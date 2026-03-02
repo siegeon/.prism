@@ -164,7 +164,7 @@ jira:
   defaultProject: PLAT
   issueKeyPattern: "[A-Z]+-\\d+"
 memory:
-  enabled: false  # PRISM-Memory archived 2026-02-16. Vault zipped to Documents/Archive/PRISM-Memory.7z
+  enabled: false  # Deprecated — PRISM-Memory is no longer active
 
 # Project Documentation Settings (document-project task)
 documentation:
