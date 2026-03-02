@@ -12,7 +12,7 @@ Environment Variables (required):
     JIRA_API_TOKEN  - Your Jira API token
 
 Alternatively, credentials can be loaded from:
-    C:/Dev/.prism/plugins/prism-devtools/.env
+    <plugin-root>/.env  (auto-detected relative to script location)
 """
 
 import argparse
@@ -27,7 +27,7 @@ from pathlib import Path
 
 # Configuration
 JIRA_BASE_URL = "https://resolvesys.atlassian.net"
-ENV_FILE_PATH = Path("C:/Dev/.prism/plugins/prism-devtools/.env")
+ENV_FILE_PATH = Path(__file__).resolve().parents[3] / ".env"
 
 
 def load_env_file(env_path: Path) -> dict:

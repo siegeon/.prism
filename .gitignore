@@ -59,6 +59,7 @@ coverage/
 
 # Claude Code temporary files
 .claude-temp/
+.claude/
 
 # PRISM Context Memory (runtime files only, not vault)
 .prism-memory.db

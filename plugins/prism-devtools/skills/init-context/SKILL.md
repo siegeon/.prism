@@ -33,7 +33,7 @@ Set up the `.context/` folder structure in the current project with PRISM contex
 
 ## Prerequisites
 
-- PRISM plugin installed at `C:\Dev\.prism\plugins\prism-devtools`
+- PRISM plugin installed (auto-detected via `${CLAUDE_PLUGIN_ROOT}`)
 - Project directory exists
 
 ## Steps
@@ -65,35 +65,37 @@ mkdir -p .context/cache/session-history
 
 Copy all template files from PRISM plugin:
 
-**Source:** `C:\Dev\.prism\plugins\prism-devtools\templates\.context\`
+**Source:** `${CLAUDE_PLUGIN_ROOT}/templates/.context/`
 
 ```bash
+TMPL="${CLAUDE_PLUGIN_ROOT}/templates/.context"
+
 # Copy core context files
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\core\persona-rules.md" ".context/core/"
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\core\commit-format.md" ".context/core/"
+cp "$TMPL/core/persona-rules.md" ".context/core/"
+cp "$TMPL/core/commit-format.md" ".context/core/"
 
 # Copy safety context files
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\safety\destructive-ops.md" ".context/safety/"
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\safety\file-write-limits.md" ".context/safety/"
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\safety\citation-integrity.md" ".context/safety/"
+cp "$TMPL/safety/destructive-ops.md" ".context/safety/"
+cp "$TMPL/safety/file-write-limits.md" ".context/safety/"
+cp "$TMPL/safety/citation-integrity.md" ".context/safety/"
 
 # Copy workflow context files
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\workflows\git-branching.md" ".context/workflows/"
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\workflows\code-review.md" ".context/workflows/"
+cp "$TMPL/workflows/git-branching.md" ".context/workflows/"
+cp "$TMPL/workflows/code-review.md" ".context/workflows/"
 
 # Copy project template
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\project\architecture.md" ".context/project/"
+cp "$TMPL/project/architecture.md" ".context/project/"
 
 # Copy manifest and gitignore
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\index.yaml" ".context/"
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\.context\.gitignore" ".context/"
+cp "$TMPL/index.yaml" ".context/"
+cp "$TMPL/.gitignore" ".context/"
 ```
 
 ### 4. Handle CLAUDE.md
 
 **If CLAUDE.md doesn't exist:**
 ```bash
-cp "C:\Dev\.prism\plugins\prism-devtools\templates\CLAUDE.md" "./CLAUDE.md"
+cp "${CLAUDE_PLUGIN_ROOT}/templates/CLAUDE.md" "./CLAUDE.md"
 ```
 
 **If CLAUDE.md exists:**
@@ -172,7 +174,7 @@ After initialization, customize:
 
 ### Template Files Not Found
 ```
-Copy-Item : Cannot find path 'C:\Dev\.prism\plugins\prism-devtools\templates\...'
+Copy-Item : Cannot find path '${CLAUDE_PLUGIN_ROOT}/templates/...'
 ```
 **Solution:** Verify PRISM plugin is installed at expected location
 
