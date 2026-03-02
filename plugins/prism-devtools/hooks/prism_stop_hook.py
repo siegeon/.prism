@@ -59,9 +59,9 @@ def detect_test_runner() -> dict:
         except:
             pass
 
-    # Check for Python project
+    # Check for Python project (use python -m for PATH compatibility on Windows)
     if (cwd / "pytest.ini").exists() or (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
-        return {"type": "pytest", "command": "pytest", "lint": "ruff check . || pylint **/*.py"}
+        return {"type": "pytest", "command": "python -m pytest", "lint": "python -m ruff check . || python -m pylint --recursive=y plugins/prism-devtools/tools/prism-cli/"}
 
     # Check for .NET project
     csproj_files = list(cwd.glob("**/*.csproj"))
@@ -475,6 +475,60 @@ def get_session_id_from_input(input_data: dict) -> str:
     return input_data.get("session_id", "")
 
 
+def get_usage_from_transcript(transcript_path: str) -> dict:
+    """Parse the transcript JSONL for cumulative token usage and model.
+
+    Claude Code provides transcript_path in hook input. Each JSONL line
+    may contain usage data from API responses.
+
+    Returns dict with total_tokens (int) and model (str or "").
+    """
+    total_input = 0
+    total_output = 0
+    model = ""
+
+    if not transcript_path:
+        return {"total_tokens": 0, "model": ""}
+
+    try:
+        tp = Path(transcript_path).expanduser()
+        if not tp.exists():
+            return {"total_tokens": 0, "model": ""}
+
+        with open(tp, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Usage can be at top level or nested under message
+                usage = entry.get("usage")
+                if not usage and isinstance(entry.get("message"), dict):
+                    usage = entry["message"].get("usage")
+                if usage and isinstance(usage, dict):
+                    total_input += usage.get("input_tokens", 0)
+                    total_output += usage.get("output_tokens", 0)
+
+                # Model can be at top level or nested under message
+                m = entry.get("model")
+                if not m and isinstance(entry.get("message"), dict):
+                    m = entry["message"].get("model")
+                if m:
+                    model = m
+
+    except (IOError, OSError):
+        pass
+
+    return {
+        "total_tokens": total_input + total_output,
+        "model": model,
+    }
+
+
 def parse_frontmatter(content: str) -> dict:
     """Parse YAML frontmatter from state file."""
     result = {
@@ -543,9 +597,15 @@ def is_same_session(state: dict, current_session_id: str) -> bool:
     """
     stored_session = state.get("session_id", "")
 
-    # Require BOTH sessions to have valid IDs
-    # This prevents "unknown" == "unknown" false matches
-    if not stored_session or not current_session_id:
+    # If stored session is empty, the setup didn't capture session_id.
+    # Be lenient: allow the hook to run (fall through to staleness check).
+    # This prevents orphaned workflows from being stuck forever.
+    if not stored_session:
+        return True
+
+    # If we have a stored session but no current session ID from the hook
+    # input, we can't verify — reject to prevent cross-session pollution.
+    if not current_session_id:
         return False
 
     return stored_session == current_session_id
@@ -590,9 +650,11 @@ def update_state_file(content: str, updates: dict) -> str:
         replacement = f"{key}: {value_str}"
 
         if re.search(pattern, content, re.MULTILINE):
-            content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+            # Use lambda to prevent re.sub from interpreting backslashes
+            # in replacement (e.g. Windows paths like docs\stories\...)
+            content = re.sub(pattern, lambda m: replacement, content, flags=re.MULTILINE)
         else:
-            content = re.sub(r"(^---\s*\n)", rf"\1{replacement}\n", content, count=1)
+            content = re.sub(r"(^---\s*\n)", lambda m: m.group(0) + replacement + "\n", content, count=1, flags=re.MULTILINE)
 
     return content
 
@@ -722,6 +784,18 @@ def main():
         # Stale workflow - don't hijack this conversation
         # User should explicitly run /prism-loop or /prism-status to re-engage
         sys.exit(0)
+
+    # Update token usage and model from transcript on every active stop
+    transcript_path = input_data.get("transcript_path", "")
+    usage = get_usage_from_transcript(transcript_path)
+    if usage["total_tokens"] > 0 or usage["model"]:
+        usage_updates = {"last_activity": datetime.now().isoformat()}
+        if usage["total_tokens"] > 0:
+            usage_updates["total_tokens"] = usage["total_tokens"]
+        if usage["model"]:
+            usage_updates["model"] = usage["model"]
+        content = update_state_file(content, usage_updates)
+        STATE_FILE.write_text(content, encoding='utf-8')
 
     if state["paused_for_manual"]:
         sys.exit(0)

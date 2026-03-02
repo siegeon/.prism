@@ -29,7 +29,7 @@ from prism_stop_hook import detect_test_runner
 STATE_DIR = Path(".claude")
 STATE_FILE = STATE_DIR / "prism-loop.local.md"
 CONTEXT_DIR = Path(".context")
-PRISM_TEMPLATES = Path(r"C:\Dev\.prism\plugins\prism-devtools\templates\.context")
+PRISM_TEMPLATES = PLUGIN_ROOT / "templates" / ".context"
 
 # Workflow steps - TDD Flow: Planning → RED Gate → GREEN (DEV+QA) → Green Gate (Final)
 # Step types: agent (auto-progress), gate (pause for /prism-approve)
@@ -160,8 +160,23 @@ def get_session_id(config: dict) -> str:
 
     Returns session_id from config (passed via --session-id from skill),
     which comes from Claude Code's ${CLAUDE_SESSION_ID} template substitution.
+
+    Raises SystemExit if session_id is empty — the workflow MUST be tied
+    to a session for tracking and cross-session isolation.
     """
-    return config.get("session_id", "")
+    session_id = config.get("session_id", "")
+    if not session_id:
+        print("ERROR: No session ID provided.")
+        print("")
+        print("The PRISM workflow requires a session ID for tracking.")
+        print("This should come from Claude Code's ${CLAUDE_SESSION_ID}")
+        print("template variable via the --session-id flag.")
+        print("")
+        print("If ${CLAUDE_SESSION_ID} is not being substituted,")
+        print("check that you're invoking /prism-loop from within")
+        print("a Claude Code session (not a raw script invocation).")
+        sys.exit(1)
+    return session_id
 
 
 def create_state_file(config: dict):
