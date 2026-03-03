@@ -229,6 +229,8 @@ last_activity: "{timestamp}"
 last_thought: ""
 step_started_at: "{timestamp}"
 step_tokens_start: 0
+step_transcript_line: 0
+step_history: "[]"
 session_id: "{session_id}"
 branch: "{branch}"
 ---

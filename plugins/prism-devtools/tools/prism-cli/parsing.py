@@ -6,10 +6,41 @@ frontmatter parsing with no YAML library dependency.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from models import StoryInfo, WorkflowState
+
+
+def _count_green_tests(work_dir: Path) -> tuple[int, int]:
+    """Read pytest cache to count passing vs total tests.
+
+    Returns (passing, total). Returns (0, 0) if no cache found.
+    Passing = all collected tests minus those still in lastfailed.
+    """
+    cache = work_dir / ".pytest_cache" / "v" / "cache"
+    nodeids_file = cache / "nodeids"
+    lastfailed_file = cache / "lastfailed"
+
+    if not nodeids_file.exists():
+        return 0, 0
+
+    try:
+        all_tests: list = json.loads(nodeids_file.read_text(encoding="utf-8"))
+        total = len(all_tests)
+        if total == 0:
+            return 0, 0
+
+        failed: set = set()
+        if lastfailed_file.exists():
+            failed_data = json.loads(lastfailed_file.read_text(encoding="utf-8"))
+            failed = set(failed_data.keys())
+
+        passing = max(0, total - len(failed))
+        return passing, total
+    except (OSError, json.JSONDecodeError, TypeError):
+        return 0, 0
 
 
 def parse_state_file(path: Path) -> WorkflowState | None:
@@ -79,6 +110,20 @@ def parse_state_file(path: Path) -> WorkflowState | None:
             state.last_thought = value
         elif key == "branch":
             state.branch = value
+        elif key == "step_started_at":
+            state.step_started_at = value
+        elif key == "step_tokens_start":
+            try:
+                state.step_tokens_start = int(value)
+            except ValueError:
+                pass
+        elif key == "step_history":
+            state.step_history = value
+        elif key == "step_transcript_line":
+            try:
+                state.step_transcript_line = int(value)
+            except ValueError:
+                pass
 
     return state
 
@@ -136,7 +181,7 @@ def update_state_field(path: Path, updates: dict[str, str]) -> bool:
         return False
 
 
-def parse_story_file(path: Path) -> StoryInfo | None:
+def parse_story_file(path: Path, work_dir: Path | None = None) -> StoryInfo | None:
     """Parse a story markdown file for ACs and plan coverage.
 
     Returns None if the file doesn't exist or can't be read.
@@ -168,6 +213,12 @@ def parse_story_file(path: Path) -> StoryInfo | None:
     if not info.acceptance_criteria and ac_section:
         numbered = re.findall(r"(\d+\.\s+[^\n]+)", ac_section)
         info.acceptance_criteria = [item.strip() for item in numbered]
+
+    # Green test progress from pytest cache
+    if work_dir:
+        passing, total = _count_green_tests(work_dir)
+        info.green_tests_passing = passing
+        info.green_tests_total = total
 
     # Extract plan coverage
     if "## Plan Coverage" in content:

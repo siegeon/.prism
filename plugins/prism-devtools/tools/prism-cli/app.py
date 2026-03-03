@@ -108,7 +108,7 @@ class PrismDashboard(App):
             story_path = Path(self._state.story_file)
             if not story_path.is_absolute():
                 story_path = self._work_dir / story_path
-            self._story = parse_story_file(story_path)
+            self._story = parse_story_file(story_path, self._work_dir)
         else:
             self._story = None
 

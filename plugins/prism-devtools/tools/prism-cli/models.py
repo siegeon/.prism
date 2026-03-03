@@ -37,6 +37,33 @@ class WorkflowState:
     total_tokens: int = 0
     last_thought: str = ""
     branch: str = ""
+    step_started_at: str = ""
+    step_tokens_start: int = 0
+    step_transcript_line: int = 0
+    step_history: str = "[]"
+
+    @property
+    def step_tokens(self) -> int:
+        """Tokens used in the current step only."""
+        return max(0, self.total_tokens - self.step_tokens_start)
+
+    @property
+    def step_history_parsed(self) -> list[dict]:
+        """List of {i, d, t} for each completed step."""
+        try:
+            import json
+            return json.loads(self.step_history)
+        except Exception:
+            return []
+
+    @property
+    def step_started_at_dt(self) -> datetime | None:
+        if not self.step_started_at:
+            return None
+        try:
+            return datetime.fromisoformat(self.step_started_at)
+        except (ValueError, TypeError):
+            return None
 
     @property
     def started_at_dt(self) -> datetime | None:
@@ -67,6 +94,8 @@ class StoryInfo:
     has_plan_coverage: bool = False
     covered_count: int = 0
     missing_count: int = 0
+    green_tests_passing: int = 0
+    green_tests_total: int = 0
 
 
 # Static workflow step definitions — mirrors prism_stop_hook.py WORKFLOW_STEPS

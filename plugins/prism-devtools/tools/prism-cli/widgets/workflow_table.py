@@ -20,6 +20,31 @@ def _fmt_duration(seconds: int) -> str:
     return f"{h}h {m}m"
 
 
+def _fmt_tokens(count: int) -> str:
+    """Format token count compactly: 1234 -> 1.2k, 1234567 -> 1.2M."""
+    if count < 1000:
+        return str(count)
+    if count < 1_000_000:
+        return f"{count / 1000:.1f}k"
+    return f"{count / 1_000_000:.1f}M"
+
+
+def _fmt_skills(skill_calls: int, tool_calls: int, dim: bool = False) -> str:
+    """Format skill usage as 'N/TC' where N=skills, TC=total tool calls.
+
+    Colors: green if skills > 0, dim grey if none used.
+    Shows as 'Ns/TC' e.g. '3s/45' meaning 3 skill calls out of 45 total.
+    """
+    if tool_calls == 0:
+        return "[dim]-[/]"
+    label = f"{skill_calls}s/{tool_calls}"
+    if dim:
+        color = "dim" if skill_calls == 0 else "dim green"
+        return f"[{color}]{label}[/]"
+    color = "green" if skill_calls > 0 else "dim"
+    return f"[{color}]{label}[/]"
+
+
 class WorkflowTable(Static):
     """Displays the 8-step workflow progress as a colored table."""
 
@@ -38,7 +63,10 @@ class WorkflowTable(Static):
         table = self.query_one(DataTable)
         table.cursor_type = "none"
         table.zebra_stripes = True
-        table.add_columns("#", "Step", "Phase", "Agent", "Type", "Model", "Status")
+        table.add_columns(
+            "#", "Step", "Phase", "Agent", "Type",
+            "Duration", "Tokens", "Tok/min", "Skills", "Status"
+        )
         self._populate(None)
 
     def update_state(self, state: WorkflowState | None) -> None:
@@ -49,35 +77,91 @@ class WorkflowTable(Static):
         table.clear()
 
         current_idx = state.current_step_index if state and state.active else -1
+        now = datetime.now()
 
-        # Compute live duration for current step
-        duration_str = ""
+        # Detect staleness from last_activity
         is_stale = False
-        if state and state.active and state.started_at_dt:
-            elapsed = max(0, int((datetime.now() - state.started_at_dt).total_seconds()))
-            duration_str = _fmt_duration(elapsed)
-            # Detect orphaned/stale state: no last_activity or very old
+        if state and state.active:
             if state.last_activity_dt:
-                stale_secs = int((datetime.now() - state.last_activity_dt).total_seconds())
-                is_stale = stale_secs > 600  # 10+ min without activity
-            elif elapsed > 300:
-                # No last_activity at all and started >5min ago → orphaned
-                is_stale = True
+                stale_secs = int((now - state.last_activity_dt).total_seconds())
+                is_stale = stale_secs > 600
+            elif state.started_at_dt:
+                elapsed = int((now - state.started_at_dt).total_seconds())
+                is_stale = elapsed > 300
+
+        # Live timing for current step
+        step_elapsed_secs = 0
+        if state and state.active:
+            step_ref = state.step_started_at_dt or state.started_at_dt
+            if step_ref:
+                step_elapsed_secs = max(0, int((now - step_ref).total_seconds()))
+
+        # Build history lookup: step_index -> {i, d, t}
+        history: dict[int, dict] = {}
+        if state and state.active:
+            for entry in state.step_history_parsed:
+                try:
+                    history[int(entry["i"])] = entry
+                except (KeyError, TypeError, ValueError):
+                    pass
 
         for step in WORKFLOW_STEPS:
             if state and state.active:
                 if step.index < current_idx:
-                    status = "[green]\u2713 DONE[/]"
-                elif step.index == current_idx:
-                    if is_stale:
-                        status = f"[bold red]\u25a0 STALE[/] [dim]{duration_str}[/]"
-                    elif state.paused_for_manual and step.step_type == "gate":
-                        status = f"[bold yellow]\u25b6 GATE[/] [dim]{duration_str}[/]"
+                    # Completed step — pull from history
+                    hist = history.get(step.index)
+                    if hist:
+                        d_secs = int(hist.get("d", 0))
+                        t_toks = int(hist.get("t", 0))
+                        s_calls = int(hist.get("s", 0))
+                        tc_calls = int(hist.get("tc", 0))
+                        dur_col = f"[dim]{_fmt_duration(d_secs)}[/]"
+                        tok_col = f"[dim]{_fmt_tokens(t_toks)}[/]"
+                        tpm = t_toks / (d_secs / 60) if d_secs > 0 and t_toks > 0 else 0
+                        tpm_col = f"[dim]{_fmt_tokens(int(tpm))}[/]" if tpm > 0 else "[dim]-[/]"
+                        skills_col = _fmt_skills(s_calls, tc_calls, dim=True)
                     else:
-                        status = f"[bold yellow]\u25b6 RUNNING[/] [green]{duration_str}[/]"
+                        dur_col = "[dim]-[/]"
+                        tok_col = "[dim]-[/]"
+                        tpm_col = "[dim]-[/]"
+                        skills_col = "[dim]-[/]"
+                    status = "[green]\u2713 DONE[/]"
+
+                elif step.index == current_idx:
+                    # Current (running) step — live values
+                    dur_str = _fmt_duration(step_elapsed_secs)
+                    dur_col = f"[green]{dur_str}[/]" if not is_stale else f"[red]{dur_str}[/]"
+
+                    step_toks = state.step_tokens if state else 0
+                    tok_col = _fmt_tokens(step_toks) if step_toks > 0 else "[dim]0[/]"
+
+                    if step_elapsed_secs > 0 and step_toks > 0:
+                        tpm = step_toks / (step_elapsed_secs / 60)
+                        tpm_col = _fmt_tokens(int(tpm))
+                    else:
+                        tpm_col = "[dim]-[/]"
+
+                    skills_col = "[dim]live[/]"
+
+                    if is_stale:
+                        status = "[bold red]\u25a0 STALE[/]"
+                    elif state.paused_for_manual and step.step_type == "gate":
+                        status = "[bold yellow]\u25b6 GATE[/]"
+                    else:
+                        status = "[bold yellow]\u25b6 RUNNING[/]"
+
                 else:
+                    # Pending
+                    dur_col = ""
+                    tok_col = ""
+                    tpm_col = ""
+                    skills_col = ""
                     status = "[dim]\u00b7[/]"
             else:
+                dur_col = ""
+                tok_col = ""
+                tpm_col = ""
+                skills_col = ""
                 status = "[dim]\u00b7[/]"
 
             # Phase color
@@ -88,15 +172,7 @@ class WorkflowTable(Static):
             else:
                 phase = f"[green]{step.phase}[/]"
 
-            # Model column — show active model on current row
-            model = "[dim]-[/]"
-            if state and state.active and state.model:
-                if step.index == current_idx:
-                    model = f"[bold cyan]{state.model}[/]"
-                elif step.index < current_idx:
-                    model = f"[dim]{state.model}[/]"
-
-            # Bold current row
+            # Bold current row, dim completed
             idx_str = str(step.index + 1)
             name = step.id
             agent = step.agent
@@ -112,4 +188,7 @@ class WorkflowTable(Static):
                 agent = f"[dim]{agent}[/]"
                 stype = f"[dim]{stype}[/]"
 
-            table.add_row(idx_str, name, phase, agent, stype, model, status)
+            table.add_row(
+                idx_str, name, phase, agent, stype,
+                dur_col, tok_col, tpm_col, skills_col, status
+            )

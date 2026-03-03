@@ -159,10 +159,10 @@ def render_snapshot(work_dir: Path) -> str:
             pass
 
     lines.append("WORKFLOW")
-    lines.append("-" * 64)
+    lines.append("-" * 72)
     lines.append(
         f"{'#':<4} {'Step':<24} {'Phase':<12} {'Agent':<6} "
-        f"{'Type':<8} {'Duration':<10} {'Tokens':<8} {'Tok/min':<8} {'Status'}"
+        f"{'Type':<8} {'Duration':<10} {'Tokens':<8} {'Tok/min':<8} {'Skills':<8} {'Status'}"
     )
     for step in WORKFLOW_STEPS:
         if step.index < current_idx:
@@ -170,12 +170,15 @@ def render_snapshot(work_dir: Path) -> str:
             if hist:
                 d_secs = int(hist.get("d", 0))
                 t_toks = int(hist.get("t", 0))
+                s_calls = int(hist.get("s", 0))
+                tc_calls = int(hist.get("tc", 0))
                 dur = _fmt_duration(d_secs)
                 tok = _fmt_tokens(t_toks)
                 tpm_val = t_toks / (d_secs / 60) if d_secs > 0 and t_toks > 0 else 0
                 tpm = _fmt_tokens(int(tpm_val)) if tpm_val > 0 else "-"
+                skills = f"{s_calls}s/{tc_calls}" if tc_calls > 0 else "-"
             else:
-                dur, tok, tpm = "-", "-", "-"
+                dur, tok, tpm, skills = "-", "-", "-", "-"
             status = "DONE"
         elif step.index == current_idx:
             dur = step_dur_str
@@ -185,6 +188,7 @@ def render_snapshot(work_dir: Path) -> str:
                 tpm = _fmt_tokens(int(step_toks / (step_elapsed_live / 60)))
             else:
                 tpm = "-"
+            skills = "live"
             if is_stale:
                 status = "STALE"
             elif state.paused_for_manual and step.step_type == "gate":
@@ -192,11 +196,11 @@ def render_snapshot(work_dir: Path) -> str:
             else:
                 status = ">> RUNNING"
         else:
-            dur, tok, tpm, status = "", "", "", "."
+            dur, tok, tpm, skills, status = "", "", "", "", "."
 
         lines.append(
             f"{step.index + 1:<4} {step.id:<24} {step.phase:<12} "
-            f"{step.agent:<6} {step.step_type:<8} {dur:<10} {tok:<8} {tpm:<8} {status}"
+            f"{step.agent:<6} {step.step_type:<8} {dur:<10} {tok:<8} {tpm:<8} {skills:<8} {status}"
         )
 
     lines.append("")

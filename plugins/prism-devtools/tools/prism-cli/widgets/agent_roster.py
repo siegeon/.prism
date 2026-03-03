@@ -69,9 +69,19 @@ class AgentRoster(Static):
 
         # Compute workflow duration and staleness
         elapsed_secs = 0
+        step_elapsed_secs = 0
+        pre_step_secs = 0
         is_stale = False
         if state and state.active and state.started_at_dt:
             elapsed_secs = max(0, int((now - state.started_at_dt).total_seconds()))
+            # Time on current step (ticks up for working agent only)
+            step_ref = state.step_started_at_dt or state.started_at_dt
+            step_elapsed_secs = max(0, int((now - step_ref).total_seconds()))
+            # Time before current step started (frozen for done agents)
+            if state.step_started_at_dt:
+                pre_step_secs = max(0, int(
+                    (state.step_started_at_dt - state.started_at_dt).total_seconds()
+                ))
             if state.last_activity_dt:
                 stale_secs = int((now - state.last_activity_dt).total_seconds())
                 is_stale = stale_secs > 600
@@ -99,22 +109,23 @@ class AgentRoster(Static):
                     if is_stale:
                         dot = "[red]\u25cf[/]"
                         agent_state = "[red]stale[/]"
-                        duration = f"[red]{_fmt_duration(elapsed_secs)}[/]"
+                        duration = f"[red]{_fmt_duration(step_elapsed_secs)}[/]"
                     elif state.paused_for_manual:
                         dot = "[green]\u25cf[/]"
                         agent_state = "[yellow]waiting[/]"
-                        duration = f"[green]{_fmt_duration(elapsed_secs)}[/]"
+                        duration = f"[green]{_fmt_duration(step_elapsed_secs)}[/]"
                     else:
                         dot = "[green]\u25cf[/]"
                         agent_state = "[green]working[/]"
-                        duration = f"[green]{_fmt_duration(elapsed_secs)}[/]"
+                        duration = f"[green]{_fmt_duration(step_elapsed_secs)}[/]"
                     phase = active_step.phase
                 elif all_done:
-                    dot = "[green]\u25cf[/]"
+                    dot = "[dim]\u25cf[/]"  # dim dot — done, not active
                     agent_state = "[dim]done[/]"
                     last_step = WORKFLOW_STEPS[step_indices[-1]]
                     phase = last_step.phase
-                    duration = "[dim]\u2713[/]"
+                    # Frozen: time from workflow start to when current step began
+                    duration = f"[dim]{_fmt_duration(pre_step_secs)}[/]"
                 else:
                     dot = "[dim]\u25cb[/]"
                     agent_state = "[dim]idle[/]"
@@ -134,18 +145,20 @@ class AgentRoster(Static):
                 elif "GREEN" in phase_str:
                     phase = f"[green]{phase}[/]"
 
-            # Token stats — only show for the active agent
+            # Token stats — per-step for working agent, pre-step for done
             tokens_str = "[dim]-[/]"
             tpm_str = "[dim]-[/]"
             if state and state.active and state.total_tokens > 0:
                 if active_step is not None:
-                    # This is the working agent — show cumulative tokens
-                    tokens_str = _fmt_tokens(state.total_tokens)
-                    if elapsed_secs > 0:
-                        tpm = state.total_tokens / (elapsed_secs / 60)
+                    # Working agent: tokens used this step only
+                    step_toks = state.step_tokens
+                    tokens_str = _fmt_tokens(step_toks)
+                    if step_elapsed_secs > 0 and step_toks > 0:
+                        tpm = step_toks / (step_elapsed_secs / 60)
                         tpm_str = f"[green]{_fmt_tokens(int(tpm))}[/]"
                 elif all_done:
-                    tokens_str = "[dim]\u2713[/]"
+                    # Done agent: tokens used before current step started
+                    tokens_str = f"[dim]{_fmt_tokens(state.step_tokens_start)}[/]"
 
             display_name = f"[bold]{name}[/] ({agent_id})" if state and state.active else f"{name} ({agent_id})"
 

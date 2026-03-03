@@ -176,7 +176,7 @@ async def _run_validation(work_dir: Path) -> ValidationResult:
         if row_count == 8:
             wf_rows = wf_data_table.ordered_rows
             wf_cols = wf_data_table.ordered_columns
-            status_col_key = wf_cols[6].key  # "Status" column
+            status_col_key = wf_cols[9].key  # "Status" column (index 9 after Skills added)
 
             # Read the status column for the current step row
             row_key = wf_rows[state.current_step_index].key

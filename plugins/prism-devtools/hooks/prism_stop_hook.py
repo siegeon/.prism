@@ -493,31 +493,40 @@ def get_session_id_from_input(input_data: dict) -> str:
     return input_data.get("session_id", "")
 
 
-def get_usage_from_transcript(transcript_path: str) -> dict:
-    """Parse the transcript JSONL for cumulative token usage and model.
+def get_usage_from_transcript(transcript_path: str, step_line_start: int = 0) -> dict:
+    """Parse the transcript JSONL for cumulative token usage, model, and tool calls.
 
     Claude Code provides transcript_path in hook input. Each JSONL line
     may contain usage data from API responses.
 
-    Returns dict with total_tokens (int) and model (str or "").
+    Args:
+        transcript_path: Path to the session JSONL transcript.
+        step_line_start: Line index where the current step began. Tool call
+            counts are computed only from this line onward (per-step).
+
+    Returns dict with total_tokens, model, total_lines, skill_calls, tool_calls.
     """
     total_input = 0
     total_output = 0
     model = ""
+    total_lines = 0
+    skill_calls = 0
+    tool_calls = 0
 
     if not transcript_path:
-        return {"total_tokens": 0, "model": ""}
+        return {"total_tokens": 0, "model": "", "total_lines": 0, "skill_calls": 0, "tool_calls": 0}
 
     try:
         tp = Path(transcript_path).expanduser()
         if not tp.exists():
-            return {"total_tokens": 0, "model": ""}
+            return {"total_tokens": 0, "model": "", "total_lines": 0, "skill_calls": 0, "tool_calls": 0}
 
         with open(tp, encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
+                total_lines += 1
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
@@ -538,12 +547,26 @@ def get_usage_from_transcript(transcript_path: str) -> dict:
                 if m:
                     model = m
 
+                # Count tool_use blocks for current step (from step_line_start)
+                if total_lines > step_line_start:
+                    msg = entry.get("message", entry)
+                    content = msg.get("content", []) if isinstance(msg, dict) else []
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                tool_calls += 1
+                                if block.get("name") == "Skill":
+                                    skill_calls += 1
+
     except (IOError, OSError):
         pass
 
     return {
         "total_tokens": total_input + total_output,
         "model": model,
+        "total_lines": total_lines,
+        "skill_calls": skill_calls,
+        "tool_calls": tool_calls,
     }
 
 
@@ -561,6 +584,7 @@ def parse_frontmatter(content: str) -> dict:
         "last_activity": "",
         "session_id": "",
         "branch": "",
+        "step_transcript_line": 0,
     }
 
     match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
@@ -598,6 +622,20 @@ def parse_frontmatter(content: str) -> dict:
                 result["session_id"] = value
             elif key == "branch":
                 result["branch"] = value
+            elif key == "step_started_at":
+                result["step_started_at"] = value
+            elif key == "step_tokens_start":
+                try:
+                    result["step_tokens_start"] = int(value)
+                except ValueError:
+                    pass
+            elif key == "step_history":
+                result["step_history"] = value
+            elif key == "step_transcript_line":
+                try:
+                    result["step_transcript_line"] = int(value)
+                except ValueError:
+                    pass
 
     return result
 
@@ -819,7 +857,8 @@ def main():
 
     # Update token usage and model from transcript on every active stop
     transcript_path = input_data.get("transcript_path", "")
-    usage = get_usage_from_transcript(transcript_path)
+    step_line_start = state.get("step_transcript_line", 0)
+    usage = get_usage_from_transcript(transcript_path, step_line_start)
     if usage["total_tokens"] > 0 or usage["model"]:
         usage_updates = {"last_activity": datetime.now().isoformat()}
         if usage["total_tokens"] > 0:
@@ -870,11 +909,40 @@ def main():
     next_step = get_step_info(next_index)
     next_step_id, next_agent, next_action, next_step_type, next_loop_back, next_validation = next_step
 
+    # Build step history entry for the step we just completed
+    now_ts = datetime.now()
+    step_dur_secs = 0
+    step_ref_str = state.get("step_started_at", state.get("started_at", ""))
+    if step_ref_str:
+        try:
+            step_dur_secs = max(0, int((now_ts - datetime.fromisoformat(step_ref_str)).total_seconds()))
+        except (ValueError, TypeError):
+            pass
+    step_tok_start = state.get("step_tokens_start", 0)
+    step_toks_used = max(0, usage["total_tokens"] - step_tok_start)
+    step_skill_calls = usage.get("skill_calls", 0)
+    step_tool_calls = usage.get("tool_calls", 0)
+    try:
+        history: list = json.loads(state.get("step_history", "[]"))
+    except Exception:
+        history = []
+    history.append({
+        "i": current_index,
+        "d": step_dur_secs,
+        "t": step_toks_used,
+        "s": step_skill_calls,
+        "tc": step_tool_calls,
+    })
+
     # Update state to next step
     updates = {
         "current_step": next_step_id,
         "current_step_index": next_index,
-        "last_activity": datetime.now().isoformat(),
+        "last_activity": now_ts.isoformat(),
+        "step_started_at": now_ts.isoformat(),
+        "step_tokens_start": str(usage["total_tokens"]),
+        "step_transcript_line": str(usage["total_lines"]),
+        "step_history": json.dumps(history),
     }
 
     # After draft_story, detect and capture the story file
@@ -887,6 +955,9 @@ def main():
     # Handle GATE steps - pause for /prism-approve
     if next_step_type == "gate":
         updates["paused_for_manual"] = True
+        updates["step_started_at"] = datetime.now().isoformat()
+        updates["step_tokens_start"] = str(usage["total_tokens"])
+        updates["step_transcript_line"] = str(usage["total_lines"])
         updated_content = update_state_file(content, updates)
         STATE_FILE.write_text(updated_content, encoding='utf-8')
 
