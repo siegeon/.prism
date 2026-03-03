@@ -144,18 +144,15 @@ class SkillValidator:
         phase_match = re.search(r"^\s+phase:\s*(.+)$", fm_text, re.MULTILINE)
         priority_match = re.search(r"^\s+priority:\s*(\S+)", fm_text, re.MULTILINE)
 
-        if not agent_match:
-            self._add("error", "prism: block present but missing 'agent' field.", "Add 'agent: dev' under prism:.")
-            return
-
-        agent = agent_match.group(1).strip()
-
-        if agent not in VALID_AGENTS:
-            self._add(
-                "error",
-                f"Invalid agent '{agent}'.",
-                f"Valid agents: {', '.join(VALID_AGENTS)}",
-            )
+        # agent is optional — all skills with prism: block are injected into every step
+        if agent_match:
+            agent = agent_match.group(1).strip()
+            if agent not in VALID_AGENTS:
+                self._add(
+                    "warning",
+                    f"Unknown agent hint '{agent}'.",
+                    f"Known agents: {', '.join(VALID_AGENTS)}. The agent field is informational only.",
+                )
 
         if phase_match:
             self._add(
