@@ -15,7 +15,7 @@ Approve the current gate and advance the workflow to the next phase.
 Run the approval script:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/prism-loop/scripts/prism_approve.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/prism-loop/scripts/prism_approve.py"
 ```
 
 ## Behavior
