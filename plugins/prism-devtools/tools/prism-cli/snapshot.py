@@ -262,7 +262,7 @@ def render_snapshot(work_dir: Path) -> str:
                 tok = _fmt_tokens(t_toks)
                 tpm_val = t_toks / (d_secs / 60) if d_secs > 0 and t_toks > 0 else 0
                 tpm = _fmt_tokens(int(tpm_val)) if tpm_val > 0 else "-"
-                skills = f"{s_calls}s/{tc_calls}" if tc_calls > 0 else "-"
+                skills = f"{s_calls}/{tc_calls}" if tc_calls > 0 else "-"
             else:
                 dur, tok, tpm, skills = "-", "-", "-", "-"
             status = "DONE"
