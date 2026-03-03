@@ -223,6 +223,7 @@ def create_state_file(config: dict):
     session_id = get_session_id(config)
     branch = detect_git_branch()
 
+    prompt_escaped = config.get("prompt", "").replace('"', '\\"')
     content = f"""---
 active: true
 workflow: core-development-cycle
@@ -231,7 +232,7 @@ current_step_index: 0
 total_steps: {len(WORKFLOW_STEPS)}
 story_file: ""
 paused_for_manual: false
-prompt: "{config.get("prompt", "").replace('"', '\\"')}"
+prompt: "{prompt_escaped}"
 started_at: "{timestamp}"
 last_activity: "{timestamp}"
 last_thought: ""
