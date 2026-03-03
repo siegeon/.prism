@@ -67,8 +67,7 @@ STEP_PHASE_MAP = {
     "verify_green_state":    ("qa", "review"),
 }
 
-# Derived: which agents appear in the workflow (for BYOS skill matching).
-# Skills only need to declare agent — the system resolves which steps.
+# Derived: which agents appear in the workflow.
 AGENTS_IN_WORKFLOW = sorted({agent for agent, _ in STEP_PHASE_MAP.values()})
 
 
@@ -155,11 +154,12 @@ def _parse_skill_frontmatter(content: str) -> dict | None:
     """
     Parse PRISM skill metadata from SKILL.md frontmatter.
 
-    Returns dict with name, description, agent, priority
+    Returns dict with name, description, agent (optional), priority
     or None if no valid prism: block found.
 
-    Phase is no longer required — the system resolves agent → phase(s)
-    from STEP_PHASE_MAP.  A legacy ``phase:`` field is silently ignored.
+    The agent field is optional/informational — skills are injected into
+    all workflow steps regardless of agent value or absence.
+    A legacy ``phase:`` field is silently ignored.
     """
     # Extract YAML frontmatter block
     fm_match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
@@ -180,18 +180,13 @@ def _parse_skill_frontmatter(content: str) -> dict | None:
     agent_match = re.search(r"^\s+agent:\s*(.+)$", fm_text, re.MULTILINE)
     priority_match = re.search(r"^\s+priority:\s*(\d+)", fm_text, re.MULTILINE)
 
-    if not (name_match and agent_match):
-        return None
-
-    agent = agent_match.group(1).strip()
-
-    if agent not in AGENTS_IN_WORKFLOW:
+    if not name_match:
         return None
 
     return {
         "name": name_match.group(1).strip(),
         "description": desc_match.group(1).strip() if desc_match else "",
-        "agent": agent,
+        "agent": agent_match.group(1).strip() if agent_match else None,
         "priority": int(priority_match.group(1)) if priority_match else 99,
     }
 
@@ -208,14 +203,12 @@ def _repo_root_from_story(story_file: str) -> Path | None:
     return None
 
 
-def discover_prism_skills(agent: str, phase: str | None = None,
-                          story_file: str = "") -> list:
+def discover_prism_skills(story_file: str = "") -> list:
     """
-    Discover local skills that declare prism.agent matching *agent*.
+    Discover all local skills with a valid prism: block.
 
-    The *phase* parameter is accepted for backwards compatibility but is
-    no longer used for matching — skills are matched by agent only.
-    QA skills automatically appear in both ``red`` and ``review`` steps.
+    Returns ALL skills regardless of which agent/step is running.
+    The agent field in SKILL.md is optional/informational only.
 
     Scans story-repo (.claude/skills/*/SKILL.md), project-local, and
     user-global (~/.claude/skills/*/SKILL.md) directories.
@@ -243,7 +236,7 @@ def discover_prism_skills(agent: str, phase: str | None = None,
                 try:
                     content = skill_file.read_text(encoding="utf-8")
                     meta = _parse_skill_frontmatter(content)
-                    if meta and meta["agent"] == agent:
+                    if meta:
                         results.append(meta)
                 except (IOError, OSError):
                     continue
@@ -258,7 +251,7 @@ def _format_discovered_skills(skills: list) -> str:
     """Format discovered skills for injection into agent instructions."""
     if not skills:
         return ""
-    lines = ["Discovered PRISM skills for this step (invoke if relevant):"]
+    lines = ["Available PRISM skills. ALWAYS prefer using a matching skill to resolve your task rather than solving without one:"]
     for s in skills:
         desc = f" - {s['description']}" if s["description"] else ""
         lines.append(f"  - /{s['name']}{desc}")
@@ -368,6 +361,10 @@ def _build_fallback_instruction(step_id: str, agent: str, story_file: str,
     if conventions:
         parts.extend(["", conventions])
     parts.extend(["", RETRIEVAL_INSTRUCTION])
+    discovered_skills = discover_prism_skills(story_file)
+    skill_text = _format_discovered_skills(discovered_skills)
+    if skill_text:
+        parts.extend(["", skill_text])
     return "\n".join(parts)
 
 
@@ -390,7 +387,7 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
         return _build_fallback_instruction(step_id, agent, story_file, conventions)
 
     agent_id, phase = phase_info
-    discovered_skills = discover_prism_skills(agent_id, phase, story_file)
+    discovered_skills = discover_prism_skills(story_file)
     skill_text = _format_discovered_skills(discovered_skills)
 
     # Load and split core step file into title (line 1) + body (rest)
