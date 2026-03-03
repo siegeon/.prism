@@ -333,6 +333,28 @@ def render_snapshot(work_dir: Path) -> str:
         if len(prompt) > 55:
             prompt = prompt[:52] + "..."
         lines.append(f"  Prompt:   {prompt}")
+    if state.last_thought:
+        thought = state.last_thought
+        if len(thought) > 55:
+            thought = thought[:52] + "..."
+        lines.append(f"  Last Thought: {thought}")
+    lines.append("")
+
+    # --- Step Detail ---
+    lines.append("STEP DETAIL")
+    lines.append("-" * 64)
+    idx = state.current_step_index
+    if 0 <= idx < len(WORKFLOW_STEPS):
+        step = WORKFLOW_STEPS[idx]
+        type_desc = "gate (manual review)" if step.step_type == "gate" else "agent (auto)"
+        validation = step.validation or "none"
+        lines.append(f"  Step {step.index + 1}: {step.id}")
+        lines.append(f"  Phase: {step.phase}")
+        lines.append(f"  Type:  {type_desc}")
+        lines.append(f"  Agent: {step.agent}")
+        lines.append(f"  Validation: {validation}")
+    else:
+        lines.append(f"  Step index {idx} out of range")
     lines.append("")
 
     # --- Story Panel ---

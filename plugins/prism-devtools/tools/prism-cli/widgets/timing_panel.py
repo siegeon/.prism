@@ -51,6 +51,13 @@ class TimingPanel(Static):
         if state.branch:
             lines.append(f"Branch: [cyan]{state.branch}[/]")
 
+        # Prompt
+        if state.prompt:
+            prompt = state.prompt
+            if len(prompt) > 55:
+                prompt = prompt[:52] + "..."
+            lines.append(f"Prompt: [cyan]{prompt}[/]")
+
         # Started at
         started = state.started_at_dt
         if started:

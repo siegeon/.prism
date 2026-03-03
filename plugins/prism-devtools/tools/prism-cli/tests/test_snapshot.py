@@ -109,6 +109,40 @@ class TestRenderSnapshot:
         assert "AC-1" in output
         assert "2 covered" in output
 
+    def test_shows_prompt_in_timing(self, work_dir: Path):
+        output = render_snapshot(work_dir)
+        assert "Prompt:" in output
+        assert "test task" in output
+
+    def test_shows_last_thought_in_timing(self, tmp_path: Path):
+        state_dir = tmp_path / ".claude"
+        state_dir.mkdir()
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        started = (now - timedelta(minutes=5)).isoformat()
+        last_act = (now - timedelta(seconds=10)).isoformat()
+        state_content = f'''---
+active: true
+current_step: implement_tasks
+current_step_index: 5
+started_at: "{started}"
+last_activity: "{last_act}"
+session_id: "sess-2"
+last_thought: "Writing unit tests for the parser"
+---
+'''
+        (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
+        output = render_snapshot(tmp_path)
+        assert "Last Thought:" in output
+        assert "Writing unit tests" in output
+
+    def test_shows_step_detail_section(self, work_dir: Path):
+        output = render_snapshot(work_dir)
+        assert "STEP DETAIL" in output
+        assert "implement_tasks" in output
+        assert "TDD GREEN" in output
+        assert "agent (auto)" in output
+
     def test_no_active_workflow(self, tmp_path: Path):
         output = render_snapshot(tmp_path)
         assert "No active workflow" in output
