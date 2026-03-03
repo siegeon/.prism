@@ -1,6 +1,6 @@
 ---
 name: byos
-description: Create and manage project-level skills shared via git with automatic PRISM agent assignment. Use when teams need project-specific skills that are auto-discovered by Claude Code and injected into the right PRISM agent (Dev, QA, SM, Architect).
+description: Create and manage project-level skills shared via git. Skills with prism: metadata are auto-discovered and injected into every PRISM workflow step. Use when teams need project-specific skills available to all agents throughout the workflow.
 version: 1.0.0
 ---
 
@@ -19,21 +19,21 @@ version: 1.0.0
 
 Project skills live at `.claude/skills/{skill-name}/SKILL.md`. Claude Code discovers them automatically - no registration, sync, or hooks required. They take precedence over user-level and plugin skills.
 
-### PRISM Agent Assignment (existing infrastructure)
+### PRISM Skill Discovery (existing infrastructure)
 
-Skills declare agent affinity via `prism:` frontmatter metadata:
+Skills opt into PRISM discovery via `prism:` frontmatter metadata. All skills with a `prism:` block are injected into every workflow step for every agent. The `agent` field is optional — it serves as informational metadata about which agent the skill was designed for, not as a filter.
 
 ```yaml
 ---
 name: my-team-skill
 description: What this skill does
 prism:
-  agent: dev          # sm | dev | qa | architect
+  agent: dev          # optional: sm | dev | qa | architect (informational hint)
   priority: 10        # lower = higher priority (default: 99)
 ---
 ```
 
-The system resolves which workflow phase(s) each agent operates in — skill authors only need to specify the agent. At runtime, `discover_prism_skills(agent)` scans `.claude/skills/*/SKILL.md`, matches the agent, and injects matching skills into the agent's step instructions in priority order.
+At runtime, `discover_prism_skills()` scans `.claude/skills/*/SKILL.md` and injects all discovered skills into every workflow step in priority order. Agents are instructed to ALWAYS prefer using an available skill over solving without one.
 
 ## Quick Start
 

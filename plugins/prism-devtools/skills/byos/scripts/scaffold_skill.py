@@ -51,13 +51,13 @@ def build_skill_md(name: str, agent: str | None, priority: int) -> str:
         f"name: {name}",
         f"description: TODO - Describe what this skill does and when Claude should use it.",
         "version: 1.0.0",
+        "prism:",
     ]
 
     if agent:
-        fm_lines.append("prism:")
-        fm_lines.append(f"  agent: {agent}")
-        fm_lines.append(f"  priority: {priority}")
+        fm_lines.append(f"  agent: {agent}  # informational — which agent this skill was designed for")
 
+    fm_lines.append(f"  priority: {priority}")
     fm_lines.append("---")
 
     # Build body
@@ -103,7 +103,7 @@ def main():
         "--agent",
         choices=VALID_AGENTS,
         default=None,
-        help="PRISM agent to assign this skill to (sm, dev, qa, architect)",
+        help="Optional: PRISM agent hint (sm, dev, qa, architect). Informational only — all skills with prism: metadata are injected into every workflow step regardless of agent.",
     )
     parser.add_argument(
         "--priority",
@@ -152,9 +152,10 @@ def main():
     print()
 
     if args.agent:
-        print(f"PRISM assignment: {args.agent} agent (priority {args.priority})")
+        print(f"PRISM agent hint: {args.agent} (informational, priority {args.priority})")
+        print("The skill will be discovered and injected into every workflow step.")
     else:
-        print("No PRISM agent assignment. Add prism: metadata to SKILL.md to assign to an agent.")
+        print("No PRISM agent specified. The skill will be discovered and injected into all workflow steps.")
 
     print()
     print("Next steps:")

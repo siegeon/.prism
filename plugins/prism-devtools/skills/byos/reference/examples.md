@@ -50,7 +50,7 @@ prism:
 - Do NOT create utility classes - use extension methods or domain services
 ```
 
-**Why it works**: The Dev agent sees this during implementation (green phase), ensuring code follows team patterns as it's written.
+**Why it works**: All agents see this skill in every workflow step. The `agent: dev` field is informational — it signals this skill was designed for implementation work. Agents are instructed to prefer using available skills over solving without them, so the Dev agent will naturally reach for it during implementation.
 
 ## 2. Team Test Patterns (QA Agent)
 
@@ -117,7 +117,7 @@ public void CreateUser_WithValidEmail_ReturnsSuccess()
 - ALWAYS use factories for test data - no inline object creation
 ```
 
-**Why it works**: The QA agent sees this during both test writing (red) and verification (review), ensuring tests follow team conventions throughout.
+**Why it works**: All agents see this skill in every workflow step. The `agent: qa` field signals this skill was designed for test work. The QA agent will prefer using it during both test writing and verification steps, ensuring tests follow team conventions throughout.
 
 ## 3. Team Architecture Guard (Architect Agent)
 
@@ -171,4 +171,4 @@ Before approving a story plan:
 - REQUIRE ADR reference for any new architectural pattern
 ```
 
-**Why it works**: The Architect agent sees this during planning, catching boundary violations before any code is written.
+**Why it works**: All agents see this skill in every workflow step. The `agent: architect` field signals this skill was designed for architecture and planning work. The SM and Architect agents will prefer using it during planning steps, catching boundary violations before any code is written.
