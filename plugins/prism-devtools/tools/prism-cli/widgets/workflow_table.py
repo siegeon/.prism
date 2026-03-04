@@ -29,12 +29,30 @@ def _fmt_tokens(count: int) -> str:
     return f"{count / 1_000_000:.1f}M"
 
 
-def _fmt_bar(value: int, total: int, width: int = 6) -> str:
-    """Proportional block bar: '██░░░░' means value/total fraction filled."""
+def _fmt_bar(value: int, total: int, width: int = 10, agent_color: str | None = None) -> str:
+    """Proportional block bar: '██░░░░░░░░' means value/total fraction filled.
+
+    agent_color: Rich color name (e.g. 'blue', 'red', 'green', 'dim') to wrap filled blocks.
+    """
     if total <= 0 or value <= 0:
         return ""
     filled = min(width, round(value / total * width))
-    return "█" * filled + "░" * (width - filled)
+    filled_str = "█" * filled
+    empty_str = "░" * (width - filled)
+    if agent_color and filled > 0:
+        return f"[{agent_color}]{filled_str}[/]{empty_str}"
+    return filled_str + empty_str
+
+
+def _agent_bar_color(agent: str) -> str:
+    """Map agent identifier to Rich color for bar rendering."""
+    if agent == "SM":
+        return "blue"
+    if agent == "QA":
+        return "red"
+    if agent == "DEV":
+        return "green"
+    return "dim"
 
 
 def _fmt_skills(skill_calls: int, tool_calls: int, dim: bool = False) -> str:
@@ -135,8 +153,9 @@ class WorkflowTable(Static):
                         tpm = t_toks / (d_secs / 60) if d_secs > 0 and t_toks > 0 else 0
                         tpm_col = f"[dim]{_fmt_tokens(int(tpm))}[/]" if tpm > 0 else "[dim]-[/]"
                         skills_col = _fmt_skills(s_calls, tc_calls, dim=True)
-                        dur_bar = _fmt_bar(d_secs, total_dur)
-                        tok_bar = _fmt_bar(t_toks, total_toks)
+                        bar_color = _agent_bar_color(step.agent)
+                        dur_bar = _fmt_bar(d_secs, total_dur, agent_color=bar_color)
+                        tok_bar = _fmt_bar(t_toks, total_toks, agent_color=bar_color)
                     else:
                         dur_col = "[dim]-[/]"
                         tok_col = "[dim]-[/]"
@@ -161,8 +180,9 @@ class WorkflowTable(Static):
                         tpm_col = "[dim]-[/]"
 
                     skills_col = "[dim]live[/]"
-                    dur_bar = _fmt_bar(step_elapsed_secs, total_dur)
-                    tok_bar = _fmt_bar(step_toks, total_toks)
+                    bar_color = _agent_bar_color(step.agent)
+                    dur_bar = _fmt_bar(step_elapsed_secs, total_dur, agent_color=bar_color)
+                    tok_bar = _fmt_bar(step_toks, total_toks, agent_color=bar_color)
 
                     if is_stale:
                         status = "[bold red]\u25a0 STALE[/]"

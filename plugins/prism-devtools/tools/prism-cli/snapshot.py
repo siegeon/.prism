@@ -139,8 +139,8 @@ def _fmt_tokens(count: int) -> str:
     return f"{count / 1_000_000:.1f}M"
 
 
-def _fmt_bar(value: int, total: int, width: int = 6) -> str:
-    """Proportional block bar: '██░░░░' means value/total fraction filled."""
+def _fmt_bar(value: int, total: int, width: int = 10) -> str:
+    """Proportional block bar: '██░░░░░░░░' means value/total fraction filled."""
     if total <= 0 or value <= 0:
         return ""
     filled = min(width, round(value / total * width))
