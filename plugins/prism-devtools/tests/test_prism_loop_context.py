@@ -261,8 +261,11 @@ def test_skills_injection_uses_directive_language(tmp_path, monkeypatch):
             step_id, agent, action,
             "docs/stories/test-story.md", "", MOCK_RUNNER
         )
-        assert "MANDATORY" in instruction, (
+        assert "1% chance" in instruction, (
             f"Skill injection text missing from {step_id} when skills present"
+        )
+        assert "MANDATORY" not in instruction, (
+            f"Skill injection should not force all skills on {step_id}"
         )
 
 
