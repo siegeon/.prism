@@ -26,6 +26,11 @@ GatePanel {
     margin-bottom: 1;
 }
 
+StoryPanel {
+    height: auto;
+    margin-bottom: 1;
+}
+
 #details {
     layout: horizontal;
     height: 1fr;
