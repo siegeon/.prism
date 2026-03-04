@@ -197,6 +197,55 @@ last_thought: "Bash"
         assert result[0]["i"] == 0
         assert result[0]["d"] == 120
 
+    def test_skills_column_ntc_format(self, tmp_path: Path):
+        """Skills column uses N/TC format (e.g. '2/10'), not old 'Ns/TC' (e.g. '2s/10')."""
+        state_dir = tmp_path / ".claude"
+        state_dir.mkdir()
+        now = datetime.now()
+        started = (now - timedelta(minutes=5)).isoformat()
+        last_act = (now - timedelta(seconds=10)).isoformat()
+        # current_step_index=5 means steps 0-4 are DONE; step 0 has s=2, tc=10
+        state_content = f'''---
+active: true
+current_step: implement_tasks
+current_step_index: 5
+started_at: "{started}"
+last_activity: "{last_act}"
+session_id: "sess-ntc"
+step_history: [{{"i": 0, "d": 120, "t": 5000, "s": 2, "tc": 10}}]
+---
+'''
+        (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
+        output = render_snapshot(tmp_path)
+        assert "2/10" in output, f"Expected '2/10' (N/TC format) in output, got:\n{output}"
+        assert "2s/10" not in output, f"Old 'Ns/TC' format '2s/10' must not appear in output"
+
+    def test_step_history_round_trip(self, tmp_path: Path):
+        """State file with step_history JSON renders done steps with correct skill counts."""
+        state_dir = tmp_path / ".claude"
+        state_dir.mkdir()
+        now = datetime.now()
+        started = (now - timedelta(minutes=8)).isoformat()
+        last_act = (now - timedelta(seconds=20)).isoformat()
+        # Multiple history entries; step 0: 3 skills / 15 tool calls
+        state_content = f'''---
+active: true
+current_step: review_tests
+current_step_index: 7
+started_at: "{started}"
+last_activity: "{last_act}"
+session_id: "sess-rtrip"
+step_history: [{{"i": 0, "d": 60, "t": 2000, "s": 3, "tc": 15}}, {{"i": 1, "d": 90, "t": 3000, "s": 0, "tc": 8}}]
+---
+'''
+        (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
+        output = render_snapshot(tmp_path)
+        # Step 0 has 3 skill calls out of 15 total tool calls
+        assert "3/15" in output, f"Expected '3/15' from step_history round-trip, got:\n{output}"
+        # Step 1 has 0 skill calls: should show '-' (tc=0 branch) or '0/8'
+        # tc=8 > 0 so shows '0/8'
+        assert "0/8" in output, f"Expected '0/8' for zero-skill step in output, got:\n{output}"
+
     def test_stale_detection(self, tmp_path: Path):
         state_dir = tmp_path / ".claude"
         state_dir.mkdir()
