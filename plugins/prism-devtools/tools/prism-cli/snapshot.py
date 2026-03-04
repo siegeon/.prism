@@ -369,7 +369,7 @@ def render_snapshot(work_dir: Path) -> str:
     lines.append("WORKFLOW")
     lines.append("-" * 80)
     lines.append(
-        f"{'#':<4} {'Step':<24} {'Agent':<6} "
+        f"{'#':<4} {'Step':<24} {'Agent':<6} {'Phase':<12} "
         f"{'Duration':<10} {'DurBar':<8} {'Tokens':<8} {'TokBar':<8} {'Tok/min':<8} {'Skills':<8} {'Status'}"
     )
     for step in WORKFLOW_STEPS:
@@ -417,7 +417,7 @@ def render_snapshot(work_dir: Path) -> str:
             dur_bar, tok_bar = "", ""
 
         lines.append(
-            f"{step.index + 1:<4} {step.id:<24} {step.agent:<6} "
+            f"{step.index + 1:<4} {step.id:<24} {step.agent:<6} {step.phase:<12} "
             f"{dur:<10} {dur_bar:<8} {tok:<8} {tok_bar:<8} {tpm:<8} {skills:<8} {status}"
         )
 
