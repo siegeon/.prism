@@ -157,14 +157,14 @@ def detect_project_conventions(runner: dict) -> str:
 
 def _parse_skill_frontmatter(content: str) -> dict | None:
     """
-    Parse PRISM skill metadata from SKILL.md frontmatter.
+    Parse skill metadata from SKILL.md frontmatter.
 
     Returns dict with name, description, agent (optional), priority
-    or None if no valid prism: block found.
+    or None if no valid frontmatter with name found.
 
-    The agent field is optional/informational — skills are injected into
-    all workflow steps regardless of agent value or absence.
-    A legacy ``phase:`` field is silently ignored.
+    Any skill in .claude/skills/*/SKILL.md is discovered — no special
+    metadata required. If a prism: block is present, agent and priority
+    are extracted from it; otherwise defaults apply.
     """
     # Extract YAML frontmatter block
     fm_match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
@@ -173,20 +173,16 @@ def _parse_skill_frontmatter(content: str) -> dict | None:
 
     fm_text = fm_match.group(1)
 
-    # Early bail-out: must contain prism: block
-    if "prism:" not in fm_text:
-        return None
-
     # Extract top-level name and description
     name_match = re.search(r"^name:\s*(.+)$", fm_text, re.MULTILINE)
     desc_match = re.search(r"^description:\s*(.+)$", fm_text, re.MULTILINE)
 
-    # Extract prism: nested values (indented under prism:)
-    agent_match = re.search(r"^\s+agent:\s*(.+)$", fm_text, re.MULTILINE)
-    priority_match = re.search(r"^\s+priority:\s*(\d+)", fm_text, re.MULTILINE)
-
     if not name_match:
         return None
+
+    # Extract prism: nested values if present (optional)
+    agent_match = re.search(r"^\s+agent:\s*(.+)$", fm_text, re.MULTILINE)
+    priority_match = re.search(r"^\s+priority:\s*(\d+)", fm_text, re.MULTILINE)
 
     return {
         "name": name_match.group(1).strip(),
@@ -210,15 +206,14 @@ def _repo_root_from_story(story_file: str) -> Path | None:
 
 def discover_prism_skills(story_file: str = "") -> list:
     """
-    Discover all local skills with a valid prism: block.
+    Discover all skills from .claude/skills/*/SKILL.md directories.
 
-    Returns ALL skills regardless of which agent/step is running.
-    The agent field in SKILL.md is optional/informational only.
+    Any SKILL.md with valid frontmatter (at minimum a name: field) is
+    included. No special metadata required — the agent decides which
+    skills fit the task. Returns ALL skills sorted by priority.
 
-    Scans story-repo (.claude/skills/*/SKILL.md), project-local, and
-    user-global (~/.claude/skills/*/SKILL.md) directories.
-    Deduplicates so the same directory is not scanned twice (e.g. when
-    CWD == story repo root).  Returns sorted list by priority.
+    Scans story-repo, project-local, and user-global directories.
+    Deduplicates so the same directory is not scanned twice.
     """
     results = []
     scan_dirs = []
@@ -256,7 +251,7 @@ def _format_discovered_skills(skills: list) -> str:
     """Format discovered skills for injection into agent instructions."""
     if not skills:
         return ""
-    lines = ["Available PRISM skills. ALWAYS prefer using a matching skill to resolve your task rather than solving without one:"]
+    lines = ["Available skills. Use a matching skill when it fits the task:"]
     for s in skills:
         desc = f" - {s['description']}" if s["description"] else ""
         lines.append(f"  - /{s['name']}{desc}")

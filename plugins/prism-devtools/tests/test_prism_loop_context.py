@@ -251,7 +251,7 @@ def test_skills_available_in_core_steps():
 
 
 def test_skills_injection_uses_directive_language(tmp_path, monkeypatch):
-    """When skills are discovered, injection uses ALWAYS prefer directive language."""
+    """When skills are discovered, injection text lists them for the agent."""
     monkeypatch.chdir(tmp_path)
     skills_dir = tmp_path / ".claude" / "skills"
     _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
@@ -261,8 +261,8 @@ def test_skills_injection_uses_directive_language(tmp_path, monkeypatch):
             step_id, agent, action,
             "docs/stories/test-story.md", "", MOCK_RUNNER
         )
-        assert "ALWAYS prefer" in instruction, (
-            f"Directive prefer language missing from {step_id} when skills present"
+        assert "Available skills" in instruction, (
+            f"Skill injection text missing from {step_id} when skills present"
         )
 
 
@@ -423,9 +423,13 @@ def test_parse_skill_frontmatter_legacy_phase_ignored():
 
 
 def test_parse_skill_frontmatter_without_prism_metadata():
-    """Returns None for non-prism skills."""
+    """Skills without prism: block are still discovered with defaults."""
     result = _parse_skill_frontmatter(SKILL_MD_NO_PRISM)
-    assert result is None
+    assert result is not None
+    assert result["name"] == "plain-skill"
+    assert result["description"] == "A normal skill without prism metadata"
+    assert result["agent"] is None
+    assert result["priority"] == 99
 
 
 def test_parse_skill_frontmatter_invalid_agent():
@@ -581,7 +585,7 @@ def test_instructions_unchanged_without_discovered_skills():
             step_id, agent, action,
             "docs/stories/test-story.md", "test prompt", MOCK_RUNNER
         )
-        assert "Available PRISM skills" not in instruction, (
+        assert "Available skills" not in instruction, (
             f"Unexpected skill injection text in {step_id} with no local skills"
         )
 
