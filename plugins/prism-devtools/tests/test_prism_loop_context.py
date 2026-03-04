@@ -24,6 +24,7 @@ from prism_loop_context import (
     INLINE_RULES,
     WORKFLOW_INDEX,
     STEP_PHASE_MAP,
+    STOP_DIRECTIVE,
     build_agent_instruction,
     detect_project_conventions,
     parse_state,
@@ -156,6 +157,45 @@ def test_retrieval_instruction_in_all_steps():
         )
 
 
+# --- REQ-4b: STOP directive in all steps ---
+
+def test_stop_directive_in_all_steps():
+    """Every step output must contain the STOP_DIRECTIVE so agents know to stop."""
+    for step_id, agent, action in AGENT_STEPS:
+        instruction = build_agent_instruction(
+            step_id, agent, action,
+            "docs/stories/test-story.md", "", MOCK_RUNNER
+        )
+        assert STOP_DIRECTIVE in instruction, (
+            f"STOP_DIRECTIVE missing from {step_id}"
+        )
+
+
+def test_stop_directive_is_last_section():
+    """STOP_DIRECTIVE must appear at the very end so it's fresh when agent finishes."""
+    for step_id, agent, action in AGENT_STEPS:
+        instruction = build_agent_instruction(
+            step_id, agent, action,
+            "docs/stories/test-story.md", "", MOCK_RUNNER
+        )
+        stop_idx = instruction.rfind(STOP_DIRECTIVE)
+        assert stop_idx != -1, f"STOP_DIRECTIVE missing from {step_id}"
+        # Nothing meaningful after STOP_DIRECTIVE (only trailing newline allowed)
+        after = instruction[stop_idx + len(STOP_DIRECTIVE):].strip()
+        assert after == "", (
+            f"Content found after STOP_DIRECTIVE in {step_id}: {after!r}"
+        )
+
+
+def test_stop_directive_fallback_step():
+    """STOP_DIRECTIVE must appear in fallback instructions for unknown steps too."""
+    instruction = build_agent_instruction(
+        "unknown_step", "dev", "some-action",
+        "docs/stories/test.md", "", MOCK_RUNNER
+    )
+    assert STOP_DIRECTIVE in instruction, "STOP_DIRECTIVE missing from fallback instruction"
+
+
 # --- REQ-5: Project conventions injected ---
 
 def test_test_runner_injected():
@@ -198,18 +238,34 @@ def test_detect_project_conventions_with_runner():
 
 # --- REQ-6: Skills as optional enhancement ---
 
-def test_skills_mentioned_as_optional():
-    """Each instruction must mention skills as available but not required."""
+def test_no_hardcoded_skill_references_in_core_steps():
+    """Core steps should not hardcode specific skill names — discovery handles it."""
     for step_id, agent, action in AGENT_STEPS:
         instruction = build_agent_instruction(
             step_id, agent, action,
             "docs/stories/test-story.md", "", MOCK_RUNNER
         )
-        assert "available" in instruction.lower(), (
-            f"Skill availability not mentioned in {step_id}"
+        assert "is available for" not in instruction, (
+            f"Hardcoded skill reference found in {step_id}"
         )
-        assert "not required" in instruction.lower(), (
-            f"'not required' not mentioned in {step_id}"
+
+
+def test_skills_injection_uses_directive_language(tmp_path, monkeypatch):
+    """When skills are discovered, injection text lists them for the agent."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+    _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
+
+    for step_id, agent, action in AGENT_STEPS:
+        instruction = build_agent_instruction(
+            step_id, agent, action,
+            "docs/stories/test-story.md", "", MOCK_RUNNER
+        )
+        assert "1% chance" in instruction, (
+            f"Skill injection text missing from {step_id} when skills present"
+        )
+        assert "MANDATORY" not in instruction, (
+            f"Skill injection should not force all skills on {step_id}"
         )
 
 
@@ -339,6 +395,14 @@ prism:
 ---
 """
 
+SKILL_MD_NO_AGENT = """---
+name: no-agent-skill
+description: A skill with prism block but no agent field
+prism:
+  priority: 5
+---
+"""
+
 
 def test_parse_skill_frontmatter_with_prism_metadata():
     """Valid prism: block parses correctly (agent-only, no phase)."""
@@ -362,20 +426,37 @@ def test_parse_skill_frontmatter_legacy_phase_ignored():
 
 
 def test_parse_skill_frontmatter_without_prism_metadata():
-    """Returns None for non-prism skills."""
+    """Skills without prism: block are still discovered with defaults."""
     result = _parse_skill_frontmatter(SKILL_MD_NO_PRISM)
-    assert result is None
+    assert result is not None
+    assert result["name"] == "plain-skill"
+    assert result["description"] == "A normal skill without prism metadata"
+    assert result["agent"] is None
+    assert result["priority"] == 99
 
 
 def test_parse_skill_frontmatter_invalid_agent():
-    """Returns None for invalid agent value."""
+    """Agent field is informational only - any value (including unknown ones) is accepted."""
     result = _parse_skill_frontmatter(SKILL_MD_INVALID_AGENT)
-    assert result is None
+    assert result is not None
+    assert result["agent"] == "wizard"
 
 
 def test_parse_skill_frontmatter_missing_required_fields():
-    """Returns None when name and agent are missing."""
+    """Returns None when name is missing."""
     result = _parse_skill_frontmatter(SKILL_MD_MISSING_FIELDS)
+    assert result is None
+
+
+def test_parse_skill_frontmatter_missing_description():
+    """Returns None when description is missing — agent needs it to decide."""
+    content = """---
+name: no-desc-skill
+prism:
+  priority: 5
+---
+"""
+    result = _parse_skill_frontmatter(content)
     assert result is None
 
 
@@ -386,35 +467,74 @@ def _create_skill(skills_dir, name, content):
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
 
+def test_parse_skill_frontmatter_no_agent():
+    """Skill with prism: block but no agent: field parses successfully."""
+    result = _parse_skill_frontmatter(SKILL_MD_NO_AGENT)
+    assert result is not None
+    assert result["name"] == "no-agent-skill"
+    assert result["agent"] is None
+    assert result["priority"] == 5
+
+
 def test_discover_prism_skills_empty_when_no_dir(tmp_path, monkeypatch):
     """Returns [] when .claude/skills doesn't exist."""
     monkeypatch.chdir(tmp_path)
-    result = discover_prism_skills("sm")
+    result = discover_prism_skills()
     assert result == []
 
 
 def test_discover_prism_skills_finds_matching(tmp_path, monkeypatch):
-    """Finds skills matching agent."""
+    """Finds all skills with valid prism: block."""
     monkeypatch.chdir(tmp_path)
     skills_dir = tmp_path / ".claude" / "skills"
     _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
-    result = discover_prism_skills("sm")
+    result = discover_prism_skills()
     assert len(result) == 1
     assert result[0]["name"] == "my-discovery-skill"
 
 
-def test_discover_prism_skills_ignores_non_matching(tmp_path, monkeypatch):
-    """Ignores wrong agent."""
+def test_discover_prism_skills_returns_all_regardless_of_agent(tmp_path, monkeypatch):
+    """Returns all skills regardless of declared agent — no agent filtering."""
     monkeypatch.chdir(tmp_path)
     skills_dir = tmp_path / ".claude" / "skills"
     _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
-    # VALID_SKILL_MD targets agent=sm — ask for dev
-    result = discover_prism_skills("dev")
-    assert result == []
+    # VALID_SKILL_MD declares agent=sm — should still be returned
+    result = discover_prism_skills()
+    assert len(result) == 1
+    assert result[0]["name"] == "my-discovery-skill"
+
+
+def test_discover_prism_skills_returns_all_agents(tmp_path, monkeypatch):
+    """Skills with any agent value are all returned unconditionally."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+    sm_skill = """---
+name: sm-skill
+description: SM skill
+prism:
+  agent: sm
+  priority: 1
+---
+"""
+    dev_skill = """---
+name: dev-skill
+description: Dev skill
+prism:
+  agent: dev
+  priority: 2
+---
+"""
+    _create_skill(skills_dir, "sm-skill", sm_skill)
+    _create_skill(skills_dir, "dev-skill", dev_skill)
+    result = discover_prism_skills()
+    assert len(result) == 2
+    names = [s["name"] for s in result]
+    assert "sm-skill" in names
+    assert "dev-skill" in names
 
 
 def test_discover_prism_skills_qa_matches_for_both_phases(tmp_path, monkeypatch):
-    """QA skills appear whether called from red or review phase."""
+    """QA skills appear unconditionally (no phase filtering)."""
     monkeypatch.chdir(tmp_path)
     skills_dir = tmp_path / ".claude" / "skills"
     qa_skill = """---
@@ -426,14 +546,9 @@ prism:
 ---
 """
     _create_skill(skills_dir, "qa-patterns", qa_skill)
-    # QA skill appears regardless of phase argument (red or review)
-    result_red = discover_prism_skills("qa", "red")
-    result_review = discover_prism_skills("qa", "review")
-    result_no_phase = discover_prism_skills("qa")
-    assert len(result_red) == 1
-    assert len(result_review) == 1
-    assert len(result_no_phase) == 1
-    assert result_red[0]["name"] == "qa-patterns"
+    result = discover_prism_skills()
+    assert len(result) == 1
+    assert result[0]["name"] == "qa-patterns"
 
 
 def test_discover_prism_skills_sorts_by_priority(tmp_path, monkeypatch):
@@ -468,7 +583,7 @@ prism:
     _create_skill(skills_dir, "a-high", high_priority)
     _create_skill(skills_dir, "m-default", default_priority)
 
-    result = discover_prism_skills("sm")
+    result = discover_prism_skills()
     assert len(result) == 3
     assert result[0]["name"] == "first-skill"
     assert result[0]["priority"] == 1
@@ -479,14 +594,14 @@ prism:
 
 
 def test_instructions_unchanged_without_discovered_skills():
-    """Backwards compat: no 'Discovered PRISM skills' in output when none exist."""
+    """No skill injection text in output when no local skills exist."""
     for step_id, agent, action in AGENT_STEPS:
         instruction = build_agent_instruction(
             step_id, agent, action,
             "docs/stories/test-story.md", "test prompt", MOCK_RUNNER
         )
-        assert "Discovered PRISM skills" not in instruction, (
-            f"Unexpected discovery text in {step_id} with no local skills"
+        assert "Available skills" not in instruction, (
+            f"Unexpected skill injection text in {step_id} with no local skills"
         )
 
 
@@ -498,3 +613,177 @@ def test_core_step_files_exist():
     for step_id in STEP_PHASE_MAP:
         step_file = core_steps_dir / f"{step_id}.md"
         assert step_file.exists(), f"Missing core step file: {step_file}"
+
+
+# --- step_history serialization round-trip ---
+
+# Import update_state_file and parse_frontmatter from stop hook for round-trip test.
+import json as _json
+import importlib.util as _importlib_util
+
+_stop_hook_path = HOOKS_DIR / "prism_stop_hook.py"
+_stop_hook_spec = _importlib_util.spec_from_file_location("prism_stop_hook", _stop_hook_path)
+_stop_hook = _importlib_util.util = _importlib_util.module_from_spec(_stop_hook_spec)
+_stop_hook_spec.loader.exec_module(_stop_hook)
+update_state_file = _stop_hook.update_state_file
+parse_frontmatter = _stop_hook.parse_frontmatter
+
+_BASE_STATE = """---
+active: true
+current_step: write_failing_tests
+current_step_index: 2
+story_file: docs/stories/auth.md
+step_history: []
+---
+
+# Notes
+"""
+
+
+def test_step_history_round_trip_simple_list():
+    """Write a list → read back → json.loads → same data. No double-escaping."""
+    history = [{"step": "review_previous_notes", "status": "done"}]
+    updated = update_state_file(_BASE_STATE, {"step_history": history})
+    parsed = parse_frontmatter(updated)
+    recovered = _json.loads(parsed["step_history"])
+    assert recovered == history
+
+
+def test_step_history_round_trip_multiple_entries():
+    """Multiple step entries survive the round-trip without corruption."""
+    history = [
+        {"step": "review_previous_notes", "status": "done", "tokens": 1234},
+        {"step": "draft_story", "status": "done", "tokens": 5678},
+        {"step": "write_failing_tests", "status": "in_progress", "tokens": 0},
+    ]
+    updated = update_state_file(_BASE_STATE, {"step_history": history})
+    parsed = parse_frontmatter(updated)
+    recovered = _json.loads(parsed["step_history"])
+    assert recovered == history
+
+
+def test_step_history_round_trip_empty_list():
+    """Empty list writes and reads back as empty list."""
+    updated = update_state_file(_BASE_STATE, {"step_history": []})
+    parsed = parse_frontmatter(updated)
+    recovered = _json.loads(parsed["step_history"])
+    assert recovered == []
+
+
+def test_step_history_no_double_escaping():
+    """step_history value in file is compact JSON, not double-escaped string."""
+    history = [{"step": "draft_story", "note": 'has "quotes"'}]
+    updated = update_state_file(_BASE_STATE, {"step_history": history})
+    # The raw line should contain JSON array directly, not a JSON-in-JSON string
+    step_line = next(
+        line for line in updated.splitlines() if line.startswith("step_history:")
+    )
+    raw_value = step_line.split(":", 1)[1].strip()
+    # Must start with '[' (direct JSON array), not '"[' (double-encoded string)
+    assert raw_value.startswith("["), (
+        f"step_history should be a JSON array, not a string: {raw_value!r}"
+    )
+    # Must be parseable in one json.loads call
+    recovered = _json.loads(raw_value)
+    assert recovered == history
+
+
+# --- Multi-skill discovery E2E with 4 skill types ---
+
+SKILL_MD_VALID_PRISM = """---
+name: valid-prism-skill
+description: A valid skill with full prism metadata
+prism:
+  agent: sm
+  priority: 1
+---
+
+# Valid Prism Skill
+"""
+
+SKILL_MD_VALID_NO_PRISM = """---
+name: valid-no-prism
+description: A valid skill without prism metadata block
+---
+
+# Plain Skill
+"""
+
+SKILL_MD_MISSING_NAME = """---
+description: Missing name field entirely
+prism:
+  agent: dev
+  priority: 5
+---
+"""
+
+SKILL_MD_MISSING_DESC = """---
+name: missing-desc-skill
+prism:
+  agent: qa
+  priority: 3
+---
+"""
+
+
+def test_discover_four_skill_types(tmp_path, monkeypatch):
+    """Multi-skill E2E: 4 skills of different types, only valid ones returned.
+
+    Setup mirrors the /tmp/prism-test scenario:
+    - valid-prism-skill: has name + description + prism block  → included
+    - valid-no-prism:    has name + description, no prism      → included
+    - missing-name:      no name field                          → excluded
+    - missing-desc:      no description field                   → excluded
+    """
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+
+    _create_skill(skills_dir, "valid-prism-skill", SKILL_MD_VALID_PRISM)
+    _create_skill(skills_dir, "valid-no-prism", SKILL_MD_VALID_NO_PRISM)
+    _create_skill(skills_dir, "missing-name", SKILL_MD_MISSING_NAME)
+    _create_skill(skills_dir, "missing-desc", SKILL_MD_MISSING_DESC)
+
+    result = discover_prism_skills()
+
+    names = [s["name"] for s in result]
+    assert "valid-prism-skill" in names, "Valid prism skill should be discovered"
+    assert "valid-no-prism" in names, "Valid no-prism skill should be discovered"
+    assert "missing-name" not in names, "Skill missing name should be excluded"
+    assert len([n for n in names if "missing" in n and "desc" in n]) == 0, (
+        "Skill missing description should be excluded"
+    )
+    assert len(result) == 2
+
+
+def test_four_skill_types_priority_ordering(tmp_path, monkeypatch):
+    """Valid skills from 4-skill setup are returned in priority order."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+
+    _create_skill(skills_dir, "valid-prism-skill", SKILL_MD_VALID_PRISM)
+    _create_skill(skills_dir, "valid-no-prism", SKILL_MD_VALID_NO_PRISM)
+    _create_skill(skills_dir, "missing-name", SKILL_MD_MISSING_NAME)
+    _create_skill(skills_dir, "missing-desc", SKILL_MD_MISSING_DESC)
+
+    result = discover_prism_skills()
+    # valid-prism-skill has priority 1, valid-no-prism defaults to 99
+    assert result[0]["name"] == "valid-prism-skill"
+    assert result[1]["name"] == "valid-no-prism"
+
+
+def test_four_skill_types_instruction_lists_valid_skills(tmp_path, monkeypatch):
+    """build_agent_instruction includes only the 2 valid skills in output."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+
+    _create_skill(skills_dir, "valid-prism-skill", SKILL_MD_VALID_PRISM)
+    _create_skill(skills_dir, "valid-no-prism", SKILL_MD_VALID_NO_PRISM)
+    _create_skill(skills_dir, "missing-name", SKILL_MD_MISSING_NAME)
+    _create_skill(skills_dir, "missing-desc", SKILL_MD_MISSING_DESC)
+
+    instruction = build_agent_instruction(
+        "write_failing_tests", "qa", "write-failing-tests",
+        "docs/stories/test.md", "", MOCK_RUNNER,
+    )
+    assert "valid-prism-skill" in instruction
+    assert "valid-no-prism" in instruction

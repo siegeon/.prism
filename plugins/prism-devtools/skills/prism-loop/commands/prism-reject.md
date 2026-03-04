@@ -15,7 +15,7 @@ Reject the current gate and loop back to an earlier phase.
 Run the rejection script:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/prism-loop/scripts/prism_reject.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/prism-loop/scripts/prism_reject.py"
 ```
 
 ## Behavior

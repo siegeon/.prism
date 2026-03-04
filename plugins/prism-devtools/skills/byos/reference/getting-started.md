@@ -23,10 +23,14 @@ Claude Code discovers these automatically. No registration needed.
 The fastest way is to use the scaffold command:
 
 ```
-/byos scaffold my-team-skill --agent dev
+/byos scaffold my-team-skill
 ```
 
-This creates the directory structure with a pre-filled SKILL.md.
+This creates the directory structure with a pre-filled SKILL.md including a `prism:` block. Optionally specify an agent hint:
+
+```
+/byos scaffold my-team-skill --agent dev
+```
 
 **Manual alternative**: Create `.claude/skills/my-team-skill/SKILL.md` with the template from [Skill Template](./skill-template.md).
 
@@ -40,37 +44,37 @@ Open the generated SKILL.md and fill in the body:
 
 Keep the body under 2k tokens. Move detailed content to `/reference/` files.
 
-## Step 3: Add PRISM Agent Assignment (Optional)
+## Step 3: PRISM Discovery (via prism: block)
 
-If this skill should be auto-injected during the PRISM workflow, add `prism:` metadata to the frontmatter:
+The scaffold command adds a `prism:` block automatically. All skills with `prism:` metadata are discovered and injected into every workflow step for every agent. The `agent` field is an optional hint indicating which agent the skill was designed for — it does not filter injection.
 
 ```yaml
 ---
 name: my-team-skill
 description: Brief description for Claude's skill list
 prism:
-  agent: dev          # Which agent receives this skill (sm | dev | qa | architect)
+  agent: dev          # optional: informational hint (sm | dev | qa | architect)
   priority: 10        # Lower = higher priority (default: 99)
 ---
 ```
 
-The system resolves which phase(s) each agent operates in automatically:
+The PRISM loop's `discover_prism_skills()` function scans project skills at runtime and injects all discovered skills into every workflow step in priority order. Agents are instructed to ALWAYS prefer using an available skill that can resolve their task over solving without one.
 
-| Agent | Injected during |
-|-------|----------------|
-| `sm` | Planning steps |
-| `dev` | Implementation (green) |
-| `qa` | Test writing (red) + verification (review) |
-| `architect` | Planning steps |
+The `agent` field, if specified, is informational context about the skill's intended audience:
 
-The PRISM loop's `discover_prism_skills()` function scans project skills at runtime and injects matching ones into the agent's instructions in priority order.
+| Agent hint | Designed for |
+|------------|--------------|
+| `sm` | Story planning and decomposition |
+| `dev` | Implementation tasks |
+| `qa` | Test writing and verification |
+| `architect` | Architecture and planning review |
 
 ## Step 4: Test Your Skill
 
 1. Start a **new Claude Code session** (skills are discovered at session start)
 2. Type `/my-team-skill` - it should appear in the skill list
 3. Invoke it and verify the output matches your expectations
-4. If using PRISM agent assignment, run `/prism-loop` and verify the skill appears in the assigned agent's instructions
+4. Run `/prism-loop` and verify the skill appears in every agent's workflow step instructions
 
 ## Step 5: Share with Your Team
 

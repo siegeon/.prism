@@ -33,11 +33,11 @@ def _fmt_skills(skill_calls: int, tool_calls: int, dim: bool = False) -> str:
     """Format skill usage as 'N/TC' where N=skills, TC=total tool calls.
 
     Colors: green if skills > 0, dim grey if none used.
-    Shows as 'Ns/TC' e.g. '3s/45' meaning 3 skill calls out of 45 total.
+    Shows as 'N/TC' e.g. '3/45' meaning 3 skill calls out of 45 total.
     """
     if tool_calls == 0:
         return "[dim]-[/]"
-    label = f"{skill_calls}s/{tool_calls}"
+    label = f"{skill_calls}/{tool_calls}"
     if dim:
         color = "dim" if skill_calls == 0 else "dim green"
         return f"[{color}]{label}[/]"

@@ -10,8 +10,8 @@ name: {skill-name}
 description: {Brief description - this appears in Claude's skill list. Be specific about when Claude should use this skill.}
 version: 1.0.0
 prism:
-  agent: dev          # sm | dev | qa | architect
-  priority: 99        # lower = higher priority
+  agent: dev          # optional: informational hint — sm | dev | qa | architect
+  priority: 99        # lower = higher priority (all skills injected everywhere)
 ---
 
 # {Skill Title}
@@ -44,14 +44,14 @@ prism:
 | `name` | Kebab-case skill identifier | `team-code-standards` |
 | `description` | What triggers this skill (shown in skill list) | `Enforce team coding standards during implementation` |
 
-### PRISM Agent Assignment (optional)
+### PRISM Discovery (optional block, optional agent)
 
 | Field | Description | Values |
 |-------|-------------|--------|
-| `prism.agent` | Which PRISM agent receives this skill | `sm`, `dev`, `qa`, `architect` |
-| `prism.priority` | Ordering when multiple skills match | Integer, lower = higher priority (default: 99) |
+| `prism.agent` | Optional: which agent this skill was designed for (informational only) | `sm`, `dev`, `qa`, `architect` |
+| `prism.priority` | Ordering when multiple skills are injected | Integer, lower = higher priority (default: 99) |
 
-The system resolves phase automatically from the agent — no `phase` field needed.
+All skills with a `prism:` block are discovered and injected into every workflow step for every agent. The `agent` field is an optional hint — it does not filter which steps receive the skill. No `phase` field is needed or supported.
 
 ### Optional Claude Code Fields
 

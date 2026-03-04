@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import glob as _glob
 import json as _json
+import logging
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -23,6 +26,24 @@ from widgets import (
     TimingPanel,
     WorkflowTable,
 )
+
+
+def _read_plugin_version() -> str:
+    """Read version from plugin.json; returns empty string on failure."""
+    import os
+    try:
+        root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        if root:
+            plugin_json = Path(root) / ".claude-plugin" / "plugin.json"
+        else:
+            plugin_json = Path(__file__).resolve().parent.parent.parent / ".claude-plugin" / "plugin.json"
+        data = _json.loads(plugin_json.read_text(encoding="utf-8"))
+        return str(data.get("version", ""))
+    except Exception:
+        return ""
+
+
+_PLUGIN_VERSION: str = _read_plugin_version()
 
 
 def _fmt_tokens(count: int) -> str:
@@ -69,7 +90,7 @@ class PrismDashboard(App):
         """Render k9s-style header info bar with live workflow metadata."""
         state = self._state
         parts: list[str | Content | tuple[str, str]] = [
-            ("PRISM Dashboard", "bold"),
+            ("PRISM Dashboard" + (_PLUGIN_VERSION and f" v{_PLUGIN_VERSION}"), "bold"),
         ]
 
         if state and state.active:
@@ -151,7 +172,10 @@ class PrismDashboard(App):
             with open(tp, encoding="utf-8", errors="replace") as f:
                 f.seek(self._transcript_offset)
                 last_good = self._transcript_offset
-                for raw in f:
+                while True:
+                    raw = f.readline()
+                    if not raw:
+                        break
                     stripped = raw.strip()
                     if not stripped:
                         last_good = f.tell()
@@ -159,16 +183,24 @@ class PrismDashboard(App):
                     try:
                         entry = _json.loads(stripped)
                     except _json.JSONDecodeError:
-                        break  # Incomplete line being written — retry next tick
+                        if raw.endswith("\n"):
+                            last_good = f.tell()
+                            continue  # Permanently malformed line — skip it
+                        else:
+                            break  # Incomplete line being written — retry next tick
+
+                    if not isinstance(entry, dict):
+                        last_good = f.tell()
+                        continue
 
                     usage = entry.get("usage")
                     if not usage and isinstance(entry.get("message"), dict):
                         usage = entry["message"].get("usage")
                     if usage and isinstance(usage, dict):
-                        self._live_total_tokens += usage.get("input_tokens", 0)
-                        self._live_total_tokens += usage.get("cache_creation_input_tokens", 0)
-                        self._live_total_tokens += usage.get("cache_read_input_tokens", 0)
-                        self._live_total_tokens += usage.get("output_tokens", 0)
+                        self._live_total_tokens += int(usage.get("input_tokens", 0) or 0)
+                        self._live_total_tokens += int(usage.get("cache_creation_input_tokens", 0) or 0)
+                        self._live_total_tokens += int(usage.get("cache_read_input_tokens", 0) or 0)
+                        self._live_total_tokens += int(usage.get("output_tokens", 0) or 0)
 
                     m = entry.get("model")
                     if not m and isinstance(entry.get("message"), dict):
@@ -178,7 +210,8 @@ class PrismDashboard(App):
 
                     last_good = f.tell()
                 self._transcript_offset = last_good
-        except (IOError, OSError):
+        except Exception:
+            _log.warning("Error reading transcript %s", self._transcript_path, exc_info=True)
             return
 
         # Inject into state for display (never go backwards)
@@ -208,7 +241,10 @@ class PrismDashboard(App):
         self._state = parse_state_file(self._state_file)
 
         if self._state and self._state.active:
-            self._read_live_tokens(self._state)
+            try:
+                self._read_live_tokens(self._state)
+            except Exception:
+                _log.warning("_read_live_tokens failed", exc_info=True)
 
         if self._state and self._state.story_file:
             story_path = Path(self._state.story_file)

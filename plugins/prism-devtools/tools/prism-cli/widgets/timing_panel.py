@@ -90,12 +90,13 @@ class TimingPanel(Static):
 
         # Last thought / what Claude is doing
         if state.last_thought:
-            # Truncate long thoughts to fit panel width
             thought = state.last_thought
-            if len(thought) > 60:
-                thought = thought[:57] + "..."
-            lines.append("")
-            lines.append(f"[bold]Last Thought[/]")
-            lines.append(f"[italic]{thought}[/]")
+            # Skip bare tool names (no spaces and no context separator means just "Bash", "Read", etc.)
+            if " " in thought or ":" in thought:
+                if len(thought) > 60:
+                    thought = thought[:57] + "..."
+                lines.append("")
+                lines.append(f"[bold]Last Thought[/]")
+                lines.append(f"[italic]{thought}[/]")
 
         self.update("\n".join(lines))

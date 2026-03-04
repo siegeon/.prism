@@ -9,7 +9,7 @@ Cancel the active PRISM workflow.
 ## Execute
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/skills/prism-loop/scripts/cancel_prism_loop.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/prism-loop/scripts/cancel_prism_loop.py"
 ```
 
 ## Behavior

@@ -223,6 +223,7 @@ def create_state_file(config: dict):
     session_id = get_session_id(config)
     branch = detect_git_branch()
 
+    prompt_escaped = config.get("prompt", "").replace('"', '\\"')
     content = f"""---
 active: true
 workflow: core-development-cycle
@@ -231,7 +232,7 @@ current_step_index: 0
 total_steps: {len(WORKFLOW_STEPS)}
 story_file: ""
 paused_for_manual: false
-prompt: "{config.get("prompt", "").replace('"', '\\"')}"
+prompt: "{prompt_escaped}"
 started_at: "{timestamp}"
 last_activity: "{timestamp}"
 last_thought: ""
@@ -352,7 +353,9 @@ def main():
     )
     print(instruction)
     print("")
-    print("The stop hook will auto-progress through agent steps.")
+    print("The stop hook auto-advances agent steps on completion.")
+    print("IMPORTANT: When each step is done, STOP. Do not edit state files or run")
+    print("workflow scripts manually — the stop hook handles all progression.")
     print("Gates pause for /prism-approve")
 
 

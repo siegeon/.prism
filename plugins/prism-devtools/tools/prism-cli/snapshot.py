@@ -19,6 +19,24 @@ from models import WORKFLOW_STEPS, WorkflowState, StoryInfo
 from parsing import check_plugin_cache_stale, parse_state_file, parse_story_file
 
 
+def _read_plugin_version() -> str:
+    """Read version from plugin.json; returns empty string on failure."""
+    import os
+    try:
+        root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        if root:
+            plugin_json = Path(root) / ".claude-plugin" / "plugin.json"
+        else:
+            plugin_json = Path(__file__).resolve().parent.parent.parent / ".claude-plugin" / "plugin.json"
+        data = _json.loads(plugin_json.read_text(encoding="utf-8"))
+        return str(data.get("version", ""))
+    except Exception:
+        return ""
+
+
+_PLUGIN_VERSION: str = _read_plugin_version()
+
+
 def _inject_live_tokens(state: WorkflowState) -> None:
     """Parse the session transcript to get live token totals.
 
@@ -82,6 +100,26 @@ AGENTS = [
 ]
 
 
+def _parse_step_history(raw: str) -> list[dict]:
+    """Parse step_history JSON with fallback for double-escaped values.
+
+    update_state_file in prism_stop_hook.py wraps the JSON in quotes and
+    escapes inner double-quotes, producing e.g. step_history: "[{\"i\": 0}]".
+    parse_state_file strips outer quotes, leaving backslash-quote pairs that
+    json.loads rejects.  This function tries a second pass after unescaping.
+    """
+    if not raw:
+        return []
+    try:
+        return _json.loads(raw)
+    except (_json.JSONDecodeError, ValueError, TypeError):
+        pass
+    try:
+        return _json.loads(raw.replace('\\"', '"'))
+    except (_json.JSONDecodeError, ValueError, TypeError):
+        return []
+
+
 def _fmt_duration(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds}s"
@@ -116,7 +154,8 @@ def render_snapshot(work_dir: Path) -> str:
 
     # Header
     lines.append("=" * 64)
-    lines.append("  PRISM Dashboard Snapshot")
+    _version_suffix = f" v{_PLUGIN_VERSION}" if _PLUGIN_VERSION else ""
+    lines.append(f"  PRISM Dashboard Snapshot{_version_suffix}")
     lines.append(f"  {now.strftime('%Y-%m-%d %H:%M:%S')}")
     if state and state.active and state.current_step:
         lines.append(f"  Step: {state.current_step}")
@@ -154,6 +193,14 @@ def render_snapshot(work_dir: Path) -> str:
             is_stale = True
 
     current_idx = state.current_step_index
+
+    # Parse step_history once for agent token lookups
+    step_hist_index: dict[int, dict] = {}
+    for entry in _parse_step_history(state.step_history):
+        try:
+            step_hist_index[int(entry["i"])] = entry
+        except (KeyError, TypeError, ValueError):
+            pass
 
     # --- Agent Roster ---
     lines.append("AGENTS")
@@ -200,7 +247,12 @@ def render_snapshot(work_dir: Path) -> str:
                     tpm = step_toks / (step_elapsed_secs / 60)
                     tpm_str = _fmt_tokens(int(tpm))
             elif all_done:
-                tokens_str = _fmt_tokens(state.step_tokens_start)
+                agent_toks = sum(
+                    int(step_hist_index[si].get("t", 0))
+                    for si in step_indices
+                    if si in step_hist_index
+                )
+                tokens_str = _fmt_tokens(agent_toks)
 
         display = f"{name} ({agent_id})"
         lines.append(
@@ -218,7 +270,7 @@ def render_snapshot(work_dir: Path) -> str:
 
     # History lookup: step_index -> {i, d, t}
     history: dict[int, dict] = {}
-    for entry in state.step_history_parsed:
+    for entry in _parse_step_history(state.step_history):
         try:
             history[int(entry["i"])] = entry
         except (KeyError, TypeError, ValueError):
@@ -242,7 +294,7 @@ def render_snapshot(work_dir: Path) -> str:
                 tok = _fmt_tokens(t_toks)
                 tpm_val = t_toks / (d_secs / 60) if d_secs > 0 and t_toks > 0 else 0
                 tpm = _fmt_tokens(int(tpm_val)) if tpm_val > 0 else "-"
-                skills = f"{s_calls}s/{tc_calls}" if tc_calls > 0 else "-"
+                skills = f"{s_calls}/{tc_calls}" if tc_calls > 0 else "-"
             else:
                 dur, tok, tpm, skills = "-", "-", "-", "-"
             status = "DONE"
@@ -328,11 +380,30 @@ def render_snapshot(work_dir: Path) -> str:
         lines.append(f"  Model:    {state.model}")
     if state.branch:
         lines.append(f"  Branch:   {state.branch}")
-    if state.prompt:
-        prompt = state.prompt
-        if len(prompt) > 55:
-            prompt = prompt[:52] + "..."
-        lines.append(f"  Prompt:   {prompt}")
+    if state.last_thought:
+        thought = state.last_thought
+        # Skip bare tool names (no spaces and no context separator)
+        if " " in thought or ":" in thought:
+            if len(thought) > 55:
+                thought = thought[:52] + "..."
+            lines.append(f"  Last Thought: {thought}")
+    lines.append("")
+
+    # --- Step Detail ---
+    lines.append("STEP DETAIL")
+    lines.append("-" * 64)
+    idx = state.current_step_index
+    if 0 <= idx < len(WORKFLOW_STEPS):
+        step = WORKFLOW_STEPS[idx]
+        type_desc = "gate (manual review)" if step.step_type == "gate" else "agent (auto)"
+        validation = step.validation or "none"
+        lines.append(f"  Step {step.index + 1}: {step.id}")
+        lines.append(f"  Phase: {step.phase}")
+        lines.append(f"  Type:  {type_desc}")
+        lines.append(f"  Agent: {step.agent}")
+        lines.append(f"  Validation: {validation}")
+    else:
+        lines.append(f"  Step index {idx} out of range")
     lines.append("")
 
     # --- Story Panel ---
