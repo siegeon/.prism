@@ -13,7 +13,6 @@ import subprocess
 import sys
 import io
 import re
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -56,7 +55,7 @@ def detect_test_runner() -> dict:
             scripts = pkg.get("scripts", {})
             if "test" in scripts:
                 return {"type": "npm", "command": "npm test", "lint": "npm run lint"}
-        except:
+        except Exception:
             pass
 
     # Check for Python project (use python -m for PATH compatibility on Windows)
@@ -979,7 +978,32 @@ def main():
     STATE_FILE.write_text(updated_content, encoding='utf-8')
 
     runner = detect_test_runner()
-    instruction = build_agent_instruction(next_step_id, next_agent, next_action, state["story_file"], state["prompt"], runner)
+    # Record outcome + build next instruction via Conductor when available
+    try:
+        from conductor_engine import Conductor
+        conductor = Conductor()
+        conductor.record_outcome(
+            prompt_id=f"{agent}/{step_id}",
+            persona=agent,
+            step_id=step_id,
+            metrics={
+                "tokens_used": step_toks_used,
+                "duration_s": step_dur_secs,
+                "gate_passed": 1,
+                "skill_calls": step_skill_calls,
+                "tool_calls": step_tool_calls,
+            },
+        )
+        conductor.incremental_reindex()
+        instruction = conductor.build_agent_instruction(
+            next_step_id, next_agent, next_action,
+            state["story_file"], state["prompt"], runner,
+        )
+    except (ImportError, Exception):
+        instruction = build_agent_instruction(
+            next_step_id, next_agent, next_action,
+            state["story_file"], state["prompt"], runner,
+        )
     print(json.dumps({
         "decision": "block",
         "reason": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n\n{instruction}"

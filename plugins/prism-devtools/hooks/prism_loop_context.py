@@ -371,12 +371,17 @@ def _build_fallback_instruction(step_id: str, agent: str, story_file: str,
 
 def build_agent_instruction(step_id: str, agent: str, action: str,
                             story_file: str, prompt: str = "",
-                            runner: dict = None) -> str:
+                            runner: dict = None, brain_context: str = "") -> str:
     """
     Build self-contained instruction for a workflow step.
 
     Composes: title + role card + dynamic context + prompt + core step body
-    + inline rules + retrieval instruction + BYOS skills.
+    + inline rules + retrieval instruction + BYOS skills + brain context
+    + stop directive.
+
+    brain_context: optional block from Brain.system_context() injected before
+    the stop directive. Pass via Conductor.build_agent_instruction() to enrich
+    instructions with project knowledge base results.
     """
     if runner is None:
         runner = {}
@@ -426,6 +431,10 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
     # BYOS discovered skills
     if skill_text:
         parts.extend(["", skill_text])
+
+    # Brain context (Understanding the System) — injected before stop directive
+    if brain_context:
+        parts.extend(["", brain_context])
 
     # Stop directive — always last so it's fresh when agent finishes
     parts.extend(["", STOP_DIRECTIVE])
