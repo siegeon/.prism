@@ -968,7 +968,8 @@ def main():
 
         gate_msg = get_gate_message(next_step_id, state["story_file"], next_loop_back)
         print(json.dumps({
-            "systemMessage": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n{gate_msg}"
+            "decision": "block",
+            "reason": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n{gate_msg}"
         }))
         sys.exit(0)
 
