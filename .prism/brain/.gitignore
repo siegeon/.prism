@@ -1,0 +1,8 @@
+# Brain index databases — rebuildable via `brain ingest`
+# Do NOT ignore scores.db (persistent learning) or outcomes.jsonl (audit trail)
+brain.db
+brain.db-shm
+brain.db-wal
+graph.db
+graph.db-shm
+graph.db-wal
