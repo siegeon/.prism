@@ -214,15 +214,15 @@ class TestAC4_PluginJsonVersion:
         """
         assert PLUGIN_JSON.exists(), f"plugin.json not found at {PLUGIN_JSON}"
 
-    def test_ac4_plugin_json_version_is_311(self):
+    def test_ac4_plugin_json_version_is_312(self):
         """
-        AC-4: plugin.json 'version' field is '3.1.1'
-        Requirement: Version bump from 3.1.0 → 3.1.1 for brain purge deleted/excluded files
-        Expected: json.loads(plugin.json)['version'] == '3.1.1'
+        AC-4: plugin.json 'version' field is '3.1.2'
+        Requirement: Version bump from 3.1.1 → 3.1.2 for workflow completion metrics summary
+        Expected: json.loads(plugin.json)['version'] == '3.1.2'
         """
         data = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
-        assert data.get("version") == "3.1.1", (
-            f"plugin.json version is '{data.get('version')}', expected '3.1.1'"
+        assert data.get("version") == "3.1.2", (
+            f"plugin.json version is '{data.get('version')}', expected '3.1.2'"
         )
 
 
