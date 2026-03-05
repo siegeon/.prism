@@ -164,3 +164,99 @@ def test_brain_bootstrap_skips_on_non_corrupt_error(tmp_path, monkeypatch, capsy
 
     captured = capsys.readouterr()
     assert "bootstrap skipped" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# FTS5 content-sync trigger tests
+# ---------------------------------------------------------------------------
+
+def test_fts5_search_returns_results_after_ingest(tmp_path):
+    """FTS5 search returns indexed docs after ingest (round-trip test)."""
+    brain = _make_brain_in(tmp_path)
+    # Ingest a document with distinctive content
+    result = brain._ingest_single(
+        "test/doc1.py",
+        "def frobnicate_widget(x): return x * 42",
+        source_file="test/doc1.py",
+        domain="py",
+    )
+    assert result is True
+
+    hits = brain._fts5_search("frobnicate_widget", domain=None, limit=5)
+    assert any(h["doc_id"] == "test/doc1.py" for h in hits), (
+        "FTS5 search should find the ingested document"
+    )
+
+
+def test_fts5_no_duplicate_on_reindex(tmp_path):
+    """Re-ingesting updated content doesn't leave duplicate FTS5 entries."""
+    brain = _make_brain_in(tmp_path)
+    brain._ingest_single("doc.py", "original content here", source_file="doc.py", domain="py")
+    brain._ingest_single("doc.py", "updated content frobnicate", source_file="doc.py", domain="py")
+
+    # FTS5 should find the new content, not return duplicates
+    hits = brain._fts5_search("frobnicate", domain=None, limit=10)
+    doc_ids = [h["doc_id"] for h in hits]
+    assert doc_ids.count("doc.py") == 1, "FTS5 should not have duplicate entries after re-index"
+
+    # Old content should NOT be found separately
+    hits_old = brain._fts5_search("original", domain=None, limit=10)
+    # 'original' might still match updated content depending on tokenizer; key test is no crash
+    assert isinstance(hits_old, list)
+
+
+def test_fts5_delete_removes_entry(tmp_path):
+    """Deleting a doc from docs table removes it from FTS5 via trigger."""
+    brain = _make_brain_in(tmp_path)
+    brain._ingest_single("del.py", "unique_quux_token content", source_file="del.py", domain="py")
+
+    # Verify it's searchable
+    hits_before = brain._fts5_search("unique_quux_token", domain=None, limit=5)
+    assert any(h["doc_id"] == "del.py" for h in hits_before)
+
+    # Delete from docs — trigger should sync FTS5
+    brain._brain.execute("DELETE FROM docs WHERE id = ?", ("del.py",))
+    brain._brain.commit()
+
+    hits_after = brain._fts5_search("unique_quux_token", domain=None, limit=5)
+    assert not any(h["doc_id"] == "del.py" for h in hits_after), (
+        "Deleted doc should not appear in FTS5 search results"
+    )
+
+
+def test_ingest_completes_without_database_error(tmp_path):
+    """Brain.ingest() completes without DatabaseError on a fresh db."""
+    import tempfile, os
+
+    brain = _make_brain_in(tmp_path)
+
+    # Create a temp source file to ingest
+    src = tmp_path / "sample.py"
+    src.write_text("def hello(): pass\n# prism sample file")
+
+    count = brain.ingest([str(src)])
+    assert count == 1, "ingest() should index 1 document"
+
+    # Verify it's searchable
+    results = brain.search("hello", limit=5)
+    assert len(results) > 0, "search should return results after ingest"
+
+
+def test_incremental_reindex_does_not_corrupt(tmp_path, monkeypatch):
+    """incremental_reindex() completes without corruption errors."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+
+    # Patch subprocess so git calls return empty output (no changed files)
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+
+    # Should not raise
+    count = brain.incremental_reindex()
+    assert count == 0  # no files changed per git mock

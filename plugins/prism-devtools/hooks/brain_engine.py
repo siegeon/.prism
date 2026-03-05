@@ -224,6 +224,20 @@ class Brain:
                 content='docs',
                 content_rowid='rowid'
             );
+            CREATE TRIGGER IF NOT EXISTS docs_fts_ai AFTER INSERT ON docs BEGIN
+                INSERT INTO docs_fts(rowid, id, content, domain)
+                    VALUES(new.rowid, new.id, new.content, new.domain);
+            END;
+            CREATE TRIGGER IF NOT EXISTS docs_fts_ad AFTER DELETE ON docs BEGIN
+                INSERT INTO docs_fts(docs_fts, rowid, id, content, domain)
+                    VALUES('delete', old.rowid, old.id, old.content, old.domain);
+            END;
+            CREATE TRIGGER IF NOT EXISTS docs_fts_au AFTER UPDATE ON docs BEGIN
+                INSERT INTO docs_fts(docs_fts, rowid, id, content, domain)
+                    VALUES('delete', old.rowid, old.id, old.content, old.domain);
+                INSERT INTO docs_fts(rowid, id, content, domain)
+                    VALUES(new.rowid, new.id, new.content, new.domain);
+            END;
             CREATE TABLE IF NOT EXISTS index_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -346,7 +360,6 @@ class Brain:
             ).fetchall()
             for row in rows:
                 doc_id = row["id"]
-                self._brain.execute("DELETE FROM docs_fts WHERE id = ?", (doc_id,))
                 if self.vector_enabled:
                     try:
                         self._brain.execute(
@@ -386,11 +399,6 @@ class Brain:
             "(id, source_file, content, domain, content_hash) "
             "VALUES (?, ?, ?, ?, ?)",
             (doc_id, source_file, content, domain, chash),
-        )
-        self._brain.execute("DELETE FROM docs_fts WHERE id = ?", (doc_id,))
-        self._brain.execute(
-            "INSERT INTO docs_fts (id, content, domain) VALUES (?, ?, ?)",
-            (doc_id, content, domain or ""),
         )
         if self.vector_enabled:
             vec = self._embed(content)
