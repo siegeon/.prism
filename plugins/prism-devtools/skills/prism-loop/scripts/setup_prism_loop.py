@@ -171,6 +171,23 @@ def initialize_context_system() -> bool:
         return False
 
 
+def brain_bootstrap():
+    """Initialize Brain on first prism-loop run. Idempotent."""
+    brain_dir = Path(".prism/brain")
+
+    if (brain_dir / "brain.db").exists():
+        return  # Already initialized
+
+    try:
+        from brain_engine import Brain, ensure_dependencies
+        ensure_dependencies()
+        brain = Brain()
+        brain.init()  # Full ingest
+    except Exception as e:
+        # Brain is optional — loop works without it
+        print(f"Brain init skipped: {e}", file=sys.stderr)
+
+
 def detect_git_branch() -> str:
     """Detect the current git branch name.
 
@@ -323,6 +340,8 @@ def main():
         else:
             print("⚠ Could not fully initialize .context - continuing anyway")
         print("")
+
+    brain_bootstrap()
 
     create_state_file(config)
 

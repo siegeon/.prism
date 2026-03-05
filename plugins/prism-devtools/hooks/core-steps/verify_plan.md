@@ -1,4 +1,12 @@
-PLAN VERIFICATION: Check Story Coverage Against Requirements
+PLAN VERIFICATION: Check Story Completeness
+
+## Understanding the System (DO THIS FIRST)
+1. Your prompt includes a ## System Context section with relevant
+   architecture and past story learnings.
+2. For deeper context: /brain search "topic you need"
+   - Architecture details: /brain search "data model for users"
+   - Past similar work: /brain search "authentication story learnings"
+3. THEN read the story file and verify coverage
 
 Steps:
 1. Read the original prompt/requirements from workflow context below
