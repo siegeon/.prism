@@ -13,7 +13,6 @@ import subprocess
 import sys
 import io
 import re
-import os
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -22,7 +21,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from prism_loop_context import build_agent_instruction, detect_project_conventions
+from conductor_engine import Conductor
 
 # State file location
 STATE_FILE = Path(".claude/prism-loop.local.md")
@@ -56,7 +55,7 @@ def detect_test_runner() -> dict:
             scripts = pkg.get("scripts", {})
             if "test" in scripts:
                 return {"type": "npm", "command": "npm test", "lint": "npm run lint"}
-        except:
+        except Exception:
             pass
 
     # Check for Python project (use python -m for PATH compatibility on Windows)
@@ -978,8 +977,28 @@ def main():
     updated_content = update_state_file(content, updates)
     STATE_FILE.write_text(updated_content, encoding='utf-8')
 
+    # Record outcome for the completed step (PSP scoring)
+    conductor = Conductor()
+    outcome_metrics = {
+        "tokens_used": step_toks_used,
+        "duration_s": step_dur_secs,
+        "gate_passed": 1,
+        "skill_calls": step_skill_calls,
+        "tool_calls": step_tool_calls,
+    }
+    conductor.record_outcome(
+        prompt_id=f"{agent}/{step_id}",
+        persona=agent,
+        step_id=step_id,
+        metrics=outcome_metrics,
+    )
+    conductor.incremental_reindex()
+
     runner = detect_test_runner()
-    instruction = build_agent_instruction(next_step_id, next_agent, next_action, state["story_file"], state["prompt"], runner)
+    instruction = conductor.build_agent_instruction(
+        next_step_id, next_agent, next_action,
+        state["story_file"], state["prompt"], runner,
+    )
     print(json.dumps({
         "decision": "block",
         "reason": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n\n{instruction}"
