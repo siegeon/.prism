@@ -56,7 +56,7 @@ def _brain_status(work_dir: Path) -> tuple[int, int]:
     if brain_db.exists():
         try:
             conn = sqlite3.connect(str(brain_db))
-            doc_count = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            doc_count = conn.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
             conn.close()
         except Exception:
             pass
