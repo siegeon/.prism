@@ -709,7 +709,23 @@ class Brain:
         step_id: str,
         difficulty: Optional[str] = None,
     ) -> str:
-        """Return highest-scoring prompt variant ID for persona/step."""
+        """Return highest-scoring prompt variant ID for persona/step.
+
+        When difficulty is provided, prefers variants that have performed
+        well on runs of that difficulty level, falling back to overall best.
+        """
+        if difficulty:
+            row = self._scores.execute(
+                "SELECT prompt_id, AVG(score) AS avg_score, COUNT(*) AS cnt "
+                "FROM prompt_scores "
+                "WHERE persona = ? AND step_id = ? AND difficulty = ? "
+                "GROUP BY prompt_id HAVING cnt >= 3 "
+                "ORDER BY avg_score DESC LIMIT 1",
+                (persona, step_id, difficulty),
+            ).fetchone()
+            if row:
+                return row["prompt_id"]
+
         row = self._scores.execute(
             "SELECT prompt_id FROM score_aggregates "
             "WHERE persona = ? AND step_id = ? AND total_runs >= 3 "
@@ -846,7 +862,9 @@ class Brain:
         """Normalize a metric value to 0-1 range."""
         if metric_name in ("gate_passed", "first_attempt"):
             return float(bool(value))
-        if metric_name in ("coverage_pct", "traceability_pct", "probe_accuracy"):
+        if metric_name in (
+            "coverage_pct", "traceability_pct", "probe_accuracy", "story_completeness"
+        ):
             return min(1.0, value / 100.0)
         if metric_name == "token_efficiency":
             baseline = self.avg_tokens(step_id) if step_id else 4000
