@@ -21,7 +21,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from conductor_engine import Conductor
+from prism_loop_context import build_agent_instruction, detect_project_conventions
 
 # State file location
 STATE_FILE = Path(".claude/prism-loop.local.md")
@@ -977,28 +977,33 @@ def main():
     updated_content = update_state_file(content, updates)
     STATE_FILE.write_text(updated_content, encoding='utf-8')
 
-    # Record outcome for the completed step (PSP scoring)
-    conductor = Conductor()
-    outcome_metrics = {
-        "tokens_used": step_toks_used,
-        "duration_s": step_dur_secs,
-        "gate_passed": 1,
-        "skill_calls": step_skill_calls,
-        "tool_calls": step_tool_calls,
-    }
-    conductor.record_outcome(
-        prompt_id=f"{agent}/{step_id}",
-        persona=agent,
-        step_id=step_id,
-        metrics=outcome_metrics,
-    )
-    conductor.incremental_reindex()
-
     runner = detect_test_runner()
-    instruction = conductor.build_agent_instruction(
-        next_step_id, next_agent, next_action,
-        state["story_file"], state["prompt"], runner,
-    )
+    # Record outcome + build next instruction via Conductor when available
+    try:
+        from conductor_engine import Conductor
+        conductor = Conductor()
+        conductor.record_outcome(
+            prompt_id=f"{agent}/{step_id}",
+            persona=agent,
+            step_id=step_id,
+            metrics={
+                "tokens_used": step_toks_used,
+                "duration_s": step_dur_secs,
+                "gate_passed": 1,
+                "skill_calls": step_skill_calls,
+                "tool_calls": step_tool_calls,
+            },
+        )
+        conductor.incremental_reindex()
+        instruction = conductor.build_agent_instruction(
+            next_step_id, next_agent, next_action,
+            state["story_file"], state["prompt"], runner,
+        )
+    except (ImportError, Exception):
+        instruction = build_agent_instruction(
+            next_step_id, next_agent, next_action,
+            state["story_file"], state["prompt"], runner,
+        )
     print(json.dumps({
         "decision": "block",
         "reason": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n\n{instruction}"
