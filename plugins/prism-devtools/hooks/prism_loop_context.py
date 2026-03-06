@@ -10,7 +10,32 @@ Used by: prism_stop_hook.py, prism_approve.py, prism_reject.py, setup_prism_loop
 """
 
 import re
+import subprocess
 from pathlib import Path
+
+def find_project_root() -> Path:
+    """Find the project root using git rev-parse --show-toplevel.
+
+    Returns the git root directory, or CWD if not inside a git repository.
+    This anchors state file resolution so that CWD shifts (e.g. a command
+    that creates a subdirectory) do not lose the state file.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return Path.cwd()
+
+
+def resolve_state_file() -> Path:
+    """Return the absolute path to the PRISM state file, anchored to the git root."""
+    return find_project_root() / ".claude" / "prism-loop.local.md"
+
 
 # --- Role Cards (compressed from full persona files) ---
 ROLE_CARDS = {

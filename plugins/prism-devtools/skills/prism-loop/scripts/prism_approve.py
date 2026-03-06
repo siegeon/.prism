@@ -37,10 +37,10 @@ except FileNotFoundError:
     else:
         raise
 sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
-from prism_loop_context import build_agent_instruction, parse_state as _parse_state
+from prism_loop_context import build_agent_instruction, parse_state as _parse_state, resolve_state_file
 from prism_stop_hook import detect_test_runner
 
-STATE_FILE = Path(".claude/prism-loop.local.md")
+STATE_FILE = resolve_state_file()
 
 WORKFLOW_STEPS = [
     # (step_id, agent, action, step_type, loop_back_to, validation)
