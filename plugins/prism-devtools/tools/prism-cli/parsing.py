@@ -98,6 +98,17 @@ def _count_green_tests(work_dir: Path) -> tuple[int, int]:
         if total == 0:
             return 0, 0
 
+        # At green_gate (step_index >= 7) all tests pass — lastfailed is stale from RED phase
+        state_path = work_dir / ".claude" / "prism-loop.local.md"
+        if state_path.exists():
+            try:
+                state_content = state_path.read_text(encoding="utf-8")
+                m = re.search(r"current_step_index:\s*(\d+)", state_content)
+                if m and int(m.group(1)) >= 7:
+                    return total, total
+            except (OSError, IOError):
+                pass
+
         failed: set = set()
         if lastfailed_file.exists():
             failed_data = json.loads(lastfailed_file.read_text(encoding="utf-8"))
