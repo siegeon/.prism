@@ -452,6 +452,27 @@ def render_snapshot(work_dir: Path) -> str:
         lines.append("!" * 64)
         lines.append("")
 
+    # --- Timing ---
+    lines.append("TIMING")
+    lines.append("-" * 64)
+    started_str = state.started_at if state.started_at else "-"
+    last_act_str = state.last_activity if state.last_activity else "-"
+    lines.append(f"  Started:  {started_str}")
+    lines.append(f"  Last Act: {last_act_str}")
+    lines.append(f"  Elapsed:  {_fmt_duration(elapsed_secs)}")
+    if state.model:
+        lines.append(f"  Model:    {state.model}")
+    _lt = state.last_thought
+    if _lt and (" " in _lt or ":" in _lt):
+        lines.append(f"  Last Thought: {_lt}")
+    if state.branch:
+        lines.append(f"  Branch:   {state.branch}")
+    if state.session_id:
+        lines.append(f"  Session:  {state.session_id[:8]}")
+    else:
+        lines.append("  Session:  ERROR — no session_id")
+    lines.append("")
+
     # --- Story Panel ---
     story: StoryInfo | None = None
     if state.story_file:

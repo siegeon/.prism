@@ -159,7 +159,7 @@ class Conductor:
         """Record step outcome for PSP scoring using actual selected prompt."""
         if not self._brain_available or self._brain is None:
             return
-        actual_prompt_id = self.last_prompt_id or prompt_id
+        actual_prompt_id = self._load_prompt_id() or self.last_prompt_id or prompt_id
         try:
             self._brain.record_outcome(actual_prompt_id, persona, step_id, metrics)
         except Exception as exc:
