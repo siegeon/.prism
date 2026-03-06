@@ -331,113 +331,78 @@ def test_purge_deleted_called_by_ingest(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Mulch expertise ingestion tests
+# Auto-bootstrap tests
 # ---------------------------------------------------------------------------
 
-def test_ingest_mulch_expertise_indexes_records(tmp_path, monkeypatch):
-    """_ingest_mulch_expertise() indexes JSONL records with domain='expertise'."""
-    expertise_dir = tmp_path / ".mulch" / "expertise"
-    expertise_dir.mkdir(parents=True)
-    (expertise_dir / "brain.jsonl").write_text(
-        '{"id":"mx-abc1","type":"pattern","name":"test-pattern","description":"Brain implements hybrid search."}\n'
-        '{"id":"mx-abc2","type":"failure","description":"Brain was empty.","resolution":"Always call ingest()."}\n',
-        encoding="utf-8",
-    )
+def test_search_auto_bootstraps_when_empty(tmp_path, monkeypatch, capsys):
+    """search() triggers ingest() when docs table is empty and logs a message."""
+    import subprocess as sp
 
     brain = _make_brain_in(tmp_path)
+
+    # Patch subprocess so incremental_reindex git calls return empty (no files)
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
     monkeypatch.chdir(tmp_path)
-    count = brain._ingest_mulch_expertise()
-    assert count == 2
 
-    # Verify domain and doc_id
-    rows = brain._brain.execute(
-        "SELECT id, domain FROM docs WHERE domain = 'expertise'"
-    ).fetchall()
-    ids = {r["id"] for r in rows}
-    assert "expertise:brain:mx-abc1" in ids
-    assert "expertise:brain:mx-abc2" in ids
-    assert all(r["domain"] == "expertise" for r in rows)
-
-
-def test_ingest_mulch_expertise_content_includes_resolution(tmp_path, monkeypatch):
-    """Resolution field is embedded in the indexed content."""
-    expertise_dir = tmp_path / ".mulch" / "expertise"
-    expertise_dir.mkdir(parents=True)
-    (expertise_dir / "hooks.jsonl").write_text(
-        '{"id":"mx-xyz","type":"failure","description":"Hook failed.","resolution":"Add error handling."}\n',
-        encoding="utf-8",
-    )
-
-    brain = _make_brain_in(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    brain._ingest_mulch_expertise()
-
-    row = brain._brain.execute(
-        "SELECT content FROM docs WHERE id = 'expertise:hooks:mx-xyz'"
-    ).fetchone()
-    assert row is not None
-    assert "resolution: Add error handling." in row["content"]
-    assert "[expertise:hooks]" in row["content"]
-
-
-def test_ingest_mulch_expertise_skips_missing_dir(tmp_path, monkeypatch):
-    """_ingest_mulch_expertise() returns 0 when .mulch/expertise doesn't exist."""
-    brain = _make_brain_in(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    count = brain._ingest_mulch_expertise()
-    assert count == 0
-
-
-def test_ingest_mulch_expertise_skips_records_without_id(tmp_path, monkeypatch):
-    """Records missing 'id' field are silently skipped."""
-    expertise_dir = tmp_path / ".mulch" / "expertise"
-    expertise_dir.mkdir(parents=True)
-    (expertise_dir / "cli.jsonl").write_text(
-        '{"type":"pattern","description":"No id here."}\n'
-        '{"id":"mx-good","description":"Has id."}\n',
-        encoding="utf-8",
-    )
-
-    brain = _make_brain_in(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    count = brain._ingest_mulch_expertise()
-    assert count == 1
-
-
-def test_ingest_calls_mulch_expertise(tmp_path, monkeypatch):
-    """ingest() includes expertise records in its return count."""
-    expertise_dir = tmp_path / ".mulch" / "expertise"
-    expertise_dir.mkdir(parents=True)
-    (expertise_dir / "conductor.jsonl").write_text(
-        '{"id":"mx-c1","description":"Conductor uses epsilon-greedy."}\n',
-        encoding="utf-8",
-    )
-
+    # Patch _cli_source_dirs to return a real directory with a known file
     src = tmp_path / "sample.py"
-    src.write_text("def foo(): pass")
-
-    brain = _make_brain_in(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    count = brain.ingest([str(src)])
-    # 1 source file + 1 expertise record
-    assert count == 2
-
-
-def test_ingest_mulch_expertise_dedup(tmp_path, monkeypatch):
-    """Re-ingesting unchanged expertise records does not increment count."""
-    expertise_dir = tmp_path / ".mulch" / "expertise"
-    expertise_dir.mkdir(parents=True)
-    (expertise_dir / "brain.jsonl").write_text(
-        '{"id":"mx-dup","description":"Same content every time."}\n',
-        encoding="utf-8",
+    src.write_text("def bootstrap_marker(): pass\n")
+    monkeypatch.setattr(
+        "brain_engine._cli_source_dirs", lambda: [str(tmp_path)]
     )
 
+    # Verify empty before search
+    assert brain._brain.execute("SELECT COUNT(*) FROM docs").fetchone()[0] == 0
+
+    results = brain.search("bootstrap_marker", limit=5)
+
+    # Should have indexed the file during bootstrap
+    doc_count_after = brain._brain.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+    assert doc_count_after > 0, "search() should have auto-bootstrapped the index"
+
+    # Should log the bootstrap message to stderr
+    captured = capsys.readouterr()
+    assert "bootstrapping" in captured.err
+
+
+def test_search_calls_incremental_reindex_when_non_empty(tmp_path, monkeypatch):
+    """search() calls incremental_reindex() when docs table is non-empty."""
+    import subprocess as sp
+
     brain = _make_brain_in(tmp_path)
+
+    # Pre-populate with a doc so we're not empty
+    src = tmp_path / "existing.py"
+    src.write_text("def existing_func(): pass\n")
+    brain._ingest_single(str(src), "def existing_func(): pass\n",
+                         source_file=str(src), domain="py")
+
+    reindex_called = {"n": 0}
+    original_reindex = brain.incremental_reindex
+
+    def fake_reindex():
+        reindex_called["n"] += 1
+        return original_reindex()
+
+    monkeypatch.setattr(brain, "incremental_reindex", fake_reindex)
+
+    # Patch subprocess so git calls return empty output
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
     monkeypatch.chdir(tmp_path)
-    first = brain._ingest_mulch_expertise()
-    second = brain._ingest_mulch_expertise()
-    assert first == 1
-    assert second == 0  # content hash unchanged, skip
+
+    brain.search("existing_func", limit=5)
+
+    assert reindex_called["n"] == 1, "search() should call incremental_reindex() when non-empty"
 
 
 def test_incremental_reindex_does_not_corrupt(tmp_path, monkeypatch):
