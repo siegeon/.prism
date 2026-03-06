@@ -27,6 +27,8 @@ from prism_loop_context import (
     STOP_DIRECTIVE,
     build_agent_instruction,
     detect_project_conventions,
+    find_project_root,
+    resolve_state_file,
     parse_state,
     _parse_skill_frontmatter,
     discover_prism_skills,
@@ -603,6 +605,104 @@ def test_instructions_unchanged_without_discovered_skills():
         assert "Available skills" not in instruction, (
             f"Unexpected skill injection text in {step_id} with no local skills"
         )
+
+
+# --- CWD-shift fix: find_project_root / resolve_state_file ---
+
+import subprocess as _subprocess
+import unittest.mock as _mock
+
+
+def test_find_project_root_returns_path():
+    """find_project_root should always return a Path (git root or CWD fallback)."""
+    root = find_project_root()
+    assert isinstance(root, Path)
+    assert root.is_absolute()
+
+
+def test_find_project_root_uses_git_toplevel(tmp_path, monkeypatch):
+    """find_project_root returns the git root when git succeeds."""
+    fake_root = str(tmp_path)
+    mock_result = _mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = fake_root + "\n"
+
+    with _mock.patch("prism_loop_context.subprocess.run", return_value=mock_result) as mock_run:
+        root = find_project_root()
+
+    mock_run.assert_called_once()
+    assert root == Path(fake_root)
+
+
+def test_find_project_root_is_stable_across_cwd_shift(tmp_path, monkeypatch):
+    """STATE_FILE stays anchored to git root even when CWD shifts to a subdirectory."""
+    git_root = str(tmp_path)
+    mock_result = _mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = git_root + "\n"
+
+    subdir = tmp_path / "subproject"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)  # CWD shifted to subdirectory
+
+    with _mock.patch("prism_loop_context.subprocess.run", return_value=mock_result):
+        root = find_project_root()
+
+    # Must return git root (tmp_path), NOT the current subdir
+    assert root == Path(git_root)
+    assert root != Path.cwd()
+
+
+def test_find_project_root_fallback_on_git_failure(tmp_path, monkeypatch):
+    """find_project_root returns CWD when git command fails."""
+    monkeypatch.chdir(tmp_path)
+    mock_result = _mock.MagicMock()
+    mock_result.returncode = 128  # git error code outside a repo
+
+    with _mock.patch("prism_loop_context.subprocess.run", return_value=mock_result):
+        root = find_project_root()
+
+    assert root == tmp_path
+
+
+def test_find_project_root_fallback_on_exception(tmp_path, monkeypatch):
+    """find_project_root returns CWD when git command raises an exception."""
+    monkeypatch.chdir(tmp_path)
+
+    with _mock.patch("prism_loop_context.subprocess.run", side_effect=FileNotFoundError):
+        root = find_project_root()
+
+    assert root == tmp_path
+
+
+def test_resolve_state_file_anchored_to_git_root(tmp_path, monkeypatch):
+    """resolve_state_file returns <git-root>/.claude/prism-loop.local.md regardless of CWD."""
+    git_root = str(tmp_path)
+    subdir = tmp_path / "some" / "subdir"
+    subdir.mkdir(parents=True)
+    monkeypatch.chdir(subdir)  # CWD shifted into subdirectory
+
+    mock_result = _mock.MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = git_root + "\n"
+
+    with _mock.patch("prism_loop_context.subprocess.run", return_value=mock_result):
+        state_file = resolve_state_file()
+
+    assert state_file == Path(git_root) / ".claude" / "prism-loop.local.md"
+    assert state_file != Path.cwd() / ".claude" / "prism-loop.local.md"
+
+
+def test_resolve_state_file_fallback_when_no_git(tmp_path, monkeypatch):
+    """Without a git repo, resolve_state_file falls back to CWD-relative path."""
+    monkeypatch.chdir(tmp_path)
+    mock_result = _mock.MagicMock()
+    mock_result.returncode = 128
+
+    with _mock.patch("prism_loop_context.subprocess.run", return_value=mock_result):
+        state_file = resolve_state_file()
+
+    assert state_file == tmp_path / ".claude" / "prism-loop.local.md"
 
 
 # --- Core step files ---

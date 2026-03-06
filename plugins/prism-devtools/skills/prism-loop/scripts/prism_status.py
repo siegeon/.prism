@@ -4,9 +4,25 @@ PRISM Workflow Status - display current workflow state.
 """
 
 import re
+import subprocess
 from pathlib import Path
 
-STATE_FILE = Path(".claude/prism-loop.local.md")
+
+def _find_project_root() -> Path:
+    """Find the git project root, falling back to CWD."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return Path.cwd()
+
+
+STATE_FILE = _find_project_root() / ".claude" / "prism-loop.local.md"
 
 # TDD Flow: Planning → RED Gate → GREEN (DEV+QA) → Green Gate (Final)
 # Step types: agent (auto), gate (/prism-approve)

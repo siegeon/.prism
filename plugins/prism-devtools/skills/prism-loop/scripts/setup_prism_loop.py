@@ -40,11 +40,11 @@ except FileNotFoundError:
     else:
         raise
 sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
-from prism_loop_context import build_agent_instruction
+from prism_loop_context import build_agent_instruction, resolve_state_file
 from prism_stop_hook import detect_test_runner
 
-STATE_DIR = Path(".claude")
-STATE_FILE = STATE_DIR / "prism-loop.local.md"
+STATE_FILE = resolve_state_file()
+STATE_DIR = STATE_FILE.parent
 CONTEXT_DIR = Path(".context")
 PRISM_TEMPLATES = PLUGIN_ROOT / "templates" / ".context"
 

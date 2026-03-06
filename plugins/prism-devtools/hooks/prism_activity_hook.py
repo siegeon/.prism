@@ -15,7 +15,9 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-STATE_FILE = Path(".claude/prism-loop.local.md")
+from prism_loop_context import resolve_state_file
+
+STATE_FILE = resolve_state_file()
 
 
 def _brief_context(tool_name: str, tool_input: dict) -> str:
