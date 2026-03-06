@@ -29,10 +29,10 @@ except FileNotFoundError:
     else:
         raise
 sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
-from prism_loop_context import build_agent_instruction, parse_state as _parse_state
+from prism_loop_context import build_agent_instruction, parse_state as _parse_state, resolve_state_file
 from prism_stop_hook import detect_test_runner
 
-STATE_FILE = Path(".claude/prism-loop.local.md")
+STATE_FILE = resolve_state_file()
 
 # Steps with their loop_back_to index (None = no reject allowed)
 WORKFLOW_STEPS = [
@@ -40,10 +40,10 @@ WORKFLOW_STEPS = [
     ("draft_story", "sm", "draft", None),
     ("verify_plan", "sm", "verify-plan", None),
     ("write_failing_tests", "qa", "write-failing-tests", None),
-    ("red_gate", None, None, 0),  # Reject loops back to step 0
+    ("red_gate", None, None, 3),  # Reject loops back to step 3 (write_failing_tests)
     ("implement_tasks", "dev", "develop-story", None),
     ("verify_green_state", "qa", "verify-green-state", None),
-    ("green_gate", None, None, None),  # Final gate - no reject
+    ("green_gate", None, None, 5),  # Reject loops back to step 5 (implement_tasks)
 ]
 
 

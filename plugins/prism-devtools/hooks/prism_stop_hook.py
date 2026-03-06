@@ -35,7 +35,7 @@ WORKFLOW_STEPS = [
     ("draft_story", "sm", "draft", "agent", None, "story_complete"),
     ("verify_plan", "sm", "verify-plan", "agent", None, "plan_coverage"),
     ("write_failing_tests", "qa", "write-failing-tests", "agent", None, "red_with_trace"),
-    ("red_gate", None, None, "gate", 0, None),
+    ("red_gate", None, None, "gate", 3, None),
     ("implement_tasks", "dev", "develop-story", "agent", None, "green"),
     ("verify_green_state", "qa", "verify-green-state", "agent", None, "green_full"),
     ("green_gate", None, None, "gate", None, None),

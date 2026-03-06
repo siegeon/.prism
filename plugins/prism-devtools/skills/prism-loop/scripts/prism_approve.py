@@ -89,9 +89,12 @@ def update_state(current_step: str, current_index: int):
 
 
 def cleanup():
-    """Remove state file."""
+    """Mark workflow as inactive (preserve file for TUI display)."""
     if STATE_FILE.exists():
-        STATE_FILE.unlink()
+        content = STATE_FILE.read_text(encoding='utf-8')
+        content = re.sub(r"^active:\s*\S+", "active: false", content, flags=re.MULTILINE)
+        content = re.sub(r"^paused_for_manual:\s*\S+", "paused_for_manual: false", content, flags=re.MULTILINE)
+        STATE_FILE.write_text(content, encoding='utf-8')
 
 
 # Step index -> (display_name, agent) for agent steps only
