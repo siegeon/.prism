@@ -62,8 +62,12 @@ Always Glob/Grep for project conventions before writing code or tests."""
 
 # --- Memory Persist Instruction ---
 MEMORY_PERSIST_INSTRUCTION = """MEMORY: Before stopping, if you discovered something useful about this project
-(a convention, pattern, pitfall, or architectural insight), append 1-3 bullet points
-to .claude/memory/MEMORY.md at the project root. Format: "- [domain] observation". Skip if nothing new."""
+(a convention, pattern, pitfall, or architectural insight):
+- Append 1-3 bullets to .prism/brain/memory/MEMORY.md (auto-memory target). Format: "- [domain] observation".
+- For structured, reusable knowledge (confirmed patterns, decisions, failures): use Mulch:
+  `mulch record <domain> --type <convention|pattern|failure|decision> --description "..."`.
+  Mulch records are indexed by Brain and searchable by all future agents.
+Skip if nothing new."""
 
 # --- Stop Directive ---
 STOP_DIRECTIVE = """STOP DIRECTIVE: When your task for this step is complete, STOP immediately.
