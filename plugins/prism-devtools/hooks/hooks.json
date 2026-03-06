@@ -51,6 +51,26 @@
             "description": "Verify all required PRISM sections exist"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/capture-commit-context.py",
+            "description": "Capture git commit context into Brain on commit"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/capture-file-context.py",
+            "description": "Trigger Brain incremental reindex on file edits (30s debounce)"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -60,6 +80,15 @@
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/prism_stop_hook.py",
             "description": "Auto-advance PRISM workflow on response completion"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/consolidate-story-learnings.py",
+            "description": "Consolidate completed story learnings into Mulch"
           }
         ]
       }
