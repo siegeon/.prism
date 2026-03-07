@@ -58,8 +58,8 @@ def run_claude(
     if max_budget_usd > 0:
         cmd += ["--max-budget-usd", str(max_budget_usd)]
 
-    # Strip CLAUDECODE and CLAUDE_CODE_ENTRYPOINT to prevent nested session errors
-    _STRIP_VARS = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}
+    # Strip env vars that cause issues in subprocess: nested session errors and invalid API keys
+    _STRIP_VARS = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "ANTHROPIC_API_KEY"}
     env = {k: v for k, v in os.environ.items() if k not in _STRIP_VARS}
 
     with open(out_path, "w") as fh:
