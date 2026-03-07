@@ -676,6 +676,217 @@ def test_chunk_round_trip_ingest_search(tmp_path, monkeypatch):
     assert "line_end" in first
 
 
+# ---------------------------------------------------------------------------
+# Role-scoped Brain search tests (Gap 6)
+# ---------------------------------------------------------------------------
+
+def test_role_domain_map_defines_all_roles(tmp_path):
+    """ROLE_DOMAIN_MAP covers sm, po, architect, qa, dev, engineer."""
+    brain = _make_brain_in(tmp_path)
+    required_roles = {"sm", "po", "architect", "qa", "dev", "engineer"}
+    assert required_roles.issubset(brain.ROLE_DOMAIN_MAP.keys())
+
+
+def test_role_domain_map_sm_includes_expertise_and_md(tmp_path):
+    """SM persona maps to expertise and md domains."""
+    brain = _make_brain_in(tmp_path)
+    sm_domains = brain.ROLE_DOMAIN_MAP["sm"]
+    assert "expertise" in sm_domains
+    assert "md" in sm_domains
+
+
+def test_role_domain_map_dev_includes_code_domains(tmp_path):
+    """DEV persona maps to code file domains."""
+    brain = _make_brain_in(tmp_path)
+    dev_domains = brain.ROLE_DOMAIN_MAP["dev"]
+    assert "py" in dev_domains
+    assert "expertise" in dev_domains
+
+
+def test_search_domains_filters_to_matching_domain(tmp_path, monkeypatch):
+    """search(domains=['expertise']) returns only expertise-domain docs."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # Ingest docs in two different domains
+    brain._ingest_single("code/mod.py", "def compute_widget(): pass",
+                         source_file="code/mod.py", domain="py")
+    brain._ingest_single("expertise:brain:mx-001",
+                         "[expertise:brain] pattern: auto-bootstrap search",
+                         source_file=None, domain="expertise")
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    # Search with domains=['expertise'] should only return expertise doc
+    results = brain.search("widget bootstrap", limit=10, domains=["expertise"])
+    result_domains = {r["domain"] for r in results}
+    assert "py" not in result_domains, "py-domain docs should be excluded when domains=['expertise']"
+
+
+def test_search_domains_filters_to_code_domains(tmp_path, monkeypatch):
+    """search(domains=['py']) returns only py-domain docs."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    brain._ingest_single("code/util.py", "def process_data(x): return x * 2",
+                         source_file="code/util.py", domain="py")
+    brain._ingest_single("expertise:brain:mx-002",
+                         "[expertise:brain] convention: use WAL mode",
+                         source_file=None, domain="expertise")
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    results = brain.search("process data convention", limit=10, domains=["py"])
+    result_domains = {r["domain"] for r in results}
+    assert "expertise" not in result_domains, (
+        "expertise-domain docs should be excluded when domains=['py']"
+    )
+
+
+def test_system_context_sm_persona_uses_role_domains(tmp_path, monkeypatch):
+    """system_context() with persona='sm' calls search with SM-specific domains first."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    all_calls: list[Optional[list[str]]] = []
+
+    original_search = brain.search
+
+    def spy_search(query, domain=None, limit=5, domains=None):
+        all_calls.append(domains)
+        return original_search(query, domain=domain, limit=limit, domains=domains)
+
+    monkeypatch.setattr(brain, "search", spy_search)
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    brain.system_context(persona="sm", limit=5)
+
+    assert len(all_calls) >= 1, "search() should have been called at least once"
+    assert all_calls[0] == brain.ROLE_DOMAIN_MAP["sm"], (
+        "First search() call should use SM domains"
+    )
+
+
+def test_system_context_dev_persona_uses_role_domains(tmp_path, monkeypatch):
+    """system_context() with persona='dev' calls search with DEV-specific domains first."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    all_calls: list[Optional[list[str]]] = []
+
+    original_search = brain.search
+
+    def spy_search(query, domain=None, limit=5, domains=None):
+        all_calls.append(domains)
+        return original_search(query, domain=domain, limit=limit, domains=domains)
+
+    monkeypatch.setattr(brain, "search", spy_search)
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    brain.system_context(persona="dev", limit=5)
+
+    assert len(all_calls) >= 1, "search() should have been called at least once"
+    assert all_calls[0] == brain.ROLE_DOMAIN_MAP["dev"], (
+        "First search() call should use DEV domains"
+    )
+
+
+def test_system_context_unknown_persona_uses_no_domain_filter(tmp_path, monkeypatch):
+    """system_context() with unknown persona passes domains=None to search()."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    all_calls: list[Optional[list[str]]] = []
+
+    original_search = brain.search
+
+    def spy_search(query, domain=None, limit=5, domains=None):
+        all_calls.append(domains)
+        return original_search(query, domain=domain, limit=limit, domains=domains)
+
+    monkeypatch.setattr(brain, "search", spy_search)
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    brain.system_context(persona="unknown_role", limit=5)
+
+    assert len(all_calls) >= 1
+    assert all_calls[0] is None, "Unknown persona should not apply any domain filter"
+
+
+def test_system_context_falls_back_to_unfiltered_when_no_results(tmp_path, monkeypatch):
+    """system_context() falls back to unfiltered search when role-filtered search yields nothing."""
+    import subprocess as sp
+
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # Only ingest a py-domain doc
+    brain._ingest_single("code/helper.py", "def unique_helper_frobnicate(): pass",
+                         source_file="code/helper.py", domain="py")
+
+    call_count = {"n": 0}
+    original_search = brain.search
+
+    def counting_search(query, domain=None, limit=5, domains=None):
+        call_count["n"] += 1
+        return original_search(query, domain=domain, limit=limit, domains=domains)
+
+    monkeypatch.setattr(brain, "search", counting_search)
+
+    def fake_run(cmd, **kwargs):
+        result = MagicMock()
+        result.stdout = ""
+        return result
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    # SM persona restricts to expertise+md; only py doc exists → should fall back
+    result = brain.system_context(persona="sm", limit=5)
+
+    # search() was called at least twice (once filtered, once unfiltered fallback)
+    assert call_count["n"] >= 2, (
+        "system_context() should retry without domain filter when filtered search yields nothing"
+    )
+
+
 def test_chunk_multiple_chunks_per_file_purge(tmp_path, monkeypatch):
     """_purge_deleted removes all chunks for a deleted file."""
     brain = _make_brain_in(tmp_path)

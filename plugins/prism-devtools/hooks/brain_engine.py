@@ -219,6 +219,19 @@ class Brain:
         ".mypy_cache", ".pytest_cache", ".overstory",
     }
 
+    # Role → preferred Brain domain list for system_context() filtering.
+    # SM/PO/Architect: architecture decisions and docs live in expertise+md.
+    # QA: test conventions live in expertise records.
+    # DEV/Engineer: code patterns live in source code domains.
+    ROLE_DOMAIN_MAP: dict[str, list[str]] = {
+        "sm": ["expertise", "md"],
+        "po": ["expertise", "md"],
+        "architect": ["expertise", "md"],
+        "qa": ["expertise"],
+        "dev": ["py", "ts", "js", "expertise"],
+        "engineer": ["py", "ts", "js", "expertise"],
+    }
+
     def __init__(
         self,
         brain_db: str = ".prism/brain/brain.db",
@@ -1270,13 +1283,26 @@ class Brain:
     # ------------------------------------------------------------------
 
     def _fts5_search(
-        self, query: str, domain: Optional[str], limit: int
+        self,
+        query: str,
+        domain: Optional[str],
+        limit: int,
+        domains: Optional[list[str]] = None,
     ) -> list[dict]:
         safe = re.sub(r"[^\w\s]", " ", query).strip()
         if not safe:
             return []
         try:
-            if domain:
+            # Multi-domain list takes precedence over single domain.
+            if domains:
+                placeholders = ",".join("?" * len(domains))
+                rows = self._brain.execute(
+                    f"SELECT id, bm25(docs_fts) AS score FROM docs_fts "
+                    f"WHERE docs_fts MATCH ? AND domain IN ({placeholders}) "
+                    f"ORDER BY score LIMIT ?",
+                    (safe, *domains, limit),
+                ).fetchall()
+            elif domain:
                 rows = self._brain.execute(
                     "SELECT id, bm25(docs_fts) AS score FROM docs_fts "
                     "WHERE docs_fts MATCH ? AND domain = ? ORDER BY score LIMIT ?",
@@ -1293,7 +1319,11 @@ class Brain:
             return []
 
     def _vector_search(
-        self, query: str, domain: Optional[str], limit: int
+        self,
+        query: str,
+        domain: Optional[str],
+        limit: int,
+        domains: Optional[list[str]] = None,
     ) -> list[dict]:
         if not self.vector_enabled:
             return []
@@ -1306,7 +1336,8 @@ class Brain:
             # sqlite-vec vec0 doesn't support WHERE on non-vec columns,
             # so over-fetch by 3x when domain filtering is needed, then
             # post-filter by joining doc_id back to the docs table.
-            fetch_limit = limit * 3 if domain else limit
+            need_filter = bool(domains or domain)
+            fetch_limit = limit * 3 if need_filter else limit
             rows = self._brain.execute(
                 "SELECT doc_id, distance FROM docs_vec "
                 "WHERE embedding MATCH ? AND k = ?",
@@ -1316,7 +1347,19 @@ class Brain:
                 {"doc_id": r["doc_id"], "score": 1.0 / (1.0 + r["distance"])}
                 for r in rows
             ]
-            if domain and results:
+            # Multi-domain list takes precedence over single domain.
+            if domains and results:
+                doc_ids = [r["doc_id"] for r in results]
+                placeholders_ids = ",".join("?" * len(doc_ids))
+                placeholders_dom = ",".join("?" * len(domains))
+                domain_rows = self._brain.execute(
+                    f"SELECT id FROM docs WHERE id IN ({placeholders_ids}) "
+                    f"AND domain IN ({placeholders_dom})",
+                    (*doc_ids, *domains),
+                ).fetchall()
+                allowed = {r["id"] for r in domain_rows}
+                results = [r for r in results if r["doc_id"] in allowed][:limit]
+            elif domain and results:
                 doc_ids = [r["doc_id"] for r in results]
                 placeholders = ",".join("?" * len(doc_ids))
                 domain_rows = self._brain.execute(
@@ -1387,12 +1430,24 @@ class Brain:
     # ------------------------------------------------------------------
 
     def search(
-        self, query: str, domain: Optional[str] = None, limit: int = 5
+        self,
+        query: str,
+        domain: Optional[str] = None,
+        limit: int = 5,
+        domains: Optional[list[str]] = None,
     ) -> list[dict]:
         """3-index hybrid search with RRF fusion.
 
         Auto-bootstraps on first call when the index is empty, and runs
         incremental_reindex() on subsequent calls to stay current.
+
+        Args:
+            query: Search query string.
+            domain: Single domain filter (e.g. 'py', 'expertise').
+            limit: Maximum results to return.
+            domains: Multi-domain filter list; takes precedence over ``domain``.
+                     When provided, results are restricted to docs whose domain
+                     is in this list (e.g. ['expertise', 'md'] for SM persona).
         """
         doc_count = self._brain.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
         if doc_count == 0:
@@ -1405,8 +1460,12 @@ class Brain:
             self.incremental_reindex()
 
         inner = limit * 2
-        bm25 = self._fts5_search(query, domain, inner)
-        vec = self._vector_search(query, domain, inner) if self.vector_enabled else []
+        bm25 = self._fts5_search(query, domain, inner, domains=domains)
+        vec = (
+            self._vector_search(query, domain, inner, domains=domains)
+            if self.vector_enabled
+            else []
+        )
         graph = self._graph_search(query, inner)
 
         fused = reciprocal_rank_fusion([bm25, vec, graph] if self.vector_enabled
@@ -1446,7 +1505,12 @@ class Brain:
         persona: Optional[str] = None,
         limit: int = 8,
     ) -> str:
-        """Run hybrid search from story/persona context and return formatted block."""
+        """Run hybrid search from story/persona context and return formatted block.
+
+        When ``persona`` matches a known PRISM role (sm/qa/dev/po/architect/engineer),
+        search results are filtered to role-relevant domains via ROLE_DOMAIN_MAP.
+        If the filtered search yields no results, falls back to unfiltered search.
+        """
         query = ""
         if story_file:
             try:
@@ -1460,7 +1524,16 @@ class Brain:
         if not query:
             return ""
 
-        results = self.search(query, limit=limit)
+        # Resolve role-specific domain filter from persona.
+        role_domains: Optional[list[str]] = None
+        if persona:
+            role_key = persona.lower().strip()
+            role_domains = self.ROLE_DOMAIN_MAP.get(role_key)
+
+        results = self.search(query, limit=limit, domains=role_domains)
+        # If role-filtered search returned nothing, fall back to unfiltered.
+        if not results and role_domains:
+            results = self.search(query, limit=limit)
         if not results:
             self.last_result_count = 0
             return ""
