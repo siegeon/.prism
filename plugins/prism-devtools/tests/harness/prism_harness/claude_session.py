@@ -47,6 +47,7 @@ def run_claude(
         "-p", prompt,
         "--plugin-dir", str(plugin_dir),
         "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--model", model,
