@@ -18,8 +18,8 @@ def run_claude(
     work_dir: Path | str,
     plugin_dir: Path | str,
     *,
-    model: str = "sonnet",
-    max_budget_usd: float = 0.50,
+    model: str = "",
+    max_budget_usd: float = 0.0,
     max_turns: int = 3,
 ) -> tuple[Path, int]:
     """Invoke `claude -p` headless and capture stream-json output to a temp file.
@@ -28,8 +28,8 @@ def run_claude(
         prompt: The prompt to pass to claude -p.
         work_dir: Working directory for the claude invocation.
         plugin_dir: Path to the prism-devtools plugin (passed as --plugin-dir).
-        model: Claude model shorthand (default: 'sonnet').
-        max_budget_usd: Budget cap in USD (default: 0.50).
+        model: Claude model shorthand (default: '' uses subscription default).
+        max_budget_usd: Budget cap in USD (default: 0.0 = no cap).
         max_turns: Maximum conversation turns (default: 3).
 
     Returns:
@@ -50,10 +50,13 @@ def run_claude(
         "--verbose",
         "--dangerously-skip-permissions",
         "--no-session-persistence",
-        "--model", model,
-        "--max-budget-usd", str(max_budget_usd),
         "--max-turns", str(max_turns),
     ]
+
+    if model:
+        cmd += ["--model", model]
+    if max_budget_usd > 0:
+        cmd += ["--max-budget-usd", str(max_budget_usd)]
 
     # Strip CLAUDECODE and CLAUDE_CODE_ENTRYPOINT to prevent nested session errors
     _STRIP_VARS = {"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}
