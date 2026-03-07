@@ -127,6 +127,121 @@ def run_lint(runner: dict) -> dict:
         return {"success": None, "output": "", "error": str(e)}
 
 
+def run_security_scan() -> dict:
+    """Scan for security issues: exposed secrets, hardcoded credentials, injection vectors.
+
+    Returns {"clean": bool, "findings": list[str]}. Best-effort, never raises.
+    """
+    findings = []
+    cwd = Path.cwd()
+
+    IGNORED = {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build'}
+    SOURCE_EXTS = {
+        '.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rb', '.java', '.cs',
+        '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env', '.pem', '.key',
+    }
+    SECRET_PATTERNS = [
+        (re.compile(r'(?i)(?:password|passwd)\s*=\s*["\'][^"\']{3,}["\']'), "hardcoded password"),
+        (re.compile(r'(?i)(?:secret|api_key|apikey|access_key)\s*=\s*["\'][^"\']{8,}["\']'), "hardcoded secret/key"),
+        (re.compile(r'(?i)(?:token)\s*=\s*["\'][A-Za-z0-9+/._-]{20,}["\']'), "hardcoded token"),
+        (re.compile(r'-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'), "exposed private key"),
+    ]
+    INJECTION_PATTERNS = [
+        (re.compile(r'\beval\s*\([^)]*\+'), "potential eval injection"),
+        (re.compile(r'\bexec\s*\([^)]*\+'), "potential exec injection"),
+        (re.compile(r'os\.system\s*\([^)]*\+'), "potential shell injection"),
+    ]
+
+    def _skip(path: Path) -> bool:
+        return any(part in IGNORED for part in path.parts)
+
+    try:
+        # Check .env files tracked by git
+        for env_file in cwd.glob("**/.env"):
+            if _skip(env_file):
+                continue
+            try:
+                r = subprocess.run(
+                    ["git", "ls-files", "--error-unmatch", str(env_file)],
+                    capture_output=True, timeout=5, cwd=cwd
+                )
+                if r.returncode == 0:
+                    findings.append(f".env file committed to git: {env_file.relative_to(cwd)}")
+            except Exception:
+                pass
+
+        # Scan source files for secret/injection patterns
+        scanned: set = set()
+        for ext in SOURCE_EXTS:
+            for src_file in cwd.glob(f"**/*{ext}"):
+                if _skip(src_file) or src_file in scanned:
+                    continue
+                scanned.add(src_file)
+                try:
+                    text = src_file.read_text(encoding='utf-8', errors='replace')
+                    rel = src_file.relative_to(cwd)
+                    for pattern, label in SECRET_PATTERNS + INJECTION_PATTERNS:
+                        m = pattern.search(text)
+                        if m:
+                            findings.append(f"{label} in {rel} (near: {m.group()[:60]!r})")
+                            break  # One finding per file
+                except (IOError, OSError):
+                    continue
+    except Exception:
+        pass
+
+    return {"clean": len(findings) == 0, "findings": findings}
+
+
+def build_trace_matrix(story_file: str) -> list:
+    """Build AC→Test trace matrix from story file and test files.
+
+    Returns list of dicts: {ac_id, description, covered}.
+    """
+    if not story_file or not Path(story_file).exists():
+        return []
+
+    try:
+        story_content = Path(story_file).read_text(encoding='utf-8', errors='replace')
+    except (IOError, OSError):
+        return []
+
+    ac_ids = sorted(set(re.findall(r'AC-(\d+)', story_content)), key=int)
+    if not ac_ids:
+        return []
+
+    ac_descriptions = {}
+    for ac_num in ac_ids:
+        m = re.search(rf'AC-{ac_num}[:\s]+([^\n]{{1,60}})', story_content)
+        ac_descriptions[f"AC-{ac_num}"] = m.group(1).strip().strip('*').strip() if m else ""
+
+    cwd = Path.cwd()
+    test_globs = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.*", "**/*Tests.cs"]
+    test_files_content = ""
+    for tg in test_globs:
+        for tf in cwd.glob(tg):
+            try:
+                test_files_content += tf.read_text(encoding='utf-8', errors='replace')
+            except (IOError, OSError):
+                pass
+
+    result = []
+    for ac_num in ac_ids:
+        ac_id = f"AC-{ac_num}"
+        covered = (
+            ac_id in test_files_content
+            or f"ac{ac_num}" in test_files_content.lower()
+            or f"ac_{ac_num}" in test_files_content.lower()
+        )
+        result.append({
+            "ac_id": ac_id,
+            "description": ac_descriptions.get(ac_id, ""),
+            "covered": covered,
+        })
+
+    return result
+
+
 def validate_step(step_id: str, validation_type: str, state: dict) -> dict:
     """
     Validate that the current step is complete.
@@ -459,7 +574,70 @@ Fix lint errors before proceeding.
 Story file: {state.get('story_file', 'unknown')}"""
             }
 
-        return {"valid": True, "message": "Full validation passed: Tests + lint clean", "continue_instruction": None}
+        # Security scan: check for exposed secrets, hardcoded credentials, injection vectors
+        sec_result = run_security_scan()
+        if not sec_result["clean"]:
+            findings_list = "\n".join(f"  - {f}" for f in sec_result["findings"][:10])
+            return {
+                "valid": False,
+                "message": "Full suite validation: Security issues found.",
+                "continue_instruction": f"""VERIFICATION FAILED: Security scan found issues
+
+{findings_list}
+
+Fix security issues before proceeding:
+- Remove .env files from git tracking (add to .gitignore)
+- Replace hardcoded credentials with environment variables
+- Eliminate injection vectors (use parameterized calls)
+
+Story file: {state.get('story_file', 'unknown')}"""
+            }
+
+        # Trace verification: confirm AC→Test chain held through implementation
+        story_file = state.get("story_file", "")
+        if story_file and Path(story_file).exists():
+            try:
+                story_content = Path(story_file).read_text(encoding='utf-8')
+                ac_ids = re.findall(r'AC-(\d+)', story_content)
+                ac_ids = sorted(set(ac_ids), key=int)
+                if ac_ids:
+                    cwd = Path.cwd()
+                    test_globs = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.*", "**/*Tests.cs"]
+                    test_files_content = ""
+                    for tg in test_globs:
+                        for tf in cwd.glob(tg):
+                            try:
+                                test_files_content += tf.read_text(encoding='utf-8', errors='replace')
+                            except (IOError, OSError):
+                                pass
+
+                    missing_acs = []
+                    for ac_id in ac_ids:
+                        ac_ref = f"AC-{ac_id}"
+                        if (ac_ref not in test_files_content
+                                and f"ac{ac_id}" not in test_files_content.lower()
+                                and f"ac_{ac_id}" not in test_files_content.lower()):
+                            missing_acs.append(ac_ref)
+
+                    if missing_acs:
+                        missing_list = ", ".join(missing_acs)
+                        return {
+                            "valid": False,
+                            "message": f"TRACE CHAIN BROKEN: {missing_list} lost test coverage",
+                            "continue_instruction": f"""VERIFICATION FAILED: AC trace chain broken
+
+Story file: {story_file}
+
+The following acceptance criteria lost test coverage during implementation:
+{chr(10).join(f'  - {ac}: No test references this AC' for ac in missing_acs)}
+
+Refactoring must not drop test references to ACs.
+Restore AC references in test names, comments, or docstrings."""
+                        }
+            except (IOError, OSError):
+                pass
+
+        return {"valid": True, "message": "Full validation passed: Tests + lint + security + trace clean", "continue_instruction": None}
 
     return {"valid": True, "message": "Unknown validation type", "continue_instruction": None}
 
@@ -937,25 +1115,49 @@ def get_step_info(index: int) -> tuple:
     return None
 
 
+def _format_trace_matrix(story_file: str) -> str:
+    """Format AC→Test trace matrix as a human-readable table string."""
+    rows = build_trace_matrix(story_file)
+    if not rows:
+        return "(No ACs found in story file)"
+
+    ac_w = max(len(r["ac_id"]) for r in rows)
+    desc_w = min(40, max((len(r["description"]) for r in rows), default=10))
+    header = f"| {'AC':<{ac_w}} | {'Description':<{desc_w}} | Status  |"
+    sep = f"|{'-' * (ac_w + 2)}|{'-' * (desc_w + 2)}|---------|"
+    lines = [header, sep]
+    for r in rows:
+        status = "COVERED" if r["covered"] else "MISSING "
+        desc = r["description"][:desc_w]
+        lines.append(f"| {r['ac_id']:<{ac_w}} | {desc:<{desc_w}} | {status} |")
+    return "\n".join(lines)
+
+
 def get_gate_message(step_id: str, story_file: str, loop_back_to: int) -> str:
     """Build message for gate steps."""
-    messages = {
-        "red_gate": f"""
+    if step_id == "red_gate":
+        matrix = _format_trace_matrix(story_file)
+        return f"""
 GATE: TDD RED Phase Complete ✓
 
 Story file: {story_file}
 
 Tests are failing with assertion errors - RED state confirmed.
 
+Trace Matrix: Requirement → AC → Test
+{matrix}
+
 Review before proceeding:
-- [ ] Each acceptance criterion has test coverage
+- [ ] Each acceptance criterion shows COVERED in the matrix above
 - [ ] Tests fail on assertions (not syntax/import errors)
 - [ ] Story requirements are clear
 
 Commands:
   /prism-approve  - Proceed to GREEN phase (implementation)
   /prism-reject   - Loop back to planning (step 1)
-""",
+"""
+
+    messages = {
         "green_gate": f"""
 GATE: TDD GREEN Phase Complete ✓
 
@@ -964,7 +1166,7 @@ Story file: {story_file}
 All validations passed:
 - RED: Failing tests written ✓
 - GREEN: All tests passing ✓
-- QA: Tests + lint verified ✓
+- QA: Tests + lint + security + trace verified ✓
 
 Final steps:
 1. Commit all changes (implementation + tests)
