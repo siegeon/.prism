@@ -340,6 +340,20 @@ def test_detect_test_runner_dotnet_falls_back_to_csproj(tmp_path, monkeypatch):
     assert result["command"].startswith("dotnet test ")
 
 
+def test_detect_dotnet_command_has_quoted_path(tmp_path, monkeypatch):
+    spaced = tmp_path / "my project"
+    spaced.mkdir()
+    (spaced / "App.sln").write_text("")
+    sub = spaced / "src"
+    sub.mkdir()
+    (sub / "App.csproj").write_text("")
+    monkeypatch.chdir(spaced)
+    result = detect_test_runner()
+    assert '"' in result["command"], "Path should be quoted"
+    assert '"' in result["lint"], "Lint path should be quoted"
+    assert "App.sln" in result["command"]
+
+
 def test_detect_project_conventions_no_runner(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = detect_test_runner()

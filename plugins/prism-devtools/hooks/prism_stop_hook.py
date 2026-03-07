@@ -79,7 +79,7 @@ def detect_test_runner() -> dict:
                 break
             search_dir = parent
         test_target = str(sln_path) if sln_path else str(csproj_files[0])
-        return {"type": "dotnet", "command": f"dotnet test {test_target}", "lint": "dotnet format --verify-no-changes"}
+        return {"type": "dotnet", "command": f'dotnet test "{test_target}"', "lint": f'dotnet format --verify-no-changes "{test_target}"'}
 
     # Check for Go project
     if (cwd / "go.mod").exists():
