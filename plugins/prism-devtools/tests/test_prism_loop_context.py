@@ -267,8 +267,9 @@ def test_conventions_with_no_runner():
         assert instruction, f"Empty instruction for {step_id} with no runner"
 
 
-def test_detect_project_conventions_no_runner():
+def test_detect_project_conventions_no_runner(tmp_path, monkeypatch):
     """detect_project_conventions should return fallback with empty runner."""
+    monkeypatch.chdir(tmp_path)
     result = detect_project_conventions({"type": "unknown", "command": None, "lint": None})
     assert result == "No test runner detected"
 
