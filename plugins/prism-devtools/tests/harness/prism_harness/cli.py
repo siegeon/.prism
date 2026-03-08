@@ -37,6 +37,11 @@ _TEST_MODULE_NAMES = [
     "prism_harness.tests.test_skill_invocation",
     "prism_harness.tests.test_prism_loop",
     "prism_harness.tests.test_yaml_scalar",
+    "prism_harness.tests.test_subagent_spawn",
+    "prism_harness.tests.test_sfr_injection",
+    "prism_harness.tests.test_subagent_hooks",
+    "prism_harness.tests.test_brain_preload",
+    "prism_harness.tests.test_gate_validation",
 ]
 
 
@@ -482,6 +487,56 @@ def _cmd_validate(args: argparse.Namespace) -> int:
             ctx._fail("TC-4: bare '>' found as skill description in fixture")
         else:
             ctx._pass("TC-4: bare '>' not present as skill description")
+    total_pass += ctx.passed
+    total_fail += ctx.failed
+    total_skip += ctx.skipped
+    print()
+
+    # --- brain-preload fixture ---
+    fixture = fixtures_dir / "brain-preload.jsonl"
+    ctx = AssertionContext(use_color=use_color)
+    ctx.log_section("brain-preload")
+    if not fixture.is_file():
+        ctx._skip("fixture file not found: brain-preload.jsonl")
+    else:
+        events = parse_jsonl(fixture)
+        ctx.last_output = fixture
+        ctx.assert_json_not_empty("TC-1: fixture is non-empty")
+        ctx.assert_json_has("*", "brain_context", "TC-2: fixture contains brain_context block")
+        ctx.assert_json_has("*", "scaffold.py", "TC-3a: brain context includes scaffold.py reference")
+        ctx.assert_json_has("*", "parser.py", "TC-3b: brain context includes parser.py reference")
+        turns = count_turns(events)
+        if turns >= 1:
+            ctx._pass(f"TC-count: at least 1 assistant turn ({turns})")
+        else:
+            ctx._fail("TC-count: expected >= 1 assistant turn", f"got {turns}")
+    total_pass += ctx.passed
+    total_fail += ctx.failed
+    total_skip += ctx.skipped
+    print()
+
+    # --- gate-validation fixture ---
+    fixture = fixtures_dir / "gate-validation.jsonl"
+    ctx = AssertionContext(use_color=use_color)
+    ctx.log_section("gate-validation")
+    if not fixture.is_file():
+        ctx._skip("fixture file not found: gate-validation.jsonl")
+    else:
+        events = parse_jsonl(fixture)
+        ctx.last_output = fixture
+        ctx.assert_json_not_empty("TC-1: fixture is non-empty")
+        ctx.assert_json_has("*", "gate", "TC-2: fixture contains gate reference")
+        ctx.assert_json_has("*", "PASS", "TC-3: fixture contains gate PASS decision")
+        tool_calls = extract_tool_calls(events)
+        if tool_calls:
+            ctx._pass(f"TC-tools: fixture has tool calls ({len(tool_calls)})")
+        else:
+            ctx._fail("TC-tools: expected at least 1 tool call in gate fixture")
+        turns = count_turns(events)
+        if turns >= 2:
+            ctx._pass(f"TC-count: at least 2 assistant turns ({turns})")
+        else:
+            ctx._fail("TC-count: expected >= 2 assistant turns", f"got {turns}")
     total_pass += ctx.passed
     total_fail += ctx.failed
     total_skip += ctx.skipped
