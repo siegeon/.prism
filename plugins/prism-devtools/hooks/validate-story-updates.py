@@ -19,6 +19,13 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 def main():
+    try:
+        _main()
+    except Exception:
+        sys.exit(0)
+
+
+def _main():
     # Claude Code passes parameters via environment variables
     # Not via stdin JSON
     import os

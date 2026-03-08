@@ -52,24 +52,27 @@ def _update_debounce_ts() -> None:
 
 def main():
     try:
-        input_data = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        sys.exit(0)
+        try:
+            input_data = json.load(sys.stdin)
+        except (json.JSONDecodeError, ValueError):
+            sys.exit(0)
 
-    tool_name = input_data.get("tool_name", "")
-    if tool_name not in ("Edit", "Write"):
-        sys.exit(0)
+        tool_name = input_data.get("tool_name", "")
+        if tool_name not in ("Edit", "Write"):
+            sys.exit(0)
 
-    if _should_debounce():
-        sys.exit(0)
+        if _should_debounce():
+            sys.exit(0)
 
-    try:
-        Brain = _load_brain()
-        brain = Brain()
-        brain.incremental_reindex()
-        _update_debounce_ts()
+        try:
+            Brain = _load_brain()
+            brain = Brain()
+            brain.incremental_reindex()
+            _update_debounce_ts()
+        except Exception:
+            pass  # Fail silently
     except Exception:
-        pass  # Fail silently
+        sys.exit(0)
 
 
 if __name__ == "__main__":
