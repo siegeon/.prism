@@ -288,7 +288,12 @@ class Brain:
         ".claude", ".prism", "__pycache__", "node_modules", ".git",
         ".venv", "venv", ".env", "dist", "build", ".tox",
         ".mypy_cache", ".pytest_cache", ".overstory",
+        # sample/test data directories — should not pollute code search results
+        "sample-resumes", "samples", "test-data", "fixtures",
+        "testdata", "seed-data",
     }
+
+    _USER_EXCLUDE_FILE = ".prism/brain/exclude"
 
     # Role → preferred Brain domain list for system_context() filtering.
     # SM/PO/Architect: architecture decisions and docs live in expertise+md.
@@ -314,6 +319,9 @@ class Brain:
         self._scores_db_path = scores_db
         self._current_step_id: Optional[str] = None
         self.last_result_count: int = 0
+        self._effective_excludes = (
+            self._EXCLUDED_PATH_SEGMENTS | self._load_user_excludes()
+        )
 
         for path in (brain_db, graph_db, scores_db):
             Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -533,9 +541,25 @@ class Brain:
         except Exception:
             return None
 
+    @staticmethod
+    def _load_user_excludes(exclude_file: str = _USER_EXCLUDE_FILE) -> set[str]:
+        """Load additional path segments from .prism/brain/exclude.
+
+        File format: one path segment per line; lines starting with '#' are comments.
+        """
+        p = Path(exclude_file)
+        if not p.exists():
+            return set()
+        segments: set[str] = set()
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                segments.add(line)
+        return segments
+
     def _should_index(self, filepath: str) -> bool:
         p = Path(filepath)
-        if any(part in self._EXCLUDED_PATH_SEGMENTS for part in p.parts):
+        if any(part in self._effective_excludes for part in p.parts):
             return False
         return p.suffix in self._INDEXABLE_SUFFIXES
 
