@@ -16,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import importlib
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -24,6 +25,19 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Suppress HuggingFace Hub unauthenticated-request warning.
+# model2vec downloads its model from HF Hub without requiring a token, but
+# the Hub client emits a noisy warning when no token is present.  We silence
+# it via the documented env-var *and* via the Python warnings filter so the
+# suppression works regardless of which code path loads the model.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+warnings.filterwarnings(
+    "ignore",
+    message=r".*unauthenticated requests.*HF Hub.*",
+)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -152,9 +166,14 @@ def _try_enable_vector(db: sqlite3.Connection) -> bool:
         """Inner helper: load model2vec StaticModel. Returns True on success."""
         global _MODEL
         try:
-            from model2vec import StaticModel  # type: ignore
-            if _MODEL is None:
-                _MODEL = StaticModel.from_pretrained("minishlab/potion-base-32M")
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r".*unauthenticated requests.*HF Hub.*",
+                )
+                from model2vec import StaticModel  # type: ignore
+                if _MODEL is None:
+                    _MODEL = StaticModel.from_pretrained("minishlab/potion-base-32M")
             return True
         except ImportError:
             return False
