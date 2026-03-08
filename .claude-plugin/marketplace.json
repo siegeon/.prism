@@ -1,17 +1,16 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "prism",
   "description": "PRISM methodology marketplace - software engineering workflow coordination",
   "owner": {
     "name": "Resolve Systems",
     "email": "jesse@resolve.io"
   },
-  "version": "3.4.0",
   "plugins": [
     {
       "name": "prism-devtools",
       "description": "PRISM methodology plugin - software engineering workflow coordination with Dev, QA, Architecture, and Product Owner agents, TDD workflow orchestration, Brain-powered semantic memory, Conductor prompt selection, and BYOS skills",
       "source": "./plugins/prism-devtools",
-      "version": "3.4.0",
       "author": {
         "name": "Resolve Systems"
       },
