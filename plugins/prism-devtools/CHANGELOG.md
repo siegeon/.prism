@@ -5,6 +5,13 @@ All notable changes to the PRISM Development System plugin will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2] - 2026-03-08
+
+### Fixed
+
+- **Brain: sample/test data exclusions** — `_EXCLUDED_PATH_SEGMENTS` now includes `sample-resumes`, `samples`, `test-data`, `fixtures`, `testdata`, `seed-data` to prevent irrelevant BM25 matches from customer project data directories
+- **Brain: user-defined exclude list** — new `_load_user_excludes()` reads `.prism/brain/exclude` (one path segment per line, `#` comments supported) so teams can exclude project-specific dirs without code changes
+
 ## [3.5.1] - 2026-03-08
 
 ### Added

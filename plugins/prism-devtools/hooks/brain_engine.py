@@ -288,6 +288,9 @@ class Brain:
         ".claude", ".prism", "__pycache__", "node_modules", ".git",
         ".venv", "venv", ".env", "dist", "build", ".tox",
         ".mypy_cache", ".pytest_cache", ".overstory",
+        # Sample / test data dirs that produce irrelevant BM25 matches
+        "sample-resumes", "samples", "test-data", "fixtures",
+        "testdata", "seed-data",
     }
 
     # Role → preferred Brain domain list for system_context() filtering.
@@ -533,9 +536,29 @@ class Brain:
         except Exception:
             return None
 
+    def _load_user_excludes(self) -> set[str]:
+        """Read .prism/brain/exclude for user-specified path segment exclusions.
+
+        Each non-blank, non-comment line is treated as a path segment to exclude
+        (same semantics as _EXCLUDED_PATH_SEGMENTS). Returns an empty set if the
+        file does not exist.
+        """
+        exclude_file = Path(".prism/brain/exclude")
+        if not exclude_file.exists():
+            return set()
+        segments: set[str] = set()
+        for line in exclude_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                segments.add(line)
+        return segments
+
     def _should_index(self, filepath: str) -> bool:
         p = Path(filepath)
         if any(part in self._EXCLUDED_PATH_SEGMENTS for part in p.parts):
+            return False
+        user_excludes = self._load_user_excludes()
+        if user_excludes and any(part in user_excludes for part in p.parts):
             return False
         return p.suffix in self._INDEXABLE_SUFFIXES
 
