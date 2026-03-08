@@ -433,6 +433,7 @@ def create_gist(transcript_path: Path) -> str | None:
         return None
     if not ensure_gh_gist_scope():
         return None
+
     try:
         rc, url, err = run([
             "gh", "gist", "create",
