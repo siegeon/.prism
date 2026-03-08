@@ -14,6 +14,7 @@ deps are unavailable.
 from __future__ import annotations
 
 import ctypes
+import importlib
 import json
 import re
 import sqlite3
@@ -37,6 +38,35 @@ class BrainCorruptError(Exception):
 # ---------------------------------------------------------------------------
 _MODEL = None
 _SQLITE_VEC_LOADED = False
+_VECTOR_INSTALL_ATTEMPTED = False
+
+
+def _auto_install_vector_deps() -> bool:
+    """Attempt pip install of sqlite-vec and model2vec. Returns True on success.
+
+    Guards against repeated install attempts within the same process.
+    After a successful install, invalidates the import cache so subsequent
+    `import sqlite_vec` / `from model2vec import ...` calls resolve correctly.
+    """
+    global _VECTOR_INSTALL_ATTEMPTED
+    if _VECTOR_INSTALL_ATTEMPTED:
+        return False
+    _VECTOR_INSTALL_ATTEMPTED = True
+    print("Brain: attempting to install optional deps (sqlite-vec model2vec)...",
+          file=sys.stderr)
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "sqlite-vec", "model2vec"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        print(
+            "Brain: optional deps unavailable, continuing in BM25+GraphRAG mode",
+            file=sys.stderr,
+        )
+        return False
+    importlib.invalidate_caches()
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Tree-sitter language loader
@@ -98,34 +128,75 @@ _TS_LANG_MAP: dict[str, str] = {
 
 
 def _try_enable_vector(db: sqlite3.Connection) -> bool:
-    """Attempt to load sqlite-vec extension and model2vec. Returns True on success."""
-    global _MODEL, _SQLITE_VEC_LOADED
-    try:
-        import sqlite_vec  # type: ignore
-        db.enable_load_extension(True)
-        sqlite_vec.load(db)
-        db.enable_load_extension(False)
-        _SQLITE_VEC_LOADED = True
-    except (ImportError, AttributeError, Exception):
-        print(
-            "Brain: running in BM25+GraphRAG mode "
-            "(install sqlite-vec model2vec for vector search)",
-            file=sys.stderr,
-        )
-        return False
+    """Attempt to load sqlite-vec extension and model2vec. Returns True on success.
 
-    try:
-        from model2vec import StaticModel  # type: ignore
-        if _MODEL is None:
-            _MODEL = StaticModel.from_pretrained("minishlab/potion-base-32M")
-        return True
-    except (ImportError, OSError, Exception):
-        print(
-            "Brain: running in BM25+GraphRAG mode "
-            "(install sqlite-vec model2vec for vector search)",
-            file=sys.stderr,
-        )
-        return False
+    On ImportError, attempts a one-time pip install of sqlite-vec and model2vec
+    before retrying. Falls back gracefully to BM25+GraphRAG mode on failure.
+    """
+    global _MODEL, _SQLITE_VEC_LOADED
+
+    def _load_sqlite_vec() -> bool:
+        """Inner helper: load sqlite-vec into db. Returns True on success."""
+        try:
+            import sqlite_vec  # type: ignore
+            db.enable_load_extension(True)
+            sqlite_vec.load(db)
+            db.enable_load_extension(False)
+            return True
+        except ImportError:
+            return False
+        except Exception:
+            return False
+
+    def _load_model2vec() -> bool:
+        """Inner helper: load model2vec StaticModel. Returns True on success."""
+        global _MODEL
+        try:
+            from model2vec import StaticModel  # type: ignore
+            if _MODEL is None:
+                _MODEL = StaticModel.from_pretrained("minishlab/potion-base-32M")
+            return True
+        except ImportError:
+            return False
+        except Exception:
+            return False
+
+    # Attempt to load sqlite-vec; auto-install on first ImportError.
+    if not _load_sqlite_vec():
+        if not _auto_install_vector_deps():
+            print(
+                "Brain: running in BM25+GraphRAG mode "
+                "(install sqlite-vec model2vec for vector search)",
+                file=sys.stderr,
+            )
+            return False
+        if not _load_sqlite_vec():
+            print(
+                "Brain: running in BM25+GraphRAG mode "
+                "(install sqlite-vec model2vec for vector search)",
+                file=sys.stderr,
+            )
+            return False
+    _SQLITE_VEC_LOADED = True
+
+    # Attempt to load model2vec; auto-install already called above if needed.
+    if not _load_model2vec():
+        if not _auto_install_vector_deps():
+            print(
+                "Brain: running in BM25+GraphRAG mode "
+                "(install sqlite-vec model2vec for vector search)",
+                file=sys.stderr,
+            )
+            return False
+        if not _load_model2vec():
+            print(
+                "Brain: running in BM25+GraphRAG mode "
+                "(install sqlite-vec model2vec for vector search)",
+                file=sys.stderr,
+            )
+            return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
