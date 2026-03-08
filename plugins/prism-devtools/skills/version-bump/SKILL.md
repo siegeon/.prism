@@ -27,7 +27,7 @@ and creates a git tag. Claude Code uses the version string to resolve plugin cac
 
 ## Quick Start
 
-Run the bump script:
+Run the bump script — it handles everything (bump, commit, tag, push):
 
 ```bash
 # Patch bump (3.5.0 → 3.5.1) — bug fixes
@@ -38,6 +38,12 @@ python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py minor
 
 # Major bump (3.5.0 → 4.0.0) — breaking changes
 python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py major
+
+# With a Jira ticket
+python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py patch --ticket PLAT-1234
+
+# Commit but don't push yet
+python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py patch --no-push
 
 # Just show current version
 python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py status
@@ -53,7 +59,8 @@ python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py tag
 3. Updates `plugin.json` with new version
 4. Prepends a new section to `CHANGELOG.md` with today's date
 5. Creates an annotated git tag `v{new_version}`
-6. Outputs a summary of changes made
+6. Commits the version files with `PLAT-XXXX Bump version X → Y`
+7. Pushes to `origin main` with tags (so downstream users get the update)
 
 ## Semver Rules for This Plugin
 
@@ -63,12 +70,10 @@ python plugins/prism-devtools/skills/version-bump/scripts/version_bump.py tag
 | MINOR | New feature: added skill, agent, command           | Adding `/new-command`          |
 | PATCH | Bug fix, prompt tweak, doc update                  | Fixing a script error          |
 
-## Post-Bump Checklist
+## Post-Bump
 
-After bumping:
-- [ ] Review the CHANGELOG section — add detail about what changed
-- [ ] Commit: `PLAT-XXXX Bump version X.Y.Z → A.B.C`
-- [ ] Push to origin when ready: `git push origin main --tags`
+The script commits and pushes automatically. After it runs:
+- [ ] Review the CHANGELOG section in the next session — fill in details about what changed
 
 ## Key Files
 

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Bump prism-devtools plugin version, update CHANGELOG, and create git tag.
+Bump prism-devtools plugin version, update CHANGELOG, create git tag, commit, and push.
 
 Usage:
-    python version_bump.py patch          # 3.5.0 → 3.5.1
-    python version_bump.py minor          # 3.5.0 → 3.6.0
-    python version_bump.py major          # 3.5.0 → 4.0.0
+    python version_bump.py patch          # 3.5.0 → 3.5.1 (bump + commit + push)
+    python version_bump.py minor          # 3.5.0 → 3.6.0 (bump + commit + push)
+    python version_bump.py major          # 3.5.0 → 4.0.0 (bump + commit + push)
     python version_bump.py status         # Show current version and tag info
     python version_bump.py tag            # Create git tag for current version
     python version_bump.py sync-changelog # Add CHANGELOG stub for current version
+
+    Options:
+        --no-push    Skip the git push (commit locally only)
+        --ticket XX  Use PLAT-XX in commit message (default: PLAT-0000)
 
 Exit codes:
     0 = success
@@ -127,6 +131,57 @@ def create_tag(version: str) -> bool:
     return True
 
 
+def git_commit_and_push(old_version: str, new_version: str, ticket: str, push: bool) -> None:
+    """Stage version files, commit, and push to origin with tags."""
+    # Find repo root (git toplevel)
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, cwd=PLUGIN_ROOT,
+    )
+    repo_root = result.stdout.strip()
+
+    # Stage the version-related files
+    files_to_stage = [str(PLUGIN_JSON)]
+    if CHANGELOG.exists():
+        files_to_stage.append(str(CHANGELOG))
+
+    subprocess.run(
+        ["git", "add"] + files_to_stage,
+        check=True, cwd=repo_root,
+    )
+    print(f"  Staged version files")
+
+    # Commit
+    msg = f"{ticket} Bump version {old_version} → {new_version}"
+    subprocess.run(
+        ["git", "commit", "-m", msg],
+        check=True, cwd=repo_root,
+    )
+    print(f"  Committed: {msg}")
+
+    # Move tag to the commit (tag was created before commit, so re-tag)
+    tag_name = f"v{new_version}"
+    subprocess.run(
+        ["git", "tag", "-d", tag_name],
+        capture_output=True, cwd=repo_root,
+    )
+    subprocess.run(
+        ["git", "tag", "-a", tag_name, "-m", f"Release {new_version}"],
+        check=True, cwd=repo_root,
+    )
+    print(f"  Re-tagged {tag_name} at commit")
+
+    # Push
+    if push:
+        subprocess.run(
+            ["git", "push", "origin", "main", "--tags"],
+            check=True, cwd=repo_root,
+        )
+        print(f"  Pushed to origin main with tags")
+    else:
+        print(f"  Skipped push (--no-push). Run: git push origin main --tags")
+
+
 def git_status() -> None:
     """Show version status: plugin.json, CHANGELOG, and tags."""
     current = read_version()
@@ -165,11 +220,18 @@ def git_status() -> None:
 
 
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print("Usage: version_bump.py <major|minor|patch|status|tag|sync-changelog>")
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print("Usage: version_bump.py <major|minor|patch|status|tag|sync-changelog> [--no-push] [--ticket PLAT-XXXX]")
         sys.exit(1)
 
-    action = sys.argv[1].lower()
+    action = args[0].lower()
+    push = "--no-push" not in args
+    ticket = "PLAT-0000"
+    if "--ticket" in args:
+        idx = args.index("--ticket")
+        if idx + 1 < len(args):
+            ticket = args[idx + 1]
 
     if action == "status":
         git_status()
@@ -201,12 +263,9 @@ def main() -> None:
         print(f"  Updated CHANGELOG.md with [{new_version}] section")
 
     create_tag(new_version)
+    git_commit_and_push(current, new_version, ticket, push)
 
-    print(f"\n  ✓ Version bumped to {new_version}")
-    print(f"  Next steps:")
-    print(f"    1. Fill in CHANGELOG.md [{new_version}] section with changes")
-    print(f"    2. git add -A && git commit -m 'PLAT-XXXX Bump version {current} → {new_version}'")
-    print(f"    3. git push origin main --tags")
+    print(f"\n  ✓ Version {new_version} released")
 
 
 if __name__ == "__main__":
