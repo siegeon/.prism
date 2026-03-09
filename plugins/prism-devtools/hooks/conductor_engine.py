@@ -29,6 +29,23 @@ EPSILON_DECAY = 0.05
 RETIRE_AVG_SCORE_THRESHOLD = 0.3
 RETIRE_MIN_RUNS = 5
 
+# Sub-agent domain mapping for Brain context role-filtering
+_AGENT_DOMAIN_MAP: dict[str, str] = {
+    "story-content-validator": "qa",
+    "requirements-tracer": "qa",
+    "qa-gate-manager": "qa",
+    "file-list-auditor": "dev",
+    "verify-plan": "sm",
+}
+
+# Sub-agent namespace mapping for Canopy variant selection
+_AGENT_NAMESPACE_MAP: dict[str, str] = {
+    "story-content-validator": "validator/story-content",
+    "requirements-tracer": "validator/requirements-tracer",
+    "qa-gate-manager": "validator/qa-gate",
+    "file-list-auditor": "validator/file-list",
+}
+
 
 class Conductor:
     """Thin orchestration layer over Brain for PRISM workflow integration.
@@ -38,6 +55,7 @@ class Conductor:
     """
 
     PROMPT_ID_FILE = ".prism/brain/current_prompt_id"
+    SUBAGENT_PROMPT_ID_DIR = ".prism/brain/subagent_variants"
 
     def __init__(self) -> None:
         self._brain = None
@@ -306,3 +324,163 @@ class Conductor:
         except Exception as exc:
             print(f"Conductor: incremental_reindex failed ({exc})", file=sys.stderr)
             return 0
+
+    # ------------------------------------------------------------------
+    # Sub-agent SFR variant selection (Phase 2)
+    # ------------------------------------------------------------------
+
+    def _get_story_file_from_state(self) -> str:
+        """Read story_file from PRISM state file. Returns '' if unavailable."""
+        try:
+            from prism_loop_context import resolve_state_file, parse_state
+            state = parse_state(resolve_state_file())
+            return state.get("story_file", "")
+        except Exception:
+            return ""
+
+    def _agent_namespace(self, agent_name: str) -> str:
+        """Resolve Canopy namespace for a sub-agent."""
+        return _AGENT_NAMESPACE_MAP.get(agent_name, f"validator/{agent_name}")
+
+    def _agent_domain(self, agent_name: str) -> str:
+        """Resolve Brain domain for a sub-agent."""
+        return _AGENT_DOMAIN_MAP.get(agent_name, "qa")
+
+    def _random_subagent_variant(self, namespace: str) -> str:
+        """Pick a random non-retired prompt variant for the given namespace."""
+        if self._brain_available and self._brain is not None:
+            try:
+                retired = {
+                    row[0]
+                    for row in self._brain._scores.execute(
+                        "SELECT prompt_id FROM retired_variants WHERE persona = 'validator'",
+                    ).fetchall()
+                }
+                rows = self._brain._scores.execute(
+                    "SELECT prompt_id FROM prompt_variants WHERE prompt_id LIKE ?",
+                    (f"{namespace}/%",),
+                ).fetchall()
+                candidates = [row[0] for row in rows if row[0] not in retired]
+                if candidates:
+                    return random.choice(candidates)
+            except Exception:
+                pass
+        return f"{namespace}/freeform"
+
+    def _select_subagent_variant(self, agent_name: str) -> tuple[str, str]:
+        """Epsilon-greedy variant selection for sub-agent validators.
+
+        Uses the validator/* namespace in Canopy. Returns (prompt_id, template_content).
+        Returns (prompt_id, "") when freeform (no SFR template) is selected.
+        """
+        namespace = self._agent_namespace(agent_name)
+        persona = "validator"
+        step_id = namespace
+
+        if not self._brain_available or self._brain is None:
+            return (f"{namespace}/freeform", "")
+        try:
+            total_runs = self._brain.outcome_count(persona, step_id)
+            eps = self._epsilon(total_runs)
+            if random.random() < eps:
+                prompt_id = self._random_subagent_variant(namespace)
+            else:
+                prompt_id = self._brain.best_prompt(persona, step_id)
+                if not prompt_id or self._is_retired(prompt_id):
+                    prompt_id = self._random_subagent_variant(namespace)
+
+            content = ""
+            try:
+                row = self._brain._scores.execute(
+                    "SELECT content FROM prompt_variants WHERE prompt_id = ?",
+                    (prompt_id,),
+                ).fetchone()
+                if row:
+                    content = row[0] or ""
+            except Exception:
+                pass
+
+            return (prompt_id, content)
+        except Exception as exc:
+            print(
+                f"Conductor: _select_subagent_variant failed ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
+            return (f"{namespace}/freeform", "")
+
+    def _subagent_brain_context(self, agent_name: str) -> str:
+        """Fetch Brain context for a sub-agent's domain.
+
+        Returns a formatted <brain_context> block, or empty string if Brain
+        is unavailable or returns no results.
+        """
+        if not self._brain_available or self._brain is None:
+            return ""
+        try:
+            story_file = self._get_story_file_from_state()
+            domain = self._agent_domain(agent_name)
+            ctx = self._brain.system_context(story_file=story_file, persona=domain)
+            return ctx or ""
+        except Exception as exc:
+            print(
+                f"Conductor: _subagent_brain_context failed ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
+            return ""
+
+    def _save_subagent_prompt_id(self, agent_name: str, prompt_id: str) -> None:
+        """Atomically persist selected variant so SubagentStop recorder can read it."""
+        try:
+            p = Path(self.SUBAGENT_PROMPT_ID_DIR)
+            p.mkdir(parents=True, exist_ok=True)
+            safe_name = agent_name.replace("/", "_").replace("\\", "_")
+            target = p / safe_name
+            fd, tmp = tempfile.mkstemp(dir=str(p))
+            try:
+                os.write(fd, prompt_id.encode())
+                os.close(fd)
+                os.replace(tmp, str(target))
+            except Exception:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+        except Exception as exc:
+            print(f"Conductor: _save_subagent_prompt_id failed ({exc})", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Conductor CLI — sub-agent SFR variant and Brain context injection"
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--select-subagent-variant",
+        metavar="AGENT_NAME",
+        help="Select SFR variant for named sub-agent (prints template or empty string)",
+    )
+    group.add_argument(
+        "--brain-context",
+        metavar="AGENT_NAME",
+        help="Fetch Brain context for named sub-agent's domain (prints context block)",
+    )
+    parsed = parser.parse_args()
+
+    conductor = Conductor()
+
+    if parsed.select_subagent_variant:
+        _, content = conductor._select_subagent_variant(parsed.select_subagent_variant)
+        if content:
+            print(content)
+    elif parsed.brain_context:
+        ctx = conductor._subagent_brain_context(parsed.brain_context)
+        if ctx:
+            print(ctx)
+
+    sys.exit(0)
