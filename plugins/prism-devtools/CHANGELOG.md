@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Lenient session check** — `is_same_session()` returns `True` when `session_id` isn't in hook input, falling back to the 2-hour staleness check for protection (#28)
-- **Unconditional last_activity update** — every successful hook fire refreshes the timestamp, preventing the staleness trap (#28)
-- **Resilient instruction building** — fallback wrapped in `try/except` so missing core-steps files don't silently crash the hook (#28)
+- **Stop hook: lenient session check** — `is_same_session()` now returns `True` when the hook input is missing a `session_id`, falling through to the staleness check instead of rejecting. Prevents workflows from getting permanently stuck when hooks fire without a session ID.
+- **Stop hook: unconditional `last_activity` refresh** — `last_activity` is now updated on every active stop, not only when transcript tokens or branch changes are detected. Prevents the 2-hour staleness trap when a step makes tool calls that produce no tokens.
+- **Stop hook: fallback instruction resilience** — `build_agent_instruction()` in the Conductor fallback path is now wrapped in `try/except`; on failure a minimal "Proceed with step: `<id>`" instruction is emitted instead of propagating an exception that caused the hook to silently exit.
 
 ## [3.9.0] - 2026-03-09
 
