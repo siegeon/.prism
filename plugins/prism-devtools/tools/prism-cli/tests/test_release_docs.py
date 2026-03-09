@@ -217,12 +217,12 @@ class TestAC4_PluginJsonVersion:
     def test_ac4_plugin_json_version_is_371(self):
         """
         AC-4: plugin.json 'version' field is '3.7.1'
-        Requirement: Version bump from 3.7.0 → 3.7.1 for HF Hub warning fix and Brain traversal crash fix
-        Expected: json.loads(plugin.json)['version'] == '3.7.1'
+        Requirement: Version bump from 3.7.1 → 3.7.2 for HF Hub warning fix and Brain traversal crash fix
+        Expected: json.loads(plugin.json)['version'] == '3.7.2'
         """
         data = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
-        assert data.get("version") == "3.7.1", (
-            f"plugin.json version is '{data.get('version')}', expected '3.7.1'"
+        assert data.get("version") == "3.7.2", (
+            f"plugin.json version is '{data.get('version')}', expected '3.7.2'"
         )
 
 
@@ -254,9 +254,9 @@ class TestAC5_VersionOrdering:
         text = _changelog_text()
         first_version = re.search(r"## \[(\d+\.\d+\.\d+)\]", text)
         assert first_version, "No version headings found in CHANGELOG"
-        assert first_version.group(1) == "3.7.1", (
+        assert first_version.group(1) == "3.7.2", (
             f"First version in CHANGELOG is '{first_version.group(1)}', "
-            f"expected '3.7.1' (should be latest)"
+            f"expected '3.7.2' (should be latest)"
         )
 
 
