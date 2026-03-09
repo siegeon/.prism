@@ -23,7 +23,7 @@ from prism_stop_hook import (  # noqa: E402
     run_security_scan,
     build_trace_matrix,
     _format_trace_matrix,
-    _filtered_glob,
+    _filtered_glob,  # noqa: F401
     get_gate_message,
     validate_step,
     detect_test_runner,
@@ -32,6 +32,11 @@ from prism_stop_hook import (  # noqa: E402
     _looks_like_test_output,
     _parse_test_output,
     extract_test_result_from_transcript,
+    _is_no_progress_stop,
+    _find_last_compaction_line,
+    _MIN_STEP_TOOL_CALLS,
+    _ADVANCE_DEBOUNCE_SECS,
+    parse_frontmatter,
 )
 
 
@@ -912,3 +917,291 @@ def test_validate_step_green_falls_back_when_transcript_inconclusive(tmp_path, m
 
     mock_run.assert_called_once()
     assert result["valid"] is True
+
+
+# ---------------------------------------------------------------------------
+# _is_no_progress_stop() tests
+# ---------------------------------------------------------------------------
+
+def test_no_progress_returns_false_when_no_validation():
+    assert _is_no_progress_stop(None, 0) is False
+
+
+def test_no_progress_returns_false_for_unknown_validation_type():
+    """Validation types not in _MIN_STEP_TOOL_CALLS have min=0 → never no-progress."""
+    assert _is_no_progress_stop("unknown_type", 0) is False
+
+
+def test_no_progress_returns_true_when_tool_calls_zero_for_green():
+    assert _is_no_progress_stop("green", 0) is True
+
+
+def test_no_progress_returns_true_when_tool_calls_below_min():
+    min_calls = _MIN_STEP_TOOL_CALLS["green"]  # 3
+    assert _is_no_progress_stop("green", min_calls - 1) is True
+
+
+def test_no_progress_returns_false_when_tool_calls_meet_minimum():
+    min_calls = _MIN_STEP_TOOL_CALLS["green"]  # 3
+    assert _is_no_progress_stop("green", min_calls) is False
+
+
+def test_no_progress_returns_false_when_tool_calls_exceed_minimum():
+    assert _is_no_progress_stop("green", 10) is False
+
+
+def test_no_progress_red_with_trace_requires_minimum():
+    min_calls = _MIN_STEP_TOOL_CALLS["red_with_trace"]  # 3
+    assert _is_no_progress_stop("red_with_trace", min_calls - 1) is True
+    assert _is_no_progress_stop("red_with_trace", min_calls) is False
+
+
+def test_no_progress_story_complete_min_two():
+    assert _is_no_progress_stop("story_complete", 1) is True
+    assert _is_no_progress_stop("story_complete", 2) is False
+
+
+def test_no_progress_green_full_requires_minimum():
+    min_calls = _MIN_STEP_TOOL_CALLS["green_full"]  # 3
+    assert _is_no_progress_stop("green_full", min_calls - 1) is True
+    assert _is_no_progress_stop("green_full", min_calls) is False
+
+
+def test_advance_debounce_secs_positive():
+    """_ADVANCE_DEBOUNCE_SECS must be a positive integer."""
+    assert isinstance(_ADVANCE_DEBOUNCE_SECS, int)
+    assert _ADVANCE_DEBOUNCE_SECS > 0
+
+
+# ---------------------------------------------------------------------------
+# _find_last_compaction_line() tests
+# ---------------------------------------------------------------------------
+
+def _make_raw_transcript(tmp_path: Path, lines: list) -> str:
+    """Write a JSONL transcript from pre-serialized JSON strings."""
+    path = tmp_path / "transcript.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+def test_find_compaction_returns_zero_for_empty_path():
+    assert _find_last_compaction_line("") == 0
+
+
+def test_find_compaction_returns_zero_for_missing_file(tmp_path):
+    assert _find_last_compaction_line(str(tmp_path / "missing.jsonl")) == 0
+
+
+def test_find_compaction_returns_zero_when_no_marker(tmp_path):
+    entries = [
+        _bash_tool_use("id1", "bun test"),
+        _bash_tool_result("id1", "===== 3 passed in 0.1s ====="),
+    ]
+    path = _make_transcript(tmp_path, entries)
+    assert _find_last_compaction_line(path) == 0
+
+
+def test_find_compaction_detects_top_level_type_marker(tmp_path):
+    lines = [
+        json.dumps({"type": "tool_use", "id": "x"}),
+        json.dumps({"type": "context_window_compacted", "timestamp": "2026-01-01"}),
+        json.dumps({"type": "tool_use", "id": "y"}),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = _find_last_compaction_line(path)
+    assert result == 2  # compaction marker is on line 2
+
+
+def test_find_compaction_detects_system_message(tmp_path):
+    lines = [
+        json.dumps({"message": {"role": "user", "content": "Hello"}}),
+        json.dumps({"message": {"role": "system", "content": "Context has been compacted to fit"}}),
+        json.dumps({"message": {"role": "user", "content": "Continue"}}),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = _find_last_compaction_line(path)
+    assert result == 2
+
+
+def test_find_compaction_ignores_non_system_messages(tmp_path):
+    lines = [
+        json.dumps({"message": {"role": "user", "content": "compact this please"}}),
+        json.dumps({"message": {"role": "assistant", "content": "compact done"}}),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = _find_last_compaction_line(path)
+    assert result == 0  # user/assistant messages don't count
+
+
+def test_find_compaction_returns_last_when_multiple_markers(tmp_path):
+    lines = [
+        json.dumps({"type": "context_window_compacted"}),
+        json.dumps({"type": "tool_use"}),
+        json.dumps({"type": "context_window_compacted"}),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = _find_last_compaction_line(path)
+    assert result == 3  # last compaction marker is on line 3
+
+
+def test_find_compaction_detects_list_content_system_message(tmp_path):
+    lines = [
+        json.dumps({"message": {"role": "system", "content": [{"type": "text", "text": "Context compacted"}]}}),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = _find_last_compaction_line(path)
+    assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# extract_test_result_from_transcript() — compaction-aware tests
+# ---------------------------------------------------------------------------
+
+def test_extract_rejects_stale_result_before_compaction(tmp_path):
+    """Test results before the compaction marker must be rejected."""
+    lines = [
+        json.dumps(_bash_tool_use("id1", "python -m pytest")),
+        json.dumps(_bash_tool_result("id1", "===== 3 passed in 0.2s =====")),
+        json.dumps({"type": "context_window_compacted"}),
+        # No test output after compaction
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = extract_test_result_from_transcript(path, step_line_start=0)
+    assert result is None  # stale: test output was before compaction
+
+
+def test_extract_accepts_result_after_compaction(tmp_path):
+    """Test results after the compaction marker must be accepted."""
+    lines = [
+        json.dumps({"type": "context_window_compacted"}),
+        json.dumps(_bash_tool_use("id1", "python -m pytest")),
+        json.dumps(_bash_tool_result("id1", "===== 3 passed in 0.2s =====")),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = extract_test_result_from_transcript(path, step_line_start=0)
+    assert result is not None
+    assert result["success"] is True
+
+
+def test_extract_uses_post_compaction_result_when_both_exist(tmp_path):
+    """Post-compaction result wins over pre-compaction result."""
+    lines = [
+        json.dumps(_bash_tool_use("id1", "python -m pytest")),
+        json.dumps(_bash_tool_result("id1", "===== 2 failed in 0.1s =====")),
+        json.dumps({"type": "context_window_compacted"}),
+        json.dumps(_bash_tool_use("id2", "python -m pytest")),
+        json.dumps(_bash_tool_result("id2", "===== 5 passed in 0.3s =====")),
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = extract_test_result_from_transcript(path, step_line_start=0)
+    assert result is not None
+    assert result["success"] is True  # post-compaction passing result
+
+
+def test_extract_returns_none_when_all_results_before_compaction(tmp_path):
+    """When ALL test results are before the compaction marker, return None."""
+    lines = [
+        json.dumps(_bash_tool_use("id1", "python -m pytest")),
+        json.dumps(_bash_tool_result("id1", "===== 1 failed in 0.1s =====")),
+        json.dumps(_bash_tool_use("id2", "python -m pytest")),
+        json.dumps(_bash_tool_result("id2", "===== 3 passed in 0.2s =====")),
+        json.dumps({"type": "context_window_compacted"}),
+        # Idle stop — no new test run
+    ]
+    path = _make_raw_transcript(tmp_path, lines)
+    result = extract_test_result_from_transcript(path, step_line_start=0)
+    assert result is None  # all results are stale
+
+
+# ---------------------------------------------------------------------------
+# main() — no-progress stop integration tests
+# ---------------------------------------------------------------------------
+
+def _run_main_capture(monkeypatch, tmp_path, state_file, tool_calls, step_dur_secs_override=None):
+    """Run main() and capture stdout output JSON.  Returns (output_dict, state_after)."""
+    import io as _io
+
+    stdin_data = json.dumps({"session_id": "test-session", "transcript_path": ""})
+    monkeypatch.setattr(sys, "stdin", _io.StringIO(stdin_data))
+    monkeypatch.setattr(_psh, "STATE_FILE", state_file)
+    monkeypatch.setattr(_psh, "get_usage_from_transcript", lambda *_a, **_k: {
+        "total_tokens": 500, "model": "test", "total_lines": 5,
+        "skill_calls": 0, "tool_calls": tool_calls,
+    })
+    monkeypatch.setattr(_psh, "is_same_session", lambda *_a: True)
+    monkeypatch.setattr(_psh, "is_workflow_stale", lambda *_a: False)
+    monkeypatch.setattr(_psh, "_record_session_outcome", lambda *_a: None)
+    if step_dur_secs_override is not None:
+        class _FakeDatetime:
+            @staticmethod
+            def now():
+                from datetime import datetime as _dt
+                return _dt(2026, 1, 1, 0, 0, step_dur_secs_override)
+            @staticmethod
+            def fromisoformat(s):
+                from datetime import datetime as _dt
+                return _dt.fromisoformat(s)
+        monkeypatch.setattr(_psh, "datetime", _FakeDatetime)
+
+    fake_conductor = MagicMock()
+    fake_conductor.build_agent_instruction = MagicMock(return_value="REINSTRUCT")
+    fake_conductor.last_had_brain_context = 0
+    fake_conductor.incremental_reindex = MagicMock()
+    fake_conductor.record_outcome = MagicMock()
+    fake_module = MagicMock()
+    fake_module.Conductor.return_value = fake_conductor
+
+    captured = []
+
+    with patch("builtins.print", side_effect=lambda *a, **k: captured.append(a[0]) if a else None):
+        with patch.dict(sys.modules, {"conductor_engine": fake_module}):
+            with pytest.raises(SystemExit):
+                _psh.main()
+
+    state_after = parse_frontmatter(state_file.read_text())
+    output = json.loads(captured[0]) if captured else {}
+    return output, state_after
+
+
+def test_no_progress_stop_blocks_and_reemits_when_zero_tool_calls(tmp_path, monkeypatch):
+    """Zero tool calls on a step with validation should block and re-emit current step."""
+    # implement_tasks (index 5) has green validation; tool_calls=0 triggers no-progress
+    state_file = _make_state_file(tmp_path, "implement_tasks", 5)
+
+    output, state_after = _run_main_capture(monkeypatch, tmp_path, state_file, tool_calls=0)
+
+    assert output.get("decision") == "block"
+    assert "No progress" in output.get("reason", "")
+    # State must NOT have advanced
+    assert state_after["current_step"] == "implement_tasks"
+    assert state_after["current_step_index"] == 5
+
+
+def test_no_progress_stop_does_not_fire_when_calls_meet_minimum(tmp_path, monkeypatch):
+    """Sufficient tool calls: no-progress should not fire; step should advance normally."""
+    min_calls = _MIN_STEP_TOOL_CALLS["green"]  # 3
+    # implement_tasks → verify_green_state on success
+    state_file = _make_state_file(tmp_path, "implement_tasks", 5)
+
+    # validate_step is not mocked here, so we patch it to pass
+    monkeypatch.setattr(_psh, "validate_step", lambda *_a, **_k: {
+        "valid": True, "message": "ok", "continue_instruction": None
+    })
+
+    output, state_after = _run_main_capture(monkeypatch, tmp_path, state_file, tool_calls=min_calls)
+
+    # Should have advanced (decision=block with next step instruction, not no-progress)
+    assert "No progress" not in output.get("reason", "")
+    assert state_after["current_step"] == "verify_green_state"
+
+
+def test_no_progress_stop_does_not_fire_for_no_validation_step(tmp_path, monkeypatch):
+    """Steps with no validation (review_previous_notes) should never trigger no-progress."""
+    # review_previous_notes (index 0) has validation=None
+    state_file = _make_state_file(tmp_path, "review_previous_notes", 0)
+
+    output, state_after = _run_main_capture(monkeypatch, tmp_path, state_file, tool_calls=0)
+
+    # Should advance (no-progress only fires when validation is set)
+    assert "No progress" not in output.get("reason", "")
+    assert state_after["current_step"] == "draft_story"
