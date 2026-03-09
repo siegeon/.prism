@@ -214,15 +214,15 @@ class TestAC4_PluginJsonVersion:
         """
         assert PLUGIN_JSON.exists(), f"plugin.json not found at {PLUGIN_JSON}"
 
-    def test_ac4_plugin_json_version_is_353(self):
+    def test_ac4_plugin_json_version_is_371(self):
         """
-        AC-4: plugin.json 'version' field is '3.5.3'
-        Requirement: Version bump from 3.5.2 → 3.5.3 for filtered glob and dotnet error fix
-        Expected: json.loads(plugin.json)['version'] == '3.5.3'
+        AC-4: plugin.json 'version' field is '3.7.1'
+        Requirement: Version bump from 3.7.0 → 3.7.1 for HF Hub warning fix and Brain traversal crash fix
+        Expected: json.loads(plugin.json)['version'] == '3.7.1'
         """
         data = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
-        assert data.get("version") == "3.5.3", (
-            f"plugin.json version is '{data.get('version')}', expected '3.5.3'"
+        assert data.get("version") == "3.7.1", (
+            f"plugin.json version is '{data.get('version')}', expected '3.7.1'"
         )
 
 
@@ -247,16 +247,16 @@ class TestAC5_VersionOrdering:
 
     def test_ac5_250_is_latest_version(self):
         """
-        AC-5: [3.5.2] is the first (topmost) version entry in CHANGELOG
+        AC-5: [3.7.0] is the first (topmost) version entry in CHANGELOG
         Requirement: Latest release must be at the very top of the version list
-        Expected: First '## [X.Y.Z]' match in CHANGELOG is [3.5.2]
+        Expected: First '## [X.Y.Z]' match in CHANGELOG is [3.7.0]
         """
         text = _changelog_text()
         first_version = re.search(r"## \[(\d+\.\d+\.\d+)\]", text)
         assert first_version, "No version headings found in CHANGELOG"
-        assert first_version.group(1) == "3.5.2", (
+        assert first_version.group(1) == "3.7.0", (
             f"First version in CHANGELOG is '{first_version.group(1)}', "
-            f"expected '3.5.2' (should be latest)"
+            f"expected '3.7.0' (should be latest)"
         )
 
 
