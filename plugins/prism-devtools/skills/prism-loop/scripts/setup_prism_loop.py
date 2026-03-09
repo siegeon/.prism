@@ -40,7 +40,7 @@ except FileNotFoundError:
     else:
         raise
 sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
-from prism_loop_context import build_agent_instruction, resolve_state_file
+from prism_loop_context import build_agent_instruction, resolve_state_file, resolve_handoff_file
 from prism_stop_hook import detect_test_runner
 
 STATE_FILE = resolve_state_file()
@@ -209,6 +209,27 @@ def brain_bootstrap():
         print(f"Brain: bootstrap skipped ({exc})", file=sys.stderr)
 
 
+def write_bootstrap_handoff(prompt: str) -> None:
+    """Write a minimal handoff file so review_previous_notes always takes the fast path.
+
+    Creates .prism/handoff.md with prompt and basic project state on first run.
+    Skipped if a handoff already exists (preserve richer prior-session data).
+    """
+    handoff_path = resolve_handoff_file()
+    if handoff_path.exists():
+        return  # preserve existing handoff from a prior session
+    try:
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat()
+        content = f"# PRISM Bootstrap Handoff\n\nGenerated: {timestamp}\n\n"
+        if prompt:
+            content += f"## Prompt\n\n{prompt}\n\n"
+        content += "## Notes\n\nFirst run — no prior session context available.\n"
+        handoff_path.write_text(content, encoding='utf-8')
+    except Exception as exc:
+        print(f"Warning: could not write bootstrap handoff ({exc})", file=sys.stderr)
+
+
 def detect_git_branch() -> str:
     """Detect the current git branch name.
 
@@ -363,6 +384,7 @@ def main():
         print("")
 
     brain_bootstrap()
+    write_bootstrap_handoff(config.get("prompt", ""))
 
     create_state_file(config)
 
