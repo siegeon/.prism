@@ -423,7 +423,7 @@ Story file: {story_file}
 The '## Acceptance Criteria' section exists but contains no
 numbered items (AC-1, AC-2, etc.). Add at least one AC."""
             }
-        return {"valid": True, "message": "Story complete: file exists with acceptance criteria", "continue_instruction": None}
+        return {"valid": True, "message": "Story complete: file exists with acceptance criteria", "continue_instruction": None, "spawn_subagent": "story-content-validator"}
 
     elif validation_type == "plan_coverage":
         # Verify plan coverage section exists with no MISSING items
@@ -493,7 +493,7 @@ Story file: {story_file}
 The Plan Coverage section exists but contains no entries.
 Map each requirement to its covering AC(s) with COVERED status."""
             }
-        return {"valid": True, "message": "Plan coverage validated: all requirements covered", "continue_instruction": None}
+        return {"valid": True, "message": "Plan coverage validated: all requirements covered", "continue_instruction": None, "spawn_subagent": "requirements-tracer"}
 
     elif validation_type == "red" or validation_type == "red_with_trace":
         # RED phase: tests must EXIST and FAIL
@@ -767,7 +767,7 @@ Restore AC references in test names, comments, or docstrings."""
             except (IOError, OSError):
                 pass
 
-        return {"valid": True, "message": "Full validation passed: Tests + lint + security + trace clean", "continue_instruction": None}
+        return {"valid": True, "message": "Full validation passed: Tests + lint + security + trace clean", "continue_instruction": None, "spawn_subagent": "qa-gate-manager"}
 
     return {"valid": True, "message": "Unknown validation type", "continue_instruction": None}
 
@@ -1588,6 +1588,17 @@ def main():
             sys.exit(0)
 
     # Validation passed (or not required) - find next step
+    # Check for sub-agent spawn directive from validation result
+    subagent_directive = ""
+    if validation and validation_result.get("spawn_subagent"):
+        agent_name = validation_result["spawn_subagent"]
+        subagent_directive = (
+            f"\n\nIMPORTANT: Before proceeding to the next step, spawn the "
+            f"{agent_name} sub-agent using the Agent tool to perform deep quality "
+            f"analysis on the current step output. Wait for its results before continuing.\n\n"
+            f'Use: Agent tool with subagent_type="{agent_name}"'
+        )
+
     next_index = current_index + 1
 
     if next_index >= len(WORKFLOW_STEPS):
@@ -1723,7 +1734,7 @@ def main():
 
     print(json.dumps({
         "decision": "block",
-        "reason": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n\n{instruction}"
+        "reason": f"[PRISM - Step {next_index + 1}/{len(WORKFLOW_STEPS)}: {next_step_id}]\n\n{instruction}{subagent_directive}"
     }))
     sys.exit(0)
 
