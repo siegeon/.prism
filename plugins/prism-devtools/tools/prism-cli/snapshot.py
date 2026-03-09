@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import glob as _glob
 import json as _json
+import sqlite3 as _sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -221,6 +222,67 @@ def _render_activity_feed(state: "WorkflowState", lines: list[str], max_entries:
     else:
         lines.append("  No tool calls in transcript")
     lines.append("")
+
+
+def _read_sfr_stats(work_dir: Path) -> dict | None:
+    """Read SFR performance stats from scores.db subagent_outcomes table.
+
+    Returns None if the DB is absent or the table has no rows.
+    Returns a dict with keys: total, sfr, freeform, sfr_cert_avg,
+    sfr_blocks_avg, sfr_gate_pct, freeform_gate_pct, timeouts.
+    """
+    scores_db = work_dir / ".prism" / "brain" / "scores.db"
+    if not scores_db.exists():
+        return None
+    try:
+        conn = _sqlite3.connect(str(scores_db))
+        rows = conn.execute(
+            "SELECT prompt_id, certificate_complete, certificate_blocked,"
+            " timed_out, gate_agreed FROM subagent_outcomes"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    sfr_entries: list[dict] = []
+    freeform_entries: list[dict] = []
+    timeouts = 0
+    for prompt_id, cert_complete, cert_blocked, timed_out, gate_agreed in rows:
+        is_sfr = bool(prompt_id and "/sfr" in prompt_id)
+        if timed_out:
+            timeouts += 1
+        entry = {
+            "cert_complete": cert_complete or 0,
+            "cert_blocked": cert_blocked or 0,
+            "gate_agreed": gate_agreed,
+        }
+        if is_sfr:
+            sfr_entries.append(entry)
+        else:
+            freeform_entries.append(entry)
+
+    def _gate_pct(entries: list[dict]) -> float | None:
+        vals = [e["gate_agreed"] for e in entries if e["gate_agreed"] is not None]
+        return (sum(vals) / len(vals) * 100) if vals else None
+
+    sfr_cert_avg: float | None = None
+    sfr_blocks_avg: float | None = None
+    if sfr_entries:
+        sfr_cert_avg = sum(e["cert_complete"] for e in sfr_entries) / len(sfr_entries)
+        sfr_blocks_avg = sum(e["cert_blocked"] for e in sfr_entries) / len(sfr_entries)
+
+    return {
+        "total": len(rows),
+        "sfr": len(sfr_entries),
+        "freeform": len(freeform_entries),
+        "sfr_cert_avg": sfr_cert_avg,
+        "sfr_blocks_avg": sfr_blocks_avg,
+        "sfr_gate_pct": _gate_pct(sfr_entries),
+        "freeform_gate_pct": _gate_pct(freeform_entries),
+        "timeouts": timeouts,
+    }
 
 
 def render_snapshot(work_dir: Path) -> str:
@@ -512,6 +574,41 @@ def render_snapshot(work_dir: Path) -> str:
     else:
         lines.append("  No story file")
 
+    lines.append("")
+
+    # --- SFR Performance ---
+    sfr = _read_sfr_stats(work_dir)
+    lines.append("SFR PERFORMANCE")
+    lines.append("-" * 64)
+    if sfr is None:
+        lines.append("  No SFR data (scores.db absent or no outcomes recorded)")
+    else:
+        lines.append(
+            f"  Runs: {sfr['total']} total"
+            f"  (SFR: {sfr['sfr']}  Freeform: {sfr['freeform']})"
+        )
+        if sfr["sfr"] > 0:
+            cert = (
+                f"{sfr['sfr_cert_avg']:.1f}/6"
+                if sfr["sfr_cert_avg"] is not None else "-"
+            )
+            blocks = (
+                f"{sfr['sfr_blocks_avg']:.1f}"
+                if sfr["sfr_blocks_avg"] is not None else "-"
+            )
+            gate = (
+                f"{sfr['sfr_gate_pct']:.1f}%"
+                if sfr["sfr_gate_pct"] is not None else "-"
+            )
+            lines.append(f"  SFR:      cert {cert}  blocks {blocks}  gate agree {gate}")
+        if sfr["freeform"] > 0:
+            gate = (
+                f"{sfr['freeform_gate_pct']:.1f}%"
+                if sfr["freeform_gate_pct"] is not None else "-"
+            )
+            lines.append(f"  Freeform: gate agree {gate}")
+        if sfr["timeouts"] > 0:
+            lines.append(f"  Timeouts: {sfr['timeouts']}")
     lines.append("")
 
     # --- Activity Feed ---

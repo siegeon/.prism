@@ -70,6 +70,30 @@ def _brain_status(work_dir: Path) -> tuple[int, int]:
     return doc_count, entity_count
 
 
+def _sfr_status(work_dir: Path) -> tuple[int, int, float]:
+    """Return (total_runs, sfr_runs, sfr_cert_avg); (-1, -1, -1.0) means no data."""
+    scores_db = work_dir / ".prism" / "brain" / "scores.db"
+    if not scores_db.exists():
+        return -1, -1, -1.0
+    try:
+        conn = sqlite3.connect(str(scores_db))
+        rows = conn.execute(
+            "SELECT prompt_id, certificate_complete FROM subagent_outcomes"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return -1, -1, -1.0
+    total = len(rows)
+    if total == 0:
+        return 0, 0, -1.0
+    sfr_rows = [(pid, cc) for pid, cc in rows if pid and "/sfr" in pid]
+    sfr_runs = len(sfr_rows)
+    cert_avg = (
+        sum(cc or 0 for _, cc in sfr_rows) / sfr_runs if sfr_runs else -1.0
+    )
+    return total, sfr_runs, cert_avg
+
+
 def _fmt_tokens(count: int) -> str:
     """Format token count compactly: 1234 -> 1.2k, 1234567 -> 1.2M."""
     if count < 1000:
@@ -112,6 +136,10 @@ class PrismDashboard(App):
         self._brain_check_tick: int = 0
         self._brain_doc_count: int = -1
         self._brain_entity_count: int = -1
+        self._sfr_check_tick: int = 0
+        self._sfr_total: int = -1
+        self._sfr_runs: int = -1
+        self._sfr_cert_avg: float = -1.0
 
     def format_title(self, title: str, sub_title: str) -> Content:
         """Render k9s-style header info bar with live workflow metadata."""
@@ -161,6 +189,14 @@ class PrismDashboard(App):
             parts.append(("  \u25cbBRAIN 0", "yellow"))
         else:
             parts.append(("  \u25cbBRAIN OFF", "dim"))
+
+        if self._sfr_total > 0:
+            sfr_label = f"{self._sfr_total}r"
+            if self._sfr_runs > 0 and self._sfr_cert_avg >= 0:
+                sfr_label += f" cert:{self._sfr_cert_avg:.1f}/6"
+            parts.append(("  \u25cfSFR " + sfr_label, "bold magenta"))
+        elif self._sfr_total == 0:
+            parts.append(("  \u25cbSFR 0", "dim"))
 
         return Content.assemble(*parts)
 
@@ -290,6 +326,10 @@ class PrismDashboard(App):
         self._brain_check_tick += 1
         if self._brain_check_tick % 10 == 1:
             self._brain_doc_count, self._brain_entity_count = _brain_status(self._work_dir)
+
+        self._sfr_check_tick += 1
+        if self._sfr_check_tick % 10 == 1:
+            self._sfr_total, self._sfr_runs, self._sfr_cert_avg = _sfr_status(self._work_dir)
 
         self._state = parse_state_file(self._state_file)
 
