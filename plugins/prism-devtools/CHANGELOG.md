@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.9.2] - 2026-03-09
 
-### Fixed
+### Changed
 
-- **Stop hook: session check leniency (#29)** — `is_same_session` no longer rejects hooks when `current_session_id` is empty; returns `True` instead of `False`, allowing the downstream staleness check to provide protection against orphaned state rather than hard-blocking the entire hook.
-- **Stop hook: staleness trap refresh** — `last_activity` is now updated unconditionally on every active stop, preventing the workflow from becoming permanently stale between stops that lack token or branch changes.
-- **Stop hook: fallback instruction resilience** — `build_agent_instruction` calls in the main advance path are now wrapped in `try/except`; if they raise, a minimal `"Proceed with step: {step_id}"` instruction is emitted instead of crashing the hook.
+- **Stop hook: write instruction to file** — `build_agent_instruction()` output (~3-5KB) is now written to `.prism/current_instruction.md` at step transitions instead of being injected into the block decision reason field. Block decisions are now short pointers (~150 bytes): `[PRISM] Step N/8: step_id. Your full instruction is at .prism/current_instruction.md — read it now and begin.`
+- **Stop hook: no-progress re-engagement** — `_emit_current_step_reinstruct` now emits a concise pointer message instead of rebuilding the full instruction. No longer calls `build_agent_instruction()` or `Conductor.build_agent_instruction()` on idle stops, eliminating token accumulation from repeated re-injection.
+- **Stop hook: cleanup** — `cleanup()` now removes `.prism/current_instruction.md` alongside the state file when the workflow completes.
+
+### Tests
+
+- 10 new tests added, 114 total passing
 
 ## [3.9.1] - 2026-03-09
 
