@@ -8,11 +8,13 @@ Claude cannot "think" it's done - the hook verifies by running tests.
 State file: .claude/prism-loop.local.md
 """
 
+import fnmatch
 import json
 import subprocess
 import sys
 import io
 import re
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
@@ -46,6 +48,57 @@ WORKFLOW_STEPS = [
 ]
 
 
+# Directories to skip during recursive glob traversal.
+_EXCLUDED_GLOB_DIRS: frozenset = frozenset({
+    "node_modules", "bin", "obj", ".git", "__pycache__",
+    "dist", ".next", ".nuget", ".venv", "venv", "build", "target", "vendor",
+})
+
+
+def _filtered_glob(root: Path, pattern: str, timeout: float = 10.0) -> list:
+    """Recursive glob with directory exclusion and timeout guard.
+
+    Skips _EXCLUDED_GLOB_DIRS during traversal.  If the walk exceeds
+    *timeout* seconds the function aborts and falls back to a non-recursive
+    glob of *root* only (avoids hanging the hook entirely).
+    """
+    if "**" not in pattern:
+        return list(root.glob(pattern))
+
+    # The filename-level pattern after the last "**/" segment.
+    suffix = pattern.rsplit("**/", 1)[-1]  # e.g. "*.csproj"
+
+    results: list = []
+    deadline = time.monotonic() + timeout
+    timed_out = False
+
+    def _walk(d: Path) -> None:
+        nonlocal timed_out
+        if timed_out or time.monotonic() > deadline:
+            timed_out = True
+            return
+        try:
+            for item in d.iterdir():
+                if timed_out or time.monotonic() > deadline:
+                    timed_out = True
+                    return
+                if item.is_dir():
+                    if item.name not in _EXCLUDED_GLOB_DIRS:
+                        _walk(item)
+                elif fnmatch.fnmatch(item.name, suffix):
+                    results.append(item)
+        except (PermissionError, OSError):
+            pass
+
+    _walk(root)
+
+    if timed_out:
+        # Fall back: non-recursive search in root only.
+        return list(root.glob(suffix))
+
+    return results
+
+
 def detect_test_runner() -> dict:
     """Detect the test runner for the current project."""
     cwd = Path.cwd()
@@ -67,7 +120,7 @@ def detect_test_runner() -> dict:
         return {"type": "pytest", "command": "python -m pytest", "lint": "python -m ruff check . || python -m pylint --recursive=y plugins/prism-devtools/tools/prism-cli/"}
 
     # Check for .NET project
-    csproj_files = list(cwd.glob("**/*.csproj"))
+    csproj_files = _filtered_glob(cwd, "**/*.csproj")
     if csproj_files:
         # Find nearest .sln file by searching cwd and parent directories
         sln_path = None
@@ -235,7 +288,7 @@ def build_trace_matrix(story_file: str) -> list:
     test_globs = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.*", "**/*Tests.cs"]
     test_files_content = ""
     for tg in test_globs:
-        for tf in cwd.glob(tg):
+        for tf in _filtered_glob(cwd, tg):
             try:
                 test_files_content += tf.read_text(encoding='utf-8', errors='replace')
             except (IOError, OSError):
@@ -430,11 +483,21 @@ Story file: {state.get('story_file', 'unknown')}"""
         # Tests failed - check if it's assertion failures (good) or errors (bad)
         output = test_result.get("output", "") + test_result.get("error", "")
 
-        # Look for signs of syntax/import errors vs assertion failures
+        # Look for signs of syntax/import errors vs assertion failures.
+        # Python/Node error indicators:
         error_indicators = ["SyntaxError", "ImportError", "ModuleNotFoundError", "NameError", "TypeError: ", "cannot find module"]
-        has_errors = any(indicator.lower() in output.lower() for indicator in error_indicators)
+        # Dotnet compiler/SDK error indicators (prefixed with "error " to avoid matching test names):
+        dotnet_error_indicators = ["error CS", "error MSB", "error NETSDK"]
+        has_errors = (
+            any(indicator.lower() in output.lower() for indicator in error_indicators)
+            or any(indicator in output for indicator in dotnet_error_indicators)
+        )
 
-        if has_errors and "assert" not in output.lower():
+        # Assertion presence: Python ("assert"), Node ("expect"), and dotnet frameworks.
+        _assertion_markers = ["assert", "xunit.sdk", "fluentassertions", "expectedexception", "nunit.framework"]
+        has_assertions = any(m in output.lower() for m in _assertion_markers)
+
+        if has_errors and not has_assertions:
             return {
                 "valid": False,
                 "message": "Tests have errors (not assertion failures).\n\nFix syntax/import errors first.",
@@ -470,7 +533,7 @@ Story file: {state.get('story_file', 'unknown')}"""
                         test_globs = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.*", "**/*Tests.cs"]
                         test_files_content = ""
                         for tg in test_globs:
-                            for tf in cwd.glob(tg):
+                            for tf in _filtered_glob(cwd, tg):
                                 try:
                                     test_files_content += tf.read_text(encoding='utf-8', errors='replace')
                                 except (IOError, OSError):
@@ -621,7 +684,7 @@ Story file: {state.get('story_file', 'unknown')}"""
                     test_globs = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.*", "**/*Tests.cs"]
                     test_files_content = ""
                     for tg in test_globs:
-                        for tf in cwd.glob(tg):
+                        for tf in _filtered_glob(cwd, tg):
                             try:
                                 test_files_content += tf.read_text(encoding='utf-8', errors='replace')
                             except (IOError, OSError):

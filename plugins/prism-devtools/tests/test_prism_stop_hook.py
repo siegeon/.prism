@@ -10,9 +10,7 @@ Coverage:
 
 import io
 import json
-import re
 import sys
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,10 +19,11 @@ import pytest
 HOOKS_DIR = Path(__file__).resolve().parent.parent / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
 
-from prism_stop_hook import (
+from prism_stop_hook import (  # noqa: E402
     run_security_scan,
     build_trace_matrix,
     _format_trace_matrix,
+    _filtered_glob,
     get_gate_message,
     validate_step,
     detect_test_runner,
@@ -367,7 +366,7 @@ def test_detect_project_conventions_no_runner(tmp_path, monkeypatch):
 # gate_passed value in conductor.record_outcome()
 # ---------------------------------------------------------------------------
 
-import prism_stop_hook as _psh
+import prism_stop_hook as _psh  # noqa: E402
 
 _FAKE_USAGE = {
     "total_tokens": 500,
@@ -465,3 +464,151 @@ def test_gate_passed_one_when_no_validation(tmp_path, monkeypatch):
 
     assert len(captured) == 1, "record_outcome should be called exactly once"
     assert captured[0]["metrics"]["gate_passed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _filtered_glob() tests
+# ---------------------------------------------------------------------------
+
+def test_filtered_glob_excludes_node_modules(tmp_path):
+    """Files inside node_modules must not be returned."""
+    nm = tmp_path / "node_modules" / "some-pkg"
+    nm.mkdir(parents=True)
+    (nm / "test_excluded.py").write_text("excluded")
+    (tmp_path / "test_included.py").write_text("included")
+
+    results = _filtered_glob(tmp_path, "**/test_*.py")
+    names = {r.name for r in results}
+    assert "test_included.py" in names
+    assert "test_excluded.py" not in names
+
+
+def test_filtered_glob_excludes_bin_and_obj(tmp_path):
+    """Files inside bin/ and obj/ must not be returned."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "obj").mkdir()
+    (tmp_path / "bin" / "Compiled.cs").write_text("compiled")
+    (tmp_path / "obj" / "Temp.cs").write_text("temp")
+    (tmp_path / "MyTests.cs").write_text("tests")
+
+    results = _filtered_glob(tmp_path, "**/*.cs")
+    names = {r.name for r in results}
+    assert "MyTests.cs" in names
+    assert "Compiled.cs" not in names
+    assert "Temp.cs" not in names
+
+
+def test_filtered_glob_non_recursive_pattern(tmp_path):
+    """Non-recursive patterns bypass the custom walker and use Path.glob directly."""
+    (tmp_path / "app.csproj").write_text("")
+    results = _filtered_glob(tmp_path, "*.csproj")
+    assert any(r.name == "app.csproj" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# detect_test_runner() — node_modules exclusion for dotnet detection
+# ---------------------------------------------------------------------------
+
+def test_detect_test_runner_ignores_csproj_in_node_modules(tmp_path, monkeypatch):
+    """csproj files only inside node_modules must not trigger dotnet detection."""
+    monkeypatch.chdir(tmp_path)
+    nm = tmp_path / "node_modules" / "some-dotnet-pkg"
+    nm.mkdir(parents=True)
+    (nm / "Fake.csproj").write_text("<Project />")
+    # No real csproj outside node_modules → should not detect dotnet
+    result = detect_test_runner()
+    assert result["type"] != "dotnet"
+
+
+# ---------------------------------------------------------------------------
+# validate_step red_with_trace — dotnet assertion and error indicator tests
+# ---------------------------------------------------------------------------
+
+def test_red_with_trace_passes_for_xunit_sdk_failures(tmp_path, monkeypatch):
+    """Xunit.Sdk exceptions (without the word 'assert') are recognised as assertion failures."""
+    monkeypatch.chdir(tmp_path)
+    story = tmp_path / "story.md"
+    story.write_text("AC-1: User login works\n")
+    (tmp_path / "LoginTests.cs").write_text("// AC-1: test login\npublic void Test_Login_AC1() {}")
+
+    state = {"story_file": str(story)}
+    xunit_output = (
+        "  Failed Test_Login_AC1 [12 ms]\n"
+        "  Error Message:\n"
+        "   Xunit.Sdk.EqualException: Values are not equal\n"
+        "   Expected: 1\n"
+        "   Actual:   0\n"
+    )
+
+    with patch("prism_stop_hook.run_tests", return_value={"success": False, "output": xunit_output, "error": ""}):
+        with patch("prism_stop_hook.detect_test_runner", return_value={"type": "dotnet", "command": "dotnet test"}):
+            result = validate_step("write_failing_tests", "red_with_trace", state)
+
+    assert result["valid"] is True
+
+
+def test_red_with_trace_no_false_positive_nameerror_in_test_name(tmp_path, monkeypatch):
+    """NameError appearing in a test class name must not false-positive as a Python error."""
+    monkeypatch.chdir(tmp_path)
+    story = tmp_path / "story.md"
+    story.write_text("AC-1: Handle resolution errors\n")
+    (tmp_path / "NameErrorHandlerTests.cs").write_text(
+        "// AC-1: NameError handling\npublic class NameErrorHandlerTests {}"
+    )
+
+    state = {"story_file": str(story)}
+    # Output contains "NameError" in class name; failure is an Xunit assertion
+    dotnet_output = (
+        "  Failed NameErrorHandlerTests.Should_Handle [5 ms]\n"
+        "  Error Message:\n"
+        "   Xunit.Sdk.TrueException: Expected True, actual False\n"
+    )
+
+    with patch("prism_stop_hook.run_tests", return_value={"success": False, "output": dotnet_output, "error": ""}):
+        with patch("prism_stop_hook.detect_test_runner", return_value={"type": "dotnet", "command": "dotnet test"}):
+            result = validate_step("write_failing_tests", "red_with_trace", state)
+
+    # Should be valid RED — assertion failure, not a real NameError
+    assert result["valid"] is True
+
+
+def test_red_with_trace_blocks_on_dotnet_compiler_error(tmp_path, monkeypatch):
+    """A real CS compiler error (error CS0103) must block as a non-assertion error."""
+    monkeypatch.chdir(tmp_path)
+    story = tmp_path / "story.md"
+    story.write_text("AC-1: Feature\n")
+    (tmp_path / "FeatureTests.cs").write_text("// AC-1\npublic void Test_Feature() {}")
+
+    state = {"story_file": str(story)}
+    compiler_output = (
+        "Build FAILED.\n"
+        "error CS0103: The name 'UnknownType' does not exist in the current context\n"
+        "    at FeatureTests.cs line 5\n"
+    )
+
+    with patch("prism_stop_hook.run_tests", return_value={"success": False, "output": compiler_output, "error": ""}):
+        with patch("prism_stop_hook.detect_test_runner", return_value={"type": "dotnet", "command": "dotnet test"}):
+            result = validate_step("write_failing_tests", "red_with_trace", state)
+
+    assert result["valid"] is False
+    assert "error" in result["message"].lower() or "error" in result.get("continue_instruction", "").lower()
+
+
+def test_red_with_trace_python_regression(tmp_path, monkeypatch):
+    """Existing Python assertion failures must still be accepted as valid RED."""
+    monkeypatch.chdir(tmp_path)
+    story = tmp_path / "story.md"
+    story.write_text("AC-1: User auth\n")
+    (tmp_path / "test_auth.py").write_text("# AC-1\ndef test_auth(): pass\n")
+
+    state = {"story_file": str(story)}
+    pytest_output = (
+        "FAILED test_auth.py::test_auth - AssertionError: assert False\n"
+        "1 failed in 0.12s\n"
+    )
+
+    with patch("prism_stop_hook.run_tests", return_value={"success": False, "output": pytest_output, "error": ""}):
+        with patch("prism_stop_hook.detect_test_runner", return_value={"type": "pytest", "command": "python -m pytest"}):
+            result = validate_step("write_failing_tests", "red_with_trace", state)
+
+    assert result["valid"] is True
