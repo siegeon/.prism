@@ -16,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import importlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -38,6 +39,7 @@ warnings.filterwarnings(
     "ignore",
     message=r".*unauthenticated requests.*HF Hub.*",
 )
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -2487,6 +2489,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     cmd = args[0]
+    _KNOWN_COMMANDS = ("init", "ingest", "search", "status", "graph", "explain", "rebuild", "analytics")
+    if cmd not in _KNOWN_COMMANDS:
+        print(f"Error: unknown command '{cmd}'", file=sys.stderr)
+        _print_usage()
+        sys.exit(1)
+
     if cmd in ("init", "ingest"):
         try:
             import sqlite_vec  # type: ignore  # noqa: F401
@@ -2541,8 +2549,7 @@ if __name__ == "__main__":
     elif cmd == "analytics":
         rc = _cmd_analytics(b)
     else:
-        print(f"Error: unknown command '{cmd}'", file=sys.stderr)
-        _print_usage()
-        sys.exit(1)
+        # unreachable: unknown commands are rejected before Brain() init above
+        rc = 1
 
     sys.exit(rc)
