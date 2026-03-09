@@ -29,6 +29,9 @@ from prism_stop_hook import (  # noqa: E402
     detect_test_runner,
     _detect_byos_test_skill,
     _extract_byos_execute_command,
+    _looks_like_test_output,
+    _parse_test_output,
+    extract_test_result_from_transcript,
 )
 
 
@@ -611,3 +614,301 @@ def test_detect_test_runner_byos_lint_is_none(tmp_path, monkeypatch):
     _make_skill(tmp_path, "run-tests", "bun test")
     result = detect_test_runner()
     assert result["lint"] is None
+
+
+# ---------------------------------------------------------------------------
+# _looks_like_test_output() tests
+# ---------------------------------------------------------------------------
+
+def test_looks_like_test_output_pytest_summary():
+    assert _looks_like_test_output("===== 3 passed in 0.12s =====")
+
+
+def test_looks_like_test_output_pytest_failed():
+    assert _looks_like_test_output("===== 1 failed, 2 passed in 0.5s =====")
+
+
+def test_looks_like_test_output_dotnet_successful():
+    assert _looks_like_test_output("Test Run Successful.\nTotal tests: 5\n  Passed: 5")
+
+
+def test_looks_like_test_output_dotnet_failed():
+    assert _looks_like_test_output("Test Run Failed.\nTotal tests: 3\n  Failed: 1")
+
+
+def test_looks_like_test_output_jest():
+    assert _looks_like_test_output("Tests: 5 passed, 5 total")
+
+
+def test_looks_like_test_output_jest_failed():
+    assert _looks_like_test_output("Tests: 1 failed, 4 passed, 5 total")
+
+
+def test_looks_like_test_output_mocha_passing():
+    assert _looks_like_test_output("  3 passing (10ms)")
+
+
+def test_looks_like_test_output_mocha_failing():
+    assert _looks_like_test_output("  2 passing (5ms)\n  1 failing")
+
+
+def test_looks_like_test_output_false_for_plain_text():
+    assert not _looks_like_test_output("Running database migrations...")
+
+
+def test_looks_like_test_output_false_for_build_output():
+    assert not _looks_like_test_output("Build succeeded.\n  0 Warning(s)\n  0 Error(s)")
+
+
+# ---------------------------------------------------------------------------
+# _parse_test_output() tests
+# ---------------------------------------------------------------------------
+
+def test_parse_test_output_dotnet_successful():
+    result = _parse_test_output("Test Run Successful.\nTotal tests: 5\n  Passed: 5")
+    assert result is not None
+    assert result["success"] is True
+    assert result["returncode"] == 0
+
+
+def test_parse_test_output_dotnet_failed():
+    result = _parse_test_output("Test Run Failed.\nTotal tests: 3\n  Failed: 1\n  Passed: 2")
+    assert result is not None
+    assert result["success"] is False
+    assert result["returncode"] == 1
+
+
+def test_parse_test_output_pytest_all_passed():
+    result = _parse_test_output("===== 5 passed in 0.2s =====")
+    assert result is not None
+    assert result["success"] is True
+
+
+def test_parse_test_output_pytest_some_failed():
+    result = _parse_test_output("===== 2 failed, 3 passed in 0.3s =====")
+    assert result is not None
+    assert result["success"] is False
+
+
+def test_parse_test_output_pytest_zero_failed_with_passed():
+    result = _parse_test_output("===== 0 failed, 5 passed in 0.1s =====")
+    assert result is not None
+    assert result["success"] is True
+
+
+def test_parse_test_output_mocha_all_passing():
+    result = _parse_test_output("  3 passing (15ms)")
+    assert result is not None
+    assert result["success"] is True
+
+
+def test_parse_test_output_mocha_some_failing():
+    result = _parse_test_output("  2 passing (10ms)\n  1 failing")
+    assert result is not None
+    assert result["success"] is False
+
+
+def test_parse_test_output_inconclusive():
+    result = _parse_test_output("Build succeeded.")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# extract_test_result_from_transcript() tests
+# ---------------------------------------------------------------------------
+
+def _make_transcript(tmp_path: Path, entries: list) -> str:
+    """Write a JSONL transcript file and return its path."""
+    path = tmp_path / "transcript.jsonl"
+    with open(path, "w") as f:
+        for entry in entries:
+            f.write(json.dumps(entry) + "\n")
+    return str(path)
+
+
+def _bash_tool_use(tool_id: str, command: str) -> dict:
+    return {
+        "message": {
+            "content": [
+                {"type": "tool_use", "id": tool_id, "name": "Bash",
+                 "input": {"command": command}}
+            ]
+        }
+    }
+
+
+def _bash_tool_result(tool_id: str, output: str) -> dict:
+    return {
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": tool_id,
+                 "content": output}
+            ]
+        }
+    }
+
+
+def test_extract_transcript_returns_none_for_empty_path():
+    result = extract_test_result_from_transcript("")
+    assert result is None
+
+
+def test_extract_transcript_returns_none_for_missing_file(tmp_path):
+    result = extract_test_result_from_transcript(str(tmp_path / "missing.jsonl"))
+    assert result is None
+
+
+def test_extract_transcript_returns_none_when_no_test_output(tmp_path):
+    entries = [
+        _bash_tool_use("id1", "git status"),
+        _bash_tool_result("id1", "On branch main\nnothing to commit"),
+    ]
+    path = _make_transcript(tmp_path, entries)
+    result = extract_test_result_from_transcript(path)
+    assert result is None
+
+
+def test_extract_transcript_detects_pytest_pass(tmp_path):
+    entries = [
+        _bash_tool_use("id1", "python -m pytest"),
+        _bash_tool_result("id1", "===== 3 passed in 0.2s ====="),
+    ]
+    path = _make_transcript(tmp_path, entries)
+    result = extract_test_result_from_transcript(path)
+    assert result is not None
+    assert result["success"] is True
+
+
+def test_extract_transcript_detects_pytest_fail(tmp_path):
+    entries = [
+        _bash_tool_use("id1", "python -m pytest"),
+        _bash_tool_result("id1", "===== 2 failed, 1 passed in 0.3s ====="),
+    ]
+    path = _make_transcript(tmp_path, entries)
+    result = extract_test_result_from_transcript(path)
+    assert result is not None
+    assert result["success"] is False
+
+
+def test_extract_transcript_uses_most_recent_test_output(tmp_path):
+    """When multiple test runs appear, the last one wins."""
+    entries = [
+        _bash_tool_use("id1", "python -m pytest"),
+        _bash_tool_result("id1", "===== 1 failed in 0.1s ====="),
+        _bash_tool_use("id2", "python -m pytest"),
+        _bash_tool_result("id2", "===== 3 passed in 0.2s ====="),
+    ]
+    path = _make_transcript(tmp_path, entries)
+    result = extract_test_result_from_transcript(path)
+    assert result is not None
+    assert result["success"] is True  # last run passed
+
+
+def test_extract_transcript_respects_step_line_start(tmp_path):
+    """Results before step_line_start must be ignored."""
+    entries = [
+        _bash_tool_use("id1", "python -m pytest"),
+        _bash_tool_result("id1", "===== 1 failed in 0.1s ====="),  # line 2 — before step
+        _bash_tool_use("id2", "python -m pytest"),                 # line 3 — in step
+        _bash_tool_result("id2", "===== 3 passed in 0.2s ====="), # line 4
+    ]
+    path = _make_transcript(tmp_path, entries)
+    # step started at line 2 — only id2 should be tracked
+    result = extract_test_result_from_transcript(path, step_line_start=2)
+    assert result is not None
+    assert result["success"] is True
+
+
+def test_extract_transcript_ignores_non_bash_tool_results(tmp_path):
+    """tool_result for non-Bash tools must not be treated as test output."""
+    entries = [
+        {
+            "message": {
+                "content": [
+                    {"type": "tool_use", "id": "id1", "name": "Read",
+                     "input": {"file_path": "foo.py"}}
+                ]
+            }
+        },
+        _bash_tool_result("id1", "===== 3 passed in 0.2s ====="),
+    ]
+    path = _make_transcript(tmp_path, entries)
+    result = extract_test_result_from_transcript(path)
+    assert result is None  # id1 was Read, not Bash
+
+
+def test_extract_transcript_handles_list_content_format(tmp_path):
+    """tool_result content may be a list of text blocks."""
+    entries = [
+        _bash_tool_use("id1", "python -m pytest"),
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "id1",
+                     "content": [{"type": "text", "text": "===== 5 passed in 0.1s ====="}]}
+                ]
+            }
+        },
+    ]
+    path = _make_transcript(tmp_path, entries)
+    result = extract_test_result_from_transcript(path)
+    assert result is not None
+    assert result["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# validate_step: transcript path flows through to test extraction
+# ---------------------------------------------------------------------------
+
+def test_validate_step_red_uses_transcript_when_available(tmp_path, monkeypatch):
+    """validate_step red_with_trace uses transcript result when conclusive."""
+    monkeypatch.chdir(tmp_path)
+    # Story with AC-1
+    story = tmp_path / "story.md"
+    story.write_text("## Acceptance Criteria\n\nAC-1: Feature X\n")
+    (tmp_path / "test_feature.py").write_text("# AC-1\ndef test_feature(): assert False\n")
+
+    # Build a transcript with a failing test result
+    entries = [
+        _bash_tool_use("id1", "python -m pytest"),
+        _bash_tool_result("id1", "===== 1 failed in 0.1s ====="),
+    ]
+    transcript = _make_transcript(tmp_path, entries)
+
+    with patch("prism_stop_hook.run_tests") as mock_run:
+        result = validate_step(
+            "write_failing_tests", "red_with_trace",
+            {"story_file": str(story)},
+            transcript_path=transcript,
+            step_line_start=0,
+        )
+
+    # run_tests should NOT have been called (transcript was conclusive)
+    mock_run.assert_not_called()
+    assert result["valid"] is True
+
+
+def test_validate_step_green_falls_back_when_transcript_inconclusive(tmp_path, monkeypatch):
+    """validate_step green calls run_tests() when transcript has no test output."""
+    monkeypatch.chdir(tmp_path)
+
+    # Transcript with no test output
+    entries = [
+        _bash_tool_use("id1", "git status"),
+        _bash_tool_result("id1", "nothing to commit"),
+    ]
+    transcript = _make_transcript(tmp_path, entries)
+
+    run_tests_result = {"success": True, "output": "3 passed", "error": "", "returncode": 0}
+    with patch("prism_stop_hook.run_tests", return_value=run_tests_result) as mock_run:
+        result = validate_step(
+            "implement_tasks", "green",
+            {},
+            transcript_path=transcript,
+            step_line_start=0,
+        )
+
+    mock_run.assert_called_once()
+    assert result["valid"] is True

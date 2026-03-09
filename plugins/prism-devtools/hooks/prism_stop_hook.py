@@ -207,7 +207,7 @@ def run_tests(runner: dict, feature_only: bool = False) -> dict:
             shell=True,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 minute timeout
+            timeout=30,  # 30s fallback — fits within hook window
             cwd=Path.cwd()
         )
 
@@ -218,7 +218,7 @@ def run_tests(runner: dict, feature_only: bool = False) -> dict:
             "returncode": result.returncode
         }
     except subprocess.TimeoutExpired:
-        return {"success": False, "output": "", "error": "Test timeout (5 minutes)", "returncode": -1}
+        return {"success": False, "output": "", "error": "Test timeout (30 seconds)", "returncode": -1}
     except Exception as e:
         return {"success": None, "output": "", "error": str(e), "returncode": -1}
 
@@ -362,9 +362,14 @@ def build_trace_matrix(story_file: str) -> list:
     return result
 
 
-def validate_step(step_id: str, validation_type: str, state: dict) -> dict:
+def validate_step(step_id: str, validation_type: str, state: dict,
+                  transcript_path: str = "", step_line_start: int = 0) -> dict:
     """
     Validate that the current step is complete.
+
+    Uses transcript-based test result extraction as the primary path for
+    red/green validation (avoids re-running tests in the hook).  Falls back
+    to run_tests() with a 30s timeout if the transcript is inconclusive.
 
     Returns:
         {"valid": bool, "message": str, "continue_instruction": str or None}
@@ -497,7 +502,10 @@ Map each requirement to its covering AC(s) with COVERED status."""
 
     elif validation_type == "red" or validation_type == "red_with_trace":
         # RED phase: tests must EXIST and FAIL
-        test_result = run_tests(runner)
+        # Primary: extract from transcript (avoids re-running slow test suites)
+        test_result = extract_test_result_from_transcript(transcript_path, step_line_start)
+        if test_result is None:
+            test_result = run_tests(runner)
 
         if test_result["success"] is None:
             return {
@@ -630,7 +638,10 @@ ACTION REQUIRED:
 
     elif validation_type == "green":
         # GREEN phase: feature tests must PASS
-        test_result = run_tests(runner)
+        # Primary: extract from transcript (avoids re-running slow test suites)
+        test_result = extract_test_result_from_transcript(transcript_path, step_line_start)
+        if test_result is None:
+            test_result = run_tests(runner)
 
         if test_result["success"] is None:
             return {
@@ -670,7 +681,10 @@ Do NOT stop until all tests pass."""
 
     elif validation_type == "green_full":
         # Full validation: tests + lint + build
-        test_result = run_tests(runner)
+        # Primary: extract from transcript (avoids re-running slow test suites)
+        test_result = extract_test_result_from_transcript(transcript_path, step_line_start)
+        if test_result is None:
+            test_result = run_tests(runner)
 
         if not test_result.get("success"):
             output = test_result.get("output", "") + test_result.get("error", "")
@@ -1084,6 +1098,131 @@ def get_usage_from_transcript(transcript_path: str, step_line_start: int = 0) ->
         "skill_calls": skill_calls,
         "tool_calls": tool_calls,
     }
+
+
+# ---------------------------------------------------------------------------
+# Transcript-based test result extraction
+# ---------------------------------------------------------------------------
+
+# High-confidence patterns that identify test runner summary output.
+_TEST_SUMMARY_PATTERNS = [
+    re.compile(r'={3,}\s+\d+\s+(passed|failed|error)', re.IGNORECASE),   # pytest summary
+    re.compile(r'Test Run (Successful|Failed)', re.IGNORECASE),           # .NET
+    re.compile(r'Tests?:\s+\d+\s+(passed|failed)', re.IGNORECASE),       # jest
+    re.compile(r'Test Suites?:\s+\d+', re.IGNORECASE),                   # jest
+    re.compile(r'\b\d+\s+passing\b', re.IGNORECASE),                     # mocha
+    re.compile(r'\b\d+\s+failing\b', re.IGNORECASE),                     # mocha
+]
+
+
+def _looks_like_test_output(text: str) -> bool:
+    """Return True if text contains a high-confidence test runner summary."""
+    return any(p.search(text) for p in _TEST_SUMMARY_PATTERNS)
+
+
+def _parse_test_output(text: str) -> Optional[dict]:
+    """Parse test runner output to determine pass/fail.
+
+    Returns a run_tests()-compatible dict or None if inconclusive.
+    """
+    # .NET explicit markers
+    if re.search(r'Test Run Successful', text, re.IGNORECASE):
+        return {"success": True, "output": text, "error": "", "returncode": 0}
+    if re.search(r'Test Run Failed', text, re.IGNORECASE):
+        return {"success": False, "output": text, "error": "", "returncode": 1}
+
+    # Count failing tests — any N > 0 means failure
+    fail_match = re.search(r'\b(\d+)\s+failed\b', text, re.IGNORECASE)
+    if fail_match and int(fail_match.group(1)) > 0:
+        return {"success": False, "output": text, "error": "", "returncode": 1}
+
+    failing_match = re.search(r'\b(\d+)\s+failing\b', text, re.IGNORECASE)
+    if failing_match and int(failing_match.group(1)) > 0:
+        return {"success": False, "output": text, "error": "", "returncode": 1}
+
+    # Passing indicators (no failure detected above)
+    if re.search(r'\b\d+\s+passed\b', text, re.IGNORECASE):
+        return {"success": True, "output": text, "error": "", "returncode": 0}
+
+    if re.search(r'\b\d+\s+passing\b', text, re.IGNORECASE):
+        return {"success": True, "output": text, "error": "", "returncode": 0}
+
+    return None  # Inconclusive
+
+
+def extract_test_result_from_transcript(
+    transcript_path: str, step_line_start: int = 0
+) -> Optional[dict]:
+    """Extract test results from Bash tool output in the session transcript.
+
+    Scans entries from step_line_start onward, finds Bash tool results that
+    look like test runner output, and returns the most recent one as a
+    run_tests()-compatible dict.  Returns None if inconclusive.
+    """
+    if not transcript_path:
+        return None
+
+    try:
+        tp = Path(transcript_path).expanduser()
+        if not tp.exists():
+            return None
+
+        bash_tool_ids: set = set()
+        test_results: list = []
+        line_num = 0
+
+        with open(tp, encoding="utf-8", errors="replace") as f:
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                line_num += 1
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = entry.get("message", entry)
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+
+                    # Collect Bash tool_use ids from the current step onward
+                    if (line_num > step_line_start
+                            and block.get("type") == "tool_use"
+                            and block.get("name") == "Bash"):
+                        bash_tool_ids.add(block.get("id", ""))
+
+                    # Check tool_result blocks for test output
+                    elif block.get("type") == "tool_result":
+                        tool_id = block.get("tool_use_id", "")
+                        if tool_id not in bash_tool_ids:
+                            continue
+                        result_content = block.get("content", "")
+                        if isinstance(result_content, list):
+                            result_text = " ".join(
+                                b.get("text", "") for b in result_content
+                                if isinstance(b, dict)
+                            )
+                        elif isinstance(result_content, str):
+                            result_text = result_content
+                        else:
+                            continue
+                        if _looks_like_test_output(result_text):
+                            test_results.append(result_text)
+
+        if not test_results:
+            return None
+        return _parse_test_output(test_results[-1])
+
+    except (IOError, OSError):
+        return None
 
 
 def get_session_metrics_from_transcript(transcript_path: str) -> dict:
@@ -1560,7 +1699,9 @@ def main():
     # VALIDATE current step before advancing
     gate_passed = 1  # default: no validation required = passed
     if validation:
-        validation_result = validate_step(step_id, validation, state)
+        validation_result = validate_step(
+            step_id, validation, state, transcript_path, step_line_start
+        )
 
         if not validation_result["valid"]:
             # Record failure outcome so Conductor learns from validation failures

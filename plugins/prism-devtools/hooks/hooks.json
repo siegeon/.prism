@@ -113,7 +113,8 @@
           {
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/prism_stop_hook.py",
-            "description": "Auto-advance PRISM workflow on response completion"
+            "description": "Auto-advance PRISM workflow on response completion",
+            "timeout": 120000
           }
         ]
       },
