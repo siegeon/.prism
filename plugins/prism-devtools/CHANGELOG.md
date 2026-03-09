@@ -5,6 +5,15 @@ All notable changes to the PRISM Development System plugin will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.3] - 2026-03-09
+
+### Added
+- `hooks/run-hook.sh`: cross-platform Python resolver — tries `python3` then `python`, fixing hooks failing on Windows where Python is installed as `python` not `python3` (root cause of issues #25, #28, #30)
+
+### Changed
+- `hooks/hooks.json`: all hook commands now use `sh run-hook.sh` instead of `python3` directly
+- `setup_prism_loop.py`: writes first-step instruction to `.prism/current_instruction.md` at setup time so the instruction file exists before the first stop hook fires
+
 ## [3.9.2] - 2026-03-09
 
 ### Changed
