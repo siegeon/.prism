@@ -54,6 +54,25 @@ _EXCLUDED_GLOB_DIRS: frozenset = frozenset({
     "dist", ".next", ".nuget", ".venv", "venv", "build", "target", "vendor",
 })
 
+# Minimum tool_use calls expected from Claude since step_line_start before
+# we consider validation meaningful.  Fewer calls → likely a post-compaction
+# idle stop; the hook should re-emit the current step instruction instead of
+# validating/advancing on stale transcript data.
+_MIN_STEP_TOOL_CALLS: dict = {
+    "story_complete": 2,
+    "plan_coverage": 2,
+    "red_with_trace": 3,
+    "red": 3,
+    "green": 3,
+    "green_full": 3,
+}
+
+# Minimum elapsed seconds for a step before advancement is allowed.
+# Acts as a debounce guard: if a validated step passes in less than this time
+# with near-zero activity, it likely passed on stale transcript data produced
+# right after context compaction.
+_ADVANCE_DEBOUNCE_SECS: int = 60
+
 
 def _filtered_glob(root: Path, pattern: str, timeout: float = 10.0) -> list:
     """Recursive glob with directory exclusion and timeout guard.
@@ -1150,6 +1169,57 @@ def _parse_test_output(text: str) -> Optional[dict]:
     return None  # Inconclusive
 
 
+def _find_last_compaction_line(transcript_path: str) -> int:
+    """Return the 1-based line number of the most recent compaction event in the transcript.
+
+    Claude Code emits a compaction marker when the context window is compacted.
+    Test results recorded *before* this marker are stale — they reflect pre-compaction
+    test runs that are no longer in Claude's active context.
+
+    Returns 0 if no compaction marker is found.
+    """
+    if not transcript_path:
+        return 0
+    try:
+        tp = Path(transcript_path).expanduser()
+        if not tp.exists():
+            return 0
+        last_compaction = 0
+        line_num = 0
+        with open(tp, encoding="utf-8", errors="replace") as f:
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                line_num += 1
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                # Top-level type field (e.g. "context_window_compacted")
+                entry_type = entry.get("type", "")
+                if isinstance(entry_type, str) and "compact" in entry_type.lower():
+                    last_compaction = line_num
+                    continue
+                # System messages from Claude Code about compaction
+                msg = entry.get("message", entry)
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("role") != "system":
+                    continue
+                content = msg.get("content", "")
+                if isinstance(content, str) and "compact" in content.lower():
+                    last_compaction = line_num
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and "compact" in block.get("text", "").lower():
+                            last_compaction = line_num
+                            break
+        return last_compaction
+    except (IOError, OSError):
+        return 0
+
+
 def extract_test_result_from_transcript(
     transcript_path: str, step_line_start: int = 0
 ) -> Optional[dict]:
@@ -1168,7 +1238,7 @@ def extract_test_result_from_transcript(
             return None
 
         bash_tool_ids: set = set()
-        test_results: list = []
+        test_results: list = []  # list of (line_num, text)
         line_num = 0
 
         with open(tp, encoding="utf-8", errors="replace") as f:
@@ -1215,11 +1285,22 @@ def extract_test_result_from_transcript(
                         else:
                             continue
                         if _looks_like_test_output(result_text):
-                            test_results.append(result_text)
+                            test_results.append((line_num, result_text))
 
         if not test_results:
             return None
-        return _parse_test_output(test_results[-1])
+
+        # Reject test results that precede a compaction marker.
+        # After compaction the pre-compaction test output is stale: it reflects
+        # test runs from a prior context window that Claude may no longer have.
+        last_compaction = _find_last_compaction_line(transcript_path)
+        if last_compaction > 0:
+            post_compaction = [(ln, txt) for ln, txt in test_results if ln > last_compaction]
+            if not post_compaction:
+                return None  # All test results are stale (before compaction)
+            test_results = post_compaction
+
+        return _parse_test_output(test_results[-1][1])
 
     except (IOError, OSError):
         return None
@@ -1496,6 +1577,51 @@ def get_step_info(index: int) -> tuple:
     return None
 
 
+def _is_no_progress_stop(validation: Optional[str], tool_calls: int) -> bool:
+    """Return True if tool call count is below the minimum for this validation type.
+
+    Detects post-compaction idle stops: after context compaction Claude may stop
+    without doing any meaningful work for the current step.  The transcript tool
+    call count since step_line_start falls to 0 (because step_line_start now
+    points beyond the compacted section).
+
+    When this returns True the hook re-emits the current step instruction rather
+    than running validation that might pass on stale pre-compaction transcript data.
+    """
+    if not validation:
+        return False
+    min_calls = _MIN_STEP_TOOL_CALLS.get(validation, 0)
+    return min_calls > 0 and tool_calls < min_calls
+
+
+def _emit_current_step_reinstruct(
+    step_id: str, agent: str, action: str, state: dict, runner: dict,
+    reason_prefix: str,
+) -> None:
+    """Build and print a block decision re-emitting the current step instruction.
+
+    Used by no-progress detection and advance debounce to re-engage Claude with
+    the current step after a suspected post-compaction idle stop.  Never raises.
+    """
+    try:
+        from conductor_engine import Conductor
+        conductor = Conductor()
+        conductor.incremental_reindex()
+        instruction = conductor.build_agent_instruction(
+            step_id, agent, action,
+            state.get("story_file", ""), state.get("prompt", ""), runner,
+        )
+    except Exception:
+        instruction = build_agent_instruction(
+            step_id, agent, action,
+            state.get("story_file", ""), state.get("prompt", ""), runner,
+        )
+    print(json.dumps({
+        "decision": "block",
+        "reason": f"{reason_prefix}\n\n{instruction}",
+    }))
+
+
 def _format_trace_matrix(story_file: str) -> str:
     """Format AC→Test trace matrix as a human-readable table string."""
     rows = build_trace_matrix(story_file)
@@ -1696,6 +1822,26 @@ def main():
     step_skill_calls = usage.get("skill_calls", 0)
     step_tool_calls = usage.get("tool_calls", 0)
 
+    # Detect test runner early — needed for no-progress re-emission and instruction building
+    runner = detect_test_runner()
+
+    # No-progress detection: if tool calls since step start are below the minimum
+    # expected for this validation type, this is likely a post-compaction idle stop.
+    # After compaction step_line_start may point beyond the compacted section, so
+    # tool_calls falls to 0.  Re-emit the current step instruction instead of
+    # validating/advancing on stale transcript data.
+    if validation and _is_no_progress_stop(validation, step_tool_calls):
+        _emit_current_step_reinstruct(
+            step_id, agent, action, state, runner,
+            reason_prefix=(
+                f"[PRISM - No progress: {step_id}] Context compaction may have "
+                f"interrupted this step. Only {step_tool_calls} tool call(s) detected "
+                f"since step start (minimum {_MIN_STEP_TOOL_CALLS.get(validation, 0)} "
+                "expected). Re-engaging current step:"
+            ),
+        )
+        sys.exit(0)
+
     # VALIDATE current step before advancing
     gate_passed = 1  # default: no validation required = passed
     if validation:
@@ -1726,6 +1872,24 @@ def main():
                 "decision": "block",
                 "reason": f"[PRISM - {step_id}] {validation_result['message']}\n\n{validation_result['continue_instruction']}"
             }))
+            sys.exit(0)
+
+        # Step-transition debounce guard (defense-in-depth after validation).
+        # If validation passed but the step ran for under _ADVANCE_DEBOUNCE_SECS
+        # with tool activity still below the expected minimum, the validation
+        # result likely came from stale pre-compaction transcript data.
+        # Re-emit the current step instruction to prevent double-advance.
+        if (step_dur_secs < _ADVANCE_DEBOUNCE_SECS
+                and step_tool_calls < _MIN_STEP_TOOL_CALLS.get(validation, 0)):
+            _emit_current_step_reinstruct(
+                step_id, agent, action, state, runner,
+                reason_prefix=(
+                    f"[PRISM - Advance debounce: {step_id}] Validation passed after only "
+                    f"{step_dur_secs}s with {step_tool_calls} tool call(s). "
+                    "Possible rapid re-advancement from stale transcript data. "
+                    "Re-engaging current step:"
+                ),
+            )
             sys.exit(0)
 
     # Validation passed (or not required) - find next step
@@ -1817,7 +1981,6 @@ def main():
 
     # Handle AGENT steps — call Conductor first to determine brain_queries,
     # then build history entry with accurate bq before writing state.
-    runner = detect_test_runner()
     brain_queries = 0
     # Record outcome + build next instruction via Conductor when available
     try:
