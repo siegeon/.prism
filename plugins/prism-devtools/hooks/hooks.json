@@ -85,6 +85,28 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/subagent_sfr_inject.py",
+            "description": "Inject SFR certificate template + Brain context into sub-agent"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/subagent_stop_recorder.py",
+            "description": "Record sub-agent outcome for SFR scoring and observability"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
