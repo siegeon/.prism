@@ -305,29 +305,22 @@ def discover_prism_skills(story_file: str = "") -> list:
         try:
             resolved = skills_dir.resolve()
             if resolved in seen:
-                print(f"[skill-discovery] skip (already scanned): {resolved}", file=sys.stderr)
                 continue
             seen.add(resolved)
             if not resolved.is_dir():
-                print(f"[skill-discovery] skip (not a dir): {resolved}", file=sys.stderr)
                 continue
-            print(f"[skill-discovery] scanning: {resolved}", file=sys.stderr)
             for skill_file in resolved.glob("*/SKILL.md"):
                 try:
                     content = skill_file.read_text(encoding="utf-8")
                     meta = _parse_skill_frontmatter(content)
                     if meta:
-                        print(f"[skill-discovery] found: {meta['name']} ({skill_file})", file=sys.stderr)
                         results.append(meta)
-                    else:
-                        print(f"[skill-discovery] skip (invalid frontmatter): {skill_file}", file=sys.stderr)
                 except (IOError, OSError):
                     continue
         except (IOError, OSError):
             continue
 
     results.sort(key=lambda s: s["priority"])
-    print(f"[skill-discovery] total: {len(results)} skill(s) found", file=sys.stderr)
     return results
 
 
@@ -400,9 +393,7 @@ _STEPS_WITH_STORY = {"verify_plan", "write_failing_tests", "implement_tasks", "v
 # Steps that include the user prompt
 _STEPS_WITH_PROMPT = {"review_previous_notes", "draft_story", "verify_plan"}
 
-# Lightweight steps that must not be distracted by BYOS skill injection.
-# These steps are designed to complete quickly (10K tokens) by reading the
-# handoff and stopping — injecting 26+ MANDATORY skills defeats that purpose.
+# Lightweight steps that skip BYOS skill injection (context-only work, not feature implementation)
 LIGHTWEIGHT_STEPS = {"review_previous_notes", "verify_plan"}
 
 
@@ -541,7 +532,7 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
     # Inline rules + retrieval instruction
     parts.extend(["", INLINE_RULES[phase], "", RETRIEVAL_INSTRUCTION])
 
-    # BYOS discovered skills — skip for lightweight steps to avoid token burn
+    # BYOS discovered skills (skip for lightweight steps — context-only work, not feature implementation)
     if skill_text and step_id not in LIGHTWEIGHT_STEPS:
         parts.extend(["", skill_text])
 
