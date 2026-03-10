@@ -5,6 +5,23 @@ All notable changes to the PRISM Development System plugin will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.5] - 2026-03-09
+
+### Added
+
+### Fixed
+
+## [3.10.4] - 2026-03-09
+
+### Added
+- Conductor-driven skill filtering: Brain scores skill relevance from usage data, Conductor selects top 3-5 skills per step with cold-start keyword fallback. Replaces full 26-skill dump with targeted injection.
+
+### Changed
+- Skill injection phrasing softened from "MANDATORY" to "Consider" for non-core skills
+
+### Fixed
+- `prism_loop_context.py`: stderr cleanup — skill discovery logs no longer leak into hook output
+
 ## [3.10.3] - 2026-03-10
 
 ### Fixed
