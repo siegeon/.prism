@@ -400,6 +400,11 @@ _STEPS_WITH_STORY = {"verify_plan", "write_failing_tests", "implement_tasks", "v
 # Steps that include the user prompt
 _STEPS_WITH_PROMPT = {"review_previous_notes", "draft_story", "verify_plan"}
 
+# Lightweight steps that must not be distracted by BYOS skill injection.
+# These steps are designed to complete quickly (10K tokens) by reading the
+# handoff and stopping — injecting 26+ MANDATORY skills defeats that purpose.
+LIGHTWEIGHT_STEPS = {"review_previous_notes", "verify_plan"}
+
 
 def _load_step_content(step_id: str) -> str:
     """Load a core step markdown file, with simple dict cache."""
@@ -536,8 +541,8 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
     # Inline rules + retrieval instruction
     parts.extend(["", INLINE_RULES[phase], "", RETRIEVAL_INSTRUCTION])
 
-    # BYOS discovered skills
-    if skill_text:
+    # BYOS discovered skills — skip for lightweight steps to avoid token burn
+    if skill_text and step_id not in LIGHTWEIGHT_STEPS:
         parts.extend(["", skill_text])
 
     # Brain context (Understanding the System) — injected before stop directive

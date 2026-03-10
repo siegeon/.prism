@@ -5,6 +5,11 @@ All notable changes to the PRISM Development System plugin will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.3] - 2026-03-10
+
+### Fixed
+- `prism_loop_context.py`: skip BYOS skills injection for lightweight steps (`review_previous_notes`, `verify_plan`). These steps are designed to complete in ~10K tokens by reading the handoff and stopping — unconditionally injecting 26+ MANDATORY skills caused Claude to invoke skills instead, burning millions of tokens on what should be a fast context-restore step.
+
 ## [3.10.2] - 2026-03-09
 
 ### Changed

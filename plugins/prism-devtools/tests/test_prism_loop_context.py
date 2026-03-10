@@ -26,6 +26,7 @@ from prism_loop_context import (
     STEP_PHASE_MAP,
     STOP_DIRECTIVE,
     MEMORY_PERSIST_INSTRUCTION,
+    LIGHTWEIGHT_STEPS,
     build_agent_instruction,
     detect_project_conventions,
     find_project_root,
@@ -298,12 +299,14 @@ def test_no_hardcoded_skill_references_in_core_steps():
 
 
 def test_skills_injection_uses_directive_language(tmp_path, monkeypatch):
-    """When skills are discovered, injection text uses mandatory imperative language."""
+    """When skills are discovered, injection text uses mandatory imperative language (non-lightweight steps only)."""
     monkeypatch.chdir(tmp_path)
     skills_dir = tmp_path / ".claude" / "skills"
     _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
 
     for step_id, agent, action in AGENT_STEPS:
+        if step_id in LIGHTWEIGHT_STEPS:
+            continue  # lightweight steps intentionally skip skill injection
         instruction = build_agent_instruction(
             step_id, agent, action,
             "docs/stories/test-story.md", "", MOCK_RUNNER
@@ -317,13 +320,17 @@ def test_skills_injection_uses_directive_language(tmp_path, monkeypatch):
 
 
 def test_core_steps_have_skills_directive():
-    """Every core-step file must contain a skills directive (spec conformance).
+    """Non-lightweight core-step files must contain a skills directive (spec conformance).
 
     AC: agents always see a directive to check/use skills — not just rely on
     the injected block that was previously buried at the end of instructions.
+    Lightweight steps (LIGHTWEIGHT_STEPS) are intentionally excluded — they skip
+    skill injection to preserve token budget.
     """
     core_steps_dir = HOOKS_DIR / "core-steps"
     for step_id in STEP_PHASE_MAP:
+        if step_id in LIGHTWEIGHT_STEPS:
+            continue  # lightweight steps intentionally omit skill directives
         step_file = core_steps_dir / f"{step_id}.md"
         content = step_file.read_text(encoding="utf-8")
         assert "Skill" in content, (
@@ -333,12 +340,14 @@ def test_core_steps_have_skills_directive():
 
 
 def test_skills_section_header_in_assembled_instruction(tmp_path, monkeypatch):
-    """Assembled instruction shows '## Available Skills' header when skills present."""
+    """Assembled instruction shows '## Available Skills' header when skills present (non-lightweight steps only)."""
     monkeypatch.chdir(tmp_path)
     skills_dir = tmp_path / ".claude" / "skills"
     _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
 
     for step_id, agent, action in AGENT_STEPS:
+        if step_id in LIGHTWEIGHT_STEPS:
+            continue  # lightweight steps intentionally skip skill injection
         instruction = build_agent_instruction(
             step_id, agent, action,
             "docs/stories/test-story.md", "", MOCK_RUNNER
@@ -1065,6 +1074,71 @@ def test_four_skill_types_instruction_lists_valid_skills(tmp_path, monkeypatch):
     assert "valid-no-prism" in instruction
 
 
+# --- LIGHTWEIGHT_STEPS: skill injection exclusion ---
+
+def test_lightweight_steps_constant_contains_review_previous_notes():
+    """LIGHTWEIGHT_STEPS must include review_previous_notes."""
+    assert "review_previous_notes" in LIGHTWEIGHT_STEPS
+
+
+def test_skills_not_injected_for_review_previous_notes(tmp_path, monkeypatch):
+    """review_previous_notes must NOT receive skill injection even when skills are present.
+
+    AC-1: skill_text NOT injected for review_previous_notes step.
+    This step is designed to read the handoff and stop in ~10K tokens.
+    Injecting 26+ MANDATORY skills causes Claude to invoke skills instead.
+    """
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+    _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
+
+    instruction = build_agent_instruction(
+        "review_previous_notes", "sm", "planning-review",
+        "docs/stories/test-story.md", "", MOCK_RUNNER,
+    )
+    assert "## Available Skills" not in instruction, (
+        "review_previous_notes must NOT have skill injection — it burns tokens on a lightweight step"
+    )
+    assert "MANDATORY" not in instruction or "MANDATORY" not in instruction.split("## Available Skills")[0] if "## Available Skills" in instruction else True, (
+        "review_previous_notes must NOT have MANDATORY skills directive"
+    )
+
+
+def test_available_skills_header_absent_for_review_previous_notes(tmp_path, monkeypatch):
+    """'## Available Skills' header must be absent from review_previous_notes instructions."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+    _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
+
+    instruction = build_agent_instruction(
+        "review_previous_notes", "sm", "planning-review",
+        "docs/stories/test-story.md", "Build auth feature", MOCK_RUNNER,
+    )
+    assert "## Available Skills" not in instruction
+
+
+def test_skills_injected_for_non_lightweight_steps(tmp_path, monkeypatch):
+    """Non-lightweight steps (draft_story, write_failing_tests, etc.) still receive skill injection."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills"
+    _create_skill(skills_dir, "my-discovery-skill", VALID_SKILL_MD)
+
+    non_lightweight = [
+        ("draft_story", "sm", "draft"),
+        ("write_failing_tests", "qa", "write-failing-tests"),
+        ("implement_tasks", "dev", "develop-story"),
+        ("verify_green_state", "qa", "verify-green-state"),
+    ]
+    for step_id, agent, action in non_lightweight:
+        instruction = build_agent_instruction(
+            step_id, agent, action,
+            "docs/stories/test-story.md", "", MOCK_RUNNER,
+        )
+        assert "## Available Skills" in instruction, (
+            f"Non-lightweight step {step_id} should still receive skill injection"
+        )
+
+
 # --- Spec conformance: verify_plan adversarial framing ---
 
 def test_verify_plan_adversarial_framing():
@@ -1109,13 +1183,17 @@ _STEP_ROLE = {
 
 
 def test_core_steps_have_role_scoped_brain_examples():
-    """Each core-step must have Brain search examples scoped to its role's domain.
+    """Non-lightweight core-steps must have Brain search examples scoped to their role's domain.
 
     Spec: SM=requirements/architecture/decisions, QA=test conventions/naming/frameworks,
     DEV=code patterns/module structure/error handling.
+    Lightweight steps (LIGHTWEIGHT_STEPS) are excluded — they are designed to avoid
+    Brain queries to preserve token budget (read handoff and stop only).
     """
     core_steps_dir = HOOKS_DIR / "core-steps"
     for step_id, role in _STEP_ROLE.items():
+        if step_id in LIGHTWEIGHT_STEPS:
+            continue  # lightweight steps intentionally omit Brain queries
         content = (core_steps_dir / f"{step_id}.md").read_text(encoding="utf-8").lower()
         expected_domains = _ROLE_BRAIN_DOMAINS[role]
         matched = [d for d in expected_domains if d in content]
