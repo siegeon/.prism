@@ -38,7 +38,9 @@ _AGENT_DOMAIN_MAP: dict[str, str] = {
     "verify-plan": "sm",
 }
 
-# Cold-start step-to-skill keyword mapping for skill filtering
+# Cold-start step-to-skill keyword mapping for skill filtering.
+# Gate steps intentionally have empty keyword lists — no skills are injected
+# because the agent must stop and wait for user action at gates.
 _STEP_SKILL_KEYWORDS: dict[str, list] = {
     "write_failing_tests": ["test", "blackbox", "validate", "spec", "qa"],
     "implement_tasks":     ["api", "db", "domain", "patterns", "implement", "code"],
@@ -46,7 +48,15 @@ _STEP_SKILL_KEYWORDS: dict[str, list] = {
     "verify_plan":         ["validate", "verify", "plan", "review"],
     "verify_green_state":  ["test", "verify", "qa", "validate", "green"],
     "review_previous_notes": ["context", "review", "notes", "memory", "brain"],
+    # Gate steps: empty list — agent must not invoke any skills at gates
+    "red_gate":            [],
+    "green_gate":          [],
 }
+
+# Skills that must never be injected at gate steps (workflow-control commands).
+_GATE_EXCLUDED_SKILL_NAMES: frozenset[str] = frozenset({
+    "prism-approve", "prism-reject", "checkin", "task", "commit", "push",
+})
 
 # Sub-agent namespace mapping for Canopy variant selection
 _AGENT_NAMESPACE_MAP: dict[str, str] = {
@@ -165,7 +175,7 @@ class Conductor:
                 and agg["total_runs"] >= RETIRE_MIN_RUNS
             ):
                 reason = (
-                    f"avg_score={agg['avg_score']:.3f} < {RETIRE_AVG_SCORE_THRESHOLD} "
+                    f"avg_score={float(agg['avg_score']):.3f} < {RETIRE_AVG_SCORE_THRESHOLD} "
                     f"after {agg['total_runs']} runs"
                 )
                 self._brain._scores.execute(
@@ -280,6 +290,10 @@ class Conductor:
         step's expected domain keywords. Returns at most max_skills skills.
         """
         if not all_skills:
+            return []
+
+        # Gate steps must never have skills — agent must wait for user action
+        if step_id in ("red_gate", "green_gate"):
             return []
 
         # Try Brain usage frequency data first

@@ -1692,6 +1692,17 @@ class Brain:
         results = [r for r in results if r.get("rrf_score", 0.0) >= 0.02]
         if not results:
             self.last_result_count = 0
+            try:
+                doc_count = self._brain.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+                if doc_count > 0:
+                    print(
+                        f"Brain: system_context() returned 0 results with {doc_count} docs "
+                        f"(query_len={len(query)}, persona={persona!r}, "
+                        f"domains={role_domains!r})",
+                        file=sys.stderr,
+                    )
+            except Exception:
+                pass
             return ""
 
         self.last_result_count = len(results)

@@ -1511,10 +1511,9 @@ def is_same_session(state: dict, current_session_id: str) -> bool:
         return True
 
     # If we have a stored session but no current session ID from the hook
-    # input, we can't verify — be lenient and allow the hook to run.
-    # The staleness check downstream provides protection against orphaned state.
+    # input, we can't verify — reject to prevent cross-session pollution.
     if not current_session_id:
-        return True
+        return False
 
     return stored_session == current_session_id
 
@@ -1667,6 +1666,10 @@ Review before proceeding:
 - [ ] Tests fail on assertions (not syntax/import errors)
 - [ ] Story requirements are clear
 
+IMPORTANT: STOP HERE. DO NOT invoke /prism-approve or /prism-reject yourself.
+These commands are for the USER to run manually. Wait for user input.
+Do NOT invoke any skill commands autonomously at this gate.
+
 Commands:
   /prism-approve  - Proceed to GREEN phase (implementation)
   /prism-reject   - Loop back to planning (step 1)
@@ -1687,11 +1690,15 @@ Final steps:
 1. Commit all changes (implementation + tests)
 2. Mark story as Done
 
+IMPORTANT: STOP HERE. DO NOT invoke /prism-approve yourself.
+This command is for the USER to run manually. Wait for user input.
+Do NOT invoke any skill commands autonomously at this gate.
+
 Command:
   /prism-approve  - Complete workflow
 """,
     }
-    return messages.get(step_id, f"Gate: {step_id}\n\nRun /prism-approve to continue.")
+    return messages.get(step_id, f"Gate: {step_id}\n\nIMPORTANT: STOP. Wait for user input. Do NOT invoke skill commands.\n\nRun /prism-approve to continue.")
 
 
 def cleanup():

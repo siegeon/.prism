@@ -403,8 +403,10 @@ _STEPS_WITH_STORY = {"verify_plan", "write_failing_tests", "implement_tasks", "v
 # Steps that include the user prompt
 _STEPS_WITH_PROMPT = {"review_previous_notes", "draft_story", "verify_plan"}
 
-# Lightweight steps that skip BYOS skill injection (context-only work, not feature implementation)
-LIGHTWEIGHT_STEPS = {"review_previous_notes", "verify_plan"}
+# Lightweight steps that skip BYOS skill injection.
+# context-only work (review_previous_notes, verify_plan) and gate steps that
+# must wait for user action rather than invoking skills autonomously.
+LIGHTWEIGHT_STEPS = {"review_previous_notes", "verify_plan", "red_gate", "green_gate"}
 
 
 def _load_step_content(step_id: str) -> str:
