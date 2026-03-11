@@ -106,7 +106,7 @@ class WorkflowTable(Static):
         table.zebra_stripes = True
         table.add_columns(
             "#", "Step", "Agent", "Phase",
-            "Duration", "DurBar", "Tokens", "TokBar", "Tok/min", "Skills", "Mem", "Status"
+            "Duration", "DurBar", "Tokens", "TokBar", "Tok/min", "Skills", "Brain", "Status"
         )
         self._populate(None)
 

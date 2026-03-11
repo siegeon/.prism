@@ -436,7 +436,7 @@ def render_snapshot(work_dir: Path) -> str:
     lines.append("-" * 80)
     lines.append(
         f"{'#':<4} {'Step':<24} {'Agent':<6} {'Phase':<12} "
-        f"{'Duration':<10} {'DurBar':<8} {'Tokens':<8} {'TokBar':<8} {'Tok/min':<8} {'Skills':<8} {'Mem':<6} {'Status'}"
+        f"{'Duration':<10} {'DurBar':<8} {'Tokens':<8} {'TokBar':<8} {'Tok/min':<8} {'Skills':<8} {'Brain':<6} {'Status'}"
     )
     for step in WORKFLOW_STEPS:
         if step.index < current_idx:
