@@ -1,32 +1,16 @@
 ---
 name: conductor
 description: Prompt optimization - scores, analysis, variant generation
+disable-model-invocation: true
 ---
-
 # Conductor — Prompt Optimization
 
-Manages prompt variant scoring, exploration, and generation
-based on PRISM execution outcomes.
+Score, analyze, and generate prompt variants based on PRISM execution outcomes.
 
-## Commands
+## Steps
+1. Run /conductor status to see best prompts per persona/step and exploration rate
+2. Run /conductor analyze to identify patterns in top vs bottom scoring prompts
+3. Run /conductor generate <persona> <step> to create a new competing variant
+4. Monitor outcomes as variants compete via epsilon-greedy exploration
 
-### /conductor status
-Show current state: best prompt per persona/step, exploration
-rate, outcome count, active/retired variant counts.
-
-### /conductor analyze
-Analyze outcomes to identify what makes top-scoring prompts
-different from bottom-scoring ones.
-
-### /conductor generate <persona> <step>
-Generate a new prompt variant based on outcome analysis.
-The new variant enters the exploration pool and competes
-with existing variants.
-
-## Architecture
-
-See [Conductor Architecture](./reference/conductor-architecture.md) for:
-- Epsilon-greedy exploration/exploitation strategy
-- PSP-based scoring formula
-- Prompt variant storage and retirement
-- Integration with build_agent_instruction()
+For detailed instructions, see [instructions.md](instructions.md).
