@@ -268,6 +268,51 @@ def _detect_structural_query(query: str) -> tuple[Optional[str], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# FTS5 query extraction
+# ---------------------------------------------------------------------------
+
+_FTS_STOP_WORDS: frozenset = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "is", "was", "are", "were", "be",
+    "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "must", "can", "this",
+    "that", "these", "those", "i", "you", "he", "she", "we", "they",
+    "it", "its", "my", "your", "his", "her", "our", "their", "what",
+    "which", "who", "when", "where", "why", "how", "all", "each", "if",
+    "not", "no", "up", "out", "so", "then", "than", "also", "into",
+    "about", "after", "before", "above", "below", "between", "through",
+    "during", "while", "although", "because", "since", "until", "unless",
+    "using", "used", "use", "just", "like", "more", "some", "been",
+    "get", "set", "new", "one", "two", "any",
+})
+
+
+def _extract_fts_query(text: str, max_terms: int = 12) -> str:
+    """Extract key terms from text and build an FTS5 OR query.
+
+    Avoids the implicit-AND problem: passing 150 tokens as a MATCH query
+    requires ALL tokens to appear in a single document (virtually never
+    matches). Instead this extracts the top ``max_terms`` unique non-stop
+    words and joins them with OR so that any one matching term retrieves
+    the document.
+    """
+    clean = re.sub(r"[^\w\s]", " ", text)
+    tokens = clean.lower().split()
+    seen: set = set()
+    terms: list = []
+    for tok in tokens:
+        if len(tok) >= 3 and tok not in _FTS_STOP_WORDS and tok not in seen:
+            seen.add(tok)
+            terms.append(tok)
+            if len(terms) >= max_terms:
+                break
+    if not terms:
+        # Fallback: include all tokens without stopword filtering
+        terms = list(dict.fromkeys(t for t in tokens if len(t) >= 2))[:max_terms]
+    return " OR ".join(terms) if terms else ""
+
+
+# ---------------------------------------------------------------------------
 # Brain class
 # ---------------------------------------------------------------------------
 
@@ -1440,7 +1485,7 @@ class Brain:
         limit: int,
         domains: Optional[list[str]] = None,
     ) -> list[dict]:
-        safe = re.sub(r"[^\w\s]", " ", query).strip()
+        safe = _extract_fts_query(query)
         if not safe:
             return []
         try:
@@ -1689,7 +1734,17 @@ class Brain:
             self.last_result_count = 0
             return ""
 
-        results = [r for r in results if r.get("rrf_score", 0.0) >= 0.02]
+        # Adaptive RRF threshold: when vector search is disabled, only FTS5
+        # (and possibly graph) contribute. With k=60, max single-list RRF
+        # score = 1/(k+1) ≈ 0.0164, which is below the old hardcoded 0.02
+        # threshold — causing all results to be filtered out. Use a threshold
+        # safely below 1/(k+1) when vector is disabled.
+        _rrf_k = 60
+        if self.vector_enabled:
+            _rrf_threshold = 0.02
+        else:
+            _rrf_threshold = 1.0 / (_rrf_k + 1) * 0.9  # ≈ 0.0148
+        results = [r for r in results if r.get("rrf_score", 0.0) >= _rrf_threshold]
         if not results:
             self.last_result_count = 0
             try:
