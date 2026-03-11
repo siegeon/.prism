@@ -25,6 +25,11 @@ EPSILON_START = 0.3
 EPSILON_MIN = 0.05
 EPSILON_DECAY = 0.05
 
+# When per-step brain data is available, skills scoring below this fraction of the
+# top-ranked skill's score are excluded. This makes the count vary: a step with 3
+# clearly dominant skills returns 3, not 5.
+SCORE_CONFIDENCE_RATIO = 0.4
+
 # Phase 7.3: variant retirement thresholds
 RETIRE_AVG_SCORE_THRESHOLD = 0.3
 RETIRE_MIN_RUNS = 5
@@ -368,10 +373,14 @@ class Conductor:
         all_skills: list,
         max_skills: int = 5,
     ) -> list:
-        """Filter skills to top max_skills relevant ones for this step/persona.
+        """Filter skills to relevant ones for this step/persona, with variable count.
 
         Uses scored ranking: phase match (from priority ranges) + keyword match
-        + Brain usage data (additive). Replaces the old boolean substring approach.
+        + Brain usage data (additive).
+
+        When per-step brain data is available, a confidence cutoff trims low-signal
+        skills so the count can fall below max_skills. When cold (no step data),
+        falls back to global usage counts or pure heuristics, returning up to max_skills.
         """
         if not all_skills:
             return []
@@ -380,21 +389,40 @@ class Conductor:
         if step_id in ("red_gate", "green_gate"):
             return []
 
-        # Gather Brain usage scores (additive signal, not separate path)
+        # Gather Brain usage scores: per-step preferred, global as fallback.
+        # isinstance(dict) guards against MagicMock leaking from tests.
         usage_scores = None
+        has_step_data = False
         if self._brain_available and self._brain is not None:
             try:
-                usage_scores = self._brain.get_skill_scores() or None
+                step_scores = self._brain.get_skill_scores_for_step(step_id)
+                if isinstance(step_scores, dict) and step_scores:
+                    usage_scores = step_scores
+                    has_step_data = True
+                else:
+                    global_scores = self._brain.get_skill_scores()
+                    if global_scores:
+                        usage_scores = global_scores
             except Exception:
                 pass
 
-        # Score every skill and sort descending
-        scored = sorted(
-            all_skills,
-            key=lambda s: _score_skill(s, step_id, agent, usage_scores),
-            reverse=True,
-        )
-        return scored[:max_skills]
+        # Pre-compute scores for all skills (avoids double-scoring)
+        scored_pairs = [
+            (s, _score_skill(s, step_id, agent, usage_scores))
+            for s in all_skills
+        ]
+        scored_pairs.sort(key=lambda x: x[1], reverse=True)
+
+        # When confident per-step data is available, apply a confidence cutoff so
+        # that skills with little signal are excluded (AC-5: variable count).
+        if has_step_data and scored_pairs:
+            top_score = scored_pairs[0][1]
+            if top_score > 0:
+                cutoff = top_score * SCORE_CONFIDENCE_RATIO
+                result = [s for s, score in scored_pairs if score >= cutoff]
+                return result[:max_skills]
+
+        return [s for s, _ in scored_pairs[:max_skills]]
 
     def build_agent_instruction(
         self,

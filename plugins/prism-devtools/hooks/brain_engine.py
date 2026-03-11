@@ -595,6 +595,7 @@ class Brain:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
                 skill_name TEXT NOT NULL,
+                step_id TEXT DEFAULT '',
                 timestamp TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS subagent_outcomes (
@@ -612,6 +613,14 @@ class Brain:
                 PRIMARY KEY (prompt_id, validator, timestamp)
             );
         """)
+        # Migration: add step_id to skill_usage for existing databases
+        try:
+            self._scores.execute(
+                "ALTER TABLE skill_usage ADD COLUMN step_id TEXT DEFAULT ''"
+            )
+            self._scores.commit()
+        except Exception:
+            pass  # Column already exists
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -2235,13 +2244,22 @@ class Brain:
         self,
         session_id: str,
         skill_name: str,
+        step_id: str = "",
         timestamp: str = "",
     ) -> None:
-        """Record a skill invocation into skill_usage table."""
+        """Record a skill invocation into skill_usage table.
+
+        Args:
+            session_id: Unique session identifier.
+            skill_name: Name of the invoked skill.
+            step_id: Workflow step where the skill was invoked (e.g. 'implement_tasks').
+                     Empty string when step context is unavailable (backward compat).
+            timestamp: ISO timestamp; defaults to current UTC time.
+        """
         ts = timestamp or datetime.now(timezone.utc).isoformat()
         self._scores.execute(
-            "INSERT INTO skill_usage (session_id, skill_name, timestamp) VALUES (?, ?, ?)",
-            (session_id, skill_name, ts),
+            "INSERT INTO skill_usage (session_id, skill_name, step_id, timestamp) VALUES (?, ?, ?, ?)",
+            (session_id, skill_name, step_id, ts),
         )
         self._scores.commit()
 
@@ -2254,6 +2272,27 @@ class Brain:
         try:
             rows = self._scores.execute(
                 "SELECT skill_name, COUNT(*) AS cnt FROM skill_usage GROUP BY skill_name"
+            ).fetchall()
+            return {row["skill_name"]: row["cnt"] for row in rows}
+        except Exception:
+            return {}
+
+    def get_skill_scores_for_step(self, step_id: str) -> dict:
+        """Return per-step usage frequency for skills recorded at a specific workflow step.
+
+        Only counts rows where step_id matches exactly. Returns an empty dict when
+        no step-specific data exists or an error occurs.
+
+        Args:
+            step_id: Workflow step identifier (e.g. 'implement_tasks', 'write_failing_tests').
+        """
+        if not step_id:
+            return {}
+        try:
+            rows = self._scores.execute(
+                "SELECT skill_name, COUNT(*) AS cnt FROM skill_usage "
+                "WHERE step_id = ? GROUP BY skill_name",
+                (step_id,),
             ).fetchall()
             return {row["skill_name"]: row["cnt"] for row in rows}
         except Exception:
