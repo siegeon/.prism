@@ -1,0 +1,33 @@
+{"name": "task", "description": "Manage tasks, capture requirements, and plan work items for TalentSyncPro", "priority": 10, "agent": null}
+{"name": "build", "description": "Implement features, write production code, develop functionality for TalentSyncPro", "priority": 20, "agent": null}
+{"name": "verify", "description": "Validate implementation, run tests, check quality standards and acceptance criteria", "priority": 30, "agent": null}
+{"name": "ship", "description": "Release, deploy, and package the TalentSyncPro application for delivery", "priority": 40, "agent": null}
+{"name": "operate", "description": "Monitor, maintain, and troubleshoot TalentSyncPro production systems", "priority": 50, "agent": null}
+{"name": "test", "description": "Design and run tests, validate behavior, ensure coverage across TalentSyncPro modules", "priority": 60, "agent": null}
+{"name": "review", "description": "Code review, inspect pull requests, validate change quality and standards", "priority": 70, "agent": null}
+{"name": "checkin", "description": "Commit changes, create branches, check in completed work to version control", "priority": 80, "agent": null}
+{"name": "api", "description": "Design and implement REST API endpoints, controllers, and request handlers", "priority": 21, "agent": null}
+{"name": "db", "description": "Database schema design, migrations, query optimization, and data access patterns", "priority": 22, "agent": null}
+{"name": "domain", "description": "Domain modeling, business logic implementation, and entity design patterns", "priority": 23, "agent": null}
+{"name": "query", "description": "Build query handlers, search logic, CQRS query patterns, and data retrieval", "priority": 24, "agent": null}
+{"name": "patterns", "description": "Apply code patterns, design patterns, and architectural patterns across the codebase", "priority": 25, "agent": null}
+{"name": "scaffold", "description": "Generate boilerplate code, project structure, module scaffolding, and starter templates", "priority": 26, "agent": null}
+{"name": "migrate", "description": "Database and code migrations, upgrade paths, schema changes, and data transformations", "priority": 27, "agent": null}
+{"name": "refactor", "description": "Code refactoring, cleanup, technical debt reduction, and code quality improvement", "priority": 28, "agent": null}
+{"name": "inject", "description": "Dependency injection configuration, IoC container setup, and service registration", "priority": 29, "agent": null}
+{"name": "blackbox", "description": "Black box testing, functional test scenarios, acceptance criteria validation for TalentSyncPro", "priority": 31, "agent": null}
+{"name": "validate", "description": "Input validation, schema validation, contract validation, and data integrity checks", "priority": 32, "agent": null}
+{"name": "test-design", "description": "Test design patterns, test planning, test case authoring, and coverage strategy", "priority": 33, "agent": null}
+{"name": "integration-test", "description": "Integration testing, component interaction verification, and end-to-end flow tests", "priority": 34, "agent": null}
+{"name": "smoke-test", "description": "Smoke test suite execution, quick sanity checks post-deploy, critical path validation", "priority": 35, "agent": null}
+{"name": "contract-test", "description": "Contract testing, API consumer-provider verification, pact tests, interface contracts", "priority": 36, "agent": null}
+{"name": "e2e-test", "description": "End-to-end test automation, browser tests, and user journey testing for TalentSyncPro", "priority": 37, "agent": null}
+{"name": "regression", "description": "Regression test suite, change impact analysis, and baseline verification after changes", "priority": 38, "agent": null}
+{"name": "coverage", "description": "Code coverage analysis, coverage reports, coverage thresholds, and test gap identification", "priority": 39, "agent": null}
+{"name": "package", "description": "Build and package artifacts, container images, release bundles for TalentSyncPro", "priority": 41, "agent": null}
+{"name": "deploy", "description": "Deploy to target environments, deployment scripts, rollout strategies, blue-green deploys", "priority": 42, "agent": null}
+{"name": "release", "description": "Cut releases, tag versions, update changelogs, and author release notes", "priority": 43, "agent": null}
+{"name": "monitor", "description": "System monitoring, dashboards, health checks, and observability setup for TalentSyncPro", "priority": 51, "agent": null}
+{"name": "alert", "description": "Configure alerts, incident detection, on-call notification rules, and SLA thresholds", "priority": 52, "agent": null}
+{"name": "rollback", "description": "Rollback procedures, hotfix deployment, emergency recovery, and incident response steps", "priority": 53, "agent": null}
+{"name": "audit", "description": "Audit trails, compliance checks, security review, and access logging for TalentSyncPro", "priority": 54, "agent": null}
