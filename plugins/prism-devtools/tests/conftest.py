@@ -3,6 +3,7 @@ conftest.py — per-phase skill/brain diagnostic report for customer skill lifec
 
 Uses pytest_terminal_summary to print a table showing skill matching metrics,
 brain ranking results, and coverage gaps per workflow step after the test session.
+Also prints a Learning Trajectory report when multi-turn lifecycle tests are run.
 """
 import json
 import re
@@ -90,6 +91,32 @@ def _make_conductor_brain(usage_scores):
     c.last_had_brain_context = 0
     c.last_prompt_id = ""
     return c
+
+
+# Simulated Feature A usage (mirrors FEATURE_A_USAGE in test_multi_turn_lifecycle.py)
+_FEATURE_A_USAGE = {
+    "implement_tasks":     {"api": 5, "db": 3, "domain": 2},
+    "write_failing_tests": {"e2e-test": 4, "integration-test": 3, "test-design": 2},
+    "verify_green_state":  {"validate": 3, "coverage": 2},
+    "draft_story":         {"task": 2, "review": 1},
+}
+
+# Learning trajectory steps (step_id, agent, role_label)
+_TRAJECTORY_STEPS = [
+    ("draft_story",         "sm",  "SM"),
+    ("implement_tasks",     "dev", "DEV"),
+    ("write_failing_tests", "qa",  "QA"),
+    ("verify_green_state",  "qa",  "QA"),
+]
+
+
+def _make_conductor_learned():
+    """Conductor after Feature A learning. Uses merged global scores as fallback."""
+    merged: dict = {}
+    for step_scores in _FEATURE_A_USAGE.values():
+        for name, cnt in step_scores.items():
+            merged[name] = merged.get(name, 0) + cnt
+    return _make_conductor_brain(merged)
 
 
 def _count_tests_per_step(terminalreporter):
@@ -237,4 +264,73 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     tw.write_line("    With usage data: top-5 by frequency (ignores keywords)")
     tw.write_line("    Without data:    falls back to cold-start keyword matching")
     tw.write_line("    Tracking:        skill_calls (s), brain_queries (bq), tool_calls (tc) in step_history")
+    tw.write_line("")
+
+    # Learning Trajectory section — only when multi-turn tests ran
+    _print_learning_trajectory(terminalreporter)
+
+
+def _print_learning_trajectory(terminalreporter) -> None:
+    """Print learning trajectory table if test_multi_turn_lifecycle tests ran."""
+    multi_turn_seen = any(
+        hasattr(rep, "nodeid") and "test_multi_turn_lifecycle" in rep.nodeid
+        for reports in terminalreporter.stats.values()
+        for rep in reports
+    )
+    if not multi_turn_seen:
+        return
+
+    try:
+        skills = _load_skills()
+        cold = _make_conductor_cold()
+        learned = _make_conductor_learned()
+    except Exception:
+        return
+
+    SEP2 = "━" * 88
+    tw = terminalreporter
+    tw.write_sep("=", "Learning Trajectory Report")
+    tw.write_line(SEP2)
+    tw.write_line(f"  {'Step':<30} {'Cold Skills':>12}  {'Learned Skills':>14}  Delta  Changed Names")
+    tw.write_line(SEP2)
+
+    steps_improved = 0
+    for step_id, agent, role in _TRAJECTORY_STEPS:
+        cold_names = [s["name"] for s in cold.select_relevant_skills(step_id, agent, skills)]
+        warm_names = [s["name"] for s in learned.select_relevant_skills(step_id, agent, skills)]
+        cold_n = len(cold_names)
+        warm_n = len(warm_names)
+        delta = warm_n - cold_n
+
+        added = [s for s in warm_names if s not in cold_names]
+        removed = [s for s in cold_names if s not in warm_names]
+
+        if added or removed or cold_names != warm_names:
+            steps_improved += 1
+            change_str = ""
+            if added:
+                change_str += f"+[{','.join(added)}]"
+            if removed:
+                change_str += f" -[{','.join(removed)}]"
+            if not change_str:
+                change_str = "(reordered)"
+        else:
+            change_str = "(no change)"
+
+        delta_str = f"{delta:+d}" if delta != 0 else " 0"
+        label = f"{step_id} ({role})"
+        tw.write_line(
+            f"  {label:<30} {','.join(cold_names):>12}  "
+            f"{','.join(warm_names):>14}  {delta_str:>5}  {change_str}"
+        )
+
+    tw.write_line(SEP2)
+    tw.write_line(
+        f"  Learning: {steps_improved}/{len(_TRAJECTORY_STEPS)} steps improved "
+        f"skill focus after 1 feature build"
+    )
+    tw.write_line(
+        "  Note: columns show merged global scores (per-step isolation pending "
+        "engine-changes-builder merge)"
+    )
     tw.write_line("")
