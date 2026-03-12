@@ -1719,9 +1719,16 @@ class Brain:
         query = ""
         if story_file:
             try:
-                query = Path(story_file).read_text(
+                raw = Path(story_file).read_text(
                     encoding="utf-8", errors="replace"
-                )[:1000]
+                )[:2000]
+                # Pre-extract key terms from the story for better FTS5 matching.
+                # Raw markdown prose has many stop words and markdown syntax that
+                # dilute the search signal; distilling to key terms yields higher
+                # RRF scores against indexed code content.
+                query = _extract_fts_query(raw, max_terms=20)
+                if not query:
+                    query = raw[:1000]
             except (IOError, OSError):
                 pass
         if not query and persona:
@@ -1753,8 +1760,14 @@ class Brain:
             _rrf_threshold = 0.02
         else:
             _rrf_threshold = 1.0 / (_rrf_k + 1) * 0.9  # ≈ 0.0148
-        results = [r for r in results if r.get("rrf_score", 0.0) >= _rrf_threshold]
-        if not results:
+        filtered = [r for r in results if r.get("rrf_score", 0.0) >= _rrf_threshold]
+        if not filtered:
+            # Fallback: return top-N results regardless of score when strict
+            # threshold filtering eliminates all results. This ensures Brain
+            # context is surfaced even when story terms don't match indexed
+            # code vocabulary well (e.g., FTS5-only installs with low RRF scores).
+            filtered = results[:limit]
+        if not filtered:
             self.last_result_count = 0
             try:
                 doc_count = self._brain.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
@@ -1768,6 +1781,7 @@ class Brain:
             except Exception:
                 pass
             return ""
+        results = filtered
 
         self.last_result_count = len(results)
         parts = ["<brain_context>"]

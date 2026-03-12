@@ -340,3 +340,105 @@ def test_build_agent_instruction_no_brain_context_when_brain_unavailable(
     assert "<brain_context>" not in result, (
         "build_agent_instruction should not emit <brain_context> when Brain is unavailable"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC-3: system_context() returns >0 results even with low RRF scores (fallback)
+# ---------------------------------------------------------------------------
+
+def test_ac3_system_context_returns_results_via_fallback_when_rrf_below_threshold(
+    tmp_path, monkeypatch
+):
+    """system_context() returns non-empty output via fallback when all RRF scores are low.
+
+    Simulates the case where Brain has indexed docs but the story file contains
+    generic markdown prose that doesn't score above the RRF threshold. The
+    fallback should return top-N results regardless of score.
+    """
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    # Index a doc with specific content
+    src = tmp_path / "fallback_test_module.py"
+    src.write_text("def fallback_test_impl(): return True\n")
+    brain._ingest_single(
+        str(src),
+        "def fallback_test_impl(): return True",
+        source_file=str(src),
+        domain="py",
+    )
+
+    # Story with generic prose that may score below threshold individually
+    # but Brain should still return the doc via the fallback path.
+    story = tmp_path / "story.md"
+    story.write_text("fallback test impl return True")
+
+    result = brain.system_context(story_file=str(story), persona="dev")
+
+    assert result, (
+        "system_context() should return non-empty via fallback when docs are indexed "
+        "even if RRF scores are marginal"
+    )
+    assert "<brain_context>" in result
+
+
+def test_ac3_last_result_count_positive_after_fallback(tmp_path, monkeypatch):
+    """last_result_count is >0 after system_context() returns results via fallback."""
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    src = tmp_path / "lrc_fallback_mod.py"
+    src.write_text("def lrc_fallback_func(): pass\n")
+    brain._ingest_single(
+        str(src),
+        "def lrc_fallback_func(): pass",
+        source_file=str(src),
+        domain="py",
+    )
+
+    story = tmp_path / "story.md"
+    story.write_text("lrc fallback func pass")
+
+    brain.system_context(story_file=str(story), persona="dev")
+
+    assert brain.last_result_count > 0, (
+        f"last_result_count must be >0 after system_context() returns results; "
+        f"got {brain.last_result_count}"
+    )
+
+
+def test_ac3_system_context_story_term_extraction_improves_search(tmp_path, monkeypatch):
+    """system_context() pre-extracts terms from story markdown for better FTS5 matching.
+
+    Verifies that story files with markdown formatting still yield results
+    because _extract_fts_query strips markdown syntax before searching.
+    """
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    src = tmp_path / "termextract_zq_module.py"
+    src.write_text("def termextract_zq_function(): pass\n")
+    brain._ingest_single(
+        str(src),
+        "def termextract_zq_function(): pass",
+        source_file=str(src),
+        domain="py",
+    )
+
+    # Story with markdown formatting — _extract_fts_query should strip ## and # chars
+    story = tmp_path / "story.md"
+    story.write_text(
+        "## Story: termextract zq function\n\n"
+        "### Acceptance Criteria\n\n"
+        "AC-1: termextract_zq_function must pass\n"
+    )
+
+    result = brain.system_context(story_file=str(story), persona="dev")
+
+    assert result, (
+        "system_context() should return results when story contains matching terms "
+        "even with markdown formatting"
+    )
