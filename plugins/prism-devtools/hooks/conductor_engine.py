@@ -491,6 +491,11 @@ class Conductor:
         try:
             self._brain.record_outcome(actual_prompt_id, persona, step_id, metrics)
             self._check_retirement(actual_prompt_id, persona, step_id)
+            skill_names = metrics.get("skill_names", []) if isinstance(metrics, dict) else []
+            session_id = metrics.get("session_id", "") if isinstance(metrics, dict) else ""
+            for name in skill_names:
+                if name:
+                    self._brain.record_skill_usage(session_id, name, step_id)
         except Exception as exc:
             print(f"Conductor: record_outcome failed ({exc})", file=sys.stderr)
 

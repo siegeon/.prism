@@ -1059,14 +1059,15 @@ def get_usage_from_transcript(transcript_path: str, step_line_start: int = 0) ->
     total_lines = 0
     skill_calls = 0
     tool_calls = 0
+    skill_names: list = []
 
     if not transcript_path:
-        return {"total_tokens": 0, "model": "", "total_lines": 0, "skill_calls": 0, "tool_calls": 0}
+        return {"total_tokens": 0, "model": "", "total_lines": 0, "skill_calls": 0, "tool_calls": 0, "skill_names": []}
 
     try:
         tp = Path(transcript_path).expanduser()
         if not tp.exists():
-            return {"total_tokens": 0, "model": "", "total_lines": 0, "skill_calls": 0, "tool_calls": 0}
+            return {"total_tokens": 0, "model": "", "total_lines": 0, "skill_calls": 0, "tool_calls": 0, "skill_names": []}
 
         with open(tp, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -1106,6 +1107,9 @@ def get_usage_from_transcript(transcript_path: str, step_line_start: int = 0) ->
                                 tool_calls += 1
                                 if block.get("name") == "Skill":
                                     skill_calls += 1
+                                    sn = block.get("input", {}).get("skill", "")
+                                    if sn:
+                                        skill_names.append(sn)
 
     except (IOError, OSError):
         pass
@@ -1116,6 +1120,7 @@ def get_usage_from_transcript(transcript_path: str, step_line_start: int = 0) ->
         "total_lines": total_lines,
         "skill_calls": skill_calls,
         "tool_calls": tool_calls,
+        "skill_names": skill_names,
     }
 
 
@@ -1844,6 +1849,7 @@ def main():
     step_toks_used = max(0, usage["total_tokens"] - step_tok_start)
     step_skill_calls = usage.get("skill_calls", 0)
     step_tool_calls = usage.get("tool_calls", 0)
+    step_skill_names = usage.get("skill_names", [])
 
     # Detect test runner early — needed for no-progress re-emission and instruction building
     runner = detect_test_runner()
@@ -2019,6 +2025,8 @@ def main():
                 "gate_passed": gate_passed,
                 "skill_calls": step_skill_calls,
                 "tool_calls": step_tool_calls,
+                "skill_names": step_skill_names,
+                "session_id": current_session_id,
             },
         )
         conductor.incremental_reindex()
