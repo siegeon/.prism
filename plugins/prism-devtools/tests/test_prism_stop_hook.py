@@ -40,6 +40,7 @@ from prism_stop_hook import (  # noqa: E402
     is_same_session,
     _write_instruction_file,
     cleanup,
+    detect_story_file,
 )
 
 
@@ -1380,3 +1381,76 @@ def test_no_progress_reinstruct_is_short(tmp_path, monkeypatch):
     assert ".prism/current_instruction.md" in reason
     # Should be short — not the full instruction body
     assert len(reason) < 400
+
+
+# ---------------------------------------------------------------------------
+# detect_story_file() tests
+# ---------------------------------------------------------------------------
+
+def test_detect_story_file_uses_tracker_file(tmp_path, monkeypatch):
+    """detect_story_file() returns the path from .prism-current-story.txt when valid."""
+    story = tmp_path / "docs" / "stories" / "my-story.md"
+    story.parent.mkdir(parents=True)
+    story.write_text("# Story")
+
+    tracker = tmp_path / ".prism-current-story.txt"
+    tracker.write_text(str(story))
+
+    monkeypatch.chdir(tmp_path)
+    result = detect_story_file()
+    assert result == str(story)
+
+
+def test_detect_story_file_tracker_missing_falls_back_to_scan(tmp_path, monkeypatch):
+    """detect_story_file() falls back to filesystem scan when tracker file is absent."""
+    story = tmp_path / "docs" / "stories" / "scan-story.md"
+    story.parent.mkdir(parents=True)
+    story.write_text("# Story")
+    import os
+    os.utime(story, None)  # ensure mtime is recent
+
+    monkeypatch.chdir(tmp_path)
+    result = detect_story_file()
+    assert result and Path(result).name == "scan-story.md"
+
+
+def test_detect_story_file_tracker_points_to_missing_file_falls_back(tmp_path, monkeypatch):
+    """detect_story_file() ignores tracker if path no longer exists, scans instead."""
+    # Tracker points to a deleted file
+    tracker = tmp_path / ".prism-current-story.txt"
+    tracker.write_text(str(tmp_path / "docs" / "stories" / "gone.md"))
+
+    # A real story exists
+    story = tmp_path / "docs" / "stories" / "real-story.md"
+    story.parent.mkdir(parents=True)
+    story.write_text("# Real Story")
+
+    monkeypatch.chdir(tmp_path)
+    result = detect_story_file()
+    assert result and Path(result).name == "real-story.md"
+
+
+def test_detect_story_file_24h_threshold(tmp_path, monkeypatch):
+    """detect_story_file() finds files modified within 24 hours (not just 1 hour)."""
+    from datetime import datetime, timedelta
+    import os
+
+    story = tmp_path / "docs" / "stories" / "old-session-story.md"
+    story.parent.mkdir(parents=True)
+    story.write_text("# Old Story")
+
+    # Set mtime to 2 hours ago — would fail old 1-hour threshold, passes new 24-hour threshold
+    two_hours_ago = datetime.now() - timedelta(hours=2)
+    ts = two_hours_ago.timestamp()
+    os.utime(story, (ts, ts))
+
+    monkeypatch.chdir(tmp_path)
+    result = detect_story_file()
+    assert result and Path(result).name == "old-session-story.md"
+
+
+def test_detect_story_file_returns_empty_when_nothing_found(tmp_path, monkeypatch):
+    """detect_story_file() returns empty string when no tracker and no recent story files."""
+    monkeypatch.chdir(tmp_path)
+    result = detect_story_file()
+    assert result == ""

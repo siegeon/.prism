@@ -1719,16 +1719,30 @@ def detect_story_file() -> str:
     """
     Detect the most recently created/modified story file.
 
-    Looks in docs/stories/ for .md files created in the last hour.
-    Returns the path to the most recent one, or empty string if none found.
+    First checks .prism-current-story.txt (written by track-current-story.py
+    whenever a story file is saved). Falls back to scanning docs/stories/ for
+    .md files modified in the last 24 hours.
+
+    Returns the path to the story file, or empty string if none found.
     """
+    # Priority 1: check the tracker file written by track-current-story.py
+    tracker = Path(".prism-current-story.txt")
+    if tracker.exists():
+        try:
+            tracked_path = tracker.read_text(encoding="utf-8").strip()
+            if tracked_path and Path(tracked_path).exists():
+                return tracked_path
+        except (OSError, IOError):
+            pass
+
+    # Priority 2: scan story directories for recently modified files (24h window)
     story_dirs = [
         Path("docs/stories"),
         Path("stories"),
         Path("docs"),
     ]
 
-    recent_threshold = datetime.now() - timedelta(hours=1)
+    recent_threshold = datetime.now() - timedelta(hours=24)
     candidates = []
 
     for story_dir in story_dirs:
@@ -1976,8 +1990,9 @@ def main():
         "step_transcript_line": str(usage["total_lines"]),
     }
 
-    # After draft_story, detect and capture the story file
-    if step_id == "draft_story" and not state.get("story_file"):
+    # Detect and capture the story file if not already set.
+    # Retry at every step transition so long sessions (>1h) don't lose the story.
+    if not state.get("story_file"):
         detected_story = detect_story_file()
         if detected_story:
             updates["story_file"] = detected_story
