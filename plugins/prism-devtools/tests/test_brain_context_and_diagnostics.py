@@ -442,3 +442,217 @@ def test_ac3_system_context_story_term_extraction_improves_search(tmp_path, monk
         "system_context() should return results when story contains matching terms "
         "even with markdown formatting"
     )
+
+
+# ---------------------------------------------------------------------------
+# Step-aware query differentiation (prism-7e1d)
+# ---------------------------------------------------------------------------
+
+def test_system_context_accepts_step_id_without_error(tmp_path, monkeypatch):
+    """system_context() accepts step_id parameter without raising."""
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    story = tmp_path / "story.md"
+    story.write_text("some story content")
+
+    # Should not raise regardless of whether step_id is valid
+    result_with_step = brain.system_context(story_file=str(story), persona="dev", step_id="draft_story")
+    result_without_step = brain.system_context(story_file=str(story), persona="dev")
+    assert isinstance(result_with_step, str)
+    assert isinstance(result_without_step, str)
+
+
+def test_system_context_step_id_augments_query(tmp_path, monkeypatch):
+    """system_context() with step_id augments the search query with step-specific keywords.
+
+    Verifies by mocking self.search and asserting the query passed to it
+    contains step-specific terms for known steps.
+    """
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    story = tmp_path / "story.md"
+    story.write_text("user story")
+
+    captured_queries: list[str] = []
+    original_search = brain.search
+
+    def _capturing_search(query, **kwargs):
+        captured_queries.append(query)
+        return original_search(query, **kwargs)
+
+    monkeypatch.setattr(brain, "search", _capturing_search)
+
+    brain.system_context(story_file=str(story), persona="sm", step_id="draft_story")
+
+    assert captured_queries, "search() should be called at least once"
+    last_query = captured_queries[-1]
+    # The draft_story step should include planning/requirements terms
+    assert any(term in last_query for term in ("requirements", "planning", "acceptance", "criteria", "scope", "feature")), (
+        f"Query for draft_story should contain step-specific terms; got: {last_query!r}"
+    )
+
+
+def test_system_context_step_id_differentiates_queries_across_steps(tmp_path, monkeypatch):
+    """system_context() with different step_ids produces different query terms.
+
+    draft_story and verify_plan query with the same story file but different
+    step_ids, so the augmented queries should differ.
+    """
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    story = tmp_path / "story.md"
+    story.write_text("shared story content")
+
+    queries: dict[str, str] = {}
+    original_search = brain.search
+
+    def _capturing_search(query, **kwargs):
+        queries[brain._current_step_id or "unknown"] = query
+        return original_search(query, **kwargs)
+
+    # Track which step is being searched by setting _current_step_id before each call
+    for step_id in ("draft_story", "verify_plan"):
+        brain._current_step_id = step_id
+        captured: list[str] = []
+
+        def _capture_for_step(query, _step=step_id, **kwargs):
+            queries[_step] = query
+            return original_search(query, **kwargs)
+
+        monkeypatch.setattr(brain, "search", _capture_for_step)
+        brain.system_context(story_file=str(story), persona="sm", step_id=step_id)
+
+    assert "draft_story" in queries and "verify_plan" in queries, (
+        "Both steps should have triggered a search"
+    )
+    assert queries["draft_story"] != queries["verify_plan"], (
+        "draft_story and verify_plan should use different augmented queries"
+    )
+
+
+def test_system_context_deduplication_excludes_previous_docs(tmp_path, monkeypatch):
+    """system_context() deduplicates: a doc returned in call N is excluded from call N+1
+    when alternative docs are available.
+
+    Two docs are indexed. With limit=1, first call returns only the top-ranked doc.
+    Second call (dedup active) should return the OTHER doc, not the same one.
+    """
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    # Index two distinct docs that both match the story terms
+    src_a = tmp_path / "dedup_alpha_module.py"
+    src_a.write_text("def dedup_alpha_impl(): pass\n")
+    brain._ingest_single(
+        str(src_a), "def dedup_alpha_impl(): pass",
+        source_file=str(src_a), domain="py",
+    )
+    src_b = tmp_path / "dedup_beta_module.py"
+    src_b.write_text("def dedup_beta_impl(): pass\n")
+    brain._ingest_single(
+        str(src_b), "def dedup_beta_impl(): pass",
+        source_file=str(src_b), domain="py",
+    )
+
+    story = tmp_path / "story.md"
+    story.write_text("dedup alpha beta impl pass")
+
+    # First call with limit=1: returns the single top-ranked doc
+    first_result = brain.system_context(story_file=str(story), persona="dev", limit=1)
+    assert first_result, "First call should return a result"
+
+    first_doc_ids = brain._previous_context_doc_ids.copy()
+    assert len(first_doc_ids) == 1, (
+        "_previous_context_doc_ids should contain exactly 1 doc after limit=1 call"
+    )
+
+    # Second call with limit=1: dedup should exclude the first call's doc
+    # and return the other doc (not an overlap with the first)
+    second_result = brain.system_context(story_file=str(story), persona="dev", limit=1)
+
+    if second_result:
+        second_doc_ids = brain._previous_context_doc_ids
+        # When dedup found a non-empty alternative, there should be no overlap
+        overlap = first_doc_ids & second_doc_ids
+        assert not overlap, (
+            f"Second call should return the non-previously-seen doc; overlap: {overlap}"
+        )
+
+
+def test_system_context_previous_context_doc_ids_populated_after_call(tmp_path, monkeypatch):
+    """_previous_context_doc_ids is set after a system_context() call that returns results."""
+    brain = _make_brain_in(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    src = tmp_path / "prev_ids_zq_mod.py"
+    src.write_text("def prev_ids_zq_func(): pass\n")
+    brain._ingest_single(
+        str(src), "def prev_ids_zq_func(): pass",
+        source_file=str(src), domain="py",
+    )
+
+    story = tmp_path / "story.md"
+    story.write_text("prev ids zq func pass")
+
+    assert brain._previous_context_doc_ids == set(), (
+        "_previous_context_doc_ids should start empty"
+    )
+
+    result = brain.system_context(story_file=str(story), persona="dev")
+
+    if result:
+        assert brain._previous_context_doc_ids, (
+            "_previous_context_doc_ids should be populated after a result-producing call"
+        )
+
+
+def test_system_context_conductor_passes_step_id(tmp_path, monkeypatch):
+    """Conductor.build_agent_instruction() passes step_id to Brain.system_context()."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sp, "run", _fake_run)
+
+    from conductor_engine import Conductor
+
+    captured_step_ids: list = []
+    mock_brain = MagicMock()
+
+    def _mock_system_context(**kwargs):
+        captured_step_ids.append(kwargs.get("step_id"))
+        return ""
+
+    mock_brain.system_context.side_effect = _mock_system_context
+    mock_brain.last_result_count = 0
+    mock_brain._scores = MagicMock()
+    mock_brain._scores.execute.return_value.fetchall.return_value = []
+    mock_brain._scores.execute.return_value.fetchone.return_value = None
+    mock_brain.outcome_count.return_value = 0
+    mock_brain.best_prompt.return_value = "sm/default"
+    mock_brain.get_prompt.return_value = ""
+
+    story = tmp_path / "story.md"
+    story.write_text("test story")
+
+    with patch("brain_engine.Brain", return_value=mock_brain):
+        c = Conductor()
+
+    c.build_agent_instruction(
+        step_id="draft_story",
+        agent="sm",
+        action="draft",
+        story_file=str(story),
+        prompt="",
+    )
+
+    assert captured_step_ids, "system_context() should have been called"
+    assert captured_step_ids[-1] == "draft_story", (
+        f"Conductor should pass step_id='draft_story' to system_context(); "
+        f"got {captured_step_ids[-1]!r}"
+    )
