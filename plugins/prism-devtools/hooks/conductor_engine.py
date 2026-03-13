@@ -445,7 +445,7 @@ class Conductor:
         if self._brain_available and self._brain is not None:
             try:
                 brain_ctx = self._brain.system_context(
-                    story_file=story_file, persona=agent
+                    story_file=story_file, persona=agent, step_id=step_id
                 )
             except Exception as exc:
                 print(

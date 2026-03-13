@@ -287,6 +287,19 @@ _FTS_STOP_WORDS: frozenset = frozenset({
 })
 
 
+# Step-specific query augmentation terms: appended to story-derived query via OR
+# so each PRISM step retrieves step-relevant knowledge even when story content
+# is identical across steps (e.g., draft_story and verify_plan share same story).
+_STEP_QUERY_KEYWORDS: dict[str, str] = {
+    "draft_story":           "requirements acceptance criteria planning scope feature",
+    "verify_plan":           "architecture dependency interface module design constraint risk",
+    "implement_tasks":       "implementation pattern function class handler service endpoint",
+    "write_failing_tests":   "test fixture assertion mock coverage scenario spec",
+    "verify_green_state":    "test error failure lint build compile validation pass",
+    "review_previous_notes": "context session history progress handoff notes",
+}
+
+
 def _extract_fts_query(text: str, max_terms: int = 12) -> str:
     """Extract key terms from text and build an FTS5 OR query.
 
@@ -395,6 +408,7 @@ class Brain:
         self._scores_db_path = scores_db
         self._current_step_id: Optional[str] = None
         self.last_result_count: int = 0
+        self._previous_context_doc_ids: set[str] = set()
         self._effective_excludes = (
             self._EXCLUDED_PATH_SEGMENTS | self._load_user_excludes()
         )
@@ -1709,6 +1723,7 @@ class Brain:
         story_file: Optional[str] = None,
         persona: Optional[str] = None,
         limit: int = 8,
+        step_id: Optional[str] = None,
     ) -> str:
         """Run hybrid search from story/persona context and return formatted block.
 
@@ -1736,16 +1751,26 @@ class Brain:
         if not query:
             return ""
 
+        # Augment query with step-specific keywords so that consecutive steps
+        # (e.g., draft_story and verify_plan) retrieve different ranked results
+        # even when their story file content is identical.
+        if step_id and step_id in _STEP_QUERY_KEYWORDS:
+            step_terms = " OR ".join(_STEP_QUERY_KEYWORDS[step_id].split())
+            query = f"{query} OR {step_terms}"
+
         # Resolve role-specific domain filter from persona.
         role_domains: Optional[list[str]] = None
         if persona:
             role_key = persona.lower().strip()
             role_domains = self.ROLE_DOMAIN_MAP.get(role_key)
 
-        results = self.search(query, limit=limit, domains=role_domains)
+        # Request extra results to provide headroom for deduplication against
+        # previously-seen docs. After dedup, only `limit` results are returned.
+        search_limit = limit * 2 if self._previous_context_doc_ids else limit
+        results = self.search(query, limit=search_limit, domains=role_domains)
         # If role-filtered search returned nothing, fall back to unfiltered.
         if not results and role_domains:
-            results = self.search(query, limit=limit)
+            results = self.search(query, limit=search_limit)
         if not results:
             self.last_result_count = 0
             return ""
@@ -1783,7 +1808,20 @@ class Brain:
             return ""
         results = filtered
 
+        # Deduplicate against docs returned in the previous system_context() call.
+        # Only applies when a previous call produced results; preserves all results
+        # when deduplication would leave the list empty (ensures Brain context is
+        # always surfaced even when all candidates are "stale").
+        if self._previous_context_doc_ids:
+            deduped = [r for r in results if r["doc_id"] not in self._previous_context_doc_ids]
+            if deduped:
+                results = deduped
+
+        # Cap at the caller's requested limit after dedup expansion
+        results = results[:limit]
+
         self.last_result_count = len(results)
+        self._previous_context_doc_ids = {r["doc_id"] for r in results}
         parts = ["<brain_context>"]
         for i, r in enumerate(results, 1):
             parts.append(f"[{i}] {r['doc_id']}")
