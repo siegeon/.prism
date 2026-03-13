@@ -22,6 +22,7 @@ from parsing import (
     update_state_field,
     _count_green_tests,
     check_plugin_cache_stale,
+    find_session_transcript,
     resolve_plugin_root,
 )
 from models import WorkflowState, StoryInfo
@@ -322,3 +323,30 @@ class TestResolvePluginRoot:
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_dir))
         root = resolve_plugin_root()
         assert root == plugin_dir
+
+
+class TestFindSessionTranscript:
+    """Tests for find_session_transcript cross-platform path resolution."""
+
+    def test_finds_transcript(self, tmp_path: Path, monkeypatch):
+        """Creates transcript file, patches Path.home, asserts it is found."""
+        projects = tmp_path / ".claude" / "projects" / "proj"
+        projects.mkdir(parents=True)
+        tp = projects / "abc123.jsonl"
+        tp.write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr("parsing.Path.home", staticmethod(lambda: tmp_path))
+        result = find_session_transcript("abc123")
+        assert result is not None
+        assert "abc123.jsonl" in result
+
+    def test_returns_none_for_empty(self):
+        """Empty session_id returns None without touching the filesystem."""
+        result = find_session_transcript("")
+        assert result is None
+
+    def test_returns_none_when_no_match(self, tmp_path: Path, monkeypatch):
+        """No matching transcript file returns None."""
+        (tmp_path / ".claude" / "projects").mkdir(parents=True)
+        monkeypatch.setattr("parsing.Path.home", staticmethod(lambda: tmp_path))
+        result = find_session_transcript("nonexistent-session-id")
+        assert result is None

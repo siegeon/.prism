@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob as _glob
 import json as _json
 import logging
 import sqlite3
@@ -20,6 +19,7 @@ from textual.widgets import Footer, Header, Static
 from models import StoryInfo, WorkflowState
 from parsing import (
     check_plugin_cache_stale,
+    find_session_transcript,
     parse_state_file,
     parse_story_file,
     read_plugin_version,
@@ -151,6 +151,8 @@ class PrismDashboard(App):
                 parts.append(("  " + model_short, "cyan"))
             if state.total_tokens > 0:
                 parts.append(f"  {_fmt_tokens(state.total_tokens)} tok")
+            elif state.session_id:
+                parts.append(("  ? tok", "dim yellow"))
         else:
             parts.append(("  \u25cbIDLE", "dim"))
 
@@ -232,13 +234,7 @@ class PrismDashboard(App):
 
         # Locate the transcript once per session
         if not self._transcript_path:
-            pattern = str(
-                Path.home() / ".claude" / "projects" / "*"
-                / f"{state.session_id}.jsonl"
-            )
-            matches = _glob.glob(pattern)
-            if matches:
-                self._transcript_path = matches[0]
+            self._transcript_path = find_session_transcript(state.session_id) or ""
         if not self._transcript_path:
             return
 

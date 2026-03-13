@@ -6,7 +6,9 @@ frontmatter parsing with no YAML library dependency.
 
 from __future__ import annotations
 
+import glob as _glob
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -155,6 +157,31 @@ def check_plugin_cache_stale(work_dir: Path) -> dict:
         pass
 
     return result
+
+
+def find_session_transcript(session_id: str) -> str | None:
+    """Locate the Claude session transcript JSONL file.
+
+    Searches ~/.claude/projects/*/SESSION_ID.jsonl using glob.
+    Returns the path as a string, or None if not found.
+    """
+    if not session_id:
+        return None
+    home = str(Path.home())
+    pattern = home + "/.claude/projects/*/" + session_id + ".jsonl"
+    pattern = pattern.replace("\\", "/")  # normalize backslashes for glob
+    matches = _glob.glob(pattern)
+    if matches:
+        return matches[0]
+    # Fallback: recursive search
+    pattern_rec = home + "/.claude/projects/**/" + session_id + ".jsonl"
+    pattern_rec = pattern_rec.replace("\\", "/")
+    matches = _glob.glob(pattern_rec, recursive=True)
+    if matches:
+        return matches[0]
+    _log = logging.getLogger(__name__)
+    _log.debug("Transcript not found for session %s", session_id[:8])
+    return None
 
 
 def _count_green_tests(work_dir: Path) -> tuple[int, int]:

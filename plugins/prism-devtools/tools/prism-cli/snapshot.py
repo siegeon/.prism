@@ -10,7 +10,6 @@ Usage:
 
 from __future__ import annotations
 
-import glob as _glob
 import json as _json
 import sqlite3 as _sqlite3
 from datetime import datetime
@@ -19,6 +18,7 @@ from pathlib import Path
 from models import WORKFLOW_STEPS, WorkflowState, StoryInfo
 from parsing import (
     check_plugin_cache_stale,
+    find_session_transcript,
     parse_state_file,
     parse_story_file,
     read_plugin_version,
@@ -36,13 +36,10 @@ def _inject_live_tokens(state: WorkflowState) -> None:
     """
     if not state.session_id:
         return
-    pattern = str(
-        Path.home() / ".claude" / "projects" / "*" / f"{state.session_id}.jsonl"
-    )
-    matches = _glob.glob(pattern)
-    if not matches:
+    transcript = find_session_transcript(state.session_id)
+    if not transcript:
         return
-    tp = Path(matches[0])
+    tp = Path(transcript)
     if not tp.exists():
         return
 
@@ -144,15 +141,12 @@ def _render_activity_feed(state: "WorkflowState", lines: list[str], max_entries:
         lines.append("  No session ID — cannot read transcript")
         lines.append("")
         return
-    pattern = str(
-        Path.home() / ".claude" / "projects" / "*" / f"{state.session_id}.jsonl"
-    )
-    matches = _glob.glob(pattern)
-    if not matches:
+    transcript = find_session_transcript(state.session_id)
+    if not transcript:
         lines.append("  No transcript found")
         lines.append("")
         return
-    tp = Path(matches[0])
+    tp = Path(transcript)
     entries: list[str] = []
     try:
         with open(tp, encoding="utf-8", errors="replace") as f:
