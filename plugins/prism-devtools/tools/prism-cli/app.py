@@ -186,10 +186,13 @@ class PrismDashboard(App):
             parts.append(("  \u25cbBRAIN OFF", "dim"))
 
         if self._sfr_total > 0:
-            sfr_label = f"{self._sfr_total}r"
-            if self._sfr_runs > 0 and self._sfr_cert_avg >= 0:
-                sfr_label += f" cert:{self._sfr_cert_avg:.1f}/6"
-            parts.append(("  \u25cfSFR " + sfr_label, "bold magenta"))
+            if self._sfr_runs > 0:
+                sfr_label = f"{self._sfr_runs}/{self._sfr_total}r"
+                if self._sfr_cert_avg >= 0:
+                    sfr_label += f" cert:{self._sfr_cert_avg:.1f}/6"
+                parts.append(("  \u25cfSFR " + sfr_label, "bold magenta"))
+            else:
+                parts.append(("  \u25cbRUNS " + f"{self._sfr_total}r", "dim"))
         elif self._sfr_total == 0:
             parts.append(("  \u25cbSFR 0", "dim"))
 

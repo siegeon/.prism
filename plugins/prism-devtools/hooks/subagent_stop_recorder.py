@@ -8,8 +8,8 @@ Fires when a sub-agent finishes. For SFR variants:
   - Records outcome to subagent_outcomes table in scores.db
 
 State files (written by SubagentStart hook):
-  .prism/brain/current_subagent_prompt_id   — which variant was selected
-  .prism/brain/sfr_block_count_{agent_name} — per-agent block counter
+  .prism/brain/subagent_variants/{safe_name} — which variant was selected (per-agent)
+  .prism/brain/sfr_block_count_{agent_name}  — per-agent block counter
 """
 
 import json
@@ -50,9 +50,15 @@ def _git_root() -> Path:
     return Path.cwd()
 
 
-def _read_prompt_id(prism_dir: Path) -> str:
-    """Read prompt_id written by SubagentStart hook. Returns '' if missing."""
-    state_file = prism_dir / "brain" / "current_subagent_prompt_id"
+def _read_prompt_id(prism_dir: Path, agent_name: str) -> str:
+    """Read prompt_id from per-agent variant file written by SubagentStart hook.
+
+    Reads from '.prism/brain/subagent_variants/{safe_name}' where safe_name
+    mirrors the path written by conductor._save_subagent_prompt_id().
+    Returns '' if missing.
+    """
+    safe_name = agent_name.replace("/", "_").replace("\\", "_")
+    state_file = prism_dir / "brain" / "subagent_variants" / safe_name
     try:
         return state_file.read_text(encoding="utf-8").strip()
     except (IOError, OSError):
@@ -156,7 +162,7 @@ def main() -> None:
     duration_s = float(input_data.get("duration_s", 0.0) or 0.0)
 
     prism_dir = _git_root() / ".prism"
-    prompt_id = _read_prompt_id(prism_dir)
+    prompt_id = _read_prompt_id(prism_dir, agent_name)
 
     is_sfr = "/sfr" in prompt_id
 
