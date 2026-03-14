@@ -45,7 +45,7 @@ from prism_stop_hook import (  # noqa: E402
     _write_instruction_file,
     cleanup,
     detect_story_file,
-    _auto_commit_phase_boundary,
+    detect_skill_bypass,
 )
 
 
@@ -1563,104 +1563,153 @@ def test_detect_story_file_returns_empty_when_nothing_found(tmp_path, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# _auto_commit_phase_boundary() tests
+# detect_skill_bypass() tests
 # ---------------------------------------------------------------------------
 
-def _make_git_run(returncode_map: dict):
-    """Return a side_effect for subprocess.run that routes by first arg."""
-    def _run(cmd, **kwargs):
-        m = MagicMock()
-        # cmd is a list; use the git subcommand as the key
-        key = cmd[1] if isinstance(cmd, list) and len(cmd) > 1 else ""
-        m.returncode = returncode_map.get(key, 0)
-        m.stdout = ""
-        m.stderr = ""
-        return m
-    return _run
+_SKILL_MD_WITH_REPLACES = """---
+name: test
+description: Run the project test suite
+replaces: npm test
+prism:
+  agent: qa
+  priority: 10
+---
+"""
+
+_SKILL_MD_NO_REPLACES = """---
+name: build
+description: Build the project
+prism:
+  agent: dev
+  priority: 20
+---
+"""
 
 
-def test_auto_commit_calls_git_add_and_commit(monkeypatch, tmp_path):
-    """_auto_commit_phase_boundary runs git add -A then git commit."""
+def _write_transcript_with_bash(path: Path, commands: list, step_line_start: int = 0) -> None:
+    """Write a minimal JSONL transcript containing Bash tool_use blocks.
+
+    Each command is written as a separate line after `step_line_start` padding lines.
+    """
+    # Pad lines so commands appear after step_line_start
+    lines = []
+    for _ in range(step_line_start):
+        lines.append(json.dumps({"message": {"role": "user", "content": []}}))
+    for cmd in commands:
+        entry = {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "id": "bash_1",
+                        "input": {"command": cmd},
+                    }
+                ],
+            }
+        }
+        lines.append(json.dumps(entry))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_detect_skill_bypass_empty_when_no_skills(tmp_path, monkeypatch):
+    """Returns empty list when no skills with replaces are discoverable."""
     monkeypatch.chdir(tmp_path)
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        m = MagicMock()
-        m.returncode = 0
-        m.stdout = ""
-        m.stderr = ""
-        return m
-
-    with patch("prism_stop_hook.subprocess.run", side_effect=fake_run):
-        _auto_commit_phase_boundary("write_failing_tests")
-
-    subcommands = [c[1] for c in calls if isinstance(c, list) and len(c) > 1]
-    assert "rev-parse" in subcommands
-    assert "add" in subcommands
-    assert "commit" in subcommands
+    transcript = tmp_path / "transcript.jsonl"
+    _write_transcript_with_bash(transcript, ["npm test"])
+    result = detect_skill_bypass(str(transcript), 0)
+    assert result == []
 
 
-def test_auto_commit_message_contains_step_id(monkeypatch, tmp_path):
-    """Commit message includes the step_id so history is traceable."""
+def test_detect_skill_bypass_empty_when_no_transcript(tmp_path, monkeypatch):
+    """Returns empty list when transcript_path is empty string."""
     monkeypatch.chdir(tmp_path)
-    commit_msgs = []
-
-    def fake_run(cmd, **kwargs):
-        if isinstance(cmd, list) and len(cmd) > 1 and cmd[1] == "commit":
-            commit_msgs.append(cmd)
-        m = MagicMock()
-        m.returncode = 0
-        return m
-
-    with patch("prism_stop_hook.subprocess.run", side_effect=fake_run):
-        _auto_commit_phase_boundary("verify_green_state")
-
-    assert commit_msgs, "git commit was not called"
-    commit_cmd = " ".join(str(x) for x in commit_msgs[0])
-    assert "verify_green_state" in commit_cmd
+    skills_dir = tmp_path / ".claude" / "skills" / "test"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_WITH_REPLACES, encoding="utf-8")
+    result = detect_skill_bypass("", 0)
+    assert result == []
 
 
-def test_auto_commit_skips_when_not_in_git_repo(monkeypatch, tmp_path):
-    """If git rev-parse fails, no git add or commit is attempted."""
+def test_detect_skill_bypass_empty_when_transcript_missing(tmp_path, monkeypatch):
+    """Returns empty list when transcript file does not exist."""
     monkeypatch.chdir(tmp_path)
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        m = MagicMock()
-        # rev-parse fails → not a git repo
-        m.returncode = 1 if "rev-parse" in cmd else 0
-        return m
-
-    with patch("prism_stop_hook.subprocess.run", side_effect=fake_run):
-        _auto_commit_phase_boundary("red_gate")
-
-    subcommands = [c[1] for c in calls if isinstance(c, list) and len(c) > 1]
-    assert "rev-parse" in subcommands
-    assert "add" not in subcommands
-    assert "commit" not in subcommands
+    skills_dir = tmp_path / ".claude" / "skills" / "test"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_WITH_REPLACES, encoding="utf-8")
+    result = detect_skill_bypass(str(tmp_path / "nonexistent.jsonl"), 0)
+    assert result == []
 
 
-def test_auto_commit_tolerates_nothing_to_commit(monkeypatch, tmp_path):
-    """If git commit returns non-zero (nothing to commit), no exception is raised."""
+def test_detect_skill_bypass_detects_matching_command(tmp_path, monkeypatch):
+    """Returns warning when agent ran a raw command that a skill replaces."""
     monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills" / "test"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_WITH_REPLACES, encoding="utf-8")
 
-    def fake_run(cmd, **kwargs):
-        m = MagicMock()
-        # commit exits 1 when there's nothing to commit — that's fine
-        m.returncode = 1 if isinstance(cmd, list) and len(cmd) > 1 and cmd[1] == "commit" else 0
-        return m
+    transcript = tmp_path / "transcript.jsonl"
+    _write_transcript_with_bash(transcript, ["npm test --coverage"])
 
-    # Should not raise
-    with patch("prism_stop_hook.subprocess.run", side_effect=fake_run):
-        _auto_commit_phase_boundary("green_gate")
+    result = detect_skill_bypass(str(transcript), 0)
+    assert len(result) == 1
+    assert "npm test" in result[0]
+    assert "test" in result[0]  # skill name
 
 
-def test_auto_commit_never_raises_on_exception(monkeypatch, tmp_path):
-    """_auto_commit_phase_boundary is best-effort and silences all exceptions."""
+def test_detect_skill_bypass_no_match_when_command_differs(tmp_path, monkeypatch):
+    """Returns empty list when Bash commands do not match any replaces value."""
     monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills" / "test"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_WITH_REPLACES, encoding="utf-8")
 
-    with patch("prism_stop_hook.subprocess.run", side_effect=RuntimeError("boom")):
-        # Must not propagate the exception
-        _auto_commit_phase_boundary("red_gate")
+    transcript = tmp_path / "transcript.jsonl"
+    _write_transcript_with_bash(transcript, ["pytest tests/"])
+
+    result = detect_skill_bypass(str(transcript), 0)
+    assert result == []
+
+
+def test_detect_skill_bypass_ignores_commands_before_step_line_start(tmp_path, monkeypatch):
+    """Commands before step_line_start are not checked for bypass."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills" / "test"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_WITH_REPLACES, encoding="utf-8")
+
+    transcript = tmp_path / "transcript.jsonl"
+    # Write npm test command before step_line_start=5
+    _write_transcript_with_bash(transcript, ["npm test"], step_line_start=0)
+    # step_line_start=2 puts the command before the threshold
+    result = detect_skill_bypass(str(transcript), 2)
+    assert result == []
+
+
+def test_detect_skill_bypass_deduplicates_same_skill(tmp_path, monkeypatch):
+    """Same skill bypassed multiple times produces only one warning."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills" / "test"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_WITH_REPLACES, encoding="utf-8")
+
+    transcript = tmp_path / "transcript.jsonl"
+    _write_transcript_with_bash(transcript, ["npm test", "npm test --watch"])
+
+    result = detect_skill_bypass(str(transcript), 0)
+    assert len(result) == 1
+
+
+def test_detect_skill_bypass_ignores_skills_without_replaces(tmp_path, monkeypatch):
+    """Skills without replaces: field are not checked for bypass."""
+    monkeypatch.chdir(tmp_path)
+    skills_dir = tmp_path / ".claude" / "skills" / "build"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(_SKILL_MD_NO_REPLACES, encoding="utf-8")
+
+    transcript = tmp_path / "transcript.jsonl"
+    _write_transcript_with_bash(transcript, ["npm run build"])
+
+    result = detect_skill_bypass(str(transcript), 0)
+    assert result == []
