@@ -717,6 +717,104 @@ def collect_transcript_system_events(transcript_path: "Path | None") -> str:
     return "\n".join(f"- `{e}`" for e in events[-20:])
 
 
+# ── Skill usage analysis ──────────────────────────────────────────────────────
+
+
+def collect_skill_usage_analysis(transcript_path: "Path | None") -> str:
+    """Analyze BYOS skill adoption: available vs invoked, plus Bash commands run."""
+    import io as _io
+    import contextlib
+
+    # 1. Discover available skills
+    _add_hooks_to_path()
+    available_skills: list[str] = []
+    discovery_error: str | None = None
+    try:
+        from prism_loop_context import discover_prism_skills  # type: ignore[import]
+        stderr_capture = _io.StringIO()
+        with contextlib.redirect_stderr(stderr_capture):
+            skills = discover_prism_skills()
+        available_skills = [s["name"] for s in skills if s.get("name")]
+    except Exception as exc:
+        discovery_error = str(exc)
+
+    # 2. Extract invoked skills and Bash commands from transcript
+    invoked_skills: list[str] = []
+    bash_commands: list[str] = []
+
+    if transcript_path and transcript_path.exists():
+        try:
+            raw_lines = transcript_path.read_text(encoding="utf-8").splitlines()
+            for raw in raw_lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                msg = obj.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    tool_name = block.get("name", "")
+                    inp = block.get("input", {})
+                    if tool_name == "Skill":
+                        skill_name = inp.get("skill", "")
+                        if skill_name:
+                            invoked_skills.append(skill_name)
+                    elif tool_name == "Bash":
+                        cmd = inp.get("command", "")
+                        if cmd:
+                            bash_commands.append(cmd[:200])
+        except Exception:
+            pass
+
+    out: list[str] = []
+
+    # 3. Adoption metrics
+    if discovery_error:
+        out.append(f"**Skill discovery error:** `{discovery_error}`")
+    else:
+        out.append(f"**Available skills:** {len(available_skills)}")
+
+    available_set = set(available_skills)
+    invoked_set = set(invoked_skills)
+
+    if available_set:
+        adopted = invoked_set & available_set
+        pct = len(adopted) / len(available_set) * 100
+        out.append(f"**Invoked skills:** {len(invoked_set)} ({pct:.0f}% adoption rate)")
+    else:
+        out.append(f"**Invoked skills:** {len(invoked_set)}")
+
+    if invoked_set:
+        out.append("\n**Skills invoked this session:**")
+        for sk in sorted(invoked_set):
+            out.append(f"- `{sk}`")
+
+    not_invoked = sorted(available_set - invoked_set)
+    if not_invoked:
+        out.append("\n**Skills NOT invoked (adoption gap):**")
+        for sk in not_invoked:
+            out.append(f"- `{sk}`")
+
+    # 4. Bash commands
+    if bash_commands:
+        out.append(f"\n**Bash commands run ({len(bash_commands)} total):**")
+        for cmd in bash_commands[-20:]:
+            out.append(f"- `{cmd}`")
+    else:
+        out.append("\n**Bash commands:** _None found in transcript._")
+
+    return "\n".join(out) if out else "_No skill usage data available._"
+
+
 # ── GitHub integration ────────────────────────────────────────────────────────
 
 
@@ -817,6 +915,7 @@ def build_report(
     conductor: str,
     sfr_status: str,
     skills: str,
+    skill_usage_analysis: str,
     session_start: str,
     test_runner: str,
     excerpt: str,
@@ -907,6 +1006,12 @@ def build_report(
 ## Skill Discovery
 
 {skills}
+
+---
+
+## Skill Usage Analysis
+
+{skill_usage_analysis}
 
 ---
 
@@ -1015,14 +1120,17 @@ def main() -> None:
     print("  Running skill discovery...")
     skills = collect_skill_discovery()
 
+    excerpt, transcript_path = collect_transcript_excerpt()
+    print(f"  Transcript: {transcript_path or 'not found'}")
+
+    print("  Analyzing skill usage...")
+    skill_usage_analysis = collect_skill_usage_analysis(transcript_path)
+
     print("  Capturing session-start hook output...")
     session_start = collect_session_start_output()
 
     print("  Detecting test runner...")
     test_runner = collect_test_runner()
-
-    excerpt, transcript_path = collect_transcript_excerpt()
-    print(f"  Transcript: {transcript_path or 'not found'}")
 
     hook_progress = collect_hook_progress(transcript_path)
     transcript_system_events = collect_transcript_system_events(transcript_path)
@@ -1055,6 +1163,7 @@ def main() -> None:
         conductor=conductor,
         sfr_status=sfr_status,
         skills=skills,
+        skill_usage_analysis=skill_usage_analysis,
         session_start=session_start,
         test_runner=test_runner,
         excerpt=excerpt,
