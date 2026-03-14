@@ -1587,6 +1587,11 @@ def parse_frontmatter(content: str) -> dict:
             elif key == "story_size":
                 if value in ("R", "M", "L"):
                     result["story_size"] = value
+            elif key == "test_timeout":
+                try:
+                    result["test_timeout"] = int(value)
+                except ValueError:
+                    pass
 
     return result
 
@@ -1808,14 +1813,14 @@ def cleanup():
     """Remove state file and instruction file.
 
     Before deleting the state file, archives its contents to
-    .prism/last_session_state.md so post-mortem diagnostics (e.g. prism-bug)
+    .prism/last_session_state.yaml so post-mortem diagnostics (e.g. prism-bug)
     can access step_history and gate results after workflow completion.
     """
     if STATE_FILE.exists():
         try:
             prism_dir = STATE_FILE.parent.parent / ".prism"
             prism_dir.mkdir(parents=True, exist_ok=True)
-            archive_path = prism_dir / "last_session_state.md"
+            archive_path = prism_dir / "last_session_state.yaml"
             archive_path.write_text(STATE_FILE.read_text(encoding="utf-8"), encoding="utf-8")
         except (IOError, OSError):
             pass  # best-effort; never block cleanup

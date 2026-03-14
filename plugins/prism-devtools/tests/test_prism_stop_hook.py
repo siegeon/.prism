@@ -179,6 +179,18 @@ def test_get_test_timeout_state_invalid_falls_back(monkeypatch):
     assert _get_test_timeout(state={"test_timeout": "not-a-number"}) == 120
 
 
+def test_parse_frontmatter_reads_test_timeout():
+    content = "---\nactive: true\ntest_timeout: 60\n---\n"
+    state = parse_frontmatter(content)
+    assert state["test_timeout"] == 60
+
+
+def test_parse_frontmatter_test_timeout_invalid_ignored():
+    content = "---\nactive: true\ntest_timeout: not-a-number\n---\n"
+    state = parse_frontmatter(content)
+    assert state["test_timeout"] is None
+
+
 def test_run_tests_uses_state_timeout(monkeypatch):
     """run_tests() reads timeout from state when env var absent."""
     monkeypatch.delenv("PRISM_TEST_TIMEOUT", raising=False)
@@ -1385,7 +1397,7 @@ def test_cleanup_tolerates_missing_instruction_file(tmp_path, monkeypatch):
 
 
 def test_cleanup_archives_state_to_last_session(tmp_path, monkeypatch):
-    """cleanup() writes .prism/last_session_state.md before deleting the state file."""
+    """cleanup() writes .prism/last_session_state.yaml before deleting the state file."""
     import prism_stop_hook as _psh2
     state_file = tmp_path / ".claude" / "prism-loop.local.md"
     state_file.parent.mkdir(parents=True)
@@ -1396,8 +1408,8 @@ def test_cleanup_archives_state_to_last_session(tmp_path, monkeypatch):
     cleanup()
 
     assert not state_file.exists()
-    archive = tmp_path / ".prism" / "last_session_state.md"
-    assert archive.exists(), "last_session_state.md should be created by cleanup()"
+    archive = tmp_path / ".prism" / "last_session_state.yaml"
+    assert archive.exists(), "last_session_state.yaml should be created by cleanup()"
     assert archive.read_text(encoding="utf-8") == state_content
 
 
@@ -1411,7 +1423,7 @@ def test_cleanup_archive_tolerates_missing_state_file(tmp_path, monkeypatch):
     monkeypatch.setattr(_psh2, "STATE_FILE", state_file)
     cleanup()  # Should not raise
 
-    archive = tmp_path / ".prism" / "last_session_state.md"
+    archive = tmp_path / ".prism" / "last_session_state.yaml"
     assert not archive.exists()
 
 
