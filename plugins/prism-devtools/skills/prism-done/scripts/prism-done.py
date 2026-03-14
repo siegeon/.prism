@@ -370,6 +370,9 @@ def print_report_card(state: dict, metrics: dict, uncommitted: list, warnings: l
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Complete a PRISM session intentionally.")
     parser.add_argument("--session-id", default="", help="Claude session ID (${CLAUDE_SESSION_ID})")
     args = parser.parse_args()
