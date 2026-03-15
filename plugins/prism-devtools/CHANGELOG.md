@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.14.1] - 2026-03-15
 
-### Added
-
 ### Fixed
+- Skill enforcement: core step files no longer contradict themselves with raw `{{test_cmd}}`/`{{lint_cmd}}` references — replaced with skill invocation language
+- `validate_step()` now checks skill usage — blocks current step if discovered skills > 0 and no skill calls were made
+- Bypass detection moved from advisory (next step warning) to blocking (current step) with "SKILL BYPASS DETECTED" message
+- Added circuit breaker (3 strikes) to prevent infinite loops when agent can't comply
+- LIGHTWEIGHT_STEPS exempted from enforcement; no enforcement when no skills discovered
 
 ## [3.14.0] - 2026-03-15
 
