@@ -40,6 +40,11 @@ from prism_stop_hook import (  # noqa: E402
     _find_last_compaction_line,
     _MIN_STEP_TOOL_CALLS,
     _ADVANCE_DEBOUNCE_SECS,
+    _CIRCUIT_BREAKER_MAX_FAILURES,
+    _check_circuit_breaker,
+    _update_circuit_breaker_state,
+    _clear_circuit_breaker,
+    _get_circuit_breaker_state,
     parse_frontmatter,
     is_same_session,
     _write_instruction_file,
@@ -1713,3 +1718,97 @@ def test_detect_skill_bypass_ignores_skills_without_replaces(tmp_path, monkeypat
 
     result = detect_skill_bypass(str(transcript), 0)
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker helpers
+# ---------------------------------------------------------------------------
+
+def test_circuit_breaker_initial_state():
+    """No failures recorded returns count=0 and not tripped."""
+    state = {}
+    count, tripped = _check_circuit_breaker("verify_green_state", state, "lint error")
+    assert count == 0
+    assert not tripped
+
+
+def test_circuit_breaker_increments_on_same_error():
+    """Same error increments the counter each call."""
+    state = {}
+    counts = _update_circuit_breaker_state("verify_green_state", state, "lint error")
+    assert counts["verify_green_state"]["count"] == 1
+
+    state["step_failure_counts"] = __import__("json").dumps(counts)
+    counts2 = _update_circuit_breaker_state("verify_green_state", state, "lint error")
+    assert counts2["verify_green_state"]["count"] == 2
+
+
+def test_circuit_breaker_resets_on_different_error():
+    """A changed error message resets the counter to 1."""
+    state = {}
+    counts = _update_circuit_breaker_state("verify_green_state", state, "lint error")
+    state["step_failure_counts"] = __import__("json").dumps(counts)
+
+    counts2 = _update_circuit_breaker_state("verify_green_state", state, "different error")
+    assert counts2["verify_green_state"]["count"] == 1
+    assert counts2["verify_green_state"]["last_error"] == "different error"
+
+
+def test_circuit_breaker_trips_after_max_failures():
+    """After _CIRCUIT_BREAKER_MAX_FAILURES failures, check_circuit_breaker returns tripped=True."""
+    import json as _json
+    state = {}
+    error = "persistent lint warning"
+    for _ in range(_CIRCUIT_BREAKER_MAX_FAILURES):
+        counts = _update_circuit_breaker_state("verify_green_state", state, error)
+        state["step_failure_counts"] = _json.dumps(counts)
+
+    count, tripped = _check_circuit_breaker("verify_green_state", state, error)
+    assert count == _CIRCUIT_BREAKER_MAX_FAILURES
+    assert tripped
+
+
+def test_circuit_breaker_not_tripped_before_max():
+    """Before reaching max failures, tripped stays False."""
+    import json as _json
+    state = {}
+    error = "lint warning"
+    for i in range(_CIRCUIT_BREAKER_MAX_FAILURES - 1):
+        counts = _update_circuit_breaker_state("verify_green_state", state, error)
+        state["step_failure_counts"] = _json.dumps(counts)
+        count, tripped = _check_circuit_breaker("verify_green_state", state, error)
+        assert not tripped, f"Should not trip after {i+1} failures"
+
+
+def test_circuit_breaker_clear_resets_counter():
+    """_clear_circuit_breaker removes the step entry."""
+    import json as _json
+    state = {}
+    error = "lint error"
+    counts = _update_circuit_breaker_state("verify_green_state", state, error)
+    state["step_failure_counts"] = _json.dumps(counts)
+
+    cleared = _clear_circuit_breaker("verify_green_state", state)
+    assert "verify_green_state" not in cleared
+
+
+def test_circuit_breaker_isolates_steps():
+    """Failure counter for one step does not affect another step."""
+    import json as _json
+    state = {}
+    error = "test error"
+    for _ in range(_CIRCUIT_BREAKER_MAX_FAILURES):
+        counts = _update_circuit_breaker_state("verify_green_state", state, error)
+        state["step_failure_counts"] = _json.dumps(counts)
+
+    # implement_tasks counter should still be zero
+    count, tripped = _check_circuit_breaker("implement_tasks", state, error)
+    assert count == 0
+    assert not tripped
+
+
+def test_get_circuit_breaker_state_returns_empty_on_invalid_json():
+    """Malformed step_failure_counts falls back to empty dict."""
+    state = {"step_failure_counts": "not-json{{{"}
+    result = _get_circuit_breaker_state(state)
+    assert result == {}

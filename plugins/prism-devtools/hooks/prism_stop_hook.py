@@ -138,6 +138,73 @@ _MIN_STEP_TOOL_CALLS: dict = {
 # right after context compaction.
 _ADVANCE_DEBOUNCE_SECS: int = 60
 
+# Circuit breaker: maximum consecutive validation failures on the same step
+# with the same error message before escalating to manual intervention.
+# The counter resets when the error message changes (agent fixed something).
+_CIRCUIT_BREAKER_MAX_FAILURES: int = 3
+
+
+def _get_circuit_breaker_state(state: dict) -> dict:
+    """Parse step_failure_counts from state, returning a dict keyed by step_id.
+
+    Each entry is {"count": int, "last_error": str}.
+    """
+    raw = state.get("step_failure_counts", "{}")
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _check_circuit_breaker(step_id: str, state: dict, error_message: str) -> tuple:
+    """Check whether the circuit breaker should trip for the given step.
+
+    Counts consecutive failures on *step_id* where the error message matches
+    the previous failure.  If the error changes, the counter has been reset
+    by a preceding call to _update_circuit_breaker_state (meaning the agent
+    fixed something), so we do not trip.
+
+    Returns (consecutive_count, tripped: bool).
+    """
+    counts = _get_circuit_breaker_state(state)
+    entry = counts.get(step_id, {"count": 0, "last_error": ""})
+    # Only count as consecutive if the error message is the same
+    if entry["last_error"] == error_message:
+        count = entry["count"]
+    else:
+        count = 0
+    tripped = count >= _CIRCUIT_BREAKER_MAX_FAILURES
+    return (count, tripped)
+
+
+def _update_circuit_breaker_state(step_id: str, state: dict, error_message: str) -> dict:
+    """Increment the consecutive failure counter for *step_id*.
+
+    Resets to 1 if the error message differs from the last recorded one
+    (meaning the agent made progress on a different sub-issue).
+
+    Returns the updated step_failure_counts dict suitable for writing to
+    the state file via update_state_file().
+    """
+    counts = _get_circuit_breaker_state(state)
+    entry = counts.get(step_id, {"count": 0, "last_error": ""})
+    if entry["last_error"] == error_message:
+        new_count = entry["count"] + 1
+    else:
+        new_count = 1
+    counts[step_id] = {"count": new_count, "last_error": error_message}
+    return counts
+
+
+def _clear_circuit_breaker(step_id: str, state: dict) -> dict:
+    """Reset the failure counter for *step_id* after a successful validation.
+
+    Returns the updated step_failure_counts dict.
+    """
+    counts = _get_circuit_breaker_state(state)
+    counts.pop(step_id, None)
+    return counts
+
 
 def _filtered_glob(root: Path, pattern: str, timeout: float = 10.0) -> list:
     """Recursive glob with directory exclusion and timeout guard.
@@ -1579,6 +1646,8 @@ def parse_frontmatter(content: str) -> dict:
                     pass
             elif key == "step_history":
                 result["step_history"] = value
+            elif key == "step_failure_counts":
+                result["step_failure_counts"] = value
             elif key == "step_transcript_line":
                 try:
                     result["step_transcript_line"] = int(value)
@@ -2133,11 +2202,37 @@ def main():
                 )
             except Exception:
                 pass
-            # Block stop - work not complete
-            print(json.dumps({
-                "decision": "block",
-                "reason": f"[PRISM - {step_id}] {validation_result['message']}\n\n{validation_result['continue_instruction']}"
-            }))
+
+            # Circuit breaker: count consecutive failures with the same error.
+            # If the counter reaches _CIRCUIT_BREAKER_MAX_FAILURES, escalate
+            # to the user instead of looping forever.
+            error_msg = validation_result["message"]
+            _consecutive, _tripped = _check_circuit_breaker(step_id, state, error_msg)
+            updated_counts = _update_circuit_breaker_state(step_id, state, error_msg)
+            new_consecutive = updated_counts[step_id]["count"]
+
+            # Persist the updated failure counts to state file immediately.
+            updated_content = update_state_file(content, {"step_failure_counts": json.dumps(updated_counts, separators=(',', ':'))})
+            STATE_FILE.write_text(updated_content, encoding='utf-8')
+
+            if _tripped:
+                print(json.dumps({
+                    "decision": "block",
+                    "reason": (
+                        f"[PRISM - {step_id}] CIRCUIT BREAKER TRIPPED: Validation has failed "
+                        f"{new_consecutive} times on the same issue. Manual intervention needed.\n\n"
+                        f"Repeated error: {error_msg}\n\n"
+                        "IMPORTANT: STOP HERE. Do not retry automatically. The same validation "
+                        "error has recurred without change. Please investigate the root cause "
+                        "manually or ask the user for guidance before continuing."
+                    )
+                }))
+            else:
+                # Block stop - work not complete
+                print(json.dumps({
+                    "decision": "block",
+                    "reason": f"[PRISM - {step_id}] {validation_result['message']}\n\n{validation_result['continue_instruction']}"
+                }))
             sys.exit(0)
 
         # Step-transition debounce guard (defense-in-depth after validation).
@@ -2158,7 +2253,15 @@ def main():
             )
             sys.exit(0)
 
-    # Validation passed (or not required) - find next step
+    # Validation passed (or not required) - clear circuit breaker counter for this step.
+    if validation:
+        cleared_counts = _clear_circuit_breaker(step_id, state)
+        if cleared_counts != _get_circuit_breaker_state(state):
+            cleared_content = update_state_file(content, {"step_failure_counts": json.dumps(cleared_counts, separators=(',', ':'))})
+            STATE_FILE.write_text(cleared_content, encoding='utf-8')
+            content = cleared_content
+
+    # Find next step
     # Check for sub-agent spawn directive from validation result
     subagent_directive = ""
     if validation and validation_result.get("spawn_subagent"):
