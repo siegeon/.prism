@@ -5,6 +5,18 @@ All notable changes to the PRISM Development System plugin will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.2] - 2026-03-15
+
+### Fixed
+- `discover_prism_skills` now scans plugin skills directories correctly
+- `save-large-responses` and `log-terminal-output` hooks registered as PostToolUse events
+- Brain skill seeding with global score cap to fix cold-start scoring
+- `adoption_rate` metric added to `step_history`, `session_outcomes`, and prism-bug reports
+
+### Changed
+- Core-step Skills sections enriched with WHY language for skill invocation clarity
+- Deduplicated BYOS skill detection and discover calls
+
 ## [3.14.1] - 2026-03-15
 
 ### Fixed
