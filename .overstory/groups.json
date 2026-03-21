@@ -1,0 +1,1160 @@
+[
+	{
+		"id": "group-9c8b5a5e",
+		"name": "byos-refactor",
+		"memberIssueIds": [
+			"prism-3a76"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-03T17:12:27.482Z",
+		"completedAt": "2026-03-04T00:36:08.871Z"
+	},
+	{
+		"id": "group-86fa5d9b",
+		"name": "wsl-compat",
+		"memberIssueIds": [
+			"prism-8528"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-03T20:20:36.976Z",
+		"completedAt": "2026-03-03T20:28:28.863Z"
+	},
+	{
+		"id": "group-a6e1e9b9",
+		"name": "cli-drift-parity",
+		"memberIssueIds": [
+			"prism-ec8f"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-03T20:57:18.787Z",
+		"completedAt": "2026-03-04T00:36:09.177Z"
+	},
+	{
+		"id": "group-8e53f2f8",
+		"name": "tui-tokens-fix",
+		"memberIssueIds": [
+			"prism-c926"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-03T21:26:11.371Z",
+		"completedAt": "2026-03-04T00:36:09.427Z"
+	},
+	{
+		"id": "group-a0d1462b",
+		"name": "test-coverage-gaps",
+		"memberIssueIds": [
+			"prism-96dc"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T14:11:30.094Z",
+		"completedAt": "2026-03-04T16:08:26.597Z"
+	},
+	{
+		"id": "group-474419c0",
+		"name": "token-fix",
+		"memberIssueIds": [
+			"prism-18ce"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T14:34:58.497Z",
+		"completedAt": "2026-03-04T16:08:26.777Z"
+	},
+	{
+		"id": "group-2b72fb2f",
+		"name": "agent-tokens-fix",
+		"memberIssueIds": [
+			"prism-053d"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T15:54:53.081Z",
+		"completedAt": "2026-03-04T16:08:26.953Z"
+	},
+	{
+		"id": "group-7fd62b3b",
+		"name": "byos-invoke-fix",
+		"memberIssueIds": [
+			"prism-086c"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T17:36:20.565Z",
+		"completedAt": "2026-03-04T17:40:49.770Z"
+	},
+	{
+		"id": "group-98a34ae9",
+		"name": "cli-version-display",
+		"memberIssueIds": [
+			"prism-0d69"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T18:01:58.824Z",
+		"completedAt": "2026-03-04T19:00:08.155Z"
+	},
+	{
+		"id": "group-80c2202d",
+		"name": "plugin-root-fix",
+		"memberIssueIds": [
+			"prism-cc0a"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T18:38:16.283Z",
+		"completedAt": "2026-03-04T19:00:08.917Z"
+	},
+	{
+		"id": "group-593307b2",
+		"name": "byos-instruction-fix",
+		"memberIssueIds": [
+			"prism-0b25"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T19:33:03.885Z",
+		"completedAt": "2026-03-04T19:37:30.640Z"
+	},
+	{
+		"id": "group-e6b91072",
+		"name": "version-bump",
+		"memberIssueIds": [
+			"prism-b21e"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T19:40:05.681Z",
+		"completedAt": "2026-03-04T21:24:08.646Z"
+	},
+	{
+		"id": "group-7e9f9e61",
+		"name": "cli-bars-update",
+		"memberIssueIds": [
+			"prism-11c9"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T21:00:00.007Z",
+		"completedAt": "2026-03-04T21:06:49.677Z"
+	},
+	{
+		"id": "group-212e9d96",
+		"name": "bar-style-update",
+		"memberIssueIds": [
+			"prism-c4e6"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T21:09:33.667Z",
+		"completedAt": "2026-03-04T21:24:08.894Z"
+	},
+	{
+		"id": "group-3f11a198",
+		"name": "layout-feed-update",
+		"memberIssueIds": [
+			"prism-776f"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T21:14:01.606Z",
+		"completedAt": "2026-03-04T21:24:09.133Z"
+	},
+	{
+		"id": "group-2bbd7b16",
+		"name": "bar-color-update",
+		"memberIssueIds": [
+			"prism-c4e4"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T21:25:59.851Z",
+		"completedAt": "2026-03-04T22:12:58.955Z"
+	},
+	{
+		"id": "group-9dc9e5ff",
+		"name": "bar-fix-scaling",
+		"memberIssueIds": [
+			"prism-cd00"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T21:54:31.812Z",
+		"completedAt": "2026-03-04T22:12:59.246Z"
+	},
+	{
+		"id": "group-8b6ea6d7",
+		"name": "story-layout-update",
+		"memberIssueIds": [
+			"prism-91f0"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T22:04:47.393Z",
+		"completedAt": "2026-03-04T22:12:59.510Z"
+	},
+	{
+		"id": "group-5466a098",
+		"name": "snapshot-story-reorder",
+		"memberIssueIds": [
+			"prism-51f9"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T22:09:14.607Z",
+		"completedAt": "2026-03-04T22:12:59.762Z"
+	},
+	{
+		"id": "group-aabd5521",
+		"name": "tui-two-column-layout",
+		"memberIssueIds": [
+			"prism-addb"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T22:23:45.505Z",
+		"completedAt": "2026-03-07T07:58:42.163Z"
+	},
+	{
+		"id": "group-25f48838",
+		"name": "gate-to-leftcol",
+		"memberIssueIds": [
+			"prism-5759"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T22:51:53.069Z",
+		"completedAt": "2026-03-07T07:58:42.301Z"
+	},
+	{
+		"id": "group-7b814fb5",
+		"name": "gate-fix",
+		"memberIssueIds": [
+			"prism-99ce"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T22:57:19.462Z",
+		"completedAt": "2026-03-07T07:58:42.407Z"
+	},
+	{
+		"id": "group-5fa9735c",
+		"name": "phase-column",
+		"memberIssueIds": [
+			"prism-63ed"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T23:12:26.430Z",
+		"completedAt": "2026-03-07T07:58:42.521Z"
+	},
+	{
+		"id": "group-5a723e0e",
+		"name": "gate-move-leftcol",
+		"memberIssueIds": [
+			"prism-7d7a"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-04T23:29:19.771Z",
+		"completedAt": "2026-03-07T07:58:42.645Z"
+	},
+	{
+		"id": "group-b17c9da1",
+		"name": "prism-v3-brain-conductor",
+		"memberIssueIds": [
+			"prism-9997",
+			"prism-1750",
+			"prism-400c",
+			"prism-bb1a",
+			"prism-eda8"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T03:52:30.816Z",
+		"completedAt": "2026-03-07T07:58:43.075Z"
+	},
+	{
+		"id": "group-2f1f45dc",
+		"name": "validate-plugin",
+		"memberIssueIds": [
+			"prism-4b06"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T04:57:21.399Z",
+		"completedAt": "2026-03-07T07:58:43.237Z"
+	},
+	{
+		"id": "group-968474f4",
+		"name": "prism-bug-skill",
+		"memberIssueIds": [
+			"prism-3594"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T05:11:36.103Z",
+		"completedAt": "2026-03-07T07:58:43.400Z"
+	},
+	{
+		"id": "group-79e82812",
+		"name": "v3-bugfixes",
+		"memberIssueIds": [
+			"prism-9b39",
+			"prism-c768"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T05:34:01.460Z",
+		"completedAt": "2026-03-07T07:58:43.599Z"
+	},
+	{
+		"id": "group-54e15992",
+		"name": "python-portability",
+		"memberIssueIds": [
+			"prism-9cf6"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T15:58:36.208Z",
+		"completedAt": "2026-03-07T07:58:43.728Z"
+	},
+	{
+		"id": "group-bdbf5f38",
+		"name": "brain-recovery",
+		"memberIssueIds": [
+			"prism-3973"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T16:25:33.867Z",
+		"completedAt": "2026-03-07T07:58:43.861Z"
+	},
+	{
+		"id": "group-90bd9d94",
+		"name": "brain-fts5-fix",
+		"memberIssueIds": [
+			"prism-76ca"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T17:58:03.634Z",
+		"completedAt": "2026-03-07T07:58:44.101Z"
+	},
+	{
+		"id": "group-c4a33747",
+		"name": "version-bump-302",
+		"memberIssueIds": [
+			"prism-91bb"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T19:35:35.215Z",
+		"completedAt": "2026-03-07T07:58:44.266Z"
+	},
+	{
+		"id": "group-8a89d823",
+		"name": "brain-cli-entrypoint",
+		"memberIssueIds": [
+			"prism-a080"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T19:42:46.308Z",
+		"completedAt": "2026-03-07T07:58:44.411Z"
+	},
+	{
+		"id": "group-cda80e42",
+		"name": "brain-deps-fix",
+		"memberIssueIds": [
+			"prism-c49b"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T20:03:56.355Z",
+		"completedAt": "2026-03-07T07:58:44.575Z"
+	},
+	{
+		"id": "group-6e79033d",
+		"name": "brain-tui-fix",
+		"memberIssueIds": [
+			"prism-2361"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T20:15:42.216Z",
+		"completedAt": "2026-03-07T07:58:44.696Z"
+	},
+	{
+		"id": "group-7244d9f4",
+		"name": "brain-exclude-fix",
+		"memberIssueIds": [
+			"prism-e52b"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T20:30:35.747Z",
+		"completedAt": "2026-03-07T07:58:44.835Z"
+	},
+	{
+		"id": "group-f82c47b8",
+		"name": "gate-block-fix",
+		"memberIssueIds": [
+			"prism-1e90"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T20:48:10.902Z",
+		"completedAt": "2026-03-07T07:58:44.962Z"
+	},
+	{
+		"id": "group-614d5690",
+		"name": "brain-indicator",
+		"memberIssueIds": [
+			"prism-2848"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T21:03:04.462Z",
+		"completedAt": "2026-03-07T07:58:45.093Z"
+	},
+	{
+		"id": "group-48c49c84",
+		"name": "mem-count",
+		"memberIssueIds": [
+			"prism-39cf"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T21:29:35.693Z",
+		"completedAt": "2026-03-07T07:58:45.220Z"
+	},
+	{
+		"id": "group-de1d1d46",
+		"name": "brain-feed-icon",
+		"memberIssueIds": [
+			"prism-0067"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T21:57:58.797Z",
+		"completedAt": "2026-03-07T07:58:45.309Z"
+	},
+	{
+		"id": "group-4328d7b9",
+		"name": "brain-purge-batch",
+		"memberIssueIds": [
+			"prism-265c"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T22:07:23.573Z",
+		"completedAt": "2026-03-07T07:58:45.409Z"
+	},
+	{
+		"id": "group-f998a932",
+		"name": "issue-9-fixes",
+		"memberIssueIds": [
+			"prism-9f88"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-05T22:29:19.488Z",
+		"completedAt": "2026-03-07T07:58:45.512Z"
+	},
+	{
+		"id": "group-83f38cfb",
+		"name": "issue-9-round2",
+		"memberIssueIds": [
+			"prism-ccb9",
+			"prism-2726"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T00:55:38.086Z",
+		"completedAt": "2026-03-06T01:20:02.696Z"
+	},
+	{
+		"id": "group-3fda1b51",
+		"name": "memory-persist-fix",
+		"memberIssueIds": [
+			"prism-83ef"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T05:03:21.424Z",
+		"completedAt": "2026-03-07T07:58:45.626Z"
+	},
+	{
+		"id": "group-6c4edf2f",
+		"name": "threshold-fix",
+		"memberIssueIds": [
+			"prism-3ab8"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T05:26:28.595Z",
+		"completedAt": "2026-03-07T07:58:45.724Z"
+	},
+	{
+		"id": "group-726e69d4",
+		"name": "issue-14-fixes",
+		"memberIssueIds": [
+			"prism-0cba",
+			"prism-f963",
+			"prism-79ed"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T06:45:19.492Z",
+		"completedAt": "2026-03-06T07:20:25.253Z"
+	},
+	{
+		"id": "group-deec255f",
+		"name": "memory-readd",
+		"memberIssueIds": [
+			"prism-4870"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T14:20:55.022Z",
+		"completedAt": "2026-03-07T07:58:45.841Z"
+	},
+	{
+		"id": "group-2d8eebd9",
+		"name": "issue-3-fixes",
+		"memberIssueIds": [
+			"prism-4258"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T15:22:44.412Z",
+		"completedAt": "2026-03-07T07:58:45.961Z"
+	},
+	{
+		"id": "group-9db4e538",
+		"name": "brain-enhancement-p1",
+		"memberIssueIds": [
+			"prism-996d",
+			"prism-f478",
+			"prism-c155",
+			"prism-0bb1"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T15:38:39.286Z",
+		"completedAt": "2026-03-07T07:58:46.345Z"
+	},
+	{
+		"id": "group-f6c967a3",
+		"name": "brain-enhancement-p2",
+		"memberIssueIds": [
+			"prism-930c",
+			"prism-7d88",
+			"prism-eff8"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T17:02:09.914Z",
+		"completedAt": "2026-03-07T07:58:46.628Z"
+	},
+	{
+		"id": "group-cc124fec",
+		"name": "brain-enhancement-p3",
+		"memberIssueIds": [
+			"prism-04f2",
+			"prism-0887",
+			"prism-ca4a",
+			"prism-c700"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T17:19:58.922Z",
+		"completedAt": "2026-03-07T07:58:47.065Z"
+	},
+	{
+		"id": "group-efe87be2",
+		"name": "test-harness",
+		"memberIssueIds": [
+			"prism-33f9"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T20:42:28.692Z",
+		"completedAt": "2026-03-07T07:58:47.202Z"
+	},
+	{
+		"id": "group-ae861b26",
+		"name": "harness-cli",
+		"memberIssueIds": [
+			"prism-6b97"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-06T22:46:57.794Z",
+		"completedAt": "2026-03-07T07:58:47.315Z"
+	},
+	{
+		"id": "group-b3709b71",
+		"name": "harness-fixtures",
+		"memberIssueIds": [
+			"prism-a9a6"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-07T03:12:36.478Z",
+		"completedAt": "2026-03-07T07:58:47.433Z"
+	},
+	{
+		"id": "group-83bbe897",
+		"name": "issue-15-yaml-fix",
+		"memberIssueIds": [
+			"prism-979c",
+			"prism-3161",
+			"prism-154d"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-07T05:30:06.649Z",
+		"completedAt": "2026-03-07T07:58:47.716Z"
+	},
+	{
+		"id": "group-a5137f2c",
+		"name": "skills-directive-gap",
+		"memberIssueIds": [
+			"prism-f5c3"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-07T06:44:26.034Z",
+		"completedAt": "2026-03-07T07:58:47.838Z"
+	},
+	{
+		"id": "group-fac0e555",
+		"name": "spec-conformance-gaps",
+		"memberIssueIds": [
+			"prism-73ea",
+			"prism-598f",
+			"prism-41dd"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-07T07:52:54.743Z",
+		"completedAt": "2026-03-07T08:03:16.917Z"
+	},
+	{
+		"id": "group-fc9c8447",
+		"name": "ship-prep",
+		"memberIssueIds": [
+			"prism-3b5c"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-07T18:33:39.354Z",
+		"completedAt": "2026-03-07T23:41:45.778Z"
+	},
+	{
+		"id": "group-91c88263",
+		"name": "prism-behavior-fixes",
+		"memberIssueIds": [
+			"prism-4f5a",
+			"prism-cbb0",
+			"prism-629c"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-07T23:52:09.046Z",
+		"completedAt": "2026-03-08T00:04:11.421Z"
+	},
+	{
+		"id": "group-8038a770",
+		"name": "brain-test-coverage",
+		"memberIssueIds": [
+			"prism-661b"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T00:13:12.618Z",
+		"completedAt": "2026-03-10T01:17:22.405Z"
+	},
+	{
+		"id": "group-b971032e",
+		"name": "marketplace-sync",
+		"memberIssueIds": [
+			"prism-3c31"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T01:49:43.021Z",
+		"completedAt": "2026-03-10T01:17:22.481Z"
+	},
+	{
+		"id": "group-d4e58622",
+		"name": "marketplace-align",
+		"memberIssueIds": [
+			"prism-3962"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T03:30:20.305Z",
+		"completedAt": "2026-03-10T01:17:22.546Z"
+	},
+	{
+		"id": "group-54e6ae49",
+		"name": "prism-bug-enhance",
+		"memberIssueIds": [
+			"prism-bbd8"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T04:38:19.267Z",
+		"completedAt": "2026-03-10T01:17:22.614Z"
+	},
+	{
+		"id": "group-1ae43e0c",
+		"name": "root-cause-fixes",
+		"memberIssueIds": [
+			"prism-7a78",
+			"prism-52d0",
+			"prism-de75"
+		],
+		"status": "active",
+		"createdAt": "2026-03-08T05:14:58.316Z",
+		"completedAt": null
+	},
+	{
+		"id": "group-24adbd96",
+		"name": "brain-bug-18",
+		"memberIssueIds": [
+			"prism-e597",
+			"prism-4bd3"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T06:47:53.339Z",
+		"completedAt": "2026-03-08T07:21:30.776Z"
+	},
+	{
+		"id": "group-8fd8a1cc",
+		"name": "harness-sfr-testing",
+		"memberIssueIds": [
+			"prism-1440",
+			"prism-f53b",
+			"prism-bf2f"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T23:04:43.165Z",
+		"completedAt": "2026-03-10T01:17:22.888Z"
+	},
+	{
+		"id": "group-9d0dab79",
+		"name": "brain-bugfixes",
+		"memberIssueIds": [
+			"prism-3fa0",
+			"prism-f1f4"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-08T23:23:16.690Z",
+		"completedAt": "2026-03-10T01:17:23.014Z"
+	},
+	{
+		"id": "group-19125c44",
+		"name": "stophook-fix",
+		"memberIssueIds": [
+			"prism-a661"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T00:17:02.937Z",
+		"completedAt": "2026-03-10T01:17:23.087Z"
+	},
+	{
+		"id": "group-94890aa5",
+		"name": "stophook-brain-fixes",
+		"memberIssueIds": [
+			"prism-a661",
+			"prism-8b03",
+			"prism-607a",
+			"prism-1e82"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T00:26:25.696Z",
+		"completedAt": "2026-03-09T00:39:31.738Z"
+	},
+	{
+		"id": "group-608e43b2",
+		"name": "skill-namespace-rename",
+		"memberIssueIds": [
+			"prism-c29b"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T01:19:27.096Z",
+		"completedAt": "2026-03-10T01:17:23.175Z"
+	},
+	{
+		"id": "group-9fe40323",
+		"name": "sfr-integration",
+		"memberIssueIds": [
+			"prism-1edd",
+			"prism-7a39"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T01:41:17.759Z",
+		"completedAt": "2026-03-09T01:55:12.263Z"
+	},
+	{
+		"id": "group-d7a6892d",
+		"name": "sfr-cli-observability",
+		"memberIssueIds": [
+			"prism-f5da"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T02:38:59.644Z",
+		"completedAt": "2026-03-09T02:49:40.935Z"
+	},
+	{
+		"id": "group-fba0734f",
+		"name": "hf-warning-fix",
+		"memberIssueIds": [
+			"prism-05fe"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T04:11:13.856Z",
+		"completedAt": "2026-03-10T01:17:23.274Z"
+	},
+	{
+		"id": "group-672c4da0",
+		"name": "brain-traversal-fix",
+		"memberIssueIds": [
+			"prism-872b"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T04:18:09.988Z",
+		"completedAt": "2026-03-09T04:24:15.981Z"
+	},
+	{
+		"id": "group-df410adf",
+		"name": "version-bump-371",
+		"memberIssueIds": [
+			"prism-f173"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T04:26:18.453Z",
+		"completedAt": "2026-03-09T04:30:22.045Z"
+	},
+	{
+		"id": "group-5111ceb7",
+		"name": "token-efficiency-25",
+		"memberIssueIds": [
+			"prism-9bdd"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T15:02:57.879Z",
+		"completedAt": "2026-03-10T01:17:23.355Z"
+	},
+	{
+		"id": "group-c4840211",
+		"name": "dedup-fix",
+		"memberIssueIds": [
+			"prism-6700"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T15:15:41.200Z",
+		"completedAt": "2026-03-10T01:17:23.430Z"
+	},
+	{
+		"id": "group-56dd855e",
+		"name": "context-restore",
+		"memberIssueIds": [
+			"prism-b4ee"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T15:22:47.081Z",
+		"completedAt": "2026-03-09T15:26:28.773Z"
+	},
+	{
+		"id": "group-fc063f28",
+		"name": "stophook-timeout-fix",
+		"memberIssueIds": [
+			"prism-f75f"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T15:35:59.920Z",
+		"completedAt": "2026-03-10T01:17:23.503Z"
+	},
+	{
+		"id": "group-f654e91d",
+		"name": "compaction-resilience",
+		"memberIssueIds": [
+			"prism-a9fb"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T20:20:47.948Z",
+		"completedAt": "2026-03-10T01:17:23.575Z"
+	},
+	{
+		"id": "group-f534faf6",
+		"name": "session-staleness-fix",
+		"memberIssueIds": [
+			"prism-b377"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T21:32:48.992Z",
+		"completedAt": "2026-03-10T01:17:23.654Z"
+	},
+	{
+		"id": "group-905a1b75",
+		"name": "instruction-to-file",
+		"memberIssueIds": [
+			"prism-4511"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T22:09:52.104Z",
+		"completedAt": "2026-03-10T01:17:23.731Z"
+	},
+	{
+		"id": "group-aa3be3bd",
+		"name": "hookrunner-fix",
+		"memberIssueIds": [
+			"prism-090b"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T23:08:32.807Z",
+		"completedAt": "2026-03-10T01:17:23.800Z"
+	},
+	{
+		"id": "group-44aba9b8",
+		"name": "prism-bug-improvement",
+		"memberIssueIds": [
+			"prism-4ab9"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-09T23:36:45.878Z",
+		"completedAt": "2026-03-10T01:17:23.881Z"
+	},
+	{
+		"id": "group-b33b568c",
+		"name": "hook-wrapper-removal",
+		"memberIssueIds": [
+			"prism-0be4"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-10T01:26:48.342Z",
+		"completedAt": "2026-03-11T12:43:39.522Z"
+	},
+	{
+		"id": "group-27f81cfa",
+		"name": "skills-lightweight-fix",
+		"memberIssueIds": [
+			"prism-2f07"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-10T02:07:57.282Z",
+		"completedAt": "2026-03-11T12:43:39.999Z"
+	},
+	{
+		"id": "group-be09a7bf",
+		"name": "smart-skill-selection",
+		"memberIssueIds": [
+			"prism-5188"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-10T02:48:06.465Z",
+		"completedAt": "2026-03-11T12:43:40.944Z"
+	},
+	{
+		"id": "group-c6a032af",
+		"name": "gate-brain-fixes",
+		"memberIssueIds": [
+			"prism-0cbb",
+			"prism-62e6"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-10T13:50:21.767Z",
+		"completedAt": "2026-03-15T18:41:11.538Z"
+	},
+	{
+		"id": "group-685a719a",
+		"name": "brain-skill-fix-35",
+		"memberIssueIds": [
+			"prism-dc13",
+			"prism-0da0"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T12:50:16.957Z",
+		"completedAt": "2026-03-11T15:21:08.918Z"
+	},
+	{
+		"id": "group-285d560a",
+		"name": "skill-overhaul-35",
+		"memberIssueIds": [
+			"prism-defd",
+			"prism-c9c1",
+			"prism-171e"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T13:39:21.578Z",
+		"completedAt": "2026-03-11T14:02:46.637Z"
+	},
+	{
+		"id": "group-de09ccbf",
+		"name": "skill-invocation-fix",
+		"memberIssueIds": [
+			"prism-0cb0"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T15:21:01.874Z",
+		"completedAt": "2026-03-11T16:15:24.271Z"
+	},
+	{
+		"id": "group-ed374f79",
+		"name": "skill-brain-observability",
+		"memberIssueIds": [
+			"prism-d5aa",
+			"prism-3e18"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T16:03:33.087Z",
+		"completedAt": "2026-03-11T16:15:23.736Z"
+	},
+	{
+		"id": "group-f1c260f5",
+		"name": "skill-lifecycle-harness",
+		"memberIssueIds": [
+			"prism-2c02"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T16:57:12.897Z",
+		"completedAt": "2026-03-11T19:55:29.796Z"
+	},
+	{
+		"id": "group-6aceeefc",
+		"name": "lifecycle-report",
+		"memberIssueIds": [
+			"prism-9433"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T17:41:30.509Z",
+		"completedAt": "2026-03-11T19:55:30.283Z"
+	},
+	{
+		"id": "group-5496d4e3",
+		"name": "phase-aware-matching",
+		"memberIssueIds": [
+			"prism-2140"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T18:17:46.288Z",
+		"completedAt": "2026-03-11T19:55:27.096Z"
+	},
+	{
+		"id": "group-0f229ce3",
+		"name": "multi-turn-learning",
+		"memberIssueIds": [
+			"prism-7de9"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-11T20:27:01.030Z",
+		"completedAt": "2026-03-14T19:16:03.160Z"
+	},
+	{
+		"id": "group-12e9b2db",
+		"name": "bug36-skill-brain-fix",
+		"memberIssueIds": [
+			"prism-617c"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-12T00:20:50.777Z",
+		"completedAt": "2026-03-14T19:16:03.760Z"
+	},
+	{
+		"id": "group-2f9a5cea",
+		"name": "story-file-fix",
+		"memberIssueIds": [
+			"prism-a177"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-12T14:23:22.574Z",
+		"completedAt": "2026-03-14T19:16:04.410Z"
+	},
+	{
+		"id": "group-18302c28",
+		"name": "issue-38-stophook",
+		"memberIssueIds": [
+			"prism-a964"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-12T20:39:04.048Z",
+		"completedAt": "2026-03-14T19:16:04.964Z"
+	},
+	{
+		"id": "group-35944404",
+		"name": "issues-39-40",
+		"memberIssueIds": [
+			"prism-7e1d",
+			"prism-7015"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-13T03:01:29.089Z",
+		"completedAt": "2026-03-14T19:16:05.703Z"
+	},
+	{
+		"id": "group-a52842e4",
+		"name": "auto-sizing",
+		"memberIssueIds": [
+			"prism-1460"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-13T13:41:54.307Z",
+		"completedAt": "2026-03-14T19:16:06.280Z"
+	},
+	{
+		"id": "group-6a71fb5f",
+		"name": "issue-41-tokens",
+		"memberIssueIds": [
+			"prism-3337"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-13T22:24:53.701Z",
+		"completedAt": "2026-03-14T19:16:06.902Z"
+	},
+	{
+		"id": "group-34fd1ac9",
+		"name": "bugfix-batch-42",
+		"memberIssueIds": [
+			"prism-587f",
+			"prism-f200",
+			"prism-08cc",
+			"prism-62e6",
+			"prism-834b",
+			"prism-86ff",
+			"prism-dca4"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-14T19:20:56.509Z",
+		"completedAt": "2026-03-14T21:12:11.739Z"
+	},
+	{
+		"id": "group-658c09ee",
+		"name": "skill-enforcement",
+		"memberIssueIds": [
+			"prism-dc78"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-14T20:37:22.474Z",
+		"completedAt": "2026-03-15T18:41:11.732Z"
+	},
+	{
+		"id": "group-2ee43b6e",
+		"name": "prism-done",
+		"memberIssueIds": [
+			"prism-7034",
+			"prism-211f"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-14T22:01:40.854Z",
+		"completedAt": "2026-03-15T18:41:11.959Z"
+	},
+	{
+		"id": "group-8cdaf21a",
+		"name": "issue-43-loop-fix",
+		"memberIssueIds": [
+			"prism-4fa8",
+			"prism-6e5d"
+		],
+		"status": "completed",
+		"createdAt": "2026-03-15T18:29:36.555Z",
+		"completedAt": "2026-03-15T18:41:12.203Z"
+	},
+	{
+		"id": "group-98b95434",
+		"name": "issue-43-byos-fix",
+		"memberIssueIds": [
+			"prism-144f",
+			"prism-6e5d"
+		],
+		"status": "active",
+		"createdAt": "2026-03-15T18:39:47.706Z",
+		"completedAt": null
+	},
+	{
+		"id": "group-50a11fa6",
+		"name": "skill-enforcement-v2",
+		"memberIssueIds": [
+			"prism-1f25"
+		],
+		"status": "active",
+		"createdAt": "2026-03-15T22:21:30.591Z",
+		"completedAt": null
+	},
+	{
+		"id": "group-3a38cbca",
+		"name": "skill-effectiveness",
+		"memberIssueIds": [
+			"prism-c481",
+			"prism-1bb2"
+		],
+		"status": "active",
+		"createdAt": "2026-03-16T00:02:08.670Z",
+		"completedAt": null
+	},
+	{
+		"id": "group-334863ac",
+		"name": "context-hooks-registration",
+		"memberIssueIds": [
+			"prism-4e18"
+		],
+		"status": "active",
+		"createdAt": "2026-03-16T03:04:34.506Z",
+		"completedAt": null
+	},
+	{
+		"id": "group-5ce063f6",
+		"name": "skill-discovery-fix",
+		"memberIssueIds": [
+			"prism-860f"
+		],
+		"status": "active",
+		"createdAt": "2026-03-16T03:39:45.314Z",
+		"completedAt": null
+	}
+]
