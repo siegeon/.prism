@@ -9,8 +9,57 @@ agents to load persona files or invoke skills to complete workflow steps.
 Used by: prism_stop_hook.py, prism_approve.py, prism_reject.py, setup_prism_loop.py
 """
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
+
+def find_project_root() -> Path:
+    """Find the project root using git rev-parse --show-toplevel.
+
+    Returns the git root directory, or CWD if not inside a git repository.
+    This anchors state file resolution so that CWD shifts (e.g. a command
+    that creates a subdirectory) do not lose the state file.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return Path.cwd()
+
+
+def resolve_state_file() -> Path:
+    """Return the absolute path to the PRISM state file, anchored to the git root."""
+    return find_project_root() / ".claude" / "prism-loop.local.md"
+
+
+def resolve_handoff_file() -> Path:
+    """Return the absolute path to the PRISM session handoff artifact, anchored to the git root."""
+    return find_project_root() / ".prism" / "handoff.md"
+
+
+def _load_handoff() -> str:
+    """Load the session handoff summary from the previous workflow, if available.
+
+    Returns handoff content (capped at 1500 chars), or empty string if not found.
+    """
+    try:
+        handoff_path = resolve_handoff_file()
+        if handoff_path.exists():
+            content = handoff_path.read_text(encoding='utf-8', errors='replace').strip()
+            if len(content) > 1500:
+                content = content[:1500] + "\n...(truncated)"
+            return content
+    except Exception:
+        pass
+    return ""
+
 
 # --- Role Cards (compressed from full persona files) ---
 ROLE_CARDS = {
@@ -34,6 +83,15 @@ Process: Read failing test -> implement minimal code -> run tests -> iterate""",
 # --- Retrieval-Led Reasoning ---
 RETRIEVAL_INSTRUCTION = """IMPORTANT: Prefer reading actual project files over pre-trained assumptions.
 Always Glob/Grep for project conventions before writing code or tests."""
+
+# --- Memory Persist Instruction ---
+MEMORY_PERSIST_INSTRUCTION = """MEMORY: Before stopping, if you discovered something useful about this project
+(a convention, pattern, pitfall, or architectural insight):
+- Append 1-3 bullets to .prism/brain/memory/MEMORY.md (auto-memory target). Format: "- [domain] observation".
+- For structured, reusable knowledge (confirmed patterns, decisions, failures): use Mulch:
+  `mulch record <domain> --type <convention|pattern|failure|decision> --description "..."`.
+  Mulch records are indexed by Brain and searchable by all future agents.
+Skip if nothing new."""
 
 # --- Stop Directive ---
 STOP_DIRECTIVE = """STOP DIRECTIVE: When your task for this step is complete, STOP immediately.
@@ -180,15 +238,40 @@ def _parse_skill_frontmatter(content: str) -> dict | None:
     if not name_match or not desc_match:
         return None
 
+    # Resolve description, handling YAML block scalars (> and |)
+    raw_desc = desc_match.group(1).strip()
+    if raw_desc in (">", "|", ">-", "|-", ">+", "|+"):
+        # Collect subsequent indented lines following the block scalar indicator
+        after = fm_text[desc_match.end():]
+        block_lines: list[str] = []
+        for line in after.split("\n"):
+            if not line:
+                block_lines.append("")
+            elif line[0] in (" ", "\t"):
+                block_lines.append(line.strip())
+            else:
+                break
+        # Strip trailing empty entries
+        while block_lines and not block_lines[-1]:
+            block_lines.pop()
+        description = " ".join(line for line in block_lines if line)
+    else:
+        description = raw_desc
+
     # Extract prism: nested values if present (optional)
     agent_match = re.search(r"^\s+agent:\s*(.+)$", fm_text, re.MULTILINE)
     priority_match = re.search(r"^\s+priority:\s*(\d+)", fm_text, re.MULTILINE)
 
+    # Optional top-level replaces: field — raw command this skill supersedes.
+    # When present, agents are explicitly told not to run that command directly.
+    replaces_match = re.search(r"^replaces:\s*(.+)$", fm_text, re.MULTILINE)
+
     return {
         "name": name_match.group(1).strip(),
-        "description": desc_match.group(1).strip() if desc_match else "",
+        "description": description,
         "agent": agent_match.group(1).strip() if agent_match else None,
         "priority": int(priority_match.group(1)) if priority_match else 99,
+        "replaces": replaces_match.group(1).strip() if replaces_match else None,
     }
 
 
@@ -204,7 +287,7 @@ def _repo_root_from_story(story_file: str) -> Path | None:
     return None
 
 
-def discover_prism_skills(story_file: str = "") -> list:
+def discover_prism_skills(story_file: str = "", _home_dir: "Path | None" = None) -> list:
     """
     Discover all skills from .claude/skills/*/SKILL.md directories.
 
@@ -212,24 +295,28 @@ def discover_prism_skills(story_file: str = "") -> list:
     included. No special metadata required — the agent decides which
     skills fit the task. Returns ALL skills sorted by priority.
 
-    Scans story-repo, project-local, and user-global directories.
-    Deduplicates so the same directory is not scanned twice.
+    Scans story-repo, project-local, and user-global skill directories.
+    Deduplicates by directory path and by skill name.
+
+    _home_dir: override for Path.home() — used in tests for isolation.
     """
+    home = _home_dir if _home_dir is not None else Path.home()
     results = []
     scan_dirs = []
     story_root = _repo_root_from_story(story_file)
     if story_root:
         scan_dirs.append(story_root / ".claude" / "skills")
     scan_dirs.append(Path.cwd() / ".claude" / "skills")
-    scan_dirs.append(Path.home() / ".claude" / "skills")
+    scan_dirs.append(home / ".claude" / "skills")
 
-    seen: set[Path] = set()
+    seen_dirs: set[Path] = set()
+    seen_names: set[str] = set()
     for skills_dir in scan_dirs:
         try:
             resolved = skills_dir.resolve()
-            if resolved in seen:
+            if resolved in seen_dirs:
                 continue
-            seen.add(resolved)
+            seen_dirs.add(resolved)
             if not resolved.is_dir():
                 continue
             for skill_file in resolved.glob("*/SKILL.md"):
@@ -237,7 +324,10 @@ def discover_prism_skills(story_file: str = "") -> list:
                     content = skill_file.read_text(encoding="utf-8")
                     meta = _parse_skill_frontmatter(content)
                     if meta:
-                        results.append(meta)
+                        name = meta["name"]
+                        if name not in seen_names:
+                            seen_names.add(name)
+                            results.append(meta)
                 except (IOError, OSError):
                     continue
         except (IOError, OSError):
@@ -247,14 +337,37 @@ def discover_prism_skills(story_file: str = "") -> list:
     return results
 
 
-def _format_discovered_skills(skills: list) -> str:
-    """Format discovered skills for injection into agent instructions."""
+def _format_discovered_skills(skills: list, is_filtered: bool = False) -> str:
+    """Format discovered skills for injection into agent instructions.
+
+    When is_filtered=True (Conductor-selected subset), uses directive language
+    that agents must act on. When False (full unfiltered list), uses the
+    original MANDATORY wording.
+
+    For each skill with a replaces: field, an explicit DO NOT line is appended
+    so agents cannot run the equivalent raw command and bypass the skill.
+    """
     if not skills:
         return ""
-    lines = ["The following skills are available. Invoke any skill using the Skill tool if there is even a 1% chance it is relevant to your current task — when in doubt, invoke it:"]
+    if is_filtered:
+        header = (
+            "You MUST check and invoke these skills before completing your task. "
+            "These have been selected as relevant to this step. "
+            "Do NOT run equivalent shell commands directly — invoke the skill instead:"
+        )
+    else:
+        header = (
+            "MANDATORY: You MUST invoke relevant skills using the Skill tool before "
+            "completing your task. For each skill below, if there is any chance it "
+            "applies to your current step, invoke it — do not skip this check. "
+            "Do NOT run equivalent shell commands directly:"
+        )
+    lines = ["## Available Skills", header]
     for s in skills:
         desc = f" - {s['description']}" if s["description"] else ""
-        lines.append(f"  - /{s['name']}{desc}")
+        replaces = s.get("replaces")
+        do_not = f" DO NOT run `{replaces}` directly." if replaces else ""
+        lines.append(f"  - /{s['name']}{desc}{do_not}")
     return "\n".join(lines)
 
 
@@ -313,6 +426,11 @@ _STEPS_WITH_STORY = {"verify_plan", "write_failing_tests", "implement_tasks", "v
 # Steps that include the user prompt
 _STEPS_WITH_PROMPT = {"review_previous_notes", "draft_story", "verify_plan"}
 
+# Lightweight steps that skip BYOS skill injection.
+# context-only work (review_previous_notes, verify_plan) and gate steps that
+# must wait for user action rather than invoking skills autonomously.
+LIGHTWEIGHT_STEPS = {"review_previous_notes", "verify_plan", "red_gate", "green_gate"}
+
 
 def _load_step_content(step_id: str) -> str:
     """Load a core step markdown file, with simple dict cache."""
@@ -365,18 +483,31 @@ def _build_fallback_instruction(step_id: str, agent: str, story_file: str,
     skill_text = _format_discovered_skills(discovered_skills)
     if skill_text:
         parts.extend(["", skill_text])
+    parts.extend(["", MEMORY_PERSIST_INSTRUCTION])
     parts.extend(["", STOP_DIRECTIVE])
     return "\n".join(parts)
 
 
 def build_agent_instruction(step_id: str, agent: str, action: str,
                             story_file: str, prompt: str = "",
-                            runner: dict = None) -> str:
+                            runner: dict = None, brain_context: str = "",
+                            prompt_variant_text: str = "",
+                            filtered_skills: list = None) -> str:
     """
     Build self-contained instruction for a workflow step.
 
     Composes: title + role card + dynamic context + prompt + core step body
-    + inline rules + retrieval instruction + BYOS skills.
+    + inline rules + retrieval instruction + BYOS skills + brain context
+    + stop directive.
+
+    brain_context: optional block from Brain.system_context() injected before
+    the stop directive. Pass via Conductor.build_agent_instruction() to enrich
+    instructions with project knowledge base results.
+    prompt_variant_text: optional persona prompt variant content from Brain PSP
+    selection. Injected after role card to provide variant-specific guidance.
+    filtered_skills: when provided by Conductor, use this pre-filtered list
+    instead of calling discover_prism_skills(). Empty list suppresses injection.
+    None means discover independently (backward-compatible default).
     """
     if runner is None:
         runner = {}
@@ -388,8 +519,11 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
         return _build_fallback_instruction(step_id, agent, story_file, conventions)
 
     agent_id, phase = phase_info
-    discovered_skills = discover_prism_skills(story_file)
-    skill_text = _format_discovered_skills(discovered_skills)
+    if filtered_skills is not None:
+        skill_text = _format_discovered_skills(filtered_skills, is_filtered=True)
+    else:
+        discovered_skills = discover_prism_skills(story_file)
+        skill_text = _format_discovered_skills(discovered_skills)
 
     # Load and split core step file into title (line 1) + body (rest)
     raw = _load_step_content(step_id)
@@ -401,6 +535,16 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
 
     # --- Compose instruction ---
     parts = [title, "", ROLE_CARDS[agent_id], ""]
+
+    # Prompt variant guidance (PSP-selected role enhancement)
+    if prompt_variant_text:
+        parts.extend([prompt_variant_text, ""])
+
+    # BYOS discovered skills — injected right after role card so agent sees them
+    # before diving into the step body. Skip for lightweight steps (context-only
+    # work like review_previous_notes and verify_plan, plus gate steps).
+    if skill_text and step_id not in LIGHTWEIGHT_STEPS:
+        parts.extend([skill_text, ""])
 
     # Dynamic context: story file + conventions
     context = []
@@ -417,15 +561,31 @@ def build_agent_instruction(step_id: str, agent: str, action: str,
         label = _prompt_label_for_step(step_id)
         parts.extend([f"{label}: {prompt}", ""])
 
+    # Session handoff injection for review_previous_notes
+    if step_id == "review_previous_notes":
+        handoff = _load_handoff()
+        if handoff:
+            parts.extend([
+                "## Session Handoff Available",
+                "IMPORTANT: A handoff from the previous workflow session is available below.",
+                "Use this summary INSTEAD of running full context discovery (skip steps 1-4).",
+                "",
+                handoff,
+                "",
+            ])
+
     # Core step body
     parts.append(body)
 
     # Inline rules + retrieval instruction
     parts.extend(["", INLINE_RULES[phase], "", RETRIEVAL_INSTRUCTION])
 
-    # BYOS discovered skills
-    if skill_text:
-        parts.extend(["", skill_text])
+    # Brain context (Understanding the System) — injected before stop directive
+    if brain_context:
+        parts.extend(["", brain_context])
+
+    # Memory persist instruction — before stop directive
+    parts.extend(["", MEMORY_PERSIST_INSTRUCTION])
 
     # Stop directive — always last so it's fresh when agent finishes
     parts.extend(["", STOP_DIRECTIVE])

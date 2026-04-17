@@ -1,13 +1,31 @@
 #!/usr/bin/env python3
 """
-Cancel PRISM Workflow Loop - removes state file to stop the workflow.
+Cancel PRISM Workflow Loop - marks workflow inactive so TUI/CLI can show final state.
 """
 
 import sys
 import re
 from pathlib import Path
 
-STATE_FILE = Path(".claude/prism-loop.local.md")
+
+def _find_prism_root() -> Path:
+    """Walk up from __file__ to find the prism root (contains core-config.yaml)."""
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / "core-config.yaml").exists():
+            return current
+        current = current.parent
+    raise FileNotFoundError("Could not find prism root (no core-config.yaml in any ancestor)")
+
+
+try:
+    PRISM_ROOT = _find_prism_root()
+except FileNotFoundError:
+    raise
+sys.path.insert(0, str(PRISM_ROOT / "hooks"))
+from prism_loop_context import resolve_state_file
+
+STATE_FILE = resolve_state_file()
 
 
 def get_current_step() -> tuple[str, int]:
@@ -35,8 +53,11 @@ def main():
 
     step, index = get_current_step()
 
-    # Delete the state file
-    STATE_FILE.unlink()
+    # Mark workflow inactive (preserve file so TUI/CLI can show final state)
+    content = STATE_FILE.read_text(encoding='utf-8')
+    content = re.sub(r"^active:\s*\S+", "active: false", content, flags=re.MULTILINE)
+    content = re.sub(r"^paused_for_manual:\s*\S+", "paused_for_manual: false", content, flags=re.MULTILINE)
+    STATE_FILE.write_text(content, encoding='utf-8')
 
     print("PRISM Workflow Loop CANCELLED")
     print(f"Stopped at step {index + 1}: {step}")

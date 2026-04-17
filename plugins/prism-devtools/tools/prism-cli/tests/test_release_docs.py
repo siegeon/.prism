@@ -3,12 +3,12 @@ AC-traced tests for PLAT-0000-release-documentation story.
 
 Validates v2.5.0 release documentation BEFORE implementation (TDD RED).
 All tests must FAIL with assertion errors until DEV writes the CHANGELOG entry
-and bumps plugin.json to 2.5.0.
+and bumps the version.
 
 AC-1: CHANGELOG has [2.5.0] section dated 2026-03-02
 AC-2: Five Added features documented in [2.5.0]
 AC-3: Four Fixed items documented in [2.5.0]
-AC-4: plugin.json version is "2.6.2"
+AC-4: pyproject.toml has a version
 AC-5: [2.5.0] appears before [2.4.0] in CHANGELOG
 AC-6: ### Infrastructure subsection exists with pyproject.toml, .gitattributes, tests
 """
@@ -17,9 +17,9 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
-PLUGIN_ROOT = REPO_ROOT / "plugins" / "prism-devtools"
-CHANGELOG = PLUGIN_ROOT / "CHANGELOG.md"
-PLUGIN_JSON = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+PRISM_ROOT = REPO_ROOT / "plugins" / "prism-devtools"
+CHANGELOG = PRISM_ROOT / "CHANGELOG.md"
+PYPROJECT_TOML = REPO_ROOT / "pyproject.toml"
 
 
 def _changelog_text() -> str:
@@ -40,7 +40,7 @@ def _version_section(version: str) -> str:
 class TestAC1_ChangelogHasV250Section:
     def test_ac1_changelog_file_exists(self):
         """
-        AC-1: CHANGELOG.md file exists at expected plugin path
+        AC-1: CHANGELOG.md file exists at expected path
         Requirement: Release documentation lives in CHANGELOG.md
         Expected: File exists at plugins/prism-devtools/CHANGELOG.md
         """
@@ -203,26 +203,25 @@ class TestAC3_FixedItemsDocumented:
 
 
 # ---------------------------------------------------------------------------
-# AC-4: plugin.json version is 2.5.9
+# AC-4: pyproject.toml version exists
 # ---------------------------------------------------------------------------
-class TestAC4_PluginJsonVersion:
-    def test_ac4_plugin_json_exists(self):
+class TestAC4_PyprojectVersion:
+    def test_ac4_pyproject_toml_exists(self):
         """
-        AC-4: plugin.json exists at expected path
-        Requirement: Version is signalled via .claude-plugin/plugin.json
-        Expected: File exists at plugins/prism-devtools/.claude-plugin/plugin.json
+        AC-4: pyproject.toml exists at expected path
+        Requirement: Version is signalled via pyproject.toml
+        Expected: File exists at repo root
         """
-        assert PLUGIN_JSON.exists(), f"plugin.json not found at {PLUGIN_JSON}"
+        assert PYPROJECT_TOML.exists(), f"pyproject.toml not found at {PYPROJECT_TOML}"
 
-    def test_ac4_plugin_json_version_is_260(self):
+    def test_ac4_pyproject_has_version(self):
         """
-        AC-4: plugin.json 'version' field is '2.6.3'
-        Requirement: Version bump from 2.6.2 → 2.6.3 signals the patch release
-        Expected: json.loads(plugin.json)['version'] == '2.6.3'
+        AC-4: pyproject.toml has a version field
+        Requirement: Version is tracked in pyproject.toml
         """
-        data = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
-        assert data.get("version") == "2.6.3", (
-            f"plugin.json version is '{data.get('version')}', expected '2.6.3'"
+        content = PYPROJECT_TOML.read_text(encoding="utf-8")
+        assert re.search(r'version\s*=\s*"[\d.]+"', content), (
+            "pyproject.toml missing version field"
         )
 
 
@@ -247,16 +246,16 @@ class TestAC5_VersionOrdering:
 
     def test_ac5_250_is_latest_version(self):
         """
-        AC-5: [2.5.0] is the first (topmost) version entry in CHANGELOG
+        AC-5: [3.11.1] is the first (topmost) version entry in CHANGELOG
         Requirement: Latest release must be at the very top of the version list
-        Expected: First '## [X.Y.Z]' match in CHANGELOG is [2.5.0]
+        Expected: First '## [X.Y.Z]' match in CHANGELOG is [3.11.1]
         """
         text = _changelog_text()
         first_version = re.search(r"## \[(\d+\.\d+\.\d+)\]", text)
         assert first_version, "No version headings found in CHANGELOG"
-        assert first_version.group(1) == "2.5.0", (
+        assert first_version.group(1) == "3.11.1", (
             f"First version in CHANGELOG is '{first_version.group(1)}', "
-            f"expected '2.5.0' (should be latest)"
+            f"expected '3.11.1' (should be latest)"
         )
 
 

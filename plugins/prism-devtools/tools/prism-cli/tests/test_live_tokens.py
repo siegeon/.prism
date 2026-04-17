@@ -27,7 +27,7 @@ TRANSCRIPT_LINES = [
     "42\n",
     '{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":300,"output_tokens":75}}}\n',
 ]
-# Expected total: 100+500+0+50 + 200+0+300+75 = 1225
+# Expected total: input+output only: (100+50) + (200+75) = 425
 
 
 def _make_app(tmp_path: Path) -> object:
@@ -58,10 +58,10 @@ class TestReadLiveTokensPopulatesState:
         app = _make_app(tmp_path)
         state = _make_state(session_id)
 
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
-        assert state.total_tokens == 1225
+        assert state.total_tokens == 425
 
     def test_sets_model(self, tmp_path: Path):
         session_id = "model-session"
@@ -69,7 +69,7 @@ class TestReadLiveTokensPopulatesState:
         app = _make_app(tmp_path)
         state = _make_state(session_id)
 
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
         assert state.model == "claude-opus-4-6"
@@ -85,11 +85,11 @@ class TestReadLiveTokensEdgeCases:
         app = _make_app(tmp_path)
         state = _make_state(session_id)
 
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
         # Must have read ALL lines including past the non-dict entry
-        assert state.total_tokens == 1225
+        assert state.total_tokens == 425
 
     def test_handles_empty_transcript(self, tmp_path: Path):
         session_id = "empty-session"
@@ -97,7 +97,7 @@ class TestReadLiveTokensEdgeCases:
         app = _make_app(tmp_path)
         state = _make_state(session_id)
 
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
         assert state.total_tokens == 0
@@ -113,7 +113,7 @@ class TestReadLiveTokensEdgeCases:
         app = _make_app(tmp_path)
         state = _make_state(session_id)
 
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
         assert state.total_tokens == 50
@@ -123,7 +123,7 @@ class TestReadLiveTokensEdgeCases:
         app = _make_app(tmp_path)
         state = _make_state("no-file-session")
 
-        with patch("app._glob.glob", return_value=[]):
+        with patch("app.find_session_transcript", return_value=None):
             app._read_live_tokens(state)
 
         assert state.total_tokens == 0
@@ -140,21 +140,21 @@ class TestReadLiveTokensIncremental:
         app = _make_app(tmp_path)
         state = _make_state(session_id)
 
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
         tokens_after_first = state.total_tokens
-        assert tokens_after_first == 650  # 100+500+0+50
+        assert tokens_after_first == 150  # input+output only: 100+50
 
         # Append remaining lines
         with open(tp, "a", encoding="utf-8") as f:
             f.writelines(TRANSCRIPT_LINES[2:])
 
         # Second call — should read only new content
-        with patch("app._glob.glob", return_value=[str(tp)]):
+        with patch("app.find_session_transcript", return_value=str(tp)):
             app._read_live_tokens(state)
 
-        assert state.total_tokens == 1225
+        assert state.total_tokens == 425
 
 
 class TestPollStateContinuesAfterTokenError:

@@ -10,31 +10,17 @@ Usage:
 
 from __future__ import annotations
 
-import glob as _glob
 import json as _json
+import sqlite3 as _sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from models import WORKFLOW_STEPS, WorkflowState, StoryInfo
-from parsing import check_plugin_cache_stale, parse_state_file, parse_story_file
-
-
-def _read_plugin_version() -> str:
-    """Read version from plugin.json; returns empty string on failure."""
-    import os
-    try:
-        root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-        if root:
-            plugin_json = Path(root) / ".claude-plugin" / "plugin.json"
-        else:
-            plugin_json = Path(__file__).resolve().parent.parent.parent / ".claude-plugin" / "plugin.json"
-        data = _json.loads(plugin_json.read_text(encoding="utf-8"))
-        return str(data.get("version", ""))
-    except Exception:
-        return ""
-
-
-_PLUGIN_VERSION: str = _read_plugin_version()
+from parsing import (
+    find_session_transcript,
+    parse_state_file,
+    parse_story_file,
+)
 
 
 def _inject_live_tokens(state: WorkflowState) -> None:
@@ -45,13 +31,10 @@ def _inject_live_tokens(state: WorkflowState) -> None:
     """
     if not state.session_id:
         return
-    pattern = str(
-        Path.home() / ".claude" / "projects" / "*" / f"{state.session_id}.jsonl"
-    )
-    matches = _glob.glob(pattern)
-    if not matches:
+    transcript = find_session_transcript(state.session_id)
+    if not transcript:
         return
-    tp = Path(matches[0])
+    tp = Path(transcript)
     if not tp.exists():
         return
 
@@ -72,8 +55,6 @@ def _inject_live_tokens(state: WorkflowState) -> None:
                     usage = entry["message"].get("usage")
                 if usage and isinstance(usage, dict):
                     total += usage.get("input_tokens", 0)
-                    total += usage.get("cache_creation_input_tokens", 0)
-                    total += usage.get("cache_read_input_tokens", 0)
                     total += usage.get("output_tokens", 0)
                 m = entry.get("model")
                 if not m and isinstance(entry.get("message"), dict):
@@ -153,15 +134,12 @@ def _render_activity_feed(state: "WorkflowState", lines: list[str], max_entries:
         lines.append("  No session ID — cannot read transcript")
         lines.append("")
         return
-    pattern = str(
-        Path.home() / ".claude" / "projects" / "*" / f"{state.session_id}.jsonl"
-    )
-    matches = _glob.glob(pattern)
-    if not matches:
+    transcript = find_session_transcript(state.session_id)
+    if not transcript:
         lines.append("  No transcript found")
         lines.append("")
         return
-    tp = Path(matches[0])
+    tp = Path(transcript)
     entries: list[str] = []
     try:
         with open(tp, encoding="utf-8", errors="replace") as f:
@@ -206,7 +184,11 @@ def _render_activity_feed(state: "WorkflowState", lines: list[str], max_entries:
                         args_str = ", ".join(parts)
                     else:
                         args_str = str(inp)[:40]
-                    entries.append(f"  {ts_str} TOOL {tool_name:<18} {args_str}")
+                    is_brain = "brain" in tool_name.lower() or (
+                        tool_name == "Skill" and "brain" in str(inp).lower()
+                    )
+                    label = "🧠 BRAIN" if is_brain else "TOOL    "
+                    entries.append(f"  {ts_str} {label} {tool_name:<18} {args_str}")
     except (IOError, OSError):
         lines.append("  Error reading transcript")
         lines.append("")
@@ -217,6 +199,67 @@ def _render_activity_feed(state: "WorkflowState", lines: list[str], max_entries:
     else:
         lines.append("  No tool calls in transcript")
     lines.append("")
+
+
+def _read_sfr_stats(work_dir: Path) -> dict | None:
+    """Read SFR performance stats from scores.db subagent_outcomes table.
+
+    Returns None if the DB is absent or the table has no rows.
+    Returns a dict with keys: total, sfr, freeform, sfr_cert_avg,
+    sfr_blocks_avg, sfr_gate_pct, freeform_gate_pct, timeouts.
+    """
+    scores_db = work_dir / ".prism" / "brain" / "scores.db"
+    if not scores_db.exists():
+        return None
+    try:
+        conn = _sqlite3.connect(str(scores_db))
+        rows = conn.execute(
+            "SELECT prompt_id, certificate_complete, certificate_blocked,"
+            " timed_out, gate_agreed FROM subagent_outcomes"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    sfr_entries: list[dict] = []
+    freeform_entries: list[dict] = []
+    timeouts = 0
+    for prompt_id, cert_complete, cert_blocked, timed_out, gate_agreed in rows:
+        is_sfr = bool(prompt_id and "/sfr" in prompt_id)
+        if timed_out:
+            timeouts += 1
+        entry = {
+            "cert_complete": cert_complete or 0,
+            "cert_blocked": cert_blocked or 0,
+            "gate_agreed": gate_agreed,
+        }
+        if is_sfr:
+            sfr_entries.append(entry)
+        else:
+            freeform_entries.append(entry)
+
+    def _gate_pct(entries: list[dict]) -> float | None:
+        vals = [e["gate_agreed"] for e in entries if e["gate_agreed"] is not None]
+        return (sum(vals) / len(vals) * 100) if vals else None
+
+    sfr_cert_avg: float | None = None
+    sfr_blocks_avg: float | None = None
+    if sfr_entries:
+        sfr_cert_avg = sum(e["cert_complete"] for e in sfr_entries) / len(sfr_entries)
+        sfr_blocks_avg = sum(e["cert_blocked"] for e in sfr_entries) / len(sfr_entries)
+
+    return {
+        "total": len(rows),
+        "sfr": len(sfr_entries),
+        "freeform": len(freeform_entries),
+        "sfr_cert_avg": sfr_cert_avg,
+        "sfr_blocks_avg": sfr_blocks_avg,
+        "sfr_gate_pct": _gate_pct(sfr_entries),
+        "freeform_gate_pct": _gate_pct(freeform_entries),
+        "timeouts": timeouts,
+    }
 
 
 def render_snapshot(work_dir: Path) -> str:
@@ -230,19 +273,12 @@ def render_snapshot(work_dir: Path) -> str:
     if state and state.active:
         _inject_live_tokens(state)
 
-    cache = check_plugin_cache_stale(work_dir)
-
     # Header
     lines.append("=" * 64)
-    _version_suffix = f" v{_PLUGIN_VERSION}" if _PLUGIN_VERSION else ""
-    lines.append(f"  PRISM Dashboard Snapshot{_version_suffix}")
+    lines.append("  PRISM Dashboard Snapshot")
     lines.append(f"  {now.strftime('%Y-%m-%d %H:%M:%S')}")
     if state and state.active and state.current_step:
         lines.append(f"  Step: {state.current_step}")
-    if cache["linked"]:
-        lines.append("  [*] CACHE LIVE — junction active, edits apply instantly")
-    elif cache["stale"]:
-        lines.append("  [!] CACHE STALE — source newer than ~/.claude/plugins/cache")
     lines.append("=" * 64)
     lines.append("")
 
@@ -370,7 +406,7 @@ def render_snapshot(work_dir: Path) -> str:
     lines.append("-" * 80)
     lines.append(
         f"{'#':<4} {'Step':<24} {'Agent':<6} {'Phase':<12} "
-        f"{'Duration':<10} {'DurBar':<8} {'Tokens':<8} {'TokBar':<8} {'Tok/min':<8} {'Skills':<8} {'Status'}"
+        f"{'Duration':<10} {'DurBar':<8} {'Tokens':<8} {'TokBar':<8} {'Tok/min':<8} {'Skills':<8} {'Brain':<6} {'Status'}"
     )
     for step in WORKFLOW_STEPS:
         if step.index < current_idx:
@@ -380,15 +416,17 @@ def render_snapshot(work_dir: Path) -> str:
                 t_toks = int(hist.get("t", 0))
                 s_calls = int(hist.get("s", 0))
                 tc_calls = int(hist.get("tc", 0))
+                bq = int(hist.get("bq", 0))
                 dur = _fmt_duration(d_secs)
                 tok = _fmt_tokens(t_toks)
                 tpm_val = t_toks / (d_secs / 60) if d_secs > 0 and t_toks > 0 else 0
                 tpm = _fmt_tokens(int(tpm_val)) if tpm_val > 0 else "-"
                 skills = f"{s_calls}/{tc_calls}" if tc_calls > 0 else "-"
+                brain = str(bq) if bq > 0 else "-"
                 dur_bar = _fmt_bar(d_secs, total_dur)
                 tok_bar = _fmt_bar(t_toks, total_toks)
             else:
-                dur, tok, tpm, skills = "-", "-", "-", "-"
+                dur, tok, tpm, skills, brain = "-", "-", "-", "-", "-"
                 dur_bar, tok_bar = "", ""
             status = "DONE"
         elif step.index == current_idx:
@@ -400,6 +438,7 @@ def render_snapshot(work_dir: Path) -> str:
             else:
                 tpm = "-"
             skills = "live"
+            brain = "live"
             if step.step_type == "gate":
                 dur_bar = ""
                 tok_bar = ""
@@ -413,12 +452,12 @@ def render_snapshot(work_dir: Path) -> str:
             else:
                 status = ">> RUNNING"
         else:
-            dur, tok, tpm, skills, status = "", "", "", "", "."
+            dur, tok, tpm, skills, brain, status = "", "", "", "", "", "."
             dur_bar, tok_bar = "", ""
 
         lines.append(
             f"{step.index + 1:<4} {step.id:<24} {step.agent:<6} {step.phase:<12} "
-            f"{dur:<10} {dur_bar:<8} {tok:<8} {tok_bar:<8} {tpm:<8} {skills:<8} {status}"
+            f"{dur:<10} {dur_bar:<8} {tok:<8} {tok_bar:<8} {tpm:<8} {skills:<8} {brain:<6} {status}"
         )
 
     lines.append("")
@@ -444,6 +483,27 @@ def render_snapshot(work_dir: Path) -> str:
         lines.append("  /prism-reject  -> Loop back to Planning")
         lines.append("!" * 64)
         lines.append("")
+
+    # --- Timing ---
+    lines.append("TIMING")
+    lines.append("-" * 64)
+    started_str = state.started_at if state.started_at else "-"
+    last_act_str = state.last_activity if state.last_activity else "-"
+    lines.append(f"  Started:  {started_str}")
+    lines.append(f"  Last Act: {last_act_str}")
+    lines.append(f"  Elapsed:  {_fmt_duration(elapsed_secs)}")
+    if state.model:
+        lines.append(f"  Model:    {state.model}")
+    _lt = state.last_thought
+    if _lt and (" " in _lt or ":" in _lt):
+        lines.append(f"  Last Thought: {_lt}")
+    if state.branch:
+        lines.append(f"  Branch:   {state.branch}")
+    if state.session_id:
+        lines.append(f"  Session:  {state.session_id[:8]}")
+    else:
+        lines.append("  Session:  ERROR — no session_id")
+    lines.append("")
 
     # --- Story Panel ---
     story: StoryInfo | None = None
@@ -484,6 +544,41 @@ def render_snapshot(work_dir: Path) -> str:
     else:
         lines.append("  No story file")
 
+    lines.append("")
+
+    # --- SFR Performance ---
+    sfr = _read_sfr_stats(work_dir)
+    lines.append("SFR PERFORMANCE")
+    lines.append("-" * 64)
+    if sfr is None:
+        lines.append("  No SFR data (scores.db absent or no outcomes recorded)")
+    else:
+        lines.append(
+            f"  Runs: {sfr['total']} total"
+            f"  (SFR: {sfr['sfr']}  Freeform: {sfr['freeform']})"
+        )
+        if sfr["sfr"] > 0:
+            cert = (
+                f"{sfr['sfr_cert_avg']:.1f}/6"
+                if sfr["sfr_cert_avg"] is not None else "-"
+            )
+            blocks = (
+                f"{sfr['sfr_blocks_avg']:.1f}"
+                if sfr["sfr_blocks_avg"] is not None else "-"
+            )
+            gate = (
+                f"{sfr['sfr_gate_pct']:.1f}%"
+                if sfr["sfr_gate_pct"] is not None else "-"
+            )
+            lines.append(f"  SFR:      cert {cert}  blocks {blocks}  gate agree {gate}")
+        if sfr["freeform"] > 0:
+            gate = (
+                f"{sfr['freeform_gate_pct']:.1f}%"
+                if sfr["freeform_gate_pct"] is not None else "-"
+            )
+            lines.append(f"  Freeform: gate agree {gate}")
+        if sfr["timeouts"] > 0:
+            lines.append(f"  Timeouts: {sfr['timeouts']}")
     lines.append("")
 
     # --- Activity Feed ---

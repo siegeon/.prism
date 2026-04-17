@@ -7,7 +7,6 @@ AC-4: Session detection handles empty/missing session IDs
 
 from __future__ import annotations
 
-import os
 import sys
 import pytest
 from pathlib import Path
@@ -16,7 +15,13 @@ from pathlib import Path
 _CLI_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_CLI_DIR))
 
-from parsing import parse_state_file, parse_story_file, update_state_field
+from parsing import (
+    parse_state_file,
+    parse_story_file,
+    update_state_field,
+    _count_green_tests,
+    find_session_transcript,
+)
 from models import WorkflowState, StoryInfo
 
 
@@ -175,3 +180,97 @@ class TestUpdateStateField:
     def test_returns_false_for_missing_file(self, tmp_path: Path):
         result = update_state_field(tmp_path / "nope.md", {"active": "false"})
         assert result is False
+
+
+class TestCountGreenTests:
+    """Tests for _count_green_tests green_gate override."""
+
+    def _make_pytest_cache(self, work_dir: Path, nodeids: list, lastfailed: dict) -> None:
+        cache = work_dir / ".pytest_cache" / "v" / "cache"
+        cache.mkdir(parents=True)
+        import json as _json
+        (cache / "nodeids").write_text(_json.dumps(nodeids), encoding="utf-8")
+        if lastfailed:
+            (cache / "lastfailed").write_text(_json.dumps(lastfailed), encoding="utf-8")
+
+    def _make_state_file(self, work_dir: Path, step_index: int) -> None:
+        state_dir = work_dir / ".claude"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        content = f"---\nactive: true\ncurrent_step_index: {step_index}\n---\n"
+        (state_dir / "prism-loop.local.md").write_text(content, encoding="utf-8")
+
+    def test_green_gate_overrides_lastfailed(self, tmp_path: Path):
+        """At step_index 7 (green_gate), lastfailed is ignored — returns (total, total)."""
+        nodeids = [f"test_foo.py::test_{i}" for i in range(10)]
+        lastfailed = {n: True for n in nodeids[:3]}  # 3 "failures" from RED phase
+        self._make_pytest_cache(tmp_path, nodeids, lastfailed)
+        self._make_state_file(tmp_path, 7)
+
+        passing, total = _count_green_tests(tmp_path)
+        assert total == 10
+        assert passing == 10  # 100% — stale lastfailed ignored at green_gate
+
+    def test_post_green_gate_step_also_overrides(self, tmp_path: Path):
+        """Step index > 7 also shows 100% (workflow has passed green_gate)."""
+        nodeids = [f"test_foo.py::test_{i}" for i in range(5)]
+        lastfailed = {nodeids[0]: True}
+        self._make_pytest_cache(tmp_path, nodeids, lastfailed)
+        self._make_state_file(tmp_path, 8)
+
+        passing, total = _count_green_tests(tmp_path)
+        assert passing == total == 5
+
+    def test_before_green_gate_uses_lastfailed(self, tmp_path: Path):
+        """Below step_index 7, lastfailed is used normally (RED phase)."""
+        nodeids = [f"test_foo.py::test_{i}" for i in range(10)]
+        lastfailed = {n: True for n in nodeids[:3]}
+        self._make_pytest_cache(tmp_path, nodeids, lastfailed)
+        self._make_state_file(tmp_path, 4)  # red_gate
+
+        passing, total = _count_green_tests(tmp_path)
+        assert total == 10
+        assert passing == 7  # 10 - 3 failures
+
+    def test_no_state_file_uses_lastfailed(self, tmp_path: Path):
+        """Without a state file, falls back to lastfailed normally."""
+        nodeids = [f"test_foo.py::test_{i}" for i in range(5)]
+        lastfailed = {nodeids[0]: True}
+        self._make_pytest_cache(tmp_path, nodeids, lastfailed)
+        # No state file created
+
+        passing, total = _count_green_tests(tmp_path)
+        assert total == 5
+        assert passing == 4
+
+    def test_no_cache_returns_zeros(self, tmp_path: Path):
+        """Missing pytest cache returns (0, 0)."""
+        passing, total = _count_green_tests(tmp_path)
+        assert passing == 0
+        assert total == 0
+
+
+class TestFindSessionTranscript:
+    """Tests for find_session_transcript cross-platform path resolution."""
+
+    def test_finds_transcript(self, tmp_path: Path, monkeypatch):
+        """Creates transcript file, patches Path.home, asserts it is found."""
+        projects = tmp_path / ".claude" / "projects" / "proj"
+        projects.mkdir(parents=True)
+        tp = projects / "abc123.jsonl"
+        tp.write_text("{}\n", encoding="utf-8")
+        monkeypatch.setattr("parsing.Path.home", staticmethod(lambda: tmp_path))
+        result = find_session_transcript("abc123")
+        assert result is not None
+        assert "abc123.jsonl" in result
+
+    def test_returns_none_for_empty(self):
+        """Empty session_id returns None without touching the filesystem."""
+        result = find_session_transcript("")
+        assert result is None
+
+    def test_returns_none_when_no_match(self, tmp_path: Path, monkeypatch):
+        """No matching transcript file returns None."""
+        (tmp_path / ".claude" / "projects").mkdir(parents=True)
+        monkeypatch.setattr("parsing.Path.home", staticmethod(lambda: tmp_path))
+        result = find_session_transcript("nonexistent-session-id")
+        assert result is None

@@ -85,3 +85,8 @@ skills/orca-*/
 .context/
 !plugins/prism-devtools/templates/.context/
 !plugins/prism-devtools/templates/.context/**
+
+# Brain runtime databases and state
+brain/
+.prism/brain/
+plugins/prism-devtools/tools/prism-cli/.prism/

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import glob as _glob
 import json as _json
 import logging
 from collections import deque
@@ -13,6 +12,7 @@ from typing import Optional
 from textual.widgets import Static
 
 from models import WORKFLOW_STEPS, WorkflowState
+from parsing import find_session_transcript
 
 _log = logging.getLogger(__name__)
 
@@ -55,13 +55,7 @@ class ActivityFeed(Static):
 
         # Locate transcript file once per session
         if not self._transcript_path:
-            pattern = str(
-                Path.home() / ".claude" / "projects" / "*"
-                / f"{state.session_id}.jsonl"
-            )
-            matches = _glob.glob(pattern)
-            if matches:
-                self._transcript_path = matches[0]
+            self._transcript_path = find_session_transcript(state.session_id) or ""
 
         if not self._transcript_path:
             self._render_entries()
@@ -154,6 +148,11 @@ class ActivityFeed(Static):
         self, ts: str, agent: str, name: str, inp: dict
     ) -> str:
         """Format one activity line."""
+        # Detect brain-related calls
+        is_brain = "brain" in name.lower() or (
+            name == "Skill" and "brain" in str(inp).lower()
+        )
+        label = "[bold green]🧠 BRAIN[/]" if is_brain else "[bold cyan]TOOL[/]"
         # Build truncated args string from first key=value pair
         args_parts: list[str] = []
         if isinstance(inp, dict):
@@ -165,7 +164,7 @@ class ActivityFeed(Static):
                 break  # only first arg for compact display
         args_str = args_parts[0] if args_parts else ""
         return (
-            f"{ts} [bold cyan]TOOL[/] [dim]{agent}[/] "
+            f"{ts} {label} [dim]{agent}[/] "
             f"tool=[bold]{name}[/] {args_str}"
         )
 

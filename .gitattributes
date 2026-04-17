@@ -1,7 +1,6 @@
-# Normalize line endings
-* text=auto
+.mulch/expertise/*.jsonl merge=union
 
-# Shell scripts must use LF (bash breaks on CRLF)
-*.sh text eol=lf
-scripts/pre-commit text eol=lf
-plugins/prism-devtools/scripts/pre-commit text eol=lf
+.seeds/issues.jsonl merge=union
+.seeds/templates.jsonl merge=union
+.canopy/prompts.jsonl merge=union
+.canopy/schemas.jsonl merge=union

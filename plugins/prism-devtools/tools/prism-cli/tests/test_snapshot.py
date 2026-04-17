@@ -17,7 +17,9 @@ from pathlib import Path
 _CLI_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_CLI_DIR))
 
-from snapshot import render_snapshot
+import sqlite3
+
+from snapshot import render_snapshot, _read_sfr_stats
 
 
 def _find_hooks_json() -> Path:
@@ -293,27 +295,113 @@ last_activity: "2025-01-01T00:00:00.000000"
         assert "STALE" in output
 
 
-    def test_version_in_header(self, work_dir: Path):
-        """Snapshot header includes version from plugin.json."""
-        import re
+    def test_header_present(self, work_dir: Path):
+        """Snapshot header includes PRISM Dashboard Snapshot title."""
         output = render_snapshot(work_dir)
-        # Should show either "v<semver>" or just "PRISM Dashboard Snapshot" if no plugin.json
-        # The canonical plugin.json exists relative to the CLI tool, so version should appear
-        assert re.search(r"PRISM Dashboard Snapshot( v\d+\.\d+\.\d+)?", output), (
-            f"Expected version pattern in header, got:\n{output}"
-        )
+        assert "PRISM Dashboard Snapshot" in output
 
-    def test_version_fallback_no_plugin_json(self, tmp_path: Path):
-        """Snapshot renders without crashing when plugin.json is absent."""
-        import snapshot as _snap
-        orig = _snap._PLUGIN_VERSION
-        try:
-            _snap._PLUGIN_VERSION = ""
-            state_dir = tmp_path / ".claude"
-            state_dir.mkdir()
-            from datetime import datetime, timedelta
-            now = datetime.now()
-            state_content = f'''---
+
+def _make_scores_db(work_dir: Path, rows: list[tuple]) -> Path:
+    """Create a minimal scores.db with subagent_outcomes rows for testing.
+
+    Each row is (prompt_id, validator, cert_complete, cert_blocked, timed_out,
+    gate_agreed, tokens_used). A unique timestamp offset is appended per row
+    to satisfy the composite PRIMARY KEY (prompt_id, validator, timestamp).
+    """
+    db_dir = work_dir / ".prism" / "brain"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    db_path = db_dir / "scores.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS subagent_outcomes"
+        " (prompt_id TEXT, validator TEXT, recommendation TEXT,"
+        " evidence_count INTEGER, certificate_complete INTEGER,"
+        " certificate_blocked INTEGER DEFAULT 0, timed_out INTEGER DEFAULT 0,"
+        " gate_agreed INTEGER, tokens_used INTEGER, duration_s REAL,"
+        " timestamp TEXT,"
+        " PRIMARY KEY (prompt_id, validator, timestamp))"
+    )
+    for i, (prompt_id, validator, cert_complete, cert_blocked, timed_out,
+            gate_agreed, tokens_used) in enumerate(rows):
+        conn.execute(
+            "INSERT INTO subagent_outcomes"
+            " (prompt_id, validator, certificate_complete, certificate_blocked,"
+            " timed_out, gate_agreed, tokens_used, timestamp)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (prompt_id, validator, cert_complete, cert_blocked, timed_out,
+             gate_agreed, tokens_used, f"2026-03-09T00:00:{i:02d}"),
+        )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+class TestSfrStats:
+    """Tests for _read_sfr_stats and SFR PERFORMANCE snapshot section."""
+
+    def test_returns_none_when_db_absent(self, tmp_path: Path):
+        result = _read_sfr_stats(tmp_path)
+        assert result is None
+
+    def test_returns_none_when_table_empty(self, tmp_path: Path):
+        _make_scores_db(tmp_path, [])
+        result = _read_sfr_stats(tmp_path)
+        assert result is None
+
+    def test_sfr_and_freeform_counts(self, tmp_path: Path):
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 5, 0, 0, 1, 1000),
+            ("validator/sfr", "v1", 4, 1, 0, 1, 1200),
+            ("validator/default", "v1", None, None, 0, 0, 800),
+        ])
+        result = _read_sfr_stats(tmp_path)
+        assert result is not None
+        assert result["total"] == 3
+        assert result["sfr"] == 2
+        assert result["freeform"] == 1
+
+    def test_sfr_cert_avg(self, tmp_path: Path):
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 6, 0, 0, 1, 1000),
+            ("validator/sfr", "v1", 4, 0, 0, 1, 1000),
+        ])
+        result = _read_sfr_stats(tmp_path)
+        assert result is not None
+        assert result["sfr_cert_avg"] == pytest.approx(5.0)
+
+    def test_sfr_blocks_avg(self, tmp_path: Path):
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 5, 2, 0, 1, 1000),
+            ("validator/sfr", "v1", 5, 0, 0, 1, 1000),
+        ])
+        result = _read_sfr_stats(tmp_path)
+        assert result is not None
+        assert result["sfr_blocks_avg"] == pytest.approx(1.0)
+
+    def test_gate_pct(self, tmp_path: Path):
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 5, 0, 0, 1, 1000),
+            ("validator/sfr", "v1", 5, 0, 0, 0, 1000),
+        ])
+        result = _read_sfr_stats(tmp_path)
+        assert result is not None
+        assert result["sfr_gate_pct"] == pytest.approx(50.0)
+
+    def test_timeouts_counted(self, tmp_path: Path):
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 3, 0, 1, None, 500),
+            ("validator/sfr", "v1", 5, 0, 0, 1, 1000),
+        ])
+        result = _read_sfr_stats(tmp_path)
+        assert result is not None
+        assert result["timeouts"] == 1
+
+    def test_snapshot_shows_sfr_section_no_db(self, tmp_path: Path):
+        """Snapshot shows SFR PERFORMANCE with absent-DB message when no scores.db."""
+        state_dir = tmp_path / ".claude"
+        state_dir.mkdir()
+        now = datetime.now()
+        state_content = f'''---
 active: true
 current_step: implement_tasks
 current_step_index: 5
@@ -321,52 +409,56 @@ started_at: "{(now - timedelta(minutes=5)).isoformat()}"
 last_activity: "{(now - timedelta(seconds=10)).isoformat()}"
 ---
 '''
-            (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
-            output = render_snapshot(tmp_path)
-            assert "PRISM Dashboard Snapshot" in output
-            assert " v" not in output.split("\n")[1]
-        finally:
-            _snap._PLUGIN_VERSION = orig
+        (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
+        output = render_snapshot(tmp_path)
+        assert "SFR PERFORMANCE" in output
+        assert "No SFR data" in output
 
-    def test_version_prefers_claude_plugin_root_env(self, tmp_path: Path):
-        """_read_plugin_version uses CLAUDE_PLUGIN_ROOT when set, not __file__-relative path."""
-        import snapshot as _snap
-        import importlib
+    def test_snapshot_shows_sfr_stats_with_data(self, tmp_path: Path):
+        """Snapshot SFR section shows run counts and cert avg when data present."""
+        state_dir = tmp_path / ".claude"
+        state_dir.mkdir()
+        now = datetime.now()
+        state_content = f'''---
+active: true
+current_step: implement_tasks
+current_step_index: 5
+started_at: "{(now - timedelta(minutes=5)).isoformat()}"
+last_activity: "{(now - timedelta(seconds=10)).isoformat()}"
+---
+'''
+        (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 5, 1, 0, 1, 1000),
+            ("validator/sfr", "v1", 4, 0, 0, 0, 900),
+            ("validator/default", "v1", None, None, 0, 1, 700),
+        ])
+        output = render_snapshot(tmp_path)
+        assert "SFR PERFORMANCE" in output
+        assert "SFR: 2" in output
+        assert "Freeform: 1" in output
+        assert "cert" in output
+        assert "gate agree" in output
 
-        # Create a fake plugin root with a different version
-        fake_root = tmp_path / "fake_plugin"
-        fake_plugin_dir = fake_root / ".claude-plugin"
-        fake_plugin_dir.mkdir(parents=True)
-        (fake_plugin_dir / "plugin.json").write_text(
-            '{"version": "99.0.0"}', encoding="utf-8"
-        )
-
-        orig_env = os.environ.get("CLAUDE_PLUGIN_ROOT")
-        try:
-            os.environ["CLAUDE_PLUGIN_ROOT"] = str(fake_root)
-            version = _snap._read_plugin_version()
-            assert version == "99.0.0", (
-                f"Expected version from CLAUDE_PLUGIN_ROOT, got: {version!r}"
-            )
-        finally:
-            if orig_env is None:
-                os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
-            else:
-                os.environ["CLAUDE_PLUGIN_ROOT"] = orig_env
-
-    def test_version_falls_back_when_env_unset(self, tmp_path: Path):
-        """_read_plugin_version falls back to __file__-relative path when env var unset."""
-        import snapshot as _snap
-
-        orig_env = os.environ.get("CLAUDE_PLUGIN_ROOT")
-        try:
-            os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
-            # Should not raise; returns string (possibly empty if plugin.json missing)
-            version = _snap._read_plugin_version()
-            assert isinstance(version, str)
-        finally:
-            if orig_env is not None:
-                os.environ["CLAUDE_PLUGIN_ROOT"] = orig_env
+    def test_snapshot_shows_timeouts_line(self, tmp_path: Path):
+        """Timeouts line only appears when timeouts > 0."""
+        state_dir = tmp_path / ".claude"
+        state_dir.mkdir()
+        now = datetime.now()
+        state_content = f'''---
+active: true
+current_step: implement_tasks
+current_step_index: 5
+started_at: "{(now - timedelta(minutes=5)).isoformat()}"
+last_activity: "{(now - timedelta(seconds=10)).isoformat()}"
+---
+'''
+        (state_dir / "prism-loop.local.md").write_text(state_content, encoding="utf-8")
+        _make_scores_db(tmp_path, [
+            ("validator/sfr", "v1", 3, 0, 1, None, 500),
+        ])
+        output = render_snapshot(tmp_path)
+        assert "Timeouts: 1" in output
 
 
 class TestHooksJson:

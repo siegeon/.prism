@@ -5,6 +5,299 @@ All notable changes to the PRISM Development System plugin will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.2] - 2026-03-15
+
+### Fixed
+- `discover_prism_skills` now scans plugin skills directories correctly
+- `save-large-responses` and `log-terminal-output` hooks registered as PostToolUse events
+- Brain skill seeding with global score cap to fix cold-start scoring
+- `adoption_rate` metric added to `step_history`, `session_outcomes`, and prism-bug reports
+
+### Changed
+- Core-step Skills sections enriched with WHY language for skill invocation clarity
+- Deduplicated BYOS skill detection and discover calls
+
+## [3.14.1] - 2026-03-15
+
+### Fixed
+- Skill enforcement: core step files no longer contradict themselves with raw `{{test_cmd}}`/`{{lint_cmd}}` references — replaced with skill invocation language
+- `validate_step()` now checks skill usage — blocks current step if discovered skills > 0 and no skill calls were made
+- Bypass detection moved from advisory (next step warning) to blocking (current step) with "SKILL BYPASS DETECTED" message
+- Added circuit breaker (3 strikes) to prevent infinite loops when agent can't comply
+- LIGHTWEIGHT_STEPS exempted from enforcement; no enforcement when no skills discovered
+
+## [3.14.0] - 2026-03-15
+
+### Added
+
+### Fixed
+
+## [3.13.0] - 2026-03-14
+
+### Added
+
+### Fixed
+
+## [3.12.0] - 2026-03-14
+
+### Added
+
+### Fixed
+
+## [3.11.11] - 2026-03-14
+
+### Added
+
+### Fixed
+
+## [3.11.10] - 2026-03-13
+
+### Added
+
+### Fixed
+
+## [3.11.9] - 2026-03-13
+
+### Added
+
+### Fixed
+
+## [3.11.8] - 2026-03-13
+
+### Added
+
+### Fixed
+
+## [3.11.7] - 2026-03-13
+
+### Added
+
+### Fixed
+
+## [3.11.6] - 2026-03-12
+
+### Added
+
+### Fixed
+
+## [3.11.5] - 2026-03-11
+
+### Added
+
+### Fixed
+
+## [3.11.4] - 2026-03-11
+
+### Added
+
+### Fixed
+
+## [3.11.3] - 2026-03-11
+
+### Added
+
+### Fixed
+
+## [3.11.1] - 2026-03-11
+
+### Fixed
+- Removed `disable-model-invocation: true` from 22 agent-scoped skills (QA, Dev, SM, Arch tiers) so Conductor-injected skill invocations can succeed
+
+## [3.11.0] - 2026-03-11
+
+### Added
+- New `release` skill — end-to-end release workflow with change analysis, CHANGELOG authoring, and push coordination
+- New `local-dev-setup` skill
+- New `living-spec` skill
+
+### Changed
+- Consolidated 10 skills into 4: `brain`, `strangler-pattern`, `validate`, `jira`
+- Consolidated `probe-estimation` + `calibrate-sizing` + `resize-story` into `story-sizing`
+- Refactored 28+ skills to thin SKILL.md (≤20 lines) with progressive disclosure via `instructions.md`
+- Strengthened filtered skill instruction language to directive ("You MUST")
+
+### Fixed
+- FTS5 query length validation and adaptive RRF threshold in brain_engine.py
+
+## [3.10.6] - 2026-03-10
+
+### Added
+
+- Conductor/brain diagnostic logging for gate step visibility
+- Mulch expertise entries for gate patterns
+
+### Fixed
+
+- Gate bypass: exclude skills at gate steps to prevent premature skill injection
+- Stop hook and loop context reliability improvements
+
+## [3.10.5] - 2026-03-09
+
+### Added
+
+### Fixed
+
+## [3.10.4] - 2026-03-09
+
+### Added
+- Conductor-driven skill filtering: Brain scores skill relevance from usage data, Conductor selects top 3-5 skills per step with cold-start keyword fallback. Replaces full 26-skill dump with targeted injection.
+
+### Changed
+- Skill injection phrasing softened from "MANDATORY" to "Consider" for non-core skills
+
+### Fixed
+- `prism_loop_context.py`: stderr cleanup — skill discovery logs no longer leak into hook output
+
+## [3.10.3] - 2026-03-10
+
+### Fixed
+- `prism_loop_context.py`: skip BYOS skills injection for lightweight steps (`review_previous_notes`, `verify_plan`). These steps are designed to complete in ~10K tokens by reading the handoff and stopping — unconditionally injecting 26+ MANDATORY skills caused Claude to invoke skills instead, burning millions of tokens on what should be a fast context-restore step.
+
+## [3.10.2] - 2026-03-09
+
+### Changed
+- `hooks/hooks.json`: all 12 hook commands now use `python3` directly instead of `sh run-hook.sh` wrapper, fixing Windows path failures caused by backslash handling in the 3-process chain (sh → python3 → script)
+
+## [3.10.1] - 2026-03-09
+
+### Added
+
+### Fixed
+
+## [3.10.0] - 2026-03-09
+
+### Added
+- `prism-bug`: Platform Diagnostics section — OS name/version, Python executable path, command availability (`python3`/`python`/`sh`/`bash`), current shell
+- `prism-bug`: hooks.json Content section — includes actual hooks.json commands in the report
+- `prism-bug`: Hook Script Verification section — for each command in hooks.json, verifies the referenced script path exists and reports missing scripts
+- `prism-bug`: Hook Execution Test section — reads hooks.json, runs session-start hook via `run-hook.sh`, reports exit code + stderr; verifies `run-hook.sh` exists
+- `prism-bug`: Transcript System Events section — scans transcript for system-role messages containing 'hook' (hook errors, lifecycle events), not just `hook_progress`
+
+## [3.9.3] - 2026-03-09
+
+### Added
+- `hooks/run-hook.sh`: cross-platform Python resolver — tries `python3` then `python`, fixing hooks failing on Windows where Python is installed as `python` not `python3` (root cause of issues #25, #28, #30)
+
+### Changed
+- `hooks/hooks.json`: all hook commands now use `sh run-hook.sh` instead of `python3` directly
+- `setup_prism_loop.py`: writes first-step instruction to `.prism/current_instruction.md` at setup time so the instruction file exists before the first stop hook fires
+
+## [3.9.2] - 2026-03-09
+
+### Changed
+
+- **Stop hook: write instruction to file** — `build_agent_instruction()` output (~3-5KB) is now written to `.prism/current_instruction.md` at step transitions instead of being injected into the block decision reason field. Block decisions are now short pointers (~150 bytes): `[PRISM] Step N/8: step_id. Your full instruction is at .prism/current_instruction.md — read it now and begin.`
+- **Stop hook: no-progress re-engagement** — `_emit_current_step_reinstruct` now emits a concise pointer message instead of rebuilding the full instruction. No longer calls `build_agent_instruction()` or `Conductor.build_agent_instruction()` on idle stops, eliminating token accumulation from repeated re-injection.
+- **Stop hook: cleanup** — `cleanup()` now removes `.prism/current_instruction.md` alongside the state file when the workflow completes.
+
+### Tests
+
+- 10 new tests added, 114 total passing
+
+## [3.9.1] - 2026-03-09
+
+### Fixed
+
+- **Stop hook: `_emit_current_step_reinstruct` fallback resilience** — the `except Exception` branch that calls `build_agent_instruction()` now wraps that call in its own `try/except`; if it raises (e.g. missing core-steps file), the function falls back to a minimal "Continue with the current step." instruction and still emits a valid `block` decision, honouring the "Never raises" contract in the docstring.
+
+## [3.9.0] - 2026-03-09
+
+### Added
+
+- **Stop hook: no-progress detection** — before validation, counts tool_use calls since `step_line_start`; if below per-step minimum threshold, re-emits current step instruction instead of validating (prevents post-compaction idle stops from causing false-positive advancement).
+- **Stop hook: step-transition debounce** — secondary guard catches rapid re-advance attempts: steps advanced within 30s with zero tool calls are blocked and the current step instruction is re-emitted.
+- **Stop hook: compaction-marker awareness** — `extract_test_result_from_transcript` now detects `type: "system"` entries (compaction markers) and discards accumulated Bash tool IDs and test results collected before the marker, preventing stale test output from being used post-compaction.
+
+### Fixed
+
+- **Stop hook: double-advance prevention** — `implement_tasks` → `verify_green_state` skip no longer possible; post-compaction idle stops are detected and blocked before validation runs.
+
+### Tests
+
+- 5 new tests added, 104 total passing
+
+## [3.8.0] - 2026-03-09
+
+### Added
+
+### Fixed
+
+## [3.7.2] - 2026-03-09
+
+### Fixed
+
+- **Dashboard: self-healing for `claude plugin update` cache bug** — `resolve_plugin_root()` probes `CLAUDE_PLUGIN_ROOT`, then `CLAUDE_PLUGIN_ROOT/plugins/prism-devtools/`, then walks up from `__file__` to find `.claude-plugin/plugin.json`. Customers no longer need to manually fix `installPath` in `installed_plugins.json`.
+- **Dashboard: `wrong_depth` detection** — `check_plugin_cache_stale()` detects when cache contains the repo root instead of the plugin subdirectory; TUI shows `⚠CACHE WRONG_DEPTH` (red), snapshot shows `[!!] CACHE WRONG_DEPTH` with fix instructions.
+- **Dashboard: removed duplicate `_read_plugin_version()`** — consolidated from `app.py` + `snapshot.py` into single `read_plugin_version()` in `parsing.py`.
+- **Dashboard: friendly textual import error** — `__main__.py` catches `ImportError` and prints `pip install 'textual>=0.40.0'` instead of a raw traceback.
+- **Hooks: shared `plugin_resolve.py`** — self-healing plugin root resolution for all hooks (`session-start`, `capture-file-context`, `capture-commit-context`, `consolidate-story-learnings`).
+- **Scripts: dynamic parent traversal** — replaced all `parent.parent.parent` chains with walk-up search for `.claude-plugin/plugin.json` across `parsing.py`, `prism-bug.py`, `validate-all.py`, `version_bump.py`. Works from any directory depth on both Windows and Linux.
+
+## [3.7.1] - 2026-03-08
+
+### Fixed
+
+- **Brain: traversal crash** — replaced `p.rglob("*")` with `os.walk(topdown=True)` + `dirnames[:] = [...]` pruning to prevent descending into excluded/corrupted directories (fixes WinError 1392)
+- **Brain: rebuild data loss** — removed upfront `_purge_deleted()` from `_cmd_rebuild()` to prevent data loss on crash mid-ingest
+- **Brain: HF Hub warning** — suppress unauthenticated Hub warning via logging filter + early command validation in `brain_engine.py`
+
+## [3.7.0] - 2026-03-08
+
+### Added
+
+- **SFR (Subagent Flow Recording)** — Full observability pipeline for subagent lifecycle
+  - Phase 1+3a: certificate templates, canopy variants, agent reasoning instructions
+  - Phase 2: SubagentStart hook, Conductor extensions, hooks.json registration
+  - Phase 3b+4: stop hook directive + SubagentStop recorder
+  - Phase 4+5: `subagent_outcomes` table, analytics, bug report diagnostics
+- **SFR CLI dashboard** — snapshot + TUI header for observability in terminal
+- **Brain: app project detection** — detect `app.*` project dirs (#19, #20)
+- **BYOS test skill detection** — `detect_test_runner()` now finds BYOS test skills
+- **Brain: expanded source dirs** — `_cli_source_dirs()` expansion + `_should_index()` allowlist
+- **Harness tests** — brain-preload, gate-validation, subagent lifecycle tests
+- **Diagnose subcommand** — `prism-harness diagnose` for troubleshooting
+- **Harness parser** — sub-agent lifecycle event extractors
+
+### Fixed
+
+- **Brain: 4 critical bugs** making Brain unusable on real projects (GH #22)
+- **Stop hook** — recursive glob hang and dotnet error false positives
+- **Diagnostics** — dataclass attribute access fix in `diagnostics.py`
+- **Brain: HF Hub** — suppress unauthenticated warning in `brain_engine.py`
+- **Brain: merge regression** — restore `_filtered_glob` and `_EXCLUDED_GLOB_DIRS`
+
+## [3.5.2] - 2026-03-08
+
+### Fixed
+
+- **Brain: sample/test data exclusions** — `_EXCLUDED_PATH_SEGMENTS` now includes `sample-resumes`, `samples`, `test-data`, `fixtures`, `testdata`, `seed-data` to prevent irrelevant BM25 matches from customer project data directories
+- **Brain: user-defined exclude list** — new `_load_user_excludes()` reads `.prism/brain/exclude` (one path segment per line, `#` comments supported) so teams can exclude project-specific dirs without code changes
+
+## [3.5.1] - 2026-03-08
+
+### Added
+
+- **Session handoff artifact** — `_write_step_handoff()` writes `.prism/handoff.md` on each step completion; `review_previous_notes` uses it to skip full context re-discovery, saving millions of tokens on re-start
+
+### Fixed
+
+- Preserved `gate_passed=0` recording in `conductor.record_outcome()` on validation failure (regression prevention)
+
+## [3.5.0] - 2026-03-07
+
+### Added
+
+### Fixed
+
+## [2.6.4] - 2026-03-04
+
+### Added
+
+- **Prompt variant files** — 12 persona prompt markdown files under `prompts/` for all four PRISM roles
+  - Personas: `sm`, `qa`, `dev`, `architect`
+  - Variants: `default` (balanced), `lean` (minimal tokens), `rich` (detailed with examples)
+  - Plain markdown, no YAML frontmatter — bootstrapped from existing ROLE_CARDS
+
 ## [2.5.0] - 2026-03-02
 
 ### Added

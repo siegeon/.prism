@@ -1,33 +1,19 @@
 ---
 name: shared
-description: Shared reference documentation for PRISM skills. Contains common best practices, command patterns, and examples used across multiple skills.
+description: Shared reference documentation: PRISM best practices, command patterns, and cross-skill examples.
 version: 1.0.0
+user-invocable: false
 ---
 
 # PRISM Shared References
 
-This directory contains shared reference documentation used across multiple PRISM skills.
+Reference library used by other PRISM skills. Not a standalone skill — a shared resource.
 
-## When to Use
+## Contents
 
-- Looking for PRISM methodology best practices
-- Understanding common command patterns
-- Finding cross-skill examples
-- Learning about skill dependencies and file structures
+1. [Best Practices](./reference/best-practices.md) — PRISM principles and development guidelines
+2. [Commands](./reference/commands.md) — Common command patterns across skills
+3. [Dependencies](./reference/dependencies.md) — Skill dependencies and file structures
+4. [Examples](./reference/examples.md) — Real-world usage examples
 
-## Reference Documentation
-
-- **[Best Practices](./reference/best-practices.md)** - PRISM principles and development guidelines
-- **[File-First](./reference/file-first.md)** - Read source files directly, not summaries
-- **[Commands](./reference/commands.md)** - Common command patterns across skills
-- **[Dependencies](./reference/dependencies.md)** - Skill dependencies and file structures
-- **[Examples](./reference/examples.md)** - Real-world usage examples
-
-## Note
-
-These documents are referenced by other skills and provide foundational knowledge for the PRISM methodology. They are not a standalone skill but a shared resource library.
-
----
-
-**Last Updated**: 2025-01-16
-**Version**: 1.0.0
+For detailed documentation, see [instructions.md](reference/instructions.md).

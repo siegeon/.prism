@@ -9,7 +9,6 @@ The script operates relative to the current working directory (the project folde
 """
 
 import sys
-import os
 import io
 import shlex
 import shutil
@@ -22,31 +21,27 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Add hooks directory to path for shared module import
-def _find_plugin_root() -> Path:
-    """Walk up from __file__ to find the plugin root (contains core-config.yaml)."""
+def _find_prism_root() -> Path:
+    """Walk up from __file__ to find the prism root (contains core-config.yaml)."""
     current = Path(__file__).resolve().parent
     while current != current.parent:
         if (current / "core-config.yaml").exists():
             return current
         current = current.parent
-    raise FileNotFoundError("Could not find plugin root (no core-config.yaml in any ancestor)")
+    raise FileNotFoundError("Could not find prism root (no core-config.yaml in any ancestor)")
 
 try:
-    PLUGIN_ROOT = _find_plugin_root()
+    PRISM_ROOT = _find_prism_root()
 except FileNotFoundError:
-    _env_root = os.environ.get('CLAUDE_PLUGIN_ROOT', '')
-    if _env_root:
-        PLUGIN_ROOT = Path(_env_root)
-    else:
-        raise
-sys.path.insert(0, str(PLUGIN_ROOT / "hooks"))
-from prism_loop_context import build_agent_instruction
+    raise
+sys.path.insert(0, str(PRISM_ROOT / "hooks"))
+from prism_loop_context import build_agent_instruction, resolve_state_file, resolve_handoff_file
 from prism_stop_hook import detect_test_runner
 
-STATE_DIR = Path(".claude")
-STATE_FILE = STATE_DIR / "prism-loop.local.md"
+STATE_FILE = resolve_state_file()
+STATE_DIR = STATE_FILE.parent
 CONTEXT_DIR = Path(".context")
-PRISM_TEMPLATES = PLUGIN_ROOT / "templates" / ".context"
+PRISM_TEMPLATES = PRISM_ROOT / "templates" / ".context"
 
 # Workflow steps - TDD Flow: Planning → RED Gate → GREEN (DEV+QA) → Green Gate (Final)
 # Step types: agent (auto-progress), gate (pause for /prism-approve)
@@ -169,6 +164,65 @@ def initialize_context_system() -> bool:
     except Exception as e:
         print(f"Error initializing context: {e}")
         return False
+
+
+def brain_bootstrap():
+    """Run initial Brain indexing if brain is available."""
+    try:
+        hooks_dir = PRISM_ROOT / "hooks"
+        if str(hooks_dir) not in sys.path:
+            sys.path.insert(0, str(hooks_dir))
+        from brain_engine import Brain, BrainCorruptError
+        try:
+            brain = Brain()
+        except BrainCorruptError as exc:
+            print(f"Brain: corrupt database detected ({exc}), recovering...", file=sys.stderr)
+            brain_dir = Path(".prism/brain")
+            for db_file in brain_dir.glob("*.db"):
+                db_file.unlink()
+            brain = Brain()
+        sources = []
+        cwd = Path.cwd()
+        # Index docs and plugin core-steps
+        docs_dir = cwd / "docs"
+        if docs_dir.exists():
+            sources.append(str(docs_dir))
+        core_steps = PRISM_ROOT / "hooks" / "core-steps"
+        if core_steps.exists():
+            sources.append(str(core_steps))
+        # Index project source files from common directories
+        for src_dir in ("src", "lib", "scripts", "plugins", "hooks"):
+            candidate = cwd / src_dir
+            if candidate.exists() and candidate.is_dir():
+                sources.append(str(candidate))
+        # Fallback: index project root if no specific source dirs found
+        if not sources:
+            sources.append(str(cwd))
+        count = brain.ingest(sources)
+        print(f"Brain: indexed {count} documents")
+    except (ImportError, Exception) as exc:
+        print(f"Brain: bootstrap skipped ({exc})", file=sys.stderr)
+
+
+def write_bootstrap_handoff(prompt: str) -> None:
+    """Write a minimal handoff file so review_previous_notes always takes the fast path.
+
+    Creates .prism/handoff.md with prompt and basic project state on first run.
+    Skipped if a handoff already exists (preserve richer prior-session data).
+    """
+    handoff_path = resolve_handoff_file()
+    if handoff_path.exists():
+        return  # preserve existing handoff from a prior session
+    try:
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat()
+        content = f"# PRISM Bootstrap Handoff\n\nGenerated: {timestamp}\n\n"
+        if prompt:
+            content += f"## Prompt\n\n{prompt}\n\n"
+        content += "## Notes\n\nFirst run — no prior session context available.\n"
+        handoff_path.write_text(content, encoding='utf-8')
+    except Exception as exc:
+        print(f"Warning: could not write bootstrap handoff ({exc})", file=sys.stderr)
 
 
 def detect_git_branch() -> str:
@@ -324,6 +378,9 @@ def main():
             print("⚠ Could not fully initialize .context - continuing anyway")
         print("")
 
+    brain_bootstrap()
+    write_bootstrap_handoff(config.get("prompt", ""))
+
     create_state_file(config)
 
     prompt = config.get("prompt", "")
@@ -351,6 +408,12 @@ def main():
         "review_previous_notes", "sm", "planning-review",
         "", prompt, runner
     )
+    # Write instruction to file so Claude can read it even if stop hook doesn't fire
+    instruction_path = STATE_DIR / "current_instruction.md"
+    try:
+        instruction_path.write_text(instruction, encoding='utf-8')
+    except Exception as exc:
+        print(f"Warning: could not write instruction file ({exc})", file=sys.stderr)
     print(instruction)
     print("")
     print("The stop hook auto-advances agent steps on completion.")

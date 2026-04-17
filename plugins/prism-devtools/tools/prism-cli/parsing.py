@@ -6,77 +6,38 @@ frontmatter parsing with no YAML library dependency.
 
 from __future__ import annotations
 
+import glob as _glob
 import json
+import logging
 import re
 from pathlib import Path
 
 from models import StoryInfo, WorkflowState
 
 
-def check_plugin_cache_stale(work_dir: Path) -> dict:
-    """Check the plugin cache status relative to the source directory.
+def find_session_transcript(session_id: str) -> str | None:
+    """Locate the Claude session transcript JSONL file.
 
-    Returns a dict with:
-      - "linked": True if the cache version dir is a symlink/junction to source
-      - "stale":  True if any source file is newer than the cached copy
-      - "missing": True if source or cache dir doesn't exist
-
-    When "linked" is True, cache IS the source — never stale by definition.
+    Searches ~/.claude/projects/*/SESSION_ID.jsonl using glob.
+    Returns the path as a string, or None if not found.
     """
-    result = {"linked": False, "stale": False, "missing": False}
-
-    source_dir = work_dir / "plugins" / "prism-devtools"
-    if not source_dir.exists():
-        result["missing"] = True
-        return result
-
-    cache_base = (
-        Path.home() / ".claude" / "plugins" / "cache" / "prism" / "prism-devtools"
-    )
-    if not cache_base.exists():
-        result["missing"] = True
-        return result
-
-    version_dirs = [d for d in cache_base.iterdir() if d.is_dir()]
-    if not version_dirs:
-        result["missing"] = True
-        return result
-
-    # Check if any version dir is a symlink/junction pointing at the source.
-    # Windows junctions don't set is_symlink(), so compare resolved paths directly.
-    source_resolved = source_dir.resolve()
-    for vd in version_dirs:
-        try:
-            if vd.resolve() == source_resolved:
-                result["linked"] = True
-                return result
-        except OSError:
-            pass
-
-    # No junction — compare mtimes to detect staleness
-    def _real_files(base: Path):
-        for f in base.rglob("*"):
-            if f.is_file() and "__pycache__" not in f.parts:
-                yield f
-
-    try:
-        cache_mtime = max(
-            (f.stat().st_mtime for vd in version_dirs for f in _real_files(vd)),
-            default=0.0,
-        )
-    except OSError:
-        cache_mtime = 0.0
-    if cache_mtime == 0.0:
-        return result
-
-    try:
-        result["stale"] = any(
-            f.stat().st_mtime > cache_mtime for f in _real_files(source_dir)
-        )
-    except OSError:
-        pass
-
-    return result
+    if not session_id:
+        return None
+    home = str(Path.home())
+    pattern = home + "/.claude/projects/*/" + session_id + ".jsonl"
+    pattern = pattern.replace("\\", "/")  # normalize backslashes for glob
+    matches = _glob.glob(pattern)
+    if matches:
+        return matches[0]
+    # Fallback: recursive search
+    pattern_rec = home + "/.claude/projects/**/" + session_id + ".jsonl"
+    pattern_rec = pattern_rec.replace("\\", "/")
+    matches = _glob.glob(pattern_rec, recursive=True)
+    if matches:
+        return matches[0]
+    _log = logging.getLogger(__name__)
+    _log.debug("Transcript not found for session %s", session_id[:8])
+    return None
 
 
 def _count_green_tests(work_dir: Path) -> tuple[int, int]:
@@ -97,6 +58,17 @@ def _count_green_tests(work_dir: Path) -> tuple[int, int]:
         total = len(all_tests)
         if total == 0:
             return 0, 0
+
+        # At green_gate (step_index >= 7) all tests pass — lastfailed is stale from RED phase
+        state_path = work_dir / ".claude" / "prism-loop.local.md"
+        if state_path.exists():
+            try:
+                state_content = state_path.read_text(encoding="utf-8")
+                m = re.search(r"current_step_index:\s*(\d+)", state_content)
+                if m and int(m.group(1)) >= 7:
+                    return total, total
+            except (OSError, IOError):
+                pass
 
         failed: set = set()
         if lastfailed_file.exists():
@@ -190,6 +162,9 @@ def parse_state_file(path: Path) -> WorkflowState | None:
                 state.step_transcript_line = int(value)
             except ValueError:
                 pass
+        elif key == "story_size":
+            if value in ("R", "M", "L"):
+                state.story_size = value
 
     return state
 

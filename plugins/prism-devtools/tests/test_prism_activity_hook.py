@@ -212,3 +212,50 @@ def test_hook_skips_mismatched_session(tmp_path, monkeypatch):
         session_id="different-session",
     )
     assert 'last_thought: "sentinel"' in updated
+
+
+def test_hook_no_op_when_state_file_none(tmp_path, monkeypatch):
+    """Hook exits cleanly when STATE_FILE is None (e.g., prism_loop_context import failure)."""
+    import prism_activity_hook
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(prism_activity_hook, "STATE_FILE", None)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"tool_name": "Read", "session_id": "x",
+                                "tool_input": {"file_path": "foo.py"}})),
+    )
+    try:
+        prism_activity_hook.main()
+    except SystemExit:
+        pass
+    # No exception = pass; hook exited cleanly without crashing
+
+
+def test_hook_resilience_unexpected_exception(tmp_path, monkeypatch):
+    """Hook exits(0) silently when an unexpected exception occurs during execution."""
+    import prism_activity_hook
+    _make_state_file(tmp_path, last_thought="sentinel")
+    state_file = tmp_path / ".claude" / "prism-loop.local.md"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(prism_activity_hook, "STATE_FILE", state_file)
+
+    # Patch _update_field to raise an unexpected exception
+    def _bad_update_field(text, key, value):
+        raise RuntimeError("simulated unexpected error")
+
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"tool_name": "Bash", "session_id": "test-session",
+                                "tool_input": {"command": "git status"}})),
+    )
+
+    original = state_file.read_text(encoding="utf-8")
+    # Patch to trigger exception after state file is read but during update
+    monkeypatch.setattr("prism_activity_hook._update_field", _bad_update_field, raising=False)
+
+    try:
+        prism_activity_hook.main()
+    except SystemExit as exc:
+        assert exc.code == 0
+    except Exception as exc:
+        raise AssertionError(f"Hook raised unexpected exception instead of exiting cleanly: {exc}")
