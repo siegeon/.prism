@@ -52,7 +52,7 @@ def _summary() -> dict:
         rels = conn.execute("SELECT COUNT(*) FROM relationships").fetchone()[0]
         communities = 0
         by_kind: Counter = Counter()
-        by_community: list[tuple[int, int, str]] = []  # (id, size, label)
+        by_community: list[tuple[int, int, str, str]] = []  # (id, size, label, summary)
         has_graphify = False
         try:
             communities = conn.execute(
@@ -63,10 +63,11 @@ def _summary() -> dict:
                 "SELECT kind, COUNT(*) AS n FROM entities GROUP BY kind"
             ):
                 by_kind[r["kind"] or "unknown"] = r["n"]
-            # Join community labels where available
+            # Join community labels + summaries where available
             try:
                 rows = conn.execute(
-                    "SELECT e.community AS cid, COUNT(*) AS n, c.label AS label "
+                    "SELECT e.community AS cid, COUNT(*) AS n, "
+                    "c.label AS label, c.summary AS summary "
                     "FROM entities e "
                     "LEFT JOIN communities c ON c.id = e.community "
                     "WHERE e.community IS NOT NULL "
@@ -75,13 +76,20 @@ def _summary() -> dict:
                 ).fetchall()
             except sqlite3.OperationalError:
                 rows = conn.execute(
-                    "SELECT community AS cid, COUNT(*) AS n, NULL AS label "
+                    "SELECT community AS cid, COUNT(*) AS n, "
+                    "NULL AS label, NULL AS summary "
                     "FROM entities WHERE community IS NOT NULL "
                     "GROUP BY community ORDER BY n DESC LIMIT 16"
                 ).fetchall()
             for r in rows:
+                label = r["label"] or f"community {r['cid']}"
+                summary = ""
+                try:
+                    summary = r["summary"] or ""
+                except (IndexError, KeyError):
+                    pass
                 by_community.append(
-                    (int(r["cid"]), int(r["n"]), r["label"] or f"community {r['cid']}")
+                    (int(r["cid"]), int(r["n"]), label, summary)
                 )
             has_graphify = bool(conn.execute(
                 "SELECT 1 FROM entities WHERE graphify_id IS NOT NULL LIMIT 1"
@@ -226,7 +234,9 @@ def graph_page():
                 ui.notify("Running graphify update…", type="info")
                 try:
                     ctx = get_project(_project_id())
-                    r = ctx.graph_svc.rebuild()
+                    r = ctx.graph_svc.rebuild(
+                        brain_db_path=str(ctx._data_dir / "brain.db")
+                    )
                     if r.get("error"):
                         ui.notify(f"Rebuild: {r['error'][:200]}", type="warning")
                     else:
@@ -268,11 +278,17 @@ def graph_page():
                     "text-sm font-medium text-gray-700 mb-2"
                 )
                 with ui.row().classes("gap-2 flex-wrap"):
-                    for cid, n, label in summary["by_community"]:
+                    for cid, n, label, summ in summary["by_community"]:
+                        # Hover shows the prose summary; escape quotes so it
+                        # stays inside the HTML title attribute cleanly.
+                        title_text = (
+                            summ.replace('"', "&quot;") if summ else
+                            f"community id: {cid}"
+                        )
                         ui.html(
                             f'<span class="text-xs font-medium px-2.5 py-1 '
                             f'rounded-full bg-emerald-50 text-emerald-700" '
-                            f'title="community id: {cid}">{label} — {n}</span>'
+                            f'title="{title_text}">{label} — {n}</span>'
                         )
 
         # --- Entities table ---

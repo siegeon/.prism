@@ -80,10 +80,22 @@ def _graph_schema_migrations(conn: sqlite3.Connection) -> None:
             "  label TEXT,"
             "  size INTEGER,"
             "  top_files TEXT,"       # JSON array
-            "  top_entities TEXT"     # JSON array
+            "  top_entities TEXT,"    # JSON array
+            "  summary TEXT"          # 1-2 sentence prose summary
             ")"
         )
         conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    # Migrate existing DBs: add summary column if missing.
+    try:
+        cols = {row[1] for row in conn.execute(
+            "PRAGMA table_info(communities)"
+        ).fetchall()}
+        if "summary" not in cols:
+            conn.execute("ALTER TABLE communities ADD COLUMN summary TEXT")
+            conn.commit()
     except sqlite3.OperationalError:
         pass
 
@@ -225,6 +237,67 @@ def _derive_community_label(
         label = _humanize(hub) if hub else "misc"
 
     return label, top_files, top_entities
+
+
+def _derive_community_summary(
+    top_files: list[str],
+    top_entities: list[str],
+    brain_db_path: str | None,
+    max_chars: int = 280,
+) -> str:
+    """Return a short prose summary for a community.
+
+    Looks up the top entities in the Brain ``docs`` table and concatenates
+    the first line of each chunk (which includes any prepended docstring
+    from ``_chunk_python_treesitter``). Falls back to a structural summary
+    when Brain content is unavailable.
+    """
+    structural = ""
+    if top_files:
+        head = ", ".join(top_files[:2])
+        structural = f"Covers {head}."
+    if not brain_db_path or not top_entities:
+        if top_entities:
+            structural += " Hubs: " + ", ".join(top_entities[:3]) + "."
+        return structural[:max_chars].strip()
+
+    import sqlite3 as _sq
+    snippets: list[str] = []
+    try:
+        conn = _sq.connect(brain_db_path)
+        conn.row_factory = _sq.Row
+        try:
+            for ename in top_entities[:4]:
+                if not ename:
+                    continue
+                row = conn.execute(
+                    "SELECT content FROM docs WHERE entity_name = ? "
+                    "AND entity_kind IN ('function','class','method') "
+                    "LIMIT 1",
+                    (ename,),
+                ).fetchone()
+                if not row:
+                    continue
+                first = (row["content"] or "").strip().splitlines()
+                first = next((ln.strip() for ln in first if ln.strip()), "")
+                first = first.lstrip('"').lstrip("'").rstrip(".")[:80]
+                if first:
+                    snippets.append(f"{ename}: {first}")
+                if sum(len(s) for s in snippets) > max_chars:
+                    break
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    body = ". ".join(snippets)
+    if structural and body:
+        out = f"{structural} {body}."
+    elif body:
+        out = body + "."
+    else:
+        out = structural or " ".join(top_entities[:3])
+    return out[:max_chars].strip()
 
 
 class GraphService:
@@ -467,13 +540,18 @@ class GraphService:
             result["error"] = f"graph.json parse failed: {e!r}"
             return result
 
-        return self._import_graph_json(data, result)
+        return self._import_graph_json(data, result, brain_db_path)
 
     # ------------------------------------------------------------------
     # graph.json -> graph.db import
     # ------------------------------------------------------------------
 
-    def _import_graph_json(self, data: dict, result: dict) -> dict:
+    def _import_graph_json(
+        self,
+        data: dict,
+        result: dict,
+        brain_db_path: str | None = None,
+    ) -> dict:
         nodes = data.get("nodes", [])
         links = data.get("links", [])
         result["nodes"] = len(nodes)
@@ -582,12 +660,16 @@ class GraphService:
                               or v.startswith(base + " ("))
                 final_label = base if n_taken == 0 else f"{base} ({n_taken + 1})"
                 labels_out[cid] = final_label
+                summary = _derive_community_summary(
+                    top_files, top_entities, brain_db_path,
+                )
                 conn.execute(
                     "INSERT OR REPLACE INTO communities "
-                    "(id, label, size, top_files, top_entities) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(id, label, size, top_files, top_entities, summary) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (cid, final_label, len(cnodes),
-                     json.dumps(top_files), json.dumps(top_entities)),
+                     json.dumps(top_files), json.dumps(top_entities),
+                     summary),
                 )
 
             conn.commit()
