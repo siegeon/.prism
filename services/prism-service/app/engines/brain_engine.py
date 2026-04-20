@@ -409,6 +409,23 @@ class Brain:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+            CREATE TABLE IF NOT EXISTS searches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL DEFAULT (datetime('now')),
+                query TEXT NOT NULL,
+                domain TEXT,
+                domains TEXT,
+                mode TEXT,
+                rerank TEXT,
+                context_prefix INTEGER,
+                chunk_agg INTEGER,
+                limit_requested INTEGER,
+                n_results INTEGER,
+                latency_ms INTEGER,
+                final_top TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_searches_ts
+                ON searches(ts DESC);
         """)
         # Migrate existing DBs: add chunk metadata columns if missing
         _meta_cols = [
@@ -1626,6 +1643,9 @@ class Brain:
         # In service mode, documents are indexed via brain_index_doc MCP tool.
         # The old CLI auto-ingest would index /app (the container code) which is wrong.
         import os as _os
+        import time as _time
+
+        _search_t0 = _time.perf_counter()
 
         # Experimental: PRISM_SEARCH_MODE controls which indices contribute.
         #   hybrid (default) = BM25 + vector + graph, fused via RRF
@@ -1709,6 +1729,7 @@ class Brain:
                 seen_files.add(group_key)
             results.append({
                 "doc_id": item["doc_id"],
+                "source_file": row["source_file"],
                 "content": row["content"],
                 "domain": row["domain"],
                 "entity_name": row["entity_name"],
@@ -1716,10 +1737,86 @@ class Brain:
                 "line_start": row["line_start"],
                 "line_end": row["line_end"],
                 "rrf_score": item.get("rrf_score", 0.0),
+                "rerank_score": item.get("rerank_score"),
             })
             if len(results) >= limit:
                 break
+        self._log_search(
+            query=query,
+            domain=domain,
+            domains=domains,
+            mode=mode,
+            rerank=rerank_preset,
+            context_prefix=_os.environ.get(
+                "PRISM_CONTEXT_PREFIX", "on"
+            ).strip().lower() != "off",
+            chunk_agg=aggregate,
+            limit_requested=limit,
+            results=results,
+            latency_ms=int((_time.perf_counter() - _search_t0) * 1000),
+        )
         return results
+
+    def _log_search(
+        self,
+        *,
+        query: str,
+        domain: Optional[str],
+        domains: Optional[list[str]],
+        mode: str,
+        rerank: str,
+        context_prefix: bool,
+        chunk_agg: bool,
+        limit_requested: int,
+        results: list[dict],
+        latency_ms: int,
+    ) -> None:
+        """Persist one search event to the ``searches`` table.
+
+        Silent on failure — observability must never break retrieval.
+        """
+        try:
+            import json as _json
+            final_top = _json.dumps([
+                {
+                    "doc_id": r.get("doc_id"),
+                    "rrf_score": r.get("rrf_score"),
+                    "rerank_score": r.get("rerank_score"),
+                    "domain": r.get("domain"),
+                    "entity_name": r.get("entity_name"),
+                }
+                for r in results
+            ])
+            self._brain.execute(
+                "INSERT INTO searches (query, domain, domains, mode, rerank, "
+                "context_prefix, chunk_agg, limit_requested, n_results, "
+                "latency_ms, final_top) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    query, domain,
+                    _json.dumps(domains) if domains else None,
+                    mode, rerank or "off",
+                    1 if context_prefix else 0,
+                    1 if chunk_agg else 0,
+                    limit_requested, len(results), latency_ms, final_top,
+                ),
+            )
+            self._brain.commit()
+        except Exception:
+            pass
+
+    def get_recent_searches(self, limit: int = 50) -> list[dict]:
+        """Return the last ``limit`` search events, newest first."""
+        try:
+            rows = self._brain.execute(
+                "SELECT id, ts, query, domain, domains, mode, rerank, "
+                "context_prefix, chunk_agg, limit_requested, n_results, "
+                "latency_ms, final_top FROM searches "
+                "ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        except Exception:
+            return []
+        return [dict(r) for r in rows]
 
     def _rerank_candidates(
         self, query: str, candidates: list[dict], preset: str,

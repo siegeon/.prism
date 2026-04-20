@@ -63,6 +63,7 @@ def create_nav():
                 ('Tasks', '/tasks'),
                 ('Conductor', '/conductor'),
                 ('Sessions', '/sessions'),
+                ('Retrievals', '/retrievals'),
             ]:
                 ui.link(label, href).classes(
                     'text-white no-underline px-3 py-1 rounded '

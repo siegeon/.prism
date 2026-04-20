@@ -133,6 +133,12 @@ class BrainService:
             story_file=story_file, persona=persona, limit=limit,
         )
 
+    def recent_searches(self, limit: int = 50) -> list[dict]:
+        """Return the most recent ``limit`` search events from brain.db."""
+        if not self._available or self._brain is None:
+            return []
+        return self._brain.get_recent_searches(limit=limit)
+
     def list_docs(
         self, domain: Optional[str] = None, limit: int = 100,
     ) -> list[dict]:

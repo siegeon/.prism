@@ -38,7 +38,7 @@ def start_governance_timer():
 # Import UI pages (they register routes with NiceGUI)
 from app.ui import (
     dashboard, brain_page, graph_page, memory_page,
-    tasks_page, conductor_page, sessions_page,
+    tasks_page, conductor_page, sessions_page, retrievals_page,
 )
 
 # Guard against double-start using file lock
