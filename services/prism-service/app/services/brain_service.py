@@ -152,69 +152,98 @@ class BrainService:
         domain: str = "code",
         entities: list[dict] | None = None,
     ) -> str:
-        """Index a document directly from content (no filesystem access needed).
+        """Index a document, chunked at function/class boundaries when possible.
 
-        Claude reads the file on the host and sends content via MCP.
-        Brain stores and indexes it for future search.
+        Code files (suffix in _TS_LANG_MAP): chunked via Brain._chunk_source_file
+        into per-function/class docs with ``path::EntityName`` ids, each with
+        its own embedding. Prose (md/txt): single whole-file doc with
+        ``path::main`` (legacy id format preserved for backward-compat).
 
-        Uses the Brain engine's own DB connections so FTS triggers fire.
-
-        Returns the doc_id.
+        Replaces any prior chunks for the same source_file so re-indexing
+        leaves no stale rows. Returns the first chunk's doc_id.
         """
         from datetime import datetime, timezone
-
-        doc_id = f"{path}::main"
-        now = datetime.now(timezone.utc).isoformat()
-        filename = path.rsplit("/", 1)[-1] if "/" in path else path
+        import hashlib as _hashlib
+        import struct
 
         if not self._available or self._brain is None:
-            return doc_id  # silently skip if Brain not available
+            return f"{path}::main"
 
-        # Use the Brain engine's own connections so search sees the new data.
-        # self._brain is the Brain engine instance.
-        # self._brain._brain is its sqlite3 connection to brain.db.
         brain_conn = self._brain._brain
+        now = datetime.now(timezone.utc).isoformat()
+        vector_on = getattr(self._brain, "vector_enabled", False)
 
-        # Expand PascalCase/camelCase for better FTS matching
-        expanded_content = _expand_identifiers(content)
-
-        # Hash the RAW content (not expanded) so callers can diff against
-        # on-disk sha256 for drift detection via prism_status.
-        import hashlib as _hashlib
-        content_hash = _hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-        # Delete first so the AFTER INSERT trigger fires for FTS sync
-        brain_conn.execute("DELETE FROM docs WHERE id = ?", (doc_id,))
-        brain_conn.execute(
-            "INSERT INTO docs "
-            "(id, source_file, content, domain, indexed_at, "
-            " entity_name, entity_kind, content_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (doc_id, path, expanded_content, domain, now,
-             filename, "file", content_hash),
-        )
-
-        # Populate vector index so semantic search sees MCP-ingested docs.
-        if getattr(self._brain, "vector_enabled", False):
-            vec = self._brain._embed(content)
-            if vec is not None:
-                import struct
-                blob = struct.pack(f"{len(vec)}f", *vec)
+        # Purge any prior rows for this source file (by source_file column,
+        # plus the legacy path::main and path-only ids) so a re-index leaves
+        # no stale chunks behind.
+        stale = brain_conn.execute(
+            "SELECT id FROM docs WHERE source_file = ? OR id = ? OR id = ?",
+            (path, path, f"{path}::main"),
+        ).fetchall()
+        stale_ids = [r[0] for r in stale]
+        if stale_ids:
+            ph = ",".join("?" * len(stale_ids))
+            if vector_on:
                 try:
                     brain_conn.execute(
-                        "DELETE FROM docs_vec WHERE doc_id = ?", (doc_id,)
+                        f"DELETE FROM docs_vec WHERE doc_id IN ({ph})",
+                        stale_ids,
                     )
-                    brain_conn.execute(
-                        "INSERT INTO docs_vec (doc_id, embedding) VALUES (?, ?)",
-                        (doc_id, blob),
-                    )
-                except Exception as e:
-                    print(f"index_doc vec insert failed: {e!r}",
-                          file=sys.stderr, flush=True)
+                except Exception:
+                    pass
+            brain_conn.execute(
+                f"DELETE FROM docs WHERE id IN ({ph})", stale_ids,
+            )
+
+        # Chunk via Brain's native chunker (tree-sitter for .py, regex
+        # fallback for .ts/.tsx/.js/.jsx/.cs, whole-file for everything else).
+        chunks = self._brain._chunk_source_file(path, content)
+
+        first_doc_id = ""
+        for chunk in chunks:
+            doc_id = chunk["doc_id"]
+            # Non-code files come back with doc_id == filepath (no "::").
+            # Normalise to the legacy path::main form for prose compat.
+            if "::" not in doc_id:
+                doc_id = f"{path}::main"
+            if not first_doc_id:
+                first_doc_id = doc_id
+
+            chunk_content = chunk["content"]
+            # Expand PascalCase/camelCase per chunk for FTS matching.
+            expanded = _expand_identifiers(chunk_content)
+            # Hash RAW chunk content so prism_status drift detection still
+            # lines up with on-disk sha256 when the file is single-chunk.
+            chash = _hashlib.sha256(chunk_content.encode("utf-8")).hexdigest()
+
+            brain_conn.execute(
+                "INSERT INTO docs "
+                "(id, source_file, content, domain, indexed_at, "
+                " entity_name, entity_kind, content_hash, "
+                " line_start, line_end) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (doc_id, path, expanded, domain, now,
+                 chunk["entity_name"], chunk["entity_kind"], chash,
+                 chunk["line_start"], chunk["line_end"]),
+            )
+
+            if vector_on:
+                vec = self._brain._embed(chunk_content)
+                if vec is not None:
+                    blob = struct.pack(f"{len(vec)}f", *vec)
+                    try:
+                        brain_conn.execute(
+                            "INSERT INTO docs_vec (doc_id, embedding) "
+                            "VALUES (?, ?)",
+                            (doc_id, blob),
+                        )
+                    except Exception as e:
+                        print(f"index_doc vec insert failed: {e!r}",
+                              file=sys.stderr, flush=True)
 
         brain_conn.commit()
 
-        # Index entities into graph.db if provided
+        # Index caller-supplied entities into graph.db (unchanged).
         if entities:
             graph_conn = self._brain._graph
             for ent in entities:
@@ -222,15 +251,13 @@ class BrainService:
                 ent_kind = ent.get("kind", "unknown")
                 if ent_name:
                     graph_conn.execute(
-                        "INSERT OR IGNORE INTO entities (name, kind, file) VALUES (?, ?, ?)",
+                        "INSERT OR IGNORE INTO entities (name, kind, file) "
+                        "VALUES (?, ?, ?)",
                         (ent_name, ent_kind, path),
                     )
             graph_conn.commit()
 
-        # Stage source file for the graphify code-graph pass.
-        # graph_svc is wired in by ProjectContext when available; if the doc
-        # has a known source-code suffix, stage_doc writes it to the project's
-        # graphify-src/ dir so a later graph_rebuild picks it up.
+        # Stage source for graphify's code-graph pass (unchanged).
         graph_svc = getattr(self, "graph_svc", None)
         if graph_svc is not None:
             try:
@@ -239,7 +266,7 @@ class BrainService:
                 print(f"index_doc: graph staging failed: {e!r}",
                       file=sys.stderr, flush=True)
 
-        return doc_id
+        return first_doc_id or f"{path}::main"
 
     # ------------------------------------------------------------------
     # Status
