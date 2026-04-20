@@ -1587,13 +1587,22 @@ class Brain:
         # The old CLI auto-ingest would index /app (the container code) which is wrong.
         import os as _os
 
-        inner = limit * 2
-
         # Experimental: PRISM_SEARCH_MODE controls which indices contribute.
         #   hybrid (default) = BM25 + vector + graph, fused via RRF
         #   vector           = vector search only (when vector_enabled)
         #   bm25             = BM25 only
         mode = _os.environ.get("PRISM_SEARCH_MODE", "hybrid").strip().lower()
+
+        # PRISM_CHUNK_AGG (default on): collapse same-source_file hits to the
+        # single best-ranked chunk per file so multi-granular chunking doesn't
+        # crowd top-K with __file__/__module__/func_X variants of one file.
+        aggregate = (
+            _os.environ.get("PRISM_CHUNK_AGG", "on").strip().lower() != "off"
+        )
+
+        # When aggregating we over-fetch from each sub-index and from the
+        # fused list so there are enough candidates left after dedupe.
+        inner = limit * 6 if aggregate else limit * 2
 
         if mode == "vector" and self.vector_enabled:
             fused = self._vector_search(query, domain, inner, domains=domains)
@@ -1610,33 +1619,47 @@ class Brain:
             fused = reciprocal_rank_fusion(
                 [bm25, vec, graph] if self.vector_enabled else [bm25, graph]
             )
-        top = fused[:limit]
+        # Take a larger candidate pool when aggregating so collapsing doesn't
+        # leave us short of ``limit`` results.
+        top = fused[: inner if aggregate else limit]
         if not top:
             return []
 
         ids = [item["doc_id"] for item in top]
         placeholders = ",".join("?" * len(ids))
         rows = self._brain.execute(
-            f"SELECT id, content, domain, entity_name, entity_kind, line_start, line_end "
+            f"SELECT id, source_file, content, domain, entity_name, entity_kind, "
+            f"line_start, line_end "
             f"FROM docs WHERE id IN ({placeholders})",
             ids,
         ).fetchall()
         content_map = {r["id"]: r for r in rows}
 
-        results = []
+        results: list[dict] = []
+        seen_files: set[str] = set()
         for item in top:
             row = content_map.get(item["doc_id"])
-            if row:
-                results.append({
-                    "doc_id": item["doc_id"],
-                    "content": row["content"],
-                    "domain": row["domain"],
-                    "entity_name": row["entity_name"],
-                    "entity_kind": row["entity_kind"],
-                    "line_start": row["line_start"],
-                    "line_end": row["line_end"],
-                    "rrf_score": item.get("rrf_score", 0.0),
-                })
+            if not row:
+                continue
+            if aggregate:
+                # Use source_file as the dedupe key; fall back to doc_id for
+                # rows without one (legacy expertise/memory domain docs).
+                group_key = row["source_file"] or item["doc_id"]
+                if group_key in seen_files:
+                    continue
+                seen_files.add(group_key)
+            results.append({
+                "doc_id": item["doc_id"],
+                "content": row["content"],
+                "domain": row["domain"],
+                "entity_name": row["entity_name"],
+                "entity_kind": row["entity_kind"],
+                "line_start": row["line_start"],
+                "line_end": row["line_end"],
+                "rrf_score": item.get("rrf_score", 0.0),
+            })
+            if len(results) >= limit:
+                break
         return results
 
     def system_context(
