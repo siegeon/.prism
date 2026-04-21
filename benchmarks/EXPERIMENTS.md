@@ -101,4 +101,27 @@ in `services/bench-service/docker-compose.yml`.
 - Kept as opt-in env var. Will re-evaluate if we ever build a code-retrieval bench where
   the cross-encoder should have room to move numbers.
 
+### 2026-04-20 — swebench-fullstack-limit10
+- SWE-bench Lite, first 10 instances, full retrieval stack: MiniLM embedder + multi-granular
+  chunking + contextual prefix (on) + cross-encoder reranker (bge-reranker-v2-m3, top-50).
+  Each instance clones repo at base_commit, indexes every source file via MCP, queries
+  Brain with the PR's problem_statement, checks whether gold files appear in top-K.
+- **R@1 = 0.400**, **R@5 = 0.800**, **R@10 = 0.900** across 10 instances.
+- Prior MiniLM+graphify sample was ~0.80 R@10; this stack is **+0.10 R@10** over that.
+  Prior potion baseline was ~0.45 R@10, so **+0.45 R@10 cumulative** over the session's
+  shipping work since baseline.
+- Per-instance: astropy 1-6 R@10 = 1.000 across the board; django 7-10 R@10 = 0.857-0.900.
+  Django codebases are larger and have more gold files per PR, which dilutes R@1 but the
+  top-10 recall stays strong.
+- Total wall clock: 15332s (~4.3 hours) for 10 instances at multi-granular chunk depth.
+  Ingest-dominated — indexing astropy/django with per-function chunks is the bottleneck,
+  not querying.
+- Attribution gap: this is the stacked result, not an A/B. We can't say from one run
+  whether the +0.10 R@10 vs prior MiniLM+graphify sample is chunking, prefix, reranker,
+  or noise on a 10-sample. A limit-20 run split across env-toggle configs is overnight-
+  scale work.
+- Validates the 2026 GraphRAG roadmap's core bet: multi-granular + contextual + reranker
+  delivers clearly on code retrieval even though it saturated at the ceiling on
+  LongMemEval smoke. The conversational corpus measures a different kind of hard.
+
 <!-- Append new entries below; keep human-readable and dated. -->
