@@ -124,6 +124,35 @@ in `services/bench-service/docker-compose.yml`.
   delivers clearly on code retrieval even though it saturated at the ceiling on
   LongMemEval smoke. The conversational corpus measures a different kind of hard.
 
+### 2026-04-21 — swebench-noprefix-limit10 (A/B vs prefix=on baseline)
+- Same 10 SWE-bench Lite instances. Stack: multi-granular + rerank=off,
+  PRISM_CONTEXT_PREFIX=off vs the 2026-04-21 noreranker-limit10 baseline
+  at PRISM_CONTEXT_PREFIX=on.
+- **R@1 = 0.300** (vs 0.600 with prefix=on, **-0.300**)
+- **R@5 = 0.600** (vs 0.800, **-0.200**)
+- **R@10 = 0.700** (vs 0.900, **-0.200**)
+- Every non-trivial instance regressed. Aggregate R@10 across the 10 instances
+  cratered from 0.900 to 0.700 by removing the contextual prefix header.
+- Per-instance summary of R@10 (on -> off):
+    astropy-12907 1.000 -> 1.000    (trivial)
+    astropy-14182 1.000 -> 0.500
+    astropy-14365 1.000 -> 0.667
+    astropy-14995 1.000 -> 0.500
+    astropy-6938  1.000 -> 0.600
+    astropy-7746  1.000 -> 0.667
+    django-10914  0.857 -> 0.571
+    django-10924  0.875 -> 0.625
+    django-11001  0.889 -> 0.667
+    django-11019  0.900 -> 0.700
+- **Decision: PRISM_CONTEXT_PREFIX=on is the permanent default**, now with
+  evidence not faith. Replicates Anthropic Contextual Retrieval paper's
+  35-67% reduction in retrieval failures, on code retrieval specifically.
+- Dispels the earlier "contextual prefix is prose no-op" memory: the
+  LongMemEval smoke at the 0.940 ceiling cannot see prefix's value because
+  conversational sessions don't share structure with (problem_statement,
+  code_chunk) pairs the prefix is anchoring. Target-corpus validation is
+  mandatory before flipping a default based on LongMemEval alone.
+
 ### 2026-04-21 — swebench-noreranker-limit10 (A/B vs yesterday's full stack)
 - Same 10 SWE-bench Lite instances, PRISM_RERANK=off, everything else identical to
   2026-04-20 swebench-fullstack-limit10 (multi-granular + contextual prefix on).
