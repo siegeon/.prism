@@ -124,4 +124,20 @@ in `services/bench-service/docker-compose.yml`.
   delivers clearly on code retrieval even though it saturated at the ceiling on
   LongMemEval smoke. The conversational corpus measures a different kind of hard.
 
+### 2026-04-20 — operator notes (cold-start behavior)
+- **Community summary prose-enrichment requires function/class docs.** The new
+  ``communities.summary`` column (see graph rebuild) always gets a structural
+  "Covers `<file>`, `<file>`." fallback, but the richer per-entity prose path only
+  activates when ``brain.db`` has ``entity_kind`` in function/class/method — which is
+  only true for content indexed after the multi-granular chunking upgrade
+  (commits a168914+). Legacy indexes that predate multi-granular will show the
+  structural fallback until they are re-ingested. Re-index path: delete the project's
+  ``docs`` table (or ``brain.db``) and run ``brain_index_doc`` over the source tree,
+  then ``graph_rebuild``. No automatic migration — the raw chunks would need to be
+  re-extracted from disk which indexing already does.
+- **Observability defaults to on.** Every ``Brain.search()`` call logs to the
+  ``searches`` table regardless of env vars; opt-out would need a new flag. Table
+  size grows ~1 row per query; no retention policy yet. Check size periodically
+  if the service runs unattended for weeks.
+
 <!-- Append new entries below; keep human-readable and dated. -->
