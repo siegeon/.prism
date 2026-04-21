@@ -262,6 +262,7 @@ def _derive_community_summary(
         return structural[:max_chars].strip()
 
     import sqlite3 as _sq
+    import re as _re
     snippets: list[str] = []
     try:
         conn = _sq.connect(brain_db_path)
@@ -270,11 +271,17 @@ def _derive_community_summary(
             for ename in top_entities[:4]:
                 if not ename:
                     continue
+                # Graphify entity labels can carry call syntax or punctuation
+                # (".execute()", "Brain._get", "_make_brain_in()"). Brain.db
+                # stores bare identifiers, so normalize before lookup.
+                clean = _re.sub(r"[()\s]", "", ename)
+                clean = clean.lstrip(".").split(".")[-1]
+                if not clean or clean.endswith(".py") or clean.endswith(".md"):
+                    continue
                 row = conn.execute(
                     "SELECT content FROM docs WHERE entity_name = ? "
-                    "AND entity_kind IN ('function','class','method') "
                     "LIMIT 1",
-                    (ename,),
+                    (clean,),
                 ).fetchone()
                 if not row:
                     continue
@@ -282,7 +289,7 @@ def _derive_community_summary(
                 first = next((ln.strip() for ln in first if ln.strip()), "")
                 first = first.lstrip('"').lstrip("'").rstrip(".")[:80]
                 if first:
-                    snippets.append(f"{ename}: {first}")
+                    snippets.append(f"{clean}: {first}")
                 if sum(len(s) for s in snippets) > max_chars:
                     break
         finally:
