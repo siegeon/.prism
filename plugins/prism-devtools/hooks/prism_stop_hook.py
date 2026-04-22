@@ -2250,21 +2250,22 @@ def main():
         )
 
         if not validation_result["valid"]:
-            # Record failure outcome so Conductor learns from validation failures
+            # Record failure outcome via MCP so the Conductor learns from
+            # validation failures.
             try:
-                from conductor_engine import Conductor
-                Conductor().record_outcome(
-                    prompt_id=f"{agent}/{step_id}",
-                    persona=agent,
-                    step_id=step_id,
-                    metrics={
+                from prism_mcp_client import call as _mcp_call
+                _mcp_call("record_outcome", {
+                    "prompt_id": f"{agent}/{step_id}",
+                    "persona": agent,
+                    "step_id": step_id,
+                    "metrics": {
                         "tokens_used": step_toks_used,
                         "duration_s": step_dur_secs,
                         "gate_passed": 0,
                         "skill_calls": step_skill_calls,
                         "tool_calls": step_tool_calls,
                     },
-                )
+                })
             except Exception:
                 pass
 
@@ -2463,18 +2464,20 @@ def main():
         }))
         sys.exit(0)
 
-    # Handle AGENT steps — call Conductor first to determine brain_queries,
-    # then build history entry with accurate bq before writing state.
+    # Handle AGENT steps. Persistence (record_outcome, reindex) goes
+    # through MCP — those writes MUST land server-side. Instruction
+    # building still uses the local Conductor for prompt-variant
+    # selection + skill filtering; see task 7be86aaa for the final
+    # deletion of the plugin's Conductor/Brain (which is gated on
+    # refactoring Conductor to source Brain reads from MCP).
     brain_queries = 0
-    # Record outcome + build next instruction via Conductor when available
     try:
-        from conductor_engine import Conductor
-        conductor = Conductor()
-        conductor.record_outcome(
-            prompt_id=f"{agent}/{step_id}",
-            persona=agent,
-            step_id=step_id,
-            metrics={
+        from prism_mcp_client import call as _mcp_call
+        _mcp_call("record_outcome", {
+            "prompt_id": f"{agent}/{step_id}",
+            "persona": agent,
+            "step_id": step_id,
+            "metrics": {
                 "tokens_used": step_toks_used,
                 "duration_s": step_dur_secs,
                 "gate_passed": gate_passed,
@@ -2483,8 +2486,10 @@ def main():
                 "skill_names": step_skill_names,
                 "session_id": current_session_id,
             },
-        )
-        conductor.incremental_reindex()
+        })
+        _mcp_call("prism_sync", {})
+        from conductor_engine import Conductor
+        conductor = Conductor()
         instruction = conductor.build_agent_instruction(
             next_step_id, next_agent, next_action,
             state["story_file"], state["prompt"], runner,
@@ -2497,11 +2502,11 @@ def main():
             file=sys.stderr,
         )
         try:
-            from brain_engine import Brain
-            Brain().incremental_reindex()
+            from prism_mcp_client import call as _mcp_call
+            _mcp_call("prism_sync", {})
         except Exception as brain_exc:
             print(
-                f"[PRISM] Brain reindex failed ({type(brain_exc).__name__}: {brain_exc})",
+                f"[PRISM] prism_sync fallback failed ({type(brain_exc).__name__}: {brain_exc})",
                 file=sys.stderr,
             )
         try:
