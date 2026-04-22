@@ -631,6 +631,19 @@ class Brain:
                 skill_name TEXT NOT NULL,
                 timestamp TEXT DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS subagent_outcomes (
+                prompt_id TEXT PRIMARY KEY,
+                validator TEXT,
+                recommendation TEXT,
+                evidence_count INTEGER DEFAULT 0,
+                certificate_complete INTEGER DEFAULT 0,
+                certificate_blocked INTEGER DEFAULT 0,
+                timed_out INTEGER DEFAULT 0,
+                gate_agreed INTEGER,
+                tokens_used INTEGER DEFAULT 0,
+                duration_s REAL DEFAULT 0.0,
+                timestamp TEXT DEFAULT (datetime('now'))
+            );
         """)
 
     # ------------------------------------------------------------------
@@ -3053,6 +3066,34 @@ class Brain:
         self._scores.execute(
             "INSERT INTO skill_usage (session_id, skill_name, timestamp) VALUES (?, ?, ?)",
             (session_id, skill_name, ts),
+        )
+        self._scores.commit()
+
+    def record_subagent_outcome(
+        self,
+        prompt_id: str,
+        validator: str,
+        recommendation: str,
+        evidence_count: int = 0,
+        certificate_complete: int = 0,
+        certificate_blocked: int = 0,
+        timed_out: int = 0,
+        tokens_used: int = 0,
+        duration_s: float = 0.0,
+    ) -> None:
+        """Upsert one SFR outcome row for a validator sub-agent."""
+        self._scores.execute(
+            "INSERT OR IGNORE INTO subagent_outcomes "
+            "(prompt_id, validator, recommendation, evidence_count, "
+            " certificate_complete, certificate_blocked, timed_out, "
+            " gate_agreed, tokens_used, duration_s) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+            (
+                prompt_id, validator, recommendation,
+                int(evidence_count),
+                int(certificate_complete), int(certificate_blocked),
+                int(timed_out), int(tokens_used), float(duration_s),
+            ),
         )
         self._scores.commit()
 

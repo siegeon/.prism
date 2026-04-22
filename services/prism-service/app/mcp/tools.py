@@ -191,6 +191,94 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="record_session_outcome",
+        description=(
+            "Upsert one session_outcomes row for the current Claude Code "
+            "session. Called by the plugin's Stop hook. Fields: "
+            "session_id, duration_s, tokens_used, files_read, "
+            "files_modified, skills_invoked. Persists to scores.db so "
+            "the /sessions UI can render it."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "duration_s": {"type": "integer"},
+                "tokens_used": {"type": "integer"},
+                "files_read": {"type": "integer"},
+                "files_modified": {"type": "integer"},
+                "skills_invoked": {"type": "integer"},
+            },
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="record_skill_usage",
+        description=(
+            "Record one skill invocation. Called by the plugin's "
+            "PostToolUse hook on Skill tool use. Feeds the Conductor's "
+            "skill-ranking model."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "skill_name": {"type": "string"},
+                "timestamp": {"type": "string",
+                               "description": "ISO-8601; omit for now"},
+            },
+            "required": ["session_id", "skill_name"],
+        },
+    ),
+    Tool(
+        name="record_outcome",
+        description=(
+            "Persist one PSP-scored execution outcome. Used by the "
+            "plugin's SubagentStop recorder and by workflow-step "
+            "recorders. Metrics dict accepts tokens_used, duration_s, "
+            "retries, gate_passed, tests_passed, coverage_pct, "
+            "traceability_pct, probe_accuracy."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "prompt_id": {"type": "string"},
+                "persona": {"type": "string",
+                             "description": "sm | dev | qa | validator | ..."},
+                "step_id": {"type": "string"},
+                "metrics": {"type": "object"},
+            },
+            "required": ["prompt_id", "persona", "step_id"],
+        },
+    ),
+    Tool(
+        name="record_subagent_outcome",
+        description=(
+            "Persist one SFR (Structured Feedback Review) outcome from a "
+            "validator sub-agent. Called by the SubagentStop recorder. "
+            "Upsert by prompt_id."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "prompt_id": {"type": "string"},
+                "validator": {"type": "string",
+                               "description": "sub-agent name"},
+                "recommendation": {"type": "string",
+                                    "description": "APPROVE | REVISE | PASS | FAIL | ..."},
+                "evidence_count": {"type": "integer"},
+                "certificate_complete": {"type": "integer",
+                                          "description": "0 or 1"},
+                "certificate_blocked": {"type": "integer",
+                                         "description": "0 or 1"},
+                "timed_out": {"type": "integer", "description": "0 or 1"},
+                "tokens_used": {"type": "integer"},
+                "duration_s": {"type": "number"},
+            },
+            "required": ["prompt_id", "validator", "recommendation"],
+        },
+    ),
+    Tool(
         name="brain_list",
         description="List all documents indexed in Brain. Returns doc_id, domain, and content length for each.",
         inputSchema={
@@ -1391,6 +1479,48 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 limit=arguments.get("limit", 50),
             )
             return [TextContent(type="text", text=_json(results))]
+
+        if name == "record_session_outcome":
+            ok = brain_svc.record_session_outcome(
+                session_id=str(arguments["session_id"]),
+                duration_s=int(arguments.get("duration_s", 0)),
+                tokens_used=int(arguments.get("tokens_used", 0)),
+                files_read=int(arguments.get("files_read", 0)),
+                files_modified=int(arguments.get("files_modified", 0)),
+                skills_invoked=int(arguments.get("skills_invoked", 0)),
+            )
+            return [TextContent(type="text", text=_json({"recorded": ok}))]
+
+        if name == "record_skill_usage":
+            ok = brain_svc.record_skill_usage(
+                session_id=str(arguments["session_id"]),
+                skill_name=str(arguments["skill_name"]),
+                timestamp=str(arguments.get("timestamp") or ""),
+            )
+            return [TextContent(type="text", text=_json({"recorded": ok}))]
+
+        if name == "record_outcome":
+            ok = brain_svc.record_outcome(
+                prompt_id=str(arguments["prompt_id"]),
+                persona=str(arguments["persona"]),
+                step_id=str(arguments["step_id"]),
+                metrics=arguments.get("metrics") or {},
+            )
+            return [TextContent(type="text", text=_json({"recorded": ok}))]
+
+        if name == "record_subagent_outcome":
+            ok = brain_svc.record_subagent_outcome(
+                prompt_id=str(arguments["prompt_id"]),
+                validator=str(arguments["validator"]),
+                recommendation=str(arguments["recommendation"]),
+                evidence_count=int(arguments.get("evidence_count", 0)),
+                certificate_complete=int(arguments.get("certificate_complete", 0)),
+                certificate_blocked=int(arguments.get("certificate_blocked", 0)),
+                timed_out=int(arguments.get("timed_out", 0)),
+                tokens_used=int(arguments.get("tokens_used", 0)),
+                duration_s=float(arguments.get("duration_s", 0.0)),
+            )
+            return [TextContent(type="text", text=_json({"recorded": ok}))]
 
         if name == "brain_list":
             docs = brain_svc.list_docs(

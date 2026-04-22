@@ -1608,38 +1608,22 @@ def get_session_metrics_from_transcript(transcript_path: str) -> dict:
 
 
 def _record_session_outcome(input_data: dict) -> None:
-    """Record session-level metrics to scores.db. Best-effort, never raises."""
+    """Record session-level metrics via MCP. Best-effort, never raises."""
     try:
         session_id = input_data.get("session_id", "")
         if not session_id:
             return
         transcript_path = input_data.get("transcript_path", "")
         metrics = get_session_metrics_from_transcript(transcript_path)
-        # Compute session-level adoption_rate from available skills.
-        try:
-            import io as _io
-            import contextlib
-            _buf = _io.StringIO()
-            with contextlib.redirect_stderr(_buf):
-                _skills = discover_prism_skills()
-            _sa = len(_skills)
-        except Exception:
-            _sa = 0
-        _session_adoption_rate: Optional[float] = (
-            round(metrics["skills_invoked"] / _sa, 2) if _sa > 0 else None
-        )
-        from brain_engine import Brain
-        brain = Brain()
-        brain.record_session_outcome(
-            session_id=session_id,
-            duration_s=metrics["duration_s"],
-            tokens_used=metrics["tokens_used"],
-            files_read=metrics["files_read"],
-            files_modified=metrics["files_modified"],
-            skills_invoked=metrics["skills_invoked"],
-            skills_available=_sa,
-            adoption_rate=_session_adoption_rate,
-        )
+        from prism_mcp_client import call as _mcp_call
+        _mcp_call("record_session_outcome", {
+            "session_id": session_id,
+            "duration_s": metrics["duration_s"],
+            "tokens_used": metrics["tokens_used"],
+            "files_read": metrics["files_read"],
+            "files_modified": metrics["files_modified"],
+            "skills_invoked": metrics["skills_invoked"],
+        })
     except Exception:
         pass  # Never interrupt Claude's stop behavior
 
