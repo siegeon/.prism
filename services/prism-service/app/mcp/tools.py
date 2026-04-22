@@ -16,7 +16,14 @@ from mcp.types import Tool, TextContent
 TOOLS: list[Tool] = [
     Tool(
         name="brain_search",
-        description="Search the project knowledge base using hybrid BM25 + vector + graph search",
+        description=(
+            "Search the project knowledge base using hybrid BM25 + vector + graph "
+            "search. Each result carries a `search_id` — after you've read or "
+            "edited a result's source_file (or deliberately skipped it), call "
+            "`brain_search_feedback(search_id, doc_id, signal='up'|'down')` to "
+            "record whether the result was useful. That feedback is persisted "
+            "to the searches/search_feedback tables for retrieval tuning."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -974,43 +981,86 @@ if __name__ == "__main__":
 '''
 
 
+def _load_asset(filename: str) -> str:
+    """Read a shipped hook script from app/assets/. The plugin-side copy in
+    ``plugins/prism-devtools/hooks/`` must be kept in sync with the copy in
+    ``services/prism-service/app/assets/``; the assets version is the one
+    served to MCP-only clients via prism_install."""
+    from pathlib import Path as _P
+    try:
+        return (_P(__file__).parent.parent / "assets" / filename).read_text(
+            encoding="utf-8"
+        )
+    except Exception:
+        return ""
+
+
+_FEEDBACK_HOOK_SCRIPT = _load_asset("feedback_signal_hook.py")
+
+
 def _install_manifest(project_id: str) -> dict:
     """Return the install manifest the agent should apply on first onboard.
     The PRISM service is the single source of truth — if the hook logic
     changes in a future release, a re-onboard serves the new version."""
     hook_script = _HOOK_SCRIPT.replace("__PRISM_VERSION__", PRISM_VERSION)
+    hooks_json = {
+        "SessionStart": [
+            {
+                "type": "command",
+                "command": "python .claude/hooks/prism-sync.py",
+                "timeout": 30000,
+            },
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "mcp__prism__brain_search|Read|Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .claude/hooks/prism-feedback-signal.py",
+                        "description": (
+                            "Implicit retrieval feedback: correlate "
+                            "brain_search results with Read/Edit and emit "
+                            "brain_search_feedback automatically."
+                        ),
+                    },
+                ],
+            },
+        ],
+    }
     return {
         "prism_version": PRISM_VERSION,
         "version_notes": PRISM_VERSION_NOTES,
         "project_id": project_id,
         "instructions_for_agent": [
             "Use the Write tool to create each entry in install_files.",
-            "If .claude/hooks.json already exists, MERGE the SessionStart "
-            "array instead of overwriting.",
-            "After writing, tell the user: 'Restart Claude so the "
-            "SessionStart hook activates.'",
-            "The hook will auto-sync Brain/Graph on every future session "
-            "— no manual prism_sync needed.",
+            "If .claude/hooks.json already exists, MERGE each top-level "
+            "array (SessionStart, PostToolUse) by appending — do not "
+            "overwrite the whole file.",
+            "After writing, tell the user: 'Restart Claude so the new "
+            "PRISM hooks activate.'",
+            "The SessionStart hook auto-syncs Brain/Graph. The PostToolUse "
+            "hook correlates brain_search results with Read/Edit and "
+            "emits implicit feedback via brain_search_feedback — no manual "
+            "thumbs-ups needed.",
         ],
         "install_files": [
             {
                 "path": ".claude/hooks.json",
                 "action": "create_or_merge",
-                "merge_key": "SessionStart",
-                "content": json.dumps({
-                    "SessionStart": [
-                        {
-                            "type": "command",
-                            "command": "python .claude/hooks/prism-sync.py",
-                            "timeout": 30000,
-                        },
-                    ],
-                }, indent=2),
+                "merge_keys": ["SessionStart", "PostToolUse"],
+                "content": json.dumps(hooks_json, indent=2),
             },
             {
                 "path": ".claude/hooks/prism-sync.py",
                 "action": "create",
                 "content": hook_script,
+                "mode": "0755",
+            },
+            {
+                "path": ".claude/hooks/prism-feedback-signal.py",
+                "action": "create",
+                "content": _FEEDBACK_HOOK_SCRIPT,
                 "mode": "0755",
             },
         ],
