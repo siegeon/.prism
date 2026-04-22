@@ -18,6 +18,10 @@ services:
       - PRISM_RERANK_TOPN=${PRISM_RERANK_TOPN:-50}
       # Contextual chunk prefixing (Anthropic-style): on (default) | off
       - PRISM_CONTEXT_PREFIX=${PRISM_CONTEXT_PREFIX:-on}
+      # Feedback consumption weight: per-thumb adjustment to rrf_score.
+      # Default 0.002 so ~3 consistent thumbs overcome a typical RRF gap.
+      # Set to "off" to disable feedback-driven re-ranking entirely.
+      - PRISM_FEEDBACK_WEIGHT=${PRISM_FEEDBACK_WEIGHT:-0.002}
       # Keep torch/HF caches on the mounted volume so bad loads can't brick Docker
       - TORCHINDUCTOR_CACHE_DIR=/data/torch-inductor-cache
       - TORCH_HOME=/data/torch-home

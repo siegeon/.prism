@@ -1710,6 +1710,33 @@ class Brain:
             if reranked is not None:
                 fused = reranked + fused[pool_n:]
 
+        # PRISM_FEEDBACK_WEIGHT (default 0.002; "off" disables): close the
+        # feedback loop by nudging rrf_score by accumulated past thumbs on
+        # each doc_id. Small weight so a single vote doesn't flip ordering —
+        # ~3 consistent thumbs overcome a typical RRF gap.
+        fb_weight_env = _os.environ.get("PRISM_FEEDBACK_WEIGHT", "0.002")
+        try:
+            fb_weight = 0.0 if fb_weight_env.strip().lower() in (
+                "off", "none", ""
+            ) else float(fb_weight_env)
+        except ValueError:
+            fb_weight = 0.0
+        if fb_weight and fused:
+            fb_scores = self.get_feedback_scores(
+                [c["doc_id"] for c in fused[:200]]
+            )
+            if fb_scores:
+                for c in fused:
+                    adj = fb_scores.get(c["doc_id"], 0.0)
+                    if adj:
+                        c["rrf_score"] = (
+                            c.get("rrf_score", 0.0) + fb_weight * adj
+                        )
+                        c["feedback_adj"] = adj
+                fused = sorted(fused, key=lambda x: (
+                    -x.get("rrf_score", 0.0), x.get("doc_id", ""),
+                ))
+
         # Take a larger candidate pool when aggregating so collapsing doesn't
         # leave us short of ``limit`` results.
         top = fused[: inner if aggregate else limit]
@@ -1750,6 +1777,7 @@ class Brain:
                 "line_end": row["line_end"],
                 "rrf_score": item.get("rrf_score", 0.0),
                 "rerank_score": item.get("rerank_score"),
+                "feedback_adj": item.get("feedback_adj"),
             })
             if len(results) >= limit:
                 break
@@ -1885,6 +1913,53 @@ class Brain:
         except Exception:
             return []
         return [dict(r) for r in rows]
+
+    def get_feedback_scores(
+        self,
+        doc_ids: list[str],
+        cap: float = 5.0,
+        decay_days: int = 30,
+    ) -> dict:
+        """Return a net signal per doc_id for the consumption layer.
+
+        net = SUM(up) - SUM(down), clamped to [-cap, +cap]. Rows older
+        than ``decay_days`` get weight 0.3 so ancient feedback decays
+        rather than dominating. Silent on error — retrieval must keep
+        working even if feedback data is weird.
+        """
+        if not doc_ids:
+            return {}
+        try:
+            placeholders = ",".join("?" * len(doc_ids))
+            rows = self._brain.execute(
+                f"SELECT doc_id, signal, ts FROM search_feedback "
+                f"WHERE doc_id IN ({placeholders})",
+                list(doc_ids),
+            ).fetchall()
+        except Exception:
+            return {}
+        if not rows:
+            return {}
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        out: dict[str, float] = {}
+        for r in rows:
+            try:
+                ts = datetime.fromisoformat(
+                    (r["ts"] or "").replace(" ", "T")
+                )
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age_days = (now - ts).days
+            except Exception:
+                age_days = 0
+            w = 0.3 if age_days > decay_days else 1.0
+            delta = w if r["signal"] == "up" else (-w if r["signal"] == "down" else 0)
+            out[r["doc_id"]] = out.get(r["doc_id"], 0.0) + delta
+        # Clamp to [-cap, +cap]
+        for k in list(out):
+            out[k] = max(-cap, min(cap, out[k]))
+        return out
 
     def feedback_stats(self) -> dict:
         """Aggregate thumbs up/down counts and per-doc win rates."""

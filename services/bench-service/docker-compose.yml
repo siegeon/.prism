@@ -18,6 +18,8 @@ services:
       - PRISM_RERANK_TOPN=${PRISM_RERANK_TOPN:-50}
       # Contextual chunk prefixing (Anthropic-style): on (default) | off
       - PRISM_CONTEXT_PREFIX=${PRISM_CONTEXT_PREFIX:-on}
+      # Feedback consumption weight; "off" disables entirely.
+      - PRISM_FEEDBACK_WEIGHT=${PRISM_FEEDBACK_WEIGHT:-0.002}
       # Keep torch.compile / inductor temp files inside the mounted volume
       # (not in the overlay fs root) so a bad model load can't brick Docker.
       - TORCHINDUCTOR_CACHE_DIR=/data/torch-inductor-cache
