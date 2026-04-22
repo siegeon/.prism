@@ -102,6 +102,17 @@ def _init_treesitter_lib() -> None:
         pass
 
 
+def _ts_find_name(node, name_types):
+    """Return the text of the first identifier-like child, or None."""
+    try:
+        for c in node.children:  # type: ignore[attr-defined]
+            if c.type in name_types:
+                return c.text.decode("utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return None
+
+
 def _get_treesitter_parser(lang_name: str) -> Optional[object]:
     """Return a cached tree_sitter.Parser for the given language, or None."""
     if lang_name in _TS_PARSER_CACHE:
@@ -127,6 +138,70 @@ def _get_treesitter_parser(lang_name: str) -> Optional[object]:
 
 
 # Map file suffix -> tree-sitter language name (as in languages.so symbol)
+# Per-language chunker config for _chunk_treesitter_lang. Keys are
+# language names from _TS_LANG_MAP. Entries describe which AST node
+# types are top-level declarations, which of those carry member
+# bodies, what the body node type is, which member node types to
+# emit as methods, and which wrapper/container nodes to transparently
+# descend through (decorators, namespaces, export statements).
+_LANG_CHUNK_CONFIG: dict[str, dict | str] = {
+    "python": {
+        "top": {"function_definition": "function",
+                "class_definition": "class"},
+        "decorated_wrapper": "decorated_definition",
+        "class_types": {"class_definition"},
+        "body_type": "block",
+        "method": {"function_definition": "method"},
+        "name_types": ("identifier",),
+        "descend": set(),
+    },
+    "c_sharp": {
+        "top": {"class_declaration": "class",
+                "interface_declaration": "interface",
+                "struct_declaration": "struct",
+                "record_declaration": "record"},
+        "decorated_wrapper": None,
+        "class_types": {"class_declaration", "interface_declaration",
+                        "struct_declaration", "record_declaration"},
+        "body_type": "declaration_list",
+        "method": {"method_declaration": "method",
+                   "constructor_declaration": "constructor"},
+        "name_types": ("identifier",),
+        # namespace bodies also use declaration_list in C#; descend
+        # into it so class_declaration inside a namespace is reached.
+        # The walker only RECURSES into ``descend`` types — class
+        # members are not reached this way because class_declaration
+        # itself is not in ``descend``; its methods are emitted via
+        # _chunk_ts_methods, which walks the class body explicitly.
+        "descend": {"namespace_declaration", "declaration_list"},
+    },
+    "typescript": {
+        "top": {"class_declaration": "class",
+                "function_declaration": "function",
+                "interface_declaration": "interface"},
+        "decorated_wrapper": None,
+        "class_types": {"class_declaration", "interface_declaration"},
+        "body_type": "class_body",
+        "method": {"method_definition": "method"},
+        "name_types": ("identifier", "property_identifier",
+                       "type_identifier"),
+        "descend": {"export_statement"},
+    },
+    "javascript": {
+        "top": {"class_declaration": "class",
+                "function_declaration": "function"},
+        "decorated_wrapper": None,
+        "class_types": {"class_declaration"},
+        "body_type": "class_body",
+        "method": {"method_definition": "method"},
+        "name_types": ("identifier", "property_identifier"),
+        "descend": {"export_statement"},
+    },
+    "tsx": "typescript",      # alias resolved at lookup time
+    "jsx": "javascript",
+}
+
+
 _TS_LANG_MAP: dict[str, str] = {
     ".py": "python",
     ".ts": "typescript",
@@ -686,8 +761,10 @@ class Brain:
         lang_name = _TS_LANG_MAP[suffix]
         parser = _get_treesitter_parser(lang_name)
 
-        if parser is not None and suffix == ".py":
-            chunks = self._chunk_python_treesitter(filepath, content, parser, lines)
+        if parser is not None and lang_name in _LANG_CHUNK_CONFIG:
+            chunks = self._chunk_treesitter_lang(
+                filepath, content, parser, lines, lang_name,
+            )
         else:
             chunks = self._chunk_regex_fallback(filepath, content, lines, suffix)
 
@@ -754,6 +831,168 @@ class Brain:
                 break
             pos += step
         return windows
+
+    def _chunk_treesitter_lang(
+        self,
+        filepath: str,
+        content: str,
+        parser: object,
+        lines: list[str],
+        lang_name: str,
+    ) -> list[dict]:
+        """Language-generic tree-sitter chunker.
+
+        Produces the same output shape as ``_chunk_python_treesitter`` for
+        any language that has an entry in ``_LANG_CHUNK_CONFIG`` (Python,
+        C#, TypeScript, JavaScript, TSX, JSX today). Methods nested in
+        classes/interfaces/structs are emitted as their own chunks with
+        doc_id = ``{path}::{ContainerName}.{method_name}`` so
+        find_symbol can return a function-level slice.
+        """
+        cfg = _LANG_CHUNK_CONFIG.get(lang_name)
+        if cfg is None:
+            return []
+        if isinstance(cfg, str):
+            cfg = _LANG_CHUNK_CONFIG[cfg]  # alias
+        raw = content.encode("utf-8", errors="replace")
+        tree = parser.parse(raw)  # type: ignore[attr-defined]
+        chunks: list[dict] = []
+        covered: set[int] = set()
+        self._chunk_ts_walk(
+            tree.root_node, cfg, filepath, lines, chunks, covered,
+            emit_docstring=(lang_name == "python"),
+        )
+        module_lines = [
+            lines[i] for i in range(len(lines))
+            if i not in covered and lines[i].strip()
+        ]
+        if module_lines:
+            chunks.append({
+                "doc_id": f"{filepath}::__module__",
+                "content": "\n".join(module_lines),
+                "entity_name": "__module__",
+                "entity_kind": "module",
+                "line_start": 1,
+                "line_end": len(lines) or 1,
+            })
+        if not chunks:
+            return [{
+                "doc_id": filepath, "content": content,
+                "entity_name": "__module__", "entity_kind": "module",
+                "line_start": 1, "line_end": len(lines) or 1,
+            }]
+        return chunks
+
+    def _chunk_ts_walk(
+        self, node, cfg, filepath, lines, chunks, covered, emit_docstring,
+    ):
+        """Recursive AST visitor for _chunk_treesitter_lang."""
+        for child in node.children:
+            t = child.type
+            if t in cfg["descend"]:
+                self._chunk_ts_walk(
+                    child, cfg, filepath, lines, chunks, covered,
+                    emit_docstring,
+                )
+                continue
+            self._chunk_ts_emit(
+                child, cfg, filepath, lines, chunks, covered, emit_docstring,
+            )
+
+    def _chunk_ts_emit(
+        self, outer, cfg, filepath, lines, chunks, covered, emit_docstring,
+    ):
+        """Emit a chunk for ``outer`` if it is a top-level declaration."""
+        t = outer.type
+        def_node = outer
+        if cfg["decorated_wrapper"] and t == cfg["decorated_wrapper"]:
+            inner = next(
+                (c for c in outer.children if c.type in cfg["top"]),
+                None,
+            )
+            if inner is None:
+                return
+            def_node = inner
+            t = inner.type
+        if t not in cfg["top"]:
+            return
+        kind = cfg["top"][t]
+        name = _ts_find_name(def_node, cfg["name_types"])
+        if name is None:
+            return
+        start = outer.start_point[0]
+        end = outer.end_point[0]
+        body = "\n".join(lines[start:end + 1])
+        if emit_docstring:
+            summary = self._extract_python_docstring(def_node)
+            if summary:
+                body = f"{summary}\n\n{body}"
+        for i in range(start, end + 1):
+            covered.add(i)
+        chunks.append({
+            "doc_id": f"{filepath}::{name}",
+            "content": body,
+            "entity_name": name,
+            "entity_kind": kind,
+            "line_start": start + 1,
+            "line_end": end + 1,
+        })
+        if t in cfg["class_types"]:
+            self._chunk_ts_methods(
+                def_node, cfg, filepath, lines, chunks, name,
+                emit_docstring,
+            )
+
+    def _chunk_ts_methods(
+        self, class_node, cfg, filepath, lines, chunks, class_name,
+        emit_docstring,
+    ):
+        """Emit method chunks for members of a class-like node."""
+        body = next(
+            (c for c in class_node.children if c.type == cfg["body_type"]),
+            None,
+        )
+        if body is None:
+            return
+        seen: set[str] = set()
+        for member in body.children:
+            outer_m = member
+            mtype = member.type
+            mnode = member
+            if cfg["decorated_wrapper"] and mtype == cfg["decorated_wrapper"]:
+                inner = next(
+                    (c for c in member.children if c.type in cfg["method"]),
+                    None,
+                )
+                if inner is None:
+                    continue
+                mnode = inner
+                mtype = inner.type
+            if mtype not in cfg["method"]:
+                continue
+            mkind = cfg["method"][mtype]
+            mname = _ts_find_name(mnode, cfg["name_types"])
+            if mname is None:
+                continue
+            doc_id = f"{filepath}::{class_name}.{mname}"
+            if doc_id in seen:
+                continue
+            seen.add(doc_id)
+            ms = outer_m.start_point[0]
+            me = outer_m.end_point[0]
+            mbody = "\n".join(lines[ms:me + 1])
+            if emit_docstring:
+                msummary = self._extract_python_docstring(mnode)
+                if msummary:
+                    mbody = f"{msummary}\n\n{mbody}"
+            chunks.append({
+                "doc_id": doc_id,
+                "content": mbody,
+                "entity_name": mname,
+                "entity_kind": mkind,
+                "line_start": ms + 1,
+                "line_end": me + 1,
+            })
 
     def _chunk_python_treesitter(
         self, filepath: str, content: str, parser: object, lines: list[str]
