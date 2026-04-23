@@ -5,9 +5,15 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from app.models.task import Task, TaskHistory
+
+
+# Callable signature for LL-03's embedder injection. Returns packed
+# float32 bytes suitable for the `tasks.embedding` BLOB column, or
+# ``None`` when no embedder is available (offline, first-session).
+EmbedFn = Callable[[str], Optional[bytes]]
 
 
 _CREATE_TASKS_SQL = """
@@ -54,12 +60,41 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
 class TaskService:
     """Manages the tasks.db lifecycle and CRUD operations."""
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, embed_fn: Optional[EmbedFn] = None) -> None:
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_CREATE_TASKS_SQL)
         self._migrate_task_columns()
+        # Optional — when provided, task create/update embeds
+        # ``title + "\n" + description`` into ``tasks.embedding`` so
+        # LL-06's cosine-similarity retrieval has vectors to work with.
+        # Left as None in contexts where the embedder isn't loaded
+        # (e.g. hook smoke tests); create/update still succeeds, the
+        # row just lacks an embedding until re-indexed.
+        self._embed_fn: Optional[EmbedFn] = embed_fn
+
+    # ------------------------------------------------------------------
+    # LL-03 helper: write an embedding for the given task if we can
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _embedding_text(title: str, description: str) -> str:
+        return f"{title}\n{description}".strip()
+
+    def _store_embedding(self, task_id: str, title: str, description: str) -> None:
+        if self._embed_fn is None:
+            return
+        try:
+            blob = self._embed_fn(self._embedding_text(title, description))
+        except Exception:
+            blob = None
+        if blob is None:
+            return
+        self._db.execute(
+            "UPDATE tasks SET embedding=? WHERE id=?", (blob, task_id)
+        )
+        self._db.commit()
 
     def _migrate_task_columns(self) -> None:
         """Backfill LL-01 columns on tasks.db files created before the
@@ -162,6 +197,10 @@ class TaskService:
         )
         self._db.commit()
         self._record_history(task.id, "created", f"title={title!r}")
+        # LL-03: embed title+description so LL-06's similarity retrieval
+        # has something to search over. Silent on embedder-offline —
+        # the row still exists, just without a vector.
+        self._store_embedding(task.id, task.title, task.description)
         return task
 
     def get(self, task_id: str) -> Optional[Task]:
@@ -254,6 +293,10 @@ class TaskService:
         )
         self._db.commit()
         self._record_history(task.id, "updated", "; ".join(changes))
+        # LL-03: re-embed only when the title or description changed.
+        # Priority / status / tag-only updates don't move the vector.
+        if "title" in kwargs or "description" in kwargs:
+            self._store_embedding(task.id, task.title, task.description)
         return task
 
     # ------------------------------------------------------------------

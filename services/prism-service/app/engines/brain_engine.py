@@ -32,6 +32,37 @@ class BrainCorruptError(Exception):
     """Raised when a Brain database file fails SQLite integrity check."""
 
 
+def encode_task_text(text: str) -> Optional[bytes]:
+    """Encode arbitrary text via the loaded MiniLM embedder and return
+    packed float32 bytes suitable for storing in a SQLite BLOB column.
+
+    Reused by TaskService (LL-03) so the learning loop's task-similarity
+    retrieval lives on the same vectors Brain uses for document search.
+    Returns ``None`` when no embedder is loaded — callers must handle
+    the offline case gracefully. First 2048 chars only (model ctx cap).
+    """
+    global _MODEL
+    if _MODEL is None:
+        return None
+    try:
+        import numpy as _np
+        vec = _MODEL.encode([text[:2048]])[0]
+        return _np.asarray(vec, dtype=_np.float32).tobytes()
+    except Exception:
+        return None
+
+
+def decode_task_embedding(blob: Optional[bytes]) -> Optional[list[float]]:
+    """Reverse of :func:`encode_task_text` — packed bytes → list[float]."""
+    if not blob:
+        return None
+    try:
+        import numpy as _np
+        return _np.frombuffer(blob, dtype=_np.float32).tolist()
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Optional dependency detection
 # ---------------------------------------------------------------------------
