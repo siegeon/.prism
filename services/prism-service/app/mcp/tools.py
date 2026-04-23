@@ -382,6 +382,40 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="prism_bulk_refresh",
+        description=(
+            "Ingest a large {path: content} map with server-side chunking "
+            "and automatic graph rebuild at the end. Use this instead of "
+            "rolling chunking on the client: callers stop needing to "
+            "tune chunk_size to the server's behavior.\n\n"
+            "Semantics: splits files into batches of `chunk_size` "
+            "(default 25), indexes each batch with skip_graph=true, "
+            "runs graph_rebuild once at the end unless skip_graph is "
+            "set. Blocks until complete, same contract as prism_refresh. "
+            "Supports cancellation via prism_cancel_pending.\n\n"
+            "Backpressure: when `PRISM_MAX_CONCURRENT_REFRESH` other "
+            "refreshes are in flight (default 2), returns "
+            "{busy: true, in_flight: N, retry_after_s: 30} instead of "
+            "queuing. Clients should back off rather than pile more work "
+            "onto a saturated server."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "domain": {"type": "string"},
+                "chunk_size": {"type": "integer",
+                                 "description": "default 25"},
+                "skip_graph": {"type": "boolean",
+                                "description": "skip final graph_rebuild; default false"},
+            },
+            "required": ["files"],
+        },
+    ),
+    Tool(
         name="prism_cancel_pending",
         description=(
             "Request cancellation of an in-flight prism_refresh for the "
@@ -1697,6 +1731,62 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             finally:
                 _indexing_end(project_id)
             summary["refreshed_files"] = indexed
+            return [TextContent(type="text", text=_json(summary))]
+
+        if name == "prism_bulk_refresh":
+            import asyncio as _aio
+            import os as _os
+            ctx = get_project(project_id)
+            files = arguments.get("files") or {}
+            default_domain = arguments.get("domain") or "code"
+            chunk_size = max(1, int(arguments.get("chunk_size", 25)))
+            skip_graph = bool(arguments.get("skip_graph", False))
+            max_concurrent = int(
+                _os.environ.get("PRISM_MAX_CONCURRENT_REFRESH", "2")
+            )
+            if indexing_in_flight(project_id) >= max_concurrent:
+                return [TextContent(type="text", text=_json({
+                    "busy": True,
+                    "in_flight": indexing_in_flight(project_id),
+                    "max_concurrent": max_concurrent,
+                    "retry_after_s": 30,
+                    "note": "server saturated — back off then retry",
+                }))]
+            _indexing_begin(project_id)
+            indexed = 0
+            cancelled = False
+            chunks = 0
+            try:
+                items = list(files.items())
+                for i in range(0, len(items), chunk_size):
+                    if check_and_clear_cancel(project_id):
+                        cancelled = True
+                        break
+                    batch = items[i:i + chunk_size]
+                    for path, content in batch:
+                        if not isinstance(content, str):
+                            continue
+                        await _aio.to_thread(
+                            ctx.brain_svc.index_doc,
+                            path=path, content=content, domain=default_domain,
+                        )
+                        indexed += 1
+                    chunks += 1
+                if cancelled or skip_graph:
+                    summary = {
+                        "cancelled": cancelled,
+                        "graph_skipped": True,
+                    }
+                else:
+                    summary = await _aio.to_thread(
+                        ctx.graph_svc.rebuild,
+                        brain_db_path=str(ctx._data_dir / "brain.db"),
+                    )
+            finally:
+                _indexing_end(project_id)
+            summary["refreshed_files"] = indexed
+            summary["chunks_processed"] = chunks
+            summary["chunk_size"] = chunk_size
             return [TextContent(type="text", text=_json(summary))]
 
         if name == "prism_cancel_pending":
