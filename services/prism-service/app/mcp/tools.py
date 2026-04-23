@@ -1278,6 +1278,39 @@ def _install_manifest(project_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Indexer in-flight tracking — exposed via prism_status (#15 observability).
+# Bumped when a request is actively inside prism_refresh's synchronous
+# index/graph work, so a concurrent prism_status call can report
+# indexing_in_flight=True without scanning state.
+# ---------------------------------------------------------------------------
+import threading as _th
+
+_INDEXING_LOCK = _th.Lock()
+_INDEXING_IN_FLIGHT: dict[str, int] = {}  # project_id -> in-flight request count
+
+
+def _indexing_begin(project_id: str) -> None:
+    with _INDEXING_LOCK:
+        _INDEXING_IN_FLIGHT[project_id] = (
+            _INDEXING_IN_FLIGHT.get(project_id, 0) + 1
+        )
+
+
+def _indexing_end(project_id: str) -> None:
+    with _INDEXING_LOCK:
+        n = _INDEXING_IN_FLIGHT.get(project_id, 0) - 1
+        if n <= 0:
+            _INDEXING_IN_FLIGHT.pop(project_id, None)
+        else:
+            _INDEXING_IN_FLIGHT[project_id] = n
+
+
+def indexing_in_flight(project_id: str) -> int:
+    with _INDEXING_LOCK:
+        return int(_INDEXING_IN_FLIGHT.get(project_id, 0))
+
+
+# ---------------------------------------------------------------------------
 # Tool handler
 # ---------------------------------------------------------------------------
 
@@ -1588,27 +1621,43 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 brain_db_path=str(ctx._data_dir / "brain.db"),
                 file_hashes=arguments.get("file_hashes"),
             )
+            # #15(c) observability: operators can tell when indexer is busy
+            # without scanning logs. indexing_in_flight counts concurrent
+            # prism_refresh calls currently inside their CPU-bound work.
+            n = indexing_in_flight(project_id)
+            status["indexing_in_flight"] = n
+            status["indexer_busy"] = bool(n)
             return [TextContent(type="text", text=_json(status))]
 
         if name == "prism_refresh":
+            import asyncio as _aio
             ctx = get_project(project_id)
             files = arguments.get("files") or {}
             default_domain = arguments.get("domain") or "code"
             skip_graph = bool(arguments.get("skip_graph", False))
+            _indexing_begin(project_id)
             indexed = 0
-            for path, content in files.items():
-                if not isinstance(content, str):
-                    continue
-                ctx.brain_svc.index_doc(
-                    path=path, content=content, domain=default_domain,
-                )
-                indexed += 1
-            if skip_graph:
-                summary = {"graph_skipped": True}
-            else:
-                summary = ctx.graph_svc.rebuild(
-                    brain_db_path=str(ctx._data_dir / "brain.db")
-                )
+            try:
+                for path, content in files.items():
+                    if not isinstance(content, str):
+                        continue
+                    # asyncio.to_thread releases the event loop so
+                    # concurrent prism_status / brain_search calls
+                    # don't queue behind this CPU-bound ingest.
+                    await _aio.to_thread(
+                        ctx.brain_svc.index_doc,
+                        path=path, content=content, domain=default_domain,
+                    )
+                    indexed += 1
+                if skip_graph:
+                    summary = {"graph_skipped": True}
+                else:
+                    summary = await _aio.to_thread(
+                        ctx.graph_svc.rebuild,
+                        brain_db_path=str(ctx._data_dir / "brain.db"),
+                    )
+            finally:
+                _indexing_end(project_id)
             summary["refreshed_files"] = indexed
             return [TextContent(type="text", text=_json(summary))]
 
