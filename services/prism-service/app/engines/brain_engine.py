@@ -717,6 +717,117 @@ class Brain:
                 duration_s REAL DEFAULT 0.0,
                 timestamp TEXT DEFAULT (datetime('now'))
             );
+
+            -- ---- Learning-loop v5 tables (LL-01) ----------------------------
+            -- Ties Claude sessions to PRISM tasks so per-task rollup joins
+            -- through the full session history. Schema-only; populated by
+            -- later LL-04 / LL-07 subtasks.
+            CREATE TABLE IF NOT EXISTS task_sessions (
+                task_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                PRIMARY KEY (task_id, session_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_sessions_session_id
+                ON task_sessions(session_id);
+            CREATE INDEX IF NOT EXISTS idx_task_sessions_task_id
+                ON task_sessions(task_id);
+
+            -- Which prompt variant was used for which (task, step). Feeds
+            -- Brain.best_prompt(similar_to_task_id=...) in LL-06.
+            CREATE TABLE IF NOT EXISTS task_variants (
+                task_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                prompt_id TEXT NOT NULL,
+                persona TEXT,
+                recorded_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (task_id, step_id, prompt_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_variants_task_id
+                ON task_variants(task_id);
+            CREATE INDEX IF NOT EXISTS idx_task_variants_prompt_id
+                ON task_variants(prompt_id);
+
+            -- Quantitative + qualitative rollup per task (one row per merged
+            -- task). `quality_score` is the Layer-A composite, `cuped_score`
+            -- is the operator-baseline-adjusted value, `qualitative_score`
+            -- is the Layer-B reflection overlay, `components_json` stores
+            -- the raw signals for auditability.
+            CREATE TABLE IF NOT EXISTS task_quality_rollup (
+                task_id TEXT PRIMARY KEY,
+                quality_score REAL,
+                qualitative_score REAL,
+                cuped_score REAL,
+                components_json TEXT,
+                scored_at TEXT DEFAULT (datetime('now'))
+            );
+
+            -- Per-operator rolling merge-rate baseline for CUPED
+            -- residualization (LL-05). Keeps operator skill from being
+            -- credited to the variant.
+            CREATE TABLE IF NOT EXISTS operator_baselines (
+                operator_id TEXT PRIMARY KEY,
+                window_start TEXT,
+                merge_rate REAL,
+                sample_n INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            -- Layer-B queue. Stop hook fills this via janitor_mark_stale;
+            -- janitor_check dispenses; caller's prism-reflect subagent
+            -- submits back.
+            CREATE TABLE IF NOT EXISTS consolidation_candidates (
+                id TEXT PRIMARY KEY,
+                task_id TEXT,
+                session_id TEXT,
+                trigger TEXT,
+                scope_json TEXT,
+                status TEXT DEFAULT 'pending',
+                queued_at TEXT DEFAULT (datetime('now')),
+                staled_at TEXT,
+                dispensed_at TEXT,
+                completed_at TEXT,
+                retry_count INTEGER DEFAULT 0,
+                last_nudged_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_consolidation_candidates_session_id
+                ON consolidation_candidates(session_id);
+            CREATE INDEX IF NOT EXISTS idx_consolidation_candidates_task_id
+                ON consolidation_candidates(task_id);
+            CREATE INDEX IF NOT EXISTS idx_consolidation_candidates_status
+                ON consolidation_candidates(status);
+
+            -- Audit trail of every completed (or errored) reflection run.
+            -- Output JSON is preserved verbatim — invalidated memories can
+            -- still be traced back to the run that retired them.
+            CREATE TABLE IF NOT EXISTS consolidation_runs (
+                id TEXT PRIMARY KEY,
+                candidate_id TEXT,
+                run_at TEXT DEFAULT (datetime('now')),
+                output_json TEXT,
+                subagent_type TEXT,
+                confidence REAL,
+                schema_valid INTEGER DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_consolidation_runs_candidate_id
+                ON consolidation_runs(candidate_id);
+
+            -- Memory metadata sidecar. The JSONL-under-mulch store remains
+            -- the source of truth for memory *content*; this SQL table
+            -- tracks the queryable metadata the janitor needs: session
+            -- attribution, recency, soft-invalidation status.
+            CREATE TABLE IF NOT EXISTS memory_meta (
+                memory_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                last_recalled_at TEXT,
+                recall_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active'
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_meta_session_id
+                ON memory_meta(session_id);
+            CREATE INDEX IF NOT EXISTS idx_memory_meta_status
+                ON memory_meta(status);
         """)
 
     # ------------------------------------------------------------------

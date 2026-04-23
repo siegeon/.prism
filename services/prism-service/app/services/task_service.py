@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     completed_at TEXT DEFAULT '',
     blocked_reason TEXT DEFAULT '',
     dependencies TEXT DEFAULT '[]',
-    tags TEXT DEFAULT '[]'
+    tags TEXT DEFAULT '[]',
+    embedding BLOB,
+    merge_sha TEXT,
+    merged_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -39,6 +42,15 @@ CREATE TABLE IF NOT EXISTS task_history (
 """
 
 
+# Columns added by LL-01 (learning-loop schema migration). Applied via
+# ALTER TABLE on existing DBs so older task rows don't need rewriting.
+_LL_TASK_COLUMNS: list[tuple[str, str]] = [
+    ("embedding", "BLOB"),
+    ("merge_sha", "TEXT"),
+    ("merged_at", "TEXT"),
+]
+
+
 class TaskService:
     """Manages the tasks.db lifecycle and CRUD operations."""
 
@@ -47,6 +59,26 @@ class TaskService:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_CREATE_TASKS_SQL)
+        self._migrate_task_columns()
+
+    def _migrate_task_columns(self) -> None:
+        """Backfill LL-01 columns on tasks.db files created before the
+        learning-loop schema landed. Idempotent: ALTER is only issued
+        when the column is actually missing."""
+        existing = {
+            row[1]
+            for row in self._db.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        for col, col_type in _LL_TASK_COLUMNS:
+            if col in existing:
+                continue
+            try:
+                self._db.execute(
+                    f"ALTER TABLE tasks ADD COLUMN {col} {col_type}"
+                )
+                self._db.commit()
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------------
     # Helpers
