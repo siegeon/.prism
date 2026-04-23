@@ -480,6 +480,10 @@ class Brain:
                 INSERT INTO docs_fts(rowid, id, content, domain)
                     VALUES(new.rowid, new.id, new.content, new.domain);
             END;
+            CREATE INDEX IF NOT EXISTS idx_docs_source_file
+                ON docs(source_file);
+            CREATE INDEX IF NOT EXISTS idx_docs_entity_name
+                ON docs(entity_name);
             CREATE TABLE IF NOT EXISTS index_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
