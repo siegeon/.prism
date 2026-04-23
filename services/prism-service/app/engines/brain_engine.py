@@ -212,6 +212,75 @@ _TS_LANG_MAP: dict[str, str] = {
 }
 
 
+# C# framework/DSL methods filtered from the call graph. Tree-sitter can't
+# resolve symbol origin (that needs Roslyn), so we drop call edges whose
+# target matches a name from ASP.NET Core DI/middleware, Minimal APIs, LINQ,
+# EF Core, async plumbing, or common BCL overrides. Without this, fluent
+# chains like `services.AddSingleton<Foo>().Configure<Opts>(...)` dominate
+# every method's out-edges and the real first-party graph is unreadable.
+# Trade-off: a first-party `Build()` or `Configure()` gets filtered too.
+# Roslyn-backed extraction would use `ContainingAssembly` instead.
+_CS_FRAMEWORK_CALLS: frozenset[str] = frozenset({
+    # Hosting / DI builder
+    "Build", "CreateBuilder", "CreateHostBuilder", "CreateDefaultBuilder",
+    "Configure", "ConfigureServices", "ConfigureAppConfiguration",
+    "ConfigureLogging", "ConfigureWebHostDefaults",
+    # IServiceCollection registration
+    "AddSingleton", "AddScoped", "AddTransient",
+    "AddDbContext", "AddDbContextPool", "AddDbContextFactory",
+    "AddIdentity", "AddIdentityCore",
+    "AddAuthentication", "AddAuthorization",
+    "AddCors", "AddHttpClient", "AddHttpContextAccessor",
+    "AddControllers", "AddControllersWithViews",
+    "AddRazorPages", "AddMvc", "AddMvcCore",
+    "AddLogging", "AddMemoryCache", "AddDistributedMemoryCache",
+    "AddSwaggerGen", "AddEndpointsApiExplorer", "AddApiVersioning",
+    "AddHostedService", "AddOptions", "AddSignalR", "AddGrpc",
+    "AddJwtBearer", "AddCookie", "AddOpenIdConnect", "AddGoogle",
+    "AddSerilog", "AddNLog", "AddOpenTelemetry", "AddHealthChecks",
+    # IApplicationBuilder / WebApplication middleware
+    "UseRouting", "UseEndpoints", "UseStaticFiles", "UseHttpsRedirection",
+    "UseAuthentication", "UseAuthorization", "UseCors", "UseMiddleware",
+    "UseExceptionHandler", "UseDeveloperExceptionPage", "UseHsts",
+    "UseSerilog", "UseNLog", "UseKestrel", "UseIIS", "UseIISIntegration",
+    "UseSwagger", "UseSwaggerUI", "UseSpa", "UseSpaStaticFiles",
+    "UseResponseCompression", "UseResponseCaching", "UseSession",
+    # Minimal API / endpoint mapping
+    "MapGet", "MapPost", "MapPut", "MapDelete", "MapPatch",
+    "MapControllers", "MapControllerRoute", "MapRazorPages",
+    "MapHub", "MapFallback", "MapFallbackToFile", "MapFallbackToPage",
+    "MapHealthChecks", "MapGrpcService", "MapWhen", "MapGroup",
+    "RequireAuthorization", "RequireCors", "RequireHost", "RequireRateLimiting",
+    "WithName", "WithTags", "WithOpenApi", "WithMetadata", "WithSummary",
+    "Produces", "ProducesProblem", "Accepts",
+    # LINQ (IEnumerable / IQueryable)
+    "Where", "Select", "SelectMany",
+    "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending",
+    "GroupBy", "GroupJoin", "Join", "Zip",
+    "ToList", "ToArray", "ToDictionary", "ToHashSet", "ToLookup",
+    "First", "FirstOrDefault", "Single", "SingleOrDefault",
+    "Last", "LastOrDefault", "ElementAt", "ElementAtOrDefault",
+    "Any", "All", "Count", "LongCount",
+    "Sum", "Min", "Max", "Average", "Aggregate",
+    "Distinct", "DistinctBy", "Skip", "SkipWhile", "Take", "TakeWhile",
+    "Reverse", "Contains", "SequenceEqual",
+    "Union", "Intersect", "Except", "Concat",
+    "Cast", "OfType", "AsEnumerable", "AsQueryable",
+    # EF Core
+    "Include", "ThenInclude", "AsNoTracking", "AsTracking", "AsSplitQuery",
+    "FindAsync", "SaveChanges", "SaveChangesAsync",
+    "AddAsync", "AddRangeAsync", "UpdateRange", "RemoveRange",
+    "FromSqlRaw", "FromSqlInterpolated", "ExecuteSqlRaw",
+    "ExecuteUpdateAsync", "ExecuteDeleteAsync",
+    # BCL overrides / delegate invocation / async plumbing
+    "ToString", "GetHashCode", "Equals", "GetType",
+    "Append", "AppendLine", "AppendFormat",
+    "Invoke", "InvokeAsync", "DynamicInvoke",
+    "ConfigureAwait", "GetAwaiter", "GetResult", "Wait",
+    "WaitAsync", "AsTask", "AsValueTask",
+})
+
+
 _EMBEDDER_PRESETS = {
     # key -> (backend, model_id)
     # backend in {"model2vec", "sentence-transformers"}
@@ -1797,9 +1866,20 @@ class Brain:
             if func is None:
                 return None
             if func.type == "identifier":
-                return func.text.decode("utf-8", errors="replace")  # type: ignore[attr-defined]
-            parts = [c for c in func.children if c.type == "identifier"]  # type: ignore[attr-defined]
-            return parts[-1].text.decode("utf-8", errors="replace") if parts else None  # type: ignore[attr-defined]
+                name = func.text.decode("utf-8", errors="replace")  # type: ignore[attr-defined]
+                return None if name in _CS_FRAMEWORK_CALLS else name
+            # Fluent-chain filter: `a.X().Y()` parses as an outer invocation
+            # whose member_access receiver has an invocation_expression as
+            # its first child. Those tail calls are almost always DSL
+            # plumbing (builder-pattern config, LINQ pipelines).
+            fc = func.children  # type: ignore[attr-defined]
+            if fc and fc[0].type == "invocation_expression":
+                return None
+            parts = [c for c in fc if c.type == "identifier"]
+            if not parts:
+                return None
+            name = parts[-1].text.decode("utf-8", errors="replace")  # type: ignore[attr-defined]
+            return None if name in _CS_FRAMEWORK_CALLS else name
 
         def _walk(node: object) -> None:
             for child in node.children:  # type: ignore[attr-defined]
