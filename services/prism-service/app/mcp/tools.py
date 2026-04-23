@@ -349,10 +349,17 @@ TOOLS: list[Tool] = [
     Tool(
         name="prism_refresh",
         description=(
-            "Batch-ingest a map of {path: content} and then trigger a "
-            "graph_rebuild in one call. Use when the SessionStart hook "
-            "detected drift: pass only the drifted paths with their current "
-            "disk content. Returns indexed-count + rebuild summary."
+            "Batch-ingest a map of {path: content}. Blocks until all "
+            "chunks are in brain.db and (when skip_graph is false) the "
+            "graph has been rebuilt — when this call returns, the files "
+            "ARE queryable via brain_search and (unless you skipped) "
+            "brain_graph / brain_find_references.\n\n"
+            "Set skip_graph=true on every call of a bulk loader except "
+            "the last, then call graph_rebuild once at the end. Graph "
+            "rebuild walks the whole staging dir per call and dominates "
+            "latency (~100s even for one file on a ~100-file project); "
+            "amortizing it across a batch is the difference between "
+            "'usable bulk ingest' and '30 hours wall-clock'."
         ),
         inputSchema={
             "type": "object",
@@ -365,6 +372,10 @@ TOOLS: list[Tool] = [
                 "domain": {
                     "type": "string",
                     "description": "Default domain for files without a per-path override. Default 'code'.",
+                },
+                "skip_graph": {
+                    "type": "boolean",
+                    "description": "When true, index the files but skip the per-call graph_rebuild. Call graph_rebuild once at the end of a bulk load. Default false.",
                 },
             },
             "required": ["files"],
@@ -1132,12 +1143,39 @@ def main() -> int:
     if not to_refresh:
         return 0
 
-    try:
-        _mcp_call(base, project, "prism_refresh", {"files": to_refresh})
-        print(f"[prism-sync] refreshed {len(to_refresh)} drifted file(s)",
-              file=sys.stderr)
-    except Exception as e:
-        print(f"[prism-sync] prism_refresh failed: {e!r}", file=sys.stderr)
+    # Chunked refresh: push files in batches of CHUNK_SIZE with
+    # skip_graph=true, then fire one graph_rebuild at the end. Avoids
+    # the per-call graphify cost that dominates latency on larger syncs.
+    CHUNK_SIZE = 25
+    items = list(to_refresh.items())
+    refreshed = 0
+    for i in range(0, len(items), CHUNK_SIZE):
+        batch = dict(items[i:i + CHUNK_SIZE])
+        try:
+            _mcp_call(
+                base, project, "prism_refresh",
+                {"files": batch, "skip_graph": True},
+            )
+            refreshed += len(batch)
+        except Exception as e:
+            print(
+                f"[prism-sync] prism_refresh chunk {i // CHUNK_SIZE} "
+                f"failed: {e!r}", file=sys.stderr,
+            )
+    if refreshed:
+        try:
+            _mcp_call(base, project, "graph_rebuild", {})
+        except Exception as e:
+            print(
+                f"[prism-sync] graph_rebuild after sync failed: {e!r}",
+                file=sys.stderr,
+            )
+        print(
+            f"[prism-sync] refreshed {refreshed} drifted file(s) in "
+            f"{(len(items) + CHUNK_SIZE - 1) // CHUNK_SIZE} chunk(s) + "
+            "1 graph_rebuild",
+            file=sys.stderr,
+        )
 
     return 0
 
@@ -1556,6 +1594,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             ctx = get_project(project_id)
             files = arguments.get("files") or {}
             default_domain = arguments.get("domain") or "code"
+            skip_graph = bool(arguments.get("skip_graph", False))
             indexed = 0
             for path, content in files.items():
                 if not isinstance(content, str):
@@ -1564,9 +1603,12 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     path=path, content=content, domain=default_domain,
                 )
                 indexed += 1
-            summary = ctx.graph_svc.rebuild(
-                brain_db_path=str(ctx._data_dir / "brain.db")
-            )
+            if skip_graph:
+                summary = {"graph_skipped": True}
+            else:
+                summary = ctx.graph_svc.rebuild(
+                    brain_db_path=str(ctx._data_dir / "brain.db")
+                )
             summary["refreshed_files"] = indexed
             return [TextContent(type="text", text=_json(summary))]
 
