@@ -15,7 +15,82 @@ from app.ui.components.nav import create_nav, page_container
 
 
 _SAFE_PROJECT_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
-_ALLOWED_VISUAL_FILES = {"graph.html", "GRAPH_REPORT.md"}
+_ALLOWED_VISUAL_FILES = {"graph.html", "GRAPH_REPORT.md", "graph.json"}
+
+
+_SIGMA_VIEWER_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PRISM Graph Viewer</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0f0f1a; color: #e5e7eb; }
+  #graph { position: absolute; inset: 0; }
+  #status { position: absolute; top: 8px; left: 8px; padding: 6px 10px;
+            background: rgba(15,15,26,0.8); border: 1px solid #2a2a4e;
+            border-radius: 6px; font-size: 12px; z-index: 10; max-width: 60ch; }
+  #legend { position: absolute; bottom: 8px; left: 8px; padding: 6px 10px;
+            background: rgba(15,15,26,0.8); border: 1px solid #2a2a4e;
+            border-radius: 6px; font-size: 11px; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="status">Loading graph...</div>
+<div id="graph"></div>
+<div id="legend">Scroll to zoom · drag to pan · click a node for details</div>
+<script src="https://unpkg.com/graphology@0.25.4/dist/graphology.umd.min.js"></script>
+<script src="https://unpkg.com/sigma@3.0.0/build/sigma.min.js"></script>
+<script>
+  const PROJECT_ID = "__PROJECT_ID__";
+  const statusEl = document.getElementById("status");
+  const COMMUNITY_COLORS = [
+    "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F","#EDC948",
+    "#B07AA1","#FF9DA7","#9C755F","#BAB0AC","#86BCB6","#D37295",
+  ];
+  function colorFor(community) {
+    if (community === undefined || community === null) return "#6b7280";
+    const idx = Math.abs(Number(community) || 0) % COMMUNITY_COLORS.length;
+    return COMMUNITY_COLORS[idx];
+  }
+  fetch(`/graphify-visual/${PROJECT_ID}/graph.json`)
+    .then(r => { if (!r.ok) throw new Error("graph.json " + r.status); return r.json(); })
+    .then(data => {
+      const g = new graphology.Graph();
+      const nodes = data.nodes || [];
+      const edges = data.links || data.edges || [];
+      statusEl.textContent = `Rendering ${nodes.length.toLocaleString()} nodes, `
+        + `${edges.length.toLocaleString()} edges...`;
+      for (const n of nodes) {
+        if (g.hasNode(n.id)) continue;
+        g.addNode(n.id, {
+          label: n.label || n.id,
+          size: Math.max(2, Math.log(1 + (n.degree || 1)) * 2),
+          color: colorFor(n.community),
+          x: Math.random(), y: Math.random(),
+        });
+      }
+      for (const e of edges) {
+        const s = e.source, t = e.target;
+        if (!g.hasNode(s) || !g.hasNode(t) || s === t) continue;
+        try { g.addEdge(s, t, {size: 0.3, color: "#2a2a4e"}); } catch (_) {}
+      }
+      const renderer = new Sigma(g, document.getElementById("graph"), {
+        labelDensity: 0.15, labelGridCellSize: 80, minCameraRatio: 0.05,
+        maxCameraRatio: 10, defaultNodeColor: "#6b7280",
+      });
+      statusEl.textContent = `${nodes.length.toLocaleString()} nodes · `
+        + `${edges.length.toLocaleString()} edges · WebGL (sigma.js)`;
+      renderer.on("clickNode", ({ node }) => {
+        const attrs = g.getNodeAttributes(node);
+        statusEl.textContent = `${attrs.label} (community ${attrs.community ?? "—"})`;
+      });
+    })
+    .catch(err => {
+      statusEl.textContent = "Error loading graph: " + err.message;
+    });
+</script>
+</body>
+</html>"""
 
 
 @app.get("/graphify-visual/{project_id}/{filename}")
@@ -30,8 +105,29 @@ def _graphify_visual(project_id: str, filename: str):
     path = ctx._data_dir / "graphify-src" / "graphify-out" / filename
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="graph.html not generated yet")
-    media = "text/html" if filename.endswith(".html") else "text/markdown"
+    if filename.endswith(".html"):
+        media = "text/html"
+    elif filename.endswith(".json"):
+        media = "application/json"
+    else:
+        media = "text/markdown"
     return FileResponse(str(path), media_type=media)
+
+
+@app.get("/graph/viewer/{project_id}")
+def _graph_viewer(project_id: str):
+    """Sigma.js WebGL viewer for a project's graph.json.
+
+    Phase 2 of #16 — handles 100K+ nodes by delegating rendering to
+    the user's browser GPU instead of asking graphify to emit a
+    possibly-rejected HTML blob. Container ships no graphics libs;
+    all rendering happens client-side.
+    """
+    from fastapi.responses import HTMLResponse
+    if not _SAFE_PROJECT_RE.match(project_id or ""):
+        raise HTTPException(status_code=400, detail="invalid project id")
+    html = _SIGMA_VIEWER_HTML.replace("__PROJECT_ID__", project_id)
+    return HTMLResponse(content=html)
 
 
 def _project_id() -> str:
@@ -255,18 +351,29 @@ def graph_page():
                 ui.label("Interactive visual").classes(
                     "text-sm font-medium text-gray-700"
                 )
-                if visual == "html":
-                    ui.link(
-                        "Open in new tab",
-                        f"/graphify-visual/{_project_id()}/graph.html",
-                        new_tab=True,
-                    ).classes("text-sm text-indigo-600 hover:underline")
-                elif visual == "md":
-                    ui.link(
-                        "Open markdown report in new tab",
-                        f"/graphify-visual/{_project_id()}/GRAPH_REPORT.md",
-                        new_tab=True,
-                    ).classes("text-sm text-indigo-600 hover:underline")
+                with ui.row().classes("gap-3"):
+                    # Sigma WebGL viewer works at any size, including
+                    # graphs graphify refused to emit HTML for.
+                    if json_path.exists():
+                        ui.link(
+                            "WebGL viewer (Sigma.js)",
+                            f"/graph/viewer/{_project_id()}",
+                            new_tab=True,
+                        ).classes(
+                            "text-sm text-indigo-600 hover:underline"
+                        )
+                    if visual == "html":
+                        ui.link(
+                            "Open graph.html in new tab",
+                            f"/graphify-visual/{_project_id()}/graph.html",
+                            new_tab=True,
+                        ).classes("text-sm text-indigo-600 hover:underline")
+                    elif visual == "md":
+                        ui.link(
+                            "Open markdown report in new tab",
+                            f"/graphify-visual/{_project_id()}/GRAPH_REPORT.md",
+                            new_tab=True,
+                        ).classes("text-sm text-indigo-600 hover:underline")
             if visual == "html":
                 ui.element("iframe").props(
                     f'src="/graphify-visual/{_project_id()}/graph.html"'
