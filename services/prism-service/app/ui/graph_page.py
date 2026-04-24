@@ -106,18 +106,14 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
     const b = parseInt(h.substring(4, 6), 16);
     return `rgba(${r},${g},${b},${a})`;
   }
-  // Seed positions on a per-community ring so ForceAtlas2 starts with
-  // cluster structure rather than pure noise — otherwise 35k random
-  // nodes make FA2 converge to a fuzzy blob instead of a readable map.
-  function seedPosition(community, idx) {
-    const c = community === undefined || community === null ? 0 : Number(community) || 0;
-    const clusterR = 50 + (Math.abs(c) % 12) * 8;
-    const theta = ((Math.abs(c) * 2.39996) + idx * 0.0001) % (Math.PI * 2);
-    const jitter = 3;
-    return {
-      x: clusterR * Math.cos(theta) + (Math.random() - 0.5) * jitter,
-      y: clusterR * Math.sin(theta) + (Math.random() - 0.5) * jitter,
-    };
+  // Random seed inside a unit square. Earlier revisions pre-seeded on
+  // per-community rings, which combined with LinLog + strong gravity
+  // shattered the graph into isolated hairballs (the opposite of
+  // graphify's organic single-component look). Random + inferSettings
+  // matches graphify's output much more closely — FA2 finds the
+  // cluster structure on its own from the edge topology.
+  function seedPosition() {
+    return { x: Math.random(), y: Math.random() };
   }
   // communities.json returns DB-derived labels ({id, label, count}) so
   // the sidebar legend reads like graphify's graph.html did. Loaded in
@@ -143,10 +139,9 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         + `${edges.length.toLocaleString()} edges`
         + (dropped ? ` (hid ${dropped.toLocaleString()} rationale)` : "")
         + "...";
-      let nIdx = 0;
       for (const n of nodes) {
         if (g.hasNode(n.id)) continue;
-        const pos = seedPosition(n.community, nIdx++);
+        const pos = seedPosition();
         g.addNode(n.id, {
           label: n.label || n.id,
           size: Math.max(2, Math.log(1 + (n.degree || 1)) * 2),
@@ -169,20 +164,27 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           edgesDrawn++;
         } catch (_) {}
       }
-      // ForceAtlas2: iteration count scales down for huge graphs so the
-      // layout returns in a few seconds. Barnes-Hut + LinLog modes help
-      // community separation and keep it tractable at 35k+ nodes.
+      // ForceAtlas2 — tune to match graphify's vis.js Barnes-Hut
+      // output (single organic hairball with visible community
+      // structure). vis.js config we're mimicking:
+      //   gravitationalConstant -60, springLength 120, springConstant
+      //   0.08, damping 0.4.
+      // FA2 equivalents: gravity 1.2 (pulls components together like
+      // vis.js's -60 G-constant does), scalingRatio 2 (moderate
+      // repulsion), adjustSizes FALSE (true creates starburst spokes
+      // around large-degree hubs — the thing we're fighting), and
+      // barnesHut for speed over ~2k nodes.
       statusEl.textContent = `Laying out ${nodes.length.toLocaleString()} nodes `
         + `(ForceAtlas2)...`;
       const settings = forceAtlas2.inferSettings(g);
       settings.barnesHutOptimize = g.order > 2000;
-      settings.barnesHutTheta = 0.8;
-      settings.linLogMode = true;
-      settings.strongGravityMode = true;
-      settings.gravity = 0.8;
-      settings.scalingRatio = 10;
-      settings.adjustSizes = true;
-      const iters = g.order > 20000 ? 120 : g.order > 5000 ? 250 : 400;
+      settings.barnesHutTheta = 0.5;
+      settings.gravity = 1.2;
+      settings.scalingRatio = 2;
+      settings.slowDown = 1;
+      settings.adjustSizes = false;
+      settings.outboundAttractionDistribution = false;
+      const iters = g.order > 20000 ? 300 : g.order > 5000 ? 600 : 800;
       const t0 = performance.now();
       // Yield to the browser once so the "Laying out..." status can paint
       // before the synchronous FA2 pass blocks the main thread.
