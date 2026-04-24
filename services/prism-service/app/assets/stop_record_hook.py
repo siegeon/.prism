@@ -5,9 +5,9 @@ Fires when Claude Code finishes a response. Parses the session
 transcript for duration/tokens/files/skills metrics and upserts one
 session_outcomes row on the PRISM service via record_session_outcome.
 
-Thin MCP-only implementation — no plugin, no local DB, no workflow
-logic. Reads .mcp.json for the MCP endpoint. Always exits 0; never
-blocks Claude Code.
+Thin MCP-only recorder — no local DB, no workflow logic. Reads
+.mcp.json for the MCP endpoint. Always exits 0; never blocks Claude
+Code.
 """
 
 from __future__ import annotations

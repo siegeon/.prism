@@ -194,7 +194,8 @@ TOOLS: list[Tool] = [
         name="record_session_outcome",
         description=(
             "Upsert one session_outcomes row for the current Claude Code "
-            "session. Called by the plugin's Stop hook. Fields: "
+            "session. Called by the Stop hook that prism_install ships. "
+            "Fields: "
             "session_id, duration_s, tokens_used, files_read, "
             "files_modified, skills_invoked. Persists to scores.db so "
             "the /sessions UI can render it."
@@ -215,8 +216,9 @@ TOOLS: list[Tool] = [
     Tool(
         name="record_skill_usage",
         description=(
-            "Record one skill invocation. Called by the plugin's "
-            "PostToolUse hook on Skill tool use. Feeds the Conductor's "
+            "Record one skill invocation. Called by the PostToolUse "
+            "hook that prism_install ships, on Skill tool use. Feeds "
+            "the Conductor's "
             "skill-ranking model."
         ),
         inputSchema={
@@ -234,8 +236,9 @@ TOOLS: list[Tool] = [
         name="record_outcome",
         description=(
             "Persist one PSP-scored execution outcome. Used by the "
-            "plugin's SubagentStop recorder and by workflow-step "
-            "recorders. Metrics dict accepts tokens_used, duration_s, "
+            "SubagentStop recorder that prism_install ships and by "
+            "workflow-step recorders. Metrics dict accepts tokens_used, "
+            "duration_s, "
             "retries, gate_passed, tests_passed, coverage_pct, "
             "traceability_pct, probe_accuracy."
         ),
@@ -1235,10 +1238,11 @@ if __name__ == "__main__":
 
 
 def _load_asset(filename: str) -> str:
-    """Read a shipped hook script from app/assets/. The plugin-side copy in
-    ``plugins/prism-devtools/hooks/`` must be kept in sync with the copy in
-    ``services/prism-service/app/assets/``; the assets version is the one
-    served to MCP-only clients via prism_install."""
+    """Read a shipped hook script from app/assets/. The copy shipped by
+    the ``prism-devtools`` Claude Code plugin at
+    ``plugins/prism-devtools/hooks/`` must be kept in sync with the copy
+    in ``services/prism-service/app/assets/``; the assets version is the
+    one served to MCP-only clients via ``prism_install``."""
     from pathlib import Path as _P
     try:
         return (_P(__file__).parent.parent / "assets" / filename).read_text(

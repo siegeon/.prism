@@ -153,9 +153,9 @@ class ConductorService:
 
         Reads the ``session_outcomes`` table populated by
         ``record_session_outcome`` (served by the MCP and written by the
-        plugin's Stop hook). Maps DB columns onto the keys the
-        /sessions UI expects (id, session_id, duration, tokens,
-        files_modified, recorded_at).
+        Stop hook that prism_install ships). Maps DB columns onto the
+        keys the /sessions UI expects (id, session_id, duration,
+        tokens, files_modified, recorded_at).
         """
         try:
             conn = self._scores_conn()
