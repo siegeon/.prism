@@ -39,6 +39,7 @@ class ProjectContext:
                 brain_db=str(self._data_dir / "brain.db"),
                 graph_db=str(self._data_dir / "graph.db"),
                 scores_db=str(self._data_dir / "scores.db"),
+                tasks_db=str(self._data_dir / "tasks.db"),
             )
             # Wire graph service for source-file staging
             self._brain_svc.graph_svc = self.graph_svc
