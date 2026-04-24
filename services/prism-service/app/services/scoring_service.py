@@ -85,6 +85,86 @@ def composite_score(components: dict[str, Any]) -> Optional[float]:
 
 
 # ======================================================================
+# LL-05 — CUPED residualization + per-operator baselines
+# ======================================================================
+
+
+def cuped_residualize(
+    quality_score: float,
+    operator_baseline: float,
+    global_baseline: float,
+    theta: float = 1.0,
+) -> float:
+    """CUPED adjustment: ``Y_cuped = Y - theta * (X - mean(X))``.
+
+    Deng/Xu/Kohavi/Walker 2013 — subtract the operator-specific
+    deviation from the global baseline before crediting the variant.
+    Keeps operator skill from inflating/deflating variant attribution.
+
+    When ``operator_baseline == global_baseline`` (e.g. unknown
+    operator defaulted to the global mean) the adjustment is zero and
+    this function degrades to the identity.
+
+    ``theta`` defaults to 1.0. Call :func:`recompute_theta` once a
+    project has ≥50 samples to replace with Cov(Y,X)/Var(X) for
+    maximal variance reduction.
+    """
+    return float(quality_score) - float(theta) * (
+        float(operator_baseline) - float(global_baseline)
+    )
+
+
+def compute_operator_baseline(
+    task_svc,
+    operator_id: str,
+    window_days: int = 90,
+    now: Optional[datetime] = None,
+) -> tuple[float, int]:
+    """Per-operator rolling merge rate + sample count.
+
+    Merge rate = (tasks with merge_sha) / (all tasks created in window)
+    for the given operator (``assigned_agent``). Unknown or new-operator
+    case returns ``(0.0, 0)``; callers typically treat that as "use the
+    global baseline" via :func:`cuped_residualize` degrading to identity.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=window_days)).isoformat()
+    row = task_svc._db.execute(
+        "SELECT "
+        "  COUNT(*) AS total, "
+        "  SUM(CASE WHEN merge_sha IS NOT NULL THEN 1 ELSE 0 END) AS merged "
+        "FROM tasks "
+        "WHERE assigned_agent = ? AND created_at >= ?",
+        (operator_id, cutoff),
+    ).fetchone()
+    total = int((row["total"] if row else 0) or 0)
+    if total == 0:
+        return 0.0, 0
+    merged = int((row["merged"] if row else 0) or 0)
+    return merged / total, total
+
+
+def recompute_theta(paired: Iterable[tuple[float, float]]) -> float:
+    """Variance-minimizing theta: ``Cov(Y,X) / Var(X)``.
+
+    ``paired`` yields (Y, X) pairs across recent tasks. Returns 1.0
+    fallback when there's not enough data or X has zero variance.
+    """
+    pairs = list(paired)
+    n = len(pairs)
+    if n < 50:
+        return 1.0
+    mean_y = sum(y for y, _ in pairs) / n
+    mean_x = sum(x for _, x in pairs) / n
+    var_x = sum((x - mean_x) ** 2 for _, x in pairs) / n
+    if var_x == 0.0:
+        return 1.0
+    cov_yx = sum((y - mean_y) * (x - mean_x) for y, x in pairs) / n
+    return cov_yx / var_x
+
+
+# ======================================================================
 # LL-04 — git walker + composite scorer wiring
 # ======================================================================
 
