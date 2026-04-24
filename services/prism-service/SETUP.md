@@ -89,7 +89,30 @@ Open **http://localhost:8080** to browse:
 
 Use the project selector dropdown in the nav bar to switch between projects.
 
-## 6. Connecting from another machine
+## 6. Updating PRISM
+
+TL;DR — ask Claude in your project:
+
+> Update PRISM from the `.prism` repo, rebuild my Docker, and then call `prism_install`.
+
+Claude will pull latest, restart the container with the new image,
+and call the install endpoint. PRISM's manifest tells Claude which
+hooks, commands, and subagents to refresh on your side. Idempotent
+and safe to re-run.
+
+Manual equivalent if you prefer:
+
+```bash
+cd ~/.prism && git pull origin main          # pull latest
+cd services/prism-service
+docker compose up -d --build                 # rebuild + restart
+```
+
+Then in Claude Code, invoke the `prism_install` MCP tool once —
+PRISM reads the project manifest and installs the client-side
+pieces (hooks, commands, subagents). No stored state is dropped.
+
+## 7. Connecting from another machine
 
 Change the URL in `.mcp.json` to point to the host running the container:
 
