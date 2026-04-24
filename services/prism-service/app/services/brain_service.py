@@ -74,10 +74,14 @@ class BrainService:
     _brain = None
     _available: bool = False
 
-    def __init__(self, brain_db: str, graph_db: str, scores_db: str) -> None:
+    def __init__(
+        self, brain_db: str, graph_db: str, scores_db: str,
+        tasks_db: Optional[str] = None,
+    ) -> None:
         self._brain_db = brain_db
         self._graph_db = graph_db
         self._scores_db = scores_db
+        self._tasks_db = tasks_db
         self._init_brain()
 
     def _init_brain(self) -> None:
@@ -89,6 +93,7 @@ class BrainService:
                 brain_db=self._brain_db,
                 graph_db=self._graph_db,
                 scores_db=self._scores_db,
+                tasks_db=self._tasks_db,
             )
             self._available = True
         except Exception as exc:
