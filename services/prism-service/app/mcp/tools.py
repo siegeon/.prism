@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
 
 from mcp.types import Tool, TextContent
@@ -1580,7 +1581,97 @@ def check_and_clear_cancel(project_id: str) -> bool:
 # Tool handler
 # ---------------------------------------------------------------------------
 
+# Tools whose responses must never get a reflection nudge prepended —
+# either because they're part of the reflection pipeline itself (would
+# create a feedback loop) or because the caller needs the response
+# structure unchanged (install manifest, guide prose).
+_NO_AUGMENT_TOOLS: frozenset[str] = frozenset({
+    "janitor_enqueue", "janitor_mark_stale", "janitor_check",
+    "janitor_submit", "janitor_abandon", "janitor_status",
+    "memory_invalidate", "prism_install", "prism_guide",
+})
+
+
 async def handle_tool(name: str, arguments: dict, *, project_id: str = "default") -> list[TextContent]:
+    """Outer MCP entry point. Dispatches to :func:`_dispatch_tool`, then
+    lets :func:`_maybe_augment_with_nudge` prepend a pending-reflection
+    header when appropriate (LL-09)."""
+    result = await _dispatch_tool(name, arguments, project_id=project_id)
+    if name in _NO_AUGMENT_TOOLS:
+        return result
+    try:
+        return _maybe_augment_with_nudge(result, project_id=project_id)
+    except Exception:
+        # Augmentation is strictly advisory — any failure here must not
+        # affect the tool result the caller actually needs.
+        return result
+
+
+def _maybe_augment_with_nudge(
+    result: list[TextContent], *, project_id: str,
+) -> list[TextContent]:
+    """Prefix the first TextContent with a PRISM_REFLECTION_PENDING
+    header when a pending candidate exists for this project AND we
+    haven't nudged it in the last 5 minutes. Updates last_nudged_at on
+    the candidate. Disabled globally by PRISM_MCP_AUGMENT_NUDGES=false.
+    """
+    import os as _os
+    import sqlite3 as _sq3
+    from datetime import datetime, timedelta, timezone
+
+    if _os.environ.get("PRISM_MCP_AUGMENT_NUDGES", "").lower() == "false":
+        return result
+    if not result:
+        return result
+
+    from app.project_context import get_project
+    try:
+        ctx = get_project(project_id)
+    except Exception:
+        return result
+
+    scores_path = str(ctx._data_dir / "scores.db")
+    if not Path(scores_path).exists():
+        return result
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=5)).isoformat()
+
+    conn = _sq3.connect(scores_path)
+    conn.row_factory = _sq3.Row
+    try:
+        # Oldest pending candidate not nudged in the last 5 min.
+        row = conn.execute(
+            "SELECT id, task_id FROM consolidation_candidates "
+            "WHERE status='pending' "
+            "  AND (last_nudged_at IS NULL OR last_nudged_at <= ?) "
+            "ORDER BY queued_at ASC LIMIT 1",
+            (cutoff,),
+        ).fetchone()
+        if row is None:
+            return result
+        cid = row["id"]
+        tid = row["task_id"] or ""
+        conn.execute(
+            "UPDATE consolidation_candidates SET last_nudged_at=? WHERE id=?",
+            (now.isoformat(), cid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    header = (
+        f"\u26a0\ufe0f PRISM_REFLECTION_PENDING candidate={cid} task={tid}\n"
+        "Before continuing, spawn the `prism-reflect` subagent. Call "
+        "`janitor_check` to fetch the brief, submit via `janitor_submit`.\n"
+        "---\n"
+    )
+    first = result[0]
+    augmented_text = header + (first.text or "")
+    return [TextContent(type="text", text=augmented_text)] + list(result[1:])
+
+
+async def _dispatch_tool(name: str, arguments: dict, *, project_id: str = "default") -> list[TextContent]:
     """Dispatch an MCP tool call to the appropriate service method.
 
     The *project_id* scopes all data access to the correct project.
