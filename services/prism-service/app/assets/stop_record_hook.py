@@ -5,9 +5,9 @@ Fires when Claude Code finishes a response. Parses the session
 transcript for duration/tokens/files/skills metrics and upserts one
 session_outcomes row on the PRISM service via record_session_outcome.
 
-Thin MCP-only implementation — no plugin, no local DB, no workflow
-logic. Reads .mcp.json for the MCP endpoint. Always exits 0; never
-blocks Claude Code.
+Thin MCP-only recorder — no local DB, no workflow logic. Reads
+.mcp.json for the MCP endpoint. Always exits 0; never blocks Claude
+Code.
 """
 
 from __future__ import annotations
@@ -154,6 +154,19 @@ def main() -> int:
         "files_read": metrics["files_read"],
         "files_modified": metrics["files_modified"],
         "skills_invoked": metrics["skills_invoked"],
+    })
+    # LL-10: flip any pending consolidation candidates whose scope
+    # overlaps this session's activity to stale, then requeue fresh.
+    # No subprocess, no LLM — just an MCP write. Scope is best-effort
+    # from transcript metrics; precise file-path extraction is a v2
+    # improvement.
+    _mcp_call(base, project, "janitor_mark_stale", {
+        "session_id": session_id,
+        "scope": {
+            "task_ids": [],
+            "memory_ids": [],
+            "file_paths": [],
+        },
     })
     return 0
 

@@ -3,7 +3,8 @@
 
 Fires when a sub-agent finishes. Records a row in the subagent_outcomes
 table via record_subagent_outcome. Does NOT enforce SFR certificate
-sections — that logic lives in the workflow-aware plugin recorder.
+sections — that logic lives in the workflow-aware recorder shipped
+by prism-devtools.
 
 Captures: validator name, parsed recommendation (APPROVE/REVISE/PASS/
 FAIL), evidence count (file:line citations in last message), tokens,

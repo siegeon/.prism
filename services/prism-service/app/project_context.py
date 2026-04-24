@@ -29,6 +29,7 @@ class ProjectContext:
         self._memory_svc = None
         self._conductor_svc = None
         self._governance = None
+        self._janitor_svc = None
 
     @property
     def brain_svc(self):
@@ -38,6 +39,7 @@ class ProjectContext:
                 brain_db=str(self._data_dir / "brain.db"),
                 graph_db=str(self._data_dir / "graph.db"),
                 scores_db=str(self._data_dir / "scores.db"),
+                tasks_db=str(self._data_dir / "tasks.db"),
             )
             # Wire graph service for source-file staging
             self._brain_svc.graph_svc = self.graph_svc
@@ -89,6 +91,15 @@ class ProjectContext:
                 scores_db=str(self._data_dir / "scores.db"),
             )
         return self._conductor_svc
+
+    @property
+    def janitor_svc(self):
+        if self._janitor_svc is None:
+            from app.services.janitor_service import JanitorService
+            self._janitor_svc = JanitorService(
+                scores_db=str(self._data_dir / "scores.db"),
+            )
+        return self._janitor_svc
 
     @property
     def governance(self):

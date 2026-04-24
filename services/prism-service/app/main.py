@@ -5,9 +5,9 @@ import threading
 
 from nicegui import ui, app
 
-from app.config import (DATA_DIR, PROJECTS_DIR,
+from app.config import (DATA_DIR, PROJECT_DIR, PROJECTS_DIR,
                          UI_PORT, MCP_PORT, GOVERNANCE_INTERVAL_SECONDS,
-                         DRIFT_INTERVAL_SECONDS)
+                         DRIFT_INTERVAL_SECONDS, QUALITY_INTERVAL_SECONDS)
 
 # Ensure base directories exist
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -74,10 +74,55 @@ def start_drift_timer():
         time.sleep(DRIFT_INTERVAL_SECONDS)
 
 
+def start_quality_timer():
+    """Score merged tasks against git truth on a cadence (LL-04).
+
+    Walks every project, calls ``score_merged_tasks`` so any task that
+    landed on main in the last 14 days gets a composite Layer-A quality
+    score written to ``task_quality_rollup``. PRISM_QUALITY_INTERVAL=0
+    disables entirely.
+    """
+    import sys as _sys
+    import time
+    if QUALITY_INTERVAL_SECONDS <= 0:
+        print("Quality timer disabled (PRISM_QUALITY_INTERVAL=0)",
+              file=_sys.stderr)
+        return
+    from app.project_context import get_project, get_all_projects
+    from app.services.scoring_service import score_merged_tasks
+    print(
+        f"Quality timer running every {QUALITY_INTERVAL_SECONDS}s",
+        file=_sys.stderr,
+    )
+    while True:
+        try:
+            for pid in get_all_projects():
+                try:
+                    ctx = get_project(pid)
+                    scored = score_merged_tasks(
+                        tasks_svc=ctx.task_svc,
+                        scores_db=str(ctx._data_dir / "scores.db"),
+                        repo_path=str(PROJECT_DIR),
+                    )
+                    if scored:
+                        print(
+                            f"[quality] {pid}: scored {len(scored)} merged "
+                            f"task(s)",
+                            file=_sys.stderr,
+                        )
+                except Exception as e:
+                    print(f"Quality cycle error ({pid}): {e}",
+                          file=_sys.stderr)
+        except Exception as e:
+            print(f"Quality timer error: {e}", file=_sys.stderr)
+        time.sleep(QUALITY_INTERVAL_SECONDS)
+
+
 # Import UI pages (they register routes with NiceGUI)
 from app.ui import (
     dashboard, brain_page, graph_page, memory_page,
     tasks_page, conductor_page, sessions_page, retrievals_page,
+    learning_page, consolidation_page,
 )
 
 # Guard against double-start using file lock
@@ -93,6 +138,7 @@ async def startup():
         threading.Thread(target=start_mcp_server, daemon=True).start()
         threading.Thread(target=start_governance_timer, daemon=True).start()
         threading.Thread(target=start_drift_timer, daemon=True).start()
+        threading.Thread(target=start_quality_timer, daemon=True).start()
     except Exception as e:
         print(f"Startup error: {e}")
 

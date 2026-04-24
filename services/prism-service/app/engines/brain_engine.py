@@ -32,6 +32,79 @@ class BrainCorruptError(Exception):
     """Raised when a Brain database file fails SQLite integrity check."""
 
 
+def encode_task_text(text: str) -> Optional[bytes]:
+    """Encode arbitrary text via the loaded MiniLM embedder and return
+    packed float32 bytes suitable for storing in a SQLite BLOB column.
+
+    Reused by TaskService (LL-03) so the learning loop's task-similarity
+    retrieval lives on the same vectors Brain uses for document search.
+    Returns ``None`` when no embedder is loaded — callers must handle
+    the offline case gracefully. First 2048 chars only (model ctx cap).
+    """
+    global _MODEL
+    if _MODEL is None:
+        return None
+    try:
+        import numpy as _np
+        vec = _MODEL.encode([text[:2048]])[0]
+        return _np.asarray(vec, dtype=_np.float32).tobytes()
+    except Exception:
+        return None
+
+
+def decode_task_embedding(blob: Optional[bytes]) -> Optional[list[float]]:
+    """Reverse of :func:`encode_task_text` — packed bytes → list[float]."""
+    if not blob:
+        return None
+    try:
+        import numpy as _np
+        return _np.frombuffer(blob, dtype=_np.float32).tolist()
+    except Exception:
+        return None
+
+
+def _similar_task_ids(
+    tasks_conn: sqlite3.Connection,
+    query_task_id: str,
+    k: int = 20,
+) -> list[tuple[str, float]]:
+    """Return the top-k task_ids by cosine similarity to ``query_task_id``.
+
+    Excludes the query task itself. Returns ``[(task_id, cosine), ...]``
+    sorted by cosine descending. Tasks without an embedding (or with a
+    mismatched-dim embedding) are skipped.
+    """
+    import math
+    row = tasks_conn.execute(
+        "SELECT embedding FROM tasks WHERE id=?", (query_task_id,)
+    ).fetchone()
+    if row is None:
+        return []
+    q_blob = row[0] if not hasattr(row, "keys") else row["embedding"]
+    q_vec = decode_task_embedding(q_blob)
+    if not q_vec:
+        return []
+    q_norm = math.sqrt(sum(x * x for x in q_vec)) or 1.0
+
+    out: list[tuple[str, float]] = []
+    for r in tasks_conn.execute(
+        "SELECT id, embedding FROM tasks "
+        "WHERE id != ? AND embedding IS NOT NULL",
+        (query_task_id,),
+    ).fetchall():
+        tid = r[0] if not hasattr(r, "keys") else r["id"]
+        blob = r[1] if not hasattr(r, "keys") else r["embedding"]
+        v = decode_task_embedding(blob)
+        if not v or len(v) != len(q_vec):
+            continue
+        dot = sum(a * b for a, b in zip(q_vec, v))
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        sim = dot / (q_norm * n)
+        out.append((tid, sim))
+    out.sort(key=lambda t: t[1], reverse=True)
+    return out[:k]
+
+
 # ---------------------------------------------------------------------------
 # Optional dependency detection
 # ---------------------------------------------------------------------------
@@ -457,10 +530,17 @@ class Brain:
         brain_db: str = "/data/brain.db",
         graph_db: str = "/data/graph.db",
         scores_db: str = "/data/scores.db",
+        tasks_db: Optional[str] = None,
     ) -> None:
         self._brain_db_path = brain_db
         self._graph_db_path = graph_db
         self._scores_db_path = scores_db
+        # Optional read-only handle to the project's tasks.db. Used by
+        # LL-06's best_prompt(similar_to_task_id=...) to pull the
+        # embedding BLOB and compute cosine similarity across tasks.
+        # Falls back to global score_aggregates when not configured.
+        self._tasks_db_path: Optional[str] = tasks_db
+        self._tasks: Optional[sqlite3.Connection] = None
         self._current_step_id: Optional[str] = None
         self.last_result_count: int = 0
 
@@ -470,6 +550,11 @@ class Brain:
         self._brain = self._connect(brain_db)
         self._graph = self._connect(graph_db)
         self._scores = self._connect(scores_db)
+        if tasks_db is not None:
+            try:
+                self._tasks = self._connect(tasks_db)
+            except sqlite3.DatabaseError:
+                self._tasks = None
 
         for label, db in (
             (brain_db, self._brain),
@@ -717,6 +802,117 @@ class Brain:
                 duration_s REAL DEFAULT 0.0,
                 timestamp TEXT DEFAULT (datetime('now'))
             );
+
+            -- ---- Learning-loop v5 tables (LL-01) ----------------------------
+            -- Ties Claude sessions to PRISM tasks so per-task rollup joins
+            -- through the full session history. Schema-only; populated by
+            -- later LL-04 / LL-07 subtasks.
+            CREATE TABLE IF NOT EXISTS task_sessions (
+                task_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT,
+                PRIMARY KEY (task_id, session_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_sessions_session_id
+                ON task_sessions(session_id);
+            CREATE INDEX IF NOT EXISTS idx_task_sessions_task_id
+                ON task_sessions(task_id);
+
+            -- Which prompt variant was used for which (task, step). Feeds
+            -- Brain.best_prompt(similar_to_task_id=...) in LL-06.
+            CREATE TABLE IF NOT EXISTS task_variants (
+                task_id TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                prompt_id TEXT NOT NULL,
+                persona TEXT,
+                recorded_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (task_id, step_id, prompt_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_variants_task_id
+                ON task_variants(task_id);
+            CREATE INDEX IF NOT EXISTS idx_task_variants_prompt_id
+                ON task_variants(prompt_id);
+
+            -- Quantitative + qualitative rollup per task (one row per merged
+            -- task). `quality_score` is the Layer-A composite, `cuped_score`
+            -- is the operator-baseline-adjusted value, `qualitative_score`
+            -- is the Layer-B reflection overlay, `components_json` stores
+            -- the raw signals for auditability.
+            CREATE TABLE IF NOT EXISTS task_quality_rollup (
+                task_id TEXT PRIMARY KEY,
+                quality_score REAL,
+                qualitative_score REAL,
+                cuped_score REAL,
+                components_json TEXT,
+                scored_at TEXT DEFAULT (datetime('now'))
+            );
+
+            -- Per-operator rolling merge-rate baseline for CUPED
+            -- residualization (LL-05). Keeps operator skill from being
+            -- credited to the variant.
+            CREATE TABLE IF NOT EXISTS operator_baselines (
+                operator_id TEXT PRIMARY KEY,
+                window_start TEXT,
+                merge_rate REAL,
+                sample_n INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            -- Layer-B queue. Stop hook fills this via janitor_mark_stale;
+            -- janitor_check dispenses; caller's prism-reflect subagent
+            -- submits back.
+            CREATE TABLE IF NOT EXISTS consolidation_candidates (
+                id TEXT PRIMARY KEY,
+                task_id TEXT,
+                session_id TEXT,
+                trigger TEXT,
+                scope_json TEXT,
+                status TEXT DEFAULT 'pending',
+                queued_at TEXT DEFAULT (datetime('now')),
+                staled_at TEXT,
+                dispensed_at TEXT,
+                completed_at TEXT,
+                retry_count INTEGER DEFAULT 0,
+                last_nudged_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_consolidation_candidates_session_id
+                ON consolidation_candidates(session_id);
+            CREATE INDEX IF NOT EXISTS idx_consolidation_candidates_task_id
+                ON consolidation_candidates(task_id);
+            CREATE INDEX IF NOT EXISTS idx_consolidation_candidates_status
+                ON consolidation_candidates(status);
+
+            -- Audit trail of every completed (or errored) reflection run.
+            -- Output JSON is preserved verbatim — invalidated memories can
+            -- still be traced back to the run that retired them.
+            CREATE TABLE IF NOT EXISTS consolidation_runs (
+                id TEXT PRIMARY KEY,
+                candidate_id TEXT,
+                run_at TEXT DEFAULT (datetime('now')),
+                output_json TEXT,
+                subagent_type TEXT,
+                confidence REAL,
+                schema_valid INTEGER DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_consolidation_runs_candidate_id
+                ON consolidation_runs(candidate_id);
+
+            -- Memory metadata sidecar. The JSONL-under-mulch store remains
+            -- the source of truth for memory *content*; this SQL table
+            -- tracks the queryable metadata the janitor needs: session
+            -- attribution, recency, soft-invalidation status.
+            CREATE TABLE IF NOT EXISTS memory_meta (
+                memory_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                last_recalled_at TEXT,
+                recall_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active'
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_meta_session_id
+                ON memory_meta(session_id);
+            CREATE INDEX IF NOT EXISTS idx_memory_meta_status
+                ON memory_meta(status);
         """)
 
     # ------------------------------------------------------------------
@@ -2951,17 +3147,40 @@ class Brain:
     # Prompt management
     # ------------------------------------------------------------------
 
+    # LL-06: sample-threshold for per-variant observation count on the
+    # similar-task path. Below 5 observations, a variant's average is
+    # too noisy to influence ranking.
+    _SIMILAR_TASK_K = 20
+    _VARIANT_SAMPLE_THRESHOLD = 5
+    # Cosine-similarity floor for a neighbor to count at all. Below
+    # this, the task is "not actually similar" and including it would
+    # let cross-cluster noise dominate when both clusters are in the
+    # top-k (the weighted mean normalizes the weight factor out).
+    _MIN_SIMILARITY = 0.3
+
     def best_prompt(
         self,
         persona: str,
         step_id: str,
         difficulty: Optional[str] = None,
+        similar_to_task_id: Optional[str] = None,
     ) -> str:
         """Return highest-scoring prompt variant ID for persona/step.
 
-        When difficulty is provided, prefers variants that have performed
-        well on runs of that difficulty level, falling back to overall best.
+        When ``similar_to_task_id`` is provided and the LL-06 similarity
+        path has enough data, rank variants by their CUPED-adjusted
+        quality on the top-20 most similar past tasks (by cosine on
+        task embeddings). Otherwise falls through to the historical
+        difficulty / score_aggregates path.
         """
+        # LL-06 similar-task path
+        if similar_to_task_id and self._tasks is not None:
+            pick = self._best_prompt_by_similar_task(
+                persona, step_id, similar_to_task_id,
+            )
+            if pick is not None:
+                return pick
+
         if difficulty:
             row = self._scores.execute(
                 "SELECT prompt_id, AVG(score) AS avg_score, COUNT(*) AS cnt "
@@ -2981,6 +3200,67 @@ class Brain:
             (persona, step_id),
         ).fetchone()
         return row["prompt_id"] if row else f"{persona}/default"
+
+    def _best_prompt_by_similar_task(
+        self,
+        persona: str,
+        step_id: str,
+        task_id: str,
+    ) -> Optional[str]:
+        """LL-06 core — rank variants by CUPED-weighted quality on the
+        top-k cosine-similar past tasks. Returns None when no variant
+        has crossed the sample threshold (caller falls back)."""
+        neighbors = _similar_task_ids(
+            self._tasks, task_id, k=self._SIMILAR_TASK_K,
+        )
+        # Drop neighbors below the similarity floor so cross-cluster
+        # tasks with high quality don't dominate via the weighted mean.
+        neighbors = [
+            (tid, sim) for tid, sim in neighbors
+            if sim >= self._MIN_SIMILARITY
+        ]
+        if not neighbors:
+            return None
+        sim_map = {tid: sim for tid, sim in neighbors}
+        placeholders = ",".join("?" * len(sim_map))
+        # Join task_variants × task_quality_rollup on the similar-task
+        # set. Prefer cuped_score; fall back to quality_score when
+        # CUPED hasn't been computed yet.
+        rows = self._scores.execute(
+            f"SELECT tv.task_id, tv.prompt_id, "
+            f"       COALESCE(qr.cuped_score, qr.quality_score) AS score "
+            f"FROM task_variants tv "
+            f"JOIN task_quality_rollup qr ON qr.task_id = tv.task_id "
+            f"WHERE tv.persona=? AND tv.step_id=? "
+            f"  AND tv.task_id IN ({placeholders})",
+            (persona, step_id, *sim_map.keys()),
+        ).fetchall()
+        if not rows:
+            return None
+
+        # Weighted average per prompt_id.
+        agg: dict[str, dict[str, float]] = {}
+        for r in rows:
+            w = max(0.0, float(sim_map.get(r["task_id"], 0.0)))
+            entry = agg.setdefault(
+                r["prompt_id"], {"weighted": 0.0, "weight": 0.0, "n": 0}
+            )
+            score = float(r["score"] or 0.0)
+            entry["weighted"] += score * w
+            entry["weight"] += w
+            entry["n"] += 1
+
+        # Sample-threshold gate: a variant with fewer than
+        # VARIANT_SAMPLE_THRESHOLD observations across similar tasks
+        # is correlational noise, not signal. Filter them out.
+        eligible = {
+            pid: (e["weighted"] / e["weight"]) if e["weight"] > 0 else 0.0
+            for pid, e in agg.items()
+            if e["n"] >= self._VARIANT_SAMPLE_THRESHOLD
+        }
+        if not eligible:
+            return None
+        return max(eligible.items(), key=lambda kv: kv[1])[0]
 
     def get_prompt(self, persona: str, variant: str = "default") -> str:
         """Return prompt variant text from scores.db or shipped prompts."""

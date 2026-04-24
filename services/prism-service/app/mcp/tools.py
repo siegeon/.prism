@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
 
 from mcp.types import Tool, TextContent
@@ -194,7 +195,8 @@ TOOLS: list[Tool] = [
         name="record_session_outcome",
         description=(
             "Upsert one session_outcomes row for the current Claude Code "
-            "session. Called by the plugin's Stop hook. Fields: "
+            "session. Called by the Stop hook that prism_install ships. "
+            "Fields: "
             "session_id, duration_s, tokens_used, files_read, "
             "files_modified, skills_invoked. Persists to scores.db so "
             "the /sessions UI can render it."
@@ -215,8 +217,9 @@ TOOLS: list[Tool] = [
     Tool(
         name="record_skill_usage",
         description=(
-            "Record one skill invocation. Called by the plugin's "
-            "PostToolUse hook on Skill tool use. Feeds the Conductor's "
+            "Record one skill invocation. Called by the PostToolUse "
+            "hook that prism_install ships, on Skill tool use. Feeds "
+            "the Conductor's "
             "skill-ranking model."
         ),
         inputSchema={
@@ -234,8 +237,9 @@ TOOLS: list[Tool] = [
         name="record_outcome",
         description=(
             "Persist one PSP-scored execution outcome. Used by the "
-            "plugin's SubagentStop recorder and by workflow-step "
-            "recorders. Metrics dict accepts tokens_used, duration_s, "
+            "SubagentStop recorder that prism_install ships and by "
+            "workflow-step recorders. Metrics dict accepts tokens_used, "
+            "duration_s, "
             "retries, gate_passed, tests_passed, coverage_pct, "
             "traceability_pct, probe_accuracy."
         ),
@@ -507,6 +511,14 @@ TOOLS: list[Tool] = [
                     "description": "semantic (fact/convention), episodic (specific incident/debug session), procedural (how-to/template). Default: semantic.",
                     "default": "semantic",
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional. When provided, stamps the memory_meta "
+                        "sidecar row with this session so the janitor can "
+                        "tie memories back to the session that wrote them."
+                    ),
+                },
             },
             "required": ["domain", "name", "description", "type", "classification"],
         },
@@ -525,6 +537,126 @@ TOOLS: list[Tool] = [
                 "limit": {"type": "integer", "description": "Max results", "default": 5},
             },
             "required": ["query"],
+        },
+    ),
+    # ------------------------------------------------------------------
+    # LL-08 — Janitor / Layer-B queue endpoints. PRISM schedules the
+    # work; the caller's Claude does the LLM compute via the prism-
+    # reflect sub-agent. See services/janitor_service.py for the
+    # underlying semantics.
+    # ------------------------------------------------------------------
+    Tool(
+        name="janitor_enqueue",
+        description=(
+            "Enqueue a consolidation candidate. Idempotent on "
+            "(task_id, trigger) within a 10-min window. Fire-and-forget "
+            "from the Stop hook."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "session_id": {"type": "string"},
+                "trigger": {"type": "string",
+                             "description": "e.g. session_end, task_done, revert_detected, staleness_sweep"},
+                "scope": {
+                    "type": "object",
+                    "description": "{task_ids, memory_ids, file_paths} — what the session touched",
+                },
+            },
+            "required": ["trigger"],
+        },
+    ),
+    Tool(
+        name="janitor_mark_stale",
+        description=(
+            "Flip pending candidates whose scope overlaps the session's "
+            "activity to status=stale and requeue fresh siblings. Called "
+            "by the Stop hook so the next reflection sees current state."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "scope": {
+                    "type": "object",
+                    "description": "{task_ids, memory_ids, file_paths} session touched",
+                },
+            },
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="janitor_check",
+        description=(
+            "Return {ready, brief}. Dispenses at most one pending "
+            "candidate per call — if ready, the brief is a subagent "
+            "work packet (question, context, mcps_available, "
+            "investigation_guidance, response_schema). Enforces the 1h "
+            "min queue age and 5-min abandon backoff."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="janitor_submit",
+        description=(
+            "Post the sub-agent's JSON output. Server validates the "
+            "response schema, writes consolidation_runs, enriches "
+            "task_quality_rollup.qualitative_score. Malformed → reject."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "output_json": {"type": "object"},
+            },
+            "required": ["candidate_id", "output_json"],
+        },
+    ),
+    Tool(
+        name="janitor_abandon",
+        description=(
+            "Give up on a dispensed candidate. Increments retry_count; "
+            "hard limit of 3 before status=abandoned."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["candidate_id"],
+        },
+    ),
+    Tool(
+        name="janitor_status",
+        description=(
+            "Return queue depth by status + last-nudged timestamps. Used "
+            "by the /consolidation UI and by operators debugging why "
+            "nothing is dispensing."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="memory_invalidate",
+        description=(
+            "Soft-delete a memory by flipping its memory_meta row to "
+            "status=invalidated. Row is preserved for audit; the JSONL "
+            "content stays where it is. Called by the prism-reflect "
+            "sub-agent when a reflection determines a memory no longer "
+            "applies."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["memory_id"],
         },
     ),
     Tool(
@@ -1226,6 +1358,49 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # LL-10: SessionStart reflection check. If a consolidation
+    # candidate is ready, emit hookSpecificOutput.additionalContext so
+    # Claude sees the brief on its first turn and can delegate to the
+    # prism-reflect sub-agent. Silent no-op when nothing is pending.
+    # SessionStart hooks receive a small JSON payload on stdin; extract
+    # session_id so janitor_check can rate-limit and so the emitted
+    # additionalContext can be linked to this session.
+    session_id = ""
+    try:
+        import json as _json
+        import sys as _sys
+        session_id = (
+            _json.loads(_sys.stdin.read() or "{}").get("session_id", "")
+        )
+    except Exception:
+        pass
+    if session_id:
+        try:
+            chk_resp = _mcp_call(
+                base, project, "janitor_check", {"session_id": session_id},
+            )
+            payload = _parse_result(chk_resp) or {}
+            if payload.get("ready") and payload.get("brief"):
+                brief = payload["brief"]
+                additional = (
+                    f"PRISM reflection pending: candidate "
+                    f"{brief.get('candidate_id', '?')}. Spawn the "
+                    f"`prism-reflect` subagent using the brief below — "
+                    f"call `janitor_check` if you need the live version, "
+                    f"submit via `janitor_submit`. Brief: "
+                    f"{json.dumps(brief)[:6000]}"
+                )
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "additionalContext": additional,
+                    },
+                }))
+        except Exception as e:
+            print(
+                f"[prism-sync] janitor_check failed: {e!r}",
+                file=sys.stderr,
+            )
+
     return 0
 
 
@@ -1235,10 +1410,11 @@ if __name__ == "__main__":
 
 
 def _load_asset(filename: str) -> str:
-    """Read a shipped hook script from app/assets/. The plugin-side copy in
-    ``plugins/prism-devtools/hooks/`` must be kept in sync with the copy in
-    ``services/prism-service/app/assets/``; the assets version is the one
-    served to MCP-only clients via prism_install."""
+    """Read a shipped hook script from app/assets/. The copy shipped by
+    the ``prism-devtools`` Claude Code plugin at
+    ``plugins/prism-devtools/hooks/`` must be kept in sync with the copy
+    in ``services/prism-service/app/assets/``; the assets version is the
+    one served to MCP-only clients via ``prism_install``."""
     from pathlib import Path as _P
     try:
         return (_P(__file__).parent.parent / "assets" / filename).read_text(
@@ -1252,6 +1428,11 @@ _FEEDBACK_HOOK_SCRIPT = _load_asset("feedback_signal_hook.py")
 _STOP_HOOK_SCRIPT = _load_asset("stop_record_hook.py")
 _SUBAGENT_HOOK_SCRIPT = _load_asset("subagent_record_hook.py")
 _SKILL_HOOK_SCRIPT = _load_asset("skill_usage_hook.py")
+# LL-10 — subagent definition + slash command shipped alongside the
+# hook scripts so Claude has something to match on when it sees the
+# SessionStart additionalContext nudge or the MCP-response header.
+_REFLECT_AGENT_MD = _load_asset("prism_reflect_agent.md")
+_REFLECT_COMMAND_MD = _load_asset("prism_reflect_command.md")
 
 
 def _install_manifest(project_id: str) -> dict:
@@ -1382,6 +1563,20 @@ def _install_manifest(project_id: str) -> dict:
                 "content": _SKILL_HOOK_SCRIPT,
                 "mode": "0755",
             },
+            # LL-10 — ship the reflection sub-agent + slash command so
+            # Claude has something to match on when it sees the
+            # SessionStart additionalContext nudge or the MCP-response
+            # header from LL-09.
+            {
+                "path": ".claude/agents/prism-reflect.md",
+                "action": "create",
+                "content": _REFLECT_AGENT_MD,
+            },
+            {
+                "path": ".claude/commands/prism-reflect.md",
+                "action": "create",
+                "content": _REFLECT_COMMAND_MD,
+            },
         ],
         "verification_steps": [
             "After Claude restart, re-invoke any tool and confirm no errors.",
@@ -1390,6 +1585,8 @@ def _install_manifest(project_id: str) -> dict:
             "logs for '[prism-sync] refreshed 1 drifted file(s)'.",
             "Finish a Claude response, reload /sessions — expect a new row "
             "for the session_id just recorded.",
+            "After any merged task, run `/prism-reflect` — it should drain "
+            "one pending candidate via the prism-reflect subagent.",
         ],
     }
 
@@ -1448,7 +1645,97 @@ def check_and_clear_cancel(project_id: str) -> bool:
 # Tool handler
 # ---------------------------------------------------------------------------
 
+# Tools whose responses must never get a reflection nudge prepended —
+# either because they're part of the reflection pipeline itself (would
+# create a feedback loop) or because the caller needs the response
+# structure unchanged (install manifest, guide prose).
+_NO_AUGMENT_TOOLS: frozenset[str] = frozenset({
+    "janitor_enqueue", "janitor_mark_stale", "janitor_check",
+    "janitor_submit", "janitor_abandon", "janitor_status",
+    "memory_invalidate", "prism_install", "prism_guide",
+})
+
+
 async def handle_tool(name: str, arguments: dict, *, project_id: str = "default") -> list[TextContent]:
+    """Outer MCP entry point. Dispatches to :func:`_dispatch_tool`, then
+    lets :func:`_maybe_augment_with_nudge` prepend a pending-reflection
+    header when appropriate (LL-09)."""
+    result = await _dispatch_tool(name, arguments, project_id=project_id)
+    if name in _NO_AUGMENT_TOOLS:
+        return result
+    try:
+        return _maybe_augment_with_nudge(result, project_id=project_id)
+    except Exception:
+        # Augmentation is strictly advisory — any failure here must not
+        # affect the tool result the caller actually needs.
+        return result
+
+
+def _maybe_augment_with_nudge(
+    result: list[TextContent], *, project_id: str,
+) -> list[TextContent]:
+    """Prefix the first TextContent with a PRISM_REFLECTION_PENDING
+    header when a pending candidate exists for this project AND we
+    haven't nudged it in the last 5 minutes. Updates last_nudged_at on
+    the candidate. Disabled globally by PRISM_MCP_AUGMENT_NUDGES=false.
+    """
+    import os as _os
+    import sqlite3 as _sq3
+    from datetime import datetime, timedelta, timezone
+
+    if _os.environ.get("PRISM_MCP_AUGMENT_NUDGES", "").lower() == "false":
+        return result
+    if not result:
+        return result
+
+    from app.project_context import get_project
+    try:
+        ctx = get_project(project_id)
+    except Exception:
+        return result
+
+    scores_path = str(ctx._data_dir / "scores.db")
+    if not Path(scores_path).exists():
+        return result
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=5)).isoformat()
+
+    conn = _sq3.connect(scores_path)
+    conn.row_factory = _sq3.Row
+    try:
+        # Oldest pending candidate not nudged in the last 5 min.
+        row = conn.execute(
+            "SELECT id, task_id FROM consolidation_candidates "
+            "WHERE status='pending' "
+            "  AND (last_nudged_at IS NULL OR last_nudged_at <= ?) "
+            "ORDER BY queued_at ASC LIMIT 1",
+            (cutoff,),
+        ).fetchone()
+        if row is None:
+            return result
+        cid = row["id"]
+        tid = row["task_id"] or ""
+        conn.execute(
+            "UPDATE consolidation_candidates SET last_nudged_at=? WHERE id=?",
+            (now.isoformat(), cid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    header = (
+        f"\u26a0\ufe0f PRISM_REFLECTION_PENDING candidate={cid} task={tid}\n"
+        "Before continuing, spawn the `prism-reflect` subagent. Call "
+        "`janitor_check` to fetch the brief, submit via `janitor_submit`.\n"
+        "---\n"
+    )
+    first = result[0]
+    augmented_text = header + (first.text or "")
+    return [TextContent(type="text", text=augmented_text)] + list(result[1:])
+
+
+async def _dispatch_tool(name: str, arguments: dict, *, project_id: str = "default") -> list[TextContent]:
     """Dispatch an MCP tool call to the appropriate service method.
 
     The *project_id* scopes all data access to the correct project.
@@ -1902,7 +2189,117 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 importance=arguments.get("importance", 5),
                 memory_type=arguments.get("memory_type", "semantic"),
             )
+            # LL-08: when the caller provides a session_id, stamp a
+            # memory_meta row so the janitor can later correlate this
+            # memory with the session that wrote it. JSONL remains the
+            # source of truth for content; memory_meta is a SQL sidecar
+            # for queryable metadata only.
+            sid = arguments.get("session_id")
+            if sid:
+                # Accept dict, dataclass, or pydantic-like: memory_svc
+                # returns an ExpertiseEntry dataclass today, but keep
+                # attribute+mapping lookup so a future shape change
+                # doesn't silently drop the stamp.
+                mem_id = None
+                for attr in ("id", "entry_id", "memory_id"):
+                    if isinstance(result, dict):
+                        mem_id = result.get(attr)
+                    else:
+                        mem_id = getattr(result, attr, None)
+                    if mem_id:
+                        break
+                if mem_id:
+                    import sqlite3 as _sq3
+                    _c = _sq3.connect(str(ctx._data_dir / "scores.db"))
+                    try:
+                        _c.execute(
+                            "INSERT OR REPLACE INTO memory_meta "
+                            "(memory_id, session_id, status) "
+                            "VALUES (?, ?, 'active')",
+                            (mem_id, sid),
+                        )
+                        _c.commit()
+                    finally:
+                        _c.close()
             return [TextContent(type="text", text=_json(result))]
+
+        if name == "memory_invalidate":
+            import sqlite3 as _sq3
+            mem_id = arguments["memory_id"]
+            reason = arguments.get("reason", "")
+            _c = _sq3.connect(str(ctx._data_dir / "scores.db"))
+            try:
+                # INSERT OR REPLACE so memories that never had a
+                # memory_meta row still get one (invalidated directly
+                # without having been session-tagged first).
+                _c.execute(
+                    "INSERT INTO memory_meta (memory_id, status) "
+                    "VALUES (?, 'invalidated') "
+                    "ON CONFLICT(memory_id) DO UPDATE SET status='invalidated'",
+                    (mem_id,),
+                )
+                _c.commit()
+            finally:
+                _c.close()
+            return [TextContent(type="text", text=_json({
+                "accepted": True, "memory_id": mem_id, "reason": reason,
+            }))]
+
+        # ------------------------------------------------------------------
+        # LL-08 — Janitor / Layer-B queue endpoints
+        # ------------------------------------------------------------------
+        if name == "janitor_enqueue":
+            cid = ctx.janitor_svc.enqueue(
+                task_id=arguments.get("task_id"),
+                session_id=arguments.get("session_id"),
+                trigger=arguments.get("trigger", "manual"),
+                scope=arguments.get("scope"),
+            )
+            return [TextContent(type="text", text=_json({"candidate_id": cid}))]
+
+        if name == "janitor_mark_stale":
+            staled = ctx.janitor_svc.mark_stale(
+                session_id=arguments["session_id"],
+                scope=arguments.get("scope"),
+            )
+            return [TextContent(type="text", text=_json({"staled": staled}))]
+
+        if name == "janitor_check":
+            res = ctx.janitor_svc.check(session_id=arguments["session_id"])
+            return [TextContent(type="text", text=_json(res))]
+
+        if name == "janitor_submit":
+            res = ctx.janitor_svc.submit(
+                candidate_id=arguments["candidate_id"],
+                output_json=arguments["output_json"],
+            )
+            return [TextContent(type="text", text=_json(res))]
+
+        if name == "janitor_abandon":
+            res = ctx.janitor_svc.abandon(
+                candidate_id=arguments["candidate_id"],
+                reason=arguments.get("reason", ""),
+            )
+            return [TextContent(type="text", text=_json(res))]
+
+        if name == "janitor_status":
+            _db = ctx.janitor_svc._db
+            rows = _db.execute(
+                "SELECT status, COUNT(*) AS n FROM consolidation_candidates "
+                "GROUP BY status"
+            ).fetchall()
+            counts = {r["status"]: r["n"] for r in rows}
+            recent_nudge = _db.execute(
+                "SELECT MAX(last_nudged_at) AS ts FROM consolidation_candidates"
+            ).fetchone()
+            return [TextContent(type="text", text=_json({
+                "pending": counts.get("pending", 0),
+                "dispensed": counts.get("dispensed", 0),
+                "completed": counts.get("completed", 0),
+                "abandoned": counts.get("abandoned", 0),
+                "stale": counts.get("stale", 0),
+                "last_nudge_at": recent_nudge["ts"] if recent_nudge else None,
+            }))]
 
         if name == "memory_recall":
             results = memory_svc.recall(

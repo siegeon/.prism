@@ -28,6 +28,13 @@ DRIFT_INTERVAL_SECONDS = int(
     os.environ.get("PRISM_DRIFT_INTERVAL", "1800"),  # 30 min default
 )
 
+# Quality timer (LL-04) — how often to score merged tasks against git
+# truth. 6h default so the 14d durability window has time to accumulate
+# revert/churn/follow-up signals. 0 disables.
+QUALITY_INTERVAL_SECONDS = int(
+    os.environ.get("PRISM_QUALITY_INTERVAL", "21600"),  # 6h default
+)
+
 # Shelf-life defaults per domain (days)
 DOMAIN_SHELF_LIFE: dict[str, int] = {
     "default": 30,
