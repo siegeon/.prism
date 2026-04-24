@@ -164,21 +164,27 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           edgesDrawn++;
         } catch (_) {}
       }
-      // ForceAtlas2 — match graphify's organic look. Start from
-      // inferSettings' defaults (tuned per graph size) and only flip
-      // the Barnes-Hut optimisation on above ~2k nodes so large graphs
-      // stay tractable. NOTE: previous config used linLogMode +
-      // strongGravityMode + scalingRatio=10, which shattered the
-      // graph into isolated hairballs — the opposite of what we want.
-      // Default FA2 (linear mode, regular gravity) preserves edge-
-      // distance relationships and gives the "hairball-with-structure"
-      // appearance graphify produces.
+      // ForceAtlas2 — tune to match graphify's vis.js Barnes-Hut
+      // output (single organic hairball with visible community
+      // structure). vis.js config we're mimicking:
+      //   gravitationalConstant -60, springLength 120, springConstant
+      //   0.08, damping 0.4.
+      // FA2 equivalents: gravity 1.2 (pulls components together like
+      // vis.js's -60 G-constant does), scalingRatio 2 (moderate
+      // repulsion), adjustSizes FALSE (true creates starburst spokes
+      // around large-degree hubs — the thing we're fighting), and
+      // barnesHut for speed over ~2k nodes.
       statusEl.textContent = `Laying out ${nodes.length.toLocaleString()} nodes `
         + `(ForceAtlas2)...`;
       const settings = forceAtlas2.inferSettings(g);
       settings.barnesHutOptimize = g.order > 2000;
-      settings.adjustSizes = true;
-      const iters = g.order > 20000 ? 200 : g.order > 5000 ? 400 : 600;
+      settings.barnesHutTheta = 0.5;
+      settings.gravity = 1.2;
+      settings.scalingRatio = 2;
+      settings.slowDown = 1;
+      settings.adjustSizes = false;
+      settings.outboundAttractionDistribution = false;
+      const iters = g.order > 20000 ? 300 : g.order > 5000 ? 600 : 800;
       const t0 = performance.now();
       // Yield to the browser once so the "Laying out..." status can paint
       // before the synchronous FA2 pass blocks the main thread.
