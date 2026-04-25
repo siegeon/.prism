@@ -81,6 +81,18 @@ def test_ac1_long_query_triggers_decomposition_above_12_tokens():
     )
 
 
+def test_ac1_temporal_memory_question_adds_name_fallback():
+    """
+    AC-1: Temporal personal-memory questions keep a name-only fallback.
+    """
+    fn = _import_decompose()
+    assert fn is not None, "T1 not shipped"
+    q = "What did I do with Rachel on the Wednesday two months ago?"
+    out = fn(q)
+    assert q in out, f"raw query must be preserved in output, got {out!r}"
+    assert "Rachel" in out, f"temporal name fallback missing from {out!r}"
+
+
 def test_ac1_empty_string_returns_singleton():
     """AC-1 edge case: empty string returns [''] (raw fallback)."""
     fn = _import_decompose()

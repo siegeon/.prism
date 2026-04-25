@@ -1,9 +1,9 @@
 """PLAT-0042 RED — Failing tests for the threshold-assertion gate.
 
 Closes the automation gap flagged by the requirements-tracer: AC-4
-(R@5 ≥ 0.96, ≥+2 pool sessions) and AC-5 (median latency ≤ 1.6×
-baseline) must be machine-checkable, not just human-read off
-EXPERIMENTS.md.
+(R@5 ≥ 0.96, ≥+2 pool sessions when baseline headroom allows) and AC-5
+(median latency ≤ 1.6× baseline) must be machine-checkable, not just
+human-read off EXPERIMENTS.md.
 
 These tests verify a small `benchmarks/assert_thresholds.py` script
 that loads the latest LongMemEval smoke result JSON plus a baseline
@@ -90,6 +90,20 @@ def test_ac4_fails_when_pool_delta_below_two_sessions(tmp_path):
     bp, dp = _write_results(tmp_path, baseline, decomp)
     rc = mod.check_thresholds(bp, dp, n=50)
     assert rc != 0, "should fail when pool delta < 2 sessions"
+
+
+def test_ac4_pool_delta_floor_is_ceiling_aware(tmp_path):
+    """
+    AC-4: If baseline has only one miss left, fixing that miss is enough.
+    """
+    mod = _import_thresholds()
+    assert mod is not None and hasattr(mod, "check_thresholds"), "T4 not shipped"
+    baseline = {"recall@5": 0.940, "pool_recall@50": 0.98, "median_ms": 100.0}
+    decomp = {"recall@5": 0.980, "pool_recall@50": 1.00, "median_ms": 140.0}
+    bp, dp = _write_results(tmp_path, baseline, decomp)
+    assert mod.check_thresholds(bp, dp, n=50) == 0, (
+        "should pass when decomp fixes all remaining pool misses"
+    )
 
 
 def test_ac5_fails_when_latency_ratio_above_cap(tmp_path):

@@ -76,3 +76,37 @@ def test_ac4_result_json_includes_pool_recall_key():
     assert "pool_recall@50" in run_mod.RESULT_KEYS, (
         f"`pool_recall@50` missing from result schema: {run_mod.RESULT_KEYS}"
     )
+
+
+def test_ac4_run_one_queries_top_50_and_records_pool_hit():
+    """
+    AC-4: run_one must query a top-50 pool while still scoring R@5.
+    """
+    run_mod = _import_run_module()
+    assert run_mod is not None, "run.py not importable"
+
+    entry = {
+        "question_id": "q-test",
+        "question_type": "single-session-user",
+        "question": "Where is the answer?",
+        "haystack_session_ids": ["gold-session-id"],
+        "haystack_sessions": [[{"role": "user", "content": "answer"}]],
+        "answer_session_ids": ["gold-session-id"],
+    }
+
+    def fake_mcp_call(project, tool, arguments):
+        if tool == "brain_index_doc":
+            return {"result": {"content": [{"text": "{}"}]}}
+        assert tool == "brain_search"
+        assert arguments["limit"] == 50
+        payload = [
+            {"doc_id": f"miss-{i}"} for i in range(5)
+        ] + [{"doc_id": "lme/q000/gold-session-id::main"}]
+        return {"result": {"content": [{"text": __import__("json").dumps(payload)}]}}
+
+    with patch.object(run_mod, "mcp_call", side_effect=fake_mcp_call):
+        result = run_mod.run_one("bench-test", 0, entry)
+
+    assert result["hit@5"] is False
+    assert result["gold_in_pool@50"] is True
+    assert "query_ms" in result

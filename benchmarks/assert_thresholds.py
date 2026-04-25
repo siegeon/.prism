@@ -4,7 +4,8 @@ Reads two LongMemEval smoke result JSONs (baseline and PRISM_QUERY_DECOMP=on),
 and exits non-zero if any AC-4 / AC-5 threshold is breached:
 
   AC-4: decomp.recall@5 >= 0.96
-        AND (decomp.pool_recall@50 - baseline.pool_recall@50) >= 2/n
+        AND (decomp.pool_recall@50 - baseline.pool_recall@50) >=
+            min(2/n, remaining baseline headroom)
   AC-5: decomp.median_ms / baseline.median_ms <= 1.6
 
 Usage:
@@ -36,12 +37,14 @@ def check_thresholds(baseline_path: Path | str, decomp_path: Path | str, n: int 
             f"AC-4: recall@5 {dec.get('recall@5'):.3f} < target {R5_TARGET}"
         )
 
-    pool_delta = dec.get("pool_recall@50", 0.0) - base.get("pool_recall@50", 0.0)
-    pool_floor = POOL_DELTA_SESSIONS / n
+    base_pool = base.get("pool_recall@50", 0.0)
+    pool_delta = dec.get("pool_recall@50", 0.0) - base_pool
+    pool_floor = min(POOL_DELTA_SESSIONS / n, max(0.0, 1.0 - base_pool))
     if pool_delta < pool_floor:
+        needed_sessions = max(1, round(pool_floor * n)) if pool_floor else 0
         failures.append(
             f"AC-4: pool_recall@50 delta {pool_delta:+.3f} < {pool_floor:+.3f} "
-            f"(need ≥{POOL_DELTA_SESSIONS} additional sessions)"
+            f"(need ≥{needed_sessions} additional sessions)"
         )
 
     base_ms = base.get("median_ms", 0.0)

@@ -33,6 +33,21 @@ _TRIVIAL_TOKEN_CAP = 6
 _DECOMP_TOKEN_TRIGGER = 12
 _MIN_SUB_TOKENS = 2
 
+_TEMPORAL_CUE_RE = re.compile(
+    r"\b("
+    r"today|yesterday|tomorrow|ago|last|next|"
+    r"month|months|week|weeks|year|years|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r")\b",
+    re.IGNORECASE,
+)
+_PROPER_NOUN_RE = re.compile(r"\b[A-Z][A-Za-z'-]{2,}\b")
+_QUESTION_WORDS = {
+    "What", "Where", "When", "Who", "Why", "How", "Which",
+    "Can", "Could", "Would", "Should", "Did", "Does", "Do",
+    "Is", "Are", "Was", "Were", "Tell",
+}
+
 
 def _has_connective(q: str) -> bool:
     return bool(_CONNECTIVE_RE.search(q))
@@ -47,6 +62,21 @@ def _strip_filler(s: str) -> str:
             break
         out = new
     return out.strip()
+
+
+def _temporal_name_subqueries(q: str) -> list[str]:
+    """Extract person-name fallbacks for temporal memory questions."""
+    if not _TEMPORAL_CUE_RE.search(q):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _PROPER_NOUN_RE.finditer(q):
+        name = match.group(0)
+        if name in _QUESTION_WORDS or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
 
 
 def decompose_query(q: str, max_subs: int = 4) -> list[str]:
@@ -102,5 +132,14 @@ def decompose_query(q: str, max_subs: int = 4) -> list[str]:
         out.append(s)
         if len(out) >= max_subs:
             break
+
+    for s in _temporal_name_subqueries(q):
+        if len(out) >= max_subs:
+            break
+        key = s.lower()
+        if key in seen_lower:
+            continue
+        seen_lower.add(key)
+        out.append(s)
 
     return out

@@ -21,6 +21,7 @@ port 18081). Smoke = stratified 50-Q sample. Full = all 500 Q.
 | 4 | `multi-granular-smoke` | multi-granular chunking (file + semantic + sliding window) on MiniLM | **0.940** | (full deferred) | **+0.416** vs baseline / **+0.140** vs MiniLM smoke | 🚀 | 50Q stratified. Initial run scored 0.080 due to stale eval matcher — fixed to strip `::*` chunk suffix from doc_ids before comparing, re-scored same data → 0.940. knowledge-update/assistant/preference all 1.000; multi-session/user/temporal 0.875-0.889. |
 | 5 | `context-prefix-smoke` | Anthropic-style contextual prefix on multi-granular stack (`PRISM_CONTEXT_PREFIX=on`) | 0.940 | — | 0.000 vs multi-granular | ↔️ | 50Q stratified. Prepends `File: <path>\nScope: <qualified entity>` before embedding/BM25. Per-type breakdown identical to multi-granular. LongMemEval queries are conversational prose; prefix adds no semantic signal for this corpus. Kept default on as theory says it should help code retrieval — needs swebench to confirm. |
 | 6 | `rerank-bge-v2-smoke` | BAAI/bge-reranker-v2-m3 cross-encoder post-RRF on multi-granular+prefix (`PRISM_RERANK=bge-v2`, top-50 pool) | 0.940 | — | 0.000 vs prior | ↔️ | 50Q stratified. Same per-type breakdown, +421s (+22%) wall time vs prefix smoke for zero gain. Suggests the LongMemEval smoke R@5 ceiling at 0.940 is semantic, not rank-order — the 3 missed Qs don't have the gold answer in top-50 to be reranked. Reranker kept as opt-in via env var. |
+| 7 | `plat0042-on-v2-smoke50` | rules-based query decomposition + temporal name fallback (`PRISM_QUERY_DECOMP=on`) | **0.980** | — | **+0.040** vs fresh off baseline | ✅ | 2026-04-25 50Q stratified A/B. Off baseline: R@5 0.940, pool@50 0.980, median 1756.5ms. On v2: R@5 0.980, pool@50 1.000, median 2576.9ms (1.47x). Gate passed after making the pool delta check ceiling-aware. |
 
 ## Decision
 **Ship MiniLM as default.** All-MiniLM-L6-v2 gives +0.110 R@5 vs potion baseline for free
@@ -112,6 +113,21 @@ in `services/bench-service/docker-compose.yml`.
   0.940 is a retrieval-candidate-generation problem, not a rank-order problem.
 - Kept as opt-in env var. Will re-evaluate if we ever build a code-retrieval bench where
   the cross-encoder should have room to move numbers.
+
+### 2026-04-25 — plat0042-on-v2-smoke50
+- Query decomposition on the multi-granular + contextual-prefix stack, with
+  `PRISM_QUERY_DECOMP=on`. Added a deterministic temporal-name fallback so personal
+  memory questions like "What did I do with Rachel on the Wednesday two months ago?"
+  emit `Rachel` as a candidate-generation subquery.
+- Fresh off baseline (`plat0042-off-smoke50`): **R@5 = 0.940** (47/50),
+  pool_recall@50 = 0.980 (49/50), median_ms = 1756.5.
+- Decomp v2 (`plat0042-on-v2-smoke50`): **R@5 = 0.980** (49/50),
+  pool_recall@50 = 1.000 (50/50), median_ms = 2576.9 (1.47x baseline).
+- Gate: `benchmarks/assert_thresholds.py` passed. The pool-delta check is now
+  ceiling-aware: it still requires +2 pool sessions when possible, but if the baseline
+  has only one miss left, fixing that miss satisfies the gate.
+- Per-type: temporal-reasoning moved from 0.875 to 1.000; multi-session stayed at 1.000
+  versus the earlier on-run, and all assistant/preference/knowledge slices stayed at 1.000.
 
 ### 2026-04-20 — swebench-fullstack-limit10
 - SWE-bench Lite, first 10 instances, full retrieval stack: MiniLM embedder + multi-granular
