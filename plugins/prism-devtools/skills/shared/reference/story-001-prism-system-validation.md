@@ -497,7 +497,7 @@ Successfully created comprehensive documentation validation system that validate
 
 **Reviewed By:** Quinn (QA Agent)
 **Review Type:** Pre-Implementation Advisory Review
-**Gate:** GATE-001-20251028T000000Z (historical artifact `story-001-prism-system-validation.yml`; qa-gate skill removed)
+**Gate:** GATE-001-20251028T000000Z (see [docs/qa/gates/story-001-prism-system-validation.yml](../../qa-gate/artifacts/story-001-prism-system-validation.yml))
 **Status:** ✅ PASS - Ready for Implementation
 
 ---
@@ -729,7 +729,7 @@ This pre-implementation review introduces a **shift-left quality pattern** - cat
 
 **Review Date:** 2025-10-29
 **Reviewer:** Quinn (QA Agent)
-**Gate:** historical artifact `story-001-post-implementation-gate.yaml` (qa-gate skill removed)
+**Gate:** [story-001-post-implementation-gate.yaml](../../qa-gate/artifacts/story-001-post-implementation-gate.yaml)
 **Gate ID:** GATE-001-20251029T134000Z
 
 ### Review Summary

@@ -61,7 +61,7 @@ curl.exe -u "${env:JIRA_EMAIL}:${env:JIRA_API_TOKEN}" `
 
 ## core-config.yaml Configuration
 
-The Jira configuration block (in your project's `core-config.yaml` — the plugin no longer ships a default):
+The Jira configuration in [core-config.yaml](../../../core-config.yaml):
 
 ```yaml
 jira:

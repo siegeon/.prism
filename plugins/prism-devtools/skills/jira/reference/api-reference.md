@@ -6,7 +6,7 @@ This document provides detailed information about using the Jira REST API v3 for
 
 ## Base Configuration
 
-From your project's `core-config.yaml` (the plugin no longer ships a default — supply your own):
+From [core-config.yaml](../../../core-config.yaml):
 
 ```yaml
 jira:
