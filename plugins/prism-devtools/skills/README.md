@@ -1,77 +1,41 @@
-# PRISM Skills
+# prism-devtools skills
 
-Auto-activating agent capabilities for PRISM workflows.
+General-purpose skills shipped with the plugin. Workflow orchestration
+(stories, gates, personas) lives in the PRISM MCP server
+(`services/prism-service/` in the repo root), not here — invoke its
+`task_*` and `workflow_*` MCP tools directly.
 
-## Issue Management
-
-| Skill | Purpose |
-|-------|---------|
-| [validate-issue](./validate-issue/SKILL.md) | Verify issue structure |
-
-## Development
+## Project knowledge
 
 | Skill | Purpose |
 |-------|---------|
-| [create-dev-task](./create-dev-task/SKILL.md) | Generate dev tasks |
-| [create-failing-test](./create-failing-test/SKILL.md) | TDD failing test spec |
-| [prism-loop](./prism-loop/SKILL.md) | TDD workflow loop |
-| [correct-course](./correct-course/SKILL.md) | Handle deviations |
+| [brain](./brain/SKILL.md) | Hybrid BM25 + vector + graph search via Brain MCP |
+| [conductor](./conductor/SKILL.md) | Prompt-optimization tools (scoring, variant generation) |
+| [remember](./remember/SKILL.md) | Persist a conviction or pattern via `memory_store` |
+| [shared](./shared/SKILL.md) | Cross-skill reference docs |
 
-## Quality Assurance
-
-| Skill | Purpose |
-|-------|---------|
-| [qa-gate](./qa-gate/SKILL.md) | Quality gate management |
-| [create-qa-task](./create-qa-task/SKILL.md) | Generate QA tasks |
-| [apply-qa-fixes](./apply-qa-fixes/SKILL.md) | Apply QA recommendations |
-| [test-design](./test-design/SKILL.md) | Test strategy design |
-| [risk-profile](./risk-profile/SKILL.md) | Risk assessment |
-| [trace-requirements](./trace-requirements/SKILL.md) | Requirements tracing |
-
-## Architecture
+## Codebase navigation
 
 | Skill | Purpose |
 |-------|---------|
-| [initialize-architecture](./initialize-architecture/SKILL.md) | Set up architecture |
-| [nfr-assess](./nfr-assess/SKILL.md) | NFR assessment |
-| [strangler-pattern](./strangler-pattern/SKILL.md) | Strangler pattern |
-
-## Integrations
-
-| Skill | Purpose |
-|-------|---------|
-| [jira](./jira/SKILL.md) | Jira integration |
+| [file-first](./file-first/SKILL.md) | Read source files directly; no RAG, no preloaded summaries |
+| [investigate-root-cause](./investigate-root-cause/SKILL.md) | Trace bugs via code analysis, git history, error tracing |
+| [validate-issue](./validate-issue/SKILL.md) | Reproduce and document a reported issue |
+| [document-project](./document-project/SKILL.md) | Generate reference documentation for a codebase |
 
 ## Tooling
 
 | Skill | Purpose |
 |-------|---------|
-| [skill-builder](./skill-builder/SKILL.md) | Create new skills |
-| [agent-builder](./agent-builder/SKILL.md) | Create sub-agents |
-| [hooks-manager](./hooks-manager/SKILL.md) | Manage hooks |
-| [execute-checklist](./execute-checklist/SKILL.md) | Run checklists |
+| [hooks-manager](./hooks-manager/SKILL.md) | Create, configure, debug Claude Code hooks |
+| [skill-builder](./skill-builder/SKILL.md) | Build, optimize, validate skills |
+| [agent-builder](./agent-builder/SKILL.md) | Build custom sub-agents |
+| [version-bump](./version-bump/SKILL.md) | Bump plugin version, update CHANGELOG, tag |
+| [validate](./validate/SKILL.md) | Run plugin docs/links/portability checks |
+| [init-context](./init-context/SKILL.md) | Bootstrap a project's `.context/` folder |
 
-## Documentation
-
-| Skill | Purpose |
-|-------|---------|
-| [document-project](./document-project/SKILL.md) | Project documentation |
-| [init-context](./init-context/SKILL.md) | Initialize context |
-| [sdlc-handoff](./sdlc-handoff/SKILL.md) | SDLC handoff |
-| [investigate-root-cause](./investigate-root-cause/SKILL.md) | Root cause analysis |
-
-## Context Loading
+## Integrations
 
 | Skill | Purpose |
 |-------|---------|
-| [file-first](./file-first/SKILL.md) | Analyze codebase, detect project type, suggest key files |
-
-## Shared Resources
-
-| Resource | Purpose |
-|----------|---------|
-| [shared](./shared/SKILL.md) | Common references |
-
----
-
-**See Also:** [Documentation Index](../docs/index.md) | [Skill Builder Guide](./skill-builder/SKILL.md)
+| [jira](./jira/SKILL.md) | Jira issue search, fetch, planning |
