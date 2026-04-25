@@ -45,6 +45,48 @@ def test_install_manifest_includes_prism_reflect_command_md():
     assert "---" in content  # slash commands also carry frontmatter
 
 
+def test_install_manifest_keeps_required_client_adapter_files():
+    files = _files_by_path(_manifest())
+    assert set(files) == {
+        ".claude/settings.json",
+        ".claude/hooks/prism-sync.py",
+        ".claude/hooks/prism-feedback-signal.py",
+        ".claude/hooks/prism-stop.py",
+        ".claude/hooks/prism-subagent.py",
+        ".claude/hooks/prism-skill-usage.py",
+        ".claude/hooks/hook_logger.py",
+        ".claude/agents/prism-reflect.md",
+        ".claude/commands/prism-reflect.md",
+    }
+    assert files[".claude/settings.json"]["action"] == "create_or_merge"
+    for path, spec in files.items():
+        if path != ".claude/settings.json":
+            assert spec["action"] == "upsert"
+
+
+def test_install_settings_wires_all_shipped_hooks():
+    files = _files_by_path(_manifest())
+    settings = json.loads(files[".claude/settings.json"]["content"])
+    hooks = settings["hooks"]
+    rendered = json.dumps(hooks)
+    for command in (
+        "python .claude/hooks/prism-sync.py",
+        "python .claude/hooks/prism-feedback-signal.py",
+        "python .claude/hooks/prism-stop.py",
+        "python .claude/hooks/prism-subagent.py",
+        "python .claude/hooks/prism-skill-usage.py",
+    ):
+        assert command in rendered
+
+
+def test_plugin_hook_registration_is_noop():
+    plugin_root = _SERVICE_ROOT.parent.parent / "plugins" / "prism-devtools"
+    hooks_dir = plugin_root / "hooks"
+    hooks_json = json.loads((hooks_dir / "hooks.json").read_text())
+    assert hooks_json["hooks"] == {}
+    assert sorted(p.name for p in hooks_dir.glob("*.py")) == []
+
+
 def test_agent_md_tool_allowlist_excludes_bash_write_edit():
     files = _files_by_path(_manifest())
     content = files[".claude/agents/prism-reflect.md"]["content"]

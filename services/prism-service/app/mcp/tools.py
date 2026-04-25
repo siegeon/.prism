@@ -750,7 +750,12 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="context_bundle",
-        description="Build a full context bundle: brain context + memory recall + active tasks + workflow state + health",
+        description=(
+            "Build a deterministic MCP-side context bundle: role card, rules, "
+            "template, Brain context, memory recall, active tasks, workflow "
+            "state, and health. Existing top-level fields are preserved for "
+            "compatibility; new clients should prefer context_pack."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -907,7 +912,8 @@ in SQLite inside the container's /data volume — no network, no API keys.
    `graph_rebuild` once after the batch, store initial conventions via
    `memory_store`.
 4. If already onboarded and in sync: `context_bundle(persona="dev")` to
-   load current tasks + recent memory.
+   load the deterministic role card/rules/template packet plus current
+   tasks, workflow, Brain context, and recent memory.
 
 ## Keeping in sync as you go
 
@@ -984,9 +990,10 @@ change between calls. Cache it.
   gate steps, pass `gate_action="approve"` or `"reject"`.
 
 ## Context + help
-- `context_bundle(persona?, story_file?)` — full session context dump:
-  brain context + memory recall + active tasks + workflow state + health.
-  Good to call once at session start after onboarding.
+- `context_bundle(persona?, story_file?)` — deterministic MCP-side context
+  packet. Preserves the legacy brain/memory/tasks/workflow/health fields and
+  adds `context_pack` with role card, rules, template, asset digests, and the
+  same relevant context nested for model-agnostic clients.
 - `prism_guide(section?)` — this tool. Sections: overview | tools |
   workflow | memory | graph | examples.
 """,
@@ -1413,15 +1420,8 @@ def _load_asset(filename: str) -> str:
     """Read a shipped hook script from ``services/prism-service/app/assets/``.
 
     The MCP server is the single source of truth for everything
-    ``prism_install`` distributes. ``feedback_signal_hook.py`` is the
-    only asset that also has a sibling copy in
-    ``plugins/prism-devtools/hooks/`` (because the plugin registers it
-    via ``hooks.json``); when that one is updated, both copies must
-    move together. The other assets here (``stop_record_hook.py``,
-    ``subagent_record_hook.py``, ``skill_usage_hook.py``,
-    ``hook_logger.py``, ``prism_reflect_agent.md``,
-    ``prism_reflect_command.md``) are MCP-install-only and have no
-    plugin counterpart."""
+    ``prism_install`` distributes. The plugin hook directory is a no-op;
+    do not add sibling hook implementations there."""
     from pathlib import Path as _P
     try:
         return (_P(__file__).parent.parent / "assets" / filename).read_text(
@@ -2428,51 +2428,22 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # Context bundle
         # ------------------------------------------------------------------
         if name == "context_bundle":
-            persona = arguments.get("persona")
-            story_file = arguments.get("story_file")
+            from app.mcp.request_context import get_request_context
+            from app.services.context_builder import ContextBuilder
 
-            # 1. Brain system context
-            brain_context = brain_svc.system_context(
-                story_file=story_file,
-                persona=persona,
+            request_ctx = get_request_context()
+            bundle = ContextBuilder(
+                project_id=project_id,
+                brain_svc=brain_svc,
+                memory_svc=memory_svc,
+                task_svc=task_svc,
+                workflow_svc=workflow_svc,
+                governance=governance,
+                request_id=request_ctx.request_id,
+            ).build(
+                persona=arguments.get("persona"),
+                story_file=arguments.get("story_file"),
             )
-
-            # 2. Memory recall for the persona's domain
-            relevant_memory: list[Any] = []
-            if persona:
-                try:
-                    relevant_memory = memory_svc.recall(
-                        query=persona,
-                        domain=persona,
-                        limit=5,
-                    )
-                except Exception:
-                    relevant_memory = []
-
-            # 3. Active tasks (in_progress + next)
-            in_progress = task_svc.list(status="in_progress")
-            next_result = task_svc.next_task()
-            active_tasks = {
-                "in_progress": in_progress,
-                "next": next_result,
-            }
-
-            # 4. Workflow state
-            wf_state = workflow_svc.get_state()
-
-            # 5. Governance health report
-            try:
-                health = governance.get_health_report()
-            except Exception:
-                health = {"error": "Governance health report unavailable"}
-
-            bundle = {
-                "brain_context": brain_context,
-                "relevant_memory": relevant_memory,
-                "active_tasks": active_tasks,
-                "workflow_state": wf_state,
-                "health": health,
-            }
             return [TextContent(type="text", text=_json(bundle))]
 
         # ------------------------------------------------------------------
