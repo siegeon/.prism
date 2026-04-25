@@ -29,6 +29,18 @@ embedders (jina-code, nomic-code) underperform badly on conversational queries a
 be avoided unless the query domain is code. `PRISM_EMBEDDER` default changed to `minilm`
 in `services/bench-service/docker-compose.yml`.
 
+## Operator env vars
+
+| Var | Default | Values | Effect |
+|---|---|---|---|
+| `PRISM_EMBEDDER` | `minilm` | `minilm`, `bge-small`, `jina-code`, `potion`, … | Vector embedder. |
+| `PRISM_SEARCH_MODE` | `hybrid` | `hybrid`, `vector`, `bm25` | Which sub-indexes contribute candidates. |
+| `PRISM_RERANK` | `off` | `bge-v2`, `jina-v2`, `ms-marco-minilm`, `off` | Cross-encoder re-rank of top-N RRF candidates. |
+| `PRISM_RERANK_TOPN` | `50` | int | Pool size for reranker. |
+| `PRISM_FEEDBACK_WEIGHT` | `0.002` | float, `off` | Up/down-vote weight applied to RRF score. |
+| `PRISM_CHUNK_AGG` | `on` | `on`, `off` | Collapse same-source-file chunks to best per file. |
+| `PRISM_QUERY_DECOMP` | `off` | `on`, `off`, `0`, `1` | **PLAT-0042.** Rules-based query decomposition for candidate generation. Splits compound questions on " and ", " then ", `;` and decomposes long (>12 token) queries; runs each sub-query through every per-index helper, unions per index, then RRF fuses once. Off-path is byte-identical to pre-change behavior. Disable if latency-sensitive — expect ~1.3-1.6× median latency. |
+
 ## Log entries
 
 ### 2026-04-19 — baseline-potion (full, 500 Q)

@@ -89,6 +89,10 @@ skills/orca-*/
 # Brain runtime databases and state
 brain/
 .prism/brain/
+.prism/handoff.md
+.prism/current_instruction.md
+.prism/last_session_state.yaml
+.prism/feedback-buffer.jsonl
 plugins/prism-devtools/tools/prism-cli/.prism/
 
 # Benchmarks — runtime data, cloned fixtures, and results (scripts only in git)

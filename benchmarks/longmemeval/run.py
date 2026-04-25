@@ -31,6 +31,36 @@ from typing import Any
 
 MCP_BASE = "http://localhost:18081/mcp/"
 
+# Result schema keys persisted to the per-run JSON. PLAT-0042 adds
+# pool_recall@50 — fraction of items whose gold session entered the
+# top-50 RRF candidate pool. Lets us prove a recall lift comes from
+# candidate generation rather than rerank reordering.
+RESULT_KEYS: tuple[str, ...] = (
+    "tag", "recall@5", "pool_recall@50", "median_ms",
+    "hits@5", "total_scored", "by_type", "per_question",
+)
+
+
+def compute_gold_in_pool(pool: list[dict], gold_session_id: str) -> bool:
+    """Return True iff ``gold_session_id`` appears anywhere in ``pool``.
+
+    Strips the ``::chunk_suffix`` Brain attaches to multi-granular
+    chunks so a session id matches whether the pool entry is the
+    file-level row, a window slice, or an entity row.
+    """
+    if not gold_session_id or not pool:
+        return False
+    for item in pool:
+        did = (item or {}).get("doc_id", "")
+        if not did:
+            continue
+        head = did.split("::", 1)[0]
+        if head == gold_session_id or did == gold_session_id:
+            return True
+        if head.rsplit("/", 1)[-1] == gold_session_id:
+            return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # MCP client (stateless)

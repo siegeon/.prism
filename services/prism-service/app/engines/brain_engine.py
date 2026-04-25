@@ -2398,18 +2398,65 @@ class Brain:
         # fused list so there are enough candidates left after dedupe.
         inner = limit * 6 if aggregate else limit * 2
 
-        if mode == "vector" and self.vector_enabled:
-            fused = self._vector_search(query, domain, inner, domains=domains)
-        elif mode == "bm25":
-            fused = self._fts5_search(query, domain, inner, domains=domains)
+        # PRISM_QUERY_DECOMP (default off): rules-based query decomposition
+        # for candidate generation. When on, run each sub-query through the
+        # same per-index helpers, union per index by best (lowest) rank per
+        # doc_id, then RRF once across the unioned per-index lists. Off-path
+        # is byte-identical to the pre-change behavior. See PLAT-0042.
+        decomp_env = (
+            _os.environ.get("PRISM_QUERY_DECOMP", "off").strip().lower()
+        )
+        decomp_on = decomp_env in ("on", "1", "true", "yes")
+        if decomp_on:
+            from app.engines.query_decomposer import decompose_query
+            sub_queries = decompose_query(query)
         else:
-            bm25 = self._fts5_search(query, domain, inner, domains=domains)
-            vec = (
-                self._vector_search(query, domain, inner, domains=domains)
+            sub_queries = [query]
+
+        def _union_by_best_rank(per_query: list[list[dict]]) -> list[dict]:
+            best: dict[str, tuple[int, dict]] = {}
+            for hits in per_query:
+                for rank, hit in enumerate(hits):
+                    did = hit.get("doc_id")
+                    if did is None:
+                        continue
+                    cur = best.get(did)
+                    if cur is None or rank < cur[0]:
+                        best[did] = (rank, hit)
+            return [item for _, item in sorted(best.values(), key=lambda x: x[0])]
+
+        if mode == "vector" and self.vector_enabled:
+            per_q = [
+                self._vector_search(sq, domain, inner, domains=domains)
+                for sq in sub_queries
+            ]
+            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+        elif mode == "bm25":
+            per_q = [
+                self._fts5_search(sq, domain, inner, domains=domains)
+                for sq in sub_queries
+            ]
+            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+        else:
+            bm25_lists = [
+                self._fts5_search(sq, domain, inner, domains=domains)
+                for sq in sub_queries
+            ]
+            vec_lists = (
+                [
+                    self._vector_search(sq, domain, inner, domains=domains)
+                    for sq in sub_queries
+                ]
                 if self.vector_enabled
-                else []
+                else [[] for _ in sub_queries]
             )
-            graph = self._graph_search(query, inner)
+            graph_lists = [self._graph_search(sq, inner) for sq in sub_queries]
+            if decomp_on:
+                bm25 = _union_by_best_rank(bm25_lists)
+                vec = _union_by_best_rank(vec_lists) if self.vector_enabled else []
+                graph = _union_by_best_rank(graph_lists)
+            else:
+                bm25, vec, graph = bm25_lists[0], vec_lists[0], graph_lists[0]
             fused = reciprocal_rank_fusion(
                 [bm25, vec, graph] if self.vector_enabled else [bm25, graph]
             )
