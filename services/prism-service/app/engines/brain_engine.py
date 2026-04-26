@@ -825,6 +825,44 @@ class Brain:
                 retired_at TEXT DEFAULT (datetime('now')),
                 reason TEXT
             );
+            CREATE TABLE IF NOT EXISTS meta_prompt_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                prompt_id TEXT UNIQUE NOT NULL,
+                persona TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                parent_prompt_id TEXT,
+                content TEXT NOT NULL,
+                rationale TEXT,
+                generator TEXT,
+                status TEXT DEFAULT 'proposed',
+                created_at TEXT DEFAULT (datetime('now')),
+                evaluated_at TEXT,
+                promoted_at TEXT,
+                decision_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_meta_prompt_candidates_status
+                ON meta_prompt_candidates(status);
+            CREATE INDEX IF NOT EXISTS idx_meta_prompt_candidates_persona_step
+                ON meta_prompt_candidates(persona, step_id);
+            CREATE TABLE IF NOT EXISTS meta_prompt_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                candidate_id TEXT NOT NULL,
+                baseline_score REAL,
+                holdout_score REAL,
+                train_score REAL,
+                contextpack_score REAL,
+                tests_passed INTEGER,
+                retry_delta REAL,
+                token_ratio REAL,
+                followup_delta REAL,
+                revert_delta REAL,
+                sample_n INTEGER,
+                score_delta REAL,
+                passed INTEGER,
+                reason TEXT,
+                metrics_json TEXT,
+                evaluated_at TEXT DEFAULT (datetime('now'))
+            );
             CREATE TABLE IF NOT EXISTS session_outcomes (
                 session_id TEXT PRIMARY KEY,
                 duration_s INTEGER DEFAULT 0,

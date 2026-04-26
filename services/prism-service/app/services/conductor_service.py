@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import sqlite3
 import sys
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 
+META_MIN_HOLDOUT_DELTA = 0.03
+META_MAX_TOKEN_RATIO = 1.15
+META_MAX_RETRY_DELTA = 0.0
+META_MAX_FOLLOWUP_DELTA = 0.0
+META_MAX_REVERT_DELTA = 0.0
+META_MIN_SAMPLE_N = 5
+META_REQUIRED_CONTEXTPACK_SCORE = 1.0
 
 # Epsilon constants (mirror conductor_engine values)
 EPSILON_START = 0.3
@@ -22,10 +32,13 @@ class ConductorService:
     for the UI and MCP layers.
     """
 
-    def __init__(self, scores_db: str) -> None:
+    def __init__(self, scores_db: str, enable_engine: bool = True) -> None:
         self._scores_db = scores_db
         self._conductor = None
         self._available = False
+        self._ensure_meta_schema()
+        if not enable_engine:
+            return
         try:
             from app.engines.conductor_engine import Conductor
 
@@ -147,6 +160,350 @@ class ConductorService:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+    # ------------------------------------------------------------------
+    # Meta-Conductor: offline prompt-variant candidate loop
+    # ------------------------------------------------------------------
+
+    def _ensure_meta_schema(self) -> None:
+        conn = self._scores_conn()
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS prompt_variants (
+                prompt_id TEXT PRIMARY KEY,
+                persona TEXT,
+                content TEXT NOT NULL,
+                source TEXT DEFAULT 'learned',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS prompt_scores (
+                prompt_id TEXT,
+                persona TEXT,
+                step_id TEXT,
+                score REAL,
+                tokens_used INTEGER,
+                context_tokens INTEGER,
+                duration_s REAL,
+                retries INTEGER,
+                difficulty TEXT,
+                tests_passed INTEGER,
+                coverage_pct REAL,
+                traceability_pct REAL,
+                gate_passed INTEGER,
+                probe_accuracy REAL,
+                timestamp TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (prompt_id, persona, step_id, timestamp)
+            );
+            CREATE TABLE IF NOT EXISTS score_aggregates (
+                prompt_id TEXT,
+                persona TEXT,
+                step_id TEXT,
+                avg_score REAL DEFAULT 0.0,
+                total_runs INTEGER DEFAULT 0,
+                last_updated TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (prompt_id, persona, step_id)
+            );
+            CREATE TABLE IF NOT EXISTS meta_prompt_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                prompt_id TEXT UNIQUE NOT NULL,
+                persona TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                parent_prompt_id TEXT,
+                content TEXT NOT NULL,
+                rationale TEXT,
+                generator TEXT,
+                status TEXT DEFAULT 'proposed',
+                created_at TEXT DEFAULT (datetime('now')),
+                evaluated_at TEXT,
+                promoted_at TEXT,
+                decision_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_meta_prompt_candidates_status
+                ON meta_prompt_candidates(status);
+            CREATE INDEX IF NOT EXISTS idx_meta_prompt_candidates_persona_step
+                ON meta_prompt_candidates(persona, step_id);
+            CREATE TABLE IF NOT EXISTS meta_prompt_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                candidate_id TEXT NOT NULL,
+                baseline_score REAL,
+                holdout_score REAL,
+                train_score REAL,
+                contextpack_score REAL,
+                tests_passed INTEGER,
+                retry_delta REAL,
+                token_ratio REAL,
+                followup_delta REAL,
+                revert_delta REAL,
+                sample_n INTEGER,
+                score_delta REAL,
+                passed INTEGER,
+                reason TEXT,
+                metrics_json TEXT,
+                evaluated_at TEXT DEFAULT (datetime('now'))
+            );
+            """
+        )
+        conn.commit()
+        conn.close()
+
+    def _current_prompt_content(self, prompt_id: str) -> str:
+        conn = self._scores_conn()
+        row = conn.execute(
+            "SELECT content FROM prompt_variants WHERE prompt_id = ?",
+            (prompt_id,),
+        ).fetchone()
+        conn.close()
+        if row:
+            return str(row["content"])
+        if "/" not in prompt_id:
+            return ""
+        persona, variant = prompt_id.split("/", 1)
+        prompt_file = Path(__file__).parent.parent / "prompts" / persona / f"{variant}.md"
+        try:
+            return prompt_file.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    def meta_brief(
+        self,
+        persona: str,
+        step_id: str,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Return a deterministic brief for an external meta-agent.
+
+        PRISM does not call an LLM here. The caller can use this packet to
+        draft a prompt variant, then submit it back through propose/evaluate.
+        """
+        self._ensure_meta_schema()
+        scores = self.get_scores(persona=persona, step_id=step_id)
+        current = scores[0] if scores else {
+            "prompt_id": f"{persona}/default",
+            "avg_score": 0.0,
+            "total_runs": 0,
+        }
+        conn = self._scores_conn()
+        top = conn.execute(
+            "SELECT prompt_id, score, tokens_used, duration_s, retries, timestamp "
+            "FROM prompt_scores WHERE persona=? AND step_id=? "
+            "ORDER BY score DESC LIMIT ?",
+            (persona, step_id, int(limit)),
+        ).fetchall()
+        low = conn.execute(
+            "SELECT prompt_id, score, tokens_used, duration_s, retries, timestamp "
+            "FROM prompt_scores WHERE persona=? AND step_id=? "
+            "ORDER BY score ASC LIMIT ?",
+            (persona, step_id, int(limit)),
+        ).fetchall()
+        conn.close()
+        prompt_id = str(current.get("prompt_id") or f"{persona}/default")
+        return {
+            "schema": "prism.meta_conductor.brief.v1",
+            "persona": persona,
+            "step_id": step_id,
+            "current_best": current,
+            "current_prompt": self._current_prompt_content(prompt_id),
+            "top_outcomes": [dict(r) for r in top],
+            "low_outcomes": [dict(r) for r in low],
+            "rules": [
+                "Submit prompt text only; PRISM owns storage and promotion.",
+                "Do not change MCP tool names, context-pack schema, or install hooks.",
+                "Optimize for holdout task quality, not live-score gaming.",
+            ],
+            "promotion_thresholds": self.meta_thresholds(),
+        }
+
+    def meta_thresholds(self) -> dict[str, Any]:
+        return {
+            "min_holdout_delta": META_MIN_HOLDOUT_DELTA,
+            "max_token_ratio": META_MAX_TOKEN_RATIO,
+            "max_retry_delta": META_MAX_RETRY_DELTA,
+            "max_followup_delta": META_MAX_FOLLOWUP_DELTA,
+            "max_revert_delta": META_MAX_REVERT_DELTA,
+            "min_sample_n": META_MIN_SAMPLE_N,
+            "required_contextpack_score": META_REQUIRED_CONTEXTPACK_SCORE,
+            "tests_passed_required": True,
+        }
+
+    def propose_meta_candidate(
+        self,
+        *,
+        persona: str,
+        step_id: str,
+        content: str,
+        parent_prompt_id: str = "",
+        rationale: str = "",
+        generator: str = "",
+    ) -> dict[str, Any]:
+        self._ensure_meta_schema()
+        normalized = content.strip()
+        if not normalized:
+            raise ValueError("candidate content must not be empty")
+        parent = parent_prompt_id or f"{persona}/default"
+        digest = hashlib.sha256(
+            f"{persona}\0{step_id}\0{parent}\0{normalized}".encode("utf-8")
+        ).hexdigest()[:12]
+        candidate_id = f"mc-{digest}"
+        prompt_id = f"{persona}/meta-{digest}"
+        conn = self._scores_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO meta_prompt_candidates "
+            "(candidate_id, prompt_id, persona, step_id, parent_prompt_id, "
+            " content, rationale, generator, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+            " COALESCE((SELECT status FROM meta_prompt_candidates WHERE candidate_id=?), 'proposed'))",
+            (
+                candidate_id,
+                prompt_id,
+                persona,
+                step_id,
+                parent,
+                normalized,
+                rationale,
+                generator,
+                candidate_id,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM meta_prompt_candidates WHERE candidate_id=?",
+            (candidate_id,),
+        ).fetchone()
+        conn.close()
+        return {
+            "candidate": dict(row),
+            "promotion_thresholds": self.meta_thresholds(),
+        }
+
+    def evaluate_meta_candidate(
+        self,
+        candidate_id: str,
+        metrics: dict[str, Any],
+    ) -> dict[str, Any]:
+        self._ensure_meta_schema()
+        conn = self._scores_conn()
+        cand = conn.execute(
+            "SELECT * FROM meta_prompt_candidates WHERE candidate_id=?",
+            (candidate_id,),
+        ).fetchone()
+        if cand is None:
+            conn.close()
+            raise ValueError(f"unknown candidate_id: {candidate_id}")
+
+        decision = self._meta_decision(metrics)
+        now_expr = "datetime('now')"
+        conn.execute(
+            "INSERT INTO meta_prompt_evaluations "
+            "(candidate_id, baseline_score, holdout_score, train_score, "
+            " contextpack_score, tests_passed, retry_delta, token_ratio, "
+            " followup_delta, revert_delta, sample_n, score_delta, passed, "
+            " reason, metrics_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                candidate_id,
+                decision["baseline_score"],
+                decision["holdout_score"],
+                decision["train_score"],
+                decision["contextpack_score"],
+                1 if decision["tests_passed"] else 0,
+                decision["retry_delta"],
+                decision["token_ratio"],
+                decision["followup_delta"],
+                decision["revert_delta"],
+                decision["sample_n"],
+                decision["score_delta"],
+                1 if decision["passed"] else 0,
+                decision["reason"],
+                json.dumps(metrics, sort_keys=True, default=str),
+            ),
+        )
+        if decision["passed"]:
+            conn.execute(
+                "INSERT OR REPLACE INTO prompt_variants "
+                "(prompt_id, persona, content, source) VALUES (?, ?, ?, 'meta-conductor')",
+                (cand["prompt_id"], cand["persona"], cand["content"]),
+            )
+            conn.execute(
+                f"UPDATE meta_prompt_candidates SET status='promoted', "
+                f"evaluated_at={now_expr}, promoted_at={now_expr}, decision_json=? "
+                "WHERE candidate_id=?",
+                (json.dumps(decision, sort_keys=True), candidate_id),
+            )
+        else:
+            conn.execute(
+                f"UPDATE meta_prompt_candidates SET status='rejected', "
+                f"evaluated_at={now_expr}, decision_json=? WHERE candidate_id=?",
+                (json.dumps(decision, sort_keys=True), candidate_id),
+            )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM meta_prompt_candidates WHERE candidate_id=?",
+            (candidate_id,),
+        ).fetchone()
+        conn.close()
+        return {
+            "candidate": dict(updated),
+            "decision": decision,
+            "promoted": bool(decision["passed"]),
+        }
+
+    def _meta_decision(self, metrics: dict[str, Any]) -> dict[str, Any]:
+        def f(name: str, default: float = 0.0) -> float:
+            value = metrics.get(name, default)
+            return float(value if value is not None else default)
+
+        baseline = f("baseline_score")
+        holdout = f("holdout_score")
+        train = f("train_score")
+        contextpack = f("contextpack_score")
+        token_ratio = f("token_ratio", 999.0)
+        retry_delta = f("retry_delta", 999.0)
+        followup_delta = f("followup_delta", 999.0)
+        revert_delta = f("revert_delta", 999.0)
+        sample_n = int(metrics.get("sample_n") or 0)
+        tests_passed = bool(metrics.get("tests_passed"))
+        score_delta = holdout - baseline
+
+        failures: list[str] = []
+        if sample_n < META_MIN_SAMPLE_N:
+            failures.append(f"sample_n {sample_n} < {META_MIN_SAMPLE_N}")
+        if score_delta < META_MIN_HOLDOUT_DELTA:
+            failures.append(
+                f"holdout_delta {score_delta:.3f} < {META_MIN_HOLDOUT_DELTA:.3f}"
+            )
+        if contextpack < META_REQUIRED_CONTEXTPACK_SCORE:
+            failures.append(
+                f"contextpack_score {contextpack:.3f} < "
+                f"{META_REQUIRED_CONTEXTPACK_SCORE:.3f}"
+            )
+        if not tests_passed:
+            failures.append("tests_passed is false")
+        if token_ratio > META_MAX_TOKEN_RATIO:
+            failures.append(f"token_ratio {token_ratio:.3f} > {META_MAX_TOKEN_RATIO:.3f}")
+        if retry_delta > META_MAX_RETRY_DELTA:
+            failures.append(f"retry_delta {retry_delta:.3f} > {META_MAX_RETRY_DELTA:.3f}")
+        if followup_delta > META_MAX_FOLLOWUP_DELTA:
+            failures.append(
+                f"followup_delta {followup_delta:.3f} > {META_MAX_FOLLOWUP_DELTA:.3f}"
+            )
+        if revert_delta > META_MAX_REVERT_DELTA:
+            failures.append(f"revert_delta {revert_delta:.3f} > {META_MAX_REVERT_DELTA:.3f}")
+
+        return {
+            "passed": not failures,
+            "reason": "passed" if not failures else "; ".join(failures),
+            "baseline_score": baseline,
+            "holdout_score": holdout,
+            "train_score": train,
+            "contextpack_score": contextpack,
+            "tests_passed": tests_passed,
+            "retry_delta": retry_delta,
+            "token_ratio": token_ratio,
+            "followup_delta": followup_delta,
+            "revert_delta": revert_delta,
+            "sample_n": sample_n,
+            "score_delta": score_delta,
+        }
 
     def get_session_outcomes(self, limit: int = 50) -> list[dict]:
         """Query recent session outcomes from scores.db.

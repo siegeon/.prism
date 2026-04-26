@@ -283,6 +283,80 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="meta_conductor_brief",
+        description=(
+            "Return a deterministic prompt-optimization brief for one "
+            "persona/step. PRISM supplies current scores, top/low outcomes, "
+            "current prompt text, and promotion thresholds; the calling agent "
+            "may use this to draft a candidate, but PRISM owns storage and "
+            "promotion."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {"type": "string"},
+                "step_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+            },
+            "required": ["persona", "step_id"],
+        },
+    ),
+    Tool(
+        name="meta_conductor_propose",
+        description=(
+            "Store a generated prompt variant as a Meta-Conductor candidate. "
+            "This does not activate the prompt. Call meta_conductor_evaluate "
+            "with benchmark/holdout metrics to let PRISM promote or reject it."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {"type": "string"},
+                "step_id": {"type": "string"},
+                "content": {"type": "string"},
+                "parent_prompt_id": {"type": "string"},
+                "rationale": {"type": "string"},
+                "generator": {
+                    "type": "string",
+                    "description": "Model/agent that drafted the candidate",
+                },
+            },
+            "required": ["persona", "step_id", "content"],
+        },
+    ),
+    Tool(
+        name="meta_conductor_evaluate",
+        description=(
+            "Evaluate a Meta-Conductor candidate against PRISM's promotion "
+            "policy. Required metrics include baseline_score, holdout_score, "
+            "contextpack_score, tests_passed, token_ratio, retry_delta, "
+            "followup_delta, revert_delta, and sample_n. Passing candidates "
+            "are promoted into prompt_variants with source='meta-conductor'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "metrics": {
+                    "type": "object",
+                    "properties": {
+                        "baseline_score": {"type": "number"},
+                        "holdout_score": {"type": "number"},
+                        "train_score": {"type": "number"},
+                        "contextpack_score": {"type": "number"},
+                        "tests_passed": {"type": "boolean"},
+                        "token_ratio": {"type": "number"},
+                        "retry_delta": {"type": "number"},
+                        "followup_delta": {"type": "number"},
+                        "revert_delta": {"type": "number"},
+                        "sample_n": {"type": "integer"},
+                    },
+                },
+            },
+            "required": ["candidate_id", "metrics"],
+        },
+    ),
+    Tool(
         name="brain_list",
         description="List all documents indexed in Brain. Returns doc_id, domain, and content length for each.",
         inputSchema={
@@ -2064,6 +2138,35 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 duration_s=float(arguments.get("duration_s", 0.0)),
             )
             return [TextContent(type="text", text=_json({"recorded": ok}))]
+
+        if name == "meta_conductor_brief":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.meta_brief(
+                persona=str(arguments["persona"]),
+                step_id=str(arguments["step_id"]),
+                limit=int(arguments.get("limit", 5)),
+            )
+            return [TextContent(type="text", text=_json(payload))]
+
+        if name == "meta_conductor_propose":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.propose_meta_candidate(
+                persona=str(arguments["persona"]),
+                step_id=str(arguments["step_id"]),
+                content=str(arguments["content"]),
+                parent_prompt_id=str(arguments.get("parent_prompt_id") or ""),
+                rationale=str(arguments.get("rationale") or ""),
+                generator=str(arguments.get("generator") or ""),
+            )
+            return [TextContent(type="text", text=_json(payload))]
+
+        if name == "meta_conductor_evaluate":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.evaluate_meta_candidate(
+                candidate_id=str(arguments["candidate_id"]),
+                metrics=arguments.get("metrics") or {},
+            )
+            return [TextContent(type="text", text=_json(payload))]
 
         if name == "brain_list":
             docs = brain_svc.list_docs(

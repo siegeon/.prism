@@ -31,12 +31,18 @@ docker compose up -d --build
 | Dir | Dataset | Metric | Status |
 |---|---|---|---|
 | `contextpack/` | Seeded PRISM persona/context fixture | persona accuracy, Brain/Memory/Task recall, leakage, determinism | active |
+| `metaconductor/` | Synthetic prompt-candidate promotion cases | decision accuracy, false promotions, missed promotions | active |
 | `swebench/` | SWE-bench (file localization) | R@k on patched files | planned |
 
 `contextpack/` is the context-management gate: it verifies the actual
 `context_bundle` payload an agent receives has the correct persona frame,
 MCP-first rules, channel-specific Brain/Memory/Task context, no unrelated
 noise, and stable asset digests.
+
+`metaconductor/` is the prompt-optimization safety gate: it verifies
+AutoAgent-style prompt candidates are promoted only after holdout lift,
+context-pack stability, passing tests, bounded token cost, and no worse
+retry/follow-up/revert signals.
 
 ## Conventions
 
