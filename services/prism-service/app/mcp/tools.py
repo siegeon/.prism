@@ -283,6 +283,102 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="meta_conductor_brief",
+        description=(
+            "Return a deterministic prompt-optimization brief for one "
+            "persona/step. PRISM supplies current scores, top/low outcomes, "
+            "current prompt text, and promotion thresholds; the calling agent "
+            "may use this to draft a candidate, but PRISM owns storage and "
+            "promotion."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {"type": "string"},
+                "step_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+            },
+            "required": ["persona", "step_id"],
+        },
+    ),
+    Tool(
+        name="meta_conductor_propose",
+        description=(
+            "Store a generated prompt variant as a Meta-Conductor candidate. "
+            "This does not activate the prompt. Call meta_conductor_evaluate "
+            "with benchmark/holdout metrics to let PRISM promote or reject it."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {"type": "string"},
+                "step_id": {"type": "string"},
+                "content": {"type": "string"},
+                "parent_prompt_id": {"type": "string"},
+                "rationale": {"type": "string"},
+                "generator": {
+                    "type": "string",
+                    "description": "Model/agent that drafted the candidate",
+                },
+            },
+            "required": ["persona", "step_id", "content"],
+        },
+    ),
+    Tool(
+        name="meta_conductor_evaluate",
+        description=(
+            "Evaluate a Meta-Conductor candidate against PRISM's promotion "
+            "policy. Required metrics include baseline_score, holdout_score, "
+            "contextpack_score, tests_passed, token_ratio, retry_delta, "
+            "followup_delta, revert_delta, and sample_n. Passing candidates "
+            "are promoted into prompt_variants with source='meta-conductor'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "candidate_id": {"type": "string"},
+                "metrics": {
+                    "type": "object",
+                    "properties": {
+                        "baseline_score": {"type": "number"},
+                        "holdout_score": {"type": "number"},
+                        "train_score": {"type": "number"},
+                        "contextpack_score": {"type": "number"},
+                        "tests_passed": {"type": "boolean"},
+                        "token_ratio": {"type": "number"},
+                        "retry_delta": {"type": "number"},
+                        "followup_delta": {"type": "number"},
+                        "revert_delta": {"type": "number"},
+                        "sample_n": {"type": "integer"},
+                    },
+                },
+            },
+            "required": ["candidate_id", "metrics"],
+        },
+    ),
+    Tool(
+        name="meta_conductor_auto",
+        description=(
+            "Run PRISM's deterministic no-LLM Meta-Conductor auto-proposer "
+            "for one persona/step. It mines recorded PSP outcome traces and "
+            "stores a conservative prompt candidate. If benchmark metrics are "
+            "provided, it also applies the normal promotion gate."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "persona": {"type": "string"},
+                "step_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+                "metrics": {
+                    "type": "object",
+                    "description": "Optional metrics for immediate gated evaluation",
+                },
+            },
+            "required": ["persona", "step_id"],
+        },
+    ),
+    Tool(
         name="brain_list",
         description="List all documents indexed in Brain. Returns doc_id, domain, and content length for each.",
         inputSchema={
@@ -750,7 +846,12 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="context_bundle",
-        description="Build a full context bundle: brain context + memory recall + active tasks + workflow state + health",
+        description=(
+            "Build a deterministic MCP-side context bundle: role card, rules, "
+            "template, Brain context, memory recall, active tasks, workflow "
+            "state, and health. Existing top-level fields are preserved for "
+            "compatibility; new clients should prefer context_pack."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -907,7 +1008,8 @@ in SQLite inside the container's /data volume — no network, no API keys.
    `graph_rebuild` once after the batch, store initial conventions via
    `memory_store`.
 4. If already onboarded and in sync: `context_bundle(persona="dev")` to
-   load current tasks + recent memory.
+   load the deterministic role card/rules/template packet plus current
+   tasks, workflow, Brain context, and recent memory.
 
 ## Keeping in sync as you go
 
@@ -984,9 +1086,10 @@ change between calls. Cache it.
   gate steps, pass `gate_action="approve"` or `"reject"`.
 
 ## Context + help
-- `context_bundle(persona?, story_file?)` — full session context dump:
-  brain context + memory recall + active tasks + workflow state + health.
-  Good to call once at session start after onboarding.
+- `context_bundle(persona?, story_file?)` — deterministic MCP-side context
+  packet. Preserves the legacy brain/memory/tasks/workflow/health fields and
+  adds `context_pack` with role card, rules, template, asset digests, and the
+  same relevant context nested for model-agnostic clients.
 - `prism_guide(section?)` — this tool. Sections: overview | tools |
   workflow | memory | graph | examples.
 """,
@@ -1410,11 +1513,11 @@ if __name__ == "__main__":
 
 
 def _load_asset(filename: str) -> str:
-    """Read a shipped hook script from app/assets/. The copy shipped by
-    the ``prism-devtools`` Claude Code plugin at
-    ``plugins/prism-devtools/hooks/`` must be kept in sync with the copy
-    in ``services/prism-service/app/assets/``; the assets version is the
-    one served to MCP-only clients via ``prism_install``."""
+    """Read a shipped hook script from ``services/prism-service/app/assets/``.
+
+    The MCP server is the single source of truth for everything
+    ``prism_install`` distributes. The plugin hook directory is a no-op;
+    do not add sibling hook implementations there."""
     from pathlib import Path as _P
     try:
         return (_P(__file__).parent.parent / "assets" / filename).read_text(
@@ -2058,6 +2161,45 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             )
             return [TextContent(type="text", text=_json({"recorded": ok}))]
 
+        if name == "meta_conductor_brief":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.meta_brief(
+                persona=str(arguments["persona"]),
+                step_id=str(arguments["step_id"]),
+                limit=int(arguments.get("limit", 5)),
+            )
+            return [TextContent(type="text", text=_json(payload))]
+
+        if name == "meta_conductor_propose":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.propose_meta_candidate(
+                persona=str(arguments["persona"]),
+                step_id=str(arguments["step_id"]),
+                content=str(arguments["content"]),
+                parent_prompt_id=str(arguments.get("parent_prompt_id") or ""),
+                rationale=str(arguments.get("rationale") or ""),
+                generator=str(arguments.get("generator") or ""),
+            )
+            return [TextContent(type="text", text=_json(payload))]
+
+        if name == "meta_conductor_evaluate":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.evaluate_meta_candidate(
+                candidate_id=str(arguments["candidate_id"]),
+                metrics=arguments.get("metrics") or {},
+            )
+            return [TextContent(type="text", text=_json(payload))]
+
+        if name == "meta_conductor_auto":
+            ctx = get_project(project_id)
+            payload = ctx.conductor_svc.auto_meta_candidate(
+                persona=str(arguments["persona"]),
+                step_id=str(arguments["step_id"]),
+                limit=int(arguments.get("limit", 5)),
+                metrics=arguments.get("metrics"),
+            )
+            return [TextContent(type="text", text=_json(payload))]
+
         if name == "brain_list":
             docs = brain_svc.list_docs(
                 domain=arguments.get("domain"),
@@ -2421,51 +2563,22 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # Context bundle
         # ------------------------------------------------------------------
         if name == "context_bundle":
-            persona = arguments.get("persona")
-            story_file = arguments.get("story_file")
+            from app.mcp.request_context import get_request_context
+            from app.services.context_builder import ContextBuilder
 
-            # 1. Brain system context
-            brain_context = brain_svc.system_context(
-                story_file=story_file,
-                persona=persona,
+            request_ctx = get_request_context()
+            bundle = ContextBuilder(
+                project_id=project_id,
+                brain_svc=brain_svc,
+                memory_svc=memory_svc,
+                task_svc=task_svc,
+                workflow_svc=workflow_svc,
+                governance=governance,
+                request_id=request_ctx.request_id,
+            ).build(
+                persona=arguments.get("persona"),
+                story_file=arguments.get("story_file"),
             )
-
-            # 2. Memory recall for the persona's domain
-            relevant_memory: list[Any] = []
-            if persona:
-                try:
-                    relevant_memory = memory_svc.recall(
-                        query=persona,
-                        domain=persona,
-                        limit=5,
-                    )
-                except Exception:
-                    relevant_memory = []
-
-            # 3. Active tasks (in_progress + next)
-            in_progress = task_svc.list(status="in_progress")
-            next_result = task_svc.next_task()
-            active_tasks = {
-                "in_progress": in_progress,
-                "next": next_result,
-            }
-
-            # 4. Workflow state
-            wf_state = workflow_svc.get_state()
-
-            # 5. Governance health report
-            try:
-                health = governance.get_health_report()
-            except Exception:
-                health = {"error": "Governance health report unavailable"}
-
-            bundle = {
-                "brain_context": brain_context,
-                "relevant_memory": relevant_memory,
-                "active_tasks": active_tasks,
-                "workflow_state": wf_state,
-                "health": health,
-            }
             return [TextContent(type="text", text=_json(bundle))]
 
         # ------------------------------------------------------------------

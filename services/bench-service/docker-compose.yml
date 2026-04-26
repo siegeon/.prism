@@ -18,6 +18,8 @@ services:
       - PRISM_RERANK_TOPN=${PRISM_RERANK_TOPN:-50}
       # Contextual chunk prefixing (Anthropic-style): on (default) | off
       - PRISM_CONTEXT_PREFIX=${PRISM_CONTEXT_PREFIX:-on}
+      # Rules-based query decomposition for candidate generation: off | on
+      - PRISM_QUERY_DECOMP=${PRISM_QUERY_DECOMP:-off}
       # Feedback consumption weight; "off" disables entirely.
       - PRISM_FEEDBACK_WEIGHT=${PRISM_FEEDBACK_WEIGHT:-0.002}
       # Drift auto-reindex — benches do not want implicit reindex; disable.

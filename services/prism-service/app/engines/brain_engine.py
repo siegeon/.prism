@@ -825,6 +825,44 @@ class Brain:
                 retired_at TEXT DEFAULT (datetime('now')),
                 reason TEXT
             );
+            CREATE TABLE IF NOT EXISTS meta_prompt_candidates (
+                candidate_id TEXT PRIMARY KEY,
+                prompt_id TEXT UNIQUE NOT NULL,
+                persona TEXT NOT NULL,
+                step_id TEXT NOT NULL,
+                parent_prompt_id TEXT,
+                content TEXT NOT NULL,
+                rationale TEXT,
+                generator TEXT,
+                status TEXT DEFAULT 'proposed',
+                created_at TEXT DEFAULT (datetime('now')),
+                evaluated_at TEXT,
+                promoted_at TEXT,
+                decision_json TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_meta_prompt_candidates_status
+                ON meta_prompt_candidates(status);
+            CREATE INDEX IF NOT EXISTS idx_meta_prompt_candidates_persona_step
+                ON meta_prompt_candidates(persona, step_id);
+            CREATE TABLE IF NOT EXISTS meta_prompt_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                candidate_id TEXT NOT NULL,
+                baseline_score REAL,
+                holdout_score REAL,
+                train_score REAL,
+                contextpack_score REAL,
+                tests_passed INTEGER,
+                retry_delta REAL,
+                token_ratio REAL,
+                followup_delta REAL,
+                revert_delta REAL,
+                sample_n INTEGER,
+                score_delta REAL,
+                passed INTEGER,
+                reason TEXT,
+                metrics_json TEXT,
+                evaluated_at TEXT DEFAULT (datetime('now'))
+            );
             CREATE TABLE IF NOT EXISTS session_outcomes (
                 session_id TEXT PRIMARY KEY,
                 duration_s INTEGER DEFAULT 0,
@@ -2398,18 +2436,65 @@ class Brain:
         # fused list so there are enough candidates left after dedupe.
         inner = limit * 6 if aggregate else limit * 2
 
-        if mode == "vector" and self.vector_enabled:
-            fused = self._vector_search(query, domain, inner, domains=domains)
-        elif mode == "bm25":
-            fused = self._fts5_search(query, domain, inner, domains=domains)
+        # PRISM_QUERY_DECOMP (default off): rules-based query decomposition
+        # for candidate generation. When on, run each sub-query through the
+        # same per-index helpers, union per index by best (lowest) rank per
+        # doc_id, then RRF once across the unioned per-index lists. Off-path
+        # is byte-identical to the pre-change behavior. See PLAT-0042.
+        decomp_env = (
+            _os.environ.get("PRISM_QUERY_DECOMP", "off").strip().lower()
+        )
+        decomp_on = decomp_env in ("on", "1", "true", "yes")
+        if decomp_on:
+            from app.engines.query_decomposer import decompose_query
+            sub_queries = decompose_query(query)
         else:
-            bm25 = self._fts5_search(query, domain, inner, domains=domains)
-            vec = (
-                self._vector_search(query, domain, inner, domains=domains)
+            sub_queries = [query]
+
+        def _union_by_best_rank(per_query: list[list[dict]]) -> list[dict]:
+            best: dict[str, tuple[int, dict]] = {}
+            for hits in per_query:
+                for rank, hit in enumerate(hits):
+                    did = hit.get("doc_id")
+                    if did is None:
+                        continue
+                    cur = best.get(did)
+                    if cur is None or rank < cur[0]:
+                        best[did] = (rank, hit)
+            return [item for _, item in sorted(best.values(), key=lambda x: x[0])]
+
+        if mode == "vector" and self.vector_enabled:
+            per_q = [
+                self._vector_search(sq, domain, inner, domains=domains)
+                for sq in sub_queries
+            ]
+            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+        elif mode == "bm25":
+            per_q = [
+                self._fts5_search(sq, domain, inner, domains=domains)
+                for sq in sub_queries
+            ]
+            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+        else:
+            bm25_lists = [
+                self._fts5_search(sq, domain, inner, domains=domains)
+                for sq in sub_queries
+            ]
+            vec_lists = (
+                [
+                    self._vector_search(sq, domain, inner, domains=domains)
+                    for sq in sub_queries
+                ]
                 if self.vector_enabled
-                else []
+                else [[] for _ in sub_queries]
             )
-            graph = self._graph_search(query, inner)
+            graph_lists = [self._graph_search(sq, inner) for sq in sub_queries]
+            if decomp_on:
+                bm25 = _union_by_best_rank(bm25_lists)
+                vec = _union_by_best_rank(vec_lists) if self.vector_enabled else []
+                graph = _union_by_best_rank(graph_lists)
+            else:
+                bm25, vec, graph = bm25_lists[0], vec_lists[0], graph_lists[0]
             fused = reciprocal_rank_fusion(
                 [bm25, vec, graph] if self.vector_enabled else [bm25, graph]
             )
@@ -2790,7 +2875,12 @@ class Brain:
             self.last_result_count = 0
             return ""
 
-        results = [r for r in results if r.get("rrf_score", 0.0) >= 0.02]
+        # A single-index exact hit has RRF ~= 1 / (60 + 1) == 0.01639.
+        # The previous 0.02 cutoff dropped valid BM25-only context, which
+        # made context_bundle lose role-specific Brain material in small or
+        # fresh projects. Search ranking already happens before this point;
+        # for system context, keep any positively scored top-K result.
+        results = [r for r in results if r.get("rrf_score", 0.0) > 0.0]
         if not results:
             self.last_result_count = 0
             return ""

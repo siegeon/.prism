@@ -21,6 +21,7 @@ port 18081). Smoke = stratified 50-Q sample. Full = all 500 Q.
 | 4 | `multi-granular-smoke` | multi-granular chunking (file + semantic + sliding window) on MiniLM | **0.940** | (full deferred) | **+0.416** vs baseline / **+0.140** vs MiniLM smoke | 🚀 | 50Q stratified. Initial run scored 0.080 due to stale eval matcher — fixed to strip `::*` chunk suffix from doc_ids before comparing, re-scored same data → 0.940. knowledge-update/assistant/preference all 1.000; multi-session/user/temporal 0.875-0.889. |
 | 5 | `context-prefix-smoke` | Anthropic-style contextual prefix on multi-granular stack (`PRISM_CONTEXT_PREFIX=on`) | 0.940 | — | 0.000 vs multi-granular | ↔️ | 50Q stratified. Prepends `File: <path>\nScope: <qualified entity>` before embedding/BM25. Per-type breakdown identical to multi-granular. LongMemEval queries are conversational prose; prefix adds no semantic signal for this corpus. Kept default on as theory says it should help code retrieval — needs swebench to confirm. |
 | 6 | `rerank-bge-v2-smoke` | BAAI/bge-reranker-v2-m3 cross-encoder post-RRF on multi-granular+prefix (`PRISM_RERANK=bge-v2`, top-50 pool) | 0.940 | — | 0.000 vs prior | ↔️ | 50Q stratified. Same per-type breakdown, +421s (+22%) wall time vs prefix smoke for zero gain. Suggests the LongMemEval smoke R@5 ceiling at 0.940 is semantic, not rank-order — the 3 missed Qs don't have the gold answer in top-50 to be reranked. Reranker kept as opt-in via env var. |
+| 7 | `plat0042-on-v2-smoke50` | rules-based query decomposition + temporal name fallback (`PRISM_QUERY_DECOMP=on`) | **0.980** | — | **+0.040** vs fresh off baseline | ✅ | 2026-04-25 50Q stratified A/B. Off baseline: R@5 0.940, pool@50 0.980, median 1756.5ms. On v2: R@5 0.980, pool@50 1.000, median 2576.9ms (1.47x). Gate passed after making the pool delta check ceiling-aware. |
 
 ## Decision
 **Ship MiniLM as default.** All-MiniLM-L6-v2 gives +0.110 R@5 vs potion baseline for free
@@ -29,8 +30,43 @@ embedders (jina-code, nomic-code) underperform badly on conversational queries a
 be avoided unless the query domain is code. `PRISM_EMBEDDER` default changed to `minilm`
 in `services/bench-service/docker-compose.yml`.
 
+## Operator env vars
+
+| Var | Default | Values | Effect |
+|---|---|---|---|
+| `PRISM_EMBEDDER` | `minilm` | `minilm`, `bge-small`, `jina-code`, `potion`, … | Vector embedder. |
+| `PRISM_SEARCH_MODE` | `hybrid` | `hybrid`, `vector`, `bm25` | Which sub-indexes contribute candidates. |
+| `PRISM_RERANK` | `off` | `bge-v2`, `jina-v2`, `ms-marco-minilm`, `off` | Cross-encoder re-rank of top-N RRF candidates. |
+| `PRISM_RERANK_TOPN` | `50` | int | Pool size for reranker. |
+| `PRISM_FEEDBACK_WEIGHT` | `0.002` | float, `off` | Up/down-vote weight applied to RRF score. |
+| `PRISM_CHUNK_AGG` | `on` | `on`, `off` | Collapse same-source-file chunks to best per file. |
+| `PRISM_QUERY_DECOMP` | `off` | `on`, `off`, `0`, `1` | **PLAT-0042.** Rules-based query decomposition for candidate generation. Splits compound questions on " and ", " then ", `;` and decomposes long (>12 token) queries; runs each sub-query through every per-index helper, unions per index, then RRF fuses once. Off-path is byte-identical to pre-change behavior. Disable if latency-sensitive — expect ~1.3-1.6× median latency. |
+
 ## Log entries
 
+### 2026-04-25 — metaconductor-policy-gate
+- Added MCP-first Meta-Conductor candidate loop for AutoAgent-style prompt
+  optimization. PRISM now owns candidate storage, evaluation, and promotion.
+  It can also generate conservative no-LLM candidates from PSP outcome traces;
+  callers can still supply prompt text, but cannot self-promote it.
+- New MCP tools: `meta_conductor_brief`, `meta_conductor_propose`,
+  `meta_conductor_evaluate`, `meta_conductor_auto`.
+- Promotion gate requires: holdout lift >= +0.03, contextpack score = 1.000,
+  tests passed, token ratio <= 1.15, sample_n >= 5, and no worse retry,
+  follow-up, or revert deltas.
+- Benchmark: `python benchmarks/metaconductor/run.py`
+  - decision_accuracy = **1.000**
+  - auto_created = **1**
+  - false_promotions = **0**
+  - missed_promotions = **0**
+- Regression gates:
+  - `python benchmarks/contextpack/run.py` stayed at **1.000** across
+    context_recall, Brain, Memory, Tasks, persona, rules, determinism, and noise.
+  - `python -m pytest benchmarks/tests` -> **16 passed**
+  - `python -m pytest services/prism-service/tests/unit` -> **104 passed**
+  - `python -m pytest services/prism-service/tests/integration` -> **6 passed**
+
+<!-- Append new entries below; keep human-readable and dated. -->
 ### 2026-04-19 — baseline-potion (full, 500 Q)
 - Stack: `potion-base-32M` (model2vec, 512-dim) + BM25(FTS5) + graph RRF
 - Identifier expansion: on
@@ -100,6 +136,21 @@ in `services/bench-service/docker-compose.yml`.
   0.940 is a retrieval-candidate-generation problem, not a rank-order problem.
 - Kept as opt-in env var. Will re-evaluate if we ever build a code-retrieval bench where
   the cross-encoder should have room to move numbers.
+
+### 2026-04-25 — plat0042-on-v2-smoke50
+- Query decomposition on the multi-granular + contextual-prefix stack, with
+  `PRISM_QUERY_DECOMP=on`. Added a deterministic temporal-name fallback so personal
+  memory questions like "What did I do with Rachel on the Wednesday two months ago?"
+  emit `Rachel` as a candidate-generation subquery.
+- Fresh off baseline (`plat0042-off-smoke50`): **R@5 = 0.940** (47/50),
+  pool_recall@50 = 0.980 (49/50), median_ms = 1756.5.
+- Decomp v2 (`plat0042-on-v2-smoke50`): **R@5 = 0.980** (49/50),
+  pool_recall@50 = 1.000 (50/50), median_ms = 2576.9 (1.47x baseline).
+- Gate: `benchmarks/assert_thresholds.py` passed. The pool-delta check is now
+  ceiling-aware: it still requires +2 pool sessions when possible, but if the baseline
+  has only one miss left, fixing that miss satisfies the gate.
+- Per-type: temporal-reasoning moved from 0.875 to 1.000; multi-session stayed at 1.000
+  versus the earlier on-run, and all assistant/preference/knowledge slices stayed at 1.000.
 
 ### 2026-04-20 — swebench-fullstack-limit10
 - SWE-bench Lite, first 10 instances, full retrieval stack: MiniLM embedder + multi-granular

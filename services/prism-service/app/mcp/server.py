@@ -9,7 +9,7 @@ If omitted, the "default" project is used.
 from __future__ import annotations
 
 import contextlib
-import contextvars
+import uuid
 from collections.abc import AsyncIterator
 from urllib.parse import parse_qs
 
@@ -17,16 +17,15 @@ import uvicorn
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
-from starlette.routing import Mount, Route
+from starlette.routing import Mount
 
-from app.mcp.tools import TOOLS, handle_tool
-
-# ---------------------------------------------------------------------------
-# Context variable: holds the project ID for the current request
-# ---------------------------------------------------------------------------
-current_project: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "current_project", default="default",
+from app.config import DEFAULT_PROJECT
+from app.mcp.request_context import (
+    PrismRequestContext,
+    get_request_context,
+    use_request_context,
 )
+from app.mcp.tools import TOOLS, handle_tool
 
 # ---------------------------------------------------------------------------
 # MCP Server instance
@@ -44,7 +43,7 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """Dispatch a tool call to the handler, scoped to the current project."""
-    project_id = current_project.get()
+    project_id = get_request_context().project_id
     return await handle_tool(name, arguments, project_id=project_id)
 
 
@@ -75,10 +74,15 @@ async def handle_mcp(scope, receive, send):
     scope = dict(scope, path=original_path)
 
     qs = parse_qs(scope.get("query_string", b"").decode())
-    project_id = qs.get("project", ["default"])[0]
-    current_project.set(project_id)
+    project_id = qs.get("project", [DEFAULT_PROJECT])[0]
+    request_ctx = PrismRequestContext(
+        project_id=project_id,
+        request_id=uuid.uuid4().hex,
+        transport="mcp-http",
+    )
 
-    await session_manager.handle_request(scope, receive, send)
+    with use_request_context(request_ctx):
+        await session_manager.handle_request(scope, receive, send)
 
 
 @contextlib.asynccontextmanager

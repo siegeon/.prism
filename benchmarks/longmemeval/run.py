@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import random
 import sys
 import time
@@ -30,6 +31,36 @@ from pathlib import Path
 from typing import Any
 
 MCP_BASE = "http://localhost:18081/mcp/"
+
+# Result schema keys persisted to the per-run JSON. PLAT-0042 adds
+# pool_recall@50 — fraction of items whose gold session entered the
+# top-50 RRF candidate pool. Lets us prove a recall lift comes from
+# candidate generation rather than rerank reordering.
+RESULT_KEYS: tuple[str, ...] = (
+    "tag", "recall@5", "pool_recall@50", "median_ms",
+    "hits@5", "total_scored", "by_type", "per_question",
+)
+
+
+def compute_gold_in_pool(pool: list[dict], gold_session_id: str) -> bool:
+    """Return True iff ``gold_session_id`` appears anywhere in ``pool``.
+
+    Strips the ``::chunk_suffix`` Brain attaches to multi-granular
+    chunks so a session id matches whether the pool entry is the
+    file-level row, a window slice, or an entity row.
+    """
+    if not gold_session_id or not pool:
+        return False
+    for item in pool:
+        did = (item or {}).get("doc_id", "")
+        if not did:
+            continue
+        head = did.split("::", 1)[0]
+        if head == gold_session_id or did == gold_session_id:
+            return True
+        if head.rsplit("/", 1)[-1] == gold_session_id:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +108,13 @@ def format_session(turns: list[dict]) -> str:
                        for t in turns)
 
 
-def run_one(project: str, q_idx: int, entry: dict, k: int = 5) -> dict:
+def run_one(
+    project: str,
+    q_idx: int,
+    entry: dict,
+    k: int = 5,
+    pool_k: int = 50,
+) -> dict:
     domain = f"lme_q{q_idx:03d}"
     t0 = time.perf_counter()
 
@@ -92,8 +129,11 @@ def run_one(project: str, q_idx: int, entry: dict, k: int = 5) -> dict:
 
     # Query
     t1 = time.perf_counter()
-    resp = mcp_call(project, "brain_search",
-                    {"query": entry["question"], "domain": domain, "limit": k})
+    resp = mcp_call(
+        project,
+        "brain_search",
+        {"query": entry["question"], "domain": domain, "limit": pool_k},
+    )
     payload = parse_result(resp) or []
     if isinstance(payload, dict):
         payload = payload.get("results") or payload.get("matches") or []
@@ -109,17 +149,23 @@ def run_one(project: str, q_idx: int, entry: dict, k: int = 5) -> dict:
     query_sec = time.perf_counter() - t1
 
     gold = set(entry["answer_session_ids"])
-    hit = any(sid in gold for sid in retrieved)
+    hit = any(sid in gold for sid in retrieved[:k])
+    gold_in_pool = any(
+        compute_gold_in_pool(payload, sid)
+        for sid in gold
+    )
 
     return {
         "q_idx": q_idx,
         "question_id": entry["question_id"],
         "question_type": entry["question_type"],
         "hit@5": hit,
+        "gold_in_pool@50": gold_in_pool,
         "retrieved_session_ids": retrieved,
         "gold_session_ids": list(gold),
         "ingest_sec": round(ingest_sec, 2),
         "query_sec": round(query_sec, 3),
+        "query_ms": round(query_sec * 1000, 3),
     }
 
 
@@ -232,6 +278,13 @@ def main() -> int:
 
     total = len(results)
     r5 = hits / total if total else 0.0
+    pool_hits = sum(1 for r in results if r.get("gold_in_pool@50"))
+    pool_recall = pool_hits / total if total else 0.0
+    query_ms = [
+        float(r["query_ms"]) for r in results
+        if "query_ms" in r and "error" not in r
+    ]
+    median_ms = statistics.median(query_ms) if query_ms else 0.0
     by_type: dict[str, dict] = {}
     for r in results:
         t = r.get("question_type", "unknown")
@@ -250,6 +303,9 @@ def main() -> int:
         "total_scored": total,
         "hits@5": hits,
         "recall@5": r5,
+        "pool_hits@50": pool_hits,
+        "pool_recall@50": pool_recall,
+        "median_ms": round(median_ms, 3),
         "by_type": by_type,
         "elapsed_sec": round(time.perf_counter() - t0, 1),
         "per_question": results,
@@ -260,6 +316,11 @@ def main() -> int:
     print(file=sys.stderr)
     print(f"RESULT [{args.tag or 'untagged'}]: R@5 = {r5:.4f}  ({hits}/{total})",
           file=sys.stderr)
+    print(
+        f"  pool_recall@50 = {pool_recall:.4f}  ({pool_hits}/{total})",
+        file=sys.stderr,
+    )
+    print(f"  median_ms = {median_ms:.1f}", file=sys.stderr)
     for t, b in sorted(by_type.items()):
         print(f"  {t:<30} {b['r@5']:.3f}  ({b['hits']}/{b['n']})", file=sys.stderr)
     print(f"Wrote {args.output}", file=sys.stderr)

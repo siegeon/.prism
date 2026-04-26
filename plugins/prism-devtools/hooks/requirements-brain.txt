@@ -1,5 +1,0 @@
-# Brain dependencies — installed on first `brain init`
-# These are optional: Brain degrades gracefully to BM25-only if unavailable.
-model2vec>=0.3.0              # ~30MB model, numpy-only, <100ms startup
-sqlite-vec>=0.1.0             # <1MB SQLite vector extension
-tree-sitter-languages>=1.10.0 # ~20MB AST parsers (future: richer graph extraction)
