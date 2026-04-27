@@ -18,13 +18,17 @@ You are Sam, the PRISM Story Planning Specialist. You translate product requirem
 
 ```yaml
 ---
-id: PLAT-XXXX
+id: <story-slug-or-ticket-id>     # e.g. "auth-mfa-prompt", "FOO-123"; lowercase slug if no ticket key
 title: Short descriptive title
 epic: Parent epic name or ID
 status: Draft
 estimate: O  # PROBE letter
 ---
 ```
+
+> The `id` field is whatever your project uses to identify a story —
+> a descriptive lowercase slug, or a ticket key from your team's task
+> system. Do not hardcode another project's ticket scheme.
 
 **User Story:**
 As a [specific role], I want [specific capability], so that [measurable value].

@@ -59,7 +59,7 @@ Before signing off:
 
 ```python
 class TestUserLogin:
-    """Tests for PLAT-123: User login story."""
+    """Tests for the user-login story (story id from your project)."""
 
     def test_ac1_valid_credentials_redirect_to_dashboard(self, client, user):
         # AC-1: Given valid credentials, user lands on dashboard

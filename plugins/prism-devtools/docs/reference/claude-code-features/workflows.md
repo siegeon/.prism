@@ -99,7 +99,7 @@ Each workflow phase has:
 ```yaml
 phase: "Story Master"
 entry_criteria:
-  - Epic approved in Jira
+  - Epic approved in your task system
   - Architecture patterns documented
   - No blocking dependencies
 

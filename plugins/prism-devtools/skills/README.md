@@ -35,12 +35,6 @@ Auto-activating agent capabilities for PRISM workflows.
 | [nfr-assess](./nfr-assess/SKILL.md) | NFR assessment |
 | [strangler-pattern](./strangler-pattern/SKILL.md) | Strangler pattern |
 
-## Integrations
-
-| Skill | Purpose |
-|-------|---------|
-| [jira](./jira/SKILL.md) | Jira integration |
-
 ## Tooling
 
 | Skill | Purpose |

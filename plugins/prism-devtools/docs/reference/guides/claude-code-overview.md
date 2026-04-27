@@ -33,7 +33,7 @@ Claude Code features build on each other in layers:
 ├─────────────────────────────────────┤
 │  CLAUDE.md (Memory)                 │  ← PRISM: Methodology context
 ├─────────────────────────────────────┤
-│  MCP (External Systems)             │  ← Optional: Jira, GitHub, etc.
+│  MCP (External Systems)             │  ← Optional: GitHub, etc.
 └─────────────────────────────────────┘
 ```
 
@@ -175,7 +175,7 @@ Configuration: See [`hooks/README.md`](../../../hooks/README.md) for setup
 
 **What it is:** Universal protocol for connecting external tools and data sources to Claude Code.
 
-**How PRISM uses it:** PRISM runs as an MCP server, and also integrates with external services like Jira:
+**How PRISM uses it:** PRISM runs as an MCP server exposing its native task / Brain / memory / workflow tools to Claude Code:
 
 ```
 .prism/
@@ -189,17 +189,6 @@ Configuration: See [`hooks/README.md`](../../../hooks/README.md) for setup
 ├── templates/                   # Document templates
 └── docs/                        # Documentation
 ```
-
-**Jira integration:**
-
-```bash
-# Agents auto-detect issue keys
-/dev PROJ-123              # Fetches story from Jira
-/architect PLAT-456        # Fetches epic from Jira
-/support BUG-789           # Fetches bug details
-```
-
-**Setup:** See [`utils/jira-integration.md`](../../../utils/jira-integration.md)
 
 **Key insight:** MCP connects external systems. Each server adds tools/resources/prompts as slash commands (e.g., `/mcp__github__create-issue`).
 
@@ -217,7 +206,7 @@ Configuration: See [`hooks/README.md`](../../../hooks/README.md) for setup
 | Enforce process rules | Hook | `enforce-story-context.py` |
 | Context-aware automation | Skill | `dev` skill for TDD workflow |
 | Share configuration | MCP Server | PRISM distribution |
-| External API access | MCP | Jira integration |
+| External API access | MCP | GitHub / custom MCP servers |
 
 ---
 

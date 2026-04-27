@@ -48,10 +48,6 @@ Thumbs.db
 *.local.yaml
 *.local.json
 
-# Jira credentials (never commit these!)
-.jira-token
-jira-config.local.yaml
-
 # Testing
 coverage/
 .nyc_output/

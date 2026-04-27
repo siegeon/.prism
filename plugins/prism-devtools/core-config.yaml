@@ -156,13 +156,6 @@ fileFirst:
     checkArchitectureReferences: true
 devStoryLocation: docs/stories
 slashPrefix: prism
-jira:
-  enabled: true
-  baseUrl: https://resolvesys.atlassian.net
-  email: ${JIRA_EMAIL}
-  token: ${JIRA_API_TOKEN}
-  defaultProject: PLAT
-  issueKeyPattern: "[A-Z]+-\\d+"
 brain:
   enabled: true
   db_dir: .prism/brain
