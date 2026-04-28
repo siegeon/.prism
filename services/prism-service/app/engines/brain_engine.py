@@ -190,17 +190,26 @@ _TS_AVAILABLE = False
 
 
 def _init_treesitter_lib() -> None:
-    """Load the bundled tree-sitter-languages .so and mark availability."""
+    """Load the bundled tree-sitter-languages shared library.
+
+    The package ships the binary under different names per OS:
+    ``languages.so`` on Linux, ``languages.dylib`` on macOS,
+    ``languages.dll`` on Windows. We try each in turn so the C# /
+    Python / TS extractors actually run on developer machines, not
+    only inside the Linux service container (siegeon#45).
+    """
     global _TS_LANGS_LIB, _TS_AVAILABLE
     if _TS_AVAILABLE:
         return
     try:
         import tree_sitter_languages as _tsl
-        lib_path = Path(_tsl.__path__[0]) / "languages.so"
-        if not lib_path.exists():
-            return
-        _TS_LANGS_LIB = ctypes.cdll.LoadLibrary(str(lib_path))
-        _TS_AVAILABLE = True
+        pkg_dir = Path(_tsl.__path__[0])
+        for name in ("languages.so", "languages.dylib", "languages.dll"):
+            candidate = pkg_dir / name
+            if candidate.exists():
+                _TS_LANGS_LIB = ctypes.cdll.LoadLibrary(str(candidate))
+                _TS_AVAILABLE = True
+                return
     except Exception:
         pass
 

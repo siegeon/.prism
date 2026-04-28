@@ -115,7 +115,7 @@ artifacts:
 - Project paths and structure
 - Artifact output locations
 - Template mappings
-- Integration settings (Jira, etc.)
+- Integration settings
 - Workflow parameters
 
 **Example Config:**

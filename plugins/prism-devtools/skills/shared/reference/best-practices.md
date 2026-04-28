@@ -181,7 +181,7 @@ This document consolidates best practices for the PRISM methodology for effectiv
 ✅ **Link to Source Documents**
 - Reference PRD sections
 - Reference architecture docs
-- Reference Jira epics
+- Reference parent epic by ID
 
 ✅ **Set Status to "Draft" Until Approved**
 - Requires user review

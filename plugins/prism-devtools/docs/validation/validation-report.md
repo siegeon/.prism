@@ -75,10 +75,6 @@
 - **Issue**: Circular reference detected: skills/agent-builder/reference/agent-examples.md → skills/agent-builder/reference/best-practices.md → skills/agent-builder/reference/troubleshooting.md → skills/agent-builder/reference/agent-examples.md
 - **Fix**: Consider if this cycle is intentional for navigation, or remove one link to break the cycle
 
-**SB013**: `skills/jira/SKILL.md`
-- **Issue**: Circular reference detected: skills/jira/SKILL.md → skills/jira/reference/instructions.md → skills/jira/reference/README.md → skills/jira/reference/extraction-format.md → skills/jira/SKILL.md
-- **Fix**: Consider if this cycle is intentional for navigation, or remove one link to break the cycle
-
 **SB013**: `skills/skill-builder/reference/quick-reference.md`
 - **Issue**: Circular reference detected: skills/skill-builder/reference/quick-reference.md → skills/skill-builder/reference/philosophy.md → skills/skill-builder/reference/quick-reference.md
 - **Fix**: Consider if this cycle is intentional for navigation, or remove one link to break the cycle
@@ -266,10 +262,6 @@
 - **Issue**: Long document (430 lines) missing disclosure techniques
 - **Fix**: Consider adding: Table of Contents, <details>/<summary> sections, or split into multiple files
 
-**PD005**: `utils/jira-integration.md`
-- **Issue**: Long document (293 lines) missing disclosure techniques
-- **Fix**: Consider adding: Table of Contents, <details>/<summary> sections, or split into multiple files
-
 **PD005**: `utils/prism-doc-template.md`
 - **Issue**: Long document (327 lines) missing disclosure techniques
 - **Fix**: Consider adding: Table of Contents, <details>/<summary> sections, or split into multiple files
@@ -317,10 +309,6 @@
 ## Terminology Issues
 
 ### Warning
-
-**TC001**: `utils/jira-integration.md`:270
-- **Issue**: Skill 'validate-issue' referred to as 'task'
-- **Fix**: Replace with '/validate-issue' or 'validate-issue skill'
 
 **TC001**: `skills/shared/reference/best-practices.md`:481
 - **Issue**: Skill 'risk-profile' referred to as 'task'

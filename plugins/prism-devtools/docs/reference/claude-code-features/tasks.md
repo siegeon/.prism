@@ -371,16 +371,16 @@ include_edge_cases=true
 **Use case:** Convert formats
 
 ```markdown
-# Task: Story to Jira
+# Task: Story to issue payload
 
 **Input:** `story_file`
 
 **Process:**
 1. Parse story markdown
-2. Extract Jira-relevant fields
-3. Format as Jira API payload
+2. Extract issue-relevant fields
+3. Format as your task system's create-issue payload
 
-**Output:** JSON payload for Jira API
+**Output:** JSON payload for the target issue tracker
 ```
 
 ---
