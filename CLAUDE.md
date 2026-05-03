@@ -25,12 +25,12 @@ Use Brain (MCP) for all project knowledge — do not create static architecture 
   plugins/prism-devtools/   # Claude Code plugin (skills, commands, hooks, agents)
   services/prism-service/   # MCP server (Brain, Memory, Tasks, Workflow)
   docs/stories/             # Story files
-  .mcp.json                 # MCP config -> localhost:8081
+  .mcp.json                 # MCP config -> localhost:7777
 ```
 
 ## MCP Service
 
-Running at `http://localhost:8081/mcp/?project=prism`. Start with:
+Running at `http://localhost:7777/mcp/?project=prism`. Start with:
 ```bash
 cd services/prism-service && docker compose up -d
 ```

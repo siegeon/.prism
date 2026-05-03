@@ -54,6 +54,8 @@ def test_install_manifest_keeps_required_client_adapter_files():
         ".claude/hooks/prism-stop.py",
         ".claude/hooks/prism-subagent.py",
         ".claude/hooks/prism-skill-usage.py",
+        ".claude/hooks/prism-edit-learn.py",
+        ".claude/hooks/prism-idle-rebuild.py",
         ".claude/hooks/hook_logger.py",
         ".claude/agents/prism-reflect.md",
         ".claude/commands/prism-reflect.md",
@@ -69,14 +71,22 @@ def test_install_settings_wires_all_shipped_hooks():
     settings = json.loads(files[".claude/settings.json"]["content"])
     hooks = settings["hooks"]
     rendered = json.dumps(hooks)
-    for command in (
-        "python .claude/hooks/prism-sync.py",
-        "python .claude/hooks/prism-feedback-signal.py",
-        "python .claude/hooks/prism-stop.py",
-        "python .claude/hooks/prism-subagent.py",
-        "python .claude/hooks/prism-skill-usage.py",
+    # Hook commands use ${CLAUDE_PROJECT_DIR} so they survive cwd shifts —
+    # match on the trailing path fragment, not the full command line.
+    for fragment in (
+        "/.claude/hooks/prism-sync.py",
+        "/.claude/hooks/prism-feedback-signal.py",
+        "/.claude/hooks/prism-stop.py",
+        "/.claude/hooks/prism-subagent.py",
+        "/.claude/hooks/prism-skill-usage.py",
+        "/.claude/hooks/prism-edit-learn.py",
+        "/.claude/hooks/prism-idle-rebuild.py",
     ):
-        assert command in rendered
+        assert fragment in rendered
+    assert "${CLAUDE_PROJECT_DIR}" in rendered, (
+        "hook commands must use ${CLAUDE_PROJECT_DIR} so they resolve "
+        "regardless of the subprocess cwd"
+    )
 
 
 def test_plugin_hook_registration_is_noop():

@@ -15,6 +15,6 @@ COPY app/ ./app/
 # Create data directory
 RUN mkdir -p /data/mulch /data/workflow
 
-EXPOSE 8080 8081
+EXPOSE 7777 7778
 
 CMD ["python", "-m", "app.main"]

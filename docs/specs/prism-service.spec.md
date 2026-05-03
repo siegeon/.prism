@@ -26,7 +26,7 @@ The primary user. Works alongside Claude Code on software projects. Needs to:
 - Monitor workflow progress and approve/reject gates
 - Audit prompt performance and conductor analytics
 
-**Interaction mode:** Web browser (localhost:8080)
+**Interaction mode:** Web browser (localhost:7778)
 
 ### A2: Claude Code Agent
 The AI coding assistant. Operates in a terminal session, performs development tasks. Needs to:
@@ -37,12 +37,12 @@ The AI coding assistant. Operates in a terminal session, performs development ta
 - Get a full context bundle at session start (Context)
 - Record prompt outcomes for continuous improvement (Conductor)
 
-**Interaction mode:** MCP tools (localhost:8081/sse)
+**Interaction mode:** MCP tools (localhost:7777/sse)
 
 ### A3: CI/CD Pipeline / External Agents (Future)
 Automated systems or other AI agents that need to interact with the service. They connect via MCP — same as Claude Code. No separate REST API needed.
 
-**Interaction mode:** MCP tools (localhost:8081/sse)
+**Interaction mode:** MCP tools (localhost:7777/sse)
 
 ---
 
@@ -209,7 +209,7 @@ CREATE TABLE task_history (
 
 ---
 
-### V7: MCP Tool Interface (port 8081)
+### V7: MCP Tool Interface (port 7777)
 
 **Purpose:** Programmatic access for Claude Code and other agents.
 
@@ -245,7 +245,7 @@ CREATE TABLE task_history (
 | **Python 3.12+** | Match existing engine code. NiceGUI and MCP SDK both support 3.12. |
 | **Offline-capable** | Brain search (BM25 + GraphRAG) must work without vector dependencies. Vector search is optional enhancement. |
 | **No model fine-tuning** | Service operates at the prompt layer only. No weight updates, no LoRA. |
-| **Port 8080 (UI) + 8081 (MCP)** | Two ports, single container. NiceGUI serves UI, separate process for MCP SSE. |
+| **Port 7778 (UI) + 7777 (MCP)** | Two ports, single container. NiceGUI serves UI, separate process for MCP SSE. |
 
 ### C2: Performance Constraints
 
@@ -354,7 +354,7 @@ Human Developer
   │
   ├─ 1. Clone/download prism-service
   ├─ 2. Run: docker compose up
-  ├─ 3. Open http://localhost:8080
+  ├─ 3. Open http://localhost:7778
   │     └─ Sees empty dashboard (no workflow active)
   │        └─ Brain Status: 0 docs, 0 entities
   │
@@ -366,7 +366,7 @@ Human Developer
   ├─ 5. Add MCP config to .claude/settings.json:
   │     {
   │       "mcpServers": {
-  │         "prism": { "type": "sse", "url": "http://localhost:8081/sse" }
+  │         "prism": { "type": "sse", "url": "http://localhost:7777/sse" }
   │       }
   │     }
   │
@@ -414,7 +414,7 @@ Claude Code Agent (via MCP)
 ```
 Human Developer (Web UI)
   │
-  ├─ 1. Opens http://localhost:8080/dashboard
+  ├─ 1. Opens http://localhost:7778/dashboard
   │     └─ Sees workflow stepper: Step 4 of 8 — "Write Failing Tests" (QA agent)
   │     └─ Token counter: 45,000 tokens used this session
   │     └─ Step history shows: Planning (3min), Draft Story (5min), Verify Plan (2min)
@@ -522,7 +522,7 @@ Two interfaces, one service layer. No REST API — everything goes through eithe
   │  Claude Code  │               │   Browser    │
   │  (Terminal)   │               │ (Developer)  │
   └──────┬───────┘               └──────┬───────┘
-         │ MCP (SSE, port 8081)          │ HTTP (port 8080)
+         │ MCP (SSE, port 7777)          │ HTTP (port 7778)
          ▼                               ▼
 ┌──────────────────────────────────────────────────┐
 │              PRISM Service Container              │

@@ -8,13 +8,13 @@ tools, not plugin or service artifacts.
 
 Benchmarks run against a separate MCP service (`services/bench-service/`) on
 ports 18080/18081, so they physically cannot touch the real PRISM index at
-ports 8080/8081.
+ports 7778/7777.
 
 ```
                       Your real work              Benchmarks
                       ─────────────               ──────────
 Container             prism-service-prism-...     prism-bench-service
-MCP port              8081                        18081
+MCP port              7777                        18081
 Data volume           ./data                      ./data-bench
 Project slugs         your real projects          bench-<...>
 ```

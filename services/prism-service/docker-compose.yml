@@ -2,8 +2,8 @@ services:
   prism-service:
     build: .
     ports:
-      - "8080:8080"
-      - "8081:8081"
+      - "7778:7778"
+      - "7777:7777"
     volumes:
       - ./data:/data
     environment:
