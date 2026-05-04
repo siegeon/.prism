@@ -1571,7 +1571,7 @@ def _install_manifest(project_id: str) -> dict:
         "SessionStart": [
             {
                 "type": "command",
-                "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-sync.py",
+                "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-sync.py",
                 "timeout": 30000,
             },
         ],
@@ -1581,7 +1581,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-feedback-signal.py",
+                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-feedback-signal.py",
                         "description": (
                             "Implicit retrieval feedback: correlate "
                             "brain_search results with Read/Edit and emit "
@@ -1595,7 +1595,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-skill-usage.py",
+                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-skill-usage.py",
                         "description": (
                             "Record skill invocations to scores.db via "
                             "record_skill_usage — populates /skills."
@@ -1608,7 +1608,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-edit-learn.py",
+                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-edit-learn.py",
                         "description": (
                             "Auto-ingest edited source files into Brain via "
                             "prism_refresh (skip_graph) so brain_search "
@@ -1624,7 +1624,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-stop.py",
+                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-stop.py",
                         "description": (
                             "Record session-level metrics (duration, "
                             "tokens, files, skills) via "
@@ -1633,7 +1633,7 @@ def _install_manifest(project_id: str) -> dict:
                     },
                     {
                         "type": "command",
-                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-idle-rebuild.py",
+                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-idle-rebuild.py",
                         "description": (
                             "Flush in-session edits into the code graph via "
                             "graph_rebuild iff the edit-learn hook left a "
@@ -1649,7 +1649,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-subagent.py",
+                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-subagent.py",
                         "description": (
                             "Record sub-agent outcome (recommendation, "
                             "evidence count, timing) via "
