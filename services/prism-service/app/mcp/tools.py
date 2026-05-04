@@ -996,6 +996,75 @@ TOOLS: list[Tool] = [
             "required": ["project_name"],
         },
     ),
+    # ------------------------------------------------------------------
+    # Verifier — outer-harness sensor (Tier 0 tooling, Tier 1 records)
+    # ------------------------------------------------------------------
+    Tool(
+        name="verifier_run",
+        description=(
+            "Run the outer-harness verifier over the current project. "
+            "Tier 0 invokes the project's own tooling (ruff/mypy/pytest "
+            "for Python, eslint/tsc for JS/TS, cargo check for Rust, go "
+            "vet for Go) scoped to git-diff'd files. Tier 1 walks PRISM "
+            "tables (brain_index_doc claims, tasks marked done, memory "
+            "writes) since session start and confirms each claim against "
+            "current state. Returns a structured verdict per claim plus a "
+            "top-line status (pass | fail | partial | error). Designed to "
+            "fire from the Stop hook on every session — typical run is "
+            "<1s when no diff is in scope."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string",
+                    "description": "Claude Code session id; scopes Tier 1 claim collection."},
+                "task_id": {"type": "string",
+                    "description": "Optional task id this run is associated with."},
+                "since_iso": {"type": "string",
+                    "description": "Override start-of-window timestamp; default = "
+                                   "session_outcomes.timestamp or 1h ago."},
+                "baseline_rev": {"type": "string",
+                    "description": "Git revision to diff against for Tier 0 scope; "
+                                   "default = HEAD."},
+                "workspace": {"type": "string",
+                    "description": "Host project directory (${CLAUDE_PROJECT_DIR}). "
+                                   "Required so Tier 0 runs against the real source "
+                                   "tree, not the MCP container's cwd."},
+            },
+        },
+    ),
+    Tool(
+        name="verifier_history",
+        description=(
+            "Recent verifier runs, newest first. Filter by task_id to get "
+            "the per-task flywheel — what got verified, what failed, "
+            "trends in tier statuses over time. Used by the dashboard "
+            "and by agents inspecting their own history before reprompting."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+    ),
+    Tool(
+        name="verifier_feedback_summary",
+        description=(
+            "Unresolved improvement seeds from recent verifier runs — "
+            "the human-readable feedback strings the verifier emitted "
+            "for fail/partial claims. Surfaced as additionalContext by "
+            "the SessionStart hook so the agent picks up where the last "
+            "run left off."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    ),
 ]
 
 
@@ -1629,6 +1698,7 @@ _HOOK_LOGGER_SCRIPT = _load_asset("hook_logger.py")
 # graph_rebuild flushes them at session end.
 _EDIT_LEARN_HOOK_SCRIPT = _load_asset("edit_learn_hook.py")
 _IDLE_REBUILD_HOOK_SCRIPT = _load_asset("idle_rebuild_hook.py")
+_VERIFIER_HOOK_SCRIPT = _load_asset("verifier_hook.py")
 # LL-10 — subagent definition + slash command shipped alongside the
 # hook scripts so Claude has something to match on when it sees the
 # SessionStart additionalContext nudge or the MCP-response header.
@@ -1746,6 +1816,21 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
                             "not per edit."
                         ),
                     },
+                    {
+                        "type": "command",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-verifier.py",
+                        "description": (
+                            "Outer-harness verifier sensor. Tier 0 runs "
+                            "the project's own tooling (ruff, mypy, "
+                            "pytest, eslint, tsc, cargo check, go vet) "
+                            "on git-diff'd files; Tier 1 walks PRISM "
+                            "tables (brain_index_doc, tasks done, "
+                            "memory writes) and confirms each claim "
+                            "against current state. Advisory: writes "
+                            "verdict to .prism/verifier.log, never "
+                            "blocks the agent."
+                        ),
+                    },
                 ],
             },
         ],
@@ -1849,6 +1934,12 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
                 "path": ".claude/hooks/prism-idle-rebuild.py",
                 "action": "upsert",
                 "content": _IDLE_REBUILD_HOOK_SCRIPT,
+                "mode": "0755",
+            },
+            {
+                "path": ".claude/hooks/prism-verifier.py",
+                "action": "upsert",
+                "content": _VERIFIER_HOOK_SCRIPT,
                 "mode": "0755",
             },
             # Shared logger: hooks call log_hook_failure() instead of the
@@ -2545,6 +2636,36 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         if name == "prism_guide":
             section = (arguments or {}).get("section", "").strip().lower() or None
             return [TextContent(type="text", text=_prism_guide(section))]
+
+        # ------------------------------------------------------------------
+        # Verifier — outer-harness sensor
+        # ------------------------------------------------------------------
+        if name == "verifier_run":
+            ctx = get_project(project_id)
+            args = arguments or {}
+            result = ctx.verifier_svc.run(
+                session_id=args.get("session_id"),
+                task_id=args.get("task_id"),
+                since_iso=args.get("since_iso"),
+                baseline_rev=args.get("baseline_rev"),
+                workspace=args.get("workspace"),
+            )
+            return [TextContent(type="text", text=_json(result))]
+
+        if name == "verifier_history":
+            ctx = get_project(project_id)
+            args = arguments or {}
+            rows = ctx.verifier_svc.history(
+                task_id=args.get("task_id"),
+                limit=int(args.get("limit", 20)),
+            )
+            return [TextContent(type="text", text=_json({"runs": rows}))]
+
+        if name == "verifier_feedback_summary":
+            ctx = get_project(project_id)
+            limit = int((arguments or {}).get("limit", 50))
+            seeds = ctx.verifier_svc.feedback_summary(limit=limit)
+            return [TextContent(type="text", text=_json({"seeds": seeds}))]
 
         # ------------------------------------------------------------------
         # Memory tools

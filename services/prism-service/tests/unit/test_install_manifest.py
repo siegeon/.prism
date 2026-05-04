@@ -56,6 +56,7 @@ def test_install_manifest_keeps_required_client_adapter_files():
         ".claude/hooks/prism-skill-usage.py",
         ".claude/hooks/prism-edit-learn.py",
         ".claude/hooks/prism-idle-rebuild.py",
+        ".claude/hooks/prism-verifier.py",
         ".claude/hooks/hook_logger.py",
         ".claude/agents/prism-reflect.md",
         ".claude/commands/prism-reflect.md",
@@ -74,6 +75,7 @@ _HOOK_FRAGMENTS = (
     "/.claude/hooks/prism-skill-usage.py",
     "/.claude/hooks/prism-edit-learn.py",
     "/.claude/hooks/prism-idle-rebuild.py",
+    "/.claude/hooks/prism-verifier.py",
 )
 
 
@@ -99,8 +101,8 @@ def test_install_settings_wires_all_shipped_hooks():
     # `SessionStart:startup hook error`. (Issue #36.)
     import re as _re
     py3_count = len(_re.findall(r'"python3 ', rendered))
-    assert py3_count >= 7, (
-        f"expected >=7 hook commands prefixed with `python3 ` on POSIX, "
+    assert py3_count >= 8, (
+        f"expected >=8 hook commands prefixed with `python3 ` on POSIX, "
         f"found {py3_count}"
     )
 
@@ -118,8 +120,8 @@ def test_install_settings_uses_py_launcher_on_windows():
     # Every hook entry must use the `py -3 ` prefix on Windows.
     import re as _re
     py_count = len(_re.findall(r'"py -3 ', rendered))
-    assert py_count >= 7, (
-        f"expected >=7 hook commands prefixed with `py -3 ` on Windows, "
+    assert py_count >= 8, (
+        f"expected >=8 hook commands prefixed with `py -3 ` on Windows, "
         f"found {py_count}"
     )
     # And no `python3 ` (which doesn't exist on Windows by default).
@@ -155,6 +157,38 @@ def test_install_manifest_accepts_platform_aliases():
     assert _hook_python_cmd("posix") == "python3"
     assert _hook_python_cmd("") == "python3"
     assert _hook_python_cmd(None) == "python3"
+
+
+def test_install_manifest_ships_verifier_hook_in_stop_event():
+    """The verifier (outer-harness sensor) is wired as a Stop hook
+    alongside record-session-outcome and idle-rebuild. Asserts the
+    install_files include the script AND the Stop event references it."""
+    files = _files_by_path(_manifest())
+    assert ".claude/hooks/prism-verifier.py" in files
+    content = files[".claude/hooks/prism-verifier.py"]["content"]
+    # Sanity: it's the verifier hook, not something else
+    assert "verifier_run" in content
+    assert ".prism/verifier.log" in content
+    # Wired into Stop event
+    settings = json.loads(files[".claude/settings.json"]["content"])
+    stop_entries = settings["hooks"].get("Stop") or []
+    flat = json.dumps(stop_entries)
+    assert "prism-verifier.py" in flat
+    # Hook description should advertise that it's advisory
+    assert "advisory" in flat.lower() or "never blocks" in flat.lower()
+
+
+def test_install_manifest_verifier_hook_works_on_windows_too():
+    """py -3 on Windows applies to the verifier hook the same way
+    it does to every other shipped hook."""
+    files = _files_by_path(_manifest(host_platform="win32"))
+    settings = json.loads(files[".claude/settings.json"]["content"])
+    flat = json.dumps(settings["hooks"])
+    assert '"py -3 ' in flat
+    assert "prism-verifier.py" in flat
+    # Make sure the verifier specifically gets the py -3 prefix
+    import re as _re
+    assert _re.search(r'"py -3 \$\{CLAUDE_PROJECT_DIR\}/\.claude/hooks/prism-verifier\.py"', flat)
 
 
 def test_plugin_hook_registration_is_noop():
