@@ -140,9 +140,13 @@ def test_stop_hook_calls_mark_stale_no_subprocess():
     files = _files_by_path(_manifest())
     content = files[".claude/hooks/prism-stop.py"]["content"]
     assert "janitor_mark_stale" in content
-    # No subprocess or claude -p invocation in the hook
-    assert "subprocess.run" not in content
+    # No `claude -p` shellout — janitor reflection runs server-side via
+    # MCP, never by spawning an LLM subprocess from the hook. (Issue #49
+    # added a `git rev-parse HEAD` subprocess, which IS legitimate;
+    # specifically guard against the old claude-shellout pattern.)
     assert '"claude"' not in content and "'claude'" not in content
+    assert "claude -p" not in content
+    assert "claude --" not in content
 
 
 def test_stop_hook_latency_under_500ms(tmp_path):
