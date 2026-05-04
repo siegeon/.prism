@@ -87,6 +87,22 @@ def test_install_settings_wires_all_shipped_hooks():
         "hook commands must use ${CLAUDE_PROJECT_DIR} so they resolve "
         "regardless of the subprocess cwd"
     )
+    # Issue #36: hook commands must invoke `python3`, not bare `python`.
+    # Modern Linux distros (Ubuntu 20.04+, Debian 11+, Fedora, Arch) ship
+    # only `/usr/bin/python3`; bare `python` exits with `command not found`
+    # and Claude Code reports `SessionStart:startup hook error`. Guard
+    # against any future drift back to the broken default.
+    assert "python " not in rendered, (
+        "hook commands must invoke `python3`, not bare `python` "
+        "(see resolve-io/.prism#36)"
+    )
+    # Sanity: every hook entry uses the python3 prefix.
+    import re as _re
+    py3_count = len(_re.findall(r'"python3 ', rendered))
+    assert py3_count >= 7, (
+        f"expected >=7 hook commands prefixed with `python3 `, found "
+        f"{py3_count}"
+    )
 
 
 def test_plugin_hook_registration_is_noop():
