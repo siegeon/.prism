@@ -80,6 +80,12 @@ def _graph_schema_migrations(conn: sqlite3.Connection) -> None:
         ("confidence_score",  "ALTER TABLE relationships ADD COLUMN confidence_score REAL"),
         ("weight",            "ALTER TABLE relationships ADD COLUMN weight REAL"),
         ("source_location",   "ALTER TABLE relationships ADD COLUMN source_location TEXT"),
+        # AC5: graphify emits source_file per edge — the FILE where
+        # the call site lives (distinct from the source ENTITY's
+        # defining file when the entity is defined elsewhere). Store
+        # as call_site_file to disambiguate; surface in call_chain
+        # results so users can jump straight to the call site.
+        ("call_site_file",    "ALTER TABLE relationships ADD COLUMN call_site_file TEXT"),
     ):
         if col not in rel_cols:
             try:
@@ -748,14 +754,22 @@ class GraphService:
                 confidence_score = float(link.get("confidence_score", 1.0))
                 weight = float(link.get("weight", 1.0))
                 source_location = link.get("source_location", "")
+                # AC5: per-edge source_file is the FILE where the call
+                # site lives (e.g. for an A→B call where A is defined
+                # in src/a.py but the call site is in src/handler.py
+                # because A was inlined or aliased). Distinct from the
+                # source entity's defining file.
+                call_site_file = link.get("source_file", "")
                 try:
                     conn.execute(
                         "INSERT OR REPLACE INTO relationships "
                         "(source_id, target_id, relation, confidence, "
-                        " confidence_score, weight, source_location) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        " confidence_score, weight, source_location, "
+                        " call_site_file) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (src_id, tgt_id, relation, confidence,
-                         confidence_score, weight, source_location),
+                         confidence_score, weight, source_location,
+                         call_site_file),
                     )
                     result["imported_relationships"] += 1
                 except sqlite3.IntegrityError:
