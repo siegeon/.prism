@@ -5,7 +5,7 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "0.3.0"
+PRISM_VERSION = "4.6.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
