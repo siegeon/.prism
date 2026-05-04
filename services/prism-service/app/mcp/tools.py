@@ -177,8 +177,10 @@ TOOLS: list[Tool] = [
             "Bounded BFS over the call graph starting at ``entity``. "
             "Returns a flat edge list [{from, to, kind, relation, hop}] "
             "so you can reconstruct 'what does this entity transitively "
-            "call'. Use to understand flow without Reading multiple "
-            "files."
+            "call'. By default only follows ``calls`` edges so "
+            "structural relations (contains/method/uses/imports_from) "
+            "don't fill the depth+limit budget; pass ``relation=\"*\"`` "
+            "to include every kind."
         ),
         inputSchema={
             "type": "object",
@@ -187,6 +189,16 @@ TOOLS: list[Tool] = [
                 "depth": {"type": "integer", "default": 2,
                           "description": "max hops (default 2)"},
                 "limit": {"type": "integer", "default": 50},
+                "relation": {
+                    "type": "string",
+                    "default": "calls",
+                    "description": (
+                        "Edge-kind filter: 'calls' (default) follows "
+                        "only call edges; '*' (or empty) includes "
+                        "every relation kind; any other value (e.g. "
+                        "'uses', 'inherits') filters to that one kind."
+                    ),
+                },
             },
             "required": ["entity"],
         },
@@ -2177,6 +2189,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 entity=arguments["entity"],
                 depth=arguments.get("depth", 2),
                 limit=arguments.get("limit", 50),
+                relation=arguments.get("relation", "calls"),
             )
             return [TextContent(type="text", text=_json(results))]
 
