@@ -1,7 +1,7 @@
 """PRISM MCP server — StreamableHTTP transport with per-project scoping.
 
 The project is determined by the ?project= query parameter on the request URL.
-E.g.  http://localhost:8081/mcp?project=my-app
+E.g.  http://localhost:7777/mcp?project=my-app
 
 If omitted, the "default" project is used.
 """

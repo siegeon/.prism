@@ -2,8 +2,10 @@ services:
   bench-service:
     build: ../prism-service
     ports:
-      - "18080:8080"
-      - "18081:8081"
+      # Bench keeps external 18080/18081 (50+ benchmark scripts hard-code
+      # them) but follows the prism-service container ports (7778/7777).
+      - "18080:7778"
+      - "18081:7777"
     volumes:
       - ./data-bench:/data
     environment:

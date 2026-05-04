@@ -15,8 +15,8 @@ PROJECTS_DIR = DATA_DIR / "projects"
 PROJECT_DIR = Path(os.environ.get("PRISM_PROJECT_DIR", "/project"))
 
 # Ports
-UI_PORT = int(os.environ.get("PRISM_UI_PORT", "8080"))
-MCP_PORT = int(os.environ.get("PRISM_MCP_PORT", "8081"))
+UI_PORT = int(os.environ.get("PRISM_UI_PORT", "7778"))
+MCP_PORT = int(os.environ.get("PRISM_MCP_PORT", "7777"))
 
 # Governance
 GOVERNANCE_INTERVAL_SECONDS = int(os.environ.get("PRISM_GOVERNANCE_INTERVAL", "300"))  # 5 min

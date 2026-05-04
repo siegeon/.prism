@@ -1407,8 +1407,22 @@ def main() -> int:
         return 0
 
     status = _parse_result(resp) or {}
+    version = status.get("prism_version") or "?"
+    print(
+        f"[prism-sync] PRISM v{version} loaded for project '{project}'",
+        file=sys.stderr,
+    )
     drifted = status.get("drifted", []) or []
     if not drifted:
+        # Always surface the version to Claude, even when there's no drift —
+        # so the agent's first turn knows which PRISM build is live.
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "additionalContext": (
+                    f"PRISM v{version} active for project '{project}'."
+                ),
+            },
+        }))
         return 0
 
     # Re-ingest drifted files
@@ -1532,6 +1546,11 @@ _STOP_HOOK_SCRIPT = _load_asset("stop_record_hook.py")
 _SUBAGENT_HOOK_SCRIPT = _load_asset("subagent_record_hook.py")
 _SKILL_HOOK_SCRIPT = _load_asset("skill_usage_hook.py")
 _HOOK_LOGGER_SCRIPT = _load_asset("hook_logger.py")
+# Autonomous learning loop: edit-learn (PostToolUse) + idle-rebuild (Stop)
+# pair up so source-file edits flow into Brain mid-session, then one
+# graph_rebuild flushes them at session end.
+_EDIT_LEARN_HOOK_SCRIPT = _load_asset("edit_learn_hook.py")
+_IDLE_REBUILD_HOOK_SCRIPT = _load_asset("idle_rebuild_hook.py")
 # LL-10 — subagent definition + slash command shipped alongside the
 # hook scripts so Claude has something to match on when it sees the
 # SessionStart additionalContext nudge or the MCP-response header.
@@ -1552,7 +1571,7 @@ def _install_manifest(project_id: str) -> dict:
         "SessionStart": [
             {
                 "type": "command",
-                "command": "python .claude/hooks/prism-sync.py",
+                "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-sync.py",
                 "timeout": 30000,
             },
         ],
@@ -1562,7 +1581,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python .claude/hooks/prism-feedback-signal.py",
+                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-feedback-signal.py",
                         "description": (
                             "Implicit retrieval feedback: correlate "
                             "brain_search results with Read/Edit and emit "
@@ -1576,10 +1595,25 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python .claude/hooks/prism-skill-usage.py",
+                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-skill-usage.py",
                         "description": (
                             "Record skill invocations to scores.db via "
                             "record_skill_usage — populates /skills."
+                        ),
+                    },
+                ],
+            },
+            {
+                "matcher": "Edit|Write|NotebookEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-edit-learn.py",
+                        "description": (
+                            "Auto-ingest edited source files into Brain via "
+                            "prism_refresh (skip_graph) so brain_search "
+                            "reflects in-session edits without waiting for "
+                            "the next SessionStart."
                         ),
                     },
                 ],
@@ -1590,11 +1624,21 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python .claude/hooks/prism-stop.py",
+                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-stop.py",
                         "description": (
                             "Record session-level metrics (duration, "
                             "tokens, files, skills) via "
                             "record_session_outcome — populates /sessions."
+                        ),
+                    },
+                    {
+                        "type": "command",
+                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-idle-rebuild.py",
+                        "description": (
+                            "Flush in-session edits into the code graph via "
+                            "graph_rebuild iff the edit-learn hook left a "
+                            "graph-dirty sentinel. One rebuild per session, "
+                            "not per edit."
                         ),
                     },
                 ],
@@ -1605,7 +1649,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python .claude/hooks/prism-subagent.py",
+                        "command": "python ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-subagent.py",
                         "description": (
                             "Record sub-agent outcome (recommendation, "
                             "evidence count, timing) via "
@@ -1682,6 +1726,24 @@ def _install_manifest(project_id: str) -> dict:
                 "path": ".claude/hooks/prism-skill-usage.py",
                 "action": "upsert",
                 "content": _SKILL_HOOK_SCRIPT,
+                "mode": "0755",
+            },
+            # Autonomous-learning loop. PostToolUse on Edit/Write/NotebookEdit
+            # auto-ingests the changed file into Brain (skip_graph=true) and
+            # drops a .prism/graph-dirty sentinel; the Stop sibling below
+            # flushes one graph_rebuild per session iff the sentinel exists.
+            # Together they close the in-session blindness gap that previously
+            # required SessionStart drift detection on the next restart.
+            {
+                "path": ".claude/hooks/prism-edit-learn.py",
+                "action": "upsert",
+                "content": _EDIT_LEARN_HOOK_SCRIPT,
+                "mode": "0755",
+            },
+            {
+                "path": ".claude/hooks/prism-idle-rebuild.py",
+                "action": "upsert",
+                "content": _IDLE_REBUILD_HOOK_SCRIPT,
                 "mode": "0755",
             },
             # Shared logger: hooks call log_hook_failure() instead of the

@@ -4,7 +4,7 @@ Mirrors MemPalace's benchmark methodology: one haystack session = one document,
 queried with the question, check if any ground-truth session appears in top-5.
 
 Runs against the *isolated bench service* at port 18081 — never touches
-the real PRISM service at 8081.
+the real PRISM service at 7777.
 
 Usage:
     # Quick stratified smoke (fast iteration during an experiment loop)

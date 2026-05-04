@@ -5,10 +5,11 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "0.2.0"
+PRISM_VERSION = "4.6.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "graphify-backed code graph, pluggable embedder (MiniLM default), "
-    "drift detection via content-hash, self-installing SessionStart hook"
+    "autonomous learning loop (PostToolUse edit-learn + Stop idle-rebuild "
+    "hooks), cwd-robust hook commands via ${CLAUDE_PROJECT_DIR}, default "
+    "ports moved to MCP=7777 / UI=7778 (breaking — update .mcp.json)"
 )

@@ -8,8 +8,8 @@ docker compose up -d
 ```
 
 That's it. Two ports come up:
-- **http://localhost:8080** — Web UI (dashboard, brain, memory, tasks)
-- **http://localhost:8081** — MCP server (Claude Code connects here)
+- **http://localhost:7778** — Web UI (dashboard, brain, memory, tasks)
+- **http://localhost:7777** — MCP server (Claude Code connects here)
 
 ## 2. Connect Claude Code to PRISM
 
@@ -20,7 +20,7 @@ In your project root, create `.mcp.json`:
   "mcpServers": {
     "prism": {
       "type": "url",
-      "url": "http://localhost:8081/mcp?project=my-project-slug"
+      "url": "http://localhost:7777/mcp?project=my-project-slug"
     }
   }
 }
@@ -78,7 +78,7 @@ Once onboarded, Claude Code has these tools available:
 
 ## 5. Web UI
 
-Open **http://localhost:8080** to browse:
+Open **http://localhost:7778** to browse:
 
 - **Dashboard** — workflow pipeline, governance health
 - **Brain** — search indexed knowledge, see doc count
@@ -121,7 +121,7 @@ Change the URL in `.mcp.json` to point to the host running the container:
   "mcpServers": {
     "prism": {
       "type": "url",
-      "url": "http://192.168.1.100:8081/mcp?project=my-project"
+      "url": "http://192.168.1.100:7777/mcp?project=my-project"
     }
   }
 }
@@ -136,7 +136,7 @@ docker compose logs
 
 **MCP not connecting?**
 ```bash
-curl -X POST http://localhost:8081/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+curl -X POST http://localhost:7777/mcp -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 # Should return a JSON-RPC response with server capabilities
 ```
 
