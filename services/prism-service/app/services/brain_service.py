@@ -211,18 +211,19 @@ class BrainService:
         depth: int = 2,
         limit: int = 50,
         relation: str | list[str] | tuple[str, ...] | None = "calls",
+        direction: str = "callees",
     ) -> list[dict]:
         """Bounded BFS over the call graph from ``entity``.
 
-        ``relation`` defaults to ``"calls"`` so structural edges
-        (contains/method/uses/imports_from) don't crowd out real call
-        edges within the depth+limit budget. Pass ``None`` or ``"*"``
-        for legacy unfiltered behavior.
+        ``direction`` is the blast-radius primitive — ``"callees"``
+        (default) walks forward, ``"callers"`` walks backward (who would
+        break if I change ``entity``?), ``"both"`` unions the two.
         """
         if not self._available or self._brain is None:
             return []
         return self._brain.call_chain(
             entity=entity, depth=depth, limit=limit, relation=relation,
+            direction=direction,
         )
 
     def record_session_outcome(

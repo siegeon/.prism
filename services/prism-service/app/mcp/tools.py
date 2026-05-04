@@ -175,12 +175,12 @@ TOOLS: list[Tool] = [
         name="brain_call_chain",
         description=(
             "Bounded BFS over the call graph starting at ``entity``. "
-            "Returns a flat edge list [{from, to, kind, relation, hop}] "
-            "so you can reconstruct 'what does this entity transitively "
-            "call'. By default only follows ``calls`` edges so "
-            "structural relations (contains/method/uses/imports_from) "
-            "don't fill the depth+limit budget; pass ``relation=\"*\"`` "
-            "to include every kind."
+            "Returns a flat edge list [{from, to, kind, relation, hop, "
+            "direction}] so you can reconstruct call flow OR blast "
+            "radius. By default follows only ``calls`` edges and walks "
+            "forward (callees). Set direction='callers' to answer "
+            "'who would break if I change this?' or direction='both' "
+            "for full impact analysis."
         ),
         inputSchema={
             "type": "object",
@@ -197,6 +197,17 @@ TOOLS: list[Tool] = [
                         "only call edges; '*' (or empty) includes "
                         "every relation kind; any other value (e.g. "
                         "'uses', 'inherits') filters to that one kind."
+                    ),
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["callees", "callers", "both"],
+                    "default": "callees",
+                    "description": (
+                        "BFS direction. 'callees' (default) = forward "
+                        "call flow; 'callers' = blast radius (who "
+                        "calls this); 'both' = union, with each edge "
+                        "tagged by how it was discovered."
                     ),
                 },
             },
@@ -2190,6 +2201,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 depth=arguments.get("depth", 2),
                 limit=arguments.get("limit", 50),
                 relation=arguments.get("relation", "calls"),
+                direction=arguments.get("direction", "callees"),
             )
             return [TextContent(type="text", text=_json(results))]
 
