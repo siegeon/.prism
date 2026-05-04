@@ -51,12 +51,27 @@ def _graph_schema_migrations(conn: sqlite3.Connection) -> None:
         ("file_type",       "ALTER TABLE entities ADD COLUMN file_type TEXT"),
         ("community",       "ALTER TABLE entities ADD COLUMN community INTEGER"),
         ("source_location", "ALTER TABLE entities ADD COLUMN source_location TEXT"),
+        # AC4: graphify emits a normalized label per node
+        # ("brain.search" → "brain_search") for fuzzy entity lookup
+        # when the user-provided name doesn't match the canonical
+        # name exactly. Indexed below for cheap fallback resolution.
+        ("norm_label",      "ALTER TABLE entities ADD COLUMN norm_label TEXT"),
     ):
         if col not in ent_cols:
             try:
                 conn.execute(sql); conn.commit()
             except sqlite3.OperationalError:
                 pass
+    # Index norm_label for the call_chain fallback lookup. Skip if
+    # column never landed (older sqlite returning OperationalError).
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ent_norm_label "
+            "ON entities(norm_label) WHERE norm_label IS NOT NULL"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
     # relationships extensions
     rel_cols = {row[1] for row in conn.execute("PRAGMA table_info(relationships)").fetchall()}
@@ -694,22 +709,31 @@ class GraphService:
                 community = node.get("community")
                 source_file = node.get("source_file", "")
                 source_location = node.get("source_location", "")
+                # AC4: graphify emits norm_label for fuzzy lookup.
+                # Fall back to a derived form so legacy graph.json
+                # without that field still gets a useful default.
+                norm_label = (
+                    node.get("norm_label")
+                    or _derive_norm_label(label)
+                )
                 # Derive "kind" from file_type or label for legacy queries
                 kind = file_type or "node"
                 cur = conn.execute(
                     "INSERT INTO entities "
                     "(name, kind, file, line, graphify_id, label, file_type, "
-                    " community, source_location) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    " community, source_location, norm_label) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(name, file) DO UPDATE SET "
                     "  kind=excluded.kind, "
                     "  graphify_id=excluded.graphify_id, "
                     "  label=excluded.label, "
                     "  file_type=excluded.file_type, "
                     "  community=excluded.community, "
-                    "  source_location=excluded.source_location",
+                    "  source_location=excluded.source_location, "
+                    "  norm_label=excluded.norm_label",
                     (label, kind, source_file, _extract_line(source_location),
-                     gid, label, file_type, community, source_location),
+                     gid, label, file_type, community, source_location,
+                     norm_label),
                 )
                 # Retrieve id (RETURNING not universally available pre-3.35)
                 row = conn.execute(
@@ -878,3 +902,20 @@ def _extract_line(source_location: str) -> Optional[int]:
         return int(s)
     except (ValueError, AttributeError):
         return None
+
+
+def _derive_norm_label(label: str) -> str:
+    """Local fallback when graphify doesn't emit norm_label.
+
+    Strips call/dot syntax and lowercases so 'Brain.search()' and
+    'brain.search' both resolve to 'brain_search'. Mirrors graphify's
+    own normalization so the index column remains useful even on
+    pre-norm_label graph.json output.
+    """
+    if not label:
+        return ""
+    import re as _re
+    s = label.strip().rstrip("()")
+    s = _re.sub(r"[.\s]+", "_", s)
+    s = _re.sub(r"[^A-Za-z0-9_]", "", s)
+    return s.lower()

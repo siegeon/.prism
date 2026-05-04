@@ -3107,6 +3107,25 @@ class Brain:
                 "SELECT id, name FROM entities WHERE name = ? LIMIT 1",
                 (entity,),
             ).fetchone()
+            # AC4: fuzzy fallback via norm_label so 'Brain.search()',
+            # 'Brain.search', and 'brain_search' all resolve to the same
+            # entity. norm_label is graphify-emitted (or derived during
+            # _import_graph_json), and the column may be absent on
+            # pre-AC4 graphs — wrap in try/except.
+            if not start:
+                try:
+                    from app.services.graph_service import (
+                        _derive_norm_label as _norm,
+                    )
+                    needle = _norm(entity)
+                    if needle:
+                        start = self._graph.execute(
+                            "SELECT id, name FROM entities "
+                            "WHERE norm_label = ? LIMIT 1",
+                            (needle,),
+                        ).fetchone()
+                except Exception:
+                    start = None
             if not start:
                 return []
             edges: list[dict] = []
