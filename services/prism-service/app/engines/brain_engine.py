@@ -795,6 +795,21 @@ class Brain:
             CREATE INDEX IF NOT EXISTS idx_rel_src ON relationships(source_id);
             CREATE INDEX IF NOT EXISTS idx_rel_tgt ON relationships(target_id);
         """)
+        # Apply the graphify-side schema extensions (confidence,
+        # confidence_score, weight, source_location, communities,
+        # graphify_id, etc.) so call_chain / graph_query can rely on
+        # those columns existing without depending on _import_graph_json
+        # having run first. Idempotent — each ALTER guards on
+        # PRAGMA table_info.
+        try:
+            from app.services.graph_service import _graph_schema_migrations
+            _graph_schema_migrations(self._graph)
+        except Exception:
+            # Tests with stripped imports / circular-import edge cases
+            # fall through silently — the SELECT will then raise and
+            # the call_chain except-clause returns []. Production has
+            # the import path available.
+            pass
 
     def _init_scores_schema(self) -> None:
         self._scores.executescript("""
