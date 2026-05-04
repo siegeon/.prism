@@ -2916,27 +2916,42 @@ class Brain:
         entity: str,
         relation: Optional[str] = None,
         limit: int = 10,
+        include_rationale: bool = False,
     ) -> list[dict]:
-        """Traverse entity relationships and return related entities."""
+        """Traverse entity relationships and return related entities.
+
+        ``include_rationale`` defaults to False so rationale nodes
+        (graphify-extracted ``# WHY:`` / ``# HACK:`` / ``# NOTE:``
+        comments stored as ``kind='rationale'``) don't pollute graph
+        traversal results — they account for ~43% of nodes in a typical
+        graph and answer different questions than code-flow traversal.
+        Pass ``True`` to surface them when intent metadata is the goal.
+        """
         ent_row = self._graph.execute(
             "SELECT id FROM entities WHERE name = ? LIMIT 1", (entity,)
         ).fetchone()
         if not ent_row:
             return []
         eid = ent_row["id"]
+        rat_clause = "" if include_rationale else (
+            " AND COALESCE(e.kind,'') != 'rationale'"
+        )
         try:
             if relation:
                 rows = self._graph.execute(
-                    "SELECT e.name, e.kind, e.file, r.relation FROM relationships r "
+                    "SELECT e.name, e.kind, e.file, r.relation "
+                    "FROM relationships r "
                     "JOIN entities e ON e.id = r.target_id "
-                    "WHERE r.source_id = ? AND r.relation = ? LIMIT ?",
+                    f"WHERE r.source_id = ? AND r.relation = ?{rat_clause} "
+                    "LIMIT ?",
                     (eid, relation, limit),
                 ).fetchall()
             else:
                 rows = self._graph.execute(
-                    "SELECT e.name, e.kind, e.file, r.relation FROM relationships r "
+                    "SELECT e.name, e.kind, e.file, r.relation "
+                    "FROM relationships r "
                     "JOIN entities e ON e.id = r.target_id "
-                    "WHERE r.source_id = ? LIMIT ?",
+                    f"WHERE r.source_id = ?{rat_clause} LIMIT ?",
                     (eid, limit),
                 ).fetchall()
             return [
@@ -3005,6 +3020,7 @@ class Brain:
 
     def find_references(
         self, name: str, limit: int = 20,
+        include_rationale: bool = False,
     ) -> list[dict]:
         """Return call sites referencing ``name`` via the graph.
 
@@ -3012,6 +3028,11 @@ class Brain:
         relationships. For each caller, returns its name/kind/file and
         the relation type. No chunk body — use find_symbol() on the
         returned caller names for content.
+
+        ``include_rationale`` defaults to False so ``rationale_for``
+        edges (rationale-comment → entity-it-explains) don't show up
+        as fake "callers". Pass True when looking for intent metadata
+        attached to ``name``.
         """
         try:
             tgt = self._graph.execute(
@@ -3019,12 +3040,15 @@ class Brain:
             ).fetchone()
             if not tgt:
                 return []
+            rat_clause = "" if include_rationale else (
+                " AND COALESCE(e.kind,'') != 'rationale'"
+            )
             rows = self._graph.execute(
                 "SELECT e.name AS caller_name, e.kind AS caller_kind, "
                 "e.file AS caller_file, r.relation AS relation "
                 "FROM relationships r "
                 "JOIN entities e ON e.id = r.source_id "
-                "WHERE r.target_id = ? LIMIT ?",
+                f"WHERE r.target_id = ?{rat_clause} LIMIT ?",
                 (tgt["id"], int(limit)),
             ).fetchall()
         except Exception:
