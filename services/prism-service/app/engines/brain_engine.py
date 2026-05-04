@@ -795,6 +795,21 @@ class Brain:
             CREATE INDEX IF NOT EXISTS idx_rel_src ON relationships(source_id);
             CREATE INDEX IF NOT EXISTS idx_rel_tgt ON relationships(target_id);
         """)
+        # Apply the graphify-side schema extensions (confidence,
+        # confidence_score, weight, source_location, communities,
+        # graphify_id, etc.) so call_chain / graph_query can rely on
+        # those columns existing without depending on _import_graph_json
+        # having run first. Idempotent — each ALTER guards on
+        # PRAGMA table_info.
+        try:
+            from app.services.graph_service import _graph_schema_migrations
+            _graph_schema_migrations(self._graph)
+        except Exception:
+            # Tests with stripped imports / circular-import edge cases
+            # fall through silently — the SELECT will then raise and
+            # the call_chain except-clause returns []. Production has
+            # the import path available.
+            pass
 
     def _init_scores_schema(self) -> None:
         self._scores.executescript("""
@@ -3147,7 +3162,9 @@ class Brain:
                 "s.name AS src_name, t.name AS tgt_name, "
                 "t.kind AS tgt_kind, t.id AS tgt_id, "
                 "s.kind AS src_kind, "
-                "r.relation AS relation, r.target_id AS tgt_id_raw "
+                "r.relation AS relation, r.target_id AS tgt_id_raw, "
+                "r.confidence AS confidence, "
+                "r.confidence_score AS confidence_score "
                 "FROM relationships r "
                 "JOIN entities s ON s.id = r.source_id "
                 "JOIN entities t ON t.id = r.target_id "
@@ -3172,11 +3189,22 @@ class Brain:
                 # direction. The 'direction' field marks how this edge
                 # was discovered — useful when the caller passed
                 # direction='both' and wants to partition results.
+                # confidence_score may be NULL for edges from the
+                # legacy tree-sitter pass (graphify started populating
+                # it in v0.4.x). Coerce to a float so the API stays
+                # uniform; treat missing as 1.0 (extracted-with-no-doubt
+                # is the conservative interpretation for legacy edges).
+                conf_raw = r["confidence_score"]
+                conf_score = (
+                    float(conf_raw) if conf_raw is not None else 1.0
+                )
                 edges.append({
                     "from": r["src_name"], "to": r["tgt_name"],
                     "kind": r["tgt_kind"] if direction == "callees"
                     else r["src_kind"],
                     "relation": r["relation"],
+                    "confidence": r["confidence"] or "EXTRACTED",
+                    "confidence_score": conf_score,
                     "hop": hop,
                     "direction": direction,
                 })
