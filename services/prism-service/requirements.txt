@@ -18,7 +18,10 @@ sentence-transformers>=2.7
 
 # Code knowledge graph (tree-sitter AST + Leiden clustering + edge confidence).
 # We use graphify's `update` subcommand which is LLM-free and local-only.
-graphifyy>=0.1
+# PRISM v4.6.0 is tested against graphifyy 0.4.29 — pin to the 0.4.x
+# series so patch fixes flow through but a 0.5 jump can't silently
+# change graph.json schema and break _import_graph_json.
+graphifyy>=0.4.29,<0.5
 
 # AST chunking for Python / TypeScript / JavaScript / C# / Go etc.
 # Without these the chunker falls back to regex which loses structural info.
