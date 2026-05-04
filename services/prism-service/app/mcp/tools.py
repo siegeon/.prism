@@ -160,13 +160,23 @@ TOOLS: list[Tool] = [
             "Each result is {caller_name, caller_kind, caller_file, "
             "relation}. Use find_symbol() on a caller_name to fetch its "
             "chunk content. Replaces 'grep for foo(' with a semantic "
-            "query that respects function boundaries."
+            "query that respects function boundaries. By default skips "
+            "rationale-comment edges; set include_rationale=true to "
+            "include them when surfacing intent metadata."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
                 "limit": {"type": "integer", "default": 20},
+                "include_rationale": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Include rationale-comment edges "
+                        "(rationale_for relation). Default false."
+                    ),
+                },
             },
             "required": ["name"],
         },
@@ -414,13 +424,29 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="brain_graph",
-        description="Query the knowledge graph for entity relationships",
+        description=(
+            "Query the knowledge graph for entity relationships. By "
+            "default excludes rationale nodes (kind='rationale') so "
+            "graph traversal returns code-flow targets, not "
+            "graphify-extracted comment metadata."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "entity": {"type": "string", "description": "Entity name to query"},
-                "relation": {"type": "string", "description": "Filter by relation type"},
-                "limit": {"type": "integer", "description": "Max results", "default": 10},
+                "entity": {"type": "string",
+                           "description": "Entity name to query"},
+                "relation": {"type": "string",
+                             "description": "Filter by relation type"},
+                "limit": {"type": "integer",
+                          "description": "Max results", "default": 10},
+                "include_rationale": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Include rationale nodes (kind='rationale') "
+                        "in results. Default false."
+                    ),
+                },
             },
             "required": ["entity"],
         },
@@ -2192,6 +2218,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             results = brain_svc.find_references(
                 name=arguments["name"],
                 limit=arguments.get("limit", 20),
+                include_rationale=arguments.get("include_rationale", False),
             )
             return [TextContent(type="text", text=_json(results))]
 
@@ -2313,6 +2340,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 entity=arguments["entity"],
                 relation=arguments.get("relation"),
                 limit=arguments.get("limit", 10),
+                include_rationale=arguments.get("include_rationale", False),
             )
             return [TextContent(type="text", text=_json(results))]
 
