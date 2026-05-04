@@ -3147,7 +3147,9 @@ class Brain:
                 "s.name AS src_name, t.name AS tgt_name, "
                 "t.kind AS tgt_kind, t.id AS tgt_id, "
                 "s.kind AS src_kind, "
-                "r.relation AS relation, r.target_id AS tgt_id_raw "
+                "r.relation AS relation, r.target_id AS tgt_id_raw, "
+                "r.confidence AS confidence, "
+                "r.confidence_score AS confidence_score "
                 "FROM relationships r "
                 "JOIN entities s ON s.id = r.source_id "
                 "JOIN entities t ON t.id = r.target_id "
@@ -3172,11 +3174,22 @@ class Brain:
                 # direction. The 'direction' field marks how this edge
                 # was discovered — useful when the caller passed
                 # direction='both' and wants to partition results.
+                # confidence_score may be NULL for edges from the
+                # legacy tree-sitter pass (graphify started populating
+                # it in v0.4.x). Coerce to a float so the API stays
+                # uniform; treat missing as 1.0 (extracted-with-no-doubt
+                # is the conservative interpretation for legacy edges).
+                conf_raw = r["confidence_score"]
+                conf_score = (
+                    float(conf_raw) if conf_raw is not None else 1.0
+                )
                 edges.append({
                     "from": r["src_name"], "to": r["tgt_name"],
                     "kind": r["tgt_kind"] if direction == "callees"
                     else r["src_kind"],
                     "relation": r["relation"],
+                    "confidence": r["confidence"] or "EXTRACTED",
+                    "confidence_score": conf_score,
                     "hop": hop,
                     "direction": direction,
                 })
