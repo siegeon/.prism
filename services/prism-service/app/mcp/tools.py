@@ -587,9 +587,27 @@ TOOLS: list[Tool] = [
             "(.claude/settings.json hooks block + hook scripts), step-by-step "
             "instructions, and verification steps. The MCP is self-describing "
             "— no external docs needed. Call this inside project_onboard's "
-            "flow or any time you want to re-install the client-side hooks."
+            "flow or any time you want to re-install the client-side hooks. "
+            "Pass `host_platform` (sys.platform of the host running Claude "
+            "Code) so hook commands use the right Python launcher: "
+            "`python3` on Linux/macOS, `py -3` on Windows. Default is "
+            "POSIX/`python3`."
         ),
-        inputSchema={"type": "object", "properties": {}},
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "host_platform": {
+                    "type": "string",
+                    "description": (
+                        "Host OS where the hooks will run. Accepts "
+                        "`sys.platform` values (`linux`, `darwin`, `win32`) "
+                        "or aliases (`windows`, `macos`, `posix`). Determines "
+                        "whether hook commands use `python3` (POSIX) or "
+                        "`py -3` (Windows, via the PEP 397 launcher)."
+                    ),
+                },
+            },
+        },
     ),
     Tool(
         name="prism_guide",
@@ -962,6 +980,17 @@ TOOLS: list[Tool] = [
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Known project conventions to seed immediately",
+                },
+                "host_platform": {
+                    "type": "string",
+                    "description": (
+                        "Host OS where Claude Code (and therefore the "
+                        "PRISM hooks) will run. Accepts sys.platform "
+                        "values (`linux`, `darwin`, `win32`) or aliases "
+                        "(`windows`, `macos`, `posix`). Forwarded to "
+                        "prism_install so hook commands use `python3` on "
+                        "POSIX and `py -3` on Windows."
+                    ),
                 },
             },
             "required": ["project_name"],
@@ -1607,11 +1636,38 @@ _REFLECT_AGENT_MD = _load_asset("prism_reflect_agent.md")
 _REFLECT_COMMAND_MD = _load_asset("prism_reflect_command.md")
 
 
-def _install_manifest(project_id: str) -> dict:
+def _hook_python_cmd(host_platform: str | None) -> str:
+    """Pick the Python invocation that hook commands should use on the host.
+
+    PEP 394 makes `python3` canonical on POSIX (modern Linux distros and
+    Debian dropped bare `python`; only `/usr/bin/python3` ships).
+    PEP 397 makes `py.exe` canonical on Windows: it is installed by every
+    python.org installer, lives in PATH by default, and routes shebangs.
+    `python3.exe` does NOT ship by default on Windows, so the previous
+    `python3 ...` command broke every Windows host. `py -3 ...` works on
+    every supported Windows install and reads the shebang in our hooks
+    (`#!/usr/bin/env python3`) to pick the right interpreter.
+
+    Caller passes the host's platform (Claude Code knows its own OS).
+    Anything starting with `win` / `nt` is treated as Windows; everything
+    else (including None) falls back to POSIX `python3`.
+    """
+    token = (host_platform or "").strip().lower()
+    if token.startswith(("win", "nt")):
+        return "py -3"
+    return "python3"
+
+
+def _install_manifest(project_id: str, host_platform: str | None = None) -> dict:
     """Return the install manifest the agent should apply on first onboard.
     The PRISM service is the single source of truth — if the hook logic
-    changes in a future release, a re-onboard serves the new version."""
+    changes in a future release, a re-onboard serves the new version.
+
+    `host_platform` is the OS where Claude Code (and therefore the hooks)
+    will run. Pass `sys.platform` from the caller, or `"windows"` /
+    `"linux"` / `"darwin"`. Defaults to POSIX (`python3`)."""
     hook_script = _HOOK_SCRIPT.replace("__PRISM_VERSION__", PRISM_VERSION)
+    py = _hook_python_cmd(host_platform)
     # Claude Code reads hooks from .claude/settings.json under a top-level
     # "hooks" key. A bare .claude/hooks.json is ignored (only plugin-shipped
     # hooks/hooks.json is loaded, via a different code path). Wrap the event
@@ -1620,7 +1676,7 @@ def _install_manifest(project_id: str) -> dict:
         "SessionStart": [
             {
                 "type": "command",
-                "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-sync.py",
+                "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-sync.py",
                 "timeout": 30000,
             },
         ],
@@ -1630,7 +1686,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-feedback-signal.py",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-feedback-signal.py",
                         "description": (
                             "Implicit retrieval feedback: correlate "
                             "brain_search results with Read/Edit and emit "
@@ -1644,7 +1700,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-skill-usage.py",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-skill-usage.py",
                         "description": (
                             "Record skill invocations to scores.db via "
                             "record_skill_usage — populates /skills."
@@ -1657,7 +1713,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-edit-learn.py",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-edit-learn.py",
                         "description": (
                             "Auto-ingest edited source files into Brain via "
                             "prism_refresh (skip_graph) so brain_search "
@@ -1673,7 +1729,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-stop.py",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-stop.py",
                         "description": (
                             "Record session-level metrics (duration, "
                             "tokens, files, skills) via "
@@ -1682,7 +1738,7 @@ def _install_manifest(project_id: str) -> dict:
                     },
                     {
                         "type": "command",
-                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-idle-rebuild.py",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-idle-rebuild.py",
                         "description": (
                             "Flush in-session edits into the code graph via "
                             "graph_rebuild iff the edit-learn hook left a "
@@ -1698,7 +1754,7 @@ def _install_manifest(project_id: str) -> dict:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/prism-subagent.py",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-subagent.py",
                         "description": (
                             "Record sub-agent outcome (recommendation, "
                             "evidence count, timing) via "
@@ -2079,7 +2135,8 @@ def _dispatch_tool(name: str, arguments: dict, *, project_id: str = "default") -
 
             # Return direct imperative instructions as plain text.
             # This is NOT a report — Claude must execute these steps.
-            manifest = _install_manifest(project_id)
+            host_platform = arguments.get("host_platform")
+            manifest = _install_manifest(project_id, host_platform)
             files_list = "\n".join(
                 f"  - {f['path']} (action: {f['action']})"
                 for f in manifest["install_files"]
@@ -2472,7 +2529,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         if name == "prism_install":
             # Returns the client-side install manifest so the agent can
             # Write the hook files into the user's project directly.
-            return [TextContent(type="text", text=_json(_install_manifest(project_id)))]
+            host_platform = (arguments or {}).get("host_platform")
+            return [TextContent(type="text", text=_json(
+                _install_manifest(project_id, host_platform)
+            ))]
 
         if name == "prism_sync":
             ctx = get_project(project_id)

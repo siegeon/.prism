@@ -16,9 +16,9 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 
-def _manifest():
+def _manifest(host_platform=None):
     from app.mcp.tools import _install_manifest
-    return _install_manifest(project_id="test")
+    return _install_manifest(project_id="test", host_platform=host_platform)
 
 
 def _files_by_path(manifest):
@@ -66,43 +66,95 @@ def test_install_manifest_keeps_required_client_adapter_files():
             assert spec["action"] == "upsert"
 
 
-def test_install_settings_wires_all_shipped_hooks():
-    files = _files_by_path(_manifest())
+_HOOK_FRAGMENTS = (
+    "/.claude/hooks/prism-sync.py",
+    "/.claude/hooks/prism-feedback-signal.py",
+    "/.claude/hooks/prism-stop.py",
+    "/.claude/hooks/prism-subagent.py",
+    "/.claude/hooks/prism-skill-usage.py",
+    "/.claude/hooks/prism-edit-learn.py",
+    "/.claude/hooks/prism-idle-rebuild.py",
+)
+
+
+def _hooks_rendered(host_platform=None):
+    files = _files_by_path(_manifest(host_platform=host_platform))
     settings = json.loads(files[".claude/settings.json"]["content"])
-    hooks = settings["hooks"]
-    rendered = json.dumps(hooks)
-    # Hook commands use ${CLAUDE_PROJECT_DIR} so they survive cwd shifts —
-    # match on the trailing path fragment, not the full command line.
-    for fragment in (
-        "/.claude/hooks/prism-sync.py",
-        "/.claude/hooks/prism-feedback-signal.py",
-        "/.claude/hooks/prism-stop.py",
-        "/.claude/hooks/prism-subagent.py",
-        "/.claude/hooks/prism-skill-usage.py",
-        "/.claude/hooks/prism-edit-learn.py",
-        "/.claude/hooks/prism-idle-rebuild.py",
-    ):
+    return json.dumps(settings["hooks"])
+
+
+def test_install_settings_wires_all_shipped_hooks():
+    """Default (no host_platform) is POSIX — every shipped hook is wired
+    with the `python3 ${CLAUDE_PROJECT_DIR}/...` form."""
+    rendered = _hooks_rendered()
+    for fragment in _HOOK_FRAGMENTS:
         assert fragment in rendered
     assert "${CLAUDE_PROJECT_DIR}" in rendered, (
         "hook commands must use ${CLAUDE_PROJECT_DIR} so they resolve "
         "regardless of the subprocess cwd"
     )
-    # Issue #36: hook commands must invoke `python3`, not bare `python`.
-    # Modern Linux distros (Ubuntu 20.04+, Debian 11+, Fedora, Arch) ship
-    # only `/usr/bin/python3`; bare `python` exits with `command not found`
-    # and Claude Code reports `SessionStart:startup hook error`. Guard
-    # against any future drift back to the broken default.
-    assert "python " not in rendered, (
-        "hook commands must invoke `python3`, not bare `python` "
-        "(see resolve-io/.prism#36)"
-    )
-    # Sanity: every hook entry uses the python3 prefix.
+    # PEP 394: POSIX uses `python3`. Modern Linux distros (Ubuntu 20.04+,
+    # Debian 11+, Fedora, Arch) ship only `/usr/bin/python3` — bare
+    # `python` exits with `command not found` and Claude Code reports
+    # `SessionStart:startup hook error`. (Issue #36.)
     import re as _re
     py3_count = len(_re.findall(r'"python3 ', rendered))
     assert py3_count >= 7, (
-        f"expected >=7 hook commands prefixed with `python3 `, found "
-        f"{py3_count}"
+        f"expected >=7 hook commands prefixed with `python3 ` on POSIX, "
+        f"found {py3_count}"
     )
+
+
+def test_install_settings_uses_py_launcher_on_windows():
+    """PEP 397: Windows uses the `py.exe` launcher (`py -3`). The
+    python.org installer ships `py.exe` to PATH but does NOT ship a
+    bare `python3.exe`, so the POSIX form would break every Windows
+    host. The hook scripts carry `#!/usr/bin/env python3` shebangs,
+    which `py.exe` reads to route to a Python 3 interpreter."""
+    rendered = _hooks_rendered(host_platform="win32")
+    for fragment in _HOOK_FRAGMENTS:
+        assert fragment in rendered
+    assert "${CLAUDE_PROJECT_DIR}" in rendered
+    # Every hook entry must use the `py -3 ` prefix on Windows.
+    import re as _re
+    py_count = len(_re.findall(r'"py -3 ', rendered))
+    assert py_count >= 7, (
+        f"expected >=7 hook commands prefixed with `py -3 ` on Windows, "
+        f"found {py_count}"
+    )
+    # And no `python3 ` (which doesn't exist on Windows by default).
+    assert "python3 " not in rendered, (
+        "Windows manifest must not emit `python3 ...` — python.org "
+        "installer doesn't ship `python3.exe`. Use `py -3` (PEP 397)."
+    )
+
+
+def test_install_settings_never_emits_bare_python():
+    """Cross-platform guard: bare `python ` (with trailing space) breaks
+    on modern Linux (no `/usr/bin/python`) and is ambiguous on Windows
+    (Python 2 vs Python 3). Must never appear, regardless of platform."""
+    for host in (None, "linux", "darwin", "win32", "windows", "posix"):
+        rendered = _hooks_rendered(host_platform=host)
+        assert '"python ' not in rendered, (
+            f"hook commands must not invoke bare `python` "
+            f"(host_platform={host!r}). See resolve-io/.prism#36."
+        )
+
+
+def test_install_manifest_accepts_platform_aliases():
+    """Caller may pass either `sys.platform` values or human aliases.
+    Anything starting with `win`/`nt` selects the Windows launcher;
+    everything else is POSIX."""
+    from app.mcp.tools import _hook_python_cmd
+    assert _hook_python_cmd("win32") == "py -3"
+    assert _hook_python_cmd("windows") == "py -3"
+    assert _hook_python_cmd("Windows") == "py -3"
+    assert _hook_python_cmd("nt") == "py -3"
+    assert _hook_python_cmd("linux") == "python3"
+    assert _hook_python_cmd("darwin") == "python3"
+    assert _hook_python_cmd("posix") == "python3"
+    assert _hook_python_cmd("") == "python3"
+    assert _hook_python_cmd(None) == "python3"
 
 
 def test_plugin_hook_registration_is_noop():
