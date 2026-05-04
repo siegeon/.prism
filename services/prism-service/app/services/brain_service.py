@@ -174,11 +174,20 @@ class BrainService:
         entity: str,
         relation: Optional[str] = None,
         limit: int = 10,
+        include_rationale: bool = False,
     ) -> list[dict]:
-        """Query the knowledge graph."""
+        """Query the knowledge graph.
+
+        Rationale nodes (kind='rationale', graphify-extracted intent
+        comments) are excluded by default. Pass include_rationale=True
+        to include them.
+        """
         if not self._available or self._brain is None:
             return []
-        return self._brain.graph_query(entity, relation=relation, limit=limit)
+        return self._brain.graph_query(
+            entity, relation=relation, limit=limit,
+            include_rationale=include_rationale,
+        )
 
     def find_symbol(
         self,
@@ -199,11 +208,19 @@ class BrainService:
 
     def find_references(
         self, name: str, limit: int = 20,
+        include_rationale: bool = False,
     ) -> list[dict]:
-        """Return callers of ``name`` from the graph (caller_name/kind/file)."""
+        """Return callers of ``name`` from the graph (caller_name/kind/file).
+
+        Rationale-comment "callers" (rationale_for edges) are excluded
+        by default; pass include_rationale=True to surface them.
+        """
         if not self._available or self._brain is None:
             return []
-        return self._brain.find_references(name=name, limit=limit)
+        return self._brain.find_references(
+            name=name, limit=limit,
+            include_rationale=include_rationale,
+        )
 
     def call_chain(
         self,
