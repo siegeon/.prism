@@ -3036,13 +3036,34 @@ class Brain:
         entity: str,
         depth: int = 2,
         limit: int = 50,
+        relation: str | list[str] | tuple[str, ...] | None = "calls",
     ) -> list[dict]:
         """Bounded BFS on the relationships graph starting at ``entity``.
 
         Returns a flat list of edges [{from, to, kind, relation, hop}]
         so the caller can reconstruct either tree or flat views. Hop 0
         is the entity itself; hop 1 is direct callees; etc.
+
+        ``relation`` filters edges by their relation kind. Default is
+        ``"calls"`` so structural edges (``contains``/``method``/``uses``
+        /``imports_from``) don't eat the depth+limit budget — those tend
+        to dominate in number while adding nothing to a call-flow trace.
+        Pass ``None`` (or the string ``"*"``) to include every relation
+        kind (legacy pre-v4.7 behavior); pass a list/tuple of strings to
+        accept several kinds.
         """
+        # Normalize the relation filter into a list of allowed kinds
+        # (or None meaning "no filter").
+        allowed: list[str] | None
+        if relation is None or relation == "*" or relation == "":
+            allowed = None
+        elif isinstance(relation, str):
+            allowed = [relation]
+        else:
+            allowed = [str(r) for r in relation if r]
+            if not allowed:
+                allowed = None
+
         try:
             start = self._graph.execute(
                 "SELECT id, name FROM entities WHERE name = ? LIMIT 1",
@@ -3057,7 +3078,7 @@ class Brain:
                 if not frontier or len(edges) >= limit:
                     break
                 placeholders = ",".join("?" * len(frontier))
-                rows = self._graph.execute(
+                sql = (
                     f"SELECT r.source_id AS src_id, "
                     f"s.name AS src_name, t.name AS tgt_name, "
                     f"t.kind AS tgt_kind, t.id AS tgt_id, "
@@ -3065,10 +3086,16 @@ class Brain:
                     f"FROM relationships r "
                     f"JOIN entities s ON s.id = r.source_id "
                     f"JOIN entities t ON t.id = r.target_id "
-                    f"WHERE r.source_id IN ({placeholders}) "
-                    f"LIMIT ?",
-                    (*frontier, int(limit) - len(edges)),
-                ).fetchall()
+                    f"WHERE r.source_id IN ({placeholders})"
+                )
+                params: list = [*frontier]
+                if allowed is not None:
+                    rel_placeholders = ",".join("?" * len(allowed))
+                    sql += f" AND r.relation IN ({rel_placeholders})"
+                    params.extend(allowed)
+                sql += " LIMIT ?"
+                params.append(int(limit) - len(edges))
+                rows = self._graph.execute(sql, params).fetchall()
                 next_frontier: list[int] = []
                 for r in rows:
                     edges.append({
