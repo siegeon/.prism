@@ -503,10 +503,18 @@ class GraphService:
         try:
             b = _sq3.connect(brain_db_path); b.row_factory = _sq3.Row
             out["docs"] = b.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+            # Issue #41: multi-granular chunking emits N rows per
+            # source_file (::win_N, ::__file__, ::__module__, ::EntName).
+            # Comparing chunk-rows vs disk-files (staged_files counts
+            # files) made `stale: true` fire on every project where
+            # chunks-per-file > 1 — typically every project. Count
+            # DISTINCT source_files so the unit matches staged_files.
+            allowed = {s.lstrip(".") for s in GRAPHIFY_CODE_SUFFIXES}
             out["code_docs"] = sum(1 for r in b.execute(
-                "SELECT source_file FROM docs"
+                "SELECT DISTINCT source_file FROM docs "
+                "WHERE source_file IS NOT NULL"
             ) if (r["source_file"] or "").lower().rsplit(".", 1)[-1]
-               in {s.lstrip(".") for s in GRAPHIFY_CODE_SUFFIXES})
+               in allowed)
             b.close()
         except _sq3.Error:
             pass
