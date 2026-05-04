@@ -206,13 +206,23 @@ class BrainService:
         return self._brain.find_references(name=name, limit=limit)
 
     def call_chain(
-        self, entity: str, depth: int = 2, limit: int = 50,
+        self,
+        entity: str,
+        depth: int = 2,
+        limit: int = 50,
+        relation: str | list[str] | tuple[str, ...] | None = "calls",
     ) -> list[dict]:
-        """Bounded BFS over the call graph from ``entity``."""
+        """Bounded BFS over the call graph from ``entity``.
+
+        ``relation`` defaults to ``"calls"`` so structural edges
+        (contains/method/uses/imports_from) don't crowd out real call
+        edges within the depth+limit budget. Pass ``None`` or ``"*"``
+        for legacy unfiltered behavior.
+        """
         if not self._available or self._brain is None:
             return []
         return self._brain.call_chain(
-            entity=entity, depth=depth, limit=limit,
+            entity=entity, depth=depth, limit=limit, relation=relation,
         )
 
     def record_session_outcome(
