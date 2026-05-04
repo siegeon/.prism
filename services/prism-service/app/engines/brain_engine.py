@@ -3037,20 +3037,31 @@ class Brain:
         depth: int = 2,
         limit: int = 50,
         relation: str | list[str] | tuple[str, ...] | None = "calls",
+        direction: str = "callees",
     ) -> list[dict]:
         """Bounded BFS on the relationships graph starting at ``entity``.
 
-        Returns a flat list of edges [{from, to, kind, relation, hop}]
-        so the caller can reconstruct either tree or flat views. Hop 0
-        is the entity itself; hop 1 is direct callees; etc.
+        Returns a flat list of edges [{from, to, kind, relation, hop,
+        direction}] so the caller can reconstruct either tree or flat
+        views. Hop 1 is direct neighbours; hop 2 is neighbours-of-
+        neighbours; etc.
 
         ``relation`` filters edges by their relation kind. Default is
         ``"calls"`` so structural edges (``contains``/``method``/``uses``
-        /``imports_from``) don't eat the depth+limit budget — those tend
-        to dominate in number while adding nothing to a call-flow trace.
-        Pass ``None`` (or the string ``"*"``) to include every relation
-        kind (legacy pre-v4.7 behavior); pass a list/tuple of strings to
-        accept several kinds.
+        /``imports_from``) don't eat the depth+limit budget. Pass
+        ``None`` or ``"*"`` for every kind; list/tuple for several kinds.
+
+        ``direction`` controls traversal:
+          * ``"callees"`` (default) — walk forward on source_id IN frontier;
+            answers "what does ``entity`` transitively call?"
+          * ``"callers"`` — walk backward on target_id IN frontier; the
+            blast-radius primitive — answers "who would break if I change
+            ``entity``?"
+          * ``"both"`` — union of the two; useful for impact analysis
+            that needs both upstream and downstream edges in one query.
+
+        Each edge carries its ``direction`` so callers of "both" can
+        partition the result.
         """
         # Normalize the relation filter into a list of allowed kinds
         # (or None meaning "no filter").
@@ -3064,6 +3075,18 @@ class Brain:
             if not allowed:
                 allowed = None
 
+        # Normalize direction; tolerate plurals and casing.
+        dir_norm = (direction or "callees").lower().strip()
+        if dir_norm in ("callee", "down", "forward", "out"):
+            dir_norm = "callees"
+        elif dir_norm in ("caller", "up", "reverse", "back", "in",
+                          "blast", "blast_radius"):
+            dir_norm = "callers"
+        elif dir_norm in ("bidirectional", "all", "either"):
+            dir_norm = "both"
+        if dir_norm not in ("callees", "callers", "both"):
+            dir_norm = "callees"
+
         try:
             start = self._graph.execute(
                 "SELECT id, name FROM entities WHERE name = ? LIMIT 1",
@@ -3071,45 +3094,97 @@ class Brain:
             ).fetchone()
             if not start:
                 return []
-            visited = {start["id"]}
-            frontier = [start["id"]]
             edges: list[dict] = []
-            for hop in range(1, max(1, int(depth)) + 1):
-                if not frontier or len(edges) >= limit:
-                    break
-                placeholders = ",".join("?" * len(frontier))
-                sql = (
-                    f"SELECT r.source_id AS src_id, "
-                    f"s.name AS src_name, t.name AS tgt_name, "
-                    f"t.kind AS tgt_kind, t.id AS tgt_id, "
-                    f"r.relation AS relation "
-                    f"FROM relationships r "
-                    f"JOIN entities s ON s.id = r.source_id "
-                    f"JOIN entities t ON t.id = r.target_id "
-                    f"WHERE r.source_id IN ({placeholders})"
+            seen_edges: set[tuple[int, int, str]] = set()
+            directions = (
+                ["callees", "callers"] if dir_norm == "both" else [dir_norm]
+            )
+            for one_dir in directions:
+                self._walk_chain(
+                    start_id=start["id"], depth=depth, limit=limit,
+                    allowed=allowed, direction=one_dir,
+                    edges=edges, seen_edges=seen_edges,
                 )
-                params: list = [*frontier]
-                if allowed is not None:
-                    rel_placeholders = ",".join("?" * len(allowed))
-                    sql += f" AND r.relation IN ({rel_placeholders})"
-                    params.extend(allowed)
-                sql += " LIMIT ?"
-                params.append(int(limit) - len(edges))
-                rows = self._graph.execute(sql, params).fetchall()
-                next_frontier: list[int] = []
-                for r in rows:
-                    edges.append({
-                        "from": r["src_name"], "to": r["tgt_name"],
-                        "kind": r["tgt_kind"], "relation": r["relation"],
-                        "hop": hop,
-                    })
-                    if r["tgt_id"] not in visited:
-                        visited.add(r["tgt_id"])
-                        next_frontier.append(r["tgt_id"])
-                frontier = next_frontier
             return edges
         except Exception:
             return []
+
+    def _walk_chain(
+        self,
+        *,
+        start_id: int,
+        depth: int,
+        limit: int,
+        allowed: list[str] | None,
+        direction: str,
+        edges: list[dict],
+        seen_edges: set[tuple[int, int, str]],
+    ) -> None:
+        """One-direction BFS used by call_chain.
+
+        For ``direction='callees'`` the frontier is on source_id and we
+        advance via target_id (forward call flow). For ``'callers'`` it
+        flips: frontier on target_id, advance via source_id (reverse).
+        Edges are appended to the shared ``edges`` list; ``seen_edges``
+        de-dupes when called twice (direction='both' case).
+        """
+        # Pivot column the frontier matches against, and the column to
+        # advance to next hop.
+        if direction == "callers":
+            frontier_col = "r.target_id"
+            advance_col = "src_id"
+        else:
+            frontier_col = "r.source_id"
+            advance_col = "tgt_id"
+        visited = {start_id}
+        frontier = [start_id]
+        for hop in range(1, max(1, int(depth)) + 1):
+            if not frontier or len(edges) >= limit:
+                break
+            placeholders = ",".join("?" * len(frontier))
+            sql = (
+                "SELECT r.source_id AS src_id, "
+                "s.name AS src_name, t.name AS tgt_name, "
+                "t.kind AS tgt_kind, t.id AS tgt_id, "
+                "s.kind AS src_kind, "
+                "r.relation AS relation, r.target_id AS tgt_id_raw "
+                "FROM relationships r "
+                "JOIN entities s ON s.id = r.source_id "
+                "JOIN entities t ON t.id = r.target_id "
+                f"WHERE {frontier_col} IN ({placeholders})"
+            )
+            params: list = [*frontier]
+            if allowed is not None:
+                rel_placeholders = ",".join("?" * len(allowed))
+                sql += f" AND r.relation IN ({rel_placeholders})"
+                params.extend(allowed)
+            sql += " LIMIT ?"
+            params.append(int(limit) - len(edges))
+            rows = self._graph.execute(sql, params).fetchall()
+            next_frontier: list[int] = []
+            for r in rows:
+                key = (r["src_id"], r["tgt_id_raw"], r["relation"])
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                # 'from' / 'to' always reflect the underlying call edge
+                # direction (caller → callee), regardless of traversal
+                # direction. The 'direction' field marks how this edge
+                # was discovered — useful when the caller passed
+                # direction='both' and wants to partition results.
+                edges.append({
+                    "from": r["src_name"], "to": r["tgt_name"],
+                    "kind": r["tgt_kind"] if direction == "callees"
+                    else r["src_kind"],
+                    "relation": r["relation"],
+                    "hop": hop,
+                    "direction": direction,
+                })
+                advance_id = r[advance_col]
+                if advance_id not in visited:
+                    visited.add(advance_id)
+                    next_frontier.append(advance_id)
+            frontier = next_frontier
 
     # ------------------------------------------------------------------
     # Ingest
