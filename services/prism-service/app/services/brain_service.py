@@ -382,12 +382,17 @@ class BrainService:
         chunks = self._brain._chunk_source_file(path, content)
 
         first_doc_id = ""
+        seen_doc_ids: dict[str, int] = {}
         for chunk in chunks:
             doc_id = chunk["doc_id"]
             # Non-code files come back with doc_id == filepath (no "::").
             # Normalise to the legacy path::main form for prose compat.
             if "::" not in doc_id:
                 doc_id = f"{path}::main"
+            seen_count = seen_doc_ids.get(doc_id, 0)
+            seen_doc_ids[doc_id] = seen_count + 1
+            if seen_count:
+                doc_id = f"{doc_id}#dup_{seen_count + 1}"
             if not first_doc_id:
                 first_doc_id = doc_id
 
@@ -423,7 +428,7 @@ class BrainService:
             # pre-expanded form, corrupting any consumer of docs.content
             # (notably graph_service.backfill_from_brain).
             brain_conn.execute(
-                "INSERT INTO docs "
+                "INSERT OR REPLACE INTO docs "
                 "(id, source_file, content, domain, indexed_at, "
                 " entity_name, entity_kind, content_hash, "
                 " line_start, line_end) "

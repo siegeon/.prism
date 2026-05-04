@@ -54,7 +54,7 @@ def _mcp_call(base: str, project: str, tool: str, args: dict,
               timeout: float = 30.0) -> Optional[dict]:
     """Call an MCP tool synchronously. Returns the parsed result or
     None on any failure (advisory hook never crashes)."""
-    url = f"{base}/?project={project}"
+    url = f"{base}/?project={project}&tool_profile=automation"
     payload = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": args},

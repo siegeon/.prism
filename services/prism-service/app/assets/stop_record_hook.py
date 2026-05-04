@@ -51,7 +51,7 @@ def _mcp_url_and_project(root: Path) -> Optional[tuple[str, str]]:
 
 def _mcp_call(base: str, project: str, tool: str, args: dict,
               timeout: float = 4.0) -> None:
-    url = f"{base}/?project={project}"
+    url = f"{base}/?project={project}&tool_profile=automation"
     payload = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": args},
@@ -214,7 +214,7 @@ def _tag_active_tasks_with_head(
     # Use a longer timeout than the 4s default — task_list can be
     # slow on large projects, and we have no UI latency budget here.
     try:
-        url = f"{base}/?project={project}"
+        url = f"{base}/?project={project}&tool_profile=automation"
         payload = json.dumps({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": "task_list", "arguments": {}},

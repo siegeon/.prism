@@ -143,6 +143,20 @@ def test_install_settings_never_emits_bare_python():
         )
 
 
+def test_install_manifest_hooks_use_automation_profile():
+    files = _files_by_path(_manifest())
+    hook_paths = [path for path in files if path.startswith(".claude/hooks/")]
+    hook_paths.remove(".claude/hooks/hook_logger.py")
+
+    for path in hook_paths:
+        content = files[path]["content"]
+        assert "tool_profile=automation" in content, (
+            f"{path} must call MCP with the automation profile so default "
+            "interactive tool gating does not break hooks"
+        )
+        assert 'f"{base}/?project={project}"' not in content
+
+
 def test_install_manifest_accepts_platform_aliases():
     """Caller may pass either `sys.platform` values or human aliases.
     Anything starting with `win`/`nt` selects the Windows launcher;

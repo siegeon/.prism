@@ -1069,6 +1069,126 @@ TOOLS: list[Tool] = [
 
 
 # ---------------------------------------------------------------------------
+# Tool profiles
+# ---------------------------------------------------------------------------
+
+INTERACTIVE_TOOL_NAMES: set[str] = {
+    "brain_search",
+    "brain_find_symbol",
+    "brain_outline",
+    "brain_find_references",
+    "brain_call_chain",
+    "prism_status",
+    "prism_sync",
+    "prism_guide",
+    "memory_store",
+    "memory_recall",
+    "task_create",
+    "task_list",
+    "task_next",
+    "task_update",
+    "workflow_state",
+    "workflow_advance",
+    "context_bundle",
+}
+
+ADMIN_TOOL_NAMES: set[str] = {
+    "project_list",
+    "project_create",
+    "project_onboard",
+    "prism_install",
+    "prism_refresh",
+    "prism_bulk_refresh",
+    "prism_cancel_pending",
+    "brain_index_doc",
+    "brain_list",
+    "brain_graph",
+    "graph_rebuild",
+    "verifier_run",
+    "verifier_history",
+}
+
+HOOK_TOOL_NAMES: set[str] = {
+    "record_session_outcome",
+    "record_skill_usage",
+    "record_outcome",
+    "record_subagent_outcome",
+    "verifier_feedback_summary",
+}
+
+LEARNING_TOOL_NAMES: set[str] = {
+    "brain_search_feedback",
+    "meta_conductor_brief",
+    "meta_conductor_propose",
+    "meta_conductor_evaluate",
+    "meta_conductor_auto",
+    "janitor_enqueue",
+    "janitor_mark_stale",
+    "janitor_check",
+    "janitor_submit",
+    "janitor_abandon",
+    "janitor_status",
+    "memory_invalidate",
+}
+
+AUTOMATION_TOOL_NAMES: set[str] = {
+    "prism_status",
+    "prism_refresh",
+    "graph_rebuild",
+    "task_list",
+    "task_update",
+    "brain_search_feedback",
+    "record_session_outcome",
+    "record_skill_usage",
+    "record_subagent_outcome",
+    "janitor_check",
+    "janitor_mark_stale",
+    "janitor_enqueue",
+    "verifier_run",
+}
+
+TOOL_PROFILE_ALIASES: dict[str, str] = {
+    "all": "all",
+    "default": "interactive",
+    "core": "interactive",
+    "interactive": "interactive",
+    "admin": "admin",
+    "project": "admin",
+    "hooks": "hooks",
+    "telemetry": "hooks",
+    "learning": "learning",
+    "automation": "automation",
+    "hooks_api": "automation",
+}
+
+
+def tool_names_for_profile(profile: str | None) -> set[str]:
+    """Return MCP tool names for a public profile name."""
+    profile_key = TOOL_PROFILE_ALIASES.get(
+        (profile or "interactive").strip().lower(),
+        "interactive",
+    )
+    all_names = {tool.name for tool in TOOLS}
+    if profile_key == "interactive":
+        return INTERACTIVE_TOOL_NAMES & all_names
+    if profile_key == "admin":
+        return ADMIN_TOOL_NAMES & all_names
+    if profile_key == "hooks":
+        return HOOK_TOOL_NAMES & all_names
+    if profile_key == "learning":
+        return LEARNING_TOOL_NAMES & all_names
+    if profile_key == "automation":
+        return AUTOMATION_TOOL_NAMES & all_names
+    return all_names
+
+
+def tools_for_profile(profile: str | None) -> list[Tool]:
+    """Return MCP tool definitions visible for a profile."""
+    allowed = tool_names_for_profile(profile)
+    return [tool for tool in TOOLS if tool.name in allowed]
+
+
+# ---------------------------------------------------------------------------
 # Convention enrichment
 # ---------------------------------------------------------------------------
 
@@ -1324,6 +1444,8 @@ It's populated by calling `graph_rebuild()` after bulk-ingesting source.
 # Example flows
 
 ## Onboarding a brand-new project (FIRST session)
+Requires a maintenance profile such as `?tool_profile=all`.
+
 1. `project_list` → confirm slug unknown.
 2. `project_onboard(project_name="My App", sub_projects=[
      {"name": "api", "tech": "C#/.NET", "path": "/home/me/api"},
@@ -1344,13 +1466,15 @@ It's populated by calling `graph_rebuild()` after bulk-ingesting source.
 2. `brain_search("user authentication flow", limit=5)` → relevant files.
 3. `memory_recall("auth", limit=5)` → project auth rules.
 4. Write code.
-5. New files → `brain_index_doc` each → `graph_rebuild()` at end.
+5. Let the installed edit-learn hooks ingest changed files; use
+   `prism_status()` to check drift and `prism_sync()` if the graph is stale.
 6. `task_update(id=..., status="done")`.
 
 ## Debugging an incident
 1. `memory_recall("similar failure", limit=10)` — seen it before?
 2. `brain_search("<error message>", limit=5)` — in any doc?
-3. `brain_graph(entity="<suspected component>")` — who uses it?
+3. `brain_call_chain(entity="<suspected component>", direction="callers")` —
+   who uses it?
 4. Fix.
 5. `memory_store(type="failure", name="oauth-null-token", description="Root
     cause was X, observed at file.py:123, fix was Y.",
@@ -1444,7 +1568,7 @@ def _mcp_url_and_project(root: Path) -> tuple[str, str] | None:
 
 
 def _mcp_call(base: str, project: str, tool: str, args: dict) -> dict:
-    url = f"{base}/?project={project}"
+    url = f"{base}/?project={project}&tool_profile=automation"
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                "params": {"name": tool, "arguments": args}}
     req = urllib.request.Request(
