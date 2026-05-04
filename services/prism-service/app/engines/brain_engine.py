@@ -3183,7 +3183,9 @@ class Brain:
                 "s.kind AS src_kind, "
                 "r.relation AS relation, r.target_id AS tgt_id_raw, "
                 "r.confidence AS confidence, "
-                "r.confidence_score AS confidence_score "
+                "r.confidence_score AS confidence_score, "
+                "r.call_site_file AS call_site_file, "
+                "r.source_location AS call_site_location "
                 "FROM relationships r "
                 "JOIN entities s ON s.id = r.source_id "
                 "JOIN entities t ON t.id = r.target_id "
@@ -3224,6 +3226,10 @@ class Brain:
                     "relation": r["relation"],
                     "confidence": r["confidence"] or "EXTRACTED",
                     "confidence_score": conf_score,
+                    # AC5: per-edge call-site location. Empty string
+                    # for legacy edges that predate the column.
+                    "call_site_file": r["call_site_file"] or "",
+                    "call_site_location": r["call_site_location"] or "",
                     "hop": hop,
                     "direction": direction,
                 })
