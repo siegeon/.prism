@@ -102,12 +102,89 @@ def _run_git(args: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str, s
 
 
 def source_dir_for(project: str) -> Path:
-    """Return the source/ subdir for a project, ensured to exist."""
+    """Return the directory PRISM should analyze for this project.
+
+    v5.2.0 — projects can be either:
+      * Folder-mode (preferred): understand_state.json has a `source_path`
+        field set to a directory (typically /code/<repo> bind-mounted from
+        the host). We return that path as-is; no clone happens server-side.
+      * Clone-mode (legacy): no source_path set. We return the per-project
+        data/projects/<name>/source dir which ensure_cloned() fills via
+        `git clone`.
+
+    Falls back to the data-dir path if state can't be read so the function
+    is safe to call before configuration.
+    """
+    from app.engines import understand_engine as ue
+    try:
+        state = ue._read_state(project)
+        sp = state.get("source_path") or ""
+        if sp:
+            p = Path(sp)
+            if p.is_dir():
+                return p
+    except Exception:
+        pass
     return project_data_dir(project) / "source"
 
 
 def is_cloned(project: str) -> bool:
-    return (source_dir_for(project) / ".git").exists()
+    """Renamed semantically — answers 'does PRISM know where this project's
+    source lives, and is it readable?' Returns True for both folder-mode
+    (source_path set and points at a real dir) and clone-mode (source/
+    has a .git checkout)."""
+    from app.engines import understand_engine as ue
+    try:
+        sp = (ue._read_state(project).get("source_path") or "").strip()
+        if sp and Path(sp).is_dir():
+            return True
+    except Exception:
+        pass
+    return (project_data_dir(project) / "source" / ".git").exists()
+
+
+def set_source_path(project: str, source_path: str) -> dict:
+    """Configure a project to read its source from a bind-mounted folder
+    instead of a git clone. Validates the path is reachable; records it
+    in understand_state.json. Idempotent.
+
+    Returns the resolved state for the SPA's response.
+    """
+    from app.engines import understand_engine as ue
+    sp = (source_path or "").strip()
+    if not sp:
+        raise SourceUnavailable("source_path is required")
+    p = Path(sp).resolve()
+    if not p.is_dir():
+        raise SourceUnavailable(
+            f"source_path {sp!r} does not exist or is not a directory inside "
+            "the container — check your docker-compose bind-mount"
+        )
+    state = ue._read_state(project)
+    state["source_path"] = str(p)
+    state["mode"] = "folder"
+    # Clear remote_url so the SPA knows this project isn't tracking a
+    # remote anymore. Leaves tracked_ref alone since it might be useful
+    # for drift-detection against the local git checkout's branch.
+    state.pop("remote_url", None)
+    ue._write_state(project, state)
+    return {
+        "project": project,
+        "source_path": str(p),
+        "mode": "folder",
+        "head_sha": _current_sha_if_git(p),
+    }
+
+
+def _current_sha_if_git(path: Path) -> str:
+    """If `path` is a git repo, return its current HEAD SHA. Otherwise ''."""
+    if not (path / ".git").exists():
+        return ""
+    try:
+        rc, out, _err = _run_git(["rev-parse", "HEAD"], path, timeout=10)
+        return out.strip() if rc == 0 else ""
+    except Exception:
+        return ""
 
 
 def ensure_cloned(
@@ -180,14 +257,51 @@ def _rev_parse(src_dir: Path, ref: str) -> Optional[str]:
 
 
 def current_sha(project: str, ref: str = "HEAD") -> str:
-    """Return the SHA at `ref` in the project's source clone."""
+    """Return the SHA at `ref` in the project's source dir.
+
+    Works for both clone-mode (data/projects/<name>/source is a git repo)
+    and folder-mode (bind-mounted /code/<repo> that happens to be a git
+    repo). If the folder isn't a git repo at all, returns a synthetic
+    SHA derived from a directory-content hash so drift detection still
+    has a stable identity to compare against.
+    """
     src = source_dir_for(project)
     if not is_cloned(project):
-        raise SourceUnavailable(f"project {project!r} is not cloned yet")
-    sha = _rev_parse(src, ref)
-    if sha is None:
-        raise SourceUnavailable(f"ref {ref!r} not found in {project}")
-    return sha
+        raise SourceUnavailable(f"project {project!r} has no source configured")
+    if (src / ".git").exists():
+        sha = _rev_parse(src, ref)
+        if sha is None:
+            raise SourceUnavailable(f"ref {ref!r} not found in {project}")
+        return sha
+    # Non-git folder: synthesize a stable SHA from a quick directory
+    # fingerprint. Enough to detect "changed since last analyzed" for
+    # drift purposes; not cryptographically meaningful.
+    return _folder_fingerprint(src)
+
+
+def _folder_fingerprint(path: Path) -> str:
+    """Stable-ish hash over file paths + mtimes under `path`. Skipped dirs
+    match the same skip set used by ingest_source_to_brain so the
+    fingerprint reflects what PRISM actually cares about."""
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        for p in sorted(path.rglob("*")):
+            if not p.is_file():
+                continue
+            if any(part in _INGEST_SKIP_DIRS for part in p.parts):
+                continue
+            try:
+                rel = str(p.relative_to(path)).replace("\\", "/")
+                h.update(rel.encode("utf-8"))
+                h.update(b"\x00")
+                h.update(str(int(p.stat().st_mtime)).encode("utf-8"))
+                h.update(b"\x00")
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
+    return h.hexdigest()
 
 
 def has_advanced(project: str, since_sha: str, tracked_ref: str = "origin/main") -> bool:

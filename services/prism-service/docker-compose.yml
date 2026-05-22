@@ -6,22 +6,24 @@ services:
       - "7777:7777"
     volumes:
       - ./data:/data
+      # v5.2.0 — bind-mount the host's existing Claude Code install.
+      # The container's `claude` reads the same OAuth credentials your
+      # host's `claude` already has from `claude login`. No setup inside
+      # the container, no key juggling. RW so token refresh writes back
+      # (8h access tokens rotate via the refresh token in the same file).
+      #
+      # Override the host path if your claude config lives elsewhere:
+      #   PRISM_CLAUDE_HOME=/path/to/.claude docker compose up
+      - ${PRISM_CLAUDE_HOME:-${HOME:-${USERPROFILE}}/.claude}:/root/.claude
+      # v5.2.0 — bind-mount the parent dir that holds your code. In the
+      # SPA's Settings → Projects, point at /code/<repo-name> and PRISM
+      # analyzes it where it lives. No clone, no git auth needed in the
+      # container (your host already has it).
+      - ${PRISM_CODE_DIR:-${HOME:-${USERPROFILE}}/code}:/code:ro
     environment:
       - PRISM_DATA_DIR=/data
-      # Claude CLI auth — borrowed from Auto-Claude's CLAUDE_CONFIG_DIR
-      # pattern (apps/desktop/src/main/claude-profile-manager.ts:541).
-      # Point Claude at a directory INSIDE the /data volume so its OAuth
-      # tokens (access + refresh) persist across container swaps and
-      # Watchtower upgrades. ONE-TIME setup:
-      #
-      #     docker exec -it prism-service claude login
-      #
-      # Then never again — the CLI auto-refreshes access tokens (8h
-      # expiry) against console.anthropic.com using the long-lived
-      # refresh token, both stored in /data/.claude-config. No host
-      # bind-mount, no host `claude` install required, INV-1 preserved
-      # (this is your subscription, not an API key).
-      - CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-/data/.claude-config}
+      # v5.2.0 — claude reads creds from the bind-mounted host config dir.
+      - CLAUDE_CONFIG_DIR=/root/.claude
       # Surfaces the friendly container name in /api/claude-auth/status
       # so the SPA can print `docker exec -it <name> claude /login`
       # instead of the random short ID. Override per install.

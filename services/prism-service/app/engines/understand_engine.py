@@ -239,8 +239,15 @@ class UnderstandEngine:
         """Compose source pin state + queue snapshot for the
         understand_status MCP tool."""
         state = _read_state(self.project)
+        # v5.2.0 — projects can be in folder-mode OR clone-mode. Surface
+        # both so the SPA can show the right thing in the Settings card.
+        source_path = state.get("source_path")
+        mode = state.get("mode") or ("folder" if source_path else
+                                     ("clone" if state.get("remote_url") else "empty"))
         out: dict = {
             "project": self.project,
+            "mode": mode,
+            "source_path": source_path,
             "tracked_ref": state.get("tracked_ref", "origin/main"),
             "remote_url": state.get("remote_url"),
             "last_analyzed_sha": state.get("last_analyzed_sha"),
