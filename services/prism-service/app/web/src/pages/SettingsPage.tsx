@@ -18,7 +18,7 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
   connections: {
     title: "Connections",
-    description: "Claude OAuth subscription and GitHub access for private-repo clones.",
+    description: "Claude OAuth (required for analyzers and Q&A). GitHub is optional — only needed if PRISM clones repos server-side; folder-mode projects use your host's git auth via the bind-mount.",
   },
   jobs: {
     title: "Jobs",
@@ -196,11 +196,35 @@ export default function SettingsPage() {
       {section === "connections" && (
         <div className="space-y-6">
           <Card>
-            <SectionLabel>Claude</SectionLabel>
+            <div className="flex items-center gap-3 mb-3">
+              <SectionLabel>Claude</SectionLabel>
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200">
+                required
+              </span>
+              <span className="text-[11px] opacity-60">
+                analyzers and ask-the-knowledge queries use your OAuth subscription
+              </span>
+            </div>
             <ClaudeAuthCard />
           </Card>
           <Card>
-            <SectionLabel>GitHub</SectionLabel>
+            <div className="flex items-center gap-3 mb-3">
+              <SectionLabel>GitHub</SectionLabel>
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--midground-base)]/15 text-[color:var(--midground-base)]">
+                optional
+              </span>
+              <span className="text-[11px] opacity-60">
+                only needed if PRISM clones repos server-side
+              </span>
+            </div>
+            <p className="text-[11px] opacity-60 leading-snug mb-3">
+              Skip this if you're using <span className="font-medium">folder
+              mode</span> (the v5.2.0 default) — your host already has git
+              auth and PRISM reads files via the bind-mount, no cloning
+              needed. Connect only if you want PRISM to <span className="font-medium">
+              clone private repos for you</span> or use the <span className="font-medium">Browse
+              my repos</span> picker in the project editor.
+            </p>
             <GithubAuthCard />
           </Card>
         </div>
