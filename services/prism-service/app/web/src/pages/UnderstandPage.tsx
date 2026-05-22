@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { FolderTree, GitBranch, Settings as SettingsIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty, ErrorBanner, Kpi, Page, Pill, SectionLabel } from "@/components/ui";
@@ -9,7 +11,13 @@ import OnboardingView from "@/components/understand/OnboardingView";
 
 type Status = {
   project: string;
+  // v5.2.0 — projects can be folder-mode or clone-mode. Surfaced here so
+  // the empty-state copy can describe the right thing and the KPI row
+  // can show source_path instead of tracked_ref for folder projects.
+  mode?: "folder" | "clone" | "empty";
+  source_path?: string | null;
   tracked_ref: string;
+  remote_url?: string | null;
   current_sha: string | null;
   last_analyzed_sha: string | null;
   in_session_drain_enabled: boolean;
@@ -121,8 +129,9 @@ export default function UnderstandPage() {
         <div>
           <h1 className="font-serif text-3xl tracking-tight">Understand</h1>
           <p className="text-sm opacity-60 mt-1">
-            Point a project at a git remote and generate tour, architecture,
-            domain glossary, and onboarding doc from its pinned source.
+            Generate tour, architecture, domain glossary, and onboarding doc
+            from this project's source. Point a project at a local folder
+            (bind-mounted) or a git remote in <span className="font-medium">Settings → Projects</span>.
           </p>
         </div>
         <button
@@ -149,7 +158,15 @@ export default function UnderstandPage() {
       )}
 
       <div className="flex gap-3 flex-wrap">
-        <Kpi label="Tracked ref" value={status?.tracked_ref ?? "—"} />
+        {status?.mode === "folder" ? (
+          <Kpi
+            label="Source folder"
+            value={status?.source_path ?? "—"}
+            hint="bind-mounted from host"
+          />
+        ) : (
+          <Kpi label="Tracked ref" value={status?.tracked_ref ?? "—"} />
+        )}
         <Kpi label="Current SHA" value={shortSha(status?.current_sha)} />
         <Kpi label="Last analyzed" value={shortSha(status?.last_analyzed_sha)} />
         <Kpi
@@ -162,11 +179,33 @@ export default function UnderstandPage() {
 
       {!status?.current_sha && (
         <Card>
-          <SectionLabel>No source configured</SectionLabel>
-          <p className="text-sm opacity-70">
-            Use <span className="font-semibold">Add project</span> in the
-            top bar to create a project pointed at a git remote.
+          <SectionLabel>No source configured for "{project}"</SectionLabel>
+          <p className="text-sm opacity-70 mt-2">
+            Pick a source for this project in <span className="font-medium">Settings → Projects</span>{" "}
+            so PRISM can scan the code. v5.2.0 supports two shapes:
           </p>
+          <ul className="text-sm opacity-70 mt-2 space-y-1 list-disc pl-5">
+            <li className="leading-relaxed">
+              <FolderTree className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+              <span className="font-medium">Local folder</span> — point at a path
+              under <span className="font-mono">/code</span> (or another bind-
+              mounted dir). Reads files where they live on your host, no clone.
+            </li>
+            <li className="leading-relaxed">
+              <GitBranch className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+              <span className="font-medium">Git URL</span> — let PRISM clone the
+              repo server-side. Needs a GitHub connection for private repos.
+            </li>
+          </ul>
+          <div className="mt-4">
+            <Link
+              to="/settings/projects"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider"
+            >
+              <SettingsIcon className="w-3.5 h-3.5" />
+              Configure "{project}" →
+            </Link>
+          </div>
         </Card>
       )}
 

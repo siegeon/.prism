@@ -5,10 +5,16 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "5.2.0"
+PRISM_VERSION = "5.2.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.2.1: Fix /understand empty-state. Used to say 'Use Add project in "
+    "the top bar' but there is no such button — replaced with a clear "
+    "two-mode explainer (Local folder + Git URL) and a `Configure '<name>' "
+    "->` button that links straight to Settings -> Projects. Status row "
+    "shows `Source folder` for folder-mode projects instead of `Tracked "
+    "ref`. "
     "v5.2.0: Local folder mode + host claude auth. Add a project by "
     "pointing at a folder PRISM has bind-mounted from your host (default "
     "`${HOME}/code` → `/code` in the container). No git URL, no clone, "
