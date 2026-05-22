@@ -5,10 +5,17 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "5.2.2"
+PRISM_VERSION = "5.2.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.2.3: GitHub connect off the Connections page entirely. The "
+    "Connections section (now `Claude auth` in the sidebar) holds only "
+    "Claude OAuth, which IS required. GitHub connect moved into the "
+    "project editor and only shows up when you pick `Git URL` mode AND "
+    "aren't already authenticated, as a collapsible `Optional: connect "
+    "GitHub for private-repo clones + a repo picker` row. Folder-mode "
+    "users never see GitHub setup anywhere. "
     "v5.2.2: Settings -> Connections is now honest about what's required "
     "vs optional. Claude OAuth carries a `required` pill (analyzers + Q&A "
     "need it). GitHub carries an `optional` pill plus inline copy saying "

@@ -17,8 +17,8 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
     description: "Add, configure, sync, and delete tracked repos.",
   },
   connections: {
-    title: "Connections",
-    description: "Claude OAuth (required for analyzers and Q&A). GitHub is optional — only needed if PRISM clones repos server-side; folder-mode projects use your host's git auth via the bind-mount.",
+    title: "Claude auth",
+    description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. The container reads tokens from the bind-mounted ~/.claude, so any `claude login` you've already done on your host is reused — no second login here.",
   },
   jobs: {
     title: "Jobs",
@@ -194,40 +194,10 @@ export default function SettingsPage() {
       )}
 
       {section === "connections" && (
-        <div className="space-y-6">
-          <Card>
-            <div className="flex items-center gap-3 mb-3">
-              <SectionLabel>Claude</SectionLabel>
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200">
-                required
-              </span>
-              <span className="text-[11px] opacity-60">
-                analyzers and ask-the-knowledge queries use your OAuth subscription
-              </span>
-            </div>
-            <ClaudeAuthCard />
-          </Card>
-          <Card>
-            <div className="flex items-center gap-3 mb-3">
-              <SectionLabel>GitHub</SectionLabel>
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--midground-base)]/15 text-[color:var(--midground-base)]">
-                optional
-              </span>
-              <span className="text-[11px] opacity-60">
-                only needed if PRISM clones repos server-side
-              </span>
-            </div>
-            <p className="text-[11px] opacity-60 leading-snug mb-3">
-              Skip this if you're using <span className="font-medium">folder
-              mode</span> (the v5.2.0 default) — your host already has git
-              auth and PRISM reads files via the bind-mount, no cloning
-              needed. Connect only if you want PRISM to <span className="font-medium">
-              clone private repos for you</span> or use the <span className="font-medium">Browse
-              my repos</span> picker in the project editor.
-            </p>
-            <GithubAuthCard />
-          </Card>
-        </div>
+        <Card>
+          <SectionLabel>Claude auth</SectionLabel>
+          <ClaudeAuthCard />
+        </Card>
       )}
 
       {section === "jobs" && (
@@ -1830,37 +1800,55 @@ function ProjectEditor({
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-[1fr_180px] gap-3">
-          <label className="flex flex-col gap-1 min-w-0">
-            <span className="text-[10px] uppercase tracking-wider opacity-60 flex items-center gap-2">
-              Git URL
-              {ghAuthed && (
-                <button
-                  type="button"
-                  onClick={() => setPicking(true)}
-                  className="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80 hover:opacity-100"
-                >
-                  <Github className="w-3 h-3" /> Browse my repos
-                </button>
-              )}
-            </span>
-            <input
-              value={remote}
-              onChange={(e) => setRemote(e.target.value)}
-              placeholder="https://github.com/owner/repo"
-              className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider opacity-60">
-              Tracked ref
-            </span>
-            <input
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-              className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
-            />
-          </label>
+        <div className="space-y-3">
+          <div className="grid grid-cols-[1fr_180px] gap-3">
+            <label className="flex flex-col gap-1 min-w-0">
+              <span className="text-[10px] uppercase tracking-wider opacity-60 flex items-center gap-2">
+                Git URL
+                {ghAuthed && (
+                  <button
+                    type="button"
+                    onClick={() => setPicking(true)}
+                    className="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80 hover:opacity-100"
+                  >
+                    <Github className="w-3 h-3" /> Browse my repos
+                  </button>
+                )}
+              </span>
+              <input
+                value={remote}
+                onChange={(e) => setRemote(e.target.value)}
+                placeholder="https://github.com/owner/repo"
+                className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider opacity-60">
+                Tracked ref
+              </span>
+              <input
+                value={ref}
+                onChange={(e) => setRef(e.target.value)}
+                className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+              />
+            </label>
+          </div>
+          {/* GitHub connect, surfaced contextually only when the user is in
+              Git URL mode and isn't yet authenticated. If they only ever use
+              folder mode, they never see this. */}
+          {!ghAuthed && (
+            <details className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.02]">
+              <summary className="px-3 py-2 text-[11px] cursor-pointer flex items-center gap-2 hover:bg-[color:var(--midground-base)]/[0.04]">
+                <Github className="w-3.5 h-3.5 opacity-70" />
+                <span className="opacity-80">
+                  Optional: connect GitHub for private-repo clones + a repo picker
+                </span>
+              </summary>
+              <div className="px-3 pt-2 pb-3 border-t border-[color:var(--midground-base)]/10">
+                <GithubAuthCard />
+              </div>
+            </details>
+          )}
         </div>
       )}
       {mode === "url" && info?.remote_url && info.remote_url !== remote.trim() && (
