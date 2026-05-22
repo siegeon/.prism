@@ -18,17 +18,19 @@ export interface PrismDomainNodeData extends Record<string, unknown> {
 
 export type PrismDomainFlowNode = Node<PrismDomainNodeData, "prism-domain">;
 
-// Slate Blue palette — paired companion set to PrismLayerNode.PALETTE
-// so the two views read as the same theme even when shown side by
-// side. Slightly lifted L for the domain (parent) tier so domain
-// cards visually outrank the layer cards underneath them.
+// Domain palette — companion to PrismLayerNode.PALETTE. Same multi-hue
+// family as v5.2.4's layer refresh, but each domain swatch is slightly
+// lifted in lightness so domain (parent) cards visually outrank the
+// layer (child) cards underneath them.
 const DOMAIN_PALETTE = [
-  { border: "rgba(100,135,180,0.55)", bg: "rgba(100,135,180,0.10)", dot: "#6487b4" },
-  { border: "rgba(125,165,195,0.55)", bg: "rgba(125,165,195,0.10)", dot: "#7da5c3" },
-  { border: "rgba(85,115,150,0.55)",  bg: "rgba(85,115,150,0.10)",  dot: "#557396" },
-  { border: "rgba(115,155,170,0.55)", bg: "rgba(115,155,170,0.10)", dot: "#739baa" },
-  { border: "rgba(150,170,195,0.55)", bg: "rgba(150,170,195,0.10)", dot: "#96aac3" },
-  { border: "rgba(95,140,170,0.55)",  bg: "rgba(95,140,170,0.10)",  dot: "#5f8caa" },
+  { border: "rgba(100,150,180,0.55)", bg: "rgba(100,150,180,0.10)", dot: "#6496b4" },  // steel blue (lifted)
+  { border: "rgba(115,190,200,0.55)", bg: "rgba(115,190,200,0.10)", dot: "#73bec8" },  // teal (lifted)
+  { border: "rgba(140,190,150,0.55)", bg: "rgba(140,190,150,0.10)", dot: "#8cbe96" },  // sage (lifted)
+  { border: "rgba(220,190,110,0.55)", bg: "rgba(220,190,110,0.10)", dot: "#dcbe6e" },  // amber (lifted)
+  { border: "rgba(235,155,130,0.55)", bg: "rgba(235,155,130,0.10)", dot: "#eb9b82" },  // coral (lifted)
+  { border: "rgba(190,160,215,0.55)", bg: "rgba(190,160,215,0.10)", dot: "#bea0d7" },  // lavender (lifted)
+  { border: "rgba(225,150,180,0.55)", bg: "rgba(225,150,180,0.10)", dot: "#e196b4" },  // rose (lifted)
+  { border: "rgba(180,170,155,0.55)", bg: "rgba(180,170,155,0.10)", dot: "#b4aa9b" },  // warm grey (lifted)
 ];
 export const prismDomainColor = (i: number) => DOMAIN_PALETTE[i % DOMAIN_PALETTE.length];
 

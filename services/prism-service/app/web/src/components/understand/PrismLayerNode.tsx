@@ -25,18 +25,21 @@ export interface PrismLayerNodeData extends Record<string, unknown> {
 
 export type PrismLayerFlowNode = Node<PrismLayerNodeData, "prism-layer">;
 
-// Slate Blue palette — all swatches sit in the cool blue-grey hue
-// family so the layer cards harmonize with the new background tokens.
-// Variation comes from L+S rather than hue so 7 layers stay
-// distinguishable without breaking the "one theme" read.
+// Layer palette — v5.2.4 refresh. Previous version sat all 7 swatches
+// inside the cool blue-grey family (Slate Blue theme harmony) but that
+// made every layer read identically in practice — a 10-layer architecture
+// graph looked like one blob. New palette gives each layer a real hue
+// while keeping saturation tasteful for the dark theme (each ~L65/C25 in
+// OKLCH terms — distinct but never crayon-bright).
 const PALETTE = [
   { border: "rgba(74,124,155,0.55)",  bg: "rgba(74,124,155,0.10)",  dot: "#4a7c9b" },  // steel blue
-  { border: "rgba(110,150,190,0.55)", bg: "rgba(110,150,190,0.10)", dot: "#6e96be" },  // sky blue
-  { border: "rgba(140,165,200,0.55)", bg: "rgba(140,165,200,0.10)", dot: "#8ca5c8" },  // periwinkle
-  { border: "rgba(95,170,180,0.55)",  bg: "rgba(95,170,180,0.10)",  dot: "#5faab4" },  // teal blue
-  { border: "rgba(130,140,165,0.55)", bg: "rgba(130,140,165,0.10)", dot: "#828ca5" },  // grey blue
-  { border: "rgba(75,110,140,0.55)",  bg: "rgba(75,110,140,0.10)",  dot: "#4b6e8c" },  // navy blue
-  { border: "rgba(160,180,200,0.55)", bg: "rgba(160,180,200,0.10)", dot: "#a0b4c8" },  // silver blue
+  { border: "rgba(95,170,180,0.55)",  bg: "rgba(95,170,180,0.10)",  dot: "#5faab4" },  // teal
+  { border: "rgba(120,170,130,0.55)", bg: "rgba(120,170,130,0.10)", dot: "#78aa82" },  // sage green
+  { border: "rgba(200,170,90,0.55)",  bg: "rgba(200,170,90,0.10)",  dot: "#c8aa5a" },  // amber
+  { border: "rgba(220,135,110,0.55)", bg: "rgba(220,135,110,0.10)", dot: "#dc876e" },  // coral
+  { border: "rgba(170,140,200,0.55)", bg: "rgba(170,140,200,0.10)", dot: "#aa8cc8" },  // lavender
+  { border: "rgba(210,130,165,0.55)", bg: "rgba(210,130,165,0.10)", dot: "#d282a5" },  // rose
+  { border: "rgba(160,150,135,0.55)", bg: "rgba(160,150,135,0.10)", dot: "#a09687" },  // warm grey
 ];
 export const prismLayerColor = (i: number) => PALETTE[i % PALETTE.length];
 
