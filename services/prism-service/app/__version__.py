@@ -5,10 +5,18 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "5.2.3"
+PRISM_VERSION = "5.2.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.2.4: Layer + domain graph palette refresh. Both PrismLayerNode "
+    "and PrismDomainNode used to keep all swatches inside the cool "
+    "blue-grey family, so a 10-layer architecture graph read as one "
+    "blob. Replaced with 8 hue-distinct colors (steel, teal, sage, "
+    "amber, coral, lavender, rose, warm grey) at muted saturation that "
+    "still sits on the Slate Blue dark theme. Domains use the same "
+    "hues lifted in lightness so parent cards visually outrank their "
+    "child layers. "
     "v5.2.3: GitHub connect off the Connections page entirely. The "
     "Connections section (now `Claude auth` in the sidebar) holds only "
     "Claude OAuth, which IS required. GitHub connect moved into the "
