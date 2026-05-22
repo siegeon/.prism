@@ -5,10 +5,21 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "5.1.11"
+PRISM_VERSION = "5.2.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.2.0: Local folder mode + host claude auth. Add a project by "
+    "pointing at a folder PRISM has bind-mounted from your host (default "
+    "`${HOME}/code` → `/code` in the container). No git URL, no clone, "
+    "no GitHub credentials in the container — your host already has "
+    "your code and your git auth. Settings → Projects has a `Local "
+    "folder` / `Git URL` toggle; folder is the new default for new "
+    "projects. The host's `~/.claude` is now bind-mounted into the "
+    "container, so the container's claude uses your existing logged-in "
+    "subscription with no `claude /login` inside the container. The "
+    "git-URL clone path (and v5.1.10–11's GitHub OAuth connect) still "
+    "work as before for anyone who prefers them. "
     "v5.1.11: GitHub connect is now a one-click button, not a paste-a-PAT "
     "form. The Connections panel walks you through registering a `PRISM` "
     "OAuth App once (deep-link to `github.com/settings/applications/new` "

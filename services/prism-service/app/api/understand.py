@@ -29,36 +29,62 @@ def status(project: str = Query("default")) -> dict:
 
 
 class ConfigureBody(BaseModel):
-    remote_url: str
+    # v5.2.0 primary path — point PRISM at a bind-mounted folder
+    source_path: Optional[str] = None
+    # v5.1 legacy — let PRISM clone the repo server-side
+    remote_url: Optional[str] = None
     tracked_ref: str = "origin/main"
 
 
 @router.post("/configure")
 def configure(body: ConfigureBody, project: str = Query("default")) -> dict:
-    if not body.remote_url.strip():
-        raise HTTPException(400, "remote_url is required")
+    source_path = (body.source_path or "").strip()
+    remote_url = (body.remote_url or "").strip()
+    if not source_path and not remote_url:
+        raise HTTPException(
+            400, "either source_path (folder mode) or remote_url (clone "
+            "mode) is required",
+        )
+    if source_path and remote_url:
+        raise HTTPException(
+            400, "pass either source_path or remote_url, not both",
+        )
+
+    if source_path:
+        # Folder mode — record the bind-mounted path, no clone.
+        try:
+            resolved = ss.set_source_path(project, source_path)
+        except ss.SourceUnavailable as e:
+            raise HTTPException(400, str(e))
+        Thread(
+            target=ss.bootstrap_after_clone,
+            args=(project,),
+            daemon=True,
+        ).start()
+        return {
+            "configured": True,
+            "mode": "folder",
+            "source_path": resolved["source_path"],
+            "head_sha": resolved["head_sha"],
+            "ingest": "started",
+            "bootstrap": "started",
+        }
+
+    # Clone mode — legacy v5.1 path.
     try:
-        state = ss.ensure_cloned(project, body.remote_url, body.tracked_ref)
+        state = ss.ensure_cloned(project, remote_url, body.tracked_ref)
     except ss.SourceUnavailable as e:
         raise HTTPException(400, str(e))
     s = ue._read_state(project)
-    s["remote_url"] = body.remote_url
+    s["remote_url"] = remote_url
     s["tracked_ref"] = body.tracked_ref
+    s["mode"] = "clone"
     ue._write_state(project, s)
-
-    # Bootstrap: ingest source into Brain + Graph AND enqueue analyzer
-    # jobs in one background thread, so the configure call returns fast.
-    # The auto-drainer (started in main.py lifespan) picks up the queue
-    # and runs claude -p for each analyzer.
-    Thread(
-        target=ss.bootstrap_after_clone,
-        args=(project,),
-        daemon=True,
-    ).start()
-
+    Thread(target=ss.bootstrap_after_clone, args=(project,), daemon=True).start()
     return {
         "configured": True,
-        "remote_url": body.remote_url,
+        "mode": "clone",
+        "remote_url": remote_url,
         "tracked_ref": body.tracked_ref,
         "head_sha": state.head_sha,
         "advanced": state.advanced,

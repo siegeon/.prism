@@ -1,14 +1,17 @@
-# Parallel preview of v5.1.7 (delete-projects + lock fix + claude CLI
-# in container + run-log observability) without disturbing the operator's
-# primary instance on 7777/7778.
+# Parallel preview of v5.2.0 (folder mode + bind-mount host claude auth)
+# without disturbing the operator's primary instance on 7777/7778.
 #
 # Run:
 #   docker compose -p prism-v51 \
 #     -f services/prism-service/docker-compose.v51.yml up -d --build
 #
-# One-time auth (v5.1.7 — claude CLI is bundled in the image):
-#   docker exec -it prism-service-v51 claude login
-#   # Tokens land in ./data-v51/.claude-config, survive container swaps.
+# v5.2.0 — no `claude login` needed in the container. The host's
+# existing ~/.claude is bind-mounted in, so the container's claude
+# uses the same OAuth tokens the host already has.
+#
+# Add a project: SPA Settings → Projects → "+ new" → type a folder
+# path like /code/<repo-name> (the /code dir is bind-mounted from
+# your host's PRISM_CODE_DIR, defaulting to ${HOME}/code).
 #
 # Then:
 #   UI  -> http://localhost:8888
@@ -28,20 +31,15 @@ services:
       - "8888:7778"   # UI
       - "8887:7777"   # MCP
     volumes:
-      # Isolated data dir so the v5.1.7 preview never writes into the
-      # primary instance's brain.db / graph.db / understand_state /
-      # .claude-config (so `claude login` here doesn't touch your prod
-      # auth, and a `claude login` on prod doesn't bleed in here).
       - ./data-v51:/data
+      # v5.2.0 — host claude auth shared into the container.
+      - ${PRISM_CLAUDE_HOME:-${HOME:-${USERPROFILE}}/.claude}:/root/.claude
+      # v5.2.0 — host code dir mounted so projects can point at /code/<repo>
+      # without server-side cloning.
+      - ${PRISM_CODE_DIR:-${HOME:-${USERPROFILE}}/code}:/code:ro
     environment:
       - PRISM_DATA_DIR=/data
-      # v5.1.7 — claude CLI uses this dir for OAuth tokens. Lives inside
-      # the data volume so `docker exec ... claude login` only has to
-      # run once per install.
-      - CLAUDE_CONFIG_DIR=/data/.claude-config
-      # Surfaces the friendly container name in /api/claude-auth/status
-      # so the SPA can print a clean `docker exec -it prism-service-v51
-      # claude /login` instead of the random short ID.
+      - CLAUDE_CONFIG_DIR=/root/.claude
       - PRISM_CONTAINER_NAME=prism-service-v51
       - NICEGUI_STORAGE_PATH=/data/.nicegui
       - PRISM_EMBEDDER=${PRISM_EMBEDDER:-minilm}

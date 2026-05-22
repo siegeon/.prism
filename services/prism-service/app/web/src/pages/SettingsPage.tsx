@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import {
-  ChevronDown, ChevronRight, ExternalLink, GitBranch,
+  ChevronDown, ChevronRight, ExternalLink, FolderTree, GitBranch,
   Github, Loader2, Plus, Search, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -52,6 +52,8 @@ type QueueCounts = {
 
 type ProjectInfo = {
   name: string;
+  mode: "folder" | "clone" | "empty";
+  source_path: string | null;
   remote_url: string | null;
   tracked_ref: string | null;
   current_sha: string | null;
@@ -63,6 +65,8 @@ const ZERO_QUEUE: QueueCounts = { pending: 0, in_progress: 0, completed: 0, fail
 
 async function fetchInfo(name: string): Promise<ProjectInfo> {
   const s = await api.get<{
+    mode?: "folder" | "clone" | "empty";
+    source_path?: string | null;
     tracked_ref: string;
     remote_url: string | null;
     current_sha: string | null;
@@ -71,6 +75,8 @@ async function fetchInfo(name: string): Promise<ProjectInfo> {
   }>(`/api/understand?project=${encodeURIComponent(name)}`);
   return {
     name,
+    mode: s.mode ?? (s.source_path ? "folder" : (s.remote_url ? "clone" : "empty")),
+    source_path: s.source_path ?? null,
     remote_url: s.remote_url ?? null,
     tracked_ref: s.tracked_ref ?? null,
     current_sha: s.current_sha ?? null,
@@ -79,9 +85,13 @@ async function fetchInfo(name: string): Promise<ProjectInfo> {
   };
 }
 
+function hasSource(info: ProjectInfo | undefined): boolean {
+  return Boolean(info?.source_path || info?.remote_url);
+}
+
 function isDrifted(info: ProjectInfo | undefined): boolean {
   if (!info?.current_sha) return false;
-  if (!info.last_analyzed_sha) return Boolean(info.remote_url);
+  if (!info.last_analyzed_sha) return hasSource(info);
   return info.current_sha !== info.last_analyzed_sha;
 }
 
@@ -1552,13 +1562,22 @@ function ProjectCard({
             )}
           </div>
           <div className="text-[11px] opacity-60 mt-1 flex flex-wrap gap-x-4 gap-y-1">
-            <span className="inline-flex items-center gap-1">
-              <GitBranch className="w-3 h-3" />
-              {info?.tracked_ref ?? "—"}
-            </span>
-            <span className="truncate max-w-[420px]">
-              {info?.remote_url ?? <em className="opacity-60">no source</em>}
-            </span>
+            {info?.mode === "folder" && info.source_path ? (
+              <span className="inline-flex items-center gap-1 truncate max-w-[480px]">
+                <FolderTree className="w-3 h-3" />
+                <span className="font-mono">{info.source_path}</span>
+              </span>
+            ) : info?.mode === "clone" && info.remote_url ? (
+              <>
+                <span className="inline-flex items-center gap-1">
+                  <GitBranch className="w-3 h-3" />
+                  {info.tracked_ref ?? "origin/main"}
+                </span>
+                <span className="truncate max-w-[420px]">{info.remote_url}</span>
+              </>
+            ) : (
+              <em className="opacity-60">no source</em>
+            )}
             <span>
               sha: <span className="font-mono">
                 {info?.current_sha ? info.current_sha.slice(0, 10) : "—"}
@@ -1623,6 +1642,19 @@ function ProjectEditor({
   onSaved: () => void;
   onDeleted: () => Promise<void> | void;
 }) {
+  // v5.2.0 — primary source mode is now "folder" (bind-mounted path).
+  // "url" is the legacy clone-mode preserved for backward compat. New
+  // projects default to folder; existing projects default to whatever
+  // they already are.
+  const initialMode: "folder" | "url" =
+    info?.mode === "clone" ? "url" :
+    info?.mode === "folder" ? "folder" :
+    // empty / new project — default to folder
+    "folder";
+  const [mode, setMode] = useState<"folder" | "url">(initialMode);
+  const [folderPath, setFolderPath] = useState(
+    info?.source_path ?? `/code/${name}`,
+  );
   const [remote, setRemote] = useState(info?.remote_url ?? "");
   const [ref, setRef] = useState(info?.tracked_ref ?? "origin/main");
   const [submitting, setSubmitting] = useState(false);
@@ -1636,9 +1668,15 @@ function ProjectEditor({
   const isProtected = name === "default";
 
   useEffect(() => {
+    setMode(
+      info?.mode === "clone" ? "url" :
+      info?.mode === "folder" ? "folder" :
+      "folder"
+    );
+    setFolderPath(info?.source_path ?? `/code/${name}`);
     setRemote(info?.remote_url ?? "");
     setRef(info?.tracked_ref ?? "origin/main");
-  }, [info?.remote_url, info?.tracked_ref]);
+  }, [info?.mode, info?.source_path, info?.remote_url, info?.tracked_ref, name]);
 
   // Lazy-load github auth status so the Browse button only renders when
   // a repo list call would actually succeed. Cheap — single GET.
@@ -1650,17 +1688,21 @@ function ProjectEditor({
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!remote.trim()) {
-      setError("git url is required (leave a project sourceless by closing this editor without saving)");
+    if (mode === "folder" && !folderPath.trim()) {
+      setError("Source path is required. Type the container-side path to the folder you bind-mounted into /code (see your docker-compose).");
+      return;
+    }
+    if (mode === "url" && !remote.trim()) {
+      setError("git URL is required.");
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
-      await api.post(`/api/understand/configure?project=${encodeURIComponent(name)}`, {
-        remote_url: remote.trim(),
-        tracked_ref: ref.trim() || "origin/main",
-      });
+      const body = mode === "folder"
+        ? { source_path: folderPath.trim() }
+        : { remote_url: remote.trim(), tracked_ref: ref.trim() || "origin/main" };
+      await api.post(`/api/understand/configure?project=${encodeURIComponent(name)}`, body);
       onSaved();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -1699,46 +1741,105 @@ function ProjectEditor({
   };
 
   const drifted = isDrifted(info);
-  const hasSource = Boolean(info?.remote_url);
+  const sourceConfigured = hasSource(info);
 
   return (
     <form
       onSubmit={save}
       className="mt-3 ml-7 rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] p-4 space-y-3"
     >
-      <div className="grid grid-cols-[1fr_180px] gap-3">
-        <label className="flex flex-col gap-1 min-w-0">
-          <span className="text-[10px] uppercase tracking-wider opacity-60 flex items-center gap-2">
-            Git URL <span className="opacity-50 normal-case">(optional)</span>
-            {ghAuthed && (
-              <button
-                type="button"
-                onClick={() => setPicking(true)}
-                className="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80 hover:opacity-100"
-              >
-                <Github className="w-3 h-3" /> Browse my repos
-              </button>
-            )}
-          </span>
-          <input
-            value={remote}
-            onChange={(e) => setRemote(e.target.value)}
-            placeholder="https://github.com/owner/repo"
-            className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[10px] uppercase tracking-wider opacity-60">
-            Tracked ref
-          </span>
-          <input
-            value={ref}
-            onChange={(e) => setRef(e.target.value)}
-            className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
-          />
-        </label>
+      {/* Source mode toggle — folder is the v5.2.0 primary path. */}
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80">
+        <span className="opacity-60 mr-2">Source</span>
+        <button
+          type="button"
+          onClick={() => setMode("folder")}
+          className={
+            "px-3 py-1 rounded-md border " +
+            (mode === "folder"
+              ? "bg-[color:var(--midground-base)]/15 border-[color:var(--midground-base)]/40"
+              : "border-[color:var(--midground-base)]/15 opacity-70 hover:opacity-100")
+          }
+        >
+          <FolderTree className="w-3 h-3 inline mr-1 -mt-0.5" />
+          Local folder
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("url")}
+          className={
+            "px-3 py-1 rounded-md border " +
+            (mode === "url"
+              ? "bg-[color:var(--midground-base)]/15 border-[color:var(--midground-base)]/40"
+              : "border-[color:var(--midground-base)]/15 opacity-70 hover:opacity-100")
+          }
+        >
+          <GitBranch className="w-3 h-3 inline mr-1 -mt-0.5" />
+          Git URL
+        </button>
+        <span className="opacity-50 normal-case ml-auto">
+          {mode === "folder"
+            ? "PRISM reads files where they already live on your host"
+            : "PRISM clones the repo server-side"}
+        </span>
       </div>
-      {info?.remote_url && info.remote_url !== remote.trim() && (
+
+      {mode === "folder" ? (
+        <div className="space-y-2">
+          <label className="flex flex-col gap-1 min-w-0">
+            <span className="text-[10px] uppercase tracking-wider opacity-60">
+              Container path
+            </span>
+            <input
+              value={folderPath}
+              onChange={(e) => setFolderPath(e.target.value)}
+              placeholder="/code/your-repo"
+              className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+            />
+          </label>
+          <p className="text-[11px] opacity-60 leading-snug">
+            This path lives <em>inside the container</em>. Bind-mount your
+            code dir into <span className="font-mono">/code</span> in
+            docker-compose (default is{" "}
+            <span className="font-mono">~/code</span> on the host), then
+            point at a subfolder here. No git URL, no auth, no clone.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-[1fr_180px] gap-3">
+          <label className="flex flex-col gap-1 min-w-0">
+            <span className="text-[10px] uppercase tracking-wider opacity-60 flex items-center gap-2">
+              Git URL
+              {ghAuthed && (
+                <button
+                  type="button"
+                  onClick={() => setPicking(true)}
+                  className="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80 hover:opacity-100"
+                >
+                  <Github className="w-3 h-3" /> Browse my repos
+                </button>
+              )}
+            </span>
+            <input
+              value={remote}
+              onChange={(e) => setRemote(e.target.value)}
+              placeholder="https://github.com/owner/repo"
+              className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wider opacity-60">
+              Tracked ref
+            </span>
+            <input
+              value={ref}
+              onChange={(e) => setRef(e.target.value)}
+              className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+            />
+          </label>
+        </div>
+      )}
+      {mode === "url" && info?.remote_url && info.remote_url !== remote.trim() && (
         <div className="text-[11px] opacity-60">
           Changing the URL is refused server-side once a clone exists — to
           re-point, delete the project's source/ dir first.
@@ -1758,7 +1859,7 @@ function ProjectEditor({
           Make active
         </button>
         <div className="flex items-center gap-2">
-          {hasSource && (
+          {sourceConfigured && (
             <button
               type="button"
               onClick={sync}
@@ -1778,7 +1879,7 @@ function ProjectEditor({
             className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40"
           >
             {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
-            {submitting ? "Saving…" : info?.remote_url ? "Update source" : "Set source"}
+            {submitting ? "Saving…" : sourceConfigured ? "Update source" : "Set source"}
           </button>
         </div>
       </div>

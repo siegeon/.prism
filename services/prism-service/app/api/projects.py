@@ -36,6 +36,13 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 class CreateBody(BaseModel):
     name: str
+    # v5.2.0 primary path: point PRISM at a bind-mounted folder on the
+    # host. This is the simple flow for developer audiences — clone the
+    # repo on your host with your existing git auth, mount it into the
+    # container, paste the path here.
+    source_path: Optional[str] = None
+    # v5.1 legacy: PRISM clones the repo server-side. Kept for backward
+    # compatibility but no longer the recommended path.
     remote_url: Optional[str] = None
     tracked_ref: str = "origin/main"
 
@@ -53,9 +60,31 @@ def create_project(body: CreateBody) -> dict:
     pdir = project_data_dir(name)  # seeds source/, graph/, state.json
     head_sha: Optional[str] = None
     bootstrap = "skipped"
-
+    mode = "empty"
+    source_path = (body.source_path or "").strip()
     remote_url = (body.remote_url or "").strip()
-    if remote_url:
+
+    if source_path and remote_url:
+        raise HTTPException(
+            400,
+            "pass either source_path (folder mode) or remote_url (clone "
+            "mode), not both",
+        )
+
+    if source_path:
+        # Folder mode — no clone. Just record the path and kick off
+        # bootstrap (ingest + analyzer-queue refresh) against the
+        # bind-mounted dir.
+        try:
+            resolved = ss.set_source_path(name, source_path)
+        except ss.SourceUnavailable as e:
+            raise HTTPException(400, str(e))
+        head_sha = resolved["head_sha"]
+        mode = "folder"
+        Thread(target=ss.bootstrap_after_clone, args=(name,), daemon=True).start()
+        bootstrap = "started"
+    elif remote_url:
+        # Clone mode — legacy v5.1 path.
         try:
             state = ss.ensure_cloned(name, remote_url, body.tracked_ref)
         except ss.SourceUnavailable as e:
@@ -64,21 +93,18 @@ def create_project(body: CreateBody) -> dict:
         s = ue._read_state(name)
         s["remote_url"] = remote_url
         s["tracked_ref"] = body.tracked_ref
+        s["mode"] = "clone"
         ue._write_state(name, s)
-        # Same bootstrap as /api/understand/configure: ingest source into
-        # Brain + Graph, then enqueue analyzer jobs. Runs in background so
-        # the API call returns fast; the auto-drainer picks up the queue.
-        Thread(
-            target=ss.bootstrap_after_clone,
-            args=(name,),
-            daemon=True,
-        ).start()
+        Thread(target=ss.bootstrap_after_clone, args=(name,), daemon=True).start()
         bootstrap = "started"
+        mode = "clone"
 
     return {
         "created": True,
         "name": name,
         "path": str(pdir),
+        "mode": mode,
+        "source_path": source_path or None,
         "remote_url": remote_url or None,
         "tracked_ref": body.tracked_ref if remote_url else None,
         "head_sha": head_sha,
