@@ -5,10 +5,18 @@ updates, install-manifest changes. Served alongside the install manifest
 so users can tell which version is live and which one installed their hook.
 """
 
-PRISM_VERSION = "5.2.4"
+PRISM_VERSION = "5.2.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.2.5: Fix the ACTUAL /graph palette. v5.2.4 patched "
+    "PrismLayerNode and PrismDomainNode (used by /understand LAYERS + "
+    "DOMAINS) but missed the Sigma viewer at /graph/viewer/<project> "
+    "which is what /graph embeds via iframe. COMMUNITY_COLORS in "
+    "graph_static.py was still 13 blue-grey hex codes. Replaced with "
+    "16 hue-distinct swatches (8 base hues + 8 lifted variants) "
+    "matching the React palette so /understand and /graph share the "
+    "same colors for the same meaning. "
     "v5.2.4: Layer + domain graph palette refresh. Both PrismLayerNode "
     "and PrismDomainNode used to keep all swatches inside the cool "
     "blue-grey family, so a 10-layer architecture graph read as one "

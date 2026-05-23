@@ -37,6 +37,9 @@ services:
       # v5.2.0 — host code dir mounted so projects can point at /code/<repo>
       # without server-side cloning.
       - ${PRISM_CODE_DIR:-${HOME:-${USERPROFILE}}/code}:/code:ro
+      # Dogfood: PRISM source itself, separate top-level path to avoid
+      # nested-mount issues. Used to verify graph rendering changes.
+      - "E:/.prism:/dogfood/.prism:ro"
     environment:
       - PRISM_DATA_DIR=/data
       - CLAUDE_CONFIG_DIR=/root/.claude

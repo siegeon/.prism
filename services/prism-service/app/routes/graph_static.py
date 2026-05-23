@@ -163,14 +163,34 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   const yieldToBrowser = () => new Promise(r => requestAnimationFrame(r));
   const PROJECT_ID = "__PROJECT_ID__";
   const statusEl = document.getElementById("status");
-  // Slate Blue palette: same dots used by the React LayersView /
-  // DomainsView (PrismLayerNode.tsx PALETTE + PrismDomainNode.tsx
-  // DOMAIN_PALETTE) so the viewer reads as part of the same app.
-  // All 13 swatches sit in the blue-grey hue family — variety comes
-  // from L+S rather than hue — against the #0d1726 background-base.
+  // Community palette: 16 hue-distinct swatches at muted saturation so
+  // clusters in dense graphs (often 100+ communities) actually read as
+  // different colors on the #0d1726 dark background. v5.2.5 refresh —
+  // the previous 13-color set was deliberately blue-grey only for
+  // theme harmony but in practice every cluster looked identical on a
+  // big graph. Hue progression matches PrismLayerNode's React palette
+  // so /understand LAYERS and /graph use the same colors for the same
+  // structural meaning.
   const COMMUNITY_COLORS = [
-    "#4a7c9b","#6e96be","#8ca5c8","#5faab4","#828ca5","#4b6e8c","#a0b4c8",
-    "#6487b4","#7da5c3","#557396","#739baa","#96aac3","#5f8caa",
+    "#4a7c9b", // steel blue
+    "#5faab4", // teal
+    "#78aa82", // sage
+    "#c8aa5a", // amber
+    "#dc876e", // coral
+    "#aa8cc8", // lavender
+    "#d282a5", // rose
+    "#a09687", // warm grey
+    // Tier 2 — each hue with lightness lifted ~10, so on graphs with
+    // more than 8 communities the palette wraps without immediately
+    // returning to the same shade.
+    "#6496b4", // steel blue lifted
+    "#73bec8", // teal lifted
+    "#8cbe96", // sage lifted
+    "#dcbe6e", // amber lifted
+    "#eb9b82", // coral lifted
+    "#bea0d7", // lavender lifted
+    "#e196b4", // rose lifted
+    "#b4aa9b", // warm grey lifted
   ];
   function colorFor(community) {
     if (community === undefined || community === null) return "#6b7280";
