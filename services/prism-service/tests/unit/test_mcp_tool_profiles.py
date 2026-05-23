@@ -13,7 +13,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 
 def _names(profile: str) -> set[str]:
-    from app.mcp.tools import tools_for_profile
+    from prism_service.mcp.tools import tools_for_profile
 
     return {tool.name for tool in tools_for_profile(profile)}
 
@@ -81,13 +81,13 @@ def test_automation_profile_exposes_hook_owned_tools_only():
 
 
 def test_all_profile_keeps_explicit_full_surface():
-    from app.mcp.tools import TOOLS
+    from prism_service.mcp.tools import TOOLS
 
     assert _names("all") == {tool.name for tool in TOOLS}
 
 
 def test_default_profile_uses_interactive_surface():
-    from app.mcp.request_context import PrismRequestContext
+    from prism_service.mcp.request_context import PrismRequestContext
 
     assert PrismRequestContext().tool_profile == "interactive"
     assert _names(None) == _names("interactive")
@@ -101,8 +101,8 @@ def test_unknown_profile_falls_back_to_interactive_tools():
 def test_default_profile_blocks_hidden_tool_calls():
     import asyncio
 
-    from app.mcp.request_context import PrismRequestContext, use_request_context
-    from app.mcp.server import call_tool
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.server import call_tool
 
     with use_request_context(PrismRequestContext(tool_profile="interactive")):
         result = asyncio.run(call_tool("brain_index_doc", {"path": "x", "content": "y"}))

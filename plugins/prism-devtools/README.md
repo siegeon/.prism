@@ -16,7 +16,7 @@ skills, prompts, templates, docs, and validation scripts.
   and validator agent specs.
 - **No plugin runtime:** `hooks/hooks.json` is intentionally a no-op. Active
   hooks are distributed by the MCP `prism_install` route from
-  `services/prism-service/app/assets/`.
+  `services/prism-service/prism_service/assets/`.
 
 ## Install
 

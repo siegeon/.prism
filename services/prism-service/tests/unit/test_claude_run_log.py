@@ -16,7 +16,7 @@ import pytest
 def isolated_runs_dir(tmp_path, monkeypatch):
     """Repoint claude_run_log at tmp_path before any module-level code
     has cached the old DATA_DIR-derived paths."""
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
     # The module captures _RUNS_DIR and _MANIFEST at import time from
     # DATA_DIR. Patch those module-level constants directly.
     runs_dir = tmp_path / "claude_runs"
@@ -35,7 +35,7 @@ def _write_stream(path: Path, blocks: list[str]) -> None:
 
 
 def test_record_and_list_round_trip(isolated_runs_dir):
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
 
     run_id, stream_path = crl.new_run()
     _write_stream(stream_path, ["Step 1", "Final answer"])
@@ -64,7 +64,7 @@ def test_record_and_list_round_trip(isolated_runs_dir):
 
 
 def test_list_recent_filters_by_project(isolated_runs_dir):
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
 
     for project in ("alpha", "beta", "alpha"):
         run_id, stream_path = crl.new_run()
@@ -82,7 +82,7 @@ def test_list_recent_filters_by_project(isolated_runs_dir):
 
 
 def test_get_run_returns_full_entry(isolated_runs_dir):
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
 
     run_id, stream_path = crl.new_run()
     _write_stream(stream_path, ["only block"])
@@ -103,7 +103,7 @@ def test_get_run_returns_full_entry(isolated_runs_dir):
 
 
 def test_stream_path_for_rejects_path_traversal(isolated_runs_dir):
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
 
     assert crl.stream_path_for("") is None
     assert crl.stream_path_for("../etc/passwd") is None
@@ -112,7 +112,7 @@ def test_stream_path_for_rejects_path_traversal(isolated_runs_dir):
 
 
 def test_trim_to_limit_drops_oldest_and_deletes_streams(isolated_runs_dir, monkeypatch):
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
     monkeypatch.setattr(crl, "RUN_LOG_LIMIT", 2)
 
     paths = []
@@ -138,7 +138,7 @@ def test_trim_to_limit_drops_oldest_and_deletes_streams(isolated_runs_dir, monke
 
 
 def test_truncates_long_final_text(isolated_runs_dir):
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
 
     run_id, stream_path = crl.new_run()
     huge = "x" * 8192
@@ -159,7 +159,7 @@ def test_truncates_long_final_text(isolated_runs_dir):
 
 def test_record_run_failure_does_not_raise(isolated_runs_dir, monkeypatch):
     """A bad manifest path must not break the analyzer pipeline."""
-    import app.services.claude_run_log as crl
+    import prism_service.services.claude_run_log as crl
     # Make _MANIFEST point at something that can't be opened in append
     # mode (a directory) — record_run should swallow the OSError.
     bad = isolated_runs_dir / "is_a_dir"

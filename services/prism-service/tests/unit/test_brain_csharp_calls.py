@@ -49,7 +49,7 @@ def _ingest_fixture(brain) -> None:
 @pytest.fixture
 def brain(tmp_path):
     """Per-test Brain instance backed by tmp_path SQLite files."""
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
     b = Brain(
         brain_db=str(tmp_path / "brain.db"),
         graph_db=str(tmp_path / "graph.db"),

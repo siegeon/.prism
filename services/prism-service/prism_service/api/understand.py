@@ -1,0 +1,159 @@
+"""Understand-Anything API — thin REST surface over the v5.1 engine.
+
+Mirrors the understand_* MCP tools so the React SPA on :7778 can drive
+the same flow without speaking JSON-RPC. Lives at /api/understand.
+"""
+
+from __future__ import annotations
+
+from threading import Thread
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+
+from prism_service.engines import understand_engine as ue
+from prism_service.services import source_service as ss
+from prism_service.services import understand_artifact_store as store
+
+router = APIRouter()
+
+
+def _engine(project: str) -> ue.UnderstandEngine:
+    return ue.UnderstandEngine(project)
+
+
+@router.get("")
+def status(project: str = Query("default")) -> dict:
+    return _engine(project).status()
+
+
+class ConfigureBody(BaseModel):
+    # v5.2.0 primary path — point PRISM at a bind-mounted folder
+    source_path: Optional[str] = None
+    # v5.1 legacy — let PRISM clone the repo server-side
+    remote_url: Optional[str] = None
+    tracked_ref: str = "origin/main"
+
+
+@router.post("/configure")
+def configure(body: ConfigureBody, project: str = Query("default")) -> dict:
+    source_path = (body.source_path or "").strip()
+    remote_url = (body.remote_url or "").strip()
+    if not source_path and not remote_url:
+        raise HTTPException(
+            400, "either source_path (folder mode) or remote_url (clone "
+            "mode) is required",
+        )
+    if source_path and remote_url:
+        raise HTTPException(
+            400, "pass either source_path or remote_url, not both",
+        )
+
+    if source_path:
+        # Folder mode — record the bind-mounted path, no clone.
+        try:
+            resolved = ss.set_source_path(project, source_path)
+        except ss.SourceUnavailable as e:
+            raise HTTPException(400, str(e))
+        Thread(
+            target=ss.bootstrap_after_clone,
+            args=(project,),
+            daemon=True,
+        ).start()
+        return {
+            "configured": True,
+            "mode": "folder",
+            "source_path": resolved["source_path"],
+            "head_sha": resolved["head_sha"],
+            "ingest": "started",
+            "bootstrap": "started",
+        }
+
+    # Clone mode — legacy v5.1 path.
+    try:
+        state = ss.ensure_cloned(project, remote_url, body.tracked_ref)
+    except ss.SourceUnavailable as e:
+        raise HTTPException(400, str(e))
+    s = ue._read_state(project)
+    s["remote_url"] = remote_url
+    s["tracked_ref"] = body.tracked_ref
+    s["mode"] = "clone"
+    ue._write_state(project, s)
+    Thread(target=ss.bootstrap_after_clone, args=(project,), daemon=True).start()
+    return {
+        "configured": True,
+        "mode": "clone",
+        "remote_url": remote_url,
+        "tracked_ref": body.tracked_ref,
+        "head_sha": state.head_sha,
+        "advanced": state.advanced,
+        "ingest": "started",
+        "bootstrap": "started",
+    }
+
+
+class RefreshBody(BaseModel):
+    analyzers: Optional[list[str]] = None
+
+
+@router.post("/refresh")
+def refresh(body: RefreshBody | None = None, project: str = Query("default")) -> dict:
+    analyzers = body.analyzers if body else None
+    result = _engine(project).refresh(analyzers=analyzers)
+    return {
+        "status": result.status,
+        "target_sha": result.target_sha,
+        "queued": result.queued,
+        "cached_hits": result.cached_hits,
+        "job_ids": result.job_ids,
+        "budget_used": result.budget_used,
+        "budget_limit": result.budget_limit,
+    }
+
+
+_ARTIFACT_MAP = {
+    "tour": "tour_builder",
+    "layers": "architecture_analyzer",
+    "domains": "domain_analyzer",
+    "onboarding": "onboarding_writer",
+}
+
+
+def _latest_sha(project: str) -> Optional[str]:
+    state = ue._read_state(project)
+    sha = state.get("last_analyzed_sha")
+    if sha:
+        return sha
+    cached = store.list_cached_shas(project)
+    return cached[-1] if cached else None
+
+
+def _get_artifact(kind: str, project: str, sha: Optional[str]) -> dict:
+    analyzer = _ARTIFACT_MAP[kind]
+    sha = sha or _latest_sha(project)
+    if not sha:
+        return {"data": None, "sha": None,
+                "miss_reason": "no cached SHAs for this project"}
+    payload = store.get(project, sha, analyzer)
+    return {"data": payload, "sha": sha}
+
+
+@router.get("/tour")
+def get_tour(project: str = Query("default"), sha: Optional[str] = None) -> dict:
+    return _get_artifact("tour", project, sha)
+
+
+@router.get("/layers")
+def get_layers(project: str = Query("default"), sha: Optional[str] = None) -> dict:
+    return _get_artifact("layers", project, sha)
+
+
+@router.get("/domains")
+def get_domains(project: str = Query("default"), sha: Optional[str] = None) -> dict:
+    return _get_artifact("domains", project, sha)
+
+
+@router.get("/onboarding")
+def get_onboarding(project: str = Query("default"), sha: Optional[str] = None) -> dict:
+    return _get_artifact("onboarding", project, sha)

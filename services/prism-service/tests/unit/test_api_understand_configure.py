@@ -13,9 +13,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app import config
-from app.api import understand as understand_api
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.api import understand as understand_api
+from prism_service.services import source_service as ss
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -58,7 +58,7 @@ def test_configure_launches_bootstrap_thread(isolated_projects_root, bare_repo):
                 targets.append((target, args))
         return T()
 
-    with patch("app.api.understand.Thread", side_effect=fake_thread):
+    with patch("prism_service.api.understand.Thread", side_effect=fake_thread):
         body = understand_api.ConfigureBody(
             remote_url=bare_repo, tracked_ref="origin/main",
         )

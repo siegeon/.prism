@@ -18,11 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from app import config
-from app.engines import understand_engine as ue
-from app.mcp import understand_tools as ut
-from app.services import source_service as ss
-from app.services import understand_artifact_store as store
+from prism_service import config
+from prism_service.engines import understand_engine as ue
+from prism_service.mcp import understand_tools as ut
+from prism_service.services import source_service as ss
+from prism_service.services import understand_artifact_store as store
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -74,7 +74,7 @@ def test_all_tools_registered():
 
 def test_interactive_profile_includes_understand_tools():
     """Tools.py splices UNDERSTAND_TOOL_NAMES into INTERACTIVE_TOOL_NAMES."""
-    from app.mcp import tools as t
+    from prism_service.mcp import tools as t
     assert ut.UNDERSTAND_TOOL_NAMES <= t.INTERACTIVE_TOOL_NAMES
 
 

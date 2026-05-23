@@ -26,8 +26,8 @@ def _pack(vec: list[float]) -> bytes:
 
 
 def _mk(tmp_path):
-    from app.engines.brain_engine import Brain
-    from app.services.task_service import TaskService
+    from prism_service.engines.brain_engine import Brain
+    from prism_service.services.task_service import TaskService
 
     tasks_db = str(tmp_path / "tasks.db")
     brain = Brain(
@@ -72,7 +72,7 @@ def _seed_variant_outcome(brain, *, task_id, prompt_id, persona, step_id,
 
 def test_similarity_top_k_returns_sorted(tmp_path):
     """Internal helper returns ids sorted by cosine desc, limited to k."""
-    from app.engines.brain_engine import _similar_task_ids
+    from prism_service.engines.brain_engine import _similar_task_ids
 
     import sqlite3
     conn = sqlite3.connect(":memory:")

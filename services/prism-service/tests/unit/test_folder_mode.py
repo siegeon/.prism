@@ -12,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from app import config
-from app.api import projects as projects_api
-from app.api import understand as understand_api
-from app.engines import understand_engine as ue
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.api import projects as projects_api
+from prism_service.api import understand as understand_api
+from prism_service.engines import understand_engine as ue
+from prism_service.services import source_service as ss
 
 
 @pytest.fixture

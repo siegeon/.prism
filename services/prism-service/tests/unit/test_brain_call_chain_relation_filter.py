@@ -67,7 +67,7 @@ def _seed_graph(graph_db: str) -> None:
 def brain(tmp_path):
     """Brain with a seeded graph but no docs/embeddings — we only
     exercise the call_chain SQL path here."""
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
     b = Brain(
         brain_db=str(tmp_path / "brain.db"),
         graph_db=str(tmp_path / "graph.db"),

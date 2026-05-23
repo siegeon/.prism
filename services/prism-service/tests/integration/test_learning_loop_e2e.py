@@ -69,9 +69,9 @@ def _git_commit(repo: Path, files: dict[str, str], msg: str, when: datetime) -> 
 
 def _mk_project(tmp_path):
     """Stand up brain+graph+scores+tasks dbs; return (brain, tasks, jan, scores_db)."""
-    from app.engines.brain_engine import Brain
-    from app.services.task_service import TaskService
-    from app.services.janitor_service import JanitorService
+    from prism_service.engines.brain_engine import Brain
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.janitor_service import JanitorService
 
     brain_db = str(tmp_path / "brain.db")
     graph_db = str(tmp_path / "graph.db")
@@ -90,7 +90,7 @@ def _mk_project(tmp_path):
 
 
 def test_task_merged_scored_reflected_e2e(tmp_path):
-    from app.services.scoring_service import score_merged_tasks
+    from prism_service.services.scoring_service import score_merged_tasks
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -276,7 +276,7 @@ def test_audit_trail_preserved_across_invalidation(tmp_path):
 
 def test_disable_consolidation_still_runs_quantitative(tmp_path, monkeypatch):
     """PRISM_CONSOLIDATION_ENABLED=false must not affect quality timer."""
-    from app.services.scoring_service import score_merged_tasks
+    from prism_service.services.scoring_service import score_merged_tasks
     monkeypatch.setenv("PRISM_CONSOLIDATION_ENABLED", "false")
 
     repo = tmp_path / "repo"

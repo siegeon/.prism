@@ -80,7 +80,7 @@ def repo(tmp_path) -> _GitRepo:
 
 def test_revert_detection(repo):
     """Revert committed within 14d of merge flips the flag."""
-    from app.services.scoring_service import detect_revert
+    from prism_service.services.scoring_service import detect_revert
 
     merged_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
     merge_sha = repo.commit(
@@ -94,7 +94,7 @@ def test_revert_detection(repo):
 
 def test_revert_outside_window_ignored(repo):
     """A revert at t=15d is past the 14-day window — flag stays False."""
-    from app.services.scoring_service import detect_revert
+    from prism_service.services.scoring_service import detect_revert
 
     merged_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
     merge_sha = repo.commit(
@@ -113,7 +113,7 @@ def test_revert_outside_window_ignored(repo):
 
 def test_churn_detection(repo):
     """Files touched by the merge get re-edited within 14d → churn>0."""
-    from app.services.scoring_service import detect_churn
+    from prism_service.services.scoring_service import detect_churn
 
     merged_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
     merge_sha = repo.commit(
@@ -132,7 +132,7 @@ def test_churn_detection(repo):
 
 def test_churn_outside_window_ignored(repo):
     """Re-edit at day 15 — outside window — doesn't count."""
-    from app.services.scoring_service import detect_churn
+    from prism_service.services.scoring_service import detect_churn
 
     merged_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
     merge_sha = repo.commit(
@@ -154,8 +154,8 @@ def test_churn_outside_window_ignored(repo):
 def test_followup_task_detection(tmp_path):
     """A task created within 14d of the merge that names one of the
     merged files counts as a follow-up fix."""
-    from app.services.scoring_service import detect_followup_fixes
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import detect_followup_fixes
+    from prism_service.services.task_service import TaskService
 
     svc = TaskService(str(tmp_path / "tasks.db"))
     merged_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
@@ -181,8 +181,8 @@ def test_followup_task_detection(tmp_path):
 
 def test_followup_requires_file_overlap(tmp_path):
     """A task that doesn't mention any merged file is NOT a follow-up."""
-    from app.services.scoring_service import detect_followup_fixes
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import detect_followup_fixes
+    from prism_service.services.task_service import TaskService
 
     svc = TaskService(str(tmp_path / "tasks.db"))
     merged_at = datetime(2026, 4, 1, tzinfo=timezone.utc)
@@ -210,7 +210,7 @@ def test_followup_requires_file_overlap(tmp_path):
 
 def _mk_brain_scores(tmp_path):
     """Init Brain so scores.db has the LL-01 schema."""
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
 
     Brain(
         brain_db=str(tmp_path / "brain.db"),
@@ -221,8 +221,8 @@ def _mk_brain_scores(tmp_path):
 
 def test_end_to_end_scoring(tmp_path, repo):
     """Seed a merged task, run the scorer once, verify rollup populated."""
-    from app.services.scoring_service import score_merged_tasks
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import score_merged_tasks
+    from prism_service.services.task_service import TaskService
 
     _mk_brain_scores(tmp_path)
     tasks_svc = TaskService(str(tmp_path / "tasks.db"))
@@ -263,8 +263,8 @@ def test_end_to_end_scoring(tmp_path, repo):
 
 def test_timer_idempotent(tmp_path, repo):
     """Second pass skips tasks already in rollup."""
-    from app.services.scoring_service import score_merged_tasks
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import score_merged_tasks
+    from prism_service.services.task_service import TaskService
 
     _mk_brain_scores(tmp_path)
     tasks_svc = TaskService(str(tmp_path / "tasks.db"))
@@ -301,8 +301,8 @@ def test_timer_idempotent(tmp_path, repo):
 
 def test_timer_skips_unmerged_tasks(tmp_path, repo):
     """Tasks without a merge_sha aren't scored."""
-    from app.services.scoring_service import score_merged_tasks
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import score_merged_tasks
+    from prism_service.services.task_service import TaskService
 
     _mk_brain_scores(tmp_path)
     tasks_svc = TaskService(str(tmp_path / "tasks.db"))
@@ -320,8 +320,8 @@ def test_timer_skips_unmerged_tasks(tmp_path, repo):
 
 def test_timer_handles_missing_git_repo(tmp_path):
     """A configured repo path that doesn't exist doesn't crash the timer."""
-    from app.services.scoring_service import score_merged_tasks
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import score_merged_tasks
+    from prism_service.services.task_service import TaskService
 
     _mk_brain_scores(tmp_path)
     tasks_svc = TaskService(str(tmp_path / "tasks.db"))

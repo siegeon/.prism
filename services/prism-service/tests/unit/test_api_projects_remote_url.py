@@ -16,9 +16,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app import config
-from app.api import projects as projects_api
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.api import projects as projects_api
+from prism_service.services import source_service as ss
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -75,7 +75,7 @@ def test_create_project_with_remote_url_launches_bootstrap_thread(
                 launched.append(args[0])
         return T()
 
-    with patch("app.api.projects.Thread", side_effect=fake_thread):
+    with patch("prism_service.api.projects.Thread", side_effect=fake_thread):
         body = projects_api.CreateBody(name="with-source", remote_url=bare_repo)
         out = projects_api.create_project(body)
 

@@ -29,7 +29,7 @@ def test_cuped_residualization_against_known_covariate():
     (global), theta=1.0 →  Y_cuped = Y - 1.0 * (X - mean(X))
                                    = 0.9 - (0.80 - 0.55) = 0.65.
     """
-    from app.services.scoring_service import cuped_residualize
+    from prism_service.services.scoring_service import cuped_residualize
     adjusted = cuped_residualize(
         quality_score=0.9,
         operator_baseline=0.80,
@@ -42,7 +42,7 @@ def test_cuped_residualization_against_known_covariate():
 def test_cuped_zero_samples_falls_back_to_raw_score():
     """When the operator has 0 prior tasks, we have no covariate — CUPED
     degrades to the identity: Y_cuped = Y."""
-    from app.services.scoring_service import cuped_residualize
+    from prism_service.services.scoring_service import cuped_residualize
     # Operator baseline == global baseline → (X - mean(X)) == 0 → no
     # adjustment. This is the defensive path: when we don't know an
     # operator's history, assume they're average.
@@ -60,7 +60,7 @@ def test_cuped_isolates_operator_effect():
     score on the same variant should produce residuals that are
     comparable (close to each other) — otherwise the variant would be
     falsely credited/penalized for operator skill."""
-    from app.services.scoring_service import cuped_residualize
+    from prism_service.services.scoring_service import cuped_residualize
 
     global_baseline = 0.60
     raw = 0.85
@@ -104,8 +104,8 @@ def test_cuped_isolates_operator_effect():
 
 def test_compute_operator_baseline_returns_merge_rate_and_sample_n(tmp_path):
     """Per-operator 90-day rolling merge rate."""
-    from app.services.scoring_service import compute_operator_baseline
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import compute_operator_baseline
+    from prism_service.services.task_service import TaskService
 
     svc = TaskService(str(tmp_path / "tasks.db"))
     now = datetime(2026, 4, 23, tzinfo=timezone.utc)
@@ -129,8 +129,8 @@ def test_compute_operator_baseline_returns_merge_rate_and_sample_n(tmp_path):
 
 def test_compute_operator_baseline_zero_samples(tmp_path):
     """Unknown operator returns (0.0, 0)."""
-    from app.services.scoring_service import compute_operator_baseline
-    from app.services.task_service import TaskService
+    from prism_service.services.scoring_service import compute_operator_baseline
+    from prism_service.services.task_service import TaskService
 
     svc = TaskService(str(tmp_path / "tasks.db"))
     merge_rate, n = compute_operator_baseline(svc, "unknown", window_days=90)

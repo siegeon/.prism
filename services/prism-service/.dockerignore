@@ -1,7 +1,10 @@
-app/web/node_modules
-app/web/.vite
-app/web_dist
+prism_service/web/node_modules
+prism_service/web/.vite
+prism_service/web_dist
 data
+build
+dist
+*.egg-info
 **/__pycache__
 **/*.pyc
 .git

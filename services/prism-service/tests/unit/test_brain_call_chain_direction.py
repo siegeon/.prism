@@ -56,7 +56,7 @@ def _seed(graph_db: str) -> dict:
 
 @pytest.fixture
 def brain(tmp_path):
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
     b = Brain(
         brain_db=str(tmp_path / "brain.db"),
         graph_db=str(tmp_path / "graph.db"),
