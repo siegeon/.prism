@@ -131,7 +131,7 @@ export default function UnderstandPage() {
           <p className="text-sm opacity-60 mt-1">
             Generate tour, architecture, domain glossary, and onboarding doc
             from this project's source. Point a project at a local folder
-            (bind-mounted) or a git remote in <span className="font-medium">Settings → Projects</span>.
+            or a git remote in <span className="font-medium">Settings → Projects</span>.
           </p>
         </div>
         <button
@@ -162,7 +162,7 @@ export default function UnderstandPage() {
           <Kpi
             label="Source folder"
             value={status?.source_path ?? "—"}
-            hint="bind-mounted from host"
+            hint="read where it lives"
           />
         ) : (
           <Kpi label="Tracked ref" value={status?.tracked_ref ?? "—"} />
@@ -182,19 +182,22 @@ export default function UnderstandPage() {
           <SectionLabel>No source configured for "{project}"</SectionLabel>
           <p className="text-sm opacity-70 mt-2">
             Pick a source for this project in <span className="font-medium">Settings → Projects</span>{" "}
-            so PRISM can scan the code. v5.2.0 supports two shapes:
+            so PRISM can scan the code. Two shapes:
           </p>
           <ul className="text-sm opacity-70 mt-2 space-y-1 list-disc pl-5">
             <li className="leading-relaxed">
               <FolderTree className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-              <span className="font-medium">Local folder</span> — point at a path
-              under <span className="font-mono">/code</span> (or another bind-
-              mounted dir). Reads files where they live on your host, no clone.
+              <span className="font-medium">Local folder</span> — point at any
+              absolute path on this machine (native install) or a bind-mounted
+              path under <span className="font-mono">/code</span> (docker
+              install). Reads files where they live, no clone.
             </li>
             <li className="leading-relaxed">
               <GitBranch className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
-              <span className="font-medium">Git URL</span> — let PRISM clone the
-              repo server-side. Needs a GitHub connection for private repos.
+              <span className="font-medium">Git URL</span> — PRISM clones the
+              repo. Falls through to your host's git auth (gh CLI, ssh keys,
+              credential manager) on native; needs a GitHub connection for
+              private repos in docker.
             </li>
           </ul>
           <div className="mt-4">

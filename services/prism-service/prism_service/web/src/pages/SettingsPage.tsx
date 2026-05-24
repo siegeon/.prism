@@ -18,7 +18,7 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
   connections: {
     title: "Claude auth",
-    description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. The container reads tokens from the bind-mounted ~/.claude, so any `claude login` you've already done on your host is reused — no second login here.",
+    description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. PRISM reads tokens from your host's ~/.claude directory (native install) or the bind-mounted /root/.claude (docker install), so any `claude login` you've already done is reused — no second login here.",
   },
   jobs: {
     title: "Jobs",
@@ -1124,6 +1124,8 @@ function jobTimestamp(j: Job): string {
 type ServiceInfo = {
   version: string;
   notes: string;
+  runtime?: "docker" | "native";
+  data_dir?: string;
   container: string;
   claude_config_dir: string;
   claude_authenticated: boolean;
@@ -1636,7 +1638,7 @@ function ProjectEditor({
   onSaved: () => void;
   onDeleted: () => Promise<void> | void;
 }) {
-  // v5.2.0 — primary source mode is now "folder" (bind-mounted path).
+  // v5.2.0 — primary source mode is now "folder" (host path).
   // "url" is the legacy clone-mode preserved for backward compat. New
   // projects default to folder; existing projects default to whatever
   // they already are.
@@ -1646,8 +1648,12 @@ function ProjectEditor({
     // empty / new project — default to folder
     "folder";
   const [mode, setMode] = useState<"folder" | "url">(initialMode);
+  const [runtime, setRuntime] = useState<"docker" | "native">("native");
+  // v5.3.0 — default folder placeholder is runtime-aware: `/code/<name>`
+  // for docker (the conventional bind-mount), empty for native (user
+  // pastes any absolute host path).
   const [folderPath, setFolderPath] = useState(
-    info?.source_path ?? `/code/${name}`,
+    info?.source_path ?? "",
   );
   const [remote, setRemote] = useState(info?.remote_url ?? "");
   const [ref, setRef] = useState(info?.tracked_ref ?? "origin/main");
@@ -1667,10 +1673,10 @@ function ProjectEditor({
       info?.mode === "folder" ? "folder" :
       "folder"
     );
-    setFolderPath(info?.source_path ?? `/code/${name}`);
+    setFolderPath(info?.source_path ?? (runtime === "docker" ? `/code/${name}` : ""));
     setRemote(info?.remote_url ?? "");
     setRef(info?.tracked_ref ?? "origin/main");
-  }, [info?.mode, info?.source_path, info?.remote_url, info?.tracked_ref, name]);
+  }, [info?.mode, info?.source_path, info?.remote_url, info?.tracked_ref, name, runtime]);
 
   // Lazy-load github auth status so the Browse button only renders when
   // a repo list call would actually succeed. Cheap — single GET.
@@ -1680,10 +1686,22 @@ function ProjectEditor({
       .catch(() => setGhAuthed(false));
   }, []);
 
+  // Resolve runtime once so the folder-mode hints + placeholder match
+  // whether PRISM is running in docker or natively on the host.
+  useEffect(() => {
+    api.get<ServiceInfo>("/api/service-info")
+      .then((s) => setRuntime(s.runtime ?? "native"))
+      .catch(() => setRuntime("native"));
+  }, []);
+
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (mode === "folder" && !folderPath.trim()) {
-      setError("Source path is required. Type the container-side path to the folder you bind-mounted into /code (see your docker-compose).");
+      setError(
+        runtime === "docker"
+          ? "Source path is required. Type the container-side path to the folder you bind-mounted into /code (see your docker-compose)."
+          : "Source path is required. Paste the absolute path to your repo on this machine (e.g. C:\\Users\\you\\code\\my-repo or /Users/you/code/my-repo).",
+      );
       return;
     }
     if (mode === "url" && !remote.trim()) {
@@ -1782,21 +1800,38 @@ function ProjectEditor({
         <div className="space-y-2">
           <label className="flex flex-col gap-1 min-w-0">
             <span className="text-[10px] uppercase tracking-wider opacity-60">
-              Container path
+              {runtime === "docker" ? "Container path" : "Folder path"}
             </span>
             <input
               value={folderPath}
               onChange={(e) => setFolderPath(e.target.value)}
-              placeholder="/code/your-repo"
+              placeholder={
+                runtime === "docker"
+                  ? "/code/your-repo"
+                  : "C:\\Users\\you\\code\\my-repo  •  /Users/you/code/my-repo"
+              }
               className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
             />
           </label>
           <p className="text-[11px] opacity-60 leading-snug">
-            This path lives <em>inside the container</em>. Bind-mount your
-            code dir into <span className="font-mono">/code</span> in
-            docker-compose (default is{" "}
-            <span className="font-mono">~/code</span> on the host), then
-            point at a subfolder here. No git URL, no auth, no clone.
+            {runtime === "docker" ? (
+              <>
+                This path lives <em>inside the container</em>. Bind-mount
+                your code dir into{" "}
+                <span className="font-mono">/code</span> in docker-compose
+                (default is <span className="font-mono">~/code</span> on
+                the host), then point at a subfolder here. No git URL, no
+                auth, no clone.
+              </>
+            ) : (
+              <>
+                Absolute path to your repo on this machine. PRISM reads
+                files where they already live — no clone, no auth needed.
+                Works with anything <span className="font-mono">git</span>{" "}
+                can read (commits, branches, drift detection) and anything
+                it can't (loose folders, notes dirs).
+              </>
+            )}
           </p>
         </div>
       ) : (

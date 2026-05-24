@@ -157,8 +157,10 @@ def set_source_path(project: str, source_path: str) -> dict:
     p = Path(sp).resolve()
     if not p.is_dir():
         raise SourceUnavailable(
-            f"source_path {sp!r} does not exist or is not a directory inside "
-            "the container — check your docker-compose bind-mount"
+            f"source_path {sp!r} does not exist or is not a directory. "
+            "Pass an absolute path that PRISM can read on this machine "
+            "(native install) or inside the container (docker install — "
+            "bind-mount the host path first via docker-compose `-v`)."
         )
     state = ue._read_state(project)
     state["source_path"] = str(p)

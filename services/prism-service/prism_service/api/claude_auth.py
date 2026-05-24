@@ -24,11 +24,18 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from prism_service.config import DATA_DIR
+from prism_service.data_dir import resolve_claude_home
+
 router = APIRouter()
 
 
 def _config_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR", "/root/.claude"))
+    return resolve_claude_home()
+
+
+def _is_docker() -> bool:
+    return str(DATA_DIR) == "/data" and Path("/etc/hostname").is_file()
 
 
 def _container_name() -> str:
@@ -55,16 +62,21 @@ def status() -> dict:
     cred = cfg / ".credentials.json"
     authenticated = cred.is_file()
     name = _container_name()
+    docker = _is_docker()
     return {
         "authenticated": authenticated,
         "config_dir": str(cfg),
         "credentials_path": str(cred),
         "container": name,
-        "login_command": f"docker exec -it {name} claude /login",
+        "runtime": "docker" if docker else "native",
+        "login_command": (
+            f"docker exec -it {name} claude /login" if docker
+            else "claude /login"
+        ),
         "instructions": (
             "Run the command above on your host to complete a one-time OAuth "
-            "flow. Tokens land in CLAUDE_CONFIG_DIR (volume-backed) and the "
-            "claude CLI auto-refreshes them - you should never need to log in "
-            "again unless you revoke the session."
+            "flow. Tokens land in CLAUDE_CONFIG_DIR (volume-backed in docker, "
+            "~/.claude on native) and the claude CLI auto-refreshes them - you "
+            "should never need to log in again unless you revoke the session."
         ),
     }

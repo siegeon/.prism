@@ -15,13 +15,25 @@ from fastapi import APIRouter
 
 from prism_service.__version__ import PRISM_VERSION, PRISM_VERSION_NOTES
 from prism_service.config import (
+    DATA_DIR,
     DRIFT_INTERVAL_SECONDS,
     GOVERNANCE_INTERVAL_SECONDS,
     QUALITY_INTERVAL_SECONDS,
 )
+from prism_service.data_dir import resolve_claude_home
 from prism_service.services import github_auth as gh
 
 router = APIRouter()
+
+
+def _runtime() -> str:
+    """`docker` when running inside the container image (signaled by /data
+    being our data dir + /etc/hostname existing as a non-trivial file);
+    `native` otherwise. Used by the SPA to pick the right path hints in
+    Settings → Projects."""
+    if str(DATA_DIR) == "/data" and Path("/etc/hostname").is_file():
+        return "docker"
+    return "native"
 
 
 def _container_name() -> str:
@@ -40,7 +52,7 @@ def _drain_interval() -> int:
 
 
 def _claude_config_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR", "/root/.claude"))
+    return resolve_claude_home()
 
 
 @router.get("")
@@ -49,6 +61,8 @@ def service_info() -> dict:
     return {
         "version": PRISM_VERSION,
         "notes": PRISM_VERSION_NOTES,
+        "runtime": _runtime(),
+        "data_dir": str(DATA_DIR),
         "container": _container_name(),
         "claude_config_dir": str(cfg),
         "claude_authenticated": (cfg / ".credentials.json").is_file(),
