@@ -51,6 +51,22 @@ def _strip_code_fence(text: str, kind: str) -> str:
     return m.group(1).strip() if m else text
 
 
+def _strip_preamble_to_heading(text: str) -> str:
+    """Trim any conversational preamble before the first markdown heading.
+
+    Claude (any model) often opens with a 'I have what I need — emitting
+    the doc now' sentence before producing the real document. That
+    preamble breaks the `_classify` startswith('#') check and renders
+    badly in the OnboardingView. This finds the first `# ` line and
+    returns from there. If no heading exists, the original text is
+    returned unchanged so the classifier can mark it failed.
+    """
+    for i, line in enumerate(text.splitlines()):
+        if line.lstrip().startswith("# "):
+            return "\n".join(text.splitlines()[i:]).strip()
+    return text
+
+
 def _extract_payload(res: claude_cli.ClaudeCliResult, analyzer: str) -> Any:
     """Pull the analyzer's JSON or markdown payload out of stream-json events."""
     text_blocks: list[str] = []
@@ -63,7 +79,9 @@ def _extract_payload(res: claude_cli.ClaudeCliResult, analyzer: str) -> Any:
                 text_blocks.append(block.get("text", ""))
     final = (text_blocks[-1] if text_blocks else "").strip()
     if analyzer == "onboarding_writer":
-        return _strip_code_fence(final, "markdown")
+        # Strip the ```markdown ... ``` fence first (if Claude wrapped it),
+        # then drop any preamble before the first H1.
+        return _strip_preamble_to_heading(_strip_code_fence(final, "markdown"))
     cleaned = _strip_code_fence(final, "json")
     try:
         return json.loads(cleaned)

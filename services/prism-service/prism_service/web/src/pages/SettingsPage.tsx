@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
+import type { ScanJob } from "@/lib/scan-activity";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
 
 /** True when the SPA is loaded inside a Tauri WebView (so the dialog
@@ -1610,6 +1611,140 @@ function ProjectCard({
 }
 
 
+/** Live scan-progress indicator. Polls /api/jobs and shows analyzers
+ * enqueued for this project since `sinceTs`. While work is active,
+ * renders a progress bar + the currently-running analyzer names; when
+ * the queue drains, switches to a summary line. Caller drives lifecycle
+ * via `sinceTs` (null = hidden) + `onDismiss`. */
+function ScanProgress({
+  project, sinceTs, onDismiss,
+}: { project: string; sinceTs: number; onDismiss: () => void }) {
+  const [jobs, setJobs] = useState<ScanJob[]>([]);
+
+  useEffect(() => {
+    let cancel = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const r = await api.get<{ jobs: ScanJob[] }>("/api/jobs?limit=200");
+        if (cancel) return;
+        const scoped = r.jobs.filter(
+          (j) => j.project === project && j.enqueued_at >= sinceTs,
+        );
+        setJobs(scoped);
+        const stillActive = scoped.some(
+          (j) => j.state === "pending" || j.state === "in_progress",
+        );
+        timer = setTimeout(poll, stillActive ? 2000 : 10000);
+      } catch {
+        if (cancel) return;
+        timer = setTimeout(poll, 10000);
+      }
+    };
+    poll();
+    return () => { cancel = true; if (timer !== null) clearTimeout(timer); };
+  }, [project, sinceTs]);
+
+  const counts = jobs.reduce(
+    (acc, j) => { acc[j.state as keyof typeof acc] = (acc[j.state as keyof typeof acc] ?? 0) + 1; acc.total++; return acc; },
+    { total: 0, pending: 0, in_progress: 0, completed: 0, failed: 0, cancelled: 0 } as Record<string, number>,
+  );
+  const done = counts.completed + counts.failed + counts.cancelled;
+  const active = counts.pending + counts.in_progress;
+  const total = counts.total;
+  const allDone = active === 0 && total > 0;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  // Auto-dismiss the success summary after 12s so the editor doesn't
+  // stay cluttered. Failures stick until the user dismisses (you want
+  // to see those).
+  useEffect(() => {
+    if (!allDone || counts.failed > 0) return;
+    const t = setTimeout(onDismiss, 12_000);
+    return () => clearTimeout(t);
+  }, [allDone, counts.failed, onDismiss]);
+
+  const inProgressNames = jobs
+    .filter((j) => j.state === "in_progress")
+    .map((j) => j.analyzer)
+    .join(", ");
+
+  if (total === 0) {
+    return (
+      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 px-3 py-2 text-xs flex items-start gap-3">
+        <Loader2 className="w-3.5 h-3.5 mt-0.5 shrink-0 animate-spin" />
+        <span className="flex-1">Saved. Waiting for the analyzer queue to pick up the scan…</span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+        >
+          dismiss
+        </button>
+      </div>
+    );
+  }
+
+  if (allDone) {
+    const tone = counts.failed > 0
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
+      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+    return (
+      <div className={`rounded-md border px-3 py-2 text-xs flex items-start gap-3 ${tone}`}>
+        <span className="flex-1">
+          Scan complete: <strong>{counts.completed}</strong> done
+          {counts.failed > 0 && <>, <strong className="text-rose-300">{counts.failed} failed</strong></>}
+          {counts.cancelled > 0 && <>, {counts.cancelled} cancelled</>}
+          .{" "}
+          <span className="opacity-70">See the Jobs tab for details.</span>
+        </span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+        >
+          dismiss
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-100 px-3 py-2 text-xs space-y-2">
+      <div className="flex items-center gap-3">
+        <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+        <span className="flex-1 font-mono tabular-nums">
+          Scanning: <strong>{done}/{total}</strong> analyzers done · {pct}%
+        </span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+        >
+          dismiss
+        </button>
+      </div>
+      <div className="h-1.5 rounded-full bg-[color:var(--background-base)]/40 overflow-hidden">
+        <div
+          className="h-full bg-emerald-400/80 transition-all duration-500"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {inProgressNames && (
+        <div className="text-[11px] opacity-75 font-mono">
+          running: {inProgressNames}
+        </div>
+      )}
+      {counts.failed > 0 && (
+        <div className="text-[11px] text-rose-300">
+          {counts.failed} failed so far — see Jobs tab.
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function QueueBadge({ queue }: { queue: QueueCounts | undefined }) {
   if (!queue) return null;
   if (queue.in_progress > 0) {
@@ -1672,7 +1807,9 @@ function ProjectEditor({
   const [confirmText, setConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // unix seconds — when set, render <ScanProgress> live-polling /api/jobs
+  // filtered to this project + only jobs enqueued at or after this time.
+  const [scanStartedAt, setScanStartedAt] = useState<number | null>(null);
   const [ghAuthed, setGhAuthed] = useState(false);
   const [picking, setPicking] = useState(false);
   const isProtected = name === "default";
@@ -1720,21 +1857,18 @@ function ProjectEditor({
     }
     setSubmitting(true);
     setError(null);
-    setNotice(null);
+    // Stamp the moment we issued the save so <ScanProgress> only counts
+    // jobs from this save forward (older completed/failed jobs from
+    // previous scans don't pollute the progress bar).
+    // Subtract 2s so server-side enqueue_at clock skew doesn't filter
+    // out jobs that were actually triggered by this save.
+    const startedAt = Math.floor(Date.now() / 1000) - 2;
     try {
       const body = mode === "folder"
         ? { source_path: folderPath.trim() }
         : { remote_url: remote.trim(), tracked_ref: ref.trim() || "origin/main" };
       await api.post(`/api/understand/configure?project=${encodeURIComponent(name)}`, body);
-      // Bootstrap is fire-and-forget on the server: ingest + analyzer
-      // enqueue happen in a daemon thread. The status strip + Jobs
-      // page surface progress; this notice tells the user the save
-      // succeeded AND scanning has started so they don't keep clicking.
-      setNotice(
-        mode === "folder"
-          ? "Saved. Scanning the folder — see the status strip up top or the Jobs tab for progress."
-          : "Saved. Cloning + scanning the repo — see the status strip up top or the Jobs tab for progress.",
-      );
+      setScanStartedAt(startedAt);
       onSaved();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -1944,18 +2078,12 @@ function ProjectEditor({
           {error}
         </div>
       )}
-      {notice && (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 px-3 py-2 text-xs flex items-start gap-3">
-          <Loader2 className="w-3.5 h-3.5 mt-0.5 shrink-0 animate-spin" />
-          <span className="flex-1">{notice}</span>
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
-          >
-            dismiss
-          </button>
-        </div>
+      {scanStartedAt !== null && (
+        <ScanProgress
+          project={name}
+          sinceTs={scanStartedAt}
+          onDismiss={() => setScanStartedAt(null)}
+        />
       )}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <button

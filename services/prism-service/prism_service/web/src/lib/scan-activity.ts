@@ -17,7 +17,7 @@ export type ScanJob = {
   project: string;
   analyzer: string;
   target_sha: string;
-  state: "pending" | "in_progress" | "completed" | "failed";
+  state: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
   enqueued_at: number;
   started_at: number;
   completed_at: number;
