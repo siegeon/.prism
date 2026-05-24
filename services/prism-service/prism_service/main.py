@@ -70,9 +70,35 @@ def start_drift_timer():
     from prism_service.engines.brain_engine import Brain
     print(f"Drift timer running every {DRIFT_INTERVAL_SECONDS}s", file=_sys.stderr)
     drift_brains: dict[str, Brain] = {}
+    # Tight loop checks for soft-deleted projects every STALE_CHECK_S so
+    # cached Brain SQLite handles release within seconds of a DELETE —
+    # the trash sweeper can then rmtree the .db files. Reindex remains
+    # on the configured DRIFT_INTERVAL_SECONDS cadence.
+    STALE_CHECK_S = 5
+    last_reindex = 0.0
     while True:
         try:
-            for pid in get_all_projects():
+            live = set(get_all_projects())
+            for stale_pid in [p for p in drift_brains if p not in live]:
+                stale_brain = drift_brains.pop(stale_pid, None)
+                for close_name in ("close", "shutdown"):
+                    close = getattr(stale_brain, close_name, None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
+                        break
+                print(f"[drift] released stale Brain for {stale_pid}", file=_sys.stderr)
+
+            now = time.time()
+            do_reindex = now - last_reindex >= DRIFT_INTERVAL_SECONDS
+            if not do_reindex:
+                time.sleep(STALE_CHECK_S)
+                continue
+            last_reindex = now
+
+            for pid in live:
                 try:
                     ctx = get_project(pid)
                     db_dir = ctx._data_dir
@@ -92,7 +118,7 @@ def start_drift_timer():
                     print(f"Drift cycle error ({pid}): {e}", file=_sys.stderr)
         except Exception as e:
             print(f"Drift timer error: {e}", file=_sys.stderr)
-        time.sleep(DRIFT_INTERVAL_SECONDS)
+        time.sleep(STALE_CHECK_S)
 
 
 def start_quality_timer():
@@ -176,6 +202,10 @@ async def lifespan(_app: FastAPI):
         threading.Thread(target=start_quality_timer, daemon=True).start()
         from prism_service.services.understand_drainer import start_understand_drainer
         threading.Thread(target=start_understand_drainer, daemon=True).start()
+        # v5.3.0 — sweep .trash/ (renamed-on-delete project dirs) until
+        # the OS releases SQLite file locks the timer threads hold open.
+        from prism_service.services.trash import start_trash_sweeper
+        threading.Thread(target=start_trash_sweeper, daemon=True).start()
     except Exception as e:
         print(f"Startup error: {e}", file=_sys.stderr, flush=True)
     yield

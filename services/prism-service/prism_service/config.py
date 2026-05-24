@@ -97,10 +97,17 @@ def project_data_dir(project_id: str) -> Path:
 
 
 def list_projects() -> list[str]:
-    """List all project IDs that have data directories."""
+    """List all project IDs that have data directories.
+
+    Filters out projects with a `.deleted` marker (soft-deleted; the
+    trash sweeper is rmtree-ing them in the background but the dir
+    still exists until file locks release).
+    """
     if not PROJECTS_DIR.exists():
         return []
     return sorted(
         p.name for p in PROJECTS_DIR.iterdir()
-        if p.is_dir() and not p.name.startswith(".")
+        if p.is_dir()
+        and not p.name.startswith(".")
+        and not (p / ".deleted").is_file()
     )

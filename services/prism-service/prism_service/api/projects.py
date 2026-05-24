@@ -10,7 +10,6 @@ specify a project falls back to it, so the endpoint refuses to delete.
 from __future__ import annotations
 
 import re
-import shutil
 from threading import Thread
 from typing import Optional
 
@@ -21,6 +20,7 @@ from prism_service.config import DEFAULT_PROJECT, PROJECTS_DIR, project_data_dir
 from prism_service.engines import understand_engine as ue
 from prism_service.project_context import get_all_projects, release_project
 from prism_service.services import source_service as ss
+from prism_service.services import trash as trash_svc
 
 router = APIRouter()
 
@@ -144,20 +144,21 @@ def delete_project(name: str) -> dict:
         raise HTTPException(404, f"project {name!r} not found")
 
     freed = _dir_size_bytes(pdir)
-    # Drop cached services FIRST so SQLite handles close before rmtree
-    # tries to unlink the .db files (Windows refuses to unlink an open
-    # file; Linux is more forgiving but consistent ordering avoids the
-    # race entirely).
+    # Drop request-path cache so future GETs on the same name re-init.
+    # Timer-thread Brain handles (drift/governance/quality/drainer) hold
+    # their own connections — they release on next iteration once
+    # `list_projects()` filters this entry out via the `.deleted` marker.
     release_project(name)
     try:
-        shutil.rmtree(pdir)
+        trash_svc.mark_deleted(pdir)
     except OSError as e:
         raise HTTPException(
             500,
-            f"failed to remove {pdir}: {e}",
+            f"failed to mark {pdir} deleted: {e}",
         )
     return {
         "deleted": True,
         "name": name,
         "freed_bytes": freed,
+        "sweep_pending": True,
     }
