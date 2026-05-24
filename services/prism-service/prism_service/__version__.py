@@ -8,10 +8,19 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.11"
+PRISM_VERSION = "5.3.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.12: Brain page no longer blank. Two fixes: "
+    "/api/dashboard/state was hardcoded to /data/projects/<name> (same "
+    "docker-path bug we just fixed in /api/graph/summary), so BRAIN "
+    "DOCS / ENTITIES / RELATIONSHIPS / COMMUNITIES tiles on the "
+    "Dashboard all reported 0 on native. AND BrainService was hitting "
+    "'trigger docs_fts_ai already exists' on second init because the "
+    "drift timer races with the request-path Brain init (issue #38: "
+    "separate connections by design); added IF NOT EXISTS to all "
+    "three docs_fts_* trigger CREATEs so the race is harmless. "
     "v5.3.11: /api/graph/summary uses project_data_dir() instead of "
     "the hardcoded /data/projects/<name> docker path, so native "
     "installs see the real entity/relationship/community counts. The "

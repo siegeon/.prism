@@ -680,17 +680,23 @@ class Brain:
             DROP TRIGGER IF EXISTS docs_fts_ai;
             DROP TRIGGER IF EXISTS docs_fts_ad;
             DROP TRIGGER IF EXISTS docs_fts_au;
-            CREATE TRIGGER docs_fts_ai AFTER INSERT ON docs BEGIN
+            -- v5.3.12 — IF NOT EXISTS on CREATE too. The drift timer's
+            -- Brain caches its own connection (issue #38) and races with
+            -- the request-path init; without this guard, the second
+            -- caller hits "trigger docs_fts_ai already exists" and
+            -- BrainService flips to _available=False even though the
+            -- schema is fine.
+            CREATE TRIGGER IF NOT EXISTS docs_fts_ai AFTER INSERT ON docs BEGIN
                 INSERT INTO docs_fts(rowid, id, content, domain)
                     VALUES(new.rowid, new.id,
                            expand_identifiers(new.content), new.domain);
             END;
-            CREATE TRIGGER docs_fts_ad AFTER DELETE ON docs BEGIN
+            CREATE TRIGGER IF NOT EXISTS docs_fts_ad AFTER DELETE ON docs BEGIN
                 INSERT INTO docs_fts(docs_fts, rowid, id, content, domain)
                     VALUES('delete', old.rowid, old.id,
                            expand_identifiers(old.content), old.domain);
             END;
-            CREATE TRIGGER docs_fts_au AFTER UPDATE ON docs BEGIN
+            CREATE TRIGGER IF NOT EXISTS docs_fts_au AFTER UPDATE ON docs BEGIN
                 INSERT INTO docs_fts(docs_fts, rowid, id, content, domain)
                     VALUES('delete', old.rowid, old.id,
                            expand_identifiers(old.content), old.domain);

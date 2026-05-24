@@ -26,7 +26,11 @@ def state(project: str = Query("default")) -> dict:
     s = ctx.workflow_svc.get_state()
     steps = ctx.workflow_svc.get_steps()
     health = ctx.governance.get_health_report()
-    root = Path(f"/data/projects/{project}")
+    # v5.3.12 — same hardcoded-docker-path bug as v5.3.11 fixed in
+    # /api/graph/summary. Use project_data_dir() so native installs
+    # see real counts.
+    from prism_service.config import project_data_dir
+    root = project_data_dir(project)
     kpis = {
         "brain_docs": _count(root / "brain.db", "SELECT COUNT(*) FROM docs"),
         "entities": _count(root / "graph.db", "SELECT COUNT(*) FROM entities"),
