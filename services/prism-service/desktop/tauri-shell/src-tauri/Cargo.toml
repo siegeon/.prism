@@ -19,6 +19,15 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_Security",
+  "Win32_Foundation",
+] }
 

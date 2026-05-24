@@ -11,7 +11,7 @@
     "windows": [
       {
         "title": "PRISM",
-        "url": "http://localhost:17778/",
+        "url": "http://localhost:7778/",
         "width": 1440,
         "height": 900,
         "resizable": true,

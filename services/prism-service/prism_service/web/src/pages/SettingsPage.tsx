@@ -9,6 +9,15 @@ import { api } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
 
+/** True when the SPA is loaded inside a Tauri WebView (so the dialog
+ * plugin and other Tauri APIs are available). Lets us gracefully degrade
+ * the Browse button when someone loads the SPA in a regular browser. */
+function isInTauri(): boolean {
+  // Tauri 2 injects this on the WebView's window. Safe to access in
+  // non-Tauri browsers — returns undefined which falsifies cleanly.
+  return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
+}
+
 type SectionId = "projects" | "connections" | "jobs" | "logs" | "service";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
@@ -1802,16 +1811,43 @@ function ProjectEditor({
             <span className="text-[10px] uppercase tracking-wider opacity-60">
               {runtime === "docker" ? "Container path" : "Folder path"}
             </span>
-            <input
-              value={folderPath}
-              onChange={(e) => setFolderPath(e.target.value)}
-              placeholder={
-                runtime === "docker"
-                  ? "/code/your-repo"
-                  : "C:\\Users\\you\\code\\my-repo  •  /Users/you/code/my-repo"
-              }
-              className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
-            />
+            <div className="flex gap-2 min-w-0">
+              <input
+                value={folderPath}
+                onChange={(e) => setFolderPath(e.target.value)}
+                placeholder={
+                  runtime === "docker"
+                    ? "/code/your-repo"
+                    : "C:\\Users\\you\\code\\my-repo  •  /Users/you/code/my-repo"
+                }
+                className="flex-1 min-w-0 px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+              />
+              {isInTauri() && runtime !== "docker" && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setError(null);
+                    try {
+                      const { open } = await import("@tauri-apps/plugin-dialog");
+                      const picked = await open({
+                        directory: true,
+                        multiple: false,
+                        title: "Pick a project folder",
+                        defaultPath: folderPath || undefined,
+                      });
+                      if (typeof picked === "string" && picked) {
+                        setFolderPath(picked);
+                      }
+                    } catch (e) {
+                      setError(`Folder picker failed: ${(e as Error).message ?? e}`);
+                    }
+                  }}
+                  className="shrink-0 px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+                >
+                  Browse…
+                </button>
+              )}
+            </div>
           </label>
           <p className="text-[11px] opacity-60 leading-snug">
             {runtime === "docker" ? (
