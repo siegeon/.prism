@@ -230,6 +230,18 @@ if WEB_DIST.exists():
     if _assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
 
+    # index.html must never be cached — Vite builds hash every asset
+    # in /assets/ so those are content-addressable and safe to cache
+    # forever, but the SPA entry point is the indirection layer that
+    # tells the browser which hash to fetch. WebView2 / Edge ignore
+    # client-Ctrl-R reloads in some configs so we set headers explicitly
+    # to prevent old HTML pinning the browser to a stale JS bundle.
+    _NO_CACHE_HEADERS = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
     @app.get("/{full_path:path}", include_in_schema=False)
     def _spa_fallback(full_path: str):
         if any(full_path.startswith(p) for p in _RESERVED_PREFIXES):
@@ -238,7 +250,10 @@ if WEB_DIST.exists():
         candidate = WEB_DIST / full_path if full_path else WEB_DIST / "index.html"
         if full_path and candidate.exists() and candidate.is_file():
             return FileResponse(str(candidate))
-        return FileResponse(str(WEB_DIST / "index.html"))
+        return FileResponse(
+            str(WEB_DIST / "index.html"),
+            headers=_NO_CACHE_HEADERS,
+        )
 else:
     @app.get("/", include_in_schema=False)
     def _no_spa():
