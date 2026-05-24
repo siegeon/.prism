@@ -186,6 +186,20 @@ class UnderstandEngine:
         if target_sha is None:
             target_sha = ss.current_sha(self.project)
 
+        # Drop pending analyzer jobs left over from a previous SHA so a
+        # rapid folder-change doesn't keep burning Claude tokens on the
+        # abandoned scope. In-progress jobs aren't touched (they finish
+        # whatever they started; the result lands in the CAS keyed by
+        # the old SHA, harmless).
+        cancelled = self.queue.cancel_stale_pending(target_sha)
+        if cancelled:
+            import sys as _sys
+            print(
+                f"[understand] {self.project}: cancelled {len(cancelled)} "
+                f"stale pending job(s) for older SHA",
+                file=_sys.stderr, flush=True,
+            )
+
         plan = self.plan(target_sha, analyzers)
 
         # All hits → mark complete, update state, exit cheaply.

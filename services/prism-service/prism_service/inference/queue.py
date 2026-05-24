@@ -41,6 +41,10 @@ STATE_PENDING = "pending"
 STATE_IN_PROGRESS = "in_progress"
 STATE_COMPLETED = "completed"
 STATE_FAILED = "failed"
+# Pending jobs targeting an obsolete SHA (e.g. the user changed the
+# project's source folder before the previous scan finished). The
+# drainer skips these so we don't spend Claude tokens on stale scope.
+STATE_CANCELLED = "cancelled"
 
 STALE_AFTER_S = 600  # 10 min — INV-6: in-session drain only; >10 min means crashed.
 
@@ -189,6 +193,33 @@ class JobQueue:
             self._jobs[jid] = job
             self._append({"op": "enqueue", "job": asdict(job)})
             return jid
+
+    def cancel_stale_pending(self, current_sha: str) -> list[str]:
+        """Cancel every pending job whose target_sha != current_sha.
+
+        Called when the project's source SHA changes (folder repointed,
+        clone fetched, etc.) so the drainer doesn't waste Claude tokens
+        running analyzers on a scope the user has already abandoned.
+        In-progress jobs are left alone — they'll burn their current
+        invocation but won't get retried, and their result lands in the
+        graph CAS keyed by the old SHA, which is harmless.
+
+        Returns the list of cancelled job_ids for log/UI use.
+        """
+        cancelled: list[str] = []
+        now = time.time()
+        with self._lock:
+            for job in self._jobs.values():
+                if job.state == STATE_PENDING and job.target_sha != current_sha:
+                    job.state = STATE_CANCELLED
+                    job.completed_at = now
+                    self._append({
+                        "op": "cancel", "job_id": job.id, "ts": now,
+                        "reason": f"stale sha (was {job.target_sha[:8]}, "
+                                  f"current {current_sha[:8]})",
+                    })
+                    cancelled.append(job.id)
+        return cancelled
 
     def drain(self, max_jobs: int = 10) -> list[AnalysisJob]:
         """Atomically claim up to `max_jobs` pending jobs.

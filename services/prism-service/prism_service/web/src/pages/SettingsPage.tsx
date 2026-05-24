@@ -1672,6 +1672,7 @@ function ProjectEditor({
   const [confirmText, setConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [ghAuthed, setGhAuthed] = useState(false);
   const [picking, setPicking] = useState(false);
   const isProtected = name === "default";
@@ -1719,11 +1720,21 @@ function ProjectEditor({
     }
     setSubmitting(true);
     setError(null);
+    setNotice(null);
     try {
       const body = mode === "folder"
         ? { source_path: folderPath.trim() }
         : { remote_url: remote.trim(), tracked_ref: ref.trim() || "origin/main" };
       await api.post(`/api/understand/configure?project=${encodeURIComponent(name)}`, body);
+      // Bootstrap is fire-and-forget on the server: ingest + analyzer
+      // enqueue happen in a daemon thread. The status strip + Jobs
+      // page surface progress; this notice tells the user the save
+      // succeeded AND scanning has started so they don't keep clicking.
+      setNotice(
+        mode === "folder"
+          ? "Saved. Scanning the folder — see the status strip up top or the Jobs tab for progress."
+          : "Saved. Cloning + scanning the repo — see the status strip up top or the Jobs tab for progress.",
+      );
       onSaved();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -1931,6 +1942,19 @@ function ProjectEditor({
       {error && (
         <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 px-3 py-2 text-xs flex items-start gap-3">
+          <Loader2 className="w-3.5 h-3.5 mt-0.5 shrink-0 animate-spin" />
+          <span className="flex-1">{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+          >
+            dismiss
+          </button>
         </div>
       )}
       <div className="flex items-center justify-between flex-wrap gap-2">
