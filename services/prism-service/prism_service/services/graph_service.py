@@ -676,9 +676,14 @@ class GraphService:
             return result
 
         # graphify CLI writes graph.json into <target>/graphify-out/ regardless
-        # of cwd, so we just pass the staging dir as target.
+        # of cwd, so we just pass the staging dir as target. v5.3.10 — invoke
+        # as `python -m graphify` rather than the bare `graphify` console-
+        # script so we don't depend on the user-Scripts dir being on PATH
+        # (pip's editable install warns about this; Tauri's spawned daemon
+        # inherits PATH from its parent shell, which often lacks it).
+        import sys as _sys
         proc = subprocess.run(
-            ["graphify", "update", str(self._staging_dir)],
+            [_sys.executable, "-m", "graphify", "update", str(self._staging_dir)],
             cwd=str(self._project_dir),
             capture_output=True, text=True, timeout=600,
         )

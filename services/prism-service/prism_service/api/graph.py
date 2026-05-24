@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from prism_service.config import project_data_dir
 from prism_service.project_context import get_project
 
 router = APIRouter()
@@ -29,7 +30,12 @@ def _count(db: Path, sql: str) -> int:
 
 @router.get("/summary")
 def summary(project: str = Query("default")) -> dict:
-    root = Path(f"/data/projects/{project}")
+    # v5.3.11 — use project_data_dir() so this resolves to the right
+    # location on native installs (%LOCALAPPDATA%\prism\... or ~/.prism)
+    # as well as docker (/data). Previously hardcoded /data/projects/...,
+    # so on native installs every count came back 0 even with a populated
+    # graph.db on disk.
+    root = project_data_dir(project)
     graph_json = root / "graphify-src" / "graphify-out" / "graph.json"
     return {
         "entities": _count(root / "graph.db", "SELECT COUNT(*) FROM entities"),

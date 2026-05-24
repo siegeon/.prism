@@ -340,6 +340,18 @@ _CODE_SUFFIXES = frozenset({
 _INGEST_SKIP_DIRS = {
     "node_modules", "__pycache__", ".git", "dist", "build",
     "graphify-out", "graphify-src", "web_dist", ".venv", "venv",
+    # v5.3.9 — folder-mode projects often point at a repo that contains
+    # `.claude/worktrees/<branch>/` siblings (developer workflow). Each
+    # worktree is a full copy of the repo, so without this skip the
+    # walker hits 10-50× duplication. `.claude` also excludes
+    # user-specific config (settings.local.json, etc) that has no
+    # business in the project's knowledge index. `benchmarks` is the
+    # PRISM-specific data-set dir that holds reference repos for eval
+    # runs — ingesting those tanks signal-to-noise. `.tmp` covers most
+    # editor scratch dirs.
+    ".claude", "worktrees", "target", ".next", ".nuxt", "out",
+    "benchmarks", ".tmp", ".cache", ".idea", ".vscode",
+    "coverage", ".pytest_cache", ".ruff_cache", ".mypy_cache",
 }
 
 

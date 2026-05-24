@@ -8,10 +8,26 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.8"
+PRISM_VERSION = "5.3.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.11: /api/graph/summary uses project_data_dir() instead of "
+    "the hardcoded /data/projects/<name> docker path, so native "
+    "installs see the real entity/relationship/community counts. The "
+    "Graph page was reporting 0/0/0 against a graph.db with 2500+ "
+    "entities because the API was looking at a file that didn't exist. "
+    "v5.3.10: Graph rebuild invokes `python -m graphify` (via "
+    "sys.executable) instead of the bare `graphify` console-script. "
+    "Pip's editable install puts scripts in a user-site dir that's "
+    "frequently not on PATH; the Tauri-spawned daemon was failing "
+    "graph.rebuild with WinError 2 because of this. The `-m` path "
+    "resolves via Python's own module loader so PATH no longer matters. "
+    "v5.3.9: Brain ingest skip list extended to .claude/worktrees/target/"
+    ".next/.nuxt/out — folder-mode projects pointing at a repo with "
+    "stale worktrees (a common dev pattern) no longer ingest each "
+    "worktree as a duplicate copy. Cut a 47k-file walk down to the "
+    "actual source. "
     "v5.3.8: Live scan progress bar in Settings → Projects (ScanProgress "
     "component polls /api/jobs scoped to the post-save window) + "
     "onboarding_writer preamble-strip — Claude's CLI prefacing the "
