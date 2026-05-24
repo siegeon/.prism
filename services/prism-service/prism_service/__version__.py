@@ -1,14 +1,51 @@
 """Single source of truth for PRISM's version.
 
-Bump on user-visible changes — schema migrations, new tools, hook script
-updates, install-manifest changes. Served alongside the install manifest
-so users can tell which version is live and which one installed their hook.
+Bump on EVERY commit that changes user-visible behavior. The MAJOR and
+MINOR slots gate releases (5.3 = pip + Tauri v6.0.0-dev); the PATCH
+slot is incremented on every small iteration so the SPA footer always
+identifies exactly which build is live. If you ship a change without
+bumping the patch, the user can't tell they got the new code — fix
+that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.0"
+PRISM_VERSION = "5.3.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.8: Live scan progress bar in Settings → Projects (ScanProgress "
+    "component polls /api/jobs scoped to the post-save window) + "
+    "onboarding_writer preamble-strip — Claude's CLI prefacing the "
+    "markdown with 'I have what I need…' no longer flips the job to "
+    "failed. Per-iteration patch-version policy starts here so the "
+    "footer always identifies the live build. "
+    "v5.3.7: Cancel stale analyzer jobs on source change + clear "
+    "post-save notice so rapid folder repointing can't burn Claude "
+    "tokens on the abandoned scope. New STATE_CANCELLED + "
+    "JobQueue.cancel_stale_pending(sha) called from refresh(). "
+    "v5.3.6: Allow Tauri dialog plugin from http://localhost:7778 via "
+    "capability remote.urls + no-cache headers on index.html so SPA "
+    "rebuilds aren't masked by WebView2 caching the old HTML. "
+    "v5.3.5: Native folder picker (tauri-plugin-dialog 'Browse…' "
+    "button) for folder-mode projects + Windows Job Object "
+    "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so Tauri shutdown cascade-kills "
+    "the Python child, no more orphan daemons. "
+    "v5.3.4: Soft-delete projects (write a .deleted marker, drop from "
+    "listing immediately, background sweeper rmtrees once SQLite locks "
+    "release) to dodge WinError 32 / WinError 5 on synchronous rmtree "
+    "of an in-use project dir. Drift timer also restructured for 5s "
+    "stale-Brain release cadence. "
+    "v5.3.3: Runtime-aware project config. /api/service-info exposes a "
+    "`runtime` field; Settings → Projects uses it to pick docker vs "
+    "native copy + placeholder. /api/claude-auth reads the host's "
+    "~/.claude on native installs. "
+    "v5.3.2: Tauri 2 native shell wraps prism_service. shell spawns "
+    "python -m prism_service.cli.prism_cli start with the 8.3 short "
+    "path to dodge a Windows msvcrt argv-corruption bug; WebView2 "
+    "loads http://localhost:7778. "
+    "v5.3.1: Pip distribution baseline (same as v5.3.0 below). "
+    "Per-iteration patch policy starts officially at v5.3.8; "
+    "5.3.1-5.3.7 are retroactively assigned to commits shipped between "
+    "5.3.0 and the policy change. "
     "v5.3.0: Pip distribution. Pivot away from docker-primary. The "
     "Python service moved from `app/` to a proper `prism_service` "
     "package with a pyproject.toml; install via `pip install "
