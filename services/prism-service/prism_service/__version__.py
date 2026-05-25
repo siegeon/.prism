@@ -8,10 +8,18 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.17"
+PRISM_VERSION = "5.3.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.18: CI fix — `release-tauri.yml` now passes `GITHUB_TOKEN` "
+    "into the `tauri-apps/tauri-action` env block. v5.3.17's first run "
+    "got past compile + sign (all .msi/.dmg/.AppImage bundles built "
+    "and signed cleanly with the minisign key) but failed at the "
+    "upload step with `GITHUB_TOKEN is required` — the action needs "
+    "the token explicitly to create the GitHub Release and attach "
+    "artifacts, the job-level `permissions: contents: write` isn't "
+    "enough on its own. No behavior change vs v5.3.17; just CI plumbing. "
     "v5.3.17: Tauri shell auto-update wired. New "
     ".github/workflows/release-tauri.yml builds signed bundles for "
     "macOS (arm64 + x64), Windows, and Linux on every `v*` tag push, "
