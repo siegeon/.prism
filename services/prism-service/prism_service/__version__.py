@@ -1,17 +1,38 @@
 """Single source of truth for PRISM's version.
 
-Bump on EVERY commit that changes user-visible behavior. The MAJOR and
-MINOR slots gate releases (5.3 = pip + Tauri v6.0.0-dev); the PATCH
-slot is incremented on every small iteration so the SPA footer always
-identifies exactly which build is live. If you ship a change without
-bumping the patch, the user can't tell they got the new code — fix
-that habit, not the version number.
+v6.0.0 marks the cutover: native (pip-installed Python service +
+Tauri desktop binaries) is now THE primary distribution. Docker
+remains supported for server / CI deploys but is no longer the
+default install. The 5.3.x patch series was the in-progress
+'pip + Tauri v6.0.0-dev' work — that work is now feature-complete
+and stable enough to drop the -dev suffix.
+
+Going forward: bump PATCH on every commit that changes user-visible
+behavior so the SPA footer always identifies exactly which build is
+live. Bump MINOR for backward-compatible feature work, MAJOR for
+distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "5.3.24"
+PRISM_VERSION = "6.0.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.0: NATIVE FIRST. The v5.3.x 'pip + Tauri v6.0.0-dev' series "
+    "is now stable; this release marks the distribution-shape cutover. "
+    "Primary install paths: `pipx install prism-service` for terminal "
+    "users on Mac/Linux/Windows, signed Tauri desktop binaries (.dmg "
+    "/ .msi / .AppImage) for click-to-run users. Docker image still "
+    "ships from GHCR for server / CI deploys but is no longer the "
+    "default the docs point at. Host-native auth (~/.claude direct, "
+    "host gh CLI + ssh keys for git, host browser for OAuth) means "
+    "the docker friction we chased through v5.1 → v5.2 (bind-mount "
+    "perms, OAuth localhost redirects, Watchtower update lag) "
+    "evaporates on native installs. Also includes the v5.3.25 "
+    "/understand contrast pass: UnderstandPage + OnboardingView + "
+    "LayersView + DomainsView were dropping AAA semantic text tokens "
+    "to opacity-60 sleeves, dropping effective contrast below WCAG "
+    "AA — replaced with --text-secondary tokens on body copy. "
+    "v5.3.25: /understand contrast pass — "
     "v5.3.24: Version-number cleanup. Regression coverage for "
     "analyzer_runner._strip_preamble_to_heading + _classify (16 unit "
     "tests, originally tagged v5.3.21 in #67) was merged after a "

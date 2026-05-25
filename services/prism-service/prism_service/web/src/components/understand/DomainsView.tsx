@@ -123,7 +123,7 @@ function DomainsOverviewPanel({
     <aside className="w-[320px] shrink-0 space-y-5">
       <div>
         <h2 className="font-serif text-xl tracking-tight">Domain glossary</h2>
-        <p className="text-[13px] opacity-70 leading-relaxed mt-1">
+        <p className="text-[13px] text-[color:var(--text-secondary)] leading-relaxed mt-1">
           {domains.length} domain{domains.length === 1 ? "" : "s"} ·{" "}
           {totalEntities} total entit{totalEntities === 1 ? "y" : "ies"}.
           Click a domain to drill into its entities.

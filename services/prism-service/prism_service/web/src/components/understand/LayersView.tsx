@@ -182,7 +182,7 @@ function LayerDetailRow({ layer, colorIdx }: { layer: Layer; colorIdx: number })
         </div>
       </div>
       {layer.description && (
-        <p className="text-[12px] opacity-70 mt-1 leading-relaxed">
+        <p className="text-[12px] text-[color:var(--text-secondary)] mt-1 leading-relaxed">
           {layer.description}
         </p>
       )}
@@ -196,7 +196,7 @@ function LayerDetailRow({ layer, colorIdx }: { layer: Layer; colorIdx: number })
         </div>
       )}
       {layer.files && layer.files.length > 0 && (
-        <ul className="mt-3 text-[11px] font-mono opacity-70 space-y-0.5 max-h-32 overflow-auto">
+        <ul className="mt-3 text-[11px] font-mono text-[color:var(--text-secondary)] space-y-0.5 max-h-32 overflow-auto">
           {layer.files.slice(0, 10).map((f) => (
             <li key={f} className="flex items-center gap-1.5 truncate">
               <FileCode className="w-3 h-3 opacity-50 shrink-0" />

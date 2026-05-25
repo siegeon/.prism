@@ -128,7 +128,7 @@ export default function UnderstandPage() {
       <div className="flex items-baseline justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl tracking-tight">Understand</h1>
-          <p className="text-sm opacity-60 mt-1">
+          <p className="text-sm text-[color:var(--text-secondary)] mt-1">
             Generate tour, architecture, domain glossary, and onboarding doc
             from this project's source. Point a project at a local folder
             or a git remote in <span className="font-medium">Settings → Projects</span>.
@@ -180,11 +180,11 @@ export default function UnderstandPage() {
       {!status?.current_sha && (
         <Card>
           <SectionLabel>No source configured for "{project}"</SectionLabel>
-          <p className="text-sm opacity-70 mt-2">
+          <p className="text-sm text-[color:var(--text-secondary)] mt-2">
             Pick a source for this project in <span className="font-medium">Settings → Projects</span>{" "}
             so PRISM can scan the code. Two shapes:
           </p>
-          <ul className="text-sm opacity-70 mt-2 space-y-1 list-disc pl-5">
+          <ul className="text-sm text-[color:var(--text-secondary)] mt-2 space-y-1 list-disc pl-5">
             <li className="leading-relaxed">
               <FolderTree className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
               <span className="font-medium">Local folder</span> — point at any

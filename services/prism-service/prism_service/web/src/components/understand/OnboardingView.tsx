@@ -28,7 +28,7 @@ function parseMarkdown(text: string): ReactNode[] {
   const flushPara = () => {
     if (para.length === 0) return;
     blocks.push(
-      <p key={`p${blocks.length}`} className="text-sm leading-relaxed opacity-85">
+      <p key={`p${blocks.length}`} className="text-sm leading-relaxed text-[color:var(--text-secondary)]">
         {renderInline(para.join(" "))}
       </p>,
     );
@@ -37,7 +37,7 @@ function parseMarkdown(text: string): ReactNode[] {
   const flushList = () => {
     if (listItems.length === 0) return;
     blocks.push(
-      <ul key={`ul${blocks.length}`} className="text-sm leading-relaxed opacity-85 list-disc pl-5 space-y-1">
+      <ul key={`ul${blocks.length}`} className="text-sm leading-relaxed text-[color:var(--text-secondary)] list-disc pl-5 space-y-1">
         {listItems.map((it, k) => (
           <li key={k}>{renderInline(it)}</li>
         ))}
