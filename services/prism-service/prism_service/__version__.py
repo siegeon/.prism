@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.11"
+PRISM_VERSION = "6.0.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.12: Sparkline tiles go side-by-side. v6.0.11 stacked the six "
+    "metrics vertically, eating ~270px of header height for what's "
+    "really six tiny shapes. Refactored Sparkline to a card layout "
+    "(label on top, full-width SVG, Σ + peak in a thin footer) and "
+    "arranged them in a responsive grid: 2 columns on mobile, 3 on "
+    "tablet, 6 on desktop. SVG uses viewBox + preserveAspectRatio="
+    "'none' + vectorEffect='non-scaling-stroke' so lines stay crisp "
+    "across tile widths. Whole strip now fits in ~120px of header "
+    "real estate. No data-shape change. "
     "v6.0.11: Reflection grounded in PRISM source + 14-day trend "
     "sparklines. v6.0.10's single-shot variant (max_turns=1, "
     "allowed_tools=()) had no source access, so the memories it "

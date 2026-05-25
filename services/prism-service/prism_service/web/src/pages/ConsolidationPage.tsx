@@ -41,35 +41,42 @@ type Trends = {
   series: Record<string, DayBucket>;
 };
 
-// v6.0.11 — tiny SVG sparkline. Hand-rolled so the SPA doesn't pick
-// up a chart lib for one shape. Renders an area + line + max marker;
-// scales independently per series so each metric reads on its own
-// floor rather than being crushed by a louder metric.
+// v6.0.12 — vertical-card sparkline tile. Label on top, SVG full
+// width of the tile, totals/peak in a thin footer. Tiles arranged in
+// a responsive grid (1 / 2 / 3 / 6 columns) so the strip stops eating
+// vertical space and the six metrics read across in one glance.
 function Sparkline({
-  values, label, color = "rgb(125 211 252)", height = 36, width = 160,
+  values, label, color = "rgb(125 211 252)", height = 40,
 }: {
-  values: number[]; label: string; color?: string;
-  height?: number; width?: number;
+  values: number[]; label: string; color?: string; height?: number;
 }) {
   if (values.length === 0) return null;
   const max = Math.max(1, ...values);
-  const stepX = values.length > 1 ? width / (values.length - 1) : 0;
+  const total = values.reduce((a, b) => a + b, 0);
+  // viewBox so the SVG stretches to fill the tile width; the actual
+  // pixel width is controlled by the parent container.
+  const viewW = 100;
+  const stepX = values.length > 1 ? viewW / (values.length - 1) : 0;
   const points = values
     .map((v, i) => `${i * stepX},${height - (v / max) * (height - 4) - 2}`)
     .join(" ");
-  const area = `0,${height} ${points} ${width},${height}`;
-  const total = values.reduce((a, b) => a + b, 0);
+  const area = `0,${height} ${points} ${viewW},${height}`;
   return (
-    <div className="flex items-baseline gap-3 text-[11px]">
-      <div className="opacity-60 w-24 shrink-0 uppercase tracking-wider">{label}</div>
-      <svg width={width} height={height} className="shrink-0">
-        <polygon points={area} fill={color} opacity="0.15" />
-        <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
+    <div className="rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-2.5 flex flex-col gap-1.5">
+      <div className="text-[10px] uppercase tracking-wider opacity-60">{label}</div>
+      <svg
+        viewBox={`0 0 ${viewW} ${height}`}
+        preserveAspectRatio="none"
+        className="w-full"
+        style={{ height: `${height}px` }}
+      >
+        <polygon points={area} fill={color} opacity="0.18" />
+        <polyline points={points} fill="none" stroke={color} strokeWidth="1.2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>
-      <div className="opacity-80 font-mono tabular-nums w-16 text-right shrink-0">
-        Σ {total.toLocaleString()}
+      <div className="flex items-baseline justify-between text-[11px] font-mono tabular-nums">
+        <span className="opacity-85">Σ {total.toLocaleString()}</span>
+        <span className="opacity-40">peak {max.toLocaleString()}</span>
       </div>
-      <div className="opacity-40 font-mono">peak {max.toLocaleString()}</div>
     </div>
   );
 }
@@ -295,7 +302,7 @@ export default function ConsolidationPage() {
       {trends && trends.days.length > 0 && (
         <Card>
           <SectionLabel>Last 14 days (UTC)</SectionLabel>
-          <div className="space-y-1.5 mt-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mt-2">
             <Sparkline label="Sessions"      values={trends.days.map((d) => trends.series[d]?.sessions ?? 0)}      color="rgb(125 211 252)" />
             <Sparkline label="Pushbacks"     values={trends.days.map((d) => trends.series[d]?.pushbacks ?? 0)}     color="rgb(252 211 77)" />
             <Sparkline label="Tool failures" values={trends.days.map((d) => trends.series[d]?.tool_failures ?? 0)} color="rgb(251 113 133)" />
