@@ -1,6 +1,9 @@
 """Tasks API — kanban list, detail, transitions, history."""
 
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from prism_service.project_context import get_project
 
@@ -30,3 +33,27 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     if not t:
         raise HTTPException(404, "task not found")
     return {"task": t, "history": _svc(project).history(task_id)}
+
+
+class TaskUpdate(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[int] = None
+    assigned_agent: Optional[str] = None
+    blocked_reason: Optional[str] = None
+
+
+@router.patch("/{task_id}")
+def update_task(
+    task_id: str, body: TaskUpdate, project: str = Query("default"),
+) -> dict:
+    """v6.0.9 — SPA-side task transitions. Mirrors mcp__prism__task_update
+    so users can flip a card from the kanban without spawning a Claude
+    session for one-line edits."""
+    svc = _svc(project)
+    kwargs = {k: v for k, v in body.dict().items() if v is not None}
+    if not kwargs:
+        raise HTTPException(400, "no fields to update")
+    t = svc.update(task_id, **kwargs)
+    if not t:
+        raise HTTPException(404, "task not found")
+    return {"task": t, "history": svc.history(task_id)}

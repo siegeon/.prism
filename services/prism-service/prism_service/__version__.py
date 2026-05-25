@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.8"
+PRISM_VERSION = "6.0.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.9: Three concrete wins for 'can I see this actually do "
+    "anything': (1) Memory entries become click-to-expand — full "
+    "description, id, importance, memory_type, effectiveness (color-"
+    "coded green/red), recall count, generation, valid_at, last_recalled, "
+    "and evidence dict. The page finally rewards looking at it. "
+    "(2) Tasks become click-to-expand with inline status transition "
+    "buttons (→ in_progress / → done / → blocked etc.) hitting a new "
+    "PATCH /api/tasks/{id} endpoint, plus visible task history (last 5 "
+    "transitions). You can now move a task across the kanban from the "
+    "SPA without spawning a Claude session. (3) /consolidation gains a "
+    "'Background workers' panel honestly listing all 7 daemons in "
+    "lifespan (transcript_importer, drift_timer, understand_drainer, "
+    "governance_timer, trash_sweeper, auto_updater) — green dots for "
+    "running, plus a rose-dot 'reflection_worker NOT RUNNING by design' "
+    "entry that explains why /learning stays empty. The panel header "
+    "carries a 'Preview next brief' button that calls a new "
+    "GET /api/consolidation/next-brief endpoint to show, non-mutatingly, "
+    "exactly what the prism-reflect sub-agent would see if invoked: "
+    "candidate_id, session_id, trigger, MCPs in the allow-list, and "
+    "the full scope_json. Answers 'what would reflection even do' "
+    "without spending tokens. "
     "v6.0.8: /memory is no longer dead. Discovered while dogfooding: "
     "PRISM Memory had ZERO entries because Claude Code agents write to "
     "their own auto-memory at ~/.claude/projects/<slug>/memory/*.md "

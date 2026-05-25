@@ -4,12 +4,22 @@ import { useProject } from "@/lib/project";
 import { Page, Card, Kpi, SectionLabel, Pill, Empty } from "@/components/ui";
 
 type Entry = {
+  id?: string;
   name?: string;
   type?: string;
   classification?: string;
   status?: string;
   description?: string;
   domain?: string;
+  importance?: number;
+  memory_type?: string;
+  recall_count?: number;
+  last_recalled?: string;
+  effectiveness?: number;
+  valid_at?: string;
+  invalid_at?: string;
+  generation?: number;
+  evidence?: Record<string, unknown>;
 };
 
 const TYPES = ["all", "expertise", "convention", "decision", "anti-pattern"];
@@ -26,6 +36,13 @@ export default function MemoryPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+
+  const toggleOpen = (id: string) => {
+    const next = new Set(open);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setOpen(next);
+  };
 
   useEffect(() => {
     api.get<{ domains: string[]; stats: Record<string, number> }>(`/api/memory/domains?project=${project}`)
@@ -131,17 +148,69 @@ export default function MemoryPage() {
           <Empty>No entries match these filters.</Empty>
         ) : (
           <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {entries.map((e, i) => (
-              <div key={i} className="py-3">
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="font-medium flex-1 truncate">{e.name ?? "—"}</span>
-                  {e.type && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.type}</span>}
-                  {e.classification && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.classification}</span>}
-                  {e.status && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.status}</span>}
+            {entries.map((e, i) => {
+              const key = e.id ?? `${e.name}-${i}`;
+              const isOpen = open.has(key);
+              return (
+                <div key={key} className="py-3">
+                  <button
+                    onClick={() => toggleOpen(key)}
+                    className="w-full text-left flex items-center gap-3 text-sm hover:opacity-100"
+                  >
+                    <span className="text-xs opacity-50 w-4">{isOpen ? "▾" : "▸"}</span>
+                    <span className="font-medium flex-1 truncate">{e.name ?? "—"}</span>
+                    {typeof e.importance === "number" && (
+                      <span className="text-[10px] uppercase tracking-wider opacity-50" title="importance 1-10">
+                        imp {e.importance}
+                      </span>
+                    )}
+                    {typeof e.recall_count === "number" && e.recall_count > 0 && (
+                      <span className="text-[10px] uppercase tracking-wider opacity-50" title="times recalled">
+                        ↻ {e.recall_count}
+                      </span>
+                    )}
+                    {e.type && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.type}</span>}
+                    {e.classification && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.classification}</span>}
+                    {e.status && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.status}</span>}
+                  </button>
+                  {!isOpen && e.description && (
+                    <div className="text-xs opacity-60 mt-1 ml-7 line-clamp-2">{e.description}</div>
+                  )}
+                  {isOpen && (
+                    <div className="ml-7 mt-2 space-y-3">
+                      {e.description && (
+                        <pre className="whitespace-pre-wrap text-[12px] leading-relaxed opacity-90 font-sans p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10">
+                          {e.description}
+                        </pre>
+                      )}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+                        {e.id && <div><span className="opacity-50">id:</span> <span className="font-mono">{e.id}</span></div>}
+                        {e.memory_type && <div><span className="opacity-50">memory_type:</span> {e.memory_type}</div>}
+                        {typeof e.effectiveness === "number" && (
+                          <div>
+                            <span className="opacity-50">effectiveness:</span>{" "}
+                            <span className={e.effectiveness > 0 ? "text-emerald-300/90" : e.effectiveness < 0 ? "text-rose-300/90" : "opacity-70"}>
+                              {e.effectiveness.toFixed(2)}
+                            </span>
+                          </div>
+                        )}
+                        {typeof e.generation === "number" && <div><span className="opacity-50">gen:</span> {e.generation}</div>}
+                        {e.valid_at && <div><span className="opacity-50">valid since:</span> {e.valid_at.slice(0, 10)}</div>}
+                        {e.last_recalled && <div><span className="opacity-50">last recalled:</span> {e.last_recalled.slice(0, 10)}</div>}
+                      </div>
+                      {e.evidence && Object.keys(e.evidence).length > 0 && (
+                        <div className="text-[11px]">
+                          <span className="opacity-50">evidence:</span>
+                          <pre className="mt-1 p-2 rounded bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 whitespace-pre-wrap font-mono opacity-80">
+                            {JSON.stringify(e.evidence, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {e.description && <div className="text-xs opacity-60 mt-1 line-clamp-2">{e.description}</div>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
