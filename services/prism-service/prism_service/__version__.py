@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.6"
+PRISM_VERSION = "6.0.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.7: Memory moved to the Knowledge sidebar group, where it "
+    "belongs. v6.0.6 left it in Activity on the rationale that Memory "
+    "is both an output of the Learning loop and an input to future "
+    "sessions — but that conflates 'data flow role' with 'what kind of "
+    "thing it is.' Memory is the persisted record of patterns / "
+    "conventions / failures / decisions the team has learned, read by "
+    "every future session via memory_recall. That makes it parallel "
+    "to Brain (what code exists), Graph (how code connects), and "
+    "Understand (architecture) — all four are read surfaces for "
+    "accumulated knowledge. Activity now reads cleanly as "
+    "things-in-motion: Tasks, Conductor, Retrievals. "
     "v6.0.6: Learning loop is now visible. Three changes addressing "
     "'I have trouble seeing what we are learning even though I know we "
     "have tons of things going on': (1) sidebar regrouped so Sessions, "
