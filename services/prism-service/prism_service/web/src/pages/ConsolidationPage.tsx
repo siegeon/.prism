@@ -138,28 +138,69 @@ export default function ConsolidationPage() {
   const [preview, setPreview] = useState<NextBrief | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [reflectBusy, setReflectBusy] = useState<string | null>(null);
+  // v6.0.13 — visible progress for the 30-90s claude run. Tracks
+  // wall-clock seconds since the click + the most recent verdict per
+  // candidate so the row stays informative after completion (toast
+  // alone disappears in 6s).
+  const [reflectStartedAt, setReflectStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [verdicts, setVerdicts] = useState<Record<string, {
+    qualitative_score?: number;
+    confidence?: number;
+    narrative?: string;
+    memories_stored?: { id: string; name: string; domain: string }[];
+    duration_s?: number;
+    error?: string;
+  }>>({});
+  const [showHelp, setShowHelp] = useState(false);
+
+  useEffect(() => {
+    if (reflectStartedAt === null) {
+      setElapsed(0);
+      return;
+    }
+    const t = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - reflectStartedAt) / 1000));
+    }, 250);
+    return () => clearInterval(t);
+  }, [reflectStartedAt]);
 
   const runReflection = async (candidateId: string) => {
     setReflectBusy(candidateId);
-    setNotice(`Running reflection on ${candidateId.slice(0, 8)}… this takes ~15-30s.`);
+    setReflectStartedAt(Date.now());
+    setNotice(`Reflecting on ${candidateId.slice(0, 8)}… claude is reading PRISM source. Typical 30-90s.`);
     try {
       const r = await api.post<{
-        ok: boolean; error?: string; verdict?: Record<string, unknown>;
-        memories_stored?: unknown[]; run_id?: string; duration_s?: number;
+        ok: boolean; error?: string;
+        verdict?: { qualitative_score?: number; confidence?: number; narrative?: string };
+        memories_stored?: { id: string; name: string; domain: string }[];
+        run_id?: string; duration_s?: number;
       }>(`/api/consolidation/run-reflection?candidate_id=${candidateId}&project=${project}`, {});
       if (!r.ok) {
         setNotice(`Reflection failed: ${r.error ?? "unknown error"}`);
+        setVerdicts((v) => ({ ...v, [candidateId]: { error: r.error ?? "unknown" } }));
       } else {
         const storedN = (r.memories_stored ?? []).length;
         setNotice(
-          `Reflection complete in ${r.duration_s ?? "?"}s. Stored ${storedN} new memor${storedN === 1 ? "y" : "ies"}. Check /learning + /memory.`,
+          `Reflection complete in ${r.duration_s ?? "?"}s. Stored ${storedN} new memor${storedN === 1 ? "y" : "ies"}.`,
         );
+        setVerdicts((v) => ({
+          ...v, [candidateId]: {
+            qualitative_score: r.verdict?.qualitative_score,
+            confidence: r.verdict?.confidence,
+            narrative: r.verdict?.narrative,
+            memories_stored: r.memories_stored ?? [],
+            duration_s: r.duration_s,
+          },
+        }));
         load();
       }
     } catch (e) {
       setNotice(`Reflection error: ${(e as Error).message ?? e}`);
+      setVerdicts((v) => ({ ...v, [candidateId]: { error: String(e) } }));
     } finally {
       setReflectBusy(null);
+      setReflectStartedAt(null);
     }
   };
 
@@ -234,7 +275,7 @@ export default function ConsolidationPage() {
         <div>
           <h1 className="font-serif text-3xl tracking-tight">Consolidation</h1>
           <p className="text-sm opacity-60 mt-1">
-            Reflection queue — one candidate per session, dispensed to a
+            Reflection queue — one <button onClick={() => setShowHelp(!showHelp)} className="underline decoration-dotted underline-offset-2 hover:opacity-100">brief</button> per session, dispensed to a
             sub-agent for post-hoc review. Populated by the Stop hook on
             session end; backfill if the hook hasn't run yet.
           </p>
@@ -247,6 +288,30 @@ export default function ConsolidationPage() {
           {busy ? "Working…" : "Backfill from sessions"}
         </button>
       </div>
+
+      {showHelp && (
+        <Card>
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-sm leading-relaxed space-y-2 flex-1">
+              <div><strong>A brief</strong> is the work-packet PRISM hands to a reflection sub-agent. One brief per Claude Code session, queued automatically by the transcript importer (every 60s).</div>
+              <div>Each brief carries:</div>
+              <ul className="ml-5 list-disc opacity-80 space-y-0.5">
+                <li><code className="opacity-90">session_id</code> + <code className="opacity-90">task_id</code> + <code className="opacity-90">trigger</code> — what triggered the queue (session_completed / transcript_imported / task_done)</li>
+                <li><code className="opacity-90">signal_counts</code> — pushbacks, tool failures, bg-protocol lines, memory-store call sites extracted from the JSONL</li>
+                <li><code className="opacity-90">transcript_excerpt</code> — the actual session content (~3.5KB max, wrapped in &lt;untrusted&gt; tags)</li>
+              </ul>
+              <div>Click <strong>Reflect</strong> on a row and PRISM spawns <code className="opacity-90">claude -p</code> headless against the PRISM source tree (Read / Glob / Grep, max_turns=15). The agent reads the brief, investigates the code, and returns a JSON verdict that:</div>
+              <ul className="ml-5 list-disc opacity-80 space-y-0.5">
+                <li>scores the session (qualitative_score 0-1, confidence 0-1)</li>
+                <li>writes a ~200-word narrative</li>
+                <li>proposes <code className="opacity-90">new_memories</code> citing real file paths — these auto-store as ExpertiseEntry rows on /memory</li>
+              </ul>
+              <div className="text-xs opacity-60 pt-1">Typical run: 30-90s. Each click spends real claude tokens on your subscription.</div>
+            </div>
+            <button onClick={() => setShowHelp(false)} className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0">close</button>
+          </div>
+        </Card>
+      )}
 
       {notice && (
         <div className="fixed bottom-6 right-6 z-40 max-w-[420px] rounded-md border border-[color:var(--midground-base)]/20 bg-[color:var(--background-base)]/95 backdrop-blur-sm shadow-lg px-4 py-3 text-[12px] flex items-start gap-3">
@@ -474,15 +539,76 @@ export default function ConsolidationPage() {
                     </span>
                     <span className="text-xs opacity-60 w-24 text-right">retries {b.retry_count ?? 0}</span>
                     <span className="text-xs opacity-60 w-16 text-right">{ageH.toFixed(1)}h</span>
-                    <button
-                      onClick={() => runReflection(b.id)}
-                      disabled={reflectBusy !== null}
-                      className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
-                      title="Spawn claude -p headless to score this brief and store any new memories"
-                    >
-                      {reflectBusy === b.id ? "…" : "Reflect"}
-                    </button>
+                    {reflectBusy === b.id ? (
+                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-sky-500/20 text-sky-200 shrink-0 inline-flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-300 animate-pulse" />
+                        reflecting {elapsed}s
+                      </span>
+                    ) : verdicts[b.id]?.error ? (
+                      <button
+                        onClick={() => runReflection(b.id)}
+                        disabled={reflectBusy !== null}
+                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 disabled:opacity-40 shrink-0"
+                        title={verdicts[b.id]?.error}
+                      >
+                        Retry
+                      </button>
+                    ) : verdicts[b.id] ? (
+                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-emerald-500/15 text-emerald-200 shrink-0 inline-flex items-center gap-1">
+                        ✓ score {(verdicts[b.id].qualitative_score ?? 0).toFixed(2)} · {(verdicts[b.id].memories_stored ?? []).length} mem
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => runReflection(b.id)}
+                        disabled={reflectBusy !== null}
+                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
+                        title="Spawn claude -p headless against PRISM source tree (Read/Glob/Grep, max_turns=15) to score this brief and extract memories"
+                      >
+                        Reflect
+                      </button>
+                    )}
                   </div>
+                  {reflectBusy === b.id && (
+                    <div className="ml-7 mt-2 p-2 rounded-md bg-sky-500/10 border border-sky-500/20 text-[11px] flex items-center gap-3">
+                      <svg className="animate-spin w-3 h-3 text-sky-300" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4zm2 5.3A8 8 0 014 12H0c0 3 1.1 5.8 3 7.9l3-2.6z" />
+                      </svg>
+                      <div className="flex-1 opacity-80">
+                        claude is reading PRISM source… typical 30-90s · elapsed <span className="font-mono tabular-nums">{elapsed}s</span>
+                      </div>
+                    </div>
+                  )}
+                  {verdicts[b.id] && !verdicts[b.id].error && !reflectBusy && (
+                    <div className="ml-7 mt-2 p-3 rounded-md bg-emerald-500/5 border border-emerald-500/20 space-y-2 text-[12px]">
+                      <div className="flex items-baseline gap-4 text-[11px]">
+                        <span><span className="opacity-60">score:</span> <span className="font-mono">{(verdicts[b.id].qualitative_score ?? 0).toFixed(2)}</span></span>
+                        <span><span className="opacity-60">confidence:</span> <span className="font-mono">{(verdicts[b.id].confidence ?? 0).toFixed(2)}</span></span>
+                        <span><span className="opacity-60">duration:</span> <span className="font-mono">{verdicts[b.id].duration_s}s</span></span>
+                      </div>
+                      {verdicts[b.id].narrative && (
+                        <div className="text-[12px] leading-relaxed opacity-90">{verdicts[b.id].narrative}</div>
+                      )}
+                      {(verdicts[b.id].memories_stored ?? []).length > 0 && (
+                        <div className="text-[11px]">
+                          <div className="opacity-60 uppercase tracking-wider mb-1">memories stored ({verdicts[b.id].memories_stored?.length})</div>
+                          <ul className="space-y-0.5">
+                            {verdicts[b.id].memories_stored?.map((m) => (
+                              <li key={m.id} className="font-mono opacity-85">
+                                <span className="opacity-50">{m.domain}/</span>{m.name}
+                                <span className="opacity-40 ml-2">{m.id}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {verdicts[b.id]?.error && !reflectBusy && (
+                    <div className="ml-7 mt-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200/90">
+                      {verdicts[b.id].error}
+                    </div>
+                  )}
                   {isOpen && hasExcerpt && (
                     <pre className="mt-2 ml-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 text-[11px] leading-relaxed whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto">
                       {b.transcript_excerpt}

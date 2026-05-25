@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.12"
+PRISM_VERSION = "6.0.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.13: Reflect button is no longer invisible. Click → the "
+    "button transforms into a sky-blue 'reflecting Ns' chip with a "
+    "pulsing dot, a per-row in-flight card appears below the row "
+    "showing 'claude is reading PRISM source… elapsed Ns' with a "
+    "spinning SVG, and the elapsed counter ticks every 250ms (matters "
+    "for a 30-90s job — silence read as 'nothing's happening' in "
+    "v6.0.12). After completion: chip flips to green '✓ score 0.55 "
+    "· 4 mem', AND a persistent verdict drawer drops in under the "
+    "row carrying qualitative_score, confidence, duration, the full "
+    "~200-word narrative, and a click-listable bullet of every memory "
+    "stored (domain/name + mx-id). Drawer stays until the next page "
+    "load instead of dissolving with the 6s toast. Failure path: chip "
+    "goes rose 'Retry' with the error message in title hover + a "
+    "rose-tinted error panel below. \n\nAlso new: 'A brief' in the page "
+    "header is a dotted-underline link to a collapsible help card "
+    "explaining exactly what fields a brief carries (session_id, "
+    "task_id, trigger, signal_counts, transcript_excerpt), what "
+    "happens when you click Reflect (spawns claude -p headless against "
+    "the source tree, Read/Glob/Grep, max_turns=15, returns JSON), and "
+    "the runtime/cost expectation. Closes 'I don't know what's "
+    "happening or what a brief even is.' "
     "v6.0.12: Sparkline tiles go side-by-side. v6.0.11 stacked the six "
     "metrics vertically, eating ~270px of header height for what's "
     "really six tiny shapes. Refactored Sparkline to a card layout "
