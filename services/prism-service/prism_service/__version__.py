@@ -8,10 +8,30 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.17"
+PRISM_VERSION = "5.3.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.20: Startup hardening. Two regressions that user hit locally "
+    "fixed before ship: (1) Brain embedder load is now serialized with "
+    "a module-level threading.Lock so concurrent Brain.__init__ from "
+    "the drift timer + MCP tools + lifespan can't both race past the "
+    "`_MODEL is None` check, both fetch from HuggingFace, and race tqdm's "
+    "class state (`'tqdm' object has no attribute '_lock'` → one worker "
+    "silently dropped to BM25+GraphRAG only). Also sets "
+    "HF_HUB_DISABLE_PROGRESS_BARS=1 and TQDM_DISABLE=1 at brain_engine "
+    "import — server processes never show those bars to anyone and they "
+    "were the proximate cause of the race. (2) Trash sweeper "
+    "`[trash] <name>: still locked, will retry` no longer logs every 30s "
+    "for the lifetime of the process. Per-entry attempt counter logs the "
+    "warning once on first failure, stays quiet through subsequent "
+    "sweeps, and re-logs loudly once at ~1h (PRISM_TRASH_SWEEP_INTERVAL × "
+    "120) so the user knows to close the tool still holding the dir. "
+    "Successful cleanup after a prior lock logs `cleaned after retry` so "
+    "the recovery is visible. New tests/unit/test_trash_sweeper.py and "
+    "test_embedder_concurrent_load.py pin both behaviors. "
+    "v5.3.19: (skipped, local build) "
+    "v5.3.18: (skipped, local build) "
     "v5.3.17: Tauri shell auto-update wired. New "
     ".github/workflows/release-tauri.yml builds signed bundles for "
     "macOS (arm64 + x64), Windows, and Linux on every `v*` tag push, "

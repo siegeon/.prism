@@ -15,11 +15,22 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import warnings
+
+# Embedder downloads pull HuggingFace files behind a tqdm progress bar.
+# Under concurrent Brain init (drift timer + MCP tools + lifespan) tqdm's
+# class-level state races and one thread fails the load with
+# `'tqdm' object has no attribute '_lock'`. Server processes never show
+# the bars to anyone — silence them before model2vec/sentence-transformers
+# pulls tqdm in.
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TQDM_DISABLE", "1")
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -139,6 +150,7 @@ def _similar_task_ids(
 # Optional dependency detection
 # ---------------------------------------------------------------------------
 _MODEL = None
+_MODEL_LOCK = threading.Lock()
 _SQLITE_VEC_LOADED = False
 
 # Cross-encoder reranker (lazy-loaded on first use when PRISM_RERANK != off).
@@ -441,21 +453,24 @@ def _try_enable_vector(db: sqlite3.Connection) -> bool:
         preset = "potion"
     backend, model_id = _EMBEDDER_PRESETS[preset]
 
-    if _MODEL is not None:
-        return True  # already loaded (same process reuse)
-
-    try:
-        if backend == "model2vec":
-            _MODEL = _load_model2vec(model_id)
-        elif backend == "sentence-transformers":
-            _MODEL = _load_sentence_transformer(model_id)
-        print(f"Brain: embedder = {preset} ({backend}: {model_id})",
-              file=sys.stderr)
-        return True
-    except Exception as e:
-        print(f"Brain: embedder load failed ({preset}: {e!r}); BM25+GraphRAG only",
-              file=sys.stderr)
-        return False
+    # Serialize the load so two threads can't both decide _MODEL is None
+    # and both fetch from HuggingFace at once — that's how tqdm's class
+    # state races and one of them logs "embedder load failed".
+    with _MODEL_LOCK:
+        if _MODEL is not None:
+            return True  # already loaded (same process reuse)
+        try:
+            if backend == "model2vec":
+                _MODEL = _load_model2vec(model_id)
+            elif backend == "sentence-transformers":
+                _MODEL = _load_sentence_transformer(model_id)
+            print(f"Brain: embedder = {preset} ({backend}: {model_id})",
+                  file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"Brain: embedder load failed ({preset}: {e!r}); BM25+GraphRAG only",
+                  file=sys.stderr)
+            return False
 
 
 # ---------------------------------------------------------------------------
