@@ -56,7 +56,8 @@ def get_unreflected_briefs(
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT id, task_id, trigger, queued_at, last_nudged_at, retry_count "
+            "SELECT id, task_id, trigger, queued_at, last_nudged_at, "
+            "       retry_count, scope_json "
             "FROM consolidation_candidates "
             "WHERE status='pending' AND queued_at <= ? "
             "ORDER BY queued_at ASC",
@@ -64,7 +65,58 @@ def get_unreflected_briefs(
         ).fetchall()
     finally:
         conn.close()
-    return [dict(r) for r in rows]
+    # v6.0.5 — surface signal_counts + transcript_excerpt for the SPA's
+    # expand-to-see-content view. Old scope dicts (counts only) carry
+    # an empty excerpt and zeroed signal_counts, which is the right
+    # rendering for pre-v6.0.5 candidates.
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        try:
+            scope = json.loads(d.pop("scope_json", None) or "{}")
+        except Exception:
+            scope = {}
+        d["signal_counts"] = scope.get("signal_counts") or {}
+        d["transcript_excerpt"] = scope.get("transcript_excerpt") or ""
+        out.append(d)
+    return out
+
+
+def get_signal_rollup(scores_db: str) -> dict:
+    """Aggregate signal_counts across all consolidation_candidates plus
+    a reflections-run count. The /consolidation page renders this as a
+    headline strip so the user can see what's been *extracted* from
+    their sessions vs. what's been *reflected into memory* — which
+    answers the question "what are we actually learning?"."""
+    empty = {
+        "sessions_scanned": 0, "pushbacks": 0, "bg_signals": 0,
+        "tool_failures": 0, "memory_writes": 0,
+        "reflections_run": 0, "memories_minted": 0,
+    }
+    if not Path(scores_db).exists():
+        return empty
+    conn = sqlite3.connect(scores_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT scope_json FROM consolidation_candidates"
+        ).fetchall()
+        run_row = conn.execute(
+            "SELECT COUNT(*) AS n FROM consolidation_runs"
+        ).fetchone()
+    finally:
+        conn.close()
+    out = dict(empty)
+    for r in rows:
+        try:
+            sc = json.loads(r["scope_json"] or "{}").get("signal_counts") or {}
+            for k in ("pushbacks", "bg_signals", "tool_failures", "memory_writes"):
+                out[k] += int(sc.get(k) or 0)
+        except Exception:
+            continue
+    out["sessions_scanned"] = len(rows)
+    out["reflections_run"] = int((run_row or {"n": 0})["n"])
+    return out
 
 
 def get_recent_runs(scores_db: str, limit: int = 20) -> list[dict]:

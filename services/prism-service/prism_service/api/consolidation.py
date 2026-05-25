@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query
 from prism_service.project_context import get_project
 from prism_service.services.consolidation_data import (
     get_queue_summary, get_unreflected_briefs, get_recent_runs,
-    backfill_from_sessions,
+    backfill_from_sessions, get_signal_rollup,
 )
 
 router = APIRouter()
@@ -28,6 +28,7 @@ def overview(
         "queue": get_queue_summary(scores_db),
         "unreflected": get_unreflected_briefs(scores_db, age_hours=pending_age_hours),
         "recent_runs": get_recent_runs(scores_db, limit=runs_limit),
+        "signal_rollup": get_signal_rollup(scores_db),
     }
 
 

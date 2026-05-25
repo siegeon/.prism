@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.5"
+PRISM_VERSION = "6.0.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.6: Learning loop is now visible. Three changes addressing "
+    "'I have trouble seeing what we are learning even though I know we "
+    "have tons of things going on': (1) sidebar regrouped so Sessions, "
+    "Consolidation, and Learning sit together as 'Learning loop' in "
+    "pipeline order (top-to-bottom = data flow). Memory stays in "
+    "Activity because it's both the loop's artifact and the primary "
+    "input to every future session. (2) New get_signal_rollup() "
+    "aggregates pushbacks / tool_failures / bg_signals / memory_writes "
+    "across all consolidation_candidates and counts consolidation_runs "
+    "— exposed on /api/consolidation as signal_rollup. (3) /consolidation "
+    "renders a headline KPI strip with those counts plus the punchline: "
+    "'N signals queued but 0 reflections run — none of this has been "
+    "promoted into /memory or scored on /learning.' Makes the gap "
+    "between 'extracted' and 'learned' visible at a glance. The "
+    "Brief table also now shows per-row signal badges (push / fail / "
+    "bg / mem in amber / rose / sky / emerald) and the brief id "
+    "becomes a click-to-expand chevron revealing the full "
+    "transcript_excerpt that gets shown to the reflection sub-agent. "
+    "Pre-v6.0.5 candidates render empty badges and no excerpt — "
+    "correct, since they were enqueued before signal extraction "
+    "existed. "
     "v6.0.5: Transcript signals -> consolidation pipeline. The disk-"
     "reader (claude_transcripts.import_unseen) was inserting "
     "session_outcomes via raw SQL and silently bypassing the "

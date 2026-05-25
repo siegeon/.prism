@@ -48,10 +48,19 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/memory", label: "Memory", icon: BookOpen },
       { to: "/tasks", label: "Tasks", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
-      { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/retrievals", label: "Retrievals", icon: Search },
-      { to: "/learning", label: "Learning", icon: Sparkles },
+    ],
+  },
+  // v6.0.6 — the four stages of the learning loop sit together so the
+  // pipeline reads top-to-bottom: transcripts -> queued briefs ->
+  // reflection output. Memory stays in Activity because it's both the
+  // loop's artifact AND the primary input to every future session.
+  {
+    label: "Learning loop",
+    items: [
+      { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/consolidation", label: "Consolidation", icon: Layers },
+      { to: "/learning", label: "Learning", icon: Sparkles },
     ],
   },
 ];
