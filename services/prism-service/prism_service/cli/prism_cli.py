@@ -150,18 +150,64 @@ def cmd_stop(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _port_serving(port: int, path: str = "/api/version") -> tuple[bool, str]:
+    """Probe a port via HTTP; return (alive, version_or_empty).
+
+    Bug-fix for v5.3.x — cmd_status previously only checked the pidfile.
+    But anything that starts the daemon WITHOUT going through
+    `prism start --daemon` (Tauri shell spawn, `python -m
+    prism_service.main`, docker container, systemd unit, customer's
+    manual launch) doesn't write a pidfile, so status reported
+    "stopped" against a perfectly-alive service. Probing the actual
+    port closes that gap.
+    """
+    import urllib.request
+    import urllib.error
+    url = f"http://127.0.0.1:{port}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as resp:
+            if resp.status != 200:
+                return (False, "")
+            body = resp.read(2048).decode("utf-8", errors="replace")
+            # Try to pluck the version out of the JSON body without a
+            # full json.load, so this stays fast.
+            import re
+            m = re.search(r'"version"\s*:\s*"([^"]+)"', body)
+            return (True, m.group(1) if m else "")
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return (False, "")
+
+
 def cmd_status(_args: argparse.Namespace) -> int:
     from prism_service.__version__ import PRISM_VERSION
+    ui = int(os.environ.get("PRISM_UI_PORT", "7778"))
+    mcp = int(os.environ.get("PRISM_MCP_PORT", "7777"))
+
     pid = _read_pid()
-    alive = bool(pid) and _is_alive(pid)
-    print(f"prism-service v{PRISM_VERSION}")
+    pid_alive = bool(pid) and _is_alive(pid)
+    port_alive, served_version = _port_serving(ui)
+
+    running = pid_alive or port_alive
+
+    print(f"prism-service v{PRISM_VERSION} (cli)")
     print(f"  data dir: {_data_dir()}")
-    print(f"  daemon:   {'running (pid ' + str(pid) + ')' if alive else 'stopped'}")
-    if alive:
-        ui = os.environ.get("PRISM_UI_PORT", "7778")
-        mcp = os.environ.get("PRISM_MCP_PORT", "7777")
+    if running:
+        if pid_alive and port_alive:
+            print(f"  daemon:   running (pid {pid}, port {ui} responding)")
+        elif pid_alive:
+            print(f"  daemon:   running (pid {pid}; port {ui} not responding yet)")
+        else:
+            # Service is up but we didn't start it (or the pidfile is
+            # stale). Common for Tauri-shell-spawned / docker / systemd.
+            print(f"  daemon:   running (port {ui} responding; no pidfile — "
+                  f"started by tauri shell, docker, or manual launch)")
+        if served_version and served_version != PRISM_VERSION:
+            print(f"  served:   v{served_version} (CLI is v{PRISM_VERSION} — "
+                  f"different prism-service install)")
         print(f"  ui:       http://localhost:{ui}/")
         print(f"  mcp:      http://localhost:{mcp}/mcp/")
+    else:
+        print(f"  daemon:   stopped (no pidfile, port {ui} not responding)")
     return 0
 
 

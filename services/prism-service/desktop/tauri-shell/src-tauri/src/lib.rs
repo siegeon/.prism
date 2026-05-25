@@ -60,22 +60,89 @@ unsafe impl Send for JobHandle {}
 #[cfg(windows)]
 unsafe impl Sync for JobHandle {}
 
+/// Resolve the directory containing prism_service/pyproject.toml.
+/// Three lookup layers in order:
+///   1. `PRISM_SERVICE_DIR` env var override.
+///   2. Walk up from the running exe — covers installed bundles where
+///      Tauri drops the python tree next to the binary, plus most
+///      pip-install layouts where the wheel lives next to its source.
+///   3. Compile-time `CARGO_MANIFEST_DIR` 3 levels up — covers
+///      `cargo tauri dev` where the exe is in `tauri-target/` (often on
+///      a different drive from the worktree) but the source still lives
+///      where it was at compile time. Falls through gracefully if that
+///      path doesn't exist on the user's box (e.g. a CI-built bundle
+///      where the manifest_dir referenced the runner's checkout).
+fn find_service_dir() -> std::path::PathBuf {
+    use std::path::PathBuf;
+
+    if let Ok(d) = std::env::var("PRISM_SERVICE_DIR") {
+        return PathBuf::from(d);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for parent in exe.ancestors() {
+            let candidate = parent.join("services").join("prism-service");
+            if candidate.join("pyproject.toml").is_file() {
+                return candidate;
+            }
+            if parent.join("pyproject.toml").is_file()
+                && parent.join("prism_service").is_dir()
+            {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    // src-tauri/../../.. = services/prism-service (the service dir).
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(dev) = manifest_dir
+        .parent()                  // tauri-shell
+        .and_then(|p| p.parent())  // desktop
+        .and_then(|p| p.parent())  // prism-service
+    {
+        if dev.join("pyproject.toml").is_file() {
+            return dev.to_path_buf();
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Pick the Python invocation to spawn the service with. Honors
+/// `PRISM_PYTHON` first; on Windows tries the 8.3 short path of
+/// `C:\Program Files\Python312\python.exe` to dodge the argv-split bug
+/// when the canonical path has spaces; on Linux/macOS defaults to
+/// `python3`. Returns a Vec so we can use multi-arg launchers like
+/// `py -3` if needed later.
+fn find_python() -> Vec<String> {
+    if let Ok(p) = std::env::var("PRISM_PYTHON") {
+        return p.split_whitespace().map(String::from).collect();
+    }
+    if cfg!(windows) {
+        // 8.3 short name works when the canonical install path is
+        // `C:\Program Files\Python312\python.exe`. If the user has
+        // python in a different location, they can override via
+        // PRISM_PYTHON. Falling back to bare `python` for non-standard
+        // installs (will resolve via PATH).
+        let short = r"C:\PROGRA~1\PYTHON~1\python.exe";
+        if std::path::Path::new(short).exists() {
+            return vec![short.to_string()];
+        }
+        return vec!["python".to_string()];
+    }
+    // POSIX — PEP 394 makes python3 canonical and python.org installs
+    // ship it as /usr/bin/python3. Override via PRISM_PYTHON if a venv
+    // is required.
+    vec!["python3".to_string()]
+}
+
 fn spawn_prism_service() -> std::io::Result<Child> {
-    let cwd = std::env::var("PRISM_SERVICE_DIR").unwrap_or_else(|_| {
-        r"E:\.prism\.claude\worktrees\v6-pivot\services\prism-service".to_string()
-    });
-    // 8.3 short path so msvcrt's argv parser doesn't choke on the space
-    // in "C:\Program Files\".
-    let python = std::env::var("PRISM_PYTHON")
-        .unwrap_or_else(|_| r"C:\PROGRA~1\PYTHON~1\python.exe".to_string());
+    let cwd = find_service_dir();
+    let python = find_python();
+    let python_exe = python.first().cloned().unwrap_or_else(|| "python3".to_string());
 
     // v5.3.21 — tell the spawned service whether we're a dev or release
-    // shell. The shell's own compile-time version (env CARGO_PKG_VERSION
-    // here; package_info().version is the runtime form) is "0.1.0" only
-    // on local cargo tauri dev. Installed bundles have the real
+    // shell. The shell's own compile-time version is "0.1.0" only on
+    // local cargo tauri dev; installed bundles have the real
     // PRISM_VERSION baked in via the v5.3.19 CI sync step. SPA footer
-    // surfaces this so the user can tell at a glance which build they
-    // are testing.
+    // surfaces this so the user can tell at a glance which build is live.
     let shell_version = env!("CARGO_PKG_VERSION");
     let build_mode = if shell_version.starts_with("0.0") || shell_version == "0.1.0" {
         "dev"
@@ -83,25 +150,35 @@ fn spawn_prism_service() -> std::io::Result<Child> {
         "release"
     };
 
-    eprintln!("[prism-shell] python: {python}");
-    eprintln!("[prism-shell] cwd:    {cwd}");
+    eprintln!("[prism-shell] python: {python:?}");
+    eprintln!("[prism-shell] cwd:    {}", cwd.display());
     eprintln!("[prism-shell] build_mode: {build_mode} (shell version {shell_version})");
 
-    Command::new(&python)
-        .args([
-            "-m",
-            "prism_service.cli.prism_cli",
-            "start",
-            "--ui-port",
-            "7778",
-            "--mcp-port",
-            "7777",
-        ])
-        .current_dir(&cwd)
-        .env("PRISM_DATA_DIR", r"C:\Users\siege\.claude\jobs\eeadb7d2\v6-data")
-        .env("PRISM_BUILD_MODE", build_mode)
-        .env("PRISM_SHELL_VERSION", shell_version)
-        .spawn()
+    let mut cmd = Command::new(&python_exe);
+    // Trailing python args (e.g. `-3` for the py launcher) before the
+    // module/arguments.
+    for arg in python.iter().skip(1) {
+        cmd.arg(arg);
+    }
+    cmd.args([
+        "-m",
+        "prism_service.cli.prism_cli",
+        "start",
+        "--ui-port",
+        "7778",
+        "--mcp-port",
+        "7777",
+    ])
+    .current_dir(&cwd)
+    .env("PRISM_BUILD_MODE", build_mode)
+    .env("PRISM_SHELL_VERSION", shell_version);
+    // Note: we intentionally do NOT set PRISM_DATA_DIR here. The python
+    // service's resolve_data_dir() handles platform-aware defaults
+    // (%LOCALAPPDATA%\prism on Windows, ~/.prism on Linux/macOS, /data
+    // in docker). Users who want a non-default data dir can set
+    // PRISM_DATA_DIR in their environment before launching the shell;
+    // it's inherited automatically.
+    cmd.spawn()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
