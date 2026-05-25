@@ -8,10 +8,16 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.20"
+PRISM_VERSION = "5.3.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.21: Regression coverage for analyzer_runner._strip_preamble_to_"
+    "heading + _classify. The preamble-strip fix landed earlier without "
+    "tests; 16 unit tests now pin behavior across the markdown path "
+    "(h1-at-start, h1-after-prose, indented-h1, empty, no-heading-fails) "
+    "and the dict path (schema/steps/layers/domains keys, error envelope, "
+    "exit-nonzero -> partial). No logic change. "
     "v5.3.20: Startup hardening. Two regressions that user hit locally "
     "fixed before ship: (1) Brain embedder load is now serialized with "
     "a module-level threading.Lock so concurrent Brain.__init__ from "
