@@ -8,10 +8,27 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.14"
+PRISM_VERSION = "5.3.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.15: Disk-reader for Claude session transcripts. Claude Code "
+    "persists every session as a JSONL at ~/.claude/projects/<slug>/"
+    "<uuid>.jsonl. New `claude_transcripts` service walks those, "
+    "matches each transcript to a PRISM project by slug prefix, and "
+    "inserts any unseen session_id into session_outcomes. Runs on a "
+    "60s timer (PRISM_TRANSCRIPT_POLL_S) + manually via POST "
+    "/api/sessions/import-transcripts. Cuts the dependency on the Stop "
+    "hook (which silently no-ops on Windows when commands say `python3` "
+    "— the MS Store stub eats them, no error surfaces). Cross-platform: "
+    "uses resolve_claude_home() so it Just Works on Linux / macOS too. "
+    "Backfills the user's historical sessions on first run. "
+    "Hook audit: of the 6 hooks prism_install ships, 5 are now "
+    "redundant (stop, subagent, feedback-signal, skill-usage, "
+    "idle-rebuild — all derivable from the JSONL post-hoc). Only "
+    "sync (SessionStart prep) + edit-learn (mid-session brain "
+    "freshness) need to fire in-line. Next patch will slim the "
+    "manifest. "
     "v5.3.14: Brain /ask actually returns answers now. v5.3.13 hit "
     "exit_code=1 + empty answer because `allowed_tools=()` doesn't "
     "disable claude's default tool set — claude was calling Grep on "

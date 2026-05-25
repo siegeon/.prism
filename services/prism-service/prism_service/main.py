@@ -206,6 +206,13 @@ async def lifespan(_app: FastAPI):
         # the OS releases SQLite file locks the timer threads hold open.
         from prism_service.services.trash import start_trash_sweeper
         threading.Thread(target=start_trash_sweeper, daemon=True).start()
+        # v5.3.15 — read claude session transcripts directly from
+        # ~/.claude/projects/<slug>/*.jsonl and populate session_outcomes.
+        # Cuts the dependency on the Stop hook (which silently no-ops on
+        # Windows when commands say `python3` — the MS Store stub eats
+        # them) and backfills the user's historical sessions.
+        from prism_service.services.claude_transcripts import start_transcript_importer
+        threading.Thread(target=start_transcript_importer, daemon=True).start()
     except Exception as e:
         print(f"Startup error: {e}", file=_sys.stderr, flush=True)
     yield
