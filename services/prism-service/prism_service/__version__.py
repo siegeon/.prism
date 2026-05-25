@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.9"
+PRISM_VERSION = "6.0.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.10: Manual reflection trigger closes the loop. New POST "
+    "/api/consolidation/run-reflection?candidate_id=X loads the "
+    "candidate, builds a single-shot prompt from the prism-reflect "
+    "agent guidance + the brief, shells out via claude_cli.invoke "
+    "(max_turns=1, allowed_tools=()) for a tokens-cheap headless run, "
+    "parses the JSON verdict (strips markdown fences if present), "
+    "calls JanitorService.submit, AND iterates verdict.new_memories "
+    "calling memory_svc.store for each — because JanitorService.submit "
+    "only COUNTS new_memories, it doesn't actually store them (the "
+    "LL-08 docstring punts to 'caller wires this up' and the MCP layer "
+    "doesn't either). Closing that gap here means a successful "
+    "reflection run causes a consolidation_runs row + task_quality_"
+    "rollup update + zero-or-more ExpertiseEntry inserts as one atomic-"
+    "ish action. The SPA gains a 'Reflect' button on each pending brief "
+    "row in /consolidation; click triggers the endpoint, toast reports "
+    "duration + memories stored, /memory + /learning fill in real time. "
+    "Single-shot variant intentionally — no MCP plumbing, no .mcp.json "
+    "routing risk, ~15-30s per run, costs only when YOU click. "
     "v6.0.9: Three concrete wins for 'can I see this actually do "
     "anything': (1) Memory entries become click-to-expand — full "
     "description, id, importance, memory_type, effectiveness (color-"

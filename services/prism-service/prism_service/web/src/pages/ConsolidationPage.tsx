@@ -88,6 +88,31 @@ export default function ConsolidationPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [preview, setPreview] = useState<NextBrief | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [reflectBusy, setReflectBusy] = useState<string | null>(null);
+
+  const runReflection = async (candidateId: string) => {
+    setReflectBusy(candidateId);
+    setNotice(`Running reflection on ${candidateId.slice(0, 8)}… this takes ~15-30s.`);
+    try {
+      const r = await api.post<{
+        ok: boolean; error?: string; verdict?: Record<string, unknown>;
+        memories_stored?: unknown[]; run_id?: string; duration_s?: number;
+      }>(`/api/consolidation/run-reflection?candidate_id=${candidateId}&project=${project}`, {});
+      if (!r.ok) {
+        setNotice(`Reflection failed: ${r.error ?? "unknown error"}`);
+      } else {
+        const storedN = (r.memories_stored ?? []).length;
+        setNotice(
+          `Reflection complete in ${r.duration_s ?? "?"}s. Stored ${storedN} new memor${storedN === 1 ? "y" : "ies"}. Check /learning + /memory.`,
+        );
+        load();
+      }
+    } catch (e) {
+      setNotice(`Reflection error: ${(e as Error).message ?? e}`);
+    } finally {
+      setReflectBusy(null);
+    }
+  };
 
   useEffect(() => {
     api.get<{ workers: Worker[] }>("/api/consolidation/workers")
@@ -379,6 +404,14 @@ export default function ConsolidationPage() {
                     </span>
                     <span className="text-xs opacity-60 w-24 text-right">retries {b.retry_count ?? 0}</span>
                     <span className="text-xs opacity-60 w-16 text-right">{ageH.toFixed(1)}h</span>
+                    <button
+                      onClick={() => runReflection(b.id)}
+                      disabled={reflectBusy !== null}
+                      className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
+                      title="Spawn claude -p headless to score this brief and store any new memories"
+                    >
+                      {reflectBusy === b.id ? "…" : "Reflect"}
+                    </button>
                   </div>
                   {isOpen && hasExcerpt && (
                     <pre className="mt-2 ml-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 text-[11px] leading-relaxed whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto">
