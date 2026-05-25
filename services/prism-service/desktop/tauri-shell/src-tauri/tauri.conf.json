@@ -31,6 +31,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/siegeon/.prism/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY4RDY1Nzg4OUE0MjEyQjIKUldTeUVrS2FpRmZXK0FtUTltWTZJSXdwMGV6Sm0vWUhFbk95bTNxay9HQjVKd0oycVRRdkdHYWkK"
+    }
   }
 }

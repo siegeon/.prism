@@ -91,6 +91,7 @@ fn spawn_prism_service() -> std::io::Result<Child> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ServiceChild(Mutex::new(None)));
 
     #[cfg(windows)]
@@ -98,6 +99,35 @@ pub fn run() {
 
     let app = app
         .setup(|app| {
+            // v5.3.17 — check for updates on launch via Tauri's bundled
+            // updater. With `dialog: true` in tauri.conf.json the plugin
+            // shows a native prompt when a signed manifest at
+            // .../releases/latest/download/latest.json advertises a
+            // newer version. Runs async so service spawn isn't blocked
+            // by the network round-trip.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri_plugin_updater::UpdaterExt;
+                match handle.updater() {
+                    Ok(updater) => match updater.check().await {
+                        Ok(Some(update)) => {
+                            eprintln!(
+                                "[prism-shell] update available: {} -> {}",
+                                update.current_version, update.version,
+                            );
+                            let _ = update
+                                .download_and_install(|_, _| {}, || {
+                                    eprintln!("[prism-shell] update installed; restart pending");
+                                })
+                                .await;
+                        }
+                        Ok(None) => eprintln!("[prism-shell] no update available"),
+                        Err(e) => eprintln!("[prism-shell] update check failed: {e}"),
+                    },
+                    Err(e) => eprintln!("[prism-shell] updater unavailable: {e}"),
+                }
+            });
+
             match spawn_prism_service() {
                 Ok(child) => {
                     let pid = child.id();

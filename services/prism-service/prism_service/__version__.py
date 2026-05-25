@@ -8,10 +8,22 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.16"
+PRISM_VERSION = "5.3.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.17: Tauri shell auto-update wired. New "
+    ".github/workflows/release-tauri.yml builds signed bundles for "
+    "macOS (arm64 + x64), Windows, and Linux on every `v*` tag push, "
+    "uploads to GitHub Releases via tauri-apps/tauri-action, and "
+    "generates a `latest.json` updater manifest. The shell calls "
+    "`updater.check()` on launch (in src/lib.rs setup hook); if the "
+    "manifest reports a newer version, Tauri prompts via native "
+    "dialog and downloads + installs the signed bundle. Distribution "
+    "shape unchanged for docker (GHCR :latest auto-pulled by "
+    "Watchtower); Tauri shell now has parity. Manifest verification "
+    "uses an embedded minisign pubkey — repo secret "
+    "TAURI_SIGNING_PRIVATE_KEY signs the bundles in CI. "
     "v5.3.16: prism_install manifest slimmed from 6 hooks to 3, "
     "matching the v5.3.15 disk-reader. Removed: prism-stop, "
     "prism-subagent, prism-skill-usage, prism-idle-rebuild — all "
