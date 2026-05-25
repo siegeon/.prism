@@ -8,10 +8,17 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.18"
+PRISM_VERSION = "5.3.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.19: CI auto-syncs tauri.conf.json version to PRISM_VERSION "
+    "before each release build, so the shipped .msi/.dmg/.AppImage's "
+    "internal version (what the updater compares) advances in lockstep "
+    "with the PRISM patch number. v5.3.17/18 worked their way through "
+    "compile + sign but the bundle internally said 0.1.0 (the scaffold "
+    "default), which meant the updater would never see itself as out "
+    "of date no matter how many releases got pushed. "
     "v5.3.18: CI fix — `release-tauri.yml` now passes `GITHUB_TOKEN` "
     "into the `tauri-apps/tauri-action` env block. v5.3.17's first run "
     "got past compile + sign (all .msi/.dmg/.AppImage bundles built "

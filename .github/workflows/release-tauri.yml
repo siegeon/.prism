@@ -72,6 +72,29 @@ jobs:
           cd services/prism-service/desktop/tauri-shell
           npm install --no-audit --no-fund
 
+      - name: Sync Tauri shell version to PRISM_VERSION
+        shell: bash
+        run: |
+          # tauri.conf.json's version is what the updater compares to
+          # decide whether a newer release is available. Without this
+          # sync the shipped .msi/.dmg/.AppImage internally reports
+          # whatever was committed (0.1.0 from the scaffold) and the
+          # updater never advances. Pull the canonical version from
+          # the Python __version__ and rewrite the JSON in place.
+          python - <<'PY'
+          import json, re, pathlib
+          version_py = pathlib.Path("services/prism-service/prism_service/__version__.py").read_text()
+          m = re.search(r'PRISM_VERSION\s*=\s*"([^"]+)"', version_py)
+          if not m:
+              raise SystemExit("PRISM_VERSION not found in __version__.py")
+          v = m.group(1)
+          conf = pathlib.Path("services/prism-service/desktop/tauri-shell/src-tauri/tauri.conf.json")
+          d = json.loads(conf.read_text())
+          d["version"] = v
+          conf.write_text(json.dumps(d, indent=2))
+          print(f"tauri.conf.json version -> {v}")
+          PY
+
       - name: Build + sign Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
