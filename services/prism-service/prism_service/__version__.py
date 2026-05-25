@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.0"
+PRISM_VERSION = "6.0.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.1: Native auto-update finally works. v6.0.0 shipped the "
+    "native install path but left it without a real update mechanism — "
+    "the `prism update` CLI was a no-op because prism-service was "
+    "never published anywhere pip could pull from. v6.0.1 closes the "
+    "gap: release.yml now builds a wheel on every tag push and "
+    "attaches it to the GitHub Release. A background poller in the "
+    "service hits api.github.com/repos/<owner>/<repo>/releases/latest "
+    "every 30 min (PRISM_AUTO_UPDATE_INTERVAL), and when a newer "
+    "SemVer tag is found, downloads the wheel + runs "
+    "`pip install --upgrade <wheel>` + re-execs the daemon. Docker "
+    "installs short-circuit (Watchtower's job). Linux/Mac get clean "
+    "in-place upgrade; Windows surfaces 'restart required to apply' "
+    "because pip can't replace a running python.exe. New endpoints: "
+    "GET /api/update/status, POST /api/update/check, POST "
+    "/api/update/apply. Opt-out: PRISM_AUTO_UPDATE=off. "
     "v6.0.0: NATIVE FIRST. The v5.3.x 'pip + Tauri v6.0.0-dev' series "
     "is now stable; this release marks the distribution-shape cutover. "
     "Primary install paths: `pipx install prism-service` for terminal "

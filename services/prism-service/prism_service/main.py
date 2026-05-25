@@ -206,6 +206,11 @@ async def lifespan(_app: FastAPI):
         # the OS releases SQLite file locks the timer threads hold open.
         from prism_service.services.trash import start_trash_sweeper
         threading.Thread(target=start_trash_sweeper, daemon=True).start()
+        # v6.0.1 — poll GitHub Releases for newer versions and auto-apply.
+        # Skips itself on docker (Watchtower's domain) and respects
+        # PRISM_AUTO_UPDATE=off / PRISM_AUTO_UPDATE_INTERVAL=0.
+        from prism_service.services.auto_updater import start_auto_updater
+        start_auto_updater()
         # v5.3.15 — read claude session transcripts directly from
         # ~/.claude/projects/<slug>/*.jsonl and populate session_outcomes.
         # Cuts the dependency on the Stop hook (which silently no-ops on

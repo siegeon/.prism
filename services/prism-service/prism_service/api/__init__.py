@@ -28,6 +28,7 @@ from prism_service.api.sessions import router as sessions_router
 from prism_service.api.tasks import router as tasks_router
 from prism_service.api.staleness import router as staleness_router
 from prism_service.api.understand import router as understand_router
+from prism_service.api.update import router as update_router
 from prism_service.api.version import router as version_router
 
 api_router = APIRouter(prefix="/api")
@@ -49,4 +50,5 @@ api_router.include_router(sessions_router, prefix="/sessions", tags=["sessions"]
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(staleness_router, prefix="/staleness", tags=["staleness"])
 api_router.include_router(understand_router, prefix="/understand", tags=["understand"])
+api_router.include_router(update_router, prefix="/update", tags=["update"])
 api_router.include_router(version_router, prefix="/version", tags=["version"])
