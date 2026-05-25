@@ -225,12 +225,233 @@ export default function SettingsPage() {
       )}
 
       {section === "service" && (
-        <Card>
-          <SectionLabel>Service</SectionLabel>
-          <ServiceInfoPanel />
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <SectionLabel>Updates</SectionLabel>
+            <UpdatesPanel />
+          </Card>
+          <Card>
+            <SectionLabel>Service</SectionLabel>
+            <ServiceInfoPanel />
+          </Card>
+        </div>
       )}
     </Page>
+  );
+}
+
+
+type UpdateStatus = {
+  running_version: string;
+  latest_version: string | null;
+  latest_published_at: string | null;
+  update_available: boolean;
+  in_docker: boolean;
+  auto_apply_enabled: boolean;
+  last_check_at: number;
+  last_check_ok: boolean;
+  last_error: string;
+  restart_required: boolean;
+  asset_url: string | null;
+  poll_interval_s: number;
+};
+
+function UpdatesPanel() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [appliedNotice, setAppliedNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const s = await api.get<UpdateStatus>("/api/update/status");
+      setStatus(s);
+      setError(null);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  // Poll every 30s so the panel reflects background checks in close to
+  // real-time. Cheap — single GET against a cached in-memory dict.
+  useEffect(() => {
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const forceCheck = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const s = await api.post<UpdateStatus>("/api/update/check", {});
+      setStatus(s);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const applyNow = async () => {
+    setApplying(true);
+    setError(null);
+    setAppliedNotice(null);
+    try {
+      const result = await api.post<{
+        ok: boolean;
+        target_version?: string;
+        restart_required?: boolean;
+        restart_auto?: boolean;
+      }>("/api/update/apply", {});
+      if (result.ok) {
+        const v = result.target_version ?? "the new version";
+        if (result.restart_auto) {
+          setAppliedNotice(
+            `Installed ${v}. Re-executing the daemon now — page may reconnect.`,
+          );
+        } else {
+          setAppliedNotice(
+            `Installed ${v}. Restart required — run \`prism stop && prism start --daemon\` on the host.`,
+          );
+        }
+      }
+      await load();
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  if (!status) {
+    return error
+      ? <div className="text-sm text-rose-200">{error}</div>
+      : <div className="text-sm text-[color:var(--text-secondary)]">Loading…</div>;
+  }
+
+  const lastCheckLabel = status.last_check_at
+    ? new Date(status.last_check_at * 1000).toLocaleString()
+    : "never";
+
+  return (
+    <div className="space-y-4">
+      <dl className="text-sm grid grid-cols-[160px_1fr] gap-y-2">
+        <dt className="text-[color:var(--text-label)]">Running</dt>
+        <dd>
+          <span className="font-serif text-base">v{status.running_version}</span>
+        </dd>
+
+        <dt className="text-[color:var(--text-label)]">Latest available</dt>
+        <dd>
+          {status.latest_version ? (
+            <span className="font-mono text-sm">{status.latest_version}</span>
+          ) : (
+            <span className="text-[color:var(--text-muted)]">unknown</span>
+          )}
+          {status.latest_published_at && (
+            <span className="text-xs text-[color:var(--text-muted)] ml-2">
+              published {new Date(status.latest_published_at).toLocaleString()}
+            </span>
+          )}
+        </dd>
+
+        <dt className="text-[color:var(--text-label)]">Status</dt>
+        <dd className="text-sm">
+          {status.update_available ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200">
+                update available
+              </span>
+              <span className="text-[color:var(--text-secondary)]">
+                {status.auto_apply_enabled
+                  ? "auto-apply will trigger on the next sweep"
+                  : "manual apply only (PRISM_AUTO_UPDATE=off)"}
+              </span>
+            </span>
+          ) : status.in_docker ? (
+            <span className="text-[color:var(--text-secondary)]">
+              running in docker — Watchtower handles updates
+            </span>
+          ) : status.last_check_ok ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200">
+                up to date
+              </span>
+              <span className="text-[color:var(--text-secondary)]">
+                last checked {lastCheckLabel}
+              </span>
+            </span>
+          ) : (
+            <span className="text-rose-200">
+              last check failed: {status.last_error || "unknown"}
+            </span>
+          )}
+        </dd>
+
+        <dt className="text-[color:var(--text-label)]">Poll interval</dt>
+        <dd className="text-sm">
+          every <span className="font-mono">{status.poll_interval_s}s</span>
+          {status.poll_interval_s === 0 && (
+            <span className="text-[color:var(--text-muted)] ml-2">(disabled)</span>
+          )}
+        </dd>
+
+        <dt className="text-[color:var(--text-label)]">Auto-apply</dt>
+        <dd className="text-sm text-[color:var(--text-secondary)]">
+          {status.auto_apply_enabled
+            ? "enabled — updates download + install + restart on their own"
+            : "disabled (PRISM_AUTO_UPDATE=off) — manual button only"}
+        </dd>
+      </dl>
+
+      {status.restart_required && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-100 px-3 py-2 text-sm">
+          New version installed — daemon restart required to apply.
+          On Linux/Mac the service re-execs itself; on Windows run{" "}
+          <span className="font-mono">prism stop && prism start --daemon</span>.
+        </div>
+      )}
+
+      {appliedNotice && (
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-100 px-3 py-2 text-sm">
+          {appliedNotice}
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={forceCheck}
+          disabled={checking || applying}
+          className="px-3 py-2 rounded-md border border-[color:var(--border-default)] text-xs uppercase tracking-wider disabled:opacity-40 hover:bg-[color:var(--surface-2)]"
+        >
+          {checking ? "Checking…" : "Check now"}
+        </button>
+        {status.update_available && !status.in_docker && (
+          <button
+            type="button"
+            onClick={applyNow}
+            disabled={applying || checking}
+            className="px-4 py-2 rounded-md bg-[color:var(--text-primary)] text-[color:var(--surface-0)] text-xs uppercase tracking-wider disabled:opacity-40"
+          >
+            {applying ? "Updating…" : `Update to ${status.latest_version}`}
+          </button>
+        )}
+        {status.in_docker && (
+          <span className="text-xs text-[color:var(--text-muted)]">
+            apply disabled — docker installs use Watchtower
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 

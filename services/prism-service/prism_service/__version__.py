@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.2"
+PRISM_VERSION = "6.0.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.3: Settings -> Service grows an 'Updates' panel surfacing the "
+    "v6.0.1 auto-updater state. Shows running version, latest available, "
+    "last check, status pill (up-to-date / update-available / docker / "
+    "error). 'Check now' button forces a fresh poll; 'Update to vX.Y.Z' "
+    "button triggers download + pip install + re-exec on Linux/Mac (or "
+    "surfaces 'restart required' on Windows). Docker installs see the "
+    "panel but apply is disabled (Watchtower owns that path). Polls "
+    "/api/update/status every 30s so background-check state propagates "
+    "into the UI without manual refresh. "
     "v6.0.2: Fix release.yml — `npm ci` was failing because the SPA's "
     "package-lock.json isn't committed. Swapped to `npm install` so "
     "the wheel build can produce web_dist/ on the GitHub Action "
