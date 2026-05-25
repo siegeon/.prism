@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.10"
+PRISM_VERSION = "6.0.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.11: Reflection grounded in PRISM source + 14-day trend "
+    "sparklines. v6.0.10's single-shot variant (max_turns=1, "
+    "allowed_tools=()) had no source access, so the memories it "
+    "extracted were generic agent advice ('read-before-edit', 'glob-"
+    "no-head-limit') with nothing to anchor them to THIS repo. Fixed: "
+    "run-reflection now mirrors analyzer_runner's pattern — max_turns=15, "
+    "allowed_tools=(Read, Glob, Grep), work_dir=source_service."
+    "source_dir_for(project), and a rewritten prompt that REQUIRES the "
+    "agent to verify each claim against the actual checkout (cite "
+    "concrete file paths in every memory description). The PRISM-"
+    "specific-vs-generic split is now explicit: a memory like 'user "
+    "prefers small commits' is rejected as worthless, a memory like "
+    "'prism_service/services/claude_transcripts.py:128 walks JSONL but "
+    "discards content' is the bar. New get_trends(scores_db, days=14) "
+    "buckets session_outcomes + consolidation_candidates.scope.signal_"
+    "counts + consolidation_runs by UTC day; /api/consolidation gains "
+    "a `trends` field; SPA renders six hand-rolled SVG sparklines "
+    "(sessions / pushbacks / tool_failures / bg_signals / memory_writes / "
+    "reflections) with independent y-axes and a 14d totals column, so "
+    "the question 'is this thing moving' has a visual answer instead of "
+    "a number-only KPI strip. "
     "v6.0.10: Manual reflection trigger closes the loop. New POST "
     "/api/consolidation/run-reflection?candidate_id=X loads the "
     "candidate, builds a single-shot prompt from the prism-reflect "

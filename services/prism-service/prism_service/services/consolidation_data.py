@@ -119,6 +119,71 @@ def get_signal_rollup(scores_db: str) -> dict:
     return out
 
 
+def get_trends(scores_db: str, days: int = 14) -> dict:
+    """v6.0.11 — Per-day rollup for the SPA sparkline strip.
+
+    Buckets the last ``days`` UTC days by session_outcomes.timestamp
+    and aggregates: sessions, total tool failures, total pushbacks
+    (counts pulled from consolidation_candidates.scope_json). Days
+    with no activity are present with zero values so the sparkline
+    renders a continuous baseline.
+    """
+    from datetime import date, datetime, timedelta, timezone
+    today = datetime.now(timezone.utc).date()
+    buckets = {
+        (today - timedelta(days=i)).isoformat(): {
+            "sessions": 0, "pushbacks": 0, "tool_failures": 0,
+            "bg_signals": 0, "memory_writes": 0, "reflections": 0,
+        }
+        for i in range(days)
+    }
+    if not Path(scores_db).exists():
+        return {"days": sorted(buckets.keys()), "series": buckets}
+    conn = sqlite3.connect(scores_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Sessions by day
+        rows = conn.execute(
+            "SELECT substr(timestamp, 1, 10) AS day, COUNT(*) AS n "
+            "FROM session_outcomes WHERE substr(timestamp, 1, 10) >= ? "
+            "GROUP BY day",
+            ((today - timedelta(days=days - 1)).isoformat(),),
+        ).fetchall()
+        for r in rows:
+            if r["day"] in buckets:
+                buckets[r["day"]]["sessions"] = int(r["n"])
+        # Signal counts per candidate, summed per day of queued_at
+        rows = conn.execute(
+            "SELECT substr(queued_at, 1, 10) AS day, scope_json "
+            "FROM consolidation_candidates "
+            "WHERE substr(queued_at, 1, 10) >= ?",
+            ((today - timedelta(days=days - 1)).isoformat(),),
+        ).fetchall()
+        for r in rows:
+            day = r["day"]
+            if day not in buckets:
+                continue
+            try:
+                sc = json.loads(r["scope_json"] or "{}").get("signal_counts") or {}
+            except Exception:
+                continue
+            for k in ("pushbacks", "tool_failures", "bg_signals", "memory_writes"):
+                buckets[day][k] += int(sc.get(k) or 0)
+        # Reflections per day
+        rows = conn.execute(
+            "SELECT substr(run_at, 1, 10) AS day, COUNT(*) AS n "
+            "FROM consolidation_runs WHERE substr(run_at, 1, 10) >= ? "
+            "GROUP BY day",
+            ((today - timedelta(days=days - 1)).isoformat(),),
+        ).fetchall()
+        for r in rows:
+            if r["day"] in buckets:
+                buckets[r["day"]]["reflections"] = int(r["n"])
+    finally:
+        conn.close()
+    return {"days": sorted(buckets.keys()), "series": buckets}
+
+
 def get_recent_runs(scores_db: str, limit: int = 20) -> list[dict]:
     """Recent consolidation_runs with a short narrative excerpt."""
     if not Path(scores_db).exists():

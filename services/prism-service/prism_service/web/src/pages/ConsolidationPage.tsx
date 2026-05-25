@@ -32,6 +32,47 @@ type NextBrief = {
   scope?: Record<string, unknown>;
   reason?: string;
 };
+type DayBucket = {
+  sessions: number; pushbacks: number; tool_failures: number;
+  bg_signals: number; memory_writes: number; reflections: number;
+};
+type Trends = {
+  days: string[];
+  series: Record<string, DayBucket>;
+};
+
+// v6.0.11 — tiny SVG sparkline. Hand-rolled so the SPA doesn't pick
+// up a chart lib for one shape. Renders an area + line + max marker;
+// scales independently per series so each metric reads on its own
+// floor rather than being crushed by a louder metric.
+function Sparkline({
+  values, label, color = "rgb(125 211 252)", height = 36, width = 160,
+}: {
+  values: number[]; label: string; color?: string;
+  height?: number; width?: number;
+}) {
+  if (values.length === 0) return null;
+  const max = Math.max(1, ...values);
+  const stepX = values.length > 1 ? width / (values.length - 1) : 0;
+  const points = values
+    .map((v, i) => `${i * stepX},${height - (v / max) * (height - 4) - 2}`)
+    .join(" ");
+  const area = `0,${height} ${points} ${width},${height}`;
+  const total = values.reduce((a, b) => a + b, 0);
+  return (
+    <div className="flex items-baseline gap-3 text-[11px]">
+      <div className="opacity-60 w-24 shrink-0 uppercase tracking-wider">{label}</div>
+      <svg width={width} height={height} className="shrink-0">
+        <polygon points={area} fill={color} opacity="0.15" />
+        <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
+      </svg>
+      <div className="opacity-80 font-mono tabular-nums w-16 text-right shrink-0">
+        Σ {total.toLocaleString()}
+      </div>
+      <div className="opacity-40 font-mono">peak {max.toLocaleString()}</div>
+    </div>
+  );
+}
 // Mirrors columns from consolidation_candidates (see consolidation_data.
 // get_unreflected_briefs). The page formerly assumed { brief_id,
 // age_hours, retry_count } — neither of the first two are real columns.
@@ -82,6 +123,7 @@ export default function ConsolidationPage() {
   const [unreflected, setUnreflected] = useState<Brief[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [rollup, setRollup] = useState<SignalRollup | null>(null);
+  const [trends, setTrends] = useState<Trends | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -137,7 +179,7 @@ export default function ConsolidationPage() {
   const load = () => {
     api.get<{
       queue: unknown; unreflected: Brief[]; recent_runs: Run[];
-      signal_rollup?: SignalRollup;
+      signal_rollup?: SignalRollup; trends?: Trends;
     }>(
       `/api/consolidation?project=${project}`,
     ).then((d) => {
@@ -145,8 +187,12 @@ export default function ConsolidationPage() {
       setUnreflected(d.unreflected ?? []);
       setRuns(d.recent_runs ?? []);
       setRollup(d.signal_rollup ?? null);
+      setTrends(d.trends ?? null);
     })
-     .catch(() => { setQueue([]); setUnreflected([]); setRuns([]); setRollup(null); });
+     .catch(() => {
+       setQueue([]); setUnreflected([]); setRuns([]);
+       setRollup(null); setTrends(null);
+     });
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [project]);
@@ -242,6 +288,23 @@ export default function ConsolidationPage() {
                 for new entries.
               </>
             )}
+          </p>
+        </Card>
+      )}
+
+      {trends && trends.days.length > 0 && (
+        <Card>
+          <SectionLabel>Last 14 days (UTC)</SectionLabel>
+          <div className="space-y-1.5 mt-2">
+            <Sparkline label="Sessions"      values={trends.days.map((d) => trends.series[d]?.sessions ?? 0)}      color="rgb(125 211 252)" />
+            <Sparkline label="Pushbacks"     values={trends.days.map((d) => trends.series[d]?.pushbacks ?? 0)}     color="rgb(252 211 77)" />
+            <Sparkline label="Tool failures" values={trends.days.map((d) => trends.series[d]?.tool_failures ?? 0)} color="rgb(251 113 133)" />
+            <Sparkline label="Bg signals"    values={trends.days.map((d) => trends.series[d]?.bg_signals ?? 0)}    color="rgb(165 180 252)" />
+            <Sparkline label="Memory writes" values={trends.days.map((d) => trends.series[d]?.memory_writes ?? 0)} color="rgb(110 231 183)" />
+            <Sparkline label="Reflections"   values={trends.days.map((d) => trends.series[d]?.reflections ?? 0)}   color="rgb(192 132 252)" />
+          </div>
+          <p className="text-[10px] opacity-40 mt-2 font-mono">
+            {trends.days[0]} → {trends.days[trends.days.length - 1]}
           </p>
         </Card>
       )}
