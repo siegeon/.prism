@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.13"
+PRISM_VERSION = "6.0.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.14: Tasks click-through to a dedicated viewer instead of "
+    "expanding inline. v6.0.9's inline expand broke the kanban — "
+    "clicking a card in 'Done' (28+ items deep) shoved the rest of "
+    "the column off-screen as the expanded panel pushed it down. "
+    "New /tasks/:id route + TaskDetailPage carrying: status pill, "
+    "transition buttons (→ in_progress / → done / → blocked / → "
+    "pending) wired to PATCH /api/tasks/{id}, full description, "
+    "tags, metadata grid (id, story_file, created/updated/completed "
+    "timestamps, dependencies — each dependency id is itself a "
+    "click-through to that task's viewer), blocked-reason callout "
+    "(rose-tinted), and full history table. Back button to /tasks "
+    "preserves the user's place. TasksPage slimmed: cards become "
+    "plain navigate-on-click buttons, no more inline state. Kanban "
+    "columns stay compact regardless of selection. "
     "v6.0.13: Reflect button is no longer invisible. Click → the "
     "button transforms into a sky-blue 'reflecting Ns' chip with a "
     "pulsing dot, a per-row in-flight card appears below the row "
