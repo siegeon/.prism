@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.1"
+PRISM_VERSION = "6.0.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.2: Fix release.yml — `npm ci` was failing because the SPA's "
+    "package-lock.json isn't committed. Swapped to `npm install` so "
+    "the wheel build can produce web_dist/ on the GitHub Action "
+    "runner. Same v6.0.1 auto-update wiring underneath. "
     "v6.0.1: Native auto-update finally works. v6.0.0 shipped the "
     "native install path but left it without a real update mechanism — "
     "the `prism update` CLI was a no-op because prism-service was "
