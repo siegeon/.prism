@@ -55,6 +55,22 @@ def _claude_config_dir() -> Path:
     return resolve_claude_home()
 
 
+def _build_mode() -> str:
+    """`dev` when the Tauri shell signals via PRISM_BUILD_MODE env that
+    it's running a cargo-tauri-dev binary (its compile-time package
+    version is the scaffold default 0.1.0); `release` for installed
+    .msi/.dmg/.AppImage shells; `docker` when the python service is
+    running inside the GHCR image (no shell at all). The SPA footer
+    badges 'dev' vs 'release' so the user can tell at a glance whether
+    they're poking at unstable code or the shipped build."""
+    explicit = os.environ.get("PRISM_BUILD_MODE", "").strip().lower()
+    if explicit:
+        return explicit
+    if _runtime() == "docker":
+        return "docker"
+    return "release"
+
+
 @router.get("")
 def service_info() -> dict:
     cfg = _claude_config_dir()
@@ -62,6 +78,8 @@ def service_info() -> dict:
         "version": PRISM_VERSION,
         "notes": PRISM_VERSION_NOTES,
         "runtime": _runtime(),
+        "build_mode": _build_mode(),
+        "shell_version": os.environ.get("PRISM_SHELL_VERSION", ""),
         "data_dir": str(DATA_DIR),
         "container": _container_name(),
         "claude_config_dir": str(cfg),

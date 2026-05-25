@@ -8,10 +8,19 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.20"
+PRISM_VERSION = "5.3.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.21: Sidebar footer badges dev vs release. Tauri shell sets "
+    "PRISM_BUILD_MODE=dev when its compile-time version is 0.1.0 "
+    "(scaffold default = local cargo tauri dev) or 'release' for an "
+    "installed .msi (CI bumps the version via the v5.3.19 sync step). "
+    "Python /api/service-info exposes the value, useVersion fetches "
+    "it after the version call, Sidebar renders an amber DEV pill or "
+    "a sky DOCKER pill alongside 'Slate Blue · v5.3.X'. Lets the user "
+    "tell at a glance whether they're poking at unstable source-tree "
+    "code or the shipped build. "
     "v5.3.20: Auto-updater check now skips on dev builds. The Tauri "
     "shell's compile-time `package_info().version` is `0.1.0` for "
     "dev builds (scaffold default); only the CI-shipped .msi/.dmg/"

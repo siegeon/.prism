@@ -16,7 +16,16 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
-export type ServiceVersion = { version: string; notes: string };
+export type BuildMode = "dev" | "release" | "docker" | string;
+export type ServiceVersion = {
+  version: string;
+  notes: string;
+  // v5.3.21 — populated from /api/service-info on first fetch so the
+  // footer can badge "dev" / "release" / "docker" alongside the version
+  // number. Empty until that secondary call lands.
+  build_mode?: BuildMode;
+  shell_version?: string;
+};
 
 let cached: ServiceVersion | null = null;
 let inflight: Promise<ServiceVersion> | null = null;
@@ -53,6 +62,17 @@ export function useVersion(): ServiceVersion | null {
         .finally(() => { inflight = null; });
     }
     inflight.then((r) => setV(r)).catch(() => {});
+    // Secondary fetch for build_mode; not on the critical path so
+    // a failure is harmless — the footer just won't show the badge.
+    api.get<{ build_mode?: BuildMode; shell_version?: string }>("/api/service-info")
+      .then((s) => {
+        if (cached) {
+          cached.build_mode = s.build_mode;
+          cached.shell_version = s.shell_version;
+        }
+        setV((prev) => prev ? { ...prev, build_mode: s.build_mode, shell_version: s.shell_version } : prev);
+      })
+      .catch(() => {});
   }, []);
   return v;
 }

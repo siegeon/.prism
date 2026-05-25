@@ -220,10 +220,26 @@ export default function Sidebar() {
           </NavLink>
         )}
         <div
-          className="px-5 py-3 text-[10px] uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)]"
+          className="px-5 py-3 text-[10px] uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)] flex items-center gap-2"
           title={version?.notes ?? ""}
         >
-          Slate Blue · v{version?.version ?? "…"}
+          <span>Slate Blue · v{version?.version ?? "…"}</span>
+          {version?.build_mode === "dev" && (
+            <span
+              className="px-1.5 py-0.5 rounded-sm bg-amber-500/20 text-amber-300 text-[9px] font-semibold tracking-wider"
+              title={version.shell_version ? `Tauri shell v${version.shell_version}` : "dev build"}
+            >
+              DEV
+            </span>
+          )}
+          {version?.build_mode === "docker" && (
+            <span
+              className="px-1.5 py-0.5 rounded-sm bg-sky-500/20 text-sky-300 text-[9px] font-semibold tracking-wider"
+              title="Running inside docker image"
+            >
+              DOCKER
+            </span>
+          )}
         </div>
       </div>
     </aside>

@@ -69,8 +69,23 @@ fn spawn_prism_service() -> std::io::Result<Child> {
     let python = std::env::var("PRISM_PYTHON")
         .unwrap_or_else(|_| r"C:\PROGRA~1\PYTHON~1\python.exe".to_string());
 
+    // v5.3.21 — tell the spawned service whether we're a dev or release
+    // shell. The shell's own compile-time version (env CARGO_PKG_VERSION
+    // here; package_info().version is the runtime form) is "0.1.0" only
+    // on local cargo tauri dev. Installed bundles have the real
+    // PRISM_VERSION baked in via the v5.3.19 CI sync step. SPA footer
+    // surfaces this so the user can tell at a glance which build they
+    // are testing.
+    let shell_version = env!("CARGO_PKG_VERSION");
+    let build_mode = if shell_version.starts_with("0.0") || shell_version == "0.1.0" {
+        "dev"
+    } else {
+        "release"
+    };
+
     eprintln!("[prism-shell] python: {python}");
     eprintln!("[prism-shell] cwd:    {cwd}");
+    eprintln!("[prism-shell] build_mode: {build_mode} (shell version {shell_version})");
 
     Command::new(&python)
         .args([
@@ -84,6 +99,8 @@ fn spawn_prism_service() -> std::io::Result<Child> {
         ])
         .current_dir(&cwd)
         .env("PRISM_DATA_DIR", r"C:\Users\siege\.claude\jobs\eeadb7d2\v6-data")
+        .env("PRISM_BUILD_MODE", build_mode)
+        .env("PRISM_SHELL_VERSION", shell_version)
         .spawn()
 }
 
