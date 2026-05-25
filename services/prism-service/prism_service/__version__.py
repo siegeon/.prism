@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.3"
+PRISM_VERSION = "6.0.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.4: Dev-mode marker. The Sidebar footer now renders an amber "
+    "'DEV' pill next to the version string when the service is started "
+    "with PRISM_DEV_MODE=1, so source-run instances (editable pip "
+    "install + 8887/8888) are visually distinguishable from a "
+    "pipx/Watchtower-managed prod daemon. /api/version gains a "
+    "`dev_mode: bool` field driving the pill; defaults false. No "
+    "behavior change for prod installs. "
     "v6.0.3: Settings -> Service grows an 'Updates' panel surfacing the "
     "v6.0.1 auto-updater state. Shows running version, latest available, "
     "last check, status pill (up-to-date / update-available / docker / "
