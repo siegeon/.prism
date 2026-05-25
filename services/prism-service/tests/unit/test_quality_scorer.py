@@ -21,7 +21,7 @@ def _score(**components):
     no churn, no followups, no revert. Individual tests override what
     they care about.
     """
-    from app.services.scoring_service import composite_score
+    from prism_service.services.scoring_service import composite_score
 
     base = {
         "merged_to_main": True,

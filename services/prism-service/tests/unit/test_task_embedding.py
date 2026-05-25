@@ -28,7 +28,7 @@ def _fake_embed(text: str) -> bytes:
 
 
 def _mk_service(tmp_path: Path, embed_fn=_fake_embed):
-    from app.services.task_service import TaskService
+    from prism_service.services.task_service import TaskService
     return TaskService(str(tmp_path / "tasks.db"), embed_fn=embed_fn)
 
 

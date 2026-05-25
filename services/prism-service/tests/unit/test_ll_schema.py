@@ -23,7 +23,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 
 def _init_brain(db_dir: Path):
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
     return Brain(
         brain_db=str(db_dir / "brain.db"),
         graph_db=str(db_dir / "graph.db"),
@@ -32,7 +32,7 @@ def _init_brain(db_dir: Path):
 
 
 def _init_tasks(db_dir: Path):
-    from app.services.task_service import TaskService
+    from prism_service.services.task_service import TaskService
     return TaskService(str(db_dir / "tasks.db"))
 
 

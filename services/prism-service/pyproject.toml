@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prism-service"
+dynamic = ["version"]
+description = "PRISM — software engineering methodology + MCP service for AI-assisted development."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "siegeon" }]
+keywords = ["claude", "mcp", "knowledge-graph", "ai-assisted-development"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+dependencies = [
+  "fastapi>=0.110",
+  "mcp>=1.0",
+  "uvicorn[standard]>=0.27",
+  "model2vec>=0.3",
+  "sqlite-vec>=0.1",
+  "numpy",
+  "tokenizers",
+  "torch>=2.2,<3",
+  "sentence-transformers>=2.7",
+  "graphifyy>=0.4.29,<0.5",
+  "tree-sitter>=0.21,<1",
+  "tree-sitter-languages>=1.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.4",
+  "build>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/siegeon/.prism"
+Issues = "https://github.com/siegeon/.prism/issues"
+
+[project.scripts]
+prism = "prism_service.cli.prism_cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["prism_service*"]
+exclude = ["tests*", "prism_service.web", "prism_service.web.*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "prism_service.__version__.PRISM_VERSION" }
+
+[tool.setuptools.package-data]
+"prism_service" = [
+  "web_dist/**/*",
+  "inference/prompts/*.md",
+  "py.typed",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

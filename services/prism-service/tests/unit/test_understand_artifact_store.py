@@ -1,4 +1,4 @@
-"""Unit tests for app.services.understand_artifact_store."""
+"""Unit tests for prism_service.services.understand_artifact_store."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from app import config
-from app.services import source_service as ss
-from app.services import understand_artifact_store as store
+from prism_service import config
+from prism_service.services import source_service as ss
+from prism_service.services import understand_artifact_store as store
 
 
 def _git(cwd: Path, *args: str) -> str:

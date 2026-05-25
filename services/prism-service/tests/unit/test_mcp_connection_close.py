@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.mcp.server import _wrap_send_with_close
+from prism_service.mcp.server import _wrap_send_with_close
 
 
 def _run(coro):

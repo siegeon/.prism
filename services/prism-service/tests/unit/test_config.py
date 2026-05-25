@@ -1,4 +1,4 @@
-"""Unit tests for app.config — focuses on v5.1 understand-layout seeding."""
+"""Unit tests for prism_service.config — focuses on v5.1 understand-layout seeding."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app import config
+from prism_service import config
 
 
 @pytest.fixture

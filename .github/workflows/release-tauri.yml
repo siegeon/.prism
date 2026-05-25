@@ -1,0 +1,91 @@
+name: Publish Tauri shell + updater manifest
+
+# Fires on the same `v*` tag the GHCR docker workflow uses, so one tag
+# push produces (1) a GHCR docker image and (2) signed Tauri bundles
+# for win/mac/linux + a `latest.json` updater manifest on GitHub
+# Releases. Running shells call `updater.check()` on launch, fetch
+# latest.json, verify the signature with the pubkey embedded in the
+# binary, prompt the user, install on confirm.
+#
+# Required repo secret:
+#   TAURI_SIGNING_PRIVATE_KEY - contents of prism-tauri-signing.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD - empty if key was generated without
+#                                        a password; required if it was set
+#
+# OS code signing (Apple Developer ID, Windows EV cert) is NOT wired
+# yet — first install shows SmartScreen warning. Updates still flow
+# once installed because Tauri verifies its own minisign signature.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'   # arm64
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'   # x64
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # macOS matrix entries need the cross target installed.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Build SPA (prism_service/web → web_dist)
+        run: |
+          cd services/prism-service/prism_service/web
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Install Tauri shell deps
+        run: |
+          cd services/prism-service/desktop/tauri-shell
+          npm install --no-audit --no-fund
+
+      - name: Build + sign Tauri bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: services/prism-service/desktop/tauri-shell
+          tagName: ${{ github.ref_name }}
+          releaseName: 'PRISM ${{ github.ref_name }}'
+          releaseBody: |
+            Native Tauri shell bundles for ${{ github.ref_name }}.
+            Auto-update: existing installs will fetch + verify via
+            the embedded minisign pubkey.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}

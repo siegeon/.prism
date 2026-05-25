@@ -21,7 +21,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 
 def _svc(tmp_path):
-    from app.services.conductor_service import ConductorService
+    from prism_service.services.conductor_service import ConductorService
 
     return ConductorService(str(tmp_path / "scores.db"), enable_engine=False)
 
@@ -165,8 +165,8 @@ def test_auto_meta_candidate_does_not_create_without_outcomes(tmp_path):
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    from app import config as cfg
-    from app import project_context as pc
+    from prism_service import config as cfg
+    from prism_service import project_context as pc
 
     monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path / "projects")
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,7 +176,7 @@ def project(tmp_path, monkeypatch):
 
 
 def _call(tool_name, arguments=None, project_id="meta-conductor-mcp"):
-    from app.mcp.tools import handle_tool
+    from prism_service.mcp.tools import handle_tool
 
     return asyncio.run(
         handle_tool(tool_name, arguments or {}, project_id=project_id)

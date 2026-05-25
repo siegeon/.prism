@@ -29,9 +29,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app import config
-from app.mcp import understand_tools as ut
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.mcp import understand_tools as ut
+from prism_service.services import source_service as ss
 
 
 def _git(cwd: Path, *args: str) -> str:

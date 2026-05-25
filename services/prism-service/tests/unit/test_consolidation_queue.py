@@ -22,8 +22,8 @@ if str(_SERVICE_ROOT) not in sys.path:
 def _mk_service(tmp_path: Path, now=None):
     """Create a JanitorService against a fresh scores.db. Seeds schema
     via Brain() so the tables LL-01 added exist."""
-    from app.engines.brain_engine import Brain
-    from app.services.janitor_service import JanitorService
+    from prism_service.engines.brain_engine import Brain
+    from prism_service.services.janitor_service import JanitorService
 
     scores_db = str(tmp_path / "scores.db")
     # Brain init installs the schema; we don't need the Brain instance

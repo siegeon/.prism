@@ -58,7 +58,7 @@ def _seed_brain(brain_db: str, files: list[tuple[str, int]]) -> None:
 
 def _make_graph_service(tmp_path):
     """Build a GraphService whose staging_dir matches a known file count."""
-    from app.services.graph_service import GraphService
+    from prism_service.services.graph_service import GraphService
     proj = tmp_path / "proj"
     proj.mkdir()
     graph_db = str(proj / "graph.db")

@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from app import config
-from app.api import projects as projects_api
-from app import project_context
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.api import projects as projects_api
+from prism_service import project_context
+from prism_service.services import source_service as ss
 
 
 @pytest.fixture

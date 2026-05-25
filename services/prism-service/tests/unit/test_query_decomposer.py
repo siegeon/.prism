@@ -23,7 +23,7 @@ def _import_decompose():
     fails with a readable message rather than crashing the collector.
     """
     try:
-        from app.engines.query_decomposer import decompose_query
+        from prism_service.engines.query_decomposer import decompose_query
         return decompose_query
     except (ImportError, ModuleNotFoundError):
         return None
@@ -33,12 +33,12 @@ def test_ac1_module_exists_and_is_callable():
     """
     AC-1: Decomposer is shipped as a callable.
     Requirement: `decompose_query(q: str, max_subs: int = 4) -> list[str]`
-                 lives at app.engines.query_decomposer.
+                 lives at prism_service.engines.query_decomposer.
     Expected: import succeeds and the symbol is callable.
     """
     fn = _import_decompose()
     assert fn is not None, (
-        "app.engines.query_decomposer.decompose_query is not importable yet — T1 not shipped"
+        "prism_service.engines.query_decomposer.decompose_query is not importable yet — T1 not shipped"
     )
     assert callable(fn), "decompose_query must be callable"
 
@@ -126,7 +126,7 @@ def test_ac1_no_llm_dependency():
     """
     fn = _import_decompose()
     assert fn is not None, "T1 not shipped"
-    import app.engines.query_decomposer as qd
+    import prism_service.engines.query_decomposer as qd
     src = Path(qd.__file__).read_text(encoding="utf-8")
     forbidden = ["import openai", "import anthropic", "from openai", "from anthropic"]
     hits = [s for s in forbidden if s in src]

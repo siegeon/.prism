@@ -1,4 +1,4 @@
-"""Integration tests for app.engines.understand_engine.
+"""Integration tests for prism_service.engines.understand_engine.
 
 Uses tmp_path + a local fake upstream git repo. Mocks claude_cli so
 no real LLM is invoked. Covers the T8 acceptance scenario:
@@ -21,11 +21,11 @@ from pathlib import Path
 
 import pytest
 
-from app import config
-from app.engines import understand_engine as ue
-from app.inference import queue as job_queue
-from app.services import source_service as ss
-from app.services import understand_artifact_store as store
+from prism_service import config
+from prism_service.engines import understand_engine as ue
+from prism_service.inference import queue as job_queue
+from prism_service.services import source_service as ss
+from prism_service.services import understand_artifact_store as store
 
 
 def _git(cwd: Path, *args: str) -> str:

@@ -1,4 +1,4 @@
-"""Unit tests for app.inference.queue.
+"""Unit tests for prism_service.inference.queue.
 
 Covers:
   * Idempotent enqueue (dedupe key collapses duplicates)
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.inference import queue as q
+from prism_service.inference import queue as q
 
 
 @pytest.fixture

@@ -17,7 +17,7 @@ _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
-from app.services.verifier_service import (    # noqa: E402
+from prism_service.services.verifier_service import (    # noqa: E402
     Claim,
     VerifierService,
     _detect_node_project,

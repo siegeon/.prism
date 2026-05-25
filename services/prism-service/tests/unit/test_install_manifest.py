@@ -17,7 +17,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 
 def _manifest(host_platform=None):
-    from app.mcp.tools import _install_manifest
+    from prism_service.mcp.tools import _install_manifest
     return _install_manifest(project_id="test", host_platform=host_platform)
 
 
@@ -161,7 +161,7 @@ def test_install_manifest_accepts_platform_aliases():
     """Caller may pass either `sys.platform` values or human aliases.
     Anything starting with `win`/`nt` selects the Windows launcher;
     everything else is POSIX."""
-    from app.mcp.tools import _hook_python_cmd
+    from prism_service.mcp.tools import _hook_python_cmd
     assert _hook_python_cmd("win32") == "py -3"
     assert _hook_python_cmd("windows") == "py -3"
     assert _hook_python_cmd("Windows") == "py -3"

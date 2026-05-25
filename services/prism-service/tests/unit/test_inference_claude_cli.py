@@ -1,4 +1,4 @@
-"""Unit tests for app.inference.claude_cli.
+"""Unit tests for prism_service.inference.claude_cli.
 
 Mocks subprocess.run so no real `claude` CLI is invoked. Asserts:
   * INV-1: env strip removes ANTHROPIC_API_KEY / CLAUDECODE /
@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.inference import claude_cli
+from prism_service.inference import claude_cli
 
 
 def _completed(exit_code: int = 0, stderr: bytes = b"") -> subprocess.CompletedProcess:
@@ -49,7 +49,7 @@ def test_invoke_strips_env_before_subprocess(monkeypatch, tmp_path):
         captured["cmd"] = cmd
         return _completed(exit_code=0)
 
-    with patch("app.inference.claude_cli.subprocess.run", side_effect=fake_run):
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
         res = claude_cli.invoke(
             "hello", tmp_path, tmp_path, max_turns=1, parse_events=False,
         )
@@ -65,7 +65,7 @@ def test_invoke_raises_not_logged_in_on_auth_failure(tmp_path):
     def fake_run(cmd, cwd, env, stdout, **kwargs):
         return _completed(exit_code=1, stderr=auth_stderr)
 
-    with patch("app.inference.claude_cli.subprocess.run", side_effect=fake_run):
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
         with pytest.raises(claude_cli.ClaudeNotLoggedInError) as exc:
             claude_cli.invoke("hi", tmp_path, tmp_path, max_turns=1)
 
@@ -76,7 +76,7 @@ def test_invoke_does_not_raise_on_success_with_empty_stderr(tmp_path):
     def fake_run(cmd, cwd, env, stdout, **kwargs):
         return _completed(exit_code=0, stderr=b"")
 
-    with patch("app.inference.claude_cli.subprocess.run", side_effect=fake_run):
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
         res = claude_cli.invoke(
             "hi", tmp_path, tmp_path, max_turns=1, parse_events=False,
         )
@@ -89,7 +89,7 @@ def test_run_claude_returns_tuple(tmp_path):
     def fake_run(cmd, cwd, env, stdout, **kwargs):
         return _completed(exit_code=0)
 
-    with patch("app.inference.claude_cli.subprocess.run", side_effect=fake_run):
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
         out, code = claude_cli.run_claude(
             "hi", tmp_path, tmp_path, max_turns=1,
         )
@@ -112,7 +112,7 @@ def test_invoke_parses_jsonl_events(tmp_path):
         stdout.flush()
         return _completed(exit_code=0)
 
-    with patch("app.inference.claude_cli.subprocess.run", side_effect=fake_run):
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
         res = claude_cli.invoke(
             "hi", tmp_path, tmp_path, max_turns=1, parse_events=True,
         )

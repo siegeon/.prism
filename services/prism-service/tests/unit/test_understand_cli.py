@@ -1,4 +1,4 @@
-"""Snapshot tests for app.cli.understand_cli (T11).
+"""Snapshot tests for prism_service.cli.understand_cli (T11).
 
 Tests run without spawning a real `claude` subprocess by mocking the
 MCP client and the per-job executor seam.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.cli import understand_cli as uc
+from prism_service.cli import understand_cli as uc
 
 
 def test_parser_accepts_status_subcommand():

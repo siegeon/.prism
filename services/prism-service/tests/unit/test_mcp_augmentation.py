@@ -26,8 +26,8 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    from app import config as cfg
-    from app import project_context as pc
+    from prism_service import config as cfg
+    from prism_service import project_context as pc
     monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path / "projects")
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     pc._contexts.clear()
@@ -37,7 +37,7 @@ def project(tmp_path, monkeypatch):
 
 
 def _call(tool_name, arguments=None, project_id="test-ll-09"):
-    from app.mcp.tools import handle_tool
+    from prism_service.mcp.tools import handle_tool
     return asyncio.run(
         handle_tool(tool_name, arguments or {}, project_id=project_id)
     )

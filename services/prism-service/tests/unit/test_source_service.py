@@ -1,4 +1,4 @@
-"""Unit tests for app.services.source_service.
+"""Unit tests for prism_service.services.source_service.
 
 Uses tmp_path + a local bare git repo as a fake remote so tests don't
 touch the network. Covers: ensure_cloned idempotency, current_sha,
@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from app import config
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.services import source_service as ss
 
 
 def _git(cwd: Path, *args: str) -> str:

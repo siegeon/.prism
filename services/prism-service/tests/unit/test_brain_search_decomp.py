@@ -23,7 +23,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 def _make_brain(tmp_path):
     """Build a Brain instance against fresh DBs and seed a tiny corpus."""
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
 
     brain = Brain(
         brain_db=str(tmp_path / "brain.db"),

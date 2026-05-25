@@ -29,7 +29,7 @@ def _seed(graph_db: str) -> None:
         # Apply graphify schema migrations so the confidence columns
         # exist on the relationships table (production code calls these
         # during _import_graph_json; tests bypass that path).
-        from app.services.graph_service import _graph_schema_migrations
+        from prism_service.services.graph_service import _graph_schema_migrations
         _graph_schema_migrations(conn)
         ids = {}
         for n in ("A", "B", "C", "D"):
@@ -65,7 +65,7 @@ def _seed(graph_db: str) -> None:
 
 @pytest.fixture
 def brain(tmp_path):
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
     b = Brain(
         brain_db=str(tmp_path / "brain.db"),
         graph_db=str(tmp_path / "graph.db"),

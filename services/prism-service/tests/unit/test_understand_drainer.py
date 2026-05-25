@@ -13,12 +13,12 @@ from unittest.mock import patch
 
 import pytest
 
-from app import config
-from app.engines import understand_engine as ue
-from app.inference import claude_cli
-from app.services import source_service as ss
-from app.services import understand_artifact_store as store
-from app.services import understand_drainer as drainer
+from prism_service import config
+from prism_service.engines import understand_engine as ue
+from prism_service.inference import claude_cli
+from prism_service.services import source_service as ss
+from prism_service.services import understand_artifact_store as store
+from prism_service.services import understand_drainer as drainer
 
 
 def _git(cwd: Path, *args: str) -> str:

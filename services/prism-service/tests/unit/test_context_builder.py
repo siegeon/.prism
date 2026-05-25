@@ -17,8 +17,8 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    from app import config as cfg
-    from app import project_context as pc
+    from prism_service import config as cfg
+    from prism_service import project_context as pc
 
     monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path / "projects")
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,7 +28,7 @@ def project(tmp_path, monkeypatch):
 
 
 def _call(tool_name, arguments=None, project_id="context-pack-test"):
-    from app.mcp.tools import handle_tool
+    from prism_service.mcp.tools import handle_tool
 
     return asyncio.run(
         handle_tool(tool_name, arguments or {}, project_id=project_id)
@@ -98,8 +98,8 @@ def test_context_bundle_keeps_single_index_brain_context(project):
 
 
 def test_request_context_resets_after_block():
-    from app.config import DEFAULT_PROJECT
-    from app.mcp.request_context import (
+    from prism_service.config import DEFAULT_PROJECT
+    from prism_service.mcp.request_context import (
         PrismRequestContext,
         get_request_context,
         use_request_context,

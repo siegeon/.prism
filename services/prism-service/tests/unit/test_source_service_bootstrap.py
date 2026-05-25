@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app import config
-from app.services import source_service as ss
+from prism_service import config
+from prism_service.services import source_service as ss
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -76,7 +76,7 @@ def test_bootstrap_swallows_refresh_exceptions(cloned_project, monkeypatch):
     )
 
     with patch(
-        "app.engines.understand_engine.UnderstandEngine.refresh",
+        "prism_service.engines.understand_engine.UnderstandEngine.refresh",
         side_effect=RuntimeError("synthetic"),
     ):
         out = ss.bootstrap_after_clone(cloned_project)

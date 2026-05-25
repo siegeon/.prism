@@ -23,12 +23,12 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 def _isolated_project(tmp_path, pid="test-ll-08"):
     """Stand up a fresh project dir and swap config to point at it."""
-    from app import config as cfg
+    from prism_service import config as cfg
     original = cfg.PROJECTS_DIR
     cfg.PROJECTS_DIR = tmp_path / "projects"
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     # Reset the cached context registry so each test is isolated.
-    from app import project_context as pc
+    from prism_service import project_context as pc
     pc._contexts.clear()
     yield pid
     cfg.PROJECTS_DIR = original
@@ -41,7 +41,7 @@ def project(tmp_path):
 
 
 def _call(tool_name, arguments=None, project_id="test-ll-08"):
-    from app.mcp.tools import handle_tool
+    from prism_service.mcp.tools import handle_tool
     return asyncio.run(
         handle_tool(tool_name, arguments or {}, project_id=project_id)
     )
@@ -59,7 +59,7 @@ def _text(result):
 
 
 def test_janitor_tools_registered():
-    from app.mcp.tools import TOOLS
+    from prism_service.mcp.tools import TOOLS
     names = {t.name for t in TOOLS}
     for n in (
         "janitor_enqueue", "janitor_mark_stale", "janitor_check",
@@ -70,7 +70,7 @@ def test_janitor_tools_registered():
 
 
 def test_memory_store_schema_accepts_session_id():
-    from app.mcp.tools import TOOLS
+    from prism_service.mcp.tools import TOOLS
     [tool] = [t for t in TOOLS if t.name == "memory_store"]
     assert "session_id" in tool.inputSchema["properties"], (
         "memory_store should expose optional session_id argument"
@@ -84,7 +84,7 @@ def test_memory_store_schema_accepts_session_id():
 
 def test_janitor_enqueue_then_check_round_trip(project):
     """Enqueue a candidate, wait past the 1h gate, check returns it."""
-    from app.project_context import get_project
+    from prism_service.project_context import get_project
     from datetime import datetime, timedelta, timezone
 
     # Enqueue via MCP
@@ -110,7 +110,7 @@ def test_janitor_enqueue_then_check_round_trip(project):
 
 def test_janitor_submit_round_trip(project):
     """Submit valid output → rollup gets qualitative_score."""
-    from app.project_context import get_project
+    from prism_service.project_context import get_project
     _call("janitor_enqueue", {
         "task_id": "T-42",
         "trigger": "task_done",
@@ -145,7 +145,7 @@ def test_janitor_submit_round_trip(project):
 
 
 def test_janitor_abandon_round_trip(project):
-    from app.project_context import get_project
+    from prism_service.project_context import get_project
 
     _call("janitor_enqueue", {
         "task_id": "T-99",
@@ -177,7 +177,7 @@ def test_janitor_status_returns_queue_depth(project):
 
 
 def test_memory_store_stamps_session_id(project):
-    from app.project_context import get_project
+    from prism_service.project_context import get_project
 
     res = json.loads(_text(_call("memory_store", {
         "domain": "conventions",
@@ -205,7 +205,7 @@ def test_memory_store_stamps_session_id(project):
 
 
 def test_memory_invalidate_flips_status_preserves_row(project):
-    from app.project_context import get_project
+    from prism_service.project_context import get_project
 
     # Create a memory (with session_id so memory_meta row exists)
     stored = json.loads(_text(_call("memory_store", {

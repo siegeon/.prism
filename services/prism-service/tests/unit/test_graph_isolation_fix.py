@@ -20,7 +20,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 
 def _brain(tmp_path: Path):
-    from app.engines.brain_engine import Brain
+    from prism_service.engines.brain_engine import Brain
     return Brain(
         brain_db=str(tmp_path / "brain.db"),
         graph_db=str(tmp_path / "graph.db"),
@@ -29,7 +29,7 @@ def _brain(tmp_path: Path):
 
 
 def _service(tmp_path: Path):
-    from app.services.brain_service import BrainService
+    from prism_service.services.brain_service import BrainService
     return BrainService(
         brain_db=str(tmp_path / "brain.db"),
         graph_db=str(tmp_path / "graph.db"),
@@ -121,7 +121,7 @@ def test_backfill_prefers_file_level_row(tmp_path):
     """Bug B: backfill_from_brain must stage the file-level content
     once per source_file, not overwrite it per chunk.
     """
-    from app.services.graph_service import GraphService
+    from prism_service.services.graph_service import GraphService
     # Hand-seed a docs table with one ::__file__ row and two chunk rows
     # for the same source. Chunk content is intentionally different
     # from file content so we can detect which one landed on disk.
@@ -164,7 +164,7 @@ def test_backfill_skips_fragment_only_files(tmp_path):
     must NOT stage a fragment — that's the bug that caused 83.5%
     isolated nodes.
     """
-    from app.services.graph_service import GraphService
+    from prism_service.services.graph_service import GraphService
     brain_db = tmp_path / "brain.db"
     conn = sqlite3.connect(str(brain_db))
     conn.execute(

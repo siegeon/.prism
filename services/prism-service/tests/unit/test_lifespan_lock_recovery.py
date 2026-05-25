@@ -20,14 +20,14 @@ import pytest
 
 @pytest.fixture
 def isolated_lock(tmp_path, monkeypatch):
-    import app.main as main_mod
+    import prism_service.main as main_mod
     monkeypatch.setattr(main_mod, "_LOCK_FILE", tmp_path / ".mcp_started")
     return tmp_path / ".mcp_started"
 
 
 def _run_lifespan(app=None) -> None:
     """Enter and exit the lifespan context once, synchronously."""
-    import app.main as main_mod
+    import prism_service.main as main_mod
     cm = main_mod.lifespan(app or object())
 
     async def runner():
@@ -39,8 +39,8 @@ def _run_lifespan(app=None) -> None:
 
 def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     assert not isolated_lock.exists()
-    with patch("app.main.threading.Thread") as mock_t, \
-            patch("app.main._install_stackdump_handler"):
+    with patch("prism_service.main.threading.Thread") as mock_t, \
+            patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
     # 5 daemon threads: mcp + governance + drift + quality + drainer.
@@ -53,8 +53,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
     isolated_lock.write_text("999999", encoding="utf-8")
     assert isolated_lock.exists()
 
-    with patch("app.main.threading.Thread") as mock_t, \
-            patch("app.main._install_stackdump_handler"):
+    with patch("prism_service.main.threading.Thread") as mock_t, \
+            patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
@@ -66,7 +66,7 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
 
 
 def test_lifespan_unlinks_lock_on_exit(isolated_lock):
-    with patch("app.main.threading.Thread"), \
-            patch("app.main._install_stackdump_handler"):
+    with patch("prism_service.main.threading.Thread"), \
+            patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
     assert not isolated_lock.exists()
