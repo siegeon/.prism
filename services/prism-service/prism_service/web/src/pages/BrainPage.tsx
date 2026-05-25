@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Search, RefreshCw } from "lucide-react";
+import { Search, RefreshCw, Sparkles, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +20,27 @@ type SearchResult = {
   score?: number;
 };
 
+type AskSource = {
+  index: number;
+  file: string;
+  entity_name: string;
+  entity_kind: string;
+  score: number;
+};
+
+type AskResponse = {
+  question: string;
+  project: string;
+  answer: string;
+  sources: AskSource[];
+  run_id: string;
+  exit_code: number;
+  duration_s: number;
+  tokens: { input: number; output: number };
+};
+
+type Mode = "search" | "ask";
+
 const DOMAINS = ["all", "py", "ts", "js", "md", "expertise"];
 
 function Kpi({ label, value }: { label: string; value: React.ReactNode }) {
@@ -35,10 +56,14 @@ export default function BrainPage() {
   const [project] = useState("default");
   const [status, setStatus] = useState<BrainStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("search");
   const [query, setQuery] = useState("");
   const [domain, setDomain] = useState<string>("all");
   const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [askResponse, setAskResponse] = useState<AskResponse | null>(null);
+  const [askError, setAskError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [asking, setAsking] = useState(false);
   const [reindexing, setReindexing] = useState(false);
 
   const loadStatus = useCallback(() => {
@@ -52,6 +77,8 @@ export default function BrainPage() {
   const doSearch = useCallback(async () => {
     if (!query.trim()) return;
     setSearching(true);
+    setAskResponse(null);
+    setAskError(null);
     try {
       const params = new URLSearchParams({ q: query.trim(), project, limit: "20" });
       if (domain !== "all") params.set("domain", domain);
@@ -59,6 +86,30 @@ export default function BrainPage() {
       setResults(data.results);
     } catch { setResults([]); } finally { setSearching(false); }
   }, [query, domain, project]);
+
+  const doAsk = useCallback(async () => {
+    if (!query.trim()) return;
+    setAsking(true);
+    setAskError(null);
+    setResults(null);
+    try {
+      const data = await api.post<AskResponse>("/api/brain/ask", {
+        q: query.trim(),
+        project,
+        domain: domain === "all" ? null : domain,
+      });
+      setAskResponse(data);
+    } catch (e) {
+      setAskError(String((e as Error).message ?? e));
+    } finally {
+      setAsking(false);
+    }
+  }, [query, domain, project]);
+
+  const submit = useCallback(() => {
+    if (mode === "ask") doAsk();
+    else doSearch();
+  }, [mode, doAsk, doSearch]);
 
   const doReindex = useCallback(async () => {
     setReindexing(true);
@@ -97,24 +148,62 @@ export default function BrainPage() {
       )}
 
       <section className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--background-base)]/40 p-5">
-        <div className="text-[10px] uppercase tracking-wider opacity-60 mb-3">Search the knowledge base</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[10px] uppercase tracking-wider opacity-60">
+            {mode === "ask" ? "Ask Claude (grounded in the knowledge base)" : "Search the knowledge base"}
+          </div>
+          <div className="inline-flex rounded-md border border-[color:var(--midground-base)]/20 overflow-hidden text-[10px] uppercase tracking-wider">
+            <button
+              type="button"
+              onClick={() => setMode("search")}
+              className={cn(
+                "px-3 py-1 transition-colors",
+                mode === "search"
+                  ? "bg-[color:var(--midground-base)] text-[color:var(--background-base)]"
+                  : "opacity-60 hover:opacity-100",
+              )}
+            >
+              <Search className="w-3 h-3 inline -mt-0.5 mr-1" />
+              Search
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("ask")}
+              className={cn(
+                "px-3 py-1 transition-colors",
+                mode === "ask"
+                  ? "bg-[color:var(--midground-base)] text-[color:var(--background-base)]"
+                  : "opacity-60 hover:opacity-100",
+              )}
+            >
+              <Sparkles className="w-3 h-3 inline -mt-0.5 mr-1" />
+              Ask Claude
+            </button>
+          </div>
+        </div>
         <div className="flex gap-3">
           <div className="flex-1 flex items-center gap-2 rounded-md border border-[color:var(--midground-base)]/20 bg-[color:var(--background-base)]/50 px-3 py-2">
-            <Search className="w-4 h-4 opacity-60" />
+            {mode === "ask"
+              ? <Sparkles className="w-4 h-4 opacity-60" />
+              : <Search className="w-4 h-4 opacity-60" />}
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doSearch()}
-              placeholder="Search concepts, entities, files…"
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder={mode === "ask"
+                ? "Ask a question about this codebase…"
+                : "Search concepts, entities, files…"}
               className="flex-1 bg-transparent outline-none text-sm placeholder:opacity-40"
             />
           </div>
           <button
-            onClick={doSearch}
-            disabled={searching || !query.trim()}
-            className="px-5 rounded-md border border-[color:var(--midground-base)]/30 bg-[color:var(--midground-base)]/10 hover:bg-[color:var(--midground-base)]/20 text-sm uppercase tracking-wider disabled:opacity-40 transition-colors"
+            onClick={submit}
+            disabled={searching || asking || !query.trim()}
+            className="px-5 rounded-md border border-[color:var(--midground-base)]/30 bg-[color:var(--midground-base)]/10 hover:bg-[color:var(--midground-base)]/20 text-sm uppercase tracking-wider disabled:opacity-40 transition-colors min-w-[120px]"
           >
-            {searching ? "Searching…" : "Search"}
+            {mode === "ask"
+              ? (asking ? <span className="inline-flex items-center gap-2"><Loader2 className="w-3 h-3 animate-spin" />Asking…</span> : "Ask")
+              : (searching ? "Searching…" : "Search")}
           </button>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -128,7 +217,60 @@ export default function BrainPage() {
               )}>{d}</button>
           ))}
         </div>
+        {mode === "ask" && (
+          <p className="mt-3 text-[11px] opacity-60 leading-snug">
+            Pulls top hits from the Brain (BM25 + vector + graph), feeds them
+            to <code className="font-mono">claude -p</code> as grounded context.
+            Costs your Claude subscription one invocation per question
+            (~5-30s depending on complexity).
+          </p>
+        )}
       </section>
+
+      {askError && (
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-4 py-3 text-sm">
+          Ask failed: {askError}
+        </div>
+      )}
+
+      {askResponse && (
+        <section className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--background-base)]/40 p-5 space-y-4">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-wider opacity-60">
+            <span>
+              Answer
+              {askResponse.duration_s > 0 && (
+                <span className="ml-2 opacity-70">· {askResponse.duration_s.toFixed(1)}s</span>
+              )}
+              {askResponse.tokens.output > 0 && (
+                <span className="ml-2 opacity-70">· {askResponse.tokens.output} output tokens</span>
+              )}
+            </span>
+            {askResponse.run_id && (
+              <span className="font-mono opacity-50">run {askResponse.run_id.slice(0, 8)}</span>
+            )}
+          </div>
+          <div className="prose prose-invert max-w-none text-sm whitespace-pre-wrap font-sans leading-relaxed">
+            {askResponse.answer}
+          </div>
+          {askResponse.sources.length > 0 && (
+            <div className="border-t border-[color:var(--midground-base)]/10 pt-3">
+              <div className="text-[10px] uppercase tracking-wider opacity-60 mb-2">
+                Cited sources ({askResponse.sources.length})
+              </div>
+              <ul className="space-y-1">
+                {askResponse.sources.map((s) => (
+                  <li key={s.index} className="flex items-baseline gap-3 text-xs font-mono opacity-80">
+                    <span className="opacity-50 w-6">[{s.index}]</span>
+                    <span className="flex-1 truncate">{s.file}</span>
+                    {s.entity_name && <span className="opacity-60">{s.entity_name}</span>}
+                    {s.score > 0 && <span className="opacity-50">{s.score.toFixed(3)}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       {results && (
         <section>

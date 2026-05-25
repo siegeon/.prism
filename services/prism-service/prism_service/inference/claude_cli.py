@@ -54,6 +54,15 @@ class ClaudeCliResult:
     exit_code: int
     parsed_events: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
+    run_id: str = ""
+    duration_s: float = 0.0
+
+    def final_text(self) -> str:
+        """Pull the last assistant text block out of the stream events.
+        Convenience accessor so callers don't have to walk parsed_events
+        themselves (analyzer_runner re-implements this locally — could
+        be unified later)."""
+        return _final_assistant_text(self.parsed_events)
 
 
 # Default tool whitelist for batch / background invocations
@@ -261,6 +270,7 @@ def invoke(
     return ClaudeCliResult(
         output_path=out_path, exit_code=result.returncode,
         parsed_events=parsed_events, usage=usage,
+        run_id=run_id, duration_s=(ts_end - ts_start),
     )
 
 

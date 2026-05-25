@@ -8,10 +8,27 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.12"
+PRISM_VERSION = "5.3.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.14: Brain /ask actually returns answers now. v5.3.13 hit "
+    "exit_code=1 + empty answer because `allowed_tools=()` doesn't "
+    "disable claude's default tool set — claude was calling Grep on "
+    "its own to explore the codebase, hit max_turns=3, never emitted "
+    "final text. Fix: max_turns=1 (single-shot, no tool iteration "
+    "possible) + prompt now explicitly forbids tool calls and instructs "
+    "claude to answer from context only. Also fixed source field "
+    "mapping (was reading 'file'/'source', actual key is 'source_file'). "
+    "v5.3.13: Brain page gains an Ask Claude mode. /api/brain/ask "
+    "shells out to the `claude` CLI (claude_cli.invoke, single-shot, "
+    "max_turns=3, no allowed_tools) with the question + top-K hybrid "
+    "retrieval hits formatted as grounded context. SPA gets a "
+    "Search/Ask toggle: same input box, different submit; the answer "
+    "renders below with cited sources, duration, output tokens, and "
+    "the run_id so the user can audit the call against the Logs tab. "
+    "ClaudeCliResult got a final_text() accessor + carries run_id + "
+    "duration_s so callers don't have to reimplement extraction. "
     "v5.3.12: Brain page no longer blank. Two fixes: "
     "/api/dashboard/state was hardcoded to /data/projects/<name> (same "
     "docker-path bug we just fixed in /api/graph/summary), so BRAIN "
