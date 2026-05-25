@@ -16,7 +16,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
-export type ServiceVersion = { version: string; notes: string };
+export type ServiceVersion = { version: string; notes: string; dev_mode?: boolean };
 
 let cached: ServiceVersion | null = null;
 let inflight: Promise<ServiceVersion> | null = null;

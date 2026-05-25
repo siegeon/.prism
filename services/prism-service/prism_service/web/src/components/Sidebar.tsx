@@ -220,10 +220,18 @@ export default function Sidebar() {
           </NavLink>
         )}
         <div
-          className="px-5 py-3 text-[10px] uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)]"
+          className="px-5 py-3 text-[10px] uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)] flex items-center gap-2"
           title={version?.notes ?? ""}
         >
-          Slate Blue · v{version?.version ?? "…"}
+          <span>Slate Blue · v{version?.version ?? "…"}</span>
+          {version?.dev_mode && (
+            <span
+              className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[9px] font-bold tracking-widest bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              title="Source-run instance (PRISM_DEV_MODE=1)"
+            >
+              DEV
+            </span>
+          )}
         </div>
       </div>
     </aside>
