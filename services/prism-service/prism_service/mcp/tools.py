@@ -1877,6 +1877,25 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
     # "hooks" key. A bare .claude/hooks.json is ignored (only plugin-shipped
     # hooks/hooks.json is loaded, via a different code path). Wrap the event
     # map under "hooks" and target settings.json so the hooks actually fire.
+    # v5.3.16 — slimmed from 6 hooks to 3. The disk-reader added in
+    # v5.3.15 (services/claude_transcripts.py) reads each session's
+    # ~/.claude/projects/<slug>/<uuid>.jsonl directly and populates
+    # session_outcomes + skill_usage post-hoc. That makes the Stop /
+    # SubagentStop / PostToolUse-Skill / Stop-idle-rebuild hooks
+    # redundant — they were just shovelling data into tables the
+    # disk-reader now fills natively.
+    #
+    # What remains genuinely needs to fire IN-LINE:
+    #   * SessionStart sync — must run BEFORE the session starts so
+    #     brain_search sees latest drift on the first query.
+    #   * PostToolUse edit-learn — must ingest edits MID-session so
+    #     subsequent brain_searches in the same session reflect them.
+    #   * PostToolUse feedback-signal — populates the Learning page's
+    #     retrieval-feedback signal (could move to disk-reader later
+    #     but the correlation logic is non-trivial; defer).
+    #   * Stop verifier — runs the project's own ruff/mypy/pytest on
+    #     git-diff'd files. Not a metrics shovel; doesn't duplicate
+    #     anything the disk-reader does.
     hooks_map = {
         "SessionStart": [
             {
@@ -1895,20 +1914,8 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
                         "description": (
                             "Implicit retrieval feedback: correlate "
                             "brain_search results with Read/Edit and emit "
-                            "brain_search_feedback automatically."
-                        ),
-                    },
-                ],
-            },
-            {
-                "matcher": "Skill",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-skill-usage.py",
-                        "description": (
-                            "Record skill invocations to scores.db via "
-                            "record_skill_usage — populates /skills."
+                            "brain_search_feedback automatically. Feeds "
+                            "the Learning page."
                         ),
                     },
                 ],
@@ -1934,56 +1941,25 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-stop.py",
-                        "description": (
-                            "Record session-level metrics (duration, "
-                            "tokens, files, skills) via "
-                            "record_session_outcome — populates /sessions."
-                        ),
-                    },
-                    {
-                        "type": "command",
-                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-idle-rebuild.py",
-                        "description": (
-                            "Flush in-session edits into the code graph via "
-                            "graph_rebuild iff the edit-learn hook left a "
-                            "graph-dirty sentinel. One rebuild per session, "
-                            "not per edit."
-                        ),
-                    },
-                    {
-                        "type": "command",
                         "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-verifier.py",
                         "description": (
                             "Outer-harness verifier sensor. Tier 0 runs "
                             "the project's own tooling (ruff, mypy, "
                             "pytest, eslint, tsc, cargo check, go vet) "
                             "on git-diff'd files; Tier 1 walks PRISM "
-                            "tables (brain_index_doc, tasks done, "
-                            "memory writes) and confirms each claim "
-                            "against current state. Advisory: writes "
-                            "verdict to .prism/verifier.log, never "
-                            "blocks the agent."
+                            "tables and confirms each claim against "
+                            "current state. Advisory: writes verdict to "
+                            ".prism/verifier.log, never blocks the agent."
                         ),
                     },
                 ],
             },
         ],
-        "SubagentStop": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-subagent.py",
-                        "description": (
-                            "Record sub-agent outcome (recommendation, "
-                            "evidence count, timing) via "
-                            "record_subagent_outcome."
-                        ),
-                    },
-                ],
-            },
-        ],
+        # v5.3.16 — Stop record / SubagentStop / Skill usage / idle "
+        # rebuild hooks dropped: claude_transcripts disk-reader (60s "
+        # importer in main.py) covers session_outcomes + skill_usage "
+        # natively. graph_rebuild after a session-with-edits can be "
+        # triggered from the same importer in a follow-up.
     }
     settings_json = {"hooks": hooks_map}
     return {
@@ -2011,10 +1987,27 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
             "settings.json under 'hooks', then delete .claude/hooks.json.",
             "After writing, tell the user: 'Restart Claude so the new "
             "PRISM hooks activate.'",
-            "SessionStart syncs Brain/Graph drift. PostToolUse covers two "
-            "things: implicit retrieval feedback (brain_search → Read/Edit) "
-            "and skill-usage recording. Stop records session outcomes "
-            "(populates /sessions). SubagentStop records sub-agent outcomes.",
+            "Hook surface (v5.3.16, slim): SessionStart syncs Brain/Graph "
+            "drift before the session starts. PostToolUse covers two "
+            "in-session needs — implicit retrieval feedback "
+            "(brain_search → Read/Edit, feeds the Learning page) and "
+            "edit-learn (auto-ingests edited files into Brain so "
+            "subsequent searches see them). Stop fires the verifier "
+            "sensor (advisory). Session outcomes + skill usage are NOT "
+            "captured by hooks anymore — the service's disk-reader "
+            "(services/claude_transcripts.py, started by main.py "
+            "lifespan) walks ~/.claude/projects/<slug>/*.jsonl every "
+            "60s and populates session_outcomes natively. That removes "
+            "the prism-stop, prism-subagent, prism-skill-usage, and "
+            "prism-idle-rebuild hooks the older manifest used to ship.",
+            "Cleanup: if you find these stale hook scripts present from "
+            "a pre-v5.3.16 install, delete them — they reference the "
+            "old commands and won't be wired into settings.json "
+            "anymore: .claude/hooks/prism-stop.py, .claude/hooks/"
+            "prism-subagent.py, .claude/hooks/prism-skill-usage.py, "
+            ".claude/hooks/prism-idle-rebuild.py. Leaving them on disk "
+            "is harmless (settings.json doesn't reference them) but "
+            "tidier to remove.",
         ],
         "install_files": [
             {
@@ -2035,40 +2028,15 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
                 "content": _FEEDBACK_HOOK_SCRIPT,
                 "mode": "0755",
             },
-            {
-                "path": ".claude/hooks/prism-stop.py",
-                "action": "upsert",
-                "content": _STOP_HOOK_SCRIPT,
-                "mode": "0755",
-            },
-            {
-                "path": ".claude/hooks/prism-subagent.py",
-                "action": "upsert",
-                "content": _SUBAGENT_HOOK_SCRIPT,
-                "mode": "0755",
-            },
-            {
-                "path": ".claude/hooks/prism-skill-usage.py",
-                "action": "upsert",
-                "content": _SKILL_HOOK_SCRIPT,
-                "mode": "0755",
-            },
             # Autonomous-learning loop. PostToolUse on Edit/Write/NotebookEdit
             # auto-ingests the changed file into Brain (skip_graph=true) and
-            # drops a .prism/graph-dirty sentinel; the Stop sibling below
-            # flushes one graph_rebuild per session iff the sentinel exists.
-            # Together they close the in-session blindness gap that previously
-            # required SessionStart drift detection on the next restart.
+            # drops a .prism/graph-dirty sentinel. (v5.3.16: the matching
+            # Stop idle-rebuild is gone — the disk-reader's follow-up
+            # commit will trigger graph_rebuild on session-end-with-edits.)
             {
                 "path": ".claude/hooks/prism-edit-learn.py",
                 "action": "upsert",
                 "content": _EDIT_LEARN_HOOK_SCRIPT,
-                "mode": "0755",
-            },
-            {
-                "path": ".claude/hooks/prism-idle-rebuild.py",
-                "action": "upsert",
-                "content": _IDLE_REBUILD_HOOK_SCRIPT,
                 "mode": "0755",
             },
             {

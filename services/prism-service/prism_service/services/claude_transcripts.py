@@ -85,16 +85,19 @@ def _is_imported(conn: sqlite3.Connection, session_id: str) -> bool:
 
 
 def parse_session_metrics(path: Path) -> dict | None:
-    """Walk a transcript JSONL once and return aggregated metrics.
+    """Walk a transcript JSONL once and return aggregated metrics +
+    per-skill invocation records.
 
     Returns None if the file is empty / unparseable / has no sessionId.
-    The dict shape matches what `Brain.record_session_outcome` expects.
+    Returned dict carries session-level totals (matching
+    `Brain.record_session_outcome` shape) plus a `skill_invocations`
+    list of (skill_name, ts_iso) pairs for skill_usage rows.
     """
     session_id = ""
     tokens_out = 0
     files_read: set[str] = set()
     files_modified: set[str] = set()
-    skills_invoked = 0
+    skill_invocations: list[tuple[str, str]] = []  # (skill_name, timestamp_iso)
     first_ts: float | None = None
     last_ts: float | None = None
     try:
@@ -138,7 +141,9 @@ def parse_session_metrics(path: Path) -> dict | None:
                 if fp:
                     files_modified.add(fp)
             elif name == "Skill":
-                skills_invoked += 1
+                skill_name = (inp.get("skill") or inp.get("name") or "").strip()
+                if skill_name:
+                    skill_invocations.append((skill_name, ts_str or ""))
     if not session_id:
         return None
     duration = 0
@@ -150,7 +155,8 @@ def parse_session_metrics(path: Path) -> dict | None:
         "tokens_used": tokens_out,
         "files_read": len(files_read),
         "files_modified": len(files_modified),
-        "skills_invoked": skills_invoked,
+        "skills_invoked": len(skill_invocations),
+        "skill_invocations": skill_invocations,
     }
 
 
@@ -197,6 +203,7 @@ def import_unseen(
             except OSError:
                 ts_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
             try:
+                before = conn.total_changes
                 conn.execute(
                     "INSERT OR IGNORE INTO session_outcomes "
                     "(session_id, duration_s, tokens_used, files_read, "
@@ -212,8 +219,25 @@ def import_unseen(
                         ts_iso,
                     ),
                 )
-                if conn.total_changes:
+                if conn.total_changes > before:
                     n += 1
+                # v5.3.16 — also populate skill_usage from the same
+                # walk. Each Skill tool_use in the JSONL = one row.
+                # The table has no unique constraint on (session_id,
+                # skill_name) so we only insert when the session row
+                # itself was new (idempotency by proxy).
+                if conn.total_changes > before:
+                    for skill_name, ts_evt in metrics.get("skill_invocations", []):
+                        skill_ts = ts_evt[:19].replace("T", " ") if ts_evt else ts_iso
+                        try:
+                            conn.execute(
+                                "INSERT INTO skill_usage "
+                                "(session_id, skill_name, timestamp) "
+                                "VALUES (?, ?, ?)",
+                                (metrics["session_id"], skill_name, skill_ts),
+                            )
+                        except sqlite3.Error:
+                            continue
             except sqlite3.Error:
                 continue
         conn.commit()

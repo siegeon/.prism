@@ -8,10 +8,26 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.15"
+PRISM_VERSION = "5.3.16"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.16: prism_install manifest slimmed from 6 hooks to 3, "
+    "matching the v5.3.15 disk-reader. Removed: prism-stop, "
+    "prism-subagent, prism-skill-usage, prism-idle-rebuild — all "
+    "redundant now that claude_transcripts.import_unseen() populates "
+    "session_outcomes + skill_usage natively from "
+    "~/.claude/projects/<slug>/*.jsonl. Kept: prism-sync (SessionStart "
+    "drift refresh, must fire BEFORE the session), prism-feedback-"
+    "signal (PostToolUse retrieval feedback for the Learning page), "
+    "prism-edit-learn (PostToolUse Edit/Write — must ingest mid-"
+    "session so subsequent brain_searches see the change), prism-"
+    "verifier (Stop sensor; project tooling runner, separate from "
+    "metrics). Disk-reader extended to populate skill_usage on the "
+    "same pass — Sessions AND Skills both flow from the JSONL. "
+    "Install instructions now call out the stale-script cleanup so "
+    "agents re-running install on a pre-v5.3.16 project can remove "
+    "the four orphaned hook files. "
     "v5.3.15: Disk-reader for Claude session transcripts. Claude Code "
     "persists every session as a JSONL at ~/.claude/projects/<slug>/"
     "<uuid>.jsonl. New `claude_transcripts` service walks those, "
