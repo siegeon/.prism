@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.7"
+PRISM_VERSION = "6.0.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.8: /memory is no longer dead. Discovered while dogfooding: "
+    "PRISM Memory had ZERO entries because Claude Code agents write to "
+    "their own auto-memory at ~/.claude/projects/<slug>/memory/*.md "
+    "instead of calling mcp__prism__memory_store — two parallel systems "
+    "with no bridge. Self-violation of the dogfood-prism rule. Fix: new "
+    "POST /api/memory/import-claude-memories walks the project's "
+    ".claude memory dir, parses frontmatter (name / description / "
+    "metadata.type), maps Claude Code types -> PRISM (type, "
+    "classification, memory_type, importance) tuples, and calls "
+    "memory_svc.store for each. /memory page gains a page header + "
+    "'Import Claude memories' button that triggers it. Idempotent — "
+    "re-running supersedes existing entries via the 85%-similarity "
+    "dedup, doesn't duplicate. After import: /memory shows 14 entries "
+    "across feedback (11) and project (3) domains for this repo, "
+    "instead of the empty state that prompted the discovery. "
     "v6.0.7: Memory moved to the Knowledge sidebar group, where it "
     "belongs. v6.0.6 left it in Activity on the rationale that Memory "
     "is both an output of the Learning loop and an input to future "
