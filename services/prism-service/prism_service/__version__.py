@@ -8,10 +8,22 @@ bumping the patch, the user can't tell they got the new code — fix
 that habit, not the version number.
 """
 
-PRISM_VERSION = "5.3.19"
+PRISM_VERSION = "5.3.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v5.3.20: Auto-updater check now skips on dev builds. The Tauri "
+    "shell's compile-time `package_info().version` is `0.1.0` for "
+    "dev builds (scaffold default); only the CI-shipped .msi/.dmg/"
+    ".AppImage have the real PRISM_VERSION baked in via the v5.3.19 "
+    "sync step. Without this guard, every dev launch fires an update "
+    "check, finds the latest release, downloads the bundle, and "
+    "tries to install — but the dev binary lives at target/debug/, "
+    "not in Program Files, so the install never wins and the loop "
+    "repeats every launch. Now: if version starts with `0.0` or "
+    "equals `0.1.0`, log `[prism-shell] dev build (v…) — skipping "
+    "updater check` and bail. Installed .msi exits this guard and "
+    "auto-updates as designed. "
     "v5.3.19: CI auto-syncs tauri.conf.json version to PRISM_VERSION "
     "before each release build, so the shipped .msi/.dmg/.AppImage's "
     "internal version (what the updater compares) advances in lockstep "

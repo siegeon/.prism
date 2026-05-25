@@ -99,34 +99,45 @@ pub fn run() {
 
     let app = app
         .setup(|app| {
-            // v5.3.17 — check for updates on launch via Tauri's bundled
-            // updater. With `dialog: true` in tauri.conf.json the plugin
-            // shows a native prompt when a signed manifest at
-            // .../releases/latest/download/latest.json advertises a
-            // newer version. Runs async so service spawn isn't blocked
-            // by the network round-trip.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri_plugin_updater::UpdaterExt;
-                match handle.updater() {
-                    Ok(updater) => match updater.check().await {
-                        Ok(Some(update)) => {
-                            eprintln!(
-                                "[prism-shell] update available: {} -> {}",
-                                update.current_version, update.version,
-                            );
-                            let _ = update
-                                .download_and_install(|_, _| {}, || {
-                                    eprintln!("[prism-shell] update installed; restart pending");
-                                })
-                                .await;
-                        }
-                        Ok(None) => eprintln!("[prism-shell] no update available"),
-                        Err(e) => eprintln!("[prism-shell] update check failed: {e}"),
-                    },
-                    Err(e) => eprintln!("[prism-shell] updater unavailable: {e}"),
-                }
-            });
+            // v5.3.20 — auto-update only for production builds. Dev
+            // binaries have tauri.conf.json version "0.1.0" (the scaffold
+            // default) and never get the CI sync step that bumps them to
+            // PRISM_VERSION. Without this guard, every dev launch sees
+            // "update available: 0.1.0 -> 5.3.X", downloads the bundle,
+            // tries to install — but the dev binary doesn't get replaced
+            // (it lives at target/debug/, not in Program Files), so the
+            // next launch fires the same loop. Annoying + spends user
+            // bandwidth on a no-op. The installed .msi carries the real
+            // version and exits this guard, so it auto-updates as intended.
+            let pkg_version = app.package_info().version.to_string();
+            if pkg_version.starts_with("0.0") || pkg_version == "0.1.0" {
+                eprintln!(
+                    "[prism-shell] dev build (v{pkg_version}) — skipping updater check"
+                );
+            } else {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri_plugin_updater::UpdaterExt;
+                    match handle.updater() {
+                        Ok(updater) => match updater.check().await {
+                            Ok(Some(update)) => {
+                                eprintln!(
+                                    "[prism-shell] update available: {} -> {}",
+                                    update.current_version, update.version,
+                                );
+                                let _ = update
+                                    .download_and_install(|_, _| {}, || {
+                                        eprintln!("[prism-shell] update installed; restart pending");
+                                    })
+                                    .await;
+                            }
+                            Ok(None) => eprintln!("[prism-shell] no update available"),
+                            Err(e) => eprintln!("[prism-shell] update check failed: {e}"),
+                        },
+                        Err(e) => eprintln!("[prism-shell] updater unavailable: {e}"),
+                    }
+                });
+            }
 
             match spawn_prism_service() {
                 Ok(child) => {
