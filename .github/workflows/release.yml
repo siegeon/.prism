@@ -85,7 +85,10 @@ jobs:
       - name: Build SPA bundle into the wheel's package_data
         run: |
           cd services/prism-service/prism_service/web
-          npm ci --no-audit --no-fund
+          # `npm install` not `npm ci` — package-lock.json is not
+          # committed (web/.gitignore excludes it), and `npm ci`
+          # requires the lockfile to exist.
+          npm install --no-audit --no-fund
           npm run build
           # The wheel's MANIFEST.in / pyproject include-package-data
           # picks up web_dist/ as long as it exists at build time.
