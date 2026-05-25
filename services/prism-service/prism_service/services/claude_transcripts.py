@@ -42,6 +42,28 @@ from prism_service.project_context import get_all_projects, get_project
 
 _SLUG_RE = re.compile(r"[:/\\.]")
 
+# v6.0.5 — signal extraction for the consolidation pipeline. Inspired by
+# Redis Iris (2026-05-18): the transcripts already on disk carry rich
+# session content (pushback, errors, decisions, memory-store call sites)
+# that prior versions silently discarded during the metrics walk. The
+# reflection sub-agent (JanitorService.check brief) can't reason about
+# what happened in a session if it only sees aggregate counts.
+_PUSHBACK_RE = re.compile(
+    r"\b(no|stop|don['’]?t|wait|actually|wrong|nope)\b",
+    re.IGNORECASE,
+)
+_BG_PROTOCOL_RE = re.compile(
+    r"^(result|needs input|failed):\s+(.+)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_MEMORY_STORE_TOOL_NAMES: tuple[str, ...] = (
+    "mcp__prism__memory_store",
+    "memory_store",
+)
+_MAX_SIGNAL_ITEMS = 12        # cap per-bucket items to bound brief size
+_EXCERPT_MAX_CHARS = 3500     # cap total transcript_excerpt length
+_RECENT_MSG_WINDOW = 8        # messages kept for memory_store context
+
 
 def path_to_slug(path: str) -> str:
     """Convert a filesystem path to Claude Code's project-slug form.
@@ -86,18 +108,25 @@ def _is_imported(conn: sqlite3.Connection, session_id: str) -> bool:
 
 def parse_session_metrics(path: Path) -> dict | None:
     """Walk a transcript JSONL once and return aggregated metrics +
-    per-skill invocation records.
+    per-skill invocation records + signals for the reflection pipeline.
 
     Returns None if the file is empty / unparseable / has no sessionId.
-    Returned dict carries session-level totals (matching
-    `Brain.record_session_outcome` shape) plus a `skill_invocations`
-    list of (skill_name, ts_iso) pairs for skill_usage rows.
+    The dict carries session-level totals (matching
+    `Brain.record_session_outcome` shape), a `skill_invocations` list of
+    (skill_name, ts_iso) pairs for skill_usage rows, and a `signals`
+    bucket — pushbacks, background-protocol lines, tool failures, and
+    memory-store call sites — that feeds the consolidation pipeline.
     """
     session_id = ""
     tokens_out = 0
     files_read: set[str] = set()
     files_modified: set[str] = set()
-    skill_invocations: list[tuple[str, str]] = []  # (skill_name, timestamp_iso)
+    skill_invocations: list[tuple[str, str]] = []
+    pushbacks: list[dict] = []
+    bg_signals: list[dict] = []
+    tool_failures: list[dict] = []
+    memory_writes: list[dict] = []
+    recent_msgs: list[tuple[str, str]] = []   # rolling (role, text) window
     first_ts: float | None = None
     last_ts: float | None = None
     try:
@@ -122,28 +151,88 @@ def parse_session_metrics(path: Path) -> dict | None:
                 if last_ts is None or ts > last_ts:
                     last_ts = ts
         msg = evt.get("message") or {}
+        role = (msg.get("role") or evt.get("type") or "").lower()
         usage = msg.get("usage") or {}
         if usage:
             tokens_out += int(usage.get("output_tokens") or 0)
-        for block in msg.get("content") or []:
+
+        # Collect plain-text spans for the role-level signals.
+        raw_content = msg.get("content")
+        if isinstance(raw_content, str):
+            text_chunks = [raw_content]
+            blocks: list = []
+        elif isinstance(raw_content, list):
+            blocks = raw_content
+            text_chunks = [
+                b.get("text", "") for b in blocks
+                if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+            ]
+        else:
+            blocks = []
+            text_chunks = []
+        joined_text = "\n".join(t for t in text_chunks if t)
+
+        if role == "user" and joined_text:
+            if (_PUSHBACK_RE.search(joined_text)
+                    and len(pushbacks) < _MAX_SIGNAL_ITEMS):
+                pushbacks.append({"ts": ts_str, "text": joined_text[:400]})
+            recent_msgs.append(("user", joined_text[:500]))
+        elif role == "assistant" and joined_text:
+            for m in _BG_PROTOCOL_RE.finditer(joined_text):
+                if len(bg_signals) >= _MAX_SIGNAL_ITEMS:
+                    break
+                bg_signals.append({
+                    "ts": ts_str,
+                    "kind": m.group(1).lower().replace(" ", "_"),
+                    "text": m.group(2).strip()[:400],
+                })
+            recent_msgs.append(("assistant", joined_text[:500]))
+        if len(recent_msgs) > _RECENT_MSG_WINDOW:
+            recent_msgs = recent_msgs[-_RECENT_MSG_WINDOW:]
+
+        for block in blocks:
             if not isinstance(block, dict):
                 continue
-            if block.get("type") != "tool_use":
-                continue
-            name = block.get("name") or ""
-            inp = block.get("input") or {}
-            if name == "Read":
-                fp = inp.get("file_path") or inp.get("path") or ""
-                if fp:
-                    files_read.add(fp)
-            elif name in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
-                fp = inp.get("file_path") or inp.get("path") or ""
-                if fp:
-                    files_modified.add(fp)
-            elif name == "Skill":
-                skill_name = (inp.get("skill") or inp.get("name") or "").strip()
-                if skill_name:
-                    skill_invocations.append((skill_name, ts_str or ""))
+            btype = block.get("type")
+            if btype == "tool_use":
+                name = block.get("name") or ""
+                inp = block.get("input") or {}
+                if name == "Read":
+                    fp = inp.get("file_path") or inp.get("path") or ""
+                    if fp:
+                        files_read.add(fp)
+                elif name in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
+                    fp = inp.get("file_path") or inp.get("path") or ""
+                    if fp:
+                        files_modified.add(fp)
+                elif name == "Skill":
+                    skill_name = (inp.get("skill") or inp.get("name") or "").strip()
+                    if skill_name:
+                        skill_invocations.append((skill_name, ts_str or ""))
+                elif name in _MEMORY_STORE_TOOL_NAMES:
+                    if len(memory_writes) < _MAX_SIGNAL_ITEMS:
+                        memory_writes.append({
+                            "ts": ts_str,
+                            "name": inp.get("name") or inp.get("title") or "",
+                            "domain": inp.get("domain") or "",
+                            "context": [
+                                {"role": r, "text": t}
+                                for r, t in recent_msgs[-4:]
+                            ],
+                        })
+            elif btype == "tool_result":
+                if block.get("is_error") and len(tool_failures) < _MAX_SIGNAL_ITEMS:
+                    raw = block.get("content") or ""
+                    if isinstance(raw, list):
+                        raw = " ".join(
+                            x.get("text", "") for x in raw
+                            if isinstance(x, dict) and x.get("text")
+                        )
+                    tool_failures.append({
+                        "ts": ts_str,
+                        "tool_use_id": block.get("tool_use_id", ""),
+                        "error": str(raw)[:400],
+                    })
     if not session_id:
         return None
     duration = 0
@@ -157,7 +246,54 @@ def parse_session_metrics(path: Path) -> dict | None:
         "files_modified": len(files_modified),
         "skills_invoked": len(skill_invocations),
         "skill_invocations": skill_invocations,
+        "signals": {
+            "pushbacks": pushbacks,
+            "bg_signals": bg_signals,
+            "tool_failures": tool_failures,
+            "memory_writes": memory_writes,
+        },
     }
+
+
+def format_transcript_excerpt(signals: dict) -> str:
+    """Render a signals bucket into a compact text excerpt for the
+    reflection sub-agent. JanitorService.check wraps it in
+    ``<untrusted>...</untrusted>`` before showing it to the LLM, so we
+    only need a human-scannable plain-text rendering here.
+
+    Capped at ``_EXCERPT_MAX_CHARS`` so the brief stays bounded even on
+    sessions with many signals; trailing buckets are truncated rather
+    than spreading the budget thinly.
+    """
+    parts: list[str] = []
+    pushbacks = signals.get("pushbacks") or []
+    if pushbacks:
+        parts.append(f"Pushbacks ({len(pushbacks)}):")
+        for p in pushbacks:
+            parts.append(f"- [{p.get('ts','')}] user: {p.get('text','')}")
+    bg = signals.get("bg_signals") or []
+    if bg:
+        parts.append(f"\nBackground protocol ({len(bg)}):")
+        for s in bg:
+            parts.append(f"- {s.get('kind','')}: {s.get('text','')}")
+    failures = signals.get("tool_failures") or []
+    if failures:
+        parts.append(f"\nTool failures ({len(failures)}):")
+        for f in failures:
+            parts.append(f"- {f.get('error','')[:200]}")
+    writes = signals.get("memory_writes") or []
+    if writes:
+        parts.append(f"\nMemory-store call sites ({len(writes)}):")
+        for w in writes:
+            parts.append(
+                f"- {w.get('domain','')}/{w.get('name','')} at {w.get('ts','')}"
+            )
+            for c in w.get("context") or []:
+                parts.append(f"    {c.get('role','')}: {c.get('text','')[:160]}")
+    out = "\n".join(parts)
+    if len(out) > _EXCERPT_MAX_CHARS:
+        out = out[:_EXCERPT_MAX_CHARS] + "\n... (truncated)"
+    return out
 
 
 def _parse_ts(s: str) -> float | None:
@@ -238,12 +374,59 @@ def import_unseen(
                             )
                         except sqlite3.Error:
                             continue
+                # v6.0.5 — bridge to /consolidation. The MCP-call path
+                # (Brain.record_session_outcome) already enqueues, but
+                # the disk-reader path was inserting via raw SQL and
+                # bypassing the bridge entirely — so transcripts pulled
+                # off disk never produced a candidate. Pass the
+                # transcript_excerpt so the reflection sub-agent sees
+                # real session content, not just aggregate counts.
+                #
+                # Commit the outer conn first so the bridge's own
+                # connection isn't blocked by our pending write lock.
+                if conn.total_changes > before:
+                    conn.commit()
+                    _enqueue_with_signals(
+                        scores_db, metrics["session_id"],
+                        metrics, ts_iso,
+                    )
             except sqlite3.Error:
                 continue
         conn.commit()
     finally:
         conn.close()
     return n
+
+
+def _enqueue_with_signals(
+    scores_db: str,
+    session_id: str,
+    metrics: dict,
+    ts_iso: str,
+) -> None:
+    """Wrap enqueue_for_session with a rich scope built from signals."""
+    try:
+        from prism_service.services.consolidation_data import enqueue_for_session
+        signals = metrics.get("signals") or {}
+        scope: dict = {
+            "files_read": metrics.get("files_read", 0),
+            "files_modified": metrics.get("files_modified", 0),
+            "skills_invoked": metrics.get("skills_invoked", 0),
+            "duration_s": metrics.get("duration_s", 0),
+            "tokens_used": metrics.get("tokens_used", 0),
+            "signal_counts": {
+                k: len(signals.get(k) or [])
+                for k in ("pushbacks", "bg_signals", "tool_failures", "memory_writes")
+            },
+        }
+        excerpt = format_transcript_excerpt(signals)
+        if excerpt:
+            scope["transcript_excerpt"] = excerpt
+        enqueue_for_session(
+            scores_db, session_id, scope=scope, trigger="transcript_imported",
+        )
+    except Exception:
+        pass  # never break the metrics insert path
 
 
 def start_transcript_importer() -> None:
