@@ -1,4 +1,0 @@
-{
-  "_comment": "No plugin-registered hooks. Active client hooks are served by the MCP prism_install route so the service remains the source of truth.",
-  "hooks": {}
-}

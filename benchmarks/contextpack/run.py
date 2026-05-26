@@ -200,7 +200,7 @@ MEMORIES = [
         "classification": "foundational",
         "importance": 9,
         "memory_type": "semantic",
-        "evidence": {"file_paths": ["plugins/prism-devtools/commands/brain.md"]},
+        "evidence": {"file_paths": []},
     },
     {
         "domain": "architect",

@@ -1,6 +1,6 @@
 # PRISM Project
 
-PRISM is a software engineering methodology and Claude Code plugin with an MCP service for AI-assisted development.
+PRISM is a software engineering methodology and MCP service for AI-assisted development.
 
 ## Project Knowledge
 
@@ -22,7 +22,6 @@ Use Brain (MCP) for all project knowledge — do not create static architecture 
 
 ```
 .prism/
-  plugins/prism-devtools/                  # Claude Code plugin (skills, commands, hooks, agents)
   services/prism-service/                  # MCP server + React SPA (pip package: prism-service)
     pyproject.toml                         # v5.3.0 — installable via pip / pipx
     prism_service/main.py                  # FastAPI + uvicorn entrypoint

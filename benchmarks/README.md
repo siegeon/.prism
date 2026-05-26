@@ -106,10 +106,9 @@ required evidence for claiming that PRISM improves a coding agent.
 - Each run writes a checkpointed JSON to `results/<bench>/<timestamp>.json`
   so crashed runs can be resumed.
 
-## Why these are not in `plugins/` or `services/`
+## Why these are not in `services/`
 
-- `plugins/prism-devtools/` is what Claude Code users install. Test fixtures
-  have no place there.
-- `services/prism-service/` ships as a Docker image. Dockerfile only copies
-  `app/`, so the benchmarks dir would never make it into the image anyway —
-  but keeping it out of `services/` makes intent obvious.
+- `services/prism-service/` ships as a pip wheel + Docker image. The wheel's
+  `package_data` and the Dockerfile only pick up `prism_service/`, so a
+  benchmarks dir nested there would never reach end users anyway — but
+  keeping it at the repo root makes intent obvious.

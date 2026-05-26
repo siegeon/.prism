@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.17"
+PRISM_VERSION = "6.0.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.18: Drop the dead plugins/ tree. PRISM stopped being a "
+    "Claude Code plugin at v6.0.0 (native-first cutover) but the "
+    "274-file plugins/prism-devtools/ subtree was left on disk — "
+    "and the analyzer kept reading it, so the /understand tour was "
+    "still narrating PRISM as 'a Claude Code plugin AND a service.' "
+    "Removed: plugins/prism-devtools/ (whole tree), root pyproject.toml "
+    "(it was the plugin's package metadata; testpaths pointed at a "
+    "directory that hadn't existed for releases), scripts/pre-commit "
+    "(delegated to a plugin hook that no longer exists). Updated: "
+    "CLAUDE.md tagline + structure tree, .gitignore (three plugin-"
+    "specific entries), benchmarks/README.md (rewrote the 'why these "
+    "aren't in plugins/ or services/' paragraph), benchmarks/"
+    "contextpack/run.py (cleared a now-orphan evidence file_path). "
+    "Service-code references to plugins/* are docstring breadcrumbs "
+    "explaining where the code was promoted from (claude_cli.py, "
+    "graph_service.py) — kept as historical context. Next time "
+    "/understand refreshes its analysis the tour will reflect a "
+    "service-only repo. "
     "v6.0.17: /understand also drops its per-page h1 (v6.0.15 only "
     "covered Memory + Consolidation). Description paragraph stays "
     "next to the Refresh button; PageHeader's top-bar 'UNDERSTAND' "
