@@ -39,13 +39,16 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -209,15 +212,26 @@ def apply_update() -> dict:
         asset = _state.asset_url
         target = _state.latest_version
 
-    # Download to a temp wheel file. /tmp on Linux/Mac, %TEMP% on Windows.
+    # Download to a temp dir using the asset's real basename. pip>=24
+    # validates wheel filenames against PEP 427's
+    # {name}-{version}-{pyver}-{abi}-{plat}.whl shape and rejects
+    # anything else — so tempfile.NamedTemporaryFile(suffix=".whl")
+    # produces names like "tmpe06f9m57.whl" that pip refuses with
+    # "Invalid wheel filename (wrong number of parts)". Pull the
+    # PEP-427-shaped basename out of the GitHub asset URL instead.
+    asset_basename = posixpath.basename(urllib.parse.urlparse(asset).path)
+    if not asset_basename.endswith(".whl"):
+        # Last-ditch fallback: synthesize a compliant name from the tag.
+        # GitHub always gives us a real basename in practice, so this
+        # branch is for safety only.
+        asset_basename = f"prism_service-{target}-py3-none-any.whl"
+    tmpdir = Path(tempfile.mkdtemp(prefix="prism-update-"))
+    wheel_path = tmpdir / asset_basename
     try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".whl", delete=False,
-        ) as tmp:
-            wheel_path = Path(tmp.name)
         with urllib.request.urlopen(asset, timeout=120) as resp:
             wheel_path.write_bytes(resp.read())
     except Exception as e:
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return {"ok": False, "reason": f"download failed: {type(e).__name__}: {e}"}
 
     cmd = [_sys.executable, "-m", "pip", "install", "--upgrade", str(wheel_path)]
@@ -228,10 +242,7 @@ def apply_update() -> dict:
     except subprocess.TimeoutExpired:
         return {"ok": False, "reason": "pip install timed out after 600s"}
     finally:
-        try:
-            wheel_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     if proc.returncode != 0:
         return {
