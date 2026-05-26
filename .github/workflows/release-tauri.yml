@@ -75,6 +75,13 @@ jobs:
       - name: Build + sign Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
+          # tauri-action's release-upload path uses the Octokit client,
+          # which reads GITHUB_TOKEN from env directly — the job-level
+          # `permissions: contents: write` grants the right scope but
+          # the action doesn't auto-pick up GITHUB_TOKEN unless it's
+          # in the step env. Every v6.x tag built clean bundles, then
+          # died with "GITHUB_TOKEN is required" on the upload step.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:

@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.26"
+PRISM_VERSION = "6.0.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.27: Tauri release workflow finally publishes the bundles. "
+    "Every v6.x tag since v6.0.5 had a green 'Build + sign Tauri "
+    "bundle' compile (3+ min of cargo across mac arm64/x64 + linux + "
+    "windows runners) followed by an immediate ##[error]GITHUB_TOKEN "
+    "is required failure on the upload step — so the .msi / .dmg / "
+    ".AppImage / latest.json updater manifest never made it to the "
+    "GitHub Release page. Eight tags worth of compiled bundles, none "
+    "shipped. Root cause: the job-level `permissions: contents: "
+    "write` block grants the token the right scope, but the Octokit "
+    "client inside tauri-apps/tauri-action reads GITHUB_TOKEN from "
+    "process.env directly and doesn't auto-pick up the contextual "
+    "permissions. One-line fix: pass GITHUB_TOKEN: ${{ secrets."
+    "GITHUB_TOKEN }} into the step env alongside the existing "
+    "TAURI_SIGNING_PRIVATE_KEY pair. This tag is the first that "
+    "should land .msi (Windows), .dmg + .app.tar.gz (mac arm64+x64), "
+    ".AppImage + .deb (linux), plus the minisign-signed `latest.json` "
+    "the auto-updater inside running shells polls. Single-click "
+    "install story for non-developer customers is unblocked. "
     "v6.0.26: Accent palette extends through /tasks and /brain, plus the "
     "misleading ':7777' hardcode in BrainPage's error banner goes away. "
     "Three things: "
