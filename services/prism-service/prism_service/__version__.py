@@ -13,10 +13,32 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.25"
+PRISM_VERSION = "6.0.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.26: Accent palette extends through /tasks and /brain, plus the "
+    "misleading ':7777' hardcode in BrainPage's error banner goes away. "
+    "Three things: "
+    "(1) /tasks kanban column headers + per-card status now use the "
+    "STATUS_TONE map (pending=amber, in_progress=teal, blocked=rose, "
+    "done=emerald) — same convention TaskDetailPage already used, just "
+    "ported off raw Tailwind amber-500/sky-500/rose-500/emerald-500 onto "
+    "the shared --accent-{tone} tokens so the design system is one "
+    "source. Priority chips get a band: p1=rose, p2=amber, p3=sage, "
+    "p4=violet, p5+=slate. Tags hash-to-tone via toneFromLabel for "
+    "deterministic per-tag color. "
+    "(2) /brain filter pills (all/py/ts/js/md/expertise) now go through "
+    "the shared Pill component with toneFromLabel — same legend pattern "
+    "as /memory and /understand. Search-result entity_kind chips become "
+    "amber (same 'symbol = amber' convention as TourView), domain chips "
+    "violet. "
+    "(3) BrainPage's status-error banner no longer hardcodes ':7777' — "
+    "it now references window.location.host so dev (8888) and release "
+    "(7778) both surface a sensible message instead of pointing users "
+    "at the wrong port. Underlying cause of the user-visible 'Failed to "
+    "fetch' was SQLite lock contention on Brain init under drift-timer "
+    "concurrency — unchanged here, but the message no longer misdirects. "
     "v6.0.25: /understand chips inherit the accent palette so the page "
     "actually reads. v6.0.24 fixed the GRAPH-node palette but the "
     "page-level chips (tour-step anchor files, follow-ups, inline `code` "

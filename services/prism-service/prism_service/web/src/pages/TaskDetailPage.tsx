@@ -2,7 +2,27 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
+
+// Same status → tone map as TasksPage so the detail-page status chip
+// matches the kanban column header it came from.
+const STATUS_TONE: Record<string, PillTone> = {
+  pending: "amber",
+  in_progress: "teal",
+  blocked: "rose",
+  done: "emerald",
+};
+
+function priorityTone(p: number | string | undefined): PillTone {
+  if (p === undefined || p === null) return "slate";
+  const n = typeof p === "number" ? p : Number(p);
+  if (!Number.isFinite(n)) return toneFromLabel(String(p));
+  if (n <= 1) return "rose";
+  if (n === 2) return "amber";
+  if (n === 3) return "sage";
+  if (n === 4) return "violet";
+  return "slate";
+}
 
 type Task = {
   id?: string;
@@ -110,12 +130,9 @@ export default function TaskDetailPage() {
   }
 
   const transitions = STATUS_CYCLE[task.status ?? "pending"] ?? [];
-  const statusColor: Record<string, string> = {
-    pending: "bg-amber-500/15 text-amber-200",
-    in_progress: "bg-sky-500/15 text-sky-200",
-    blocked: "bg-rose-500/15 text-rose-200",
-    done: "bg-emerald-500/15 text-emerald-200",
-  };
+  const taskStatus = task.status ?? "pending";
+  const statusTone = STATUS_TONE[taskStatus] ?? "slate";
+  const pTone = priorityTone(task.priority);
 
   return (
     <Page>
@@ -136,22 +153,54 @@ export default function TaskDetailPage() {
         <div>
           <h1 className="font-serif text-3xl tracking-tight">{task.title ?? "Untitled task"}</h1>
           <div className="flex items-center gap-2 mt-2">
-            <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${statusColor[task.status ?? "pending"] ?? ""}`}>
-              {task.status ?? "pending"}
+            <span
+              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+              style={{
+                background: `var(--accent-${statusTone}-bg)`,
+                color: `var(--accent-${statusTone}-fg)`,
+                boxShadow: `inset 0 0 0 1px var(--accent-${statusTone}-ring)`,
+              }}
+            >
+              {taskStatus}
             </span>
             {typeof task.priority !== "undefined" && (
-              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">
+              <span
+                className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+                style={{
+                  background: `var(--accent-${pTone}-bg)`,
+                  color: `var(--accent-${pTone}-fg)`,
+                  boxShadow: `inset 0 0 0 1px var(--accent-${pTone}-ring)`,
+                }}
+              >
                 priority {task.priority}
               </span>
             )}
             {task.assigned_agent && (
-              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">
+              <span
+                className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+                style={{
+                  background: "var(--accent-violet-bg)",
+                  color: "var(--accent-violet-fg)",
+                }}
+              >
                 {task.assigned_agent}
               </span>
             )}
-            {(task.tags ?? []).map((tag) => (
-              <span key={tag} className="text-[10px] opacity-50 font-mono">#{tag}</span>
-            ))}
+            {(task.tags ?? []).map((tag) => {
+              const tTone = toneFromLabel(tag);
+              return (
+                <span
+                  key={tag}
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                  style={{
+                    background: `var(--accent-${tTone}-bg)`,
+                    color: `var(--accent-${tTone}-fg)`,
+                  }}
+                >
+                  #{tag}
+                </span>
+              );
+            })}
           </div>
         </div>
         <div className="flex flex-wrap gap-1 shrink-0">
