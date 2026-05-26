@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.22"
+PRISM_VERSION = "6.0.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.23: Filter pills read as a legend by default, not on click. "
+    "v6.0.22 only applied the accent tone on the active pill — clicking "
+    "EXPERTISE turned the pill teal, but until you clicked, every pill "
+    "in the strip looked identical (the v6.0.21 fix only showed up on "
+    "interaction, which defeats half the purpose). New: when a Pill "
+    "has a tone but isn't active, the bg stays neutral surface-2 but "
+    "the TEXT inherits the accent fg, and hover lifts the bg toward "
+    "the accent fill. So you can scan the strip and see 'expertise = "
+    "teal, decision = amber, anti-pattern = rose' at a glance without "
+    "clicking. Active state still gets the solid accent fill, so "
+    "what's selected stays unambiguous. Also: Domain pills now get "
+    "deterministic-hash-to-tone via new toneFromLabel(label) helper "
+    "in components/ui.tsx — 'all' always maps to slate so the "
+    "universal-filter pill doesn't accidentally borrow a meaningful "
+    "tone; every other domain string hashes to one of six rotating "
+    "accents (teal/sage/amber/rose/violet/emerald). Domain coloring "
+    "is now persistent: architecture is always the same color across "
+    "page loads, but no per-domain map needed (domains are "
+    "user-defined). "
     "v6.0.22: /memory filter pills speak the same color language as the "
     "entry chips they filter. v6.0.21 colored the per-row type / "
     "classification / status chips but left the Type and Status filter "

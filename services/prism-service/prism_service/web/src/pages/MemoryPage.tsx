@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Pill, Empty } from "@/components/ui";
+import { Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel } from "@/components/ui";
 
 type Entry = {
   id?: string;
@@ -179,9 +179,11 @@ export default function MemoryPage() {
       <Card>
         <SectionLabel>Domain</SectionLabel>
         <div className="flex flex-wrap gap-2 mb-4">
-          <Pill active={domain === "all"} onClick={() => setDomain("all")}>all</Pill>
+          <Pill active={domain === "all"} onClick={() => setDomain("all")} tone="slate">all</Pill>
           {domains.map((d) => (
-            <Pill key={d} active={domain === d} onClick={() => setDomain(d)}>{d}</Pill>
+            <Pill key={d} active={domain === d} onClick={() => setDomain(d)} tone={toneFromLabel(d)}>
+              {d}
+            </Pill>
           ))}
         </div>
         <SectionLabel>Type</SectionLabel>
