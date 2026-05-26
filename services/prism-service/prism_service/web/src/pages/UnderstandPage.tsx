@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { FolderTree, GitBranch, Settings as SettingsIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Card, Empty, ErrorBanner, Kpi, Page, Pill, SectionLabel } from "@/components/ui";
+import { Card, Empty, ErrorBanner, Kpi, Page, Pill, SectionLabel, type PillTone } from "@/components/ui";
 import TourView from "@/components/understand/TourView";
 import LayersView from "@/components/understand/LayersView";
 import DomainsView from "@/components/understand/DomainsView";
@@ -29,6 +29,18 @@ type Status = {
 };
 
 type ArtifactKind = "tour" | "layers" | "domains" | "onboarding";
+
+// Each artifact tab gets a distinct accent so the strip reads as a
+// legend at-a-glance, matching the /memory chip pattern. Mapping is
+// loosely semantic: tour=walk-through (teal), layers=architecture
+// structure (amber), domains=glossary/concepts (violet), onboarding
+// =writeup (sage).
+const ARTIFACT_TONE: Record<ArtifactKind, PillTone> = {
+  tour: "teal",
+  layers: "amber",
+  domains: "violet",
+  onboarding: "sage",
+};
 
 type ArtifactResponse = {
   data: unknown;
@@ -214,7 +226,7 @@ export default function UnderstandPage() {
           <SectionLabel>Artifact</SectionLabel>
           <div className="flex gap-2 ml-2">
             {(["tour", "layers", "domains", "onboarding"] as ArtifactKind[]).map((k) => (
-              <Pill key={k} active={tab === k} onClick={() => setTab(k)}>
+              <Pill key={k} active={tab === k} onClick={() => setTab(k)} tone={ARTIFACT_TONE[k]}>
                 {k}
               </Pill>
             ))}

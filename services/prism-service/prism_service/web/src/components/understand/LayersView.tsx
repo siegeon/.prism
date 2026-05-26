@@ -189,7 +189,10 @@ function LayerDetailRow({ layer, colorIdx }: { layer: Layer; colorIdx: number })
       {layer.hub_symbols && layer.hub_symbols.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {layer.hub_symbols.slice(0, 6).map((s) => (
-            <span key={s} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/10">
+            <span
+              key={s}
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]"
+            >
               {s}
             </span>
           ))}

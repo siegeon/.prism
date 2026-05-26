@@ -103,7 +103,7 @@ function renderInline(text: string): ReactNode {
     if (!next) { parts.push(rest); break; }
     if (next.index > 0) parts.push(rest.slice(0, next.index));
     if (next === code) {
-      parts.push(<code key={key++} className="text-[12px] font-mono px-1 py-0.5 rounded bg-[color:var(--midground-base)]/10">{next[1]}</code>);
+      parts.push(<code key={key++} className="text-[12px] font-mono px-1 py-0.5 rounded bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)]">{next[1]}</code>);
     } else {
       parts.push(<strong key={key++} className="font-semibold">{next[1]}</strong>);
     }

@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.24"
+PRISM_VERSION = "6.0.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.25: /understand chips inherit the accent palette so the page "
+    "actually reads. v6.0.24 fixed the GRAPH-node palette but the "
+    "page-level chips (tour-step anchor files, follow-ups, inline `code` "
+    "spans in onboarding, layer hub_symbols) were still bg-[color:var("
+    "--midground-base)]/10 plus an opacity-60 dashed border on follow-up "
+    "refs — every chip read as the same dim slate against the dark "
+    "surface, and on small text that's below comfortable reading "
+    "contrast. Now: UnderstandPage tabs (tour / layers / domains / "
+    "onboarding) get distinct tones (teal / amber / violet / sage) so "
+    "the strip reads as a legend; TourView anchor_file chips become "
+    "teal, anchor_symbol amber, follow_ups violet (drops the dashed-"
+    "border + opacity sleeve in favor of a saturated accent ring); "
+    "OnboardingView inline `code` spans switch from slate to teal "
+    "(same 'code/identifier = teal' convention); LayersView hub_symbol "
+    "chips switch from slate to amber so they pop against their layer "
+    "card. The palette is the same --accent-{tone}-{bg,ring,fg} family "
+    "introduced for /memory in v6.0.21, so the design language is now "
+    "consistent across /memory, /graph, and /understand. "
     "v6.0.24: /graph + /understand draw from the same accent palette as "
     "/memory chips. Three palettes were drifting independently — "
     "graph_static.py COMMUNITY_COLORS (16 hand-authored hexes for the "
