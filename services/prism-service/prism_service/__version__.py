@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.21"
+PRISM_VERSION = "6.0.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.22: /memory filter pills speak the same color language as the "
+    "entry chips they filter. v6.0.21 colored the per-row type / "
+    "classification / status chips but left the Type and Status filter "
+    "pills at the top of the page using the generic Pill component — "
+    "still flat blue. Clicking EXPERTISE in the filter strip lit a "
+    "white pill above teal entries; ACTIVE lit a white pill above "
+    "emerald entries. The filter strip and the strip it filters read "
+    "as two different design systems. Fix: Pill in components/ui.tsx "
+    "gains an optional `tone` prop wired to the same --accent-{tone} "
+    "token triples. When active+tone, the pill inherits that accent; "
+    "when inactive, it stays neutral surface-2 so the filter strip "
+    "doesn't shout when nothing is selected. MemoryPage passes "
+    "TYPE_TONE[t] and STATUS_TONE[s] into the filter Pills. Domain "
+    "pills stay un-toned (no stable mapping — domains are user-defined "
+    "strings, not a small enum). "
     "v6.0.21: /memory chips read as more than blue-on-blue-on-blue. The "
     "page had become a single-hue surface — every type / classification / "
     "status chip on every entry row was the same bg-[color:var(--midground"

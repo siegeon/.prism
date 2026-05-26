@@ -186,11 +186,19 @@ export default function MemoryPage() {
         </div>
         <SectionLabel>Type</SectionLabel>
         <div className="flex flex-wrap gap-2 mb-4">
-          {TYPES.map((t) => <Pill key={t} active={type === t} onClick={() => setType(t)}>{t}</Pill>)}
+          {TYPES.map((t) => (
+            <Pill key={t} active={type === t} onClick={() => setType(t)} tone={TYPE_TONE[t]}>
+              {t}
+            </Pill>
+          ))}
         </div>
         <SectionLabel>Status</SectionLabel>
         <div className="flex flex-wrap gap-2">
-          {STATUSES.map((s) => <Pill key={s} active={status === s} onClick={() => setStatus(s)}>{s}</Pill>)}
+          {STATUSES.map((s) => (
+            <Pill key={s} active={status === s} onClick={() => setStatus(s)} tone={STATUS_TONE[s]}>
+              {s}
+            </Pill>
+          ))}
         </div>
       </Card>
 

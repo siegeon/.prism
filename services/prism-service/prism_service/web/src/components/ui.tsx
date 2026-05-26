@@ -49,13 +49,43 @@ export const Kpi = ({ label, value, hint }: { label: string; value: ReactNode; h
   </div>
 );
 
-export const Pill = ({ children, active, onClick }: { children: ReactNode; active?: boolean; onClick?: () => void }) => (
+/** Tone names matching the --accent-{name}-{bg,ring,fg} token triples
+ * in index.css. When a Pill is given a tone AND is active, the pill
+ * inherits that accent — keeping filter UI and the entries it filters
+ * speaking the same color language. Inactive pills stay neutral
+ * regardless of tone so the filter strip doesn't shout when nothing
+ * is selected.
+ */
+export type PillTone =
+  | "teal" | "sage" | "amber" | "rose" | "violet" | "emerald" | "slate";
+
+const PILL_TONE_ACTIVE: Record<PillTone, string> = {
+  teal:    "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]",
+  sage:    "bg-[color:var(--accent-sage-bg)] text-[color:var(--accent-sage-fg)] ring-1 ring-inset ring-[color:var(--accent-sage-ring)]",
+  amber:   "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]",
+  rose:    "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] ring-1 ring-inset ring-[color:var(--accent-rose-ring)]",
+  violet:  "bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]",
+  emerald: "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]",
+  slate:   "bg-[color:var(--accent-slate-bg)] text-[color:var(--accent-slate-fg)] ring-1 ring-inset ring-[color:var(--accent-slate-ring)]",
+};
+
+export const Pill = ({
+  children, active, onClick, tone,
+}: {
+  children: ReactNode;
+  active?: boolean;
+  onClick?: () => void;
+  /** When set + active, pill adopts this tone's accent triple. */
+  tone?: PillTone;
+}) => (
   <button
     onClick={onClick}
     className={cn(
       "px-3 py-1 rounded-full text-[11px] uppercase tracking-wider transition-colors",
       active
-        ? "bg-[color:var(--text-primary)] text-[color:var(--surface-0)]"
+        ? tone
+          ? PILL_TONE_ACTIVE[tone]
+          : "bg-[color:var(--text-primary)] text-[color:var(--surface-0)]"
         : "bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-3)] hover:text-[color:var(--text-primary)]",
     )}
   >{children}</button>
