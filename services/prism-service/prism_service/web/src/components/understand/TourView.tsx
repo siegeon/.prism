@@ -69,13 +69,13 @@ function StepCard({ step, fallbackOrdinal }: { step: Step; fallbackOrdinal: numb
         )}
         <div className="flex flex-wrap items-center gap-2 mt-3 text-[11px]">
           {step.anchor_file && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[color:var(--midground-base)]/10 font-mono">
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded font-mono bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]">
               <FileCode className="w-3 h-3" />
               {step.anchor_file}
             </span>
           )}
           {step.anchor_symbol && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[color:var(--midground-base)]/10 font-mono">
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded font-mono bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]">
               <ArrowRight className="w-3 h-3" />
               {step.anchor_symbol}
             </span>
@@ -83,7 +83,7 @@ function StepCard({ step, fallbackOrdinal }: { step: Step; fallbackOrdinal: numb
           {step.follow_ups?.slice(0, 6).map((ref) => (
             <span
               key={ref}
-              className="px-2 py-1 rounded font-mono opacity-60 border border-dashed border-[color:var(--midground-base)]/20"
+              className="px-2 py-1 rounded font-mono bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]"
             >
               {ref}
             </span>
