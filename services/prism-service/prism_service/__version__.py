@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.19"
+PRISM_VERSION = "6.0.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.20: `?project=<name>` URL param actually selects the project. "
+    "useProject() in web/src/lib/project.ts was localStorage-only — every "
+    "Edge --app launch or deep-link with `?project=prism` silently fell "
+    "back to whatever localStorage said (typically `default`), and the "
+    "user landed on /graph with the wrong project's stats (7 / 5 / 3 "
+    "from `default` instead of the prism project's 2651 / 5517 / 92). "
+    "Fix: getProject() now checks `new URLSearchParams(location.search)"
+    ".get('project')` first; URL wins, and the value is mirrored into "
+    "localStorage on first read so the header picker + every other "
+    "page sees the same active project without us threading the param "
+    "through every component. Header picker still flips it manually. "
     "v6.0.19: /graph rebuild button finally does something visible. "
     "Symptom: clicking Rebuild flashed a toast and /graph stayed empty "
     "(graph_json_exists: false, communities: 0). Two compounding bugs: "
