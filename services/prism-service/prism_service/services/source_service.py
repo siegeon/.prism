@@ -352,6 +352,15 @@ _INGEST_SKIP_DIRS = {
     ".claude", "worktrees", "target", ".next", ".nuxt", "out",
     "benchmarks", ".tmp", ".cache", ".idea", ".vscode",
     "coverage", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    # v6.0.19 — `.venv` (singular) was the only venv name on the list,
+    # but the prism-dev skill creates `E:\.prism\.venvs\dev\…` (PLURAL,
+    # at the repo root). Without `.venvs` here, ingest pulled ~1900
+    # site-packages .py files into the prism project's Brain — and the
+    # real services/ source code never crossed the noise floor in
+    # graphify community detection. `.dev-data` is the matching dev
+    # data dir (`E:\.prism\.dev-data\projects\<p>\…`) — same problem,
+    # it carries `.venvs` and `projects/<p>/source/` from prior runs.
+    ".venvs", ".dev-data",
 }
 
 

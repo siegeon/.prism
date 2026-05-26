@@ -47,12 +47,47 @@ def summary(project: str = Query("default")) -> dict:
 
 
 @router.post("/rebuild")
-def rebuild(project: str = Query("default")) -> dict:
+def rebuild(
+    project: str = Query("default"),
+    reingest: bool = Query(False),
+) -> dict:
+    """Rebuild the graph for `project`.
+
+    v6.0.19 — two changes versus the silent v5.x version:
+      * Returns the `graph_svc.rebuild()` summary (nodes / edges /
+        communities / imported_* / error / message) instead of swallowing
+        it under a fixed `{"ok": True}`. The SPA was reporting success
+        on every click even when graphify produced no graph.json
+        because staging was full of venv site-packages.
+      * `reingest=true` re-walks the project's source dir and re-stages
+        every code file from disk first — the cheapest way to recover
+        from a poisoned Brain after a skip-list fix landed.
+    """
     try:
-        get_project(project).graph_svc.rebuild()
+        ctx = get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    out: dict = {}
+    if reingest:
+        from prism_service.services.source_service import ingest_source_to_brain
+        # Wipe staging before re-walking so the prior skip-list miss
+        # doesn't leave stale .venvs/ files sitting in graphify-src/.
+        try:
+            ctx.graph_svc.clear_staging()
+        except Exception:
+            pass
+        out["reingest"] = ingest_source_to_brain(project)
+    try:
+        ctx_brain_db = str(ctx._data_dir / "brain.db")
+        result = ctx.graph_svc.rebuild(brain_db_path=ctx_brain_db)
     except Exception as exc:
         raise HTTPException(500, f"rebuild failed: {exc}")
-    return {"ok": True}
+    # The synchronous rebuild may set `error` or `message` without raising
+    # — surface that to the caller so the SPA can show why no graph.json
+    # appeared instead of pretending the click worked.
+    out.update(result)
+    out["ok"] = "error" not in result and "message" not in result
+    return out
 
 
 class EdgesBetweenBody(BaseModel):

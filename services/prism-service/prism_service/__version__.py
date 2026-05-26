@@ -13,10 +13,32 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.18"
+PRISM_VERSION = "6.0.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.19: /graph rebuild button finally does something visible. "
+    "Symptom: clicking Rebuild flashed a toast and /graph stayed empty "
+    "(graph_json_exists: false, communities: 0). Two compounding bugs: "
+    "(1) _INGEST_SKIP_DIRS had `.venv` (singular) but not `.venvs`, and "
+    "the prism-dev skill creates the dev venv at `E:\\.prism\\.venvs"
+    "\\dev\\…` (plural, at the repo root). So Brain ingest pulled "
+    "~1925 site-packages .py files for the prism project and the real "
+    "143 services/ source files were lost in the noise — graphify's "
+    "own filter then dropped the venvs as site-packages-ish and "
+    "reported 'No code files found - nothing to rebuild', producing no "
+    "graph.json. Added `.venvs` and `.dev-data` to the skip set so a "
+    "fresh ingest walks only real source. (2) /api/graph/rebuild "
+    "discarded graph_svc.rebuild()'s result dict and returned a flat "
+    "{ok: true} regardless — including when the inner call set "
+    "`result['error']` or `result['message']`. The SPA had no signal "
+    "to differentiate 'graphify ran and produced 12 communities' from "
+    "'graphify said no code files exist.' Fixed: route now returns "
+    "the full summary (nodes / edges / communities / imported_* / "
+    "error / message) and computes `ok` from absence of error/message. "
+    "Also new: `?reingest=true` query param wipes staging and re-walks "
+    "the project's source_path before invoking graphify — the cheapest "
+    "way to recover from a poisoned Brain after a skip-list fix lands. "
     "v6.0.18: Close PR #74's learning-loop punch-list. (1) /learning is "
     "no longer empty after a reflection runs — task_quality_rollup only "
     "INSERTs when a candidate carries task_id, but transcript-derived "
