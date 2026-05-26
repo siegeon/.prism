@@ -13,11 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.17"
+PRISM_VERSION = "6.0.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v6.0.17: /understand also drops its per-page h1 (v6.0.15 only "
+    "v6.0.18: /graph Rebuild button actually rebuilds now. The "
+    "/api/graph/rebuild endpoint was calling graph_svc.rebuild() "
+    "without passing brain_db_path, so the staging-dir auto-backfill "
+    "(gated on `if brain_db_path and staging is empty`) silently "
+    "skipped. rebuild() then early-returned with "
+    "{message: 'no staged source files yet'}, but the API discarded "
+    "the result dict and returned {ok: true} — so every project that "
+    "had source files in Brain but had never manually staged for "
+    "graphify (i.e. virtually all of them) saw the Rebuild button "
+    "appear to succeed while graph.json never got produced and "
+    "communities stayed at 0. graph.db entities did exist but all "
+    "came from the tree-sitter fallback in brain_engine (graphify_id "
+    "NULL on every row), which sync_status had been flagging as stale "
+    "with no user-facing way to escape. Fix: pass brain_db_path so "
+    "backfill runs, and surface result['error'] as a real 500 instead "
+    "of masking it. The result dict (with nodes/edges/communities/"
+    "backfilled counts) now flows back to the SPA too, so the next "
+    "/api/graph/summary refresh sees graph_json_exists flip true and "
+    "the Sigma viewer can finally paint. v6.0.17: /understand also "
+    "drops its per-page h1 (v6.0.15 only "
     "covered Memory + Consolidation). Description paragraph stays "
     "next to the Refresh button; PageHeader's top-bar 'UNDERSTAND' "
     "is the single title. Swept the rest of the SPA — SettingsPage "

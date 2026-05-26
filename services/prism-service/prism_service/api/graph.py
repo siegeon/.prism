@@ -48,11 +48,22 @@ def summary(project: str = Query("default")) -> dict:
 
 @router.post("/rebuild")
 def rebuild(project: str = Query("default")) -> dict:
+    # Pass brain_db_path so rebuild() can auto-backfill the graphify
+    # staging dir from the docs table when it's empty. Without this, any
+    # project whose source files were ingested via Brain but never
+    # manually staged (i.e. virtually all of them) saw the Rebuild button
+    # silently no-op: rebuild() returned {"message": "no staged source
+    # files yet"}, the API discarded it, and graph.json was never produced.
     try:
-        get_project(project).graph_svc.rebuild()
+        ctx = get_project(project)
+        result = ctx.graph_svc.rebuild(
+            brain_db_path=str(ctx._data_dir / "brain.db"),
+        )
     except Exception as exc:
         raise HTTPException(500, f"rebuild failed: {exc}")
-    return {"ok": True}
+    if isinstance(result, dict) and result.get("error"):
+        raise HTTPException(500, f"rebuild failed: {result['error']}")
+    return {"ok": True, **(result if isinstance(result, dict) else {})}
 
 
 class EdgesBetweenBody(BaseModel):
