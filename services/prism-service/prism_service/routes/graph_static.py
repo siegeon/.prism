@@ -163,34 +163,31 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   const yieldToBrowser = () => new Promise(r => requestAnimationFrame(r));
   const PROJECT_ID = "__PROJECT_ID__";
   const statusEl = document.getElementById("status");
-  // Community palette: 16 hue-distinct swatches at muted saturation so
-  // clusters in dense graphs (often 100+ communities) actually read as
-  // different colors on the #0d1726 dark background. v5.2.5 refresh —
-  // the previous 13-color set was deliberately blue-grey only for
-  // theme harmony but in practice every cluster looked identical on a
-  // big graph. Hue progression matches PrismLayerNode's React palette
-  // so /understand LAYERS and /graph use the same colors for the same
-  // structural meaning.
+  // Community palette: 14 hue-distinct swatches (7 base + 7 lifted)
+  // sourced from web/src/lib/palette.ts ACCENT_HEX + ACCENT_HEX_LIFTED.
+  // v6.0.24 refresh — replaces the v5.2.5 16-color set so /graph,
+  // /understand (layers + domains), and /memory chips all draw from
+  // the same --accent-{tone}-fg token family. Keep this list in lock-
+  // step with palette.ts: if you add a tone to the TS module, mirror
+  // the hex here so the server-rendered Sigma viewer doesn't drift
+  // out of sync.
   const COMMUNITY_COLORS = [
-    "#4a7c9b", // steel blue
-    "#5faab4", // teal
-    "#78aa82", // sage
-    "#c8aa5a", // amber
-    "#dc876e", // coral
-    "#aa8cc8", // lavender
-    "#d282a5", // rose
-    "#a09687", // warm grey
-    // Tier 2 — each hue with lightness lifted ~10, so on graphs with
-    // more than 8 communities the palette wraps without immediately
-    // returning to the same shade.
-    "#6496b4", // steel blue lifted
-    "#73bec8", // teal lifted
-    "#8cbe96", // sage lifted
-    "#dcbe6e", // amber lifted
-    "#eb9b82", // coral lifted
-    "#bea0d7", // lavender lifted
-    "#e196b4", // rose lifted
-    "#b4aa9b", // warm grey lifted
+    // Base — matches ACCENT_HEX in web/src/lib/palette.ts.
+    "#5eead4", // teal
+    "#a3d9a5", // sage
+    "#fcd34d", // amber
+    "#f9a8d4", // rose
+    "#c4b5fd", // violet
+    "#6ee7b7", // emerald
+    "#cbd5e1", // slate
+    // Lifted — matches ACCENT_HEX_LIFTED in web/src/lib/palette.ts.
+    "#8ff5e6", // teal lifted
+    "#bee5c0", // sage lifted
+    "#fde58a", // amber lifted
+    "#fbc7e5", // rose lifted
+    "#d6cdfd", // violet lifted
+    "#9ef0c9", // emerald lifted
+    "#dde4eb", // slate lifted
   ];
   function colorFor(community) {
     if (community === undefined || community === null) return "#6b7280";

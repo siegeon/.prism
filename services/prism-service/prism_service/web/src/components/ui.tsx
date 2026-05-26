@@ -49,17 +49,80 @@ export const Kpi = ({ label, value, hint }: { label: string; value: ReactNode; h
   </div>
 );
 
-export const Pill = ({ children, active, onClick }: { children: ReactNode; active?: boolean; onClick?: () => void }) => (
+/** Tone names matching the --accent-{name}-{bg,ring,fg} token triples
+ * in index.css. When a Pill is given a tone AND is active, the pill
+ * inherits that accent — keeping filter UI and the entries it filters
+ * speaking the same color language. Inactive pills stay neutral
+ * regardless of tone so the filter strip doesn't shout when nothing
+ * is selected.
+ */
+export type PillTone =
+  | "teal" | "sage" | "amber" | "rose" | "violet" | "emerald" | "slate";
+
+const PILL_TONE_ACTIVE: Record<PillTone, string> = {
+  teal:    "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]",
+  sage:    "bg-[color:var(--accent-sage-bg)] text-[color:var(--accent-sage-fg)] ring-1 ring-inset ring-[color:var(--accent-sage-ring)]",
+  amber:   "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]",
+  rose:    "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] ring-1 ring-inset ring-[color:var(--accent-rose-ring)]",
+  violet:  "bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]",
+  emerald: "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]",
+  slate:   "bg-[color:var(--accent-slate-bg)] text-[color:var(--accent-slate-fg)] ring-1 ring-inset ring-[color:var(--accent-slate-ring)]",
+};
+
+// Inactive-with-tone: keep the neutral surface-2 background (so the
+// strip doesn't shout) but tint the TEXT with the accent's fg color
+// so the pill reads as a legend at-a-glance — you can see "expertise
+// = teal, decision = amber" without clicking. On hover we lift the
+// bg slightly toward the accent fill so it still feels actionable.
+const PILL_TONE_INACTIVE: Record<PillTone, string> = {
+  teal:    "bg-[color:var(--surface-2)] text-[color:var(--accent-teal-fg)] hover:bg-[color:var(--accent-teal-bg)]",
+  sage:    "bg-[color:var(--surface-2)] text-[color:var(--accent-sage-fg)] hover:bg-[color:var(--accent-sage-bg)]",
+  amber:   "bg-[color:var(--surface-2)] text-[color:var(--accent-amber-fg)] hover:bg-[color:var(--accent-amber-bg)]",
+  rose:    "bg-[color:var(--surface-2)] text-[color:var(--accent-rose-fg)] hover:bg-[color:var(--accent-rose-bg)]",
+  violet:  "bg-[color:var(--surface-2)] text-[color:var(--accent-violet-fg)] hover:bg-[color:var(--accent-violet-bg)]",
+  emerald: "bg-[color:var(--surface-2)] text-[color:var(--accent-emerald-fg)] hover:bg-[color:var(--accent-emerald-bg)]",
+  slate:   "bg-[color:var(--surface-2)] text-[color:var(--accent-slate-fg)] hover:bg-[color:var(--accent-slate-bg)]",
+};
+
+export const Pill = ({
+  children, active, onClick, tone,
+}: {
+  children: ReactNode;
+  active?: boolean;
+  onClick?: () => void;
+  /** When set, the pill adopts the tone's accent — solid fill when
+   * active, tinted text + neutral bg when inactive (legend mode). */
+  tone?: PillTone;
+}) => (
   <button
     onClick={onClick}
     className={cn(
       "px-3 py-1 rounded-full text-[11px] uppercase tracking-wider transition-colors",
       active
-        ? "bg-[color:var(--text-primary)] text-[color:var(--surface-0)]"
-        : "bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-3)] hover:text-[color:var(--text-primary)]",
+        ? tone
+          ? PILL_TONE_ACTIVE[tone]
+          : "bg-[color:var(--text-primary)] text-[color:var(--surface-0)]"
+        : tone
+          ? PILL_TONE_INACTIVE[tone]
+          : "bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-3)] hover:text-[color:var(--text-primary)]",
     )}
   >{children}</button>
 );
+
+/** Stable hash → PillTone. Used for filter axes where labels are
+ * user-defined strings (e.g. memory domains) so coloring is still
+ * deterministic across renders without an explicit per-label map.
+ * "all" intentionally maps to slate so the universal-filter pill
+ * doesn't accidentally borrow a meaningful tone.
+ */
+const HASH_TONES: PillTone[] = ["teal", "sage", "amber", "rose", "violet", "emerald"];
+
+export function toneFromLabel(label: string): PillTone {
+  if (label === "all") return "slate";
+  let h = 0;
+  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
+  return HASH_TONES[h % HASH_TONES.length];
+}
 
 export const Empty = ({ children }: { children: ReactNode }) => (
   <div className="rounded-md border border-dashed border-[color:var(--border-default)] px-5 py-8 text-center text-sm text-[color:var(--text-muted)]">

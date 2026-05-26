@@ -57,6 +57,40 @@
   --border-default: rgba(237, 241, 247, 0.12);
   --border-strong:  rgba(237, 241, 247, 0.22);
 
+  /* Semantic accents — muted hues that sit on the Slate-Blue base
+   * without overwhelming it. Used by chips/badges that encode
+   * meaning (memory type, status, importance band). Each role
+   * carries a -bg (~10-12% alpha fill), -ring (~30% alpha border),
+   * and -fg (saturated foreground that hits AA on -bg).
+   */
+  --accent-teal-bg:     rgba(45, 212, 191, 0.12);
+  --accent-teal-ring:   rgba(45, 212, 191, 0.32);
+  --accent-teal-fg:     #5eead4;
+
+  --accent-sage-bg:     rgba(132, 204, 132, 0.12);
+  --accent-sage-ring:   rgba(132, 204, 132, 0.32);
+  --accent-sage-fg:     #a3d9a5;
+
+  --accent-amber-bg:    rgba(251, 191, 36, 0.12);
+  --accent-amber-ring:  rgba(251, 191, 36, 0.32);
+  --accent-amber-fg:    #fcd34d;
+
+  --accent-rose-bg:     rgba(244, 114, 182, 0.12);
+  --accent-rose-ring:   rgba(244, 114, 182, 0.32);
+  --accent-rose-fg:     #f9a8d4;
+
+  --accent-violet-bg:   rgba(167, 139, 250, 0.12);
+  --accent-violet-ring: rgba(167, 139, 250, 0.32);
+  --accent-violet-fg:   #c4b5fd;
+
+  --accent-emerald-bg:  rgba(52, 211, 153, 0.14);
+  --accent-emerald-ring:rgba(52, 211, 153, 0.32);
+  --accent-emerald-fg:  #6ee7b7;
+
+  --accent-slate-bg:    rgba(148, 163, 184, 0.10);
+  --accent-slate-ring:  rgba(148, 163, 184, 0.24);
+  --accent-slate-fg:    #cbd5e1;
+
   --noise-opacity-mul: 1;
   --radius: 0.5rem;
   --theme-radius: 0.5rem;

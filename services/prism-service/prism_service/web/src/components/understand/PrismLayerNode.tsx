@@ -12,6 +12,7 @@
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { Node, NodeProps } from "@xyflow/react";
+import { ACCENT_HEX, hexToRgba } from "@/lib/palette";
 
 export interface PrismLayerNodeData extends Record<string, unknown> {
   layerId: string;
@@ -25,22 +26,16 @@ export interface PrismLayerNodeData extends Record<string, unknown> {
 
 export type PrismLayerFlowNode = Node<PrismLayerNodeData, "prism-layer">;
 
-// Layer palette — v5.2.4 refresh. Previous version sat all 7 swatches
-// inside the cool blue-grey family (Slate Blue theme harmony) but that
-// made every layer read identically in practice — a 10-layer architecture
-// graph looked like one blob. New palette gives each layer a real hue
-// while keeping saturation tasteful for the dark theme (each ~L65/C25 in
-// OKLCH terms — distinct but never crayon-bright).
-const PALETTE = [
-  { border: "rgba(74,124,155,0.55)",  bg: "rgba(74,124,155,0.10)",  dot: "#4a7c9b" },  // steel blue
-  { border: "rgba(95,170,180,0.55)",  bg: "rgba(95,170,180,0.10)",  dot: "#5faab4" },  // teal
-  { border: "rgba(120,170,130,0.55)", bg: "rgba(120,170,130,0.10)", dot: "#78aa82" },  // sage green
-  { border: "rgba(200,170,90,0.55)",  bg: "rgba(200,170,90,0.10)",  dot: "#c8aa5a" },  // amber
-  { border: "rgba(220,135,110,0.55)", bg: "rgba(220,135,110,0.10)", dot: "#dc876e" },  // coral
-  { border: "rgba(170,140,200,0.55)", bg: "rgba(170,140,200,0.10)", dot: "#aa8cc8" },  // lavender
-  { border: "rgba(210,130,165,0.55)", bg: "rgba(210,130,165,0.10)", dot: "#d282a5" },  // rose
-  { border: "rgba(160,150,135,0.55)", bg: "rgba(160,150,135,0.10)", dot: "#a09687" },  // warm grey
-];
+// Layer palette — v6.0.24 refresh. Sourced from src/lib/palette.ts so
+// it stays in lock-step with the --accent-{tone}-fg tokens used by
+// /memory chips and the /graph community palette. Border + bg derive
+// from the same hex at fixed alphas (0.55 / 0.10), matching the old
+// hand-authored triples but without the per-color rgba literal drift.
+const PALETTE = ACCENT_HEX.map((hex) => ({
+  border: hexToRgba(hex, 0.55),
+  bg: hexToRgba(hex, 0.10),
+  dot: hex,
+}));
 export const prismLayerColor = (i: number) => PALETTE[i % PALETTE.length];
 
 
