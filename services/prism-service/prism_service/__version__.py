@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.20"
+PRISM_VERSION = "6.0.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.21: /memory chips read as more than blue-on-blue-on-blue. The "
+    "page had become a single-hue surface — every type / classification / "
+    "status chip on every entry row was the same bg-[color:var(--midground"
+    "-base)]/10 sleeve, so a 'feedback' chip next to a 'project' chip next "
+    "to an 'active' status pill looked identical at a glance. New "
+    "semantic accent tokens in index.css (--accent-{teal,sage,amber,rose,"
+    "violet,emerald,slate}-{bg,ring,fg}) carry a bg/ring/fg triple per "
+    "role; MemoryPage maps memory_type, classification, and status onto "
+    "those triples via TYPE_TONE + STATUS_TONE tables. Result: expertise "
+    "→ teal, convention → sage, decision → amber, anti-pattern → rose, "
+    "feedback → violet, active → emerald, stale → amber, retired → "
+    "slate. Importance also gains a colored dot (slate → sage → amber → "
+    "rose at 4/7/9 thresholds) next to the 'imp N' text. Tokens are "
+    "page-agnostic and sized so other pages can adopt the same chip "
+    "language without inventing a new palette per page. "
     "v6.0.20: `?project=<name>` URL param actually selects the project. "
     "useProject() in web/src/lib/project.ts was localStorage-only — every "
     "Edge --app launch or deep-link with `?project=prism` silently fell "

@@ -25,6 +25,54 @@ type Entry = {
 const TYPES = ["all", "expertise", "convention", "decision", "anti-pattern"];
 const STATUSES = ["all", "active", "stale", "retired"];
 
+// v6.0.21 — semantic chip palette. Each memory-type/status/classification
+// label maps to one of the --accent-* token triples (bg / ring / fg) in
+// index.css so the page reads as more than "blue on blue on blue".
+// Unknown labels fall back to slate (the old --midground-base look).
+type ChipTone =
+  | "teal" | "sage" | "amber" | "rose" | "violet" | "emerald" | "slate";
+
+const TYPE_TONE: Record<string, ChipTone> = {
+  expertise: "teal",
+  convention: "sage",
+  decision: "amber",
+  "anti-pattern": "rose",
+  feedback: "violet",
+  project: "amber",
+  reference: "teal",
+  user: "violet",
+};
+
+const STATUS_TONE: Record<string, ChipTone> = {
+  active: "emerald",
+  stale: "amber",
+  retired: "slate",
+};
+
+const TONE_CLASS: Record<ChipTone, string> = {
+  teal:    "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]",
+  sage:    "bg-[color:var(--accent-sage-bg)] text-[color:var(--accent-sage-fg)] ring-1 ring-inset ring-[color:var(--accent-sage-ring)]",
+  amber:   "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]",
+  rose:    "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] ring-1 ring-inset ring-[color:var(--accent-rose-ring)]",
+  violet:  "bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]",
+  emerald: "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]",
+  slate:   "bg-[color:var(--accent-slate-bg)] text-[color:var(--accent-slate-fg)] ring-1 ring-inset ring-[color:var(--accent-slate-ring)]",
+};
+
+function chipClass(tone: ChipTone): string {
+  return `text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${TONE_CLASS[tone]}`;
+}
+
+// Importance 1-10 → a single colored dot. Low importance reads as
+// muted slate, mid as sage, high as amber, top as rose. Adds a visual
+// signal next to the "imp N" text without growing the row height.
+function importanceTone(n: number): ChipTone {
+  if (n >= 9) return "rose";
+  if (n >= 7) return "amber";
+  if (n >= 4) return "sage";
+  return "slate";
+}
+
 export default function MemoryPage() {
   const [project] = useProject();
   const [domains, setDomains] = useState<string[]>([]);
@@ -164,7 +212,12 @@ export default function MemoryPage() {
                     <span className="text-xs opacity-50 w-4">{isOpen ? "▾" : "▸"}</span>
                     <span className="font-medium flex-1 truncate">{e.name ?? "—"}</span>
                     {typeof e.importance === "number" && (
-                      <span className="text-[10px] uppercase tracking-wider opacity-50" title="importance 1-10">
+                      <span className="text-[10px] uppercase tracking-wider opacity-70 flex items-center gap-1.5" title="importance 1-10">
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ background: `var(--accent-${importanceTone(e.importance)}-fg)` }}
+                          aria-hidden
+                        />
                         imp {e.importance}
                       </span>
                     )}
@@ -173,9 +226,21 @@ export default function MemoryPage() {
                         ↻ {e.recall_count}
                       </span>
                     )}
-                    {e.type && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.type}</span>}
-                    {e.classification && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.classification}</span>}
-                    {e.status && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{e.status}</span>}
+                    {e.type && (
+                      <span className={chipClass(TYPE_TONE[e.type.toLowerCase()] ?? "slate")}>
+                        {e.type}
+                      </span>
+                    )}
+                    {e.classification && (
+                      <span className={chipClass(TYPE_TONE[e.classification.toLowerCase()] ?? "slate")}>
+                        {e.classification}
+                      </span>
+                    )}
+                    {e.status && (
+                      <span className={chipClass(STATUS_TONE[e.status.toLowerCase()] ?? "slate")}>
+                        {e.status}
+                      </span>
+                    )}
                   </button>
                   {!isOpen && e.description && (
                     <div className="text-xs opacity-60 mt-1 ml-7 line-clamp-2">{e.description}</div>
