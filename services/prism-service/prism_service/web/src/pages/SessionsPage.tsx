@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
+import { Page, Card, Kpi, SectionLabel, Empty, toneFromLabel } from "@/components/ui";
 
 // Mirrors what conductor_service.get_session_outcomes() returns. The
 // keys are DB columns (snake_case_with_units) — the page renders the
@@ -92,12 +92,18 @@ export default function SessionsPage() {
           <Empty>No skills invoked yet in scored sessions.</Empty>
         ) : (
           <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {skills.map((s) => (
-              <div key={s.skill} className="py-2 flex items-center gap-4 text-sm">
-                <span className="flex-1 font-mono opacity-80">{s.skill}</span>
-                <span className="font-mono opacity-70">{s.count}</span>
-              </div>
-            ))}
+            {skills.map((s) => {
+              const tone = toneFromLabel(s.skill);
+              return (
+                <div key={s.skill} className="py-2 flex items-center gap-4 text-sm">
+                  <span
+                    className="flex-1 font-mono px-1.5 py-0.5 rounded inline-block max-w-fit"
+                    style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}
+                  >{s.skill}</span>
+                  <span className="font-mono opacity-70">{s.count}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>

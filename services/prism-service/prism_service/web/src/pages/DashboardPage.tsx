@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import WorkflowLanes, { type Step, type Workflow } from "@/components/WorkflowLanes";
 
 type State = {
@@ -48,9 +47,17 @@ export default function DashboardPage() {
         <Card className="lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
             <SectionLabel>Workflow</SectionLabel>
-            <span className={cn("text-[10px] uppercase tracking-wider px-2 py-0.5 rounded",
-              workflow?.active ? "bg-cyan-400/15 text-cyan-200" : "bg-[color:var(--midground-base)]/10 opacity-60",
-            )}>{workflow?.active ? "running" : "idle"}</span>
+            <span
+              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+              style={workflow?.active ? {
+                background: "var(--accent-emerald-bg)",
+                color: "var(--accent-emerald-fg)",
+                boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)",
+              } : {
+                background: "var(--accent-slate-bg)",
+                color: "var(--accent-slate-fg)",
+              }}
+            >{workflow?.active ? "running" : "idle"}</span>
           </div>
           {steps.length === 0 ? (
             <Empty>No workflow steps defined.</Empty>
@@ -81,12 +88,17 @@ export default function DashboardPage() {
 }
 
 function Row({ label, v, bad }: { label: string; v: number; bad: boolean }) {
+  const tone = bad ? "amber" : "emerald";
   return (
     <div className="flex items-center justify-between">
       <span className="opacity-80">{label}</span>
-      <span className={cn("font-mono text-xs px-2 py-0.5 rounded",
-        bad ? "bg-amber-400/15 text-amber-200" : "bg-emerald-400/10 text-emerald-200/80",
-      )}>{v}</span>
+      <span
+        className="font-mono text-xs px-2 py-0.5 rounded"
+        style={{
+          background: `var(--accent-${tone}-bg)`,
+          color: `var(--accent-${tone}-fg)`,
+        }}
+      >{v}</span>
     </div>
   );
 }

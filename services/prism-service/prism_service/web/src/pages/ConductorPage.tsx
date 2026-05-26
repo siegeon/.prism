@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
+import { Page, Card, Kpi, SectionLabel, Empty, toneFromLabel } from "@/components/ui";
 
 type Variant = {
   variant_id?: string;
@@ -48,17 +48,23 @@ export default function ConductorPage() {
           <Empty>No variants — conductor hasn't seeded any yet.</Empty>
         ) : (
           <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {variants.map((v) => (
-              <div key={v.variant_id} className="py-3">
-                <div className="flex items-center gap-4 text-sm">
-                  <span className="font-mono opacity-80 w-40 truncate">{v.variant_id}</span>
-                  <span className="text-xs uppercase tracking-wider opacity-60 w-20">{v.persona ?? "—"}</span>
-                  <span className="flex-1 truncate opacity-80">{v.template ?? ""}</span>
-                  <span className="text-xs opacity-60 w-12 text-right">n={v.n_uses ?? 0}</span>
-                  <span className="font-mono w-20 text-right">{v.mean_score?.toFixed?.(3) ?? "—"}</span>
+            {variants.map((v) => {
+              const personaTone = v.persona ? toneFromLabel(v.persona) : "slate";
+              return (
+                <div key={v.variant_id} className="py-3">
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="font-mono opacity-80 w-40 truncate">{v.variant_id}</span>
+                    <span
+                      className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded w-20 text-center font-medium"
+                      style={{ background: `var(--accent-${personaTone}-bg)`, color: `var(--accent-${personaTone}-fg)` }}
+                    >{v.persona ?? "—"}</span>
+                    <span className="flex-1 truncate opacity-80">{v.template ?? ""}</span>
+                    <span className="text-xs opacity-60 w-12 text-right">n={v.n_uses ?? 0}</span>
+                    <span className="font-mono w-20 text-right">{v.mean_score?.toFixed?.(3) ?? "—"}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>

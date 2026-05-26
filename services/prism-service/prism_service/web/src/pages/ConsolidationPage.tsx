@@ -340,7 +340,7 @@ export default function ConsolidationPage() {
           <p className="text-xs opacity-60 mt-3 leading-relaxed">
             {rollup.reflections_run === 0 ? (
               <>
-                <span className="text-amber-300/90">
+                <span style={{ color: "var(--accent-amber-fg)" }}>
                   {(rollup.pushbacks + rollup.tool_failures + rollup.bg_signals + rollup.memory_writes).toLocaleString()} signals
                 </span>{" "}
                 are queued but no reflection has run yet — none of this
@@ -365,12 +365,18 @@ export default function ConsolidationPage() {
         <Card>
           <SectionLabel>Last 14 days (UTC)</SectionLabel>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mt-2">
-            <Sparkline label="Sessions"      values={trends.days.map((d) => trends.series[d]?.sessions ?? 0)}      color="rgb(125 211 252)" />
-            <Sparkline label="Pushbacks"     values={trends.days.map((d) => trends.series[d]?.pushbacks ?? 0)}     color="rgb(252 211 77)" />
-            <Sparkline label="Tool failures" values={trends.days.map((d) => trends.series[d]?.tool_failures ?? 0)} color="rgb(251 113 133)" />
-            <Sparkline label="Bg signals"    values={trends.days.map((d) => trends.series[d]?.bg_signals ?? 0)}    color="rgb(165 180 252)" />
-            <Sparkline label="Memory writes" values={trends.days.map((d) => trends.series[d]?.memory_writes ?? 0)} color="rgb(110 231 183)" />
-            <Sparkline label="Reflections"   values={trends.days.map((d) => trends.series[d]?.reflections ?? 0)}   color="rgb(192 132 252)" />
+            {/* Sparkline colors mirror the shared --accent-{tone}-fg
+                hexes (palette.ts ACCENT_HEX) so the trend tiles speak
+                the same color language as the in-row signal badges:
+                sessions=teal, pushbacks=amber, tool_failures=rose,
+                bg_signals=violet (matches the new bg badge tone),
+                memory=emerald, reflections=sage. */}
+            <Sparkline label="Sessions"      values={trends.days.map((d) => trends.series[d]?.sessions ?? 0)}      color="#5eead4" />
+            <Sparkline label="Pushbacks"     values={trends.days.map((d) => trends.series[d]?.pushbacks ?? 0)}     color="#fcd34d" />
+            <Sparkline label="Tool failures" values={trends.days.map((d) => trends.series[d]?.tool_failures ?? 0)} color="#f9a8d4" />
+            <Sparkline label="Bg signals"    values={trends.days.map((d) => trends.series[d]?.bg_signals ?? 0)}    color="#c4b5fd" />
+            <Sparkline label="Memory writes" values={trends.days.map((d) => trends.series[d]?.memory_writes ?? 0)} color="#6ee7b7" />
+            <Sparkline label="Reflections"   values={trends.days.map((d) => trends.series[d]?.reflections ?? 0)}   color="#a3d9a5" />
           </div>
           <p className="text-[10px] opacity-40 mt-2 font-mono">
             {trends.days[0]} → {trends.days[trends.days.length - 1]}
@@ -410,7 +416,10 @@ export default function ConsolidationPage() {
                       </span>
                     )}
                     {!w.running && (
-                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+                      <span
+                        className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                        style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
+                      >
                         not running
                       </span>
                     )}
@@ -508,22 +517,38 @@ export default function ConsolidationPage() {
                     </button>
                     <span className="flex gap-1 shrink-0">
                       {(sc.pushbacks ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300/90" title="user pushbacks">
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)" }}
+                          title="user pushbacks"
+                        >
                           {sc.pushbacks} push
                         </span>
                       )}
                       {(sc.tool_failures ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90" title="tool failures">
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
+                          title="tool failures"
+                        >
                           {sc.tool_failures} fail
                         </span>
                       )}
                       {(sc.bg_signals ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90" title="result:/failed:/needs input: markers">
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)" }}
+                          title="result:/failed:/needs input: markers"
+                        >
                           {sc.bg_signals} bg
                         </span>
                       )}
                       {(sc.memory_writes ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90" title="memory_store call sites">
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+                          title="memory_store call sites"
+                        >
                           {sc.memory_writes} mem
                         </span>
                       )}
@@ -537,21 +562,28 @@ export default function ConsolidationPage() {
                     <span className="text-xs opacity-60 w-24 text-right">retries {b.retry_count ?? 0}</span>
                     <span className="text-xs opacity-60 w-16 text-right">{ageH.toFixed(1)}h</span>
                     {reflectBusy === b.id ? (
-                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-sky-500/20 text-sky-200 shrink-0 inline-flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-sky-300 animate-pulse" />
+                      <span
+                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded shrink-0 inline-flex items-center gap-1.5"
+                        style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)" }}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "var(--accent-teal-fg)" }} />
                         reflecting {elapsed}s
                       </span>
                     ) : verdicts[b.id]?.error ? (
                       <button
                         onClick={() => runReflection(b.id)}
                         disabled={reflectBusy !== null}
-                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 disabled:opacity-40 shrink-0"
+                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40 shrink-0"
+                        style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
                         title={verdicts[b.id]?.error}
                       >
                         Retry
                       </button>
                     ) : verdicts[b.id] ? (
-                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-emerald-500/15 text-emerald-200 shrink-0 inline-flex items-center gap-1">
+                      <span
+                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded shrink-0 inline-flex items-center gap-1"
+                        style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+                      >
                         ✓ score {(verdicts[b.id].qualitative_score ?? 0).toFixed(2)} · {(verdicts[b.id].memories_stored ?? []).length} mem
                       </span>
                     ) : (

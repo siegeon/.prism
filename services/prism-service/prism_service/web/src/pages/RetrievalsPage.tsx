@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { ThumbsUp, ThumbsDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, toneFromLabel } from "@/components/ui";
 
 type Hit = {
   doc_id: string;
@@ -63,8 +63,24 @@ export default function RetrievalsPage() {
                     <span className="flex-1 truncate font-medium">{r.query}</span>
                     <span className="text-xs opacity-60 font-mono whitespace-nowrap">{r.n_results ?? 0} hits</span>
                     <span className="text-xs opacity-60 font-mono whitespace-nowrap">{r.latency_ms ?? 0}ms</span>
-                    {r.mode && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{r.mode}</span>}
-                    {r.rerank && r.rerank !== "off" && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">rerank: {r.rerank}</span>}
+                    {r.mode && (() => {
+                      const t = toneFromLabel(r.mode);
+                      return (
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+                          style={{ background: `var(--accent-${t}-bg)`, color: `var(--accent-${t}-fg)` }}
+                        >{r.mode}</span>
+                      );
+                    })()}
+                    {r.rerank && r.rerank !== "off" && (() => {
+                      const t = toneFromLabel(r.rerank);
+                      return (
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+                          style={{ background: `var(--accent-${t}-bg)`, color: `var(--accent-${t}-fg)` }}
+                        >rerank: {r.rerank}</span>
+                      );
+                    })()}
                   </div>
                   {r.ts && <div className="text-[10px] uppercase tracking-wider opacity-40 mt-1 font-mono">{r.ts}</div>}
                   {hits.length > 0 && (

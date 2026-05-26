@@ -31,15 +31,19 @@ function ScorePill({ value }: { value: number | null | undefined }) {
   if (value == null || Number.isNaN(value)) {
     return <span className="font-mono opacity-60">—</span>;
   }
-  // green ≥ 0.7 · amber 0.4-0.7 · rose < 0.4
-  const tone =
-    value >= 0.7
-      ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
-      : value >= 0.4
-        ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
-        : "text-rose-300 bg-rose-500/10 border-rose-500/30";
+  // emerald ≥ 0.7 · amber 0.4-0.7 · rose < 0.4 — ported off raw
+  // Tailwind onto the shared --accent-{tone} tokens so the scoring
+  // language matches /memory, /tasks, /consolidation chips.
+  const tone = value >= 0.7 ? "emerald" : value >= 0.4 ? "amber" : "rose";
   return (
-    <span className={`font-mono text-xs px-2 py-0.5 rounded border ${tone}`}>
+    <span
+      className="font-mono text-xs px-2 py-0.5 rounded"
+      style={{
+        background: `var(--accent-${tone}-bg)`,
+        color: `var(--accent-${tone}-fg)`,
+        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
+      }}
+    >
       {value.toFixed(2)}
     </span>
   );
@@ -109,7 +113,7 @@ export default function LearningPage() {
                       {subjectId.length > 24 ? `${subjectId.slice(0, 24)}…` : subjectId}
                     </span>
                     {(r.memories_minted ?? 0) > 0 && (
-                      <span className="text-[10px] uppercase tracking-wider text-emerald-300/80">
+                      <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--accent-emerald-fg)" }}>
                         +{r.memories_minted} mem
                       </span>
                     )}
@@ -136,7 +140,7 @@ export default function LearningPage() {
         ) : (
           <>
             {lowN && (
-              <div className="mb-3 text-[11px] uppercase tracking-wider text-amber-300/80">
+              <div className="mb-3 text-[11px] uppercase tracking-wider" style={{ color: "var(--accent-amber-fg)" }}>
                 Correlational only — every variant has n &lt; 20.
               </div>
             )}
