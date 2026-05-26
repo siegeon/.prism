@@ -34,24 +34,38 @@ const TOP_SECTION: Section = {
 // Default body: Knowledge + Activity, shown on every route that isn't
 // /settings/*.
 const MAIN_SECTIONS: Section[] = [
+  // v6.0.7 — Memory belongs to Knowledge, not Activity. It is the
+  // persisted record of patterns / conventions / failures / decisions
+  // the team has learned, read by every future session via
+  // memory_recall. Parallel to Brain (what code exists), Graph (how
+  // code connects), Understand (architecture) — Memory is knowledge of
+  // *how the team works*. Activity is reserved for things-in-motion.
   {
     label: "Knowledge",
     items: [
       { to: "/brain", label: "Brain", icon: Brain, staleKey: "brain" },
       { to: "/graph", label: "Graph", icon: Network, staleKey: "graph" },
       { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
+      { to: "/memory", label: "Memory", icon: BookOpen },
     ],
   },
   {
     label: "Activity",
     items: [
-      { to: "/memory", label: "Memory", icon: BookOpen },
       { to: "/tasks", label: "Tasks", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
-      { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/retrievals", label: "Retrievals", icon: Search },
-      { to: "/learning", label: "Learning", icon: Sparkles },
+    ],
+  },
+  // Learning loop = the pipeline that PRODUCES new Memory entries.
+  // Pipeline order, top-to-bottom: Sessions (raw) -> Consolidation
+  // (briefs queued) -> Learning (scored output of completed reflections).
+  {
+    label: "Learning loop",
+    items: [
+      { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/consolidation", label: "Consolidation", icon: Layers },
+      { to: "/learning", label: "Learning", icon: Sparkles },
     ],
   },
 ];

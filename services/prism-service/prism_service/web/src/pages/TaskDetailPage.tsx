@@ -1,0 +1,234 @@
+import { useEffect, useState, useCallback } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { api } from "@/lib/api";
+import { useProject } from "@/lib/project";
+import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+
+type Task = {
+  id?: string;
+  title?: string;
+  status?: string;
+  priority?: number | string;
+  tags?: string[];
+  assigned_agent?: string;
+  description?: string;
+  story_file?: string;
+  created_at?: string;
+  updated_at?: string;
+  completed_at?: string;
+  blocked_reason?: string;
+  dependencies?: string[];
+};
+
+type HistoryRow = {
+  id?: string;
+  task_id?: string;
+  timestamp?: string;
+  from_status?: string;
+  to_status?: string;
+  reason?: string;
+};
+
+const STATUS_CYCLE: Record<string, string[]> = {
+  pending: ["in_progress", "blocked", "done"],
+  in_progress: ["done", "blocked", "pending"],
+  blocked: ["in_progress", "pending", "done"],
+  done: ["pending"],
+};
+
+export default function TaskDetailPage() {
+  const { id = "" } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [project] = useProject();
+  const [task, setTask] = useState<Task | null>(null);
+  const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!id) return;
+    try {
+      const d = await api.get<{ task: Task; history: HistoryRow[] }>(
+        `/api/tasks/${id}?project=${project}`,
+      );
+      setTask(d.task);
+      setHistory(d.history ?? []);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message ?? "task not found");
+    }
+  }, [id, project]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  const setStatus = async (status: string) => {
+    setBusy(true);
+    try {
+      await fetch(`/api/tasks/${id}?project=${project}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      setNotice(`Moved to ${status}.`);
+      load();
+    } catch (e) {
+      setNotice(`Update failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (error) {
+    return (
+      <Page>
+        <button
+          onClick={() => navigate("/tasks")}
+          className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100"
+        >
+          ← back to tasks
+        </button>
+        <Card>
+          <Empty>{error}</Empty>
+        </Card>
+      </Page>
+    );
+  }
+
+  if (!task) {
+    return (
+      <Page>
+        <Card><Empty>Loading…</Empty></Card>
+      </Page>
+    );
+  }
+
+  const transitions = STATUS_CYCLE[task.status ?? "pending"] ?? [];
+  const statusColor: Record<string, string> = {
+    pending: "bg-amber-500/15 text-amber-200",
+    in_progress: "bg-sky-500/15 text-sky-200",
+    blocked: "bg-rose-500/15 text-rose-200",
+    done: "bg-emerald-500/15 text-emerald-200",
+  };
+
+  return (
+    <Page>
+      <button
+        onClick={() => navigate("/tasks")}
+        className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
+      >
+        ← back to tasks
+      </button>
+
+      {notice && (
+        <div className="fixed bottom-6 right-6 z-40 max-w-[420px] rounded-md border border-[color:var(--midground-base)]/20 bg-[color:var(--background-base)]/95 backdrop-blur-sm shadow-lg px-4 py-3 text-[12px]">
+          {notice}
+        </div>
+      )}
+
+      <div className="flex items-baseline justify-between gap-4">
+        <div>
+          <h1 className="font-serif text-3xl tracking-tight">{task.title ?? "Untitled task"}</h1>
+          <div className="flex items-center gap-2 mt-2">
+            <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${statusColor[task.status ?? "pending"] ?? ""}`}>
+              {task.status ?? "pending"}
+            </span>
+            {typeof task.priority !== "undefined" && (
+              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">
+                priority {task.priority}
+              </span>
+            )}
+            {task.assigned_agent && (
+              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">
+                {task.assigned_agent}
+              </span>
+            )}
+            {(task.tags ?? []).map((tag) => (
+              <span key={tag} className="text-[10px] opacity-50 font-mono">#{tag}</span>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1 shrink-0">
+          {transitions.map((target) => (
+            <button
+              key={target}
+              disabled={busy}
+              onClick={() => setStatus(target)}
+              className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+            >
+              → {target}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {task.blocked_reason && (
+        <Card>
+          <SectionLabel>Blocked because</SectionLabel>
+          <div className="text-sm text-rose-300/90 mt-1">{task.blocked_reason}</div>
+        </Card>
+      )}
+
+      <Card>
+        <SectionLabel>Description</SectionLabel>
+        {task.description ? (
+          <pre className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed opacity-90 font-sans">
+            {task.description}
+          </pre>
+        ) : (
+          <Empty>No description.</Empty>
+        )}
+      </Card>
+
+      <Card>
+        <SectionLabel>Metadata</SectionLabel>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-[12px] mt-2">
+          <div><span className="opacity-50">id:</span> <span className="font-mono break-all">{task.id}</span></div>
+          {task.story_file && <div><span className="opacity-50">story:</span> <span className="font-mono">{task.story_file}</span></div>}
+          {task.created_at && <div><span className="opacity-50">created:</span> {String(task.created_at).slice(0, 19)}</div>}
+          {task.updated_at && <div><span className="opacity-50">updated:</span> {String(task.updated_at).slice(0, 19)}</div>}
+          {task.completed_at && <div><span className="opacity-50">completed:</span> {String(task.completed_at).slice(0, 19)}</div>}
+          {(task.dependencies ?? []).length > 0 && (
+            <div className="col-span-2 md:col-span-3">
+              <span className="opacity-50">dependencies:</span>{" "}
+              {(task.dependencies ?? []).map((d, i) => (
+                <span key={d} className="font-mono">
+                  {i > 0 && ", "}
+                  <button
+                    onClick={() => navigate(`/tasks/${d}`)}
+                    className="underline decoration-dotted underline-offset-2 hover:opacity-100"
+                  >
+                    {d.slice(0, 8)}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Card>
+        <SectionLabel>History ({history.length})</SectionLabel>
+        {history.length === 0 ? (
+          <Empty>No transitions recorded.</Empty>
+        ) : (
+          <ul className="divide-y divide-[color:var(--midground-base)]/10 mt-2">
+            {history.map((h, i) => (
+              <li key={i} className="py-2 text-[12px] font-mono">
+                <span className="opacity-60">{String(h.timestamp ?? "").slice(0, 19)}</span>
+                <span className="mx-2 opacity-80">{h.from_status ?? "—"} → {h.to_status ?? "—"}</span>
+                {h.reason && <span className="opacity-60">({h.reason})</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </Page>
+  );
+}

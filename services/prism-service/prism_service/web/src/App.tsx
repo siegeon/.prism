@@ -8,6 +8,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import GraphPage from "@/pages/GraphPage";
 import MemoryPage from "@/pages/MemoryPage";
 import TasksPage from "@/pages/TasksPage";
+import TaskDetailPage from "@/pages/TaskDetailPage";
 import ConductorPage from "@/pages/ConductorPage";
 import SessionsPage from "@/pages/SessionsPage";
 import RetrievalsPage from "@/pages/RetrievalsPage";
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/conductor" element={<ConductorPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/retrievals" element={<RetrievalsPage />} />

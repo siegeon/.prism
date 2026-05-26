@@ -12,9 +12,21 @@ const TITLES: Record<string, string> = {
   "/understand": "Understand", "/settings": "Settings",
 };
 
+// v6.0.15 — match nested routes (e.g. /tasks/:id -> "Tasks",
+// /settings/:section -> "Settings") by longest-prefix lookup so the
+// header doesn't fall back to the generic "PRISM" on detail pages.
+function resolveTitle(pathname: string): string {
+  if (TITLES[pathname]) return TITLES[pathname];
+  const candidates = Object.keys(TITLES).sort((a, b) => b.length - a.length);
+  for (const prefix of candidates) {
+    if (prefix !== "/" && pathname.startsWith(prefix + "/")) return TITLES[prefix];
+  }
+  return "PRISM";
+}
+
 export default function PageHeader() {
   const { pathname } = useLocation();
-  const title = TITLES[pathname] ?? "PRISM";
+  const title = resolveTitle(pathname);
   const [project, setProject] = useProject();
   const [projects, setProjects] = useState<string[]>([]);
 
