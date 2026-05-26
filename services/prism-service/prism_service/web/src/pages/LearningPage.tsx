@@ -13,21 +13,122 @@ type Row = {
 
 type Variant = { variant: string; n: number; mean_score: number };
 
+type Reflection = {
+  id?: number;
+  candidate_id?: string;
+  run_at?: string;
+  subagent_type?: string;
+  confidence?: number | null;
+  qualitative_score?: number | null;
+  narrative_excerpt?: string;
+  memories_minted?: number;
+  candidate_task_id?: string | null;
+  candidate_session_id?: string | null;
+  candidate_trigger?: string | null;
+};
+
+function ScorePill({ value }: { value: number | null | undefined }) {
+  if (value == null || Number.isNaN(value)) {
+    return <span className="font-mono opacity-60">—</span>;
+  }
+  // green ≥ 0.7 · amber 0.4-0.7 · rose < 0.4
+  const tone =
+    value >= 0.7
+      ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
+      : value >= 0.4
+        ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
+        : "text-rose-300 bg-rose-500/10 border-rose-500/30";
+  return (
+    <span className={`font-mono text-xs px-2 py-0.5 rounded border ${tone}`}>
+      {value.toFixed(2)}
+    </span>
+  );
+}
+
 export default function LearningPage() {
   const [project] = useProject();
   const [rows, setRows] = useState<Row[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
+  const [reflections, setReflections] = useState<Reflection[]>([]);
 
   useEffect(() => {
-    api.get<{ rows: Row[]; variants: Variant[] }>(`/api/learning?project=${project}`)
-      .then((d) => { setRows(d.rows); setVariants(d.variants); })
-      .catch(() => { setRows([]); setVariants([]); });
+    api
+      .get<{
+        rows: Row[];
+        variants: Variant[];
+        recent_reflections?: Reflection[];
+      }>(`/api/learning?project=${project}`)
+      .then((d) => {
+        setRows(d.rows ?? []);
+        setVariants(d.variants ?? []);
+        setReflections(d.recent_reflections ?? []);
+      })
+      .catch(() => {
+        setRows([]);
+        setVariants([]);
+        setReflections([]);
+      });
   }, [project]);
 
   const lowN = variants.length > 0 && variants.every((v) => v.n < 20);
 
   return (
     <Page>
+      <Card raised>
+        <div className="flex items-baseline justify-between mb-3">
+          <SectionLabel>Recent reflections</SectionLabel>
+          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+            from consolidation_runs · click /consolidation to run more
+          </div>
+        </div>
+        {reflections.length === 0 ? (
+          <Empty>
+            No reflections yet — click <span className="font-mono">Reflect</span>{" "}
+            on a row in <span className="font-mono">/consolidation</span>, or
+            opt into the background worker with{" "}
+            <span className="font-mono">PRISM_REFLECTION_WORKER=on</span>.
+          </Empty>
+        ) : (
+          <div className="divide-y divide-[color:var(--border-default)]/40">
+            {reflections.map((r) => {
+              const subjectId =
+                r.candidate_task_id || r.candidate_session_id || r.candidate_id || "—";
+              const subjectKind = r.candidate_task_id
+                ? "task"
+                : r.candidate_session_id
+                  ? "session"
+                  : "candidate";
+              return (
+                <div key={r.id ?? r.candidate_id} className="py-3 space-y-1">
+                  <div className="flex items-center gap-3 text-sm">
+                    <ScorePill value={r.qualitative_score} />
+                    <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] w-14">
+                      {subjectKind}
+                    </span>
+                    <span className="font-mono opacity-80 flex-1 truncate" title={subjectId}>
+                      {subjectId.length > 24 ? `${subjectId.slice(0, 24)}…` : subjectId}
+                    </span>
+                    {(r.memories_minted ?? 0) > 0 && (
+                      <span className="text-[10px] uppercase tracking-wider text-emerald-300/80">
+                        +{r.memories_minted} mem
+                      </span>
+                    )}
+                    <span className="text-[10px] text-[color:var(--text-muted)] w-44 text-right">
+                      {r.run_at ?? ""}
+                    </span>
+                  </div>
+                  {r.narrative_excerpt && (
+                    <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed pl-2 border-l-2 border-[color:var(--border-default)]">
+                      {r.narrative_excerpt}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
       <Card>
         <SectionLabel>Variant performance</SectionLabel>
         {variants.length === 0 ? (
@@ -55,7 +156,11 @@ export default function LearningPage() {
       <Card>
         <SectionLabel>Scored tasks (Layer-A)</SectionLabel>
         {rows.length === 0 ? (
-          <Empty>No scored tasks yet.</Empty>
+          <Empty>
+            No scored tasks yet. Layer-A only fills for candidates with a
+            task_id — transcript-derived reflections appear in the Recent
+            reflections panel above instead.
+          </Empty>
         ) : (
           <div className="divide-y divide-[color:var(--midground-base)]/10">
             {rows.map((r, i) => (

@@ -9,6 +9,7 @@ Parent task: 37932f3f · LL-11.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -62,5 +63,47 @@ def get_variant_performance(
     for r in rows:
         d = dict(r)
         d["correlational"] = int(d["n"]) < n_threshold
+        out.append(d)
+    return out
+
+
+def get_recent_reflections(scores_db: str, limit: int = 25) -> list[dict]:
+    """Return recent consolidation_runs flattened for the /learning page.
+
+    /learning's primary table (task_quality_rollup) only fills when a
+    candidate has a task_id, but transcript-derived candidates only
+    carry session_id — so the page stayed empty even after a reflection
+    landed. This pulls the runs directly so users see something happen
+    after they click Reflect on /consolidation, regardless of whether
+    the candidate had a task_id.
+    """
+    if not Path(scores_db).exists():
+        return []
+    conn = sqlite3.connect(scores_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT r.id, r.candidate_id, r.run_at, r.subagent_type, "
+            "       r.confidence, r.output_json, "
+            "       c.task_id AS candidate_task_id, "
+            "       c.session_id AS candidate_session_id, "
+            "       c.trigger AS candidate_trigger "
+            "FROM consolidation_runs r "
+            "LEFT JOIN consolidation_candidates c ON c.id = r.candidate_id "
+            "ORDER BY r.run_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        try:
+            payload = json.loads(d.pop("output_json", None) or "{}")
+        except Exception:
+            payload = {}
+        d["qualitative_score"] = payload.get("qualitative_score")
+        d["narrative_excerpt"] = (payload.get("narrative") or "")[:280]
+        d["memories_minted"] = len(payload.get("new_memories") or [])
         out.append(d)
     return out
