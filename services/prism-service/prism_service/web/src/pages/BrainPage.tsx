@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Search, RefreshCw, Sparkles, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { Pill, toneFromLabel } from "@/components/ui";
 
 type BrainStatus = {
   doc_count?: number;
@@ -143,7 +144,7 @@ export default function BrainPage() {
       </section>
       {statusError && (
         <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-4 py-3 text-sm">
-          Brain status unreachable — is the PRISM service running on :7777? <span className="opacity-60">({statusError.slice(0, 120)})</span>
+          Brain status unreachable — backend at <code className="font-mono">{window.location.host}</code> didn't respond. <span className="opacity-60">({statusError.slice(0, 120)})</span>
         </div>
       )}
 
@@ -208,13 +209,9 @@ export default function BrainPage() {
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {DOMAINS.map((d) => (
-            <button key={d} onClick={() => setDomain(d)}
-              className={cn(
-                "px-3 py-1 rounded-full text-[11px] uppercase tracking-wider transition-colors",
-                domain === d
-                  ? "bg-[color:var(--midground-base)] text-[color:var(--background-base)]"
-                  : "bg-[color:var(--midground-base)]/10 text-[color:var(--midground-base)]/70 hover:bg-[color:var(--midground-base)]/20"
-              )}>{d}</button>
+            <Pill key={d} active={domain === d} onClick={() => setDomain(d)} tone={toneFromLabel(d)}>
+              {d}
+            </Pill>
           ))}
         </div>
         {mode === "ask" && (
@@ -292,10 +289,10 @@ export default function BrainPage() {
                     <div className="text-xs opacity-60 truncate font-mono mt-0.5">{r.file ?? r.source ?? ""}</div>
                   </div>
                   {r.entity_kind && (
-                    <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{r.entity_kind}</span>
+                    <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]">{r.entity_kind}</span>
                   )}
                   {r.domain && (
-                    <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{r.domain}</span>
+                    <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]">{r.domain}</span>
                   )}
                 </div>
               );
