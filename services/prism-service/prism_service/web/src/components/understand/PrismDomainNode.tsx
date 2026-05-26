@@ -7,6 +7,7 @@
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { Node, NodeProps } from "@xyflow/react";
+import { ACCENT_HEX_LIFTED, hexToRgba } from "@/lib/palette";
 
 export interface PrismDomainNodeData extends Record<string, unknown> {
   domainId: string;
@@ -18,20 +19,16 @@ export interface PrismDomainNodeData extends Record<string, unknown> {
 
 export type PrismDomainFlowNode = Node<PrismDomainNodeData, "prism-domain">;
 
-// Domain palette — companion to PrismLayerNode.PALETTE. Same multi-hue
-// family as v5.2.4's layer refresh, but each domain swatch is slightly
-// lifted in lightness so domain (parent) cards visually outrank the
-// layer (child) cards underneath them.
-const DOMAIN_PALETTE = [
-  { border: "rgba(100,150,180,0.55)", bg: "rgba(100,150,180,0.10)", dot: "#6496b4" },  // steel blue (lifted)
-  { border: "rgba(115,190,200,0.55)", bg: "rgba(115,190,200,0.10)", dot: "#73bec8" },  // teal (lifted)
-  { border: "rgba(140,190,150,0.55)", bg: "rgba(140,190,150,0.10)", dot: "#8cbe96" },  // sage (lifted)
-  { border: "rgba(220,190,110,0.55)", bg: "rgba(220,190,110,0.10)", dot: "#dcbe6e" },  // amber (lifted)
-  { border: "rgba(235,155,130,0.55)", bg: "rgba(235,155,130,0.10)", dot: "#eb9b82" },  // coral (lifted)
-  { border: "rgba(190,160,215,0.55)", bg: "rgba(190,160,215,0.10)", dot: "#bea0d7" },  // lavender (lifted)
-  { border: "rgba(225,150,180,0.55)", bg: "rgba(225,150,180,0.10)", dot: "#e196b4" },  // rose (lifted)
-  { border: "rgba(180,170,155,0.55)", bg: "rgba(180,170,155,0.10)", dot: "#b4aa9b" },  // warm grey (lifted)
-];
+// Domain palette — same accent hues as PrismLayerNode but each
+// swatch's lightness lifted ~10 so domain (parent) cards visually
+// outrank the layer (child) cards underneath them. Sourced from
+// src/lib/palette.ts (ACCENT_HEX_LIFTED) for parity with the other
+// palettes — see palette.ts for the alignment story.
+const DOMAIN_PALETTE = ACCENT_HEX_LIFTED.map((hex) => ({
+  border: hexToRgba(hex, 0.55),
+  bg: hexToRgba(hex, 0.10),
+  dot: hex,
+}));
 export const prismDomainColor = (i: number) => DOMAIN_PALETTE[i % DOMAIN_PALETTE.length];
 
 

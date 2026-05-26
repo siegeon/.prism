@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.23"
+PRISM_VERSION = "6.0.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.24: /graph + /understand draw from the same accent palette as "
+    "/memory chips. Three palettes were drifting independently — "
+    "graph_static.py COMMUNITY_COLORS (16 hand-authored hexes for the "
+    "Sigma viewer), PrismLayerNode PALETTE (8 layer swatches), and "
+    "PrismDomainNode DOMAIN_PALETTE (8 lifted variants), all coordinated "
+    "in v5.2.4/v5.2.5 but never tied to a single source of truth. "
+    "v6.0.21 then introduced --accent-{teal,sage,amber,rose,violet,"
+    "emerald,slate}-{bg,ring,fg} on /memory and the gap reopened: "
+    "/memory chips and /graph community fills were now visibly out of "
+    "register. New web/src/lib/palette.ts exports ACCENT_HEX + "
+    "ACCENT_HEX_LIFTED — JS mirrors of the --accent-{tone}-fg hexes — "
+    "plus a hexToRgba helper. PrismLayerNode + PrismDomainNode build "
+    "their {border, bg, dot} triples from those hexes at fixed 0.55 / "
+    "0.10 alphas (no more per-color rgba literals). graph_static.py "
+    "COMMUNITY_COLORS becomes a 14-color list (7 base + 7 lifted) "
+    "mirroring the same hexes, with a comment pointing at palette.ts "
+    "as the source of truth. Now /graph, /understand layers/domains, "
+    "and /memory chips share one palette — pick a tone for one and you "
+    "pick it everywhere. "
     "v6.0.23: Filter pills read as a legend by default, not on click. "
     "v6.0.22 only applied the accent tone on the active pill — clicking "
     "EXPERTISE turned the pill teal, but until you clicked, every pill "
