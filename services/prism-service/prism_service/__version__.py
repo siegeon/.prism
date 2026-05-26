@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.14"
+PRISM_VERSION = "6.0.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.15: Three small but visible fixes the user flagged on /memory "
+    "in v6.0.14. (1) The 'Entries' KPI was rendering "
+    "'0[object Object][object Object]…' — total was reducing the stats "
+    "values with `+`, but v6.0.8 changed the stats shape from "
+    "Record<string, number> to Record<string, {active, archived, "
+    "total}>, so the `+` coerced the objects to strings. Fixed by "
+    "summing .active (and exposing totalArchived for future use). "
+    "(2) Each page was showing its name twice — once in the global "
+    "PageHeader bar (top-left, uppercase tracking) and once as a "
+    "page-local h1. Dropped the per-page h1 from MemoryPage and "
+    "ConsolidationPage; kept the description paragraph next to the "
+    "action button. PageHeader is now the single source of page-name "
+    "truth. (3) PageHeader's title lookup was exact-path-only, so "
+    "/tasks/:id and /settings/:section fell back to the generic "
+    "'PRISM' header. Added a longest-prefix matcher so detail routes "
+    "inherit their section's title. "
     "v6.0.14: Tasks click-through to a dedicated viewer instead of "
     "expanding inline. v6.0.9's inline expand broke the kanban — "
     "clicking a card in 'Done' (28+ items deep) shoved the rest of "

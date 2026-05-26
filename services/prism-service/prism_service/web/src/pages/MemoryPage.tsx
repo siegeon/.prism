@@ -28,7 +28,7 @@ const STATUSES = ["all", "active", "stale", "retired"];
 export default function MemoryPage() {
   const [project] = useProject();
   const [domains, setDomains] = useState<string[]>([]);
-  const [stats, setStats] = useState<Record<string, number>>({});
+  const [stats, setStats] = useState<Record<string, { active: number; archived: number; total: number }>>({});
   const [domain, setDomain] = useState<string>("all");
   const [type, setType] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
@@ -45,7 +45,7 @@ export default function MemoryPage() {
   };
 
   useEffect(() => {
-    api.get<{ domains: string[]; stats: Record<string, number> }>(`/api/memory/domains?project=${project}`)
+    api.get<{ domains: string[]; stats: Record<string, { active: number; archived: number; total: number }> }>(`/api/memory/domains?project=${project}`)
       .then((d) => { setDomains(d.domains); setStats(d.stats); })
       .catch(() => { setDomains([]); setStats({}); });
   }, [project, bump]);
@@ -84,23 +84,27 @@ export default function MemoryPage() {
       .then((d) => setEntries(d.entries)).catch(() => setEntries([]));
   }, [project, domain, type, status, bump]);
 
-  const total = useMemo(() => Object.values(stats).reduce((a, b) => a + b, 0), [stats]);
+  // v6.0.15 — stats values are {active, archived, total} objects since
+  // the v6.0.8 import added Graphiti supersede counts. Summing the raw
+  // values with `+` coerces them to strings and renders "[object Object]".
+  // Sum .active so the Entries Kpi matches what's actually filterable.
+  const total = useMemo(
+    () => Object.values(stats).reduce((a, b) => a + (b?.active ?? 0), 0),
+    [stats],
+  );
 
   return (
     <Page>
-      <div className="flex items-baseline justify-between gap-4">
-        <div>
-          <h1 className="font-serif text-3xl tracking-tight">Memory</h1>
-          <p className="text-sm opacity-60 mt-1">
-            Persisted patterns, conventions, decisions, and failures —
-            queried by every Claude session via <code className="opacity-80">memory_recall</code>.
-            Backfill from Claude Code's auto-memory if this page is empty.
-          </p>
-        </div>
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-sm opacity-60 flex-1">
+          Persisted patterns, conventions, decisions, and failures —
+          queried by every Claude session via <code className="opacity-80">memory_recall</code>.
+          Backfill from Claude Code's auto-memory if this page is empty.
+        </p>
         <button
           onClick={importClaudeMemories}
           disabled={busy}
-          className="px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40"
+          className="px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40 shrink-0"
         >
           {busy ? "Working…" : "Import Claude memories"}
         </button>
