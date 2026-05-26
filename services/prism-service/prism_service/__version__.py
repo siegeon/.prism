@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.4"
+PRISM_VERSION = "6.0.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.5: Auto-updater wheel filename fix. v6.0.1's apply_update() "
+    "downloaded the release wheel via "
+    "tempfile.NamedTemporaryFile(suffix='.whl'), producing names like "
+    "'tmpe06f9m57.whl'. pip>=24 validates wheel filenames against "
+    "PEP 427 ({name}-{version}-{pyver}-{abi}-{plat}.whl) and rejects "
+    "anything else — so every auto-update attempt since v6.0.1 has "
+    "died with 'Invalid wheel filename (wrong number of parts: must "
+    "have 5)'. Now extracts the real basename from the asset URL "
+    "(e.g. 'prism_service-6.0.5-py3-none-any.whl') via "
+    "posixpath.basename(urlparse(asset).path) and downloads into a "
+    "mkdtemp dir so pip sees a PEP-427-compliant name; cleanup via "
+    "shutil.rmtree in the finally block. Separate but related: "
+    "pipx>=1.7 venvs are uv-backed and don't ship pip — users on those "
+    "need `uv pip install --python <venv> pip` once before sys.executable "
+    "-m pip can resolve, but that's a pipx-side issue, not ours. "
     "v6.0.4: Dev-mode marker. The Sidebar footer now renders an amber "
     "'DEV' pill next to the version string when the service is started "
     "with PRISM_DEV_MODE=1, so source-run instances (editable pip "
