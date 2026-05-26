@@ -125,19 +125,16 @@ export default function UnderstandPage() {
 
   return (
     <Page>
-      <div className="flex items-baseline justify-between gap-4">
-        <div>
-          <h1 className="font-serif text-3xl tracking-tight">Understand</h1>
-          <p className="text-sm text-[color:var(--text-secondary)] mt-1">
-            Generate tour, architecture, domain glossary, and onboarding doc
-            from this project's source. Point a project at a local folder
-            or a git remote in <span className="font-medium">Settings → Projects</span>.
-          </p>
-        </div>
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-sm text-[color:var(--text-secondary)] flex-1">
+          Generate tour, architecture, domain glossary, and onboarding doc
+          from this project's source. Point a project at a local folder
+          or a git remote in <span className="font-medium">Settings → Projects</span>.
+        </p>
         <button
           onClick={triggerRefresh}
           disabled={submitting || !status?.current_sha}
-          className="px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40"
+          className="px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40 shrink-0"
         >
           {submitting ? "Working…" : "Refresh"}
         </button>

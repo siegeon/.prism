@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.16"
+PRISM_VERSION = "6.0.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.17: /understand also drops its per-page h1 (v6.0.15 only "
+    "covered Memory + Consolidation). Description paragraph stays "
+    "next to the Refresh button; PageHeader's top-bar 'UNDERSTAND' "
+    "is the single title. Swept the rest of the SPA — SettingsPage "
+    "and TaskDetailPage h1s stay because they show meaningful "
+    "sub-page info (the active settings section name; the specific "
+    "task title), not a literal duplicate of the page name. No data "
+    "or behavior change. "
     "v6.0.16: Merge mainline into the iris-transcript-signals branch. "
     "Main shipped its own v6.0.5 (PR #75 — auto-updater wheel "
     "filename fix) in parallel with this branch's v6.0.5 (transcript "
