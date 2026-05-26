@@ -218,6 +218,12 @@ async def lifespan(_app: FastAPI):
         # them) and backfills the user's historical sessions.
         from prism_service.services.claude_transcripts import start_transcript_importer
         threading.Thread(target=start_transcript_importer, daemon=True).start()
+        # v6.0.18 — opt-in background reflection. Off by default (a
+        # zero-LLM service shouldn't burn claude tokens unprompted);
+        # set PRISM_REFLECTION_WORKER=on to drain pending briefs every
+        # PRISM_REFLECTION_WORKER_INTERVAL seconds.
+        from prism_service.services.reflection_worker import start_reflection_worker
+        start_reflection_worker()
     except Exception as e:
         print(f"Startup error: {e}", file=_sys.stderr, flush=True)
     yield
