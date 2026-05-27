@@ -1,11 +1,12 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
+import { Page, Card, Kpi, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import {
   stepLabel, gateLabel, WORKFLOW_STEPS_ORDERED,
 } from "@/lib/workflowChips";
+import { relativeTime } from "@/lib/relativeTime";
 
 type ManagedTask = {
   id: string;
@@ -14,6 +15,12 @@ type ManagedTask = {
   gate_state?: string;
   gate_reason?: string;
   status?: string;
+  // v6.0.43: extra fields backing the uniform tile redesign
+  priority?: number;
+  assigned_agent?: string;
+  created_at?: string;
+  updated_at?: string;
+  tags?: string[];
 };
 
 type State = {
@@ -27,10 +34,19 @@ const PERSONA_TONE: Record<string, string> = {
   qa: "violet",
 };
 
-const GATE_TONE: Record<string, string> = {
+const GATE_TONE: Record<string, PillTone> = {
   pending: "amber",
   passed: "emerald",
   failed: "rose",
+};
+
+// Mirrors TasksPage / TaskDetailPage status coloring so tiles read with
+// the same status language used everywhere else in the SPA.
+const STATUS_TONE: Record<string, PillTone> = {
+  pending: "amber",
+  in_progress: "teal",
+  blocked: "rose",
+  done: "emerald",
 };
 
 export default function ConductorPage() {
@@ -111,38 +127,17 @@ export default function ConductorPage() {
                     <span className="text-[10px] uppercase opacity-50 font-mono">{s.persona}</span>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2 min-h-[1.5rem] items-center">
+                <div className="min-h-[1.5rem]">
                   {tasksHere.length === 0 ? (
                     <span className="text-[11px] opacity-30 italic">empty</span>
                   ) : (
-                    tasksHere.map((t) => {
-                      // Gate-row pills carry the gate_state color; agent-row pills
-                      // use the lane tone so all tasks at a step read together.
-                      const gate = t.gate_state ?? "none";
-                      const pillTone = isGate && gate !== "none"
-                        ? (GATE_TONE[gate] ?? "slate")
-                        : laneTone;
-                      return (
-                        <button
-                          key={t.id}
-                          onClick={() => navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })}
-                          className="text-[12px] px-2.5 py-1 rounded ring-1 max-w-[24rem] truncate text-left hover:opacity-100"
-                          style={{
-                            background: `var(--accent-${pillTone}-bg)`,
-                            color: `var(--accent-${pillTone}-fg)`,
-                            boxShadow: `inset 0 0 0 1px var(--accent-${pillTone}-ring)`,
-                          }}
-                          title={`${t.title}\nid: ${t.id}${gate !== "none" ? `\ngate: ${gateLabel(gate as any)}${t.gate_reason ? "\n" + t.gate_reason : ""}` : ""}`}
-                        >
-                          <span>{t.title}</span>
-                          {isGate && gate !== "none" && (
-                            <span className="ml-2 opacity-80 text-[10px] uppercase font-mono">
-                              {gateLabel(gate as any)}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+                      {tasksHere.map((t) => (
+                        <TaskTile key={t.id} task={t} onClick={() =>
+                          navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
+                        } />
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
@@ -157,3 +152,80 @@ export default function ConductorPage() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// TaskTile — uniform-sized swimlane tile (v6.0.43)
+//
+// Replaces the variable-width truncated pill that used to render each task
+// inside its lane. Sized by the parent's auto-fill CSS grid (minmax 220px)
+// so the lane reads as a row of equal cards; each tile then exposes the
+// SDLC signal the swimlanes are trying to communicate at a glance:
+//   - title (2-line clamp, font-medium)
+//   - status badge + gate badge (when gate_state != 'none')
+//   - p{priority} . {relative_age} . id {short_id}
+//   - owner: {assigned_agent or 'unassigned'}
+//   - up to 3 tag chips
+// ---------------------------------------------------------------------------
+function TaskTile({ task, onClick }: { task: ManagedTask; onClick: () => void }) {
+  const status = (task.status ?? "").toLowerCase();
+  const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
+  const gate = task.gate_state ?? "none";
+  const showGate = gate !== "none";
+  const gateTone: PillTone = GATE_TONE[gate] ?? "slate";
+  const priority = task.priority ?? 0;
+  const updated = task.updated_at || task.created_at || "";
+  const age = relativeTime(updated);
+  const shortId = task.id.slice(0, 8);
+  const owner = task.assigned_agent || "unassigned";
+  const tags = (task.tags ?? []).slice(0, 3);
+  const title = `${task.title}\nid: ${task.id}${showGate ? `\ngate: ${gateLabel(gate as any)}${task.gate_reason ? "\n" + task.gate_reason : ""}` : ""}`;
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors"
+    >
+      <div className="text-[13px] leading-snug font-medium line-clamp-2 text-[color:var(--text-primary)]">
+        {task.title}
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        <TileBadge tone={statusTone}>{status || "—"}</TileBadge>
+        {showGate && (
+          <TileBadge tone={gateTone}>{gateLabel(gate as any)}</TileBadge>
+        )}
+      </div>
+      <div className="text-[11px] font-mono text-[color:var(--text-muted)]">
+        p{priority} · {age} · id {shortId}
+      </div>
+      <div className="text-[11px] text-[color:var(--text-muted)]">
+        owner: <span className="text-[color:var(--text-secondary)]">{owner}</span>
+      </div>
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-0.5">
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)]"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </button>
+  );
+}
+
+function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
+  return (
+    <span
+      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+      style={{
+        background: `var(--accent-${tone}-bg)`,
+        color: `var(--accent-${tone}-fg)`,
+        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
