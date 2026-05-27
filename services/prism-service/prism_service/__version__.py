@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.0"
+PRISM_VERSION = "6.1.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.1: MemoryPage as uniform tile grid + drill-in detail page + "
+    "auto-summarized tile face + clickable /settings/activity prompt "
+    "drilldown. (1) Each memory now renders as a uniform card (mirrors "
+    "the v6.1.0 conductor TaskTile auto-fill grid) showing name + a "
+    "plain-English summary line + type/status/classification chips + "
+    "importance dot + recall ↻ + domain. Clicking a tile routes to a "
+    "new /memory/:id detail page with the full description, evidence, "
+    "supersede chain. (2) New memory_summary_worker daemon (default ON) "
+    "shells out to `claude -p` with a one-sentence summarization prompt "
+    "for each active memory missing one, persisting the result on "
+    "ExpertiseEntry.summary. Re-polls /api/memory/entries every 30s so "
+    "the tile face fills in without manual refresh. Toggle off with "
+    "PRISM_MEMORY_SUMMARY_WORKER=off. (3) /settings/activity workers + "
+    "jobs are now clickable disclosures. Each worker row reveals the "
+    "exact claude prompt template that drives it (memory_summary worker "
+    "ships with a static prompt; reflection_worker points at the "
+    "dynamic brief builder; pure-Python workers have no expand). Each "
+    "job row reveals what analyzer it'll run + acknowledges the prompt "
+    "is run-time-assembled (full prompt persistence on AnalysisJob is "
+    "v6.2 roadmap). Closes the user's 'memory is hard to read' feedback "
+    "without the old wall-of-text accordion.\n\n"
     "v6.1.0: Windows installer is finally self-sufficient (closes #84, "
     "reported by danpuzon-resolve). The 6.0.x Tauri installer dropped "
     "prism-shell.exe on disk but no backend, so a fresh-machine install "

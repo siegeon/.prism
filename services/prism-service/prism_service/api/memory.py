@@ -95,6 +95,26 @@ def entries(
     return {"entries": rows}
 
 
+@router.get("/entry/{entry_id}")
+def entry_detail(entry_id: str, project: str = Query("default")) -> dict:
+    """Fetch a single memory entry + its supersede chain.
+
+    The chain is every entry (any status) sharing the same `name` within
+    the same domain, ordered by `generation`. Lets the detail page show
+    'gen 1 → gen 2 (current)' history without a second round-trip.
+    """
+    svc = _svc(project)
+    entry = svc.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(404, f"unknown entry: {entry_id}")
+    chain = [
+        e for e in svc.list_entries(domain=entry.domain, status_filter="")
+        if e.name == entry.name
+    ]
+    chain.sort(key=lambda e: e.generation)
+    return {"entry": entry, "chain": chain}
+
+
 @router.post("/import-claude-memories")
 def import_claude_memories(project: str = Query("default")) -> dict:
     """Backfill PRISM expertise from Claude Code's auto-memory markdown

@@ -224,6 +224,15 @@ async def lifespan(_app: FastAPI):
         # PRISM_REFLECTION_WORKER_INTERVAL seconds.
         from prism_service.services.reflection_worker import start_reflection_worker
         start_reflection_worker()
+        # v6.1.1 — fills ExpertiseEntry.summary on memories that ship
+        # without one so the MemoryPage tile face is a human-readable
+        # sentence instead of dense engineering prose. Defaults ON
+        # (the feature is only useful when summaries actually fill);
+        # disable with PRISM_MEMORY_SUMMARY_WORKER=off.
+        from prism_service.services.memory_summary_worker import (
+            start_memory_summary_worker,
+        )
+        start_memory_summary_worker()
     except Exception as e:
         print(f"Startup error: {e}", file=_sys.stderr, flush=True)
     yield

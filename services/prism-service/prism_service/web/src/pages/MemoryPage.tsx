@@ -1,7 +1,11 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel } from "@/components/ui";
+import {
+  Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel,
+  type PillTone,
+} from "@/components/ui";
 
 type Entry = {
   id?: string;
@@ -10,6 +14,7 @@ type Entry = {
   classification?: string;
   status?: string;
   description?: string;
+  summary?: string;
   domain?: string;
   importance?: number;
   memory_type?: string;
@@ -29,10 +34,7 @@ const STATUSES = ["all", "active", "stale", "retired"];
 // label maps to one of the --accent-* token triples (bg / ring / fg) in
 // index.css so the page reads as more than "blue on blue on blue".
 // Unknown labels fall back to slate (the old --midground-base look).
-type ChipTone =
-  | "teal" | "sage" | "amber" | "rose" | "violet" | "emerald" | "slate";
-
-const TYPE_TONE: Record<string, ChipTone> = {
+const TYPE_TONE: Record<string, PillTone> = {
   expertise: "teal",
   convention: "sage",
   decision: "amber",
@@ -41,32 +43,21 @@ const TYPE_TONE: Record<string, ChipTone> = {
   project: "amber",
   reference: "teal",
   user: "violet",
+  pattern: "teal",
+  failure: "rose",
 };
 
-const STATUS_TONE: Record<string, ChipTone> = {
+const STATUS_TONE: Record<string, PillTone> = {
   active: "emerald",
   stale: "amber",
   retired: "slate",
+  archived: "slate",
+  needs_review: "amber",
 };
-
-const TONE_CLASS: Record<ChipTone, string> = {
-  teal:    "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]",
-  sage:    "bg-[color:var(--accent-sage-bg)] text-[color:var(--accent-sage-fg)] ring-1 ring-inset ring-[color:var(--accent-sage-ring)]",
-  amber:   "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]",
-  rose:    "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] ring-1 ring-inset ring-[color:var(--accent-rose-ring)]",
-  violet:  "bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]",
-  emerald: "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]",
-  slate:   "bg-[color:var(--accent-slate-bg)] text-[color:var(--accent-slate-fg)] ring-1 ring-inset ring-[color:var(--accent-slate-ring)]",
-};
-
-function chipClass(tone: ChipTone): string {
-  return `text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${TONE_CLASS[tone]}`;
-}
 
 // Importance 1-10 → a single colored dot. Low importance reads as
-// muted slate, mid as sage, high as amber, top as rose. Adds a visual
-// signal next to the "imp N" text without growing the row height.
-function importanceTone(n: number): ChipTone {
+// muted slate, mid as sage, high as amber, top as rose.
+function importanceTone(n: number): PillTone {
   if (n >= 9) return "rose";
   if (n >= 7) return "amber";
   if (n >= 4) return "sage";
@@ -75,6 +66,7 @@ function importanceTone(n: number): ChipTone {
 
 export default function MemoryPage() {
   const [project] = useProject();
+  const navigate = useNavigate();
   const [domains, setDomains] = useState<string[]>([]);
   const [stats, setStats] = useState<Record<string, { active: number; archived: number; total: number }>>({});
   const [domain, setDomain] = useState<string>("all");
@@ -84,13 +76,6 @@ export default function MemoryPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
-  const [open, setOpen] = useState<Set<string>>(new Set());
-
-  const toggleOpen = (id: string) => {
-    const next = new Set(open);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    setOpen(next);
-  };
 
   useEffect(() => {
     api.get<{ domains: string[]; stats: Record<string, { active: number; archived: number; total: number }> }>(`/api/memory/domains?project=${project}`)
@@ -128,17 +113,24 @@ export default function MemoryPage() {
     if (domain !== "all") params.set("domain", domain);
     if (type !== "all") params.set("type", type);
     if (status !== "all") params.set("status", status);
-    api.get<{ entries: Entry[] }>(`/api/memory/entries?${params}`)
-      .then((d) => setEntries(d.entries)).catch(() => setEntries([]));
+    const load = () => api.get<{ entries: Entry[] }>(`/api/memory/entries?${params}`)
+      .then((d) => setEntries(d.entries)).catch(() => { /* keep last */ });
+    load();
+    // Re-fetch every 30s so the summary-worker's results appear without
+    // a manual refresh while the user is looking at the page.
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
   }, [project, domain, type, status, bump]);
 
   // v6.0.15 — stats values are {active, archived, total} objects since
-  // the v6.0.8 import added Graphiti supersede counts. Summing the raw
-  // values with `+` coerces them to strings and renders "[object Object]".
-  // Sum .active so the Entries Kpi matches what's actually filterable.
+  // the v6.0.8 import added Graphiti supersede counts. Sum .active.
   const total = useMemo(
     () => Object.values(stats).reduce((a, b) => a + (b?.active ?? 0), 0),
     [stats],
+  );
+  const pendingSummaries = useMemo(
+    () => entries.filter((e) => !e.summary).length,
+    [entries],
   );
 
   return (
@@ -147,7 +139,8 @@ export default function MemoryPage() {
         <p className="text-sm opacity-60 flex-1">
           Persisted patterns, conventions, decisions, and failures —
           queried by every Claude session via <code className="opacity-80">memory_recall</code>.
-          Backfill from Claude Code's auto-memory if this page is empty.
+          The summary on each tile is minted by the memory-summary worker;
+          click a tile for the full description, evidence, and supersede chain.
         </p>
         <button
           onClick={importClaudeMemories}
@@ -174,6 +167,7 @@ export default function MemoryPage() {
         <Kpi label="Entries" value={total} />
         <Kpi label="Domains" value={domains.length} />
         <Kpi label="Showing" value={entries.length} />
+        <Kpi label="Awaiting summary" value={pendingSummaries} />
       </section>
 
       <Card>
@@ -209,90 +203,103 @@ export default function MemoryPage() {
         {entries.length === 0 ? (
           <Empty>No entries match these filters.</Empty>
         ) : (
-          <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {entries.map((e, i) => {
-              const key = e.id ?? `${e.name}-${i}`;
-              const isOpen = open.has(key);
-              return (
-                <div key={key} className="py-3">
-                  <button
-                    onClick={() => toggleOpen(key)}
-                    className="w-full text-left flex items-center gap-3 text-sm hover:opacity-100"
-                  >
-                    <span className="text-xs opacity-50 w-4">{isOpen ? "▾" : "▸"}</span>
-                    <span className="font-medium flex-1 truncate">{e.name ?? "—"}</span>
-                    {typeof e.importance === "number" && (
-                      <span className="text-[10px] uppercase tracking-wider opacity-70 flex items-center gap-1.5" title="importance 1-10">
-                        <span
-                          className="inline-block w-2 h-2 rounded-full"
-                          style={{ background: `var(--accent-${importanceTone(e.importance)}-fg)` }}
-                          aria-hidden
-                        />
-                        imp {e.importance}
-                      </span>
-                    )}
-                    {typeof e.recall_count === "number" && e.recall_count > 0 && (
-                      <span className="text-[10px] uppercase tracking-wider opacity-50" title="times recalled">
-                        ↻ {e.recall_count}
-                      </span>
-                    )}
-                    {e.type && (
-                      <span className={chipClass(TYPE_TONE[e.type.toLowerCase()] ?? "slate")}>
-                        {e.type}
-                      </span>
-                    )}
-                    {e.classification && (
-                      <span className={chipClass(TYPE_TONE[e.classification.toLowerCase()] ?? "slate")}>
-                        {e.classification}
-                      </span>
-                    )}
-                    {e.status && (
-                      <span className={chipClass(STATUS_TONE[e.status.toLowerCase()] ?? "slate")}>
-                        {e.status}
-                      </span>
-                    )}
-                  </button>
-                  {!isOpen && e.description && (
-                    <div className="text-xs opacity-60 mt-1 ml-7 line-clamp-2">{e.description}</div>
-                  )}
-                  {isOpen && (
-                    <div className="ml-7 mt-2 space-y-3">
-                      {e.description && (
-                        <pre className="whitespace-pre-wrap text-[12px] leading-relaxed opacity-90 font-sans p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10">
-                          {e.description}
-                        </pre>
-                      )}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
-                        {e.id && <div><span className="opacity-50">id:</span> <span className="font-mono">{e.id}</span></div>}
-                        {e.memory_type && <div><span className="opacity-50">memory_type:</span> {e.memory_type}</div>}
-                        {typeof e.effectiveness === "number" && (
-                          <div>
-                            <span className="opacity-50">effectiveness:</span>{" "}
-                            <span className={e.effectiveness > 0 ? "text-emerald-300/90" : e.effectiveness < 0 ? "text-rose-300/90" : "opacity-70"}>
-                              {e.effectiveness.toFixed(2)}
-                            </span>
-                          </div>
-                        )}
-                        {typeof e.generation === "number" && <div><span className="opacity-50">gen:</span> {e.generation}</div>}
-                        {e.valid_at && <div><span className="opacity-50">valid since:</span> {e.valid_at.slice(0, 10)}</div>}
-                        {e.last_recalled && <div><span className="opacity-50">last recalled:</span> {e.last_recalled.slice(0, 10)}</div>}
-                      </div>
-                      {e.evidence && Object.keys(e.evidence).length > 0 && (
-                        <div className="text-[11px]">
-                          <span className="opacity-50">evidence:</span>
-                          <pre className="mt-1 p-2 rounded bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 whitespace-pre-wrap font-mono opacity-80">
-                            {JSON.stringify(e.evidence, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+            {entries.map((e, i) => (
+              <MemoryTile
+                key={e.id ?? `${e.name}-${i}`}
+                entry={e}
+                onClick={() => e.id && navigate(`/memory/${e.id}`)}
+              />
+            ))}
           </div>
         )}
       </Card>
     </Page>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MemoryTile — uniform-sized card (v6.1.1)
+//
+// Mirrors the conductor TaskTile pattern (auto-fill grid w/ minmax 280px)
+// so /memory and /conductor read as visual siblings. Each tile shows:
+//   - name (1-line clamp, bold)
+//   - summary line — the worker-minted plain-English rephrase, or a
+//     "Summarizing…" placeholder when the worker hasn't filled it yet
+//   - type / status / classification chips (semantic palette)
+//   - importance dot + recall ↻ count + domain in the meta footer
+// Whole tile is a button that routes to /memory/:id for the drill-in.
+// ---------------------------------------------------------------------------
+function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
+  const type = (entry.type ?? "").toLowerCase();
+  const status = (entry.status ?? "").toLowerCase();
+  const classification = (entry.classification ?? "").toLowerCase();
+  const typeTone: PillTone = TYPE_TONE[type] ?? "slate";
+  const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
+  const importance = entry.importance ?? 0;
+  const recall = entry.recall_count ?? 0;
+  const tooltip = `${entry.name ?? "—"}\nid: ${entry.id ?? "—"}\n\n${entry.description ?? ""}`;
+  return (
+    <button
+      onClick={onClick}
+      title={tooltip}
+      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-2 transition-colors min-h-[140px]"
+    >
+      <div className="text-[13px] leading-snug font-medium line-clamp-1 text-[color:var(--text-primary)]">
+        {entry.name ?? "—"}
+      </div>
+      <div className={
+        "text-[12px] leading-relaxed line-clamp-3 flex-1 " +
+        (entry.summary
+          ? "text-[color:var(--text-secondary)]"
+          : "text-[color:var(--text-muted)] italic")
+      }>
+        {entry.summary || "Summarizing…"}
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        {type && <TileBadge tone={typeTone}>{type}</TileBadge>}
+        {status && status !== "active" && (
+          <TileBadge tone={statusTone}>{status}</TileBadge>
+        )}
+        {classification && (
+          <TileBadge tone="slate">{classification}</TileBadge>
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-[11px] font-mono text-[color:var(--text-muted)]">
+        {importance > 0 && (
+          <span className="inline-flex items-center gap-1" title={`importance ${importance}/10`}>
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ background: `var(--accent-${importanceTone(importance)}-fg)` }}
+              aria-hidden
+            />
+            imp {importance}
+          </span>
+        )}
+        {recall > 0 && (
+          <span title={`recalled ${recall} time${recall === 1 ? "" : "s"}`}>↻ {recall}</span>
+        )}
+        {entry.domain && (
+          <span className="ml-auto truncate text-[color:var(--text-secondary)]" title={`domain: ${entry.domain}`}>
+            {entry.domain}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
+  return (
+    <span
+      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+      style={{
+        background: `var(--accent-${tone}-bg)`,
+        color: `var(--accent-${tone}-fg)`,
+        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
+      }}
+    >
+      {children}
+    </span>
   );
 }

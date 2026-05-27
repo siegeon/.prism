@@ -44,7 +44,9 @@ def workers() -> dict:
     """v6.0.9 — Honest snapshot of what's running vs what isn't. v6.0.18
     splits the reflection_worker entry by PRISM_REFLECTION_WORKER env
     state so the panel reports reality rather than a fixed 'NOT
-    RUNNING by design' string."""
+    RUNNING by design' string. v6.1.1 adds a `prompt` field on workers
+    that shell out to claude_cli, so the /settings/activity drilldown
+    can render the actual instructions that drive each one."""
     reflection_on = os.environ.get("PRISM_REFLECTION_WORKER", "").lower() in (
         "1", "on", "true", "yes",
     )
@@ -64,6 +66,13 @@ def workers() -> dict:
                 "claude_cli path /api/consolidation/run-reflection uses, "
                 "and persists the verdict + minted memories."
             ),
+            "prompt_kind": "dynamic",
+            "prompt": (
+                "Reflection prompts are assembled per-candidate from the "
+                "JanitorService brief. Preview the next one via "
+                "GET /api/consolidation/next-brief; the runner template "
+                "lives in services/reflection_runner.py."
+            ),
         }
     else:
         reflection_entry = {
@@ -78,7 +87,31 @@ def workers() -> dict:
                 "/learning + /memory only fill when you click Reflect "
                 "on /consolidation or run /prism-reflect from a session."
             ),
+            "prompt_kind": "none",
         }
+    from prism_service.services import memory_summary_worker
+    memory_summary_enabled = memory_summary_worker.is_enabled()
+    memory_summary_entry = {
+        "id": memory_summary_worker.WORKER_ID,
+        "label": memory_summary_worker.WORKER_LABEL,
+        "running": memory_summary_enabled,
+        "cadence_s": (
+            int(os.environ.get("PRISM_MEMORY_SUMMARY_WORKER_INTERVAL", "60"))
+            if memory_summary_enabled else 0
+        ),
+        "description": (
+            "Fills ExpertiseEntry.summary on active memories that ship "
+            "without one — each sweep takes the oldest few and runs "
+            "claude -p to mint a one-sentence rephrase for the "
+            "MemoryPage tile face. Defaults ON; "
+            "PRISM_MEMORY_SUMMARY_WORKER=off to disable."
+            if memory_summary_enabled else
+            "OFF — set PRISM_MEMORY_SUMMARY_WORKER=on to fill the "
+            "summary field on the MemoryPage tile face."
+        ),
+        "prompt_kind": "static",
+        "prompt": memory_summary_worker.SUMMARY_PROMPT_TEMPLATE,
+    }
     return {
         "workers": [
             {
@@ -92,6 +125,7 @@ def workers() -> dict:
                     "(v6.0.5+) enqueues a consolidation_candidate with "
                     "transcript_excerpt for each."
                 ),
+                "prompt_kind": "none",
             },
             {
                 "id": "drift_timer",
@@ -99,6 +133,7 @@ def workers() -> dict:
                 "running": True,
                 "cadence_s": 1800,
                 "description": "Reindexes drifted Brain docs per project on a cadence.",
+                "prompt_kind": "none",
             },
             {
                 "id": "understand_drainer",
@@ -106,6 +141,13 @@ def workers() -> dict:
                 "running": True,
                 "cadence_s": 0,
                 "description": "Pulls analyzer jobs off the queue, runs them, writes results.",
+                "prompt_kind": "per_job",
+                "prompt": (
+                    "Each analyzer carries its own prompt template; the "
+                    "drainer renders one per claimed job. Click a job "
+                    "row below to see the exact prompt sent for that "
+                    "run (v6.1.1+)."
+                ),
             },
             {
                 "id": "governance_timer",
@@ -113,6 +155,7 @@ def workers() -> dict:
                 "running": True,
                 "cadence_s": 3600,
                 "description": "Per-domain health checks + janitor sweeps.",
+                "prompt_kind": "none",
             },
             {
                 "id": "trash_sweeper",
@@ -120,6 +163,7 @@ def workers() -> dict:
                 "running": True,
                 "cadence_s": 30,
                 "description": "rmtree's soft-deleted project dirs once SQLite locks release.",
+                "prompt_kind": "none",
             },
             {
                 "id": "auto_updater",
@@ -127,8 +171,10 @@ def workers() -> dict:
                 "running": True,
                 "cadence_s": 1800,
                 "description": "Polls GitHub Releases, applies newer wheel via pip.",
+                "prompt_kind": "none",
             },
             reflection_entry,
+            memory_summary_entry,
         ],
     }
 
