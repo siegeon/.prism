@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  AppWindow, BookOpen, Brain, Eye, FolderTree, Info,
+  Activity, AppWindow, BookOpen, Brain, Eye, FolderTree, Info,
   Layers, LayoutDashboard, ListChecks, MessageSquare, Network, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
@@ -79,7 +79,7 @@ const SETTINGS_SECTIONS: Section[] = [
     items: [
       { to: "/settings/projects", label: "Projects", icon: FolderTree },
       { to: "/settings/connections", label: "Claude auth", icon: Plug },
-      { to: "/settings/jobs", label: "Jobs", icon: ListChecks },
+      { to: "/settings/activity", label: "Background activity", icon: Activity },
       { to: "/settings/logs", label: "Logs", icon: ScrollText },
       { to: "/settings/service", label: "Service", icon: Info },
     ],

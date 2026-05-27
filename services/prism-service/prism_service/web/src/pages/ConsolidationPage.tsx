@@ -13,13 +13,6 @@ type SignalRollup = {
   reflections_run: number;
   memories_minted: number;
 };
-type Worker = {
-  id: string;
-  label: string;
-  running: boolean;
-  cadence_s: number;
-  description: string;
-};
 type NextBrief = {
   ready: boolean;
   candidate_id?: string;
@@ -134,7 +127,6 @@ export default function ConsolidationPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [workers, setWorkers] = useState<Worker[]>([]);
   const [preview, setPreview] = useState<NextBrief | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [reflectBusy, setReflectBusy] = useState<string | null>(null);
@@ -203,12 +195,6 @@ export default function ConsolidationPage() {
       setReflectStartedAt(null);
     }
   };
-
-  useEffect(() => {
-    api.get<{ workers: Worker[] }>("/api/consolidation/workers")
-      .then((d) => setWorkers(d.workers ?? []))
-      .catch(() => setWorkers([]));
-  }, []);
 
   const previewNext = async () => {
     setPreviewBusy(true);
@@ -378,61 +364,36 @@ export default function ConsolidationPage() {
         </Card>
       )}
 
-      {workers.length > 0 && (
-        <Card>
-          <div className="flex items-center justify-between mb-2">
-            <SectionLabel>Background workers</SectionLabel>
-            <button
-              onClick={previewNext}
-              disabled={previewBusy}
-              className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
-            >
-              {previewBusy ? "loading…" : "Preview next brief"}
-            </button>
+      <Card>
+        <div className="flex items-center justify-between">
+          <div>
+            <SectionLabel>Next brief preview</SectionLabel>
+            <p className="text-xs opacity-60 mt-1 leading-relaxed">
+              Peek at the candidate the reflection sub-agent would pick up
+              next — non-mutating, no tokens spent. Background worker status
+              lives on <code className="opacity-80">/settings/workers</code>.
+            </p>
           </div>
-          <ul className="divide-y divide-[color:var(--midground-base)]/10">
-            {workers.map((w) => (
-              <li key={w.id} className="py-2 flex items-start gap-3 text-sm">
-                <span
-                  className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
-                    w.running
-                      ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
-                      : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
-                  }`}
-                  aria-label={w.running ? "running" : "not running"}
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{w.label}</span>
-                    {w.cadence_s > 0 && (
-                      <span className="text-[10px] opacity-50 font-mono">
-                        every {w.cadence_s < 60 ? `${w.cadence_s}s` : `${Math.round(w.cadence_s / 60)}m`}
-                      </span>
-                    )}
-                    {!w.running && (
-                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
-                        not running
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs opacity-60 mt-0.5 leading-relaxed">{w.description}</div>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <button
+            onClick={previewNext}
+            disabled={previewBusy}
+            className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
+          >
+            {previewBusy ? "loading…" : "Preview next brief"}
+          </button>
+        </div>
 
-          {preview && (
-            <div className="mt-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10">
-              <div className="flex items-center justify-between mb-2">
-                <SectionLabel>Next brief preview</SectionLabel>
-                <button
-                  onClick={() => setPreview(null)}
-                  className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100"
-                >
-                  close
-                </button>
-              </div>
-              {!preview.ready ? (
+        {preview && (
+          <div className="mt-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10">
+            <div className="flex items-center justify-end mb-2">
+              <button
+                onClick={() => setPreview(null)}
+                className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100"
+              >
+                close
+              </button>
+            </div>
+            {!preview.ready ? (
                 <div className="text-xs opacity-60">{preview.reason ?? "no pending briefs"}</div>
               ) : (
                 <div className="space-y-3 text-xs">
@@ -464,10 +425,9 @@ export default function ConsolidationPage() {
                   )}
                 </div>
               )}
-            </div>
-          )}
-        </Card>
-      )}
+          </div>
+        )}
+      </Card>
 
       <section className="flex flex-wrap gap-3">
         {queue.length === 0 && <Kpi label="Queue" value="—" />}

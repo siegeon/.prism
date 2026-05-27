@@ -266,6 +266,16 @@ def format_transcript_excerpt(signals: dict) -> str:
     than spreading the budget thinly.
     """
     parts: list[str] = []
+    skills = signals.get("skill_invocations") or []
+    if skills:
+        # tuples (name, ts) from parse_session_metrics; sort by ts asc.
+        ordered = sorted(skills, key=lambda x: (x[1] if len(x) > 1 else ""))
+        parts.append(f"Skills invoked ({len(ordered)}):")
+        for entry in ordered:
+            name = entry[0] if entry else ""
+            ts = entry[1] if len(entry) > 1 else ""
+            parts.append(f"- [{ts}] {name}")
+        parts.append("")
     pushbacks = signals.get("pushbacks") or []
     if pushbacks:
         parts.append(f"Pushbacks ({len(pushbacks)}):")
@@ -408,6 +418,7 @@ def _enqueue_with_signals(
     try:
         from prism_service.services.consolidation_data import enqueue_for_session
         signals = metrics.get("signals") or {}
+        skill_invocations = metrics.get("skill_invocations") or []
         scope: dict = {
             "files_read": metrics.get("files_read", 0),
             "files_modified": metrics.get("files_modified", 0),
@@ -418,8 +429,12 @@ def _enqueue_with_signals(
                 k: len(signals.get(k) or [])
                 for k in ("pushbacks", "bg_signals", "tool_failures", "memory_writes")
             },
+            "skill_invocations": skill_invocations,
         }
-        excerpt = format_transcript_excerpt(signals)
+        # Inject named skill list into signals so format_transcript_excerpt
+        # renders the Skills-invoked section alongside the other buckets.
+        signals_for_excerpt = {**signals, "skill_invocations": skill_invocations}
+        excerpt = format_transcript_excerpt(signals_for_excerpt)
         if excerpt:
             scope["transcript_excerpt"] = excerpt
         enqueue_for_session(

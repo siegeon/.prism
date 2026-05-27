@@ -60,6 +60,66 @@ fetch yourself via MCP tools.
 
 ## Rules
 
+- **Scope to ONE project — never the harness, never another repo.**
+  PRISM is the *application* running this consolidation. PRISM is NOT
+  the subject of the session unless the project named in the brief is
+  literally PRISM. Reflect ONLY on the project at the brief's `cwd`.
+
+  A memory is acceptable ONLY when ALL THREE hold:
+    1. It cites a file path inside the brief's project — OR a token
+       (function name, class, identifier) that Grep resolves to a
+       file inside the brief's project.
+    2. You verified the file exists via Read / Glob / Grep.
+    3. You read the file and confirmed the claim against current
+       content (not against the transcript's recollection of it).
+
+  You MUST reject — do NOT save — anything matching these patterns:
+    - "the user prefers terse responses / small commits / no emojis"
+      → generic agent ergonomics, applies in every project.
+    - "always use TaskCreate / run /verify after edits" with no
+      project-specific cause cited
+      → generic harness ergonomics. (A skill OUTCOME tied to a file
+      in this project is a different thing — see *Skill signals*
+      below.)
+    - "always pass --repo <other-org>/<other-repo> to gh / merge to
+      main only" → about a specific repo. Valid only if the brief's
+      project IS that repo.
+    - "<other-project-name> does X" (any name that is not the
+      brief's project) → about a different project. Reject regardless
+      of plausibility.
+    - "in the transcript the user said …" with no file confirmation
+      → unverified hearsay; transcripts are noisy and may discuss
+      things unrelated to the current project.
+    - "the codebase generally follows pattern X" with no specific
+      file cited → too vague to verify, too vague to act on.
+
+- **Skill signals and pushbacks are valuable — when project-tied.**
+  The brief's `signal_counts` reports skill invocations and pushback
+  counts. The `transcript_excerpt` usually shows which skills ran and
+  what was pushed back on. These are first-class reflection signals,
+  but only when you can ground them in a file inside the project:
+
+    KEEP: "the `verify` skill cannot run tests here because
+      `<path>/pyproject.toml` declares no test runner" (skill outcome,
+      cites a file in the project).
+    KEEP: "user rejected `npm test` here; `package.json` has no `test`
+      script — use `pytest` per `<path>` instead" (pushback grounded
+      in two files).
+    KEEP: "the `ship` skill failed on `<path>` because of <reason
+      visible in the file>" (failure tied to a real file).
+
+    REJECT: "the user pushed back when I summarized at the end"
+      (generic ergonomics, no file tie).
+    REJECT: "skill X is useful / unreliable" (no project tie).
+    REJECT: "the user often pushes back" (no specific cause).
+
+  When `signal_counts` shows nonzero pushbacks or skill invocations,
+  hunt the excerpt for the *what* and the *why*, then verify whether
+  the cause is captured in a file. If yes, that's a memory.
+
+  When in doubt, return an empty `new_memories` list. ONE polluted
+  memory poisons every future session that reads it; a clean empty
+  list costs nothing.
 - Primary signal is `context.quantitative_score` (git-truth). Your
   qualitative score is an OVERLAY, not a replacement. When git says
   "merged + not reverted" and you think the code is bad, say so with
