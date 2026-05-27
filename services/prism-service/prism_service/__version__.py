@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.41"
+PRISM_VERSION = "6.1.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.0: Windows installer is finally self-sufficient (closes #84). "
+    "The 6.0.x Tauri installer dropped prism-shell.exe on disk but no "
+    "backend, so a fresh-machine install rendered ERR_CONNECTION_REFUSED "
+    "until the user ran `pipx install prism-service` by hand. v6.1.0 "
+    "ships prism-service as a PyInstaller-frozen single-file exe bundled "
+    "alongside prism-shell.exe via Tauri's bundle.externalBin. New "
+    "services/prism-service/installer/ carries pyinstaller.spec and a "
+    "lightweight service_entry.py that boots uvicorn directly (sidesteps "
+    "the CLI's sys.executable -m re-exec which doesn't work under "
+    "PyInstaller). release-tauri.yml gains four steps before the Tauri "
+    "bundle: setup Python, pip install + pyinstaller, resolve the rust "
+    "target triple, run pyinstaller, copy dist/prism-service(.exe) into "
+    "src-tauri/binaries/prism-service-<triple>(.exe) so tauri-action "
+    "picks it up. tauri.conf.json bundle.externalBin entry teaches the "
+    "installer to ship it. Pairs with PR #85's ordered launcher "
+    "discovery — resolve_launcher() in lib.rs finds the bundled "
+    "prism-service.exe next to prism-shell.exe and spawns it; no host "
+    "Python required. "
     "v6.0.41: Give job rows the same title+description shape as worker rows. "
     "Each analyzer now has a friendly title (\"Onboarding writer\" instead of "
     "raw `onboarding_writer`) and a one-line purpose blurb pulled from the "
