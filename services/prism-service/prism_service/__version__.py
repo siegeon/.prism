@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.41"
+PRISM_VERSION = "6.0.43"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.43: /conductor swimlane tiles redesigned as uniform-width boxes "
+    "with at-a-glance SDLC stats. Pre-v6.0.43 each managed task rendered as "
+    "a max-w-[24rem] truncate <button> pill inside a flex-wrap row, so "
+    "widths varied with the truncated title and only the title (plus "
+    "sometimes the gate state) was visible without clicking. Now the lane's "
+    "right column is a CSS grid (auto-fill, minmax 220px) of nested-Card "
+    "tiles; each tile exposes: 2-line-clamped title, status + gate badges "
+    "via the existing PillTone tokens (status: pending=amber, in_progress="
+    "teal, blocked=rose, done=emerald), p{priority} . {age} . id {short_id} "
+    "mono stat row, owner line (assigned_agent or 'unassigned'), and up to "
+    "3 tag chips. Backing it: conductor_service.managed_tasks() additively "
+    "returns priority/assigned_agent/created_at/updated_at/tags so the SPA "
+    "can render the new tile without an N+1 fetch. New helper web/src/lib/"
+    "relativeTime.ts buckets ISO timestamps into s/m/h/d/w. Click-through "
+    "behavior unchanged: tile still navigates to /tasks/{id} with state."
+    "from='/conductor' so the back-button-knows-where-it-came-from work "
+    "from v6.0.30 still applies. "
     "v6.0.41: Give job rows the same title+description shape as worker rows. "
     "Each analyzer now has a friendly title (\"Onboarding writer\" instead of "
     "raw `onboarding_writer`) and a one-line purpose blurb pulled from the "

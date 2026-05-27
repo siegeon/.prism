@@ -1373,6 +1373,14 @@ class ConductorService:
                 "workflow_step": step,
                 "gate_state": gate,
                 "gate_reason": getattr(t, "gate_reason", "") or "",
+                # v6.0.43: extra fields for the /conductor tile redesign so
+                # the SPA can render status/priority/age/owner/tags without
+                # an N+1 fetch on each tile.
+                "priority": getattr(t, "priority", 0) or 0,
+                "assigned_agent": getattr(t, "assigned_agent", "") or "",
+                "created_at": getattr(t, "created_at", "") or "",
+                "updated_at": getattr(t, "updated_at", "") or "",
+                "tags": list(getattr(t, "tags", []) or []),
             })
         return out
 
