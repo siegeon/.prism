@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.41"
+PRISM_VERSION = "6.0.42"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.0.42: Installer fix for issue #84 (danpuzon-resolve). The Tauri shell "
+    "previously hardcoded a developer-only PRISM_SERVICE_DIR fallback "
+    "(E:\\.prism\\.claude\\worktrees\\v6-pivot\\...), a developer-only "
+    "PRISM_PYTHON path, and a developer-only PRISM_DATA_DIR — and the window "
+    "opened directly on http://localhost:7778/, so on any user's machine "
+    "without those exact paths the first launch rendered ERR_CONNECTION_REFUSED. "
+    "Phase 1 fix: (a) lib.rs now does ordered launcher discovery — dev env "
+    "override → `prism` on PATH (pipx-installed) → bundled sidecar slot "
+    "(Phase 2). No hardcoded dev paths. (b) tauri.conf.json window now opens "
+    "on the bundled src/index.html splash; the splash polls "
+    "http://127.0.0.1:7778/api/version every 500ms and window.location.replace's "
+    "to the main UI on first 200. Times out after 30s with a 'Backend failed "
+    "to start' state + install-docs link instead of bare ERR_CONNECTION_REFUSED. "
+    "(c) 127.0.0.1 everywhere instead of localhost (WSL wslrelay.exe trap from "
+    "issue #64). Phase 2 (bundled Python runtime via Tauri sidecar) filed as a "
+    "separate task — pipx-installed users get the full Phase-1 experience today. "
     "v6.0.41: Give job rows the same title+description shape as worker rows. "
     "Each analyzer now has a friendly title (\"Onboarding writer\" instead of "
     "raw `onboarding_writer`) and a one-line purpose blurb pulled from the "
