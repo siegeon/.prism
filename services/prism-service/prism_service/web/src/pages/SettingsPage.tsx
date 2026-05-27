@@ -19,7 +19,7 @@ function isInTauri(): boolean {
   return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 }
 
-type SectionId = "projects" | "connections" | "jobs" | "logs" | "service";
+type SectionId = "projects" | "connections" | "jobs" | "logs" | "workers" | "service";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
   projects: {
@@ -38,13 +38,17 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
     title: "Logs",
     description: "Every PRISM-initiated claude -p call with timing, tokens, and assistant output.",
   },
+  workers: {
+    title: "Background workers",
+    description: "Live status of the in-process background workers — transcript importer, drift reindex, understand drainer, governance, trash sweeper, auto-updater, and the opt-in reflection worker. Status, cadence, and role for each are read from /api/consolidation/workers. Read-only for now; start/stop controls are coming separately.",
+  },
   service: {
     title: "Service",
     description: "Container name, version, intervals, MCP endpoint.",
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "jobs", "logs", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "jobs", "logs", "workers", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
   // `/settings/auth` is the legacy v5.1.8 URL for what's now Connections.
@@ -221,6 +225,13 @@ export default function SettingsPage() {
         <Card>
           <SectionLabel>Logs</SectionLabel>
           <ClaudeRunsPanel />
+        </Card>
+      )}
+
+      {section === "workers" && (
+        <Card>
+          <SectionLabel>Background workers</SectionLabel>
+          <BackgroundWorkersPanel />
         </Card>
       )}
 
@@ -1368,6 +1379,106 @@ type ServiceInfo = {
   quality_interval_s: number;
   mcp_endpoint: string;
 };
+
+type Worker = {
+  id: string;
+  label: string;
+  running: boolean;
+  cadence_s: number;
+  description: string;
+};
+
+function BackgroundWorkersPanel() {
+  const [workers, setWorkers] = useState<Worker[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastLoaded, setLastLoaded] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(Date.now());
+
+  const load = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const d = await api.get<{ workers: Worker[] }>("/api/consolidation/workers");
+      setWorkers(d.workers ?? []);
+      setLastLoaded(Date.now());
+      setError(null);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    // Cheap GET against a small in-memory dict; 10s keeps the dots
+    // responsive without taxing the daemon.
+    const poll = setInterval(load, 10000);
+    // Tick the "Xs ago" label every second.
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(poll); clearInterval(tick); };
+  }, [load]);
+
+  const ageLabel = lastLoaded
+    ? `Updated ${Math.max(0, Math.round((now - lastLoaded) / 1000))}s ago`
+    : "";
+
+  if (error && workers === null) {
+    return <div className="text-sm text-rose-200">{error}</div>;
+  }
+  if (workers === null) {
+    return <div className="text-sm opacity-60">Loading…</div>;
+  }
+  return (
+    <>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] opacity-50 font-mono">{ageLabel}</span>
+        <button
+          onClick={load}
+          disabled={refreshing}
+          className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+        >
+          {refreshing ? "refreshing…" : "Refresh now"}
+        </button>
+      </div>
+      {workers.length === 0 ? (
+        <Empty>No workers reported.</Empty>
+      ) : (
+      <ul className="divide-y divide-[color:var(--midground-base)]/10">
+      {workers.map((w) => (
+        <li key={w.id} className="py-2 flex items-start gap-3 text-sm">
+          <span
+            className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+              w.running
+                ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+                : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+            }`}
+            aria-label={w.running ? "running" : "not running"}
+          />
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{w.label}</span>
+              {w.cadence_s > 0 && (
+                <span className="text-[10px] opacity-50 font-mono">
+                  every {w.cadence_s < 60 ? `${w.cadence_s}s` : `${Math.round(w.cadence_s / 60)}m`}
+                </span>
+              )}
+              {!w.running && (
+                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+                  not running
+                </span>
+              )}
+            </div>
+            <div className="text-xs opacity-60 mt-0.5 leading-relaxed">{w.description}</div>
+          </div>
+        </li>
+      ))}
+    </ul>
+      )}
+    </>
+  );
+}
+
 
 function ServiceInfoPanel() {
   const [info, setInfo] = useState<ServiceInfo | null>(null);
