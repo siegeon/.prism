@@ -8,6 +8,14 @@ data/
 data-v51/
 .prism/
 
+# PyInstaller sidecar build outputs (services/prism-service/installer/)
+build/
+dist/
+*.spec.bak
+
+# Staged Tauri sidecar binaries (built in CI, copied per target triple)
+desktop/tauri-shell/src-tauri/binaries/
+
 # IDE
 .vscode/
 .idea/

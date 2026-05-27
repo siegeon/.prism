@@ -67,6 +67,61 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
+      # --- Bundle prism-service as a Tauri sidecar (v6.1.0+, issue #84) ----
+      # The Tauri installer used to ship just the shell; users had to
+      # pipx-install the backend by hand or hit ERR_CONNECTION_REFUSED.
+      # PyInstaller freezes prism_service into a single platform-native
+      # exe that ships alongside prism-shell.exe via bundle.externalBin.
+      # --------------------------------------------------------------------
+      - name: Setup Python (for sidecar build)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install prism-service + pyinstaller into a sidecar venv
+        shell: bash
+        run: |
+          cd services/prism-service
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -e .
+
+      - name: Resolve Rust target triple for sidecar naming
+        id: triple
+        shell: bash
+        run: |
+          # tauri-action passes --target X via matrix.args on macOS; on
+          # linux/windows the matrix uses the host's default triple.
+          ARGS="${{ matrix.args }}"
+          if echo "$ARGS" | grep -q -- '--target'; then
+            TRIPLE=$(echo "$ARGS" | sed -E 's/.*--target +([^ ]+).*/\1/')
+          else
+            TRIPLE=$(rustc -vV | sed -n 's|host: ||p')
+          fi
+          echo "triple=$TRIPLE" >> "$GITHUB_OUTPUT"
+          echo "Sidecar target triple: $TRIPLE"
+
+      - name: Build prism-service sidecar (pyinstaller)
+        shell: bash
+        run: |
+          cd services/prism-service
+          pyinstaller installer/pyinstaller.spec --noconfirm --clean
+          ls -la dist/
+
+      - name: Stage sidecar into Tauri externalBin slot
+        shell: bash
+        run: |
+          cd services/prism-service
+          mkdir -p desktop/tauri-shell/src-tauri/binaries
+          TRIPLE="${{ steps.triple.outputs.triple }}"
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            cp dist/prism-service.exe "desktop/tauri-shell/src-tauri/binaries/prism-service-${TRIPLE}.exe"
+          else
+            cp dist/prism-service "desktop/tauri-shell/src-tauri/binaries/prism-service-${TRIPLE}"
+            chmod +x "desktop/tauri-shell/src-tauri/binaries/prism-service-${TRIPLE}"
+          fi
+          ls -la desktop/tauri-shell/src-tauri/binaries/
+
       - name: Install Tauri shell deps
         run: |
           cd services/prism-service/desktop/tauri-shell
