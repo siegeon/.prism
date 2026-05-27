@@ -13,11 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.33"
+PRISM_VERSION = "6.0.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v6.0.33: New /ship skill at .claude/skills/ship/SKILL.md codifies "
+    "v6.0.34: auto_updater apply_update() gains two fallback install paths "
+    "so the release daemon can self-update on pipx-uv-backed venvs (which "
+    "ship without pip). New order: 'python -m pip install' (legacy); on "
+    "'No module named pip', 'python -m ensurepip --upgrade' then retry; "
+    "final fallback 'uv pip install --python <sys.executable> <wheel>' "
+    "(works on every pipx-uv install since uv is always on PATH there). "
+    "Picks the first non-zero-exit path; surfaces 'install exit=N (tried "
+    "pip, ensurepip+pip, uv pip)' if all three fail. v6.0.33 hit this "
+    "exact gap — the WSL release daemon refused auto-apply with 'pip "
+    "install exit=1' and required a manual wheel install. v6.0.34 will "
+    "be the first release that ALL existing daemons can pull in cleanly. "    "v6.0.33: New /ship skill at .claude/skills/ship/SKILL.md codifies "
     "the delivery flow: pre-flight checks (version bumped, no merge "
     "markers, not on protected branch) -> local gates (tsc + npm build "
     "+ pytest + dev /api/version + /verify) -> checkin (specific files, "
@@ -790,6 +800,7 @@ PRISM_VERSION_NOTES = (
     "drainer + drift UI. v5.1: Understand-Anything. v5.0: "
     "Hermes-native React/Vite SPA."
 )
+
 
 
 

@@ -234,20 +234,50 @@ def apply_update() -> dict:
         shutil.rmtree(tmpdir, ignore_errors=True)
         return {"ok": False, "reason": f"download failed: {type(e).__name__}: {e}"}
 
-    cmd = [_sys.executable, "-m", "pip", "install", "--upgrade", str(wheel_path)]
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "reason": "pip install timed out after 600s"}
-    finally:
+    # Three install paths, in order:
+    #   1. python -m pip install  (the legacy path, works when pip is in the venv)
+    #   2. python -m ensurepip --upgrade ; python -m pip install
+    #      (recovers from venvs that shipped without pip)
+    #   3. uv pip install --python <sys.executable> <wheel>
+    #      (works on pipx-uv-backed venvs that intentionally exclude pip)
+    # Picks the first that exits 0. Surfaces a useful error if all fail.
+
+    def _try(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return None
+
+    pip_cmd = [_sys.executable, "-m", "pip", "install", "--upgrade", str(wheel_path)]
+    proc = _try(pip_cmd)
+    if proc is None:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        return {"ok": False, "reason": "pip install timed out after 600s"}
+
+    # If pip is missing, try ensurepip + retry.
+    if proc.returncode != 0 and "No module named pip" in (proc.stderr or ""):
+        bootstrap = _try([_sys.executable, "-m", "ensurepip", "--upgrade"])
+        if bootstrap is not None and bootstrap.returncode == 0:
+            proc = _try(pip_cmd) or proc
+
+    # Final fallback: uv pip install --python <sys.executable> <wheel>.
+    # Picks up uv from PATH (pipx-uv-backed installs always have uv available).
+    if proc.returncode != 0:
+        uv_path = shutil.which("uv")
+        if uv_path:
+            uv_cmd = [uv_path, "pip", "install", "--python", _sys.executable,
+                      str(wheel_path)]
+            uv_proc = _try(uv_cmd)
+            if uv_proc is not None:
+                proc = uv_proc
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
 
     if proc.returncode != 0:
         return {
             "ok": False,
-            "reason": f"pip install exit={proc.returncode}",
+            "reason": f"install exit={proc.returncode} "
+                      f"(tried pip, ensurepip+pip, uv pip)",
             "stderr": (proc.stderr or "")[-1200:],
         }
 
