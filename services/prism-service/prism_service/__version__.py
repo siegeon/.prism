@@ -13,11 +13,61 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.27"
+PRISM_VERSION = "6.0.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v6.0.27: Tauri release workflow finally publishes the bundles. "
+    "v6.0.33: New /ship skill at .claude/skills/ship/SKILL.md codifies "
+    "the delivery flow: pre-flight checks (version bumped, no merge "
+    "markers, not on protected branch) -> local gates (tsc + npm build "
+    "+ pytest + dev /api/version + /verify) -> checkin (specific files, "
+    "conventional commit) -> push + PR -> CI gate (gh pr checks poll) "
+    "-> release (merge, tag, watch release.yml + release-tauri.yml) -> "
+    "handoff verify (release :7778 /api/version flips + feature visible "
+    "in prod Edge window). Refuses to advance at any failed gate. "
+    "Dogfoods through conductor: each ship is a tracked task on /conductor "
+    "swimlanes with validation evidence at every SDLC gate. "    "v6.0.32: Conductor gate_decide now REQUIRES a reason on every "
+    "approve — the reason is the validation evidence (test run, "
+    "screenshot, manual review, etc.) and is persisted to task."
+    "gate_reason on pass so it surfaces on /tasks, /conductor swimlanes, "
+    "and TaskDetailPage. Three persisted shapes: 'manual override: "
+    "<reason>' (override path), 'verified (<validation>): <reason>' "
+    "(verifier-pass path), or the bare reason (legacy no-verifier). "
+    "MCP schema bumped: conductor_gate.reason is now required:[id, "
+    "action, reason]. conductor_gate description rewritten to make the "
+    "validation contract explicit. TaskDetailPage Conductor card "
+    "relabels the reason cell to 'validation' (on pass) / 'failure "
+    "reason' (on fail) / 'reason' (none). "    "v6.0.31: Conductor gate_decide accepts override=True on failed "
+    "gates so a stuck task can be recovered through conductor itself "
+    "(no DB hand-edit). Pre-v6.0.31 the only escape from gate_state="
+    "'failed' was direct SQL. Now: action='approve' with override=True "
+    "flips failed -> passed and auto-advances; the audit row tags actor="
+    "'manual-override' with the supplied reason so the recovery stays "
+    "visible. action='reject' on a failed gate still refuses (no "
+    "semantic). "    "v6.0.30: TaskDetailPage back button remembers where you came from. "
+    "Clicking a task pill on /conductor (swimlanes) sets router state "
+    "{from: '/conductor'}; clicking a card on /tasks sets {from: '/tasks'}. "
+    "TaskDetailPage reads useLocation().state.from and renders 'back to "
+    "conductor' or 'back to tasks' accordingly. Deep-links default to "
+    "/tasks. "    "v6.0.29: /conductor page becomes SDLC swimlanes — 8 rows top-to-"
+    "bottom in WORKFLOW_STEPS order, each labelled with its step in the "
+    "persona tone (sm=teal, dev=amber, qa=violet, gates=slate); tasks "
+    "parked at that step render as clickable pills inside the row. Gate-"
+    "row pills carry gate_state color (amber pending, emerald passed, "
+    "rose failed). Empty rows show 'empty' faintly. Prompt-optimization "
+    "section removed from /conductor entirely — prompt scoring is a "
+    "Learning loop concern, not a conductor concern. meta_conductor_* "
+    "MCP tools remain callable for any future meta-agent. "    "v6.0.28: Conductor visual — chips only render when conductor is "
+    "engaged on a task (workflow_step != '' or gate_state != 'none'); "
+    "tasks worked raw look unchanged. /conductor page rewritten as the "
+    "SDLC dashboard: KPIs (under management / pending gates / failed "
+    "gates / modal step), horizontal stepper of all 8 WORKFLOW_STEPS "
+    "with per-step counts and click-to-filter, active-tasks list with "
+    "step + gate chips and click-through to TaskDetailPage. Prompt-"
+    "variant scoring demoted to a collapsed 'Prompt optimization' "
+    "section. New /api/conductor/state fields managed_tasks + "
+    "step_buckets (additive). New SPA module lib/workflowChips.ts is "
+    "the shared palette + label source. "    "v6.0.27: Tauri release workflow finally publishes the bundles. "
     "Every v6.x tag since v6.0.5 had a green 'Build + sign Tauri "
     "bundle' compile (3+ min of cargo across mac arm64/x64 + linux + "
     "windows runners) followed by an immediate ##[error]GITHUB_TOKEN "
@@ -740,3 +790,9 @@ PRISM_VERSION_NOTES = (
     "drainer + drift UI. v5.1: Understand-Anything. v5.0: "
     "Hermes-native React/Vite SPA."
 )
+
+
+
+
+
+

@@ -18,11 +18,15 @@ from prism_service.services import source_service as ss
 
 @pytest.fixture
 def isolated_projects_root(tmp_path, monkeypatch):
+    from prism_service.services import trash as trash_svc
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "projects")
     # The endpoint reads config.DEFAULT_PROJECT (not module-imported) so
     # patch happens through config; also patch projects_api's local imports.
     monkeypatch.setattr(projects_api, "PROJECTS_DIR", tmp_path / "projects")
     monkeypatch.setattr(projects_api, "DEFAULT_PROJECT", "default")
+    # trash.sweep_once reads its own module-level PROJECTS_DIR (imported at
+    # load time), so the test sweep needs that pointer redirected too.
+    monkeypatch.setattr(trash_svc, "PROJECTS_DIR", tmp_path / "projects")
     ss._LOCKS.clear()
     project_context._contexts.clear()
     return tmp_path / "projects"
@@ -43,7 +47,11 @@ def test_delete_removes_dir(isolated_projects_root):
     assert out["deleted"] is True
     assert out["name"] == "trash-me"
     assert out["freed_bytes"] >= len("hello")
-    assert not pdir.exists()
+    # v5.3 sweep model: delete drops a `.deleted` marker; the trash
+    # sweeper rmtrees the dir on its next pass (sweep_pending=True).
+    assert out["sweep_pending"] is True
+    from prism_service.services import trash as trash_svc
+    assert trash_svc.is_deleted(pdir)
 
 
 def test_delete_refuses_default(isolated_projects_root):
@@ -86,6 +94,10 @@ def test_delete_releases_project_context(isolated_projects_root):
 def test_delete_then_recreate_is_clean_slate(isolated_projects_root):
     _seed_project("roundtrip")
     projects_api.delete_project("roundtrip")
+    # v5.3 sweep model: the trash sweeper rmtrees the marked dir on its
+    # next pass. Drive it synchronously so recreate sees a clean slot.
+    from prism_service.services import trash as trash_svc
+    trash_svc.sweep_once()
     # Recreate with the same name — should land in a freshly seeded dir
     # with no leftover marker file.
     out = projects_api.create_project(

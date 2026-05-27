@@ -33,7 +33,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     tags TEXT DEFAULT '[]',
     embedding BLOB,
     merge_sha TEXT,
-    merged_at TEXT
+    merged_at TEXT,
+    workflow_step TEXT DEFAULT '',
+    gate_state TEXT DEFAULT 'none',
+    gate_reason TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -54,6 +57,12 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     ("embedding", "BLOB"),
     ("merge_sha", "TEXT"),
     ("merged_at", "TEXT"),
+    # Conductor v2 (issue #79 [1/4]) — per-task workflow state machine.
+    # Existing rows backfill via SQLite DEFAULTs: workflow_step=''
+    # (not yet in the workflow) and gate_state='none'.
+    ("workflow_step", "TEXT DEFAULT ''"),
+    ("gate_state", "TEXT DEFAULT 'none'"),
+    ("gate_reason", "TEXT DEFAULT ''"),
 ]
 
 
@@ -122,6 +131,10 @@ class TaskService:
 
     def _row_to_task(self, row: sqlite3.Row) -> Task:
         """Convert a database row to a Task dataclass."""
+        # Conductor v2 columns are optional on the cursor for tests that
+        # query against pre-migration handles; .keys() lookup keeps the
+        # cast safe and falls back to dataclass defaults.
+        keys = set(row.keys())
         return Task(
             id=row["id"],
             title=row["title"],
@@ -136,6 +149,12 @@ class TaskService:
             blocked_reason=row["blocked_reason"],
             dependencies=json.loads(row["dependencies"]),
             tags=json.loads(row["tags"]),
+            workflow_step=(row["workflow_step"] if "workflow_step" in keys
+                           and row["workflow_step"] is not None else ""),
+            gate_state=(row["gate_state"] if "gate_state" in keys
+                        and row["gate_state"] is not None else "none"),
+            gate_reason=(row["gate_reason"] if "gate_reason" in keys
+                         and row["gate_reason"] is not None else ""),
         )
 
     def _record_history(
@@ -149,6 +168,15 @@ class TaskService:
             (task_id, actor, action, details, now),
         )
         self._db.commit()
+
+    def record_history(
+        self, task_id: str, action: str, details: str = "", actor: str = "",
+    ) -> None:
+        """Public wrapper around _record_history for collaborators
+        (e.g. ConductorService) that need to append audit rows for
+        workflow_step / gate transitions without going through update().
+        """
+        self._record_history(task_id, action, details=details, actor=actor)
 
     # ------------------------------------------------------------------
     # CRUD
@@ -276,7 +304,8 @@ class TaskService:
         self._db.execute(
             "UPDATE tasks SET title=?, description=?, status=?, priority=?, "
             "story_file=?, assigned_agent=?, updated_at=?, completed_at=?, "
-            "blocked_reason=?, dependencies=?, tags=? WHERE id=?",
+            "blocked_reason=?, dependencies=?, tags=?, "
+            "workflow_step=?, gate_state=?, gate_reason=? WHERE id=?",
             (
                 task.title,
                 task.description,
@@ -289,6 +318,9 @@ class TaskService:
                 task.blocked_reason,
                 json.dumps(task.dependencies),
                 json.dumps(task.tags),
+                task.workflow_step,
+                task.gate_state,
+                task.gate_reason,
                 task.id,
             ),
         )

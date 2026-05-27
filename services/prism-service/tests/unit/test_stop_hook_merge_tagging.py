@@ -27,7 +27,7 @@ import pytest
 
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
-_HOOK_SRC = _SERVICE_ROOT / "app" / "assets" / "stop_record_hook.py"
+_HOOK_SRC = _SERVICE_ROOT / "prism_service" / "assets" / "stop_record_hook.py"
 
 
 def _load_hook():

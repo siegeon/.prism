@@ -906,7 +906,12 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="workflow_advance",
-        description="Advance the PRISM workflow to the next step",
+        description=(
+            "Deprecated: prefer `conductor_advance(id=...)` for per-task "
+            "state. This tool drives the legacy session-global "
+            "WorkflowState and does not update the per-task "
+            "workflow_step / gate_state set by Conductor v2."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -916,6 +921,84 @@ TOOLS: list[Tool] = [
                     "description": "Action for gate steps: approve or reject",
                 },
             },
+        },
+    ),
+    Tool(
+        name="conductor_advance",
+        description=(
+            "Advance a task to the next entry in WORKFLOW_STEPS "
+            "(Conductor v2 per-task state machine). Refuses if the task "
+            "is currently sitting on a gate with gate_state='pending' — "
+            "call `conductor_gate` first. Returns `{ok, task_id, "
+            "from_step, to_step, gate_state, task}` where `task` is the "
+            "updated task row."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Task ID to advance"},
+                "validation": {
+                    "type": "string",
+                    "description": "Optional validation note recorded on the transition history row",
+                },
+            },
+            "required": ["id"],
+        },
+    ),
+    Tool(
+        name="conductor_gate",
+        description=(
+            "Resolve a gate on a task (Conductor v2 / per-task SDLC "
+            "state machine). REASON IS REQUIRED on every approve and "
+            "describes the validation evidence the caller used to "
+            "satisfy the gate (test run, screenshot path, manual "
+            "review notes, etc.). The reason is persisted to "
+            "task.gate_reason on pass so it surfaces on the kanban "
+            "and /conductor swimlanes. action='approve' (default "
+            "path): consults VerifierService against the prior-step "
+            "validation if one is wired; releases the gate when "
+            "verifier confirms, else flips to 'failed' with the "
+            "verifier's reason. action='reject' flips to 'failed' "
+            "and stores reason. Set override=true to bypass the "
+            "verifier (force pass) and/or recover from gate_state="
+            "'failed'; audited as actor='manual-override'. "
+            "Returns {ok, task_id, gate_step, gate_state, to_step?, "
+            "auto_advanced?, verifier?, validation?, override?, task}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Task ID whose gate to decide"},
+                "action": {
+                    "type": "string",
+                    "enum": ["approve", "reject"],
+                    "description": "Gate decision: approve or reject",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Validation evidence describing how the caller "
+                        "satisfied the gate (test run, screenshot path, "
+                        "manual review notes, etc.). REQUIRED on every "
+                        "approve; recorded to task.gate_reason on pass "
+                        "and visible in task_history and on the /conductor "
+                        "swimlanes. Different for each task."
+                    ),
+                },
+                "override": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Bypass VerifierService (force pass) and/or recover "
+                        "from gate_state='failed'. Audited as actor="
+                        "'manual-override'. Required for manual-only "
+                        "validation kinds (story_complete, plan_coverage) "
+                        "and for the terminal green_gate (no machine-"
+                        "sensible test)."
+                    ),
+                },
+            },
+            "required": ["id", "action", "reason"],
         },
     ),
     Tool(
@@ -1096,6 +1179,8 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "task_update",
     "workflow_state",
     "workflow_advance",
+    "conductor_advance",
+    "conductor_gate",
     "context_bundle",
 } | UNDERSTAND_TOOL_NAMES
 
@@ -2966,6 +3051,31 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 validation=arguments.get("validation"),
                 gate_action=arguments.get("gate_action"),
             )
+            return [TextContent(type="text", text=_json(result))]
+
+        # ------------------------------------------------------------------
+        # Conductor v2 — per-task state machine
+        # ------------------------------------------------------------------
+        if name == "conductor_advance":
+            task_id = arguments["id"]
+            result = conductor_svc.advance_task(
+                task_id,
+                validation=arguments.get("validation"),
+            )
+            task = task_svc.get(task_id)
+            result["task"] = task
+            return [TextContent(type="text", text=_json(result))]
+
+        if name == "conductor_gate":
+            task_id = arguments["id"]
+            result = conductor_svc.gate_decide(
+                task_id,
+                arguments["action"],
+                reason=arguments.get("reason", ""),
+                override=bool(arguments.get("override", False)),
+            )
+            task = task_svc.get(task_id)
+            result["task"] = task
             return [TextContent(type="text", text=_json(result))]
 
         # ------------------------------------------------------------------

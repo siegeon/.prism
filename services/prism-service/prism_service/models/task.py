@@ -24,6 +24,17 @@ class Task:
     blocked_reason: str = ""
     dependencies: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    # Conductor v2 — per-task workflow state machine. workflow_step holds
+    # the id of the current entry in models.workflow.WORKFLOW_STEPS (empty
+    # string means the task has not entered the workflow yet). gate_state
+    # is meaningful only when workflow_step points at a gate-type entry:
+    #   none    — not at a gate (or pre-decision)
+    #   pending — at a gate awaiting gate_decide
+    #   passed  — gate approved (transient; auto-advance clears this)
+    #   failed  — gate rejected; gate_reason carries the explanation
+    workflow_step: str = ""
+    gate_state: str = "none"  # none | pending | passed | failed
+    gate_reason: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

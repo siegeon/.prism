@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
+import {
+  stepChipClass, gateChipClass, gateLabel, stepLabel,
+} from "@/lib/workflowChips";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -38,6 +41,9 @@ type Task = {
   completed_at?: string;
   blocked_reason?: string;
   dependencies?: string[];
+  workflow_step?: string;
+  gate_state?: string;
+  gate_reason?: string;
 };
 
 type HistoryRow = {
@@ -59,6 +65,11 @@ const STATUS_CYCLE: Record<string, string[]> = {
 export default function TaskDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = ((location.state as { from?: string } | null)?.from) === "/conductor"
+    ? "/conductor"
+    : "/tasks";
+  const backLabel = from === "/conductor" ? "back to conductor" : "back to tasks";
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -109,10 +120,10 @@ export default function TaskDetailPage() {
     return (
       <Page>
         <button
-          onClick={() => navigate("/tasks")}
+          onClick={() => navigate(from)}
           className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100"
         >
-          ← back to tasks
+          ← {backLabel}
         </button>
         <Card>
           <Empty>{error}</Empty>
@@ -133,14 +144,15 @@ export default function TaskDetailPage() {
   const taskStatus = task.status ?? "pending";
   const statusTone = STATUS_TONE[taskStatus] ?? "slate";
   const pTone = priorityTone(task.priority);
+  const conductorOn = (task.workflow_step ?? "") !== "" || (task.gate_state ?? "none") !== "none";
 
   return (
     <Page>
       <button
-        onClick={() => navigate("/tasks")}
+        onClick={() => navigate(from)}
         className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
       >
-        ← back to tasks
+        ← {backLabel}
       </button>
 
       {notice && (
@@ -152,7 +164,7 @@ export default function TaskDetailPage() {
       <div className="flex items-baseline justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl tracking-tight">{task.title ?? "Untitled task"}</h1>
-          <div className="flex items-center gap-2 mt-2">
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
             <span
               className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
               style={{
@@ -224,6 +236,36 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
+      {conductorOn && (
+        <Card>
+          <SectionLabel>Conductor</SectionLabel>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-3 text-[12px] mt-2 items-start">
+            <div>
+              <div className="opacity-50 mb-1">step</div>
+              {task.workflow_step
+                ? <span className={stepChipClass(task.workflow_step)}>{stepLabel(task.workflow_step)}</span>
+                : <span className="opacity-50">—</span>}
+            </div>
+            <div>
+              <div className="opacity-50 mb-1">gate</div>
+              {task.gate_state && task.gate_state !== "none"
+                ? <span className={gateChipClass(task.gate_state as any)}>{gateLabel(task.gate_state as any)}</span>
+                : <span className="opacity-50">none</span>}
+            </div>
+            <div className="md:col-span-1">
+              <div className="opacity-50 mb-1">
+                {task.gate_state === "passed" ? "validation"
+                  : task.gate_state === "failed" ? "failure reason"
+                  : "reason"}
+              </div>
+              {task.gate_reason
+                ? <div className="text-[12px] leading-snug opacity-90">{task.gate_reason}</div>
+                : <span className="opacity-50">-</span>}
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card>
         <SectionLabel>Description</SectionLabel>
         {task.description ? (
@@ -281,3 +323,4 @@ export default function TaskDetailPage() {
     </Page>
   );
 }
+
