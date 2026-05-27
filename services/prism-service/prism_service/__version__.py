@@ -13,11 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.34"
+PRISM_VERSION = "6.0.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v6.0.34: auto_updater apply_update() gains two fallback install paths "
+    "v6.0.35: Proof-ship that v6.0.34's auto_updater fix works end-to-end. "
+    "Process: bump to 6.0.35, ship via /ship, then call /api/update/apply "
+    "on the v6.0.34 release daemon and confirm it auto-flips to 6.0.35 "
+    "without manual wheel install. If the running v6.0.34 daemon's "
+    "/api/version flips on its own, the three-path install fallback "
+    "(pip / ensurepip+pip / uv pip) introduced in v6.0.34 is verified. "
+    "No code change beyond the version literal + this note. "    "v6.0.34: auto_updater apply_update() gains two fallback install paths "
     "so the release daemon can self-update on pipx-uv-backed venvs (which "
     "ship without pip). New order: 'python -m pip install' (legacy); on "
     "'No module named pip', 'python -m ensurepip --upgrade' then retry; "
@@ -800,6 +806,7 @@ PRISM_VERSION_NOTES = (
     "drainer + drift UI. v5.1: Understand-Anything. v5.0: "
     "Hermes-native React/Vite SPA."
 )
+
 
 
 
