@@ -11,7 +11,7 @@
     "windows": [
       {
         "title": "PRISM",
-        "url": "http://localhost:7778/",
+        "url": "index.html",
         "width": 1440,
         "height": 900,
         "resizable": true,
@@ -32,6 +32,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "externalBin": ["binaries/prism-service"],
     "createUpdaterArtifacts": true
   },
   "plugins": {
