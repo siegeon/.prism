@@ -13,11 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.0.42"
+PRISM_VERSION = "6.1.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v6.0.42: Installer fix for issue #84 (danpuzon-resolve). The Tauri shell "
+    "v6.1.0: Installer fix for issue #84 (danpuzon-resolve) batched with "
+    "conductor task-tile redesign. First MINOR bump since the v6.0 native pivot "
+    "— covers the splash + path discovery (this branch), the bundled sidecar "
+    "runtime (parallel branch), and the /conductor uniform-tile redesign "
+    "(parallel branch). Future feature work continues on the v6.1.X series. "
+    "Installer behavior: the Tauri shell "
     "previously hardcoded a developer-only PRISM_SERVICE_DIR fallback "
     "(E:\\.prism\\.claude\\worktrees\\v6-pivot\\...), a developer-only "
     "PRISM_PYTHON path, and a developer-only PRISM_DATA_DIR — and the window "
