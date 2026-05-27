@@ -1,4 +1,4 @@
-"""Conductor API — prompt variants, scores, session outcomes."""
+"""Conductor API — prompt variants, scores, session outcomes, and SDLC state."""
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -23,4 +23,9 @@ def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1
         "scores": s.get_scores(),
         "session_outcomes": s.get_session_outcomes(limit=outcomes_limit),
         "retired": s.get_retired(),
+        # Conductor v2 (#79 follow-up): SPA /conductor page reads these to
+        # render the SDLC dashboard — which tasks conductor is driving and
+        # where they are in the workflow.
+        "managed_tasks": s.managed_tasks(),
+        "step_buckets": s.step_buckets(),
     }

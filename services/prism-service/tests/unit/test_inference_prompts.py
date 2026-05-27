@@ -19,7 +19,8 @@ except ImportError:
 
 
 PROMPTS_DIR = (
-    Path(__file__).resolve().parents[2] / "app" / "inference" / "prompts"
+    Path(__file__).resolve().parents[2]
+    / "prism_service" / "inference" / "prompts"
 )
 
 ANALYZERS = [

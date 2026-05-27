@@ -88,8 +88,14 @@ class ProjectContext:
     def conductor_svc(self):
         if self._conductor_svc is None:
             from prism_service.services.conductor_service import ConductorService
+            # Wire verifier_svc up-front so Conductor v2 gates (issue
+            # #79 [3/4]) can consult it. attach_verifier_service() is
+            # also exposed for late binding when callers (tests, MCP)
+            # build a ConductorService bare.
             self._conductor_svc = ConductorService(
                 scores_db=str(self._data_dir / "scores.db"),
+                task_svc=self.task_svc,
+                verifier_svc=self.verifier_svc,
             )
         return self._conductor_svc
 

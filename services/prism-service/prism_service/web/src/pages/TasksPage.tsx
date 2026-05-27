@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Kpi, toneFromLabel, type PillTone } from "@/components/ui";
+import {
+  stepChipClass, gateChipClass, gateLabel, stepLabel,
+} from "@/lib/workflowChips";
 
 type Task = {
   id?: string;
@@ -11,6 +14,9 @@ type Task = {
   priority?: number | string;
   tags?: string[];
   assigned_agent?: string;
+  workflow_step?: string;
+  gate_state?: string;
+  gate_reason?: string;
 };
 
 // Workflow tones — same convention TaskDetailPage uses for its status
@@ -72,7 +78,7 @@ export default function TasksPage() {
         <SectionLabel>What's next</SectionLabel>
         {next ? (
           <button
-            onClick={() => next.id && navigate(`/tasks/${next.id}`)}
+            onClick={() => next.id && navigate(`/tasks/${next.id}`, { state: { from: "/tasks" } })}
             className="text-sm text-left hover:opacity-100 w-full"
           >
             <div className="font-medium hover:underline decoration-dotted underline-offset-2">{next.title ?? next.id}</div>
@@ -108,13 +114,36 @@ export default function TasksPage() {
                 <div className="space-y-2">
                   {items.map((t) => {
                     const pTone = priorityTone(t.priority);
+                    const step = t.workflow_step ?? "";
+                    const gate = t.gate_state ?? "none";
+                    const conductorOn = step !== "" || gate !== "none";
                     return (
                       <button
                         key={t.id}
-                        onClick={() => t.id && navigate(`/tasks/${t.id}`)}
+                        onClick={() => t.id && navigate(`/tasks/${t.id}`, { state: { from: "/tasks" } })}
                         className="w-full text-left rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-3 hover:border-[color:var(--midground-base)]/40 hover:bg-[color:var(--background-base)]/50 transition-colors cursor-pointer"
                       >
                         <div className="text-sm font-medium">{t.title ?? "—"}</div>
+                        {conductorOn && (
+                          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                            {step && (
+                              <span
+                                className={stepChipClass(step)}
+                                title={`conductor step: ${step}`}
+                              >
+                                {stepLabel(step)}
+                              </span>
+                            )}
+                            {gate !== "none" && (
+                              <span
+                                className={gateChipClass(gate as any)}
+                                title={t.gate_reason || `gate ${gate}`}
+                              >
+                                gate {gateLabel(gate as any)}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                           {typeof t.priority !== "undefined" && (
                             <span
@@ -160,3 +189,4 @@ export default function TasksPage() {
     </Page>
   );
 }
+

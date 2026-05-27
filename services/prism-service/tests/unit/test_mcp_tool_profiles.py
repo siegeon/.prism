@@ -21,15 +21,18 @@ def _names(profile: str) -> set[str]:
 def test_interactive_profile_exposes_core_agent_tools_only():
     names = _names("interactive")
 
-    # 17 original core tools + 10 v5.1 understand_* tools
+    # 17 original core tools + 2 Conductor v2 tools
+    # (conductor_advance / conductor_gate) + 10 v5.1 understand_* tools
     # (T9 nine + understand_configure follow-up).
-    assert len(names) == 27
+    assert len(names) == 29
     assert {
         "brain_search",
         "brain_call_chain",
         "memory_recall",
         "task_next",
         "workflow_state",
+        "conductor_advance",
+        "conductor_gate",
         "context_bundle",
         "prism_status",
         "understand_refresh",
@@ -96,6 +99,27 @@ def test_default_profile_uses_interactive_surface():
 
 def test_unknown_profile_falls_back_to_interactive_tools():
     assert _names("does-not-exist") == _names("interactive")
+
+
+def test_conductor_v2_tools_registered_with_required_schema():
+    """conductor_advance / conductor_gate appear in TOOLS with the
+    required input fields (id; action enum for the gate tool)."""
+    from prism_service.mcp.tools import TOOLS
+
+    by_name = {tool.name for tool in TOOLS}
+    assert {"conductor_advance", "conductor_gate"} <= by_name
+
+    tools_map = {tool.name: tool for tool in TOOLS}
+    advance = tools_map["conductor_advance"]
+    assert advance.inputSchema["required"] == ["id"]
+    assert "validation" in advance.inputSchema["properties"]
+
+    gate = tools_map["conductor_gate"]
+    # v6.0.32: reason is now required on every gate_decide call.
+    assert set(gate.inputSchema["required"]) == {"id", "action", "reason"}
+    assert gate.inputSchema["properties"]["action"]["enum"] == [
+        "approve", "reject",
+    ]
 
 
 def test_default_profile_blocks_hidden_tool_calls():

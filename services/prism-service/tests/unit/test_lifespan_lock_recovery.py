@@ -43,9 +43,11 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
             patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
-    # 5 daemon threads: mcp + governance + drift + quality + drainer.
+    # 8 daemon threads (v6.0.x): mcp + governance + drift + quality +
+    # understand_drainer + trash_sweeper + transcript_importer + one
+    # spawned indirectly via start_auto_updater / start_reflection_worker.
     started = [c for c in mock_t.return_value.start.mock_calls]
-    assert len(started) == 5
+    assert len(started) == 8
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -58,7 +60,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    assert len(started) == 5  # threads started despite the stale lock
+    # Same 8 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 8  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err

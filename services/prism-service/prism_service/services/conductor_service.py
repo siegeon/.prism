@@ -33,10 +33,26 @@ class ConductorService:
     for the UI and MCP layers.
     """
 
-    def __init__(self, scores_db: str, enable_engine: bool = True) -> None:
+    def __init__(
+        self,
+        scores_db: str,
+        enable_engine: bool = True,
+        task_svc: Optional[Any] = None,
+        verifier_svc: Optional[Any] = None,
+    ) -> None:
         self._scores_db = scores_db
         self._conductor = None
         self._available = False
+        # Conductor v2 (issue #79 [1/4]): optional TaskService reference
+        # consumed by advance_task / gate_decide. Wired by ProjectContext
+        # after both services exist; kept optional so legacy callers
+        # (and the meta-conductor unit tests) can construct a bare
+        # ConductorService without a TaskService.
+        self._task_svc = task_svc
+        # Conductor v2 (issue #79 [3/4]): optional VerifierService used by
+        # gate_decide to convert a caller's 'approve' into a real
+        # pass/fail decision. None = legacy behavior (trust the caller).
+        self._verifier_svc = verifier_svc
         self._ensure_meta_schema()
         if not enable_engine:
             return
@@ -50,6 +66,25 @@ class ConductorService:
                 f"ConductorService: Conductor unavailable ({exc})",
                 file=sys.stderr,
             )
+
+    # ------------------------------------------------------------------
+    # Late binding for TaskService — ProjectContext wires this after
+    # construction so the two services can stay laziness-friendly.
+    # ------------------------------------------------------------------
+
+    def attach_task_service(self, task_svc: Any) -> None:
+        """Attach (or replace) the TaskService consumed by advance_task
+        and gate_decide. No-op if already attached to the same instance.
+        """
+        self._task_svc = task_svc
+
+    def attach_verifier_service(self, verifier_svc: Any) -> None:
+        """Attach (or replace) the VerifierService consumed by gate_decide
+        (issue #79 [3/4]). When None, gate_decide trusts the caller's
+        action (legacy [1/4] behavior). When attached, 'approve' without
+        override is verified against the prior step's validation kind.
+        """
+        self._verifier_svc = verifier_svc
 
     # ------------------------------------------------------------------
     # Delegated methods
@@ -708,6 +743,485 @@ class ConductorService:
             "score_delta": score_delta,
         }
 
+    # ------------------------------------------------------------------
+    # Conductor v2 — per-task workflow state machine (issue #79 [1/4])
+    # ------------------------------------------------------------------
+    #
+    # advance_task / gate_decide are the only sanctioned entry points
+    # for moving a task across WORKFLOW_STEPS. They consult and write
+    # Task.workflow_step / .gate_state / .gate_reason via TaskService,
+    # and append explicit task_history rows for every transition so the
+    # audit log captures who moved the task and why.
+    #
+    # Out of scope for [1/4]:
+    #   * No MCP surface (deliverable [2/4]).
+    #   * No verifier_service consultation (deliverable [3/4]).
+    #   * No per-task override of WORKFLOW_STEPS — every task walks the
+    #     default sequence from models.workflow.
+
+    @staticmethod
+    def _workflow_steps() -> list[dict]:
+        """Local import avoids a circular dep with models.workflow."""
+        from prism_service.models.workflow import WORKFLOW_STEPS
+
+        return WORKFLOW_STEPS
+
+    @classmethod
+    def _step_index(cls, step_id: str) -> int:
+        """Return the position of step_id in WORKFLOW_STEPS, or -1.
+
+        An empty step_id means the task has not entered the workflow,
+        which is equivalent to index -1 (the next step is index 0).
+        """
+        if not step_id:
+            return -1
+        for i, step in enumerate(cls._workflow_steps()):
+            if step["id"] == step_id:
+                return i
+        return -1
+
+    @classmethod
+    def _step_by_id(cls, step_id: str) -> Optional[dict]:
+        if not step_id:
+            return None
+        for step in cls._workflow_steps():
+            if step["id"] == step_id:
+                return step
+        return None
+
+    def advance_task(
+        self,
+        task_id: str,
+        validation: Optional[str] = None,
+    ) -> dict:
+        """Move a task to the next entry in WORKFLOW_STEPS.
+
+        Rules:
+          * Task with workflow_step='' enters the workflow at step 0.
+          * If the *current* step is a gate and gate_state='pending', the
+            transition is refused — the gate must be decided first.
+          * After moving, if the *new* step is a gate, gate_state is set
+            to 'pending' (caller must use gate_decide to release it).
+          * Every transition appends a task_history row.
+
+        Returns a dict shaped:
+          {'ok': bool, 'task_id', 'from_step', 'to_step',
+           'gate_state', 'reason' (on refusal)}
+        """
+        if self._task_svc is None:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "no TaskService attached"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "unknown task"}
+
+        steps = self._workflow_steps()
+        if not steps:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "WORKFLOW_STEPS is empty"}
+
+        current_id = task.workflow_step or ""
+        current_step = self._step_by_id(current_id)
+
+        # Refuse if we're sitting on a gate that hasn't been decided.
+        if (current_step is not None
+                and current_step["type"] == "gate"
+                and task.gate_state == "pending"):
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "from_step": current_id,
+                "to_step": current_id,
+                "gate_state": task.gate_state,
+                "reason": (
+                    f"gate '{current_id}' is pending; "
+                    "call gate_decide before advancing"
+                ),
+            }
+
+        current_index = self._step_index(current_id)
+        next_index = current_index + 1
+        if next_index >= len(steps):
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "from_step": current_id,
+                "to_step": current_id,
+                "gate_state": task.gate_state,
+                "reason": "task is already at the final workflow step",
+            }
+
+        next_step = steps[next_index]
+        next_id = next_step["id"]
+        new_gate_state = (
+            "pending" if next_step["type"] == "gate" else "none"
+        )
+        # Clear stale gate_reason whenever we leave a gate.
+        new_gate_reason = task.gate_reason if new_gate_state == "pending" else ""
+
+        self._task_svc.update(
+            task_id,
+            workflow_step=next_id,
+            gate_state=new_gate_state,
+            gate_reason=new_gate_reason,
+        )
+
+        detail_bits = [f"from={current_id or '<start>'}", f"to={next_id}"]
+        if validation:
+            detail_bits.append(f"validation={validation}")
+        if new_gate_state == "pending":
+            detail_bits.append("gate=pending")
+        self._task_svc.record_history(
+            task_id,
+            action="advance_task",
+            details="; ".join(detail_bits),
+            actor="conductor",
+        )
+
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "from_step": current_id,
+            "to_step": next_id,
+            "gate_state": new_gate_state,
+        }
+
+    # ------------------------------------------------------------------
+    # Gate verification helpers (issue #79 [3/4])
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _validation_for_gate(cls, gate_step_id: str) -> Optional[str]:
+        """Return the validation kind the verifier should check at this
+        gate. By convention, a gate inherits its expectation from the
+        immediately preceding step's ``validation`` field
+        (e.g. ``red_gate`` follows ``write_failing_tests`` whose
+        validation is ``red_with_trace``)."""
+        steps = cls._workflow_steps()
+        idx = cls._step_index(gate_step_id)
+        if idx <= 0:
+            return None
+        for prev in reversed(steps[:idx]):
+            if prev.get("validation"):
+                return str(prev["validation"])
+        return None
+
+    # Mapping: validation kind -> (allowed verifier statuses,
+    # allowed tier0 statuses, human-readable expectation). Manual
+    # kinds (story_complete, plan_coverage) have value None — we can't
+    # verify them mechanically and a human must use override.
+    _VERIFIER_RULES: dict[str, Optional[dict]] = {
+        "red_with_trace": {
+            "expect_status": ("fail",),
+            "expect_tier0": ("fail",),
+            "expectation": (
+                "red_with_trace expects verifier.status=fail with "
+                "tier0=fail (failing test scaffold landed)"
+            ),
+        },
+        "green": {
+            "expect_status": ("pass",),
+            "expect_tier0": ("pass", "not-run"),
+            "expectation": "green expects verifier.status=pass with tier0=pass",
+        },
+        "green_full": {
+            "expect_status": ("pass",),
+            "expect_tier0": ("pass", "not-run"),
+            "expectation": "green_full expects verifier.status=pass with tier0=pass",
+        },
+        "story_complete": None,
+        "plan_coverage": None,
+    }
+
+    def _verify_gate(self, task, gate_step_id: str) -> dict:
+        """Consult the attached VerifierService for the gate's expected
+        validation. Returns a dict shaped:
+          {'verified': bool|None, 'reason': str,
+           'verifier': <raw verifier dict or None>,
+           'validation': <kind or None>}
+        'verified' is True/False after a verifier run, or None when no
+        verifier is attached or the validation is a manual kind."""
+        validation = self._validation_for_gate(gate_step_id)
+        if validation is None:
+            return {"verified": None, "reason": "gate has no validation kind",
+                    "verifier": None, "validation": None}
+        rule = self._VERIFIER_RULES.get(validation)
+        if rule is None:
+            return {
+                "verified": None,
+                "reason": (
+                    f"validation {validation!r} requires manual review; "
+                    "re-call gate_decide with override=True"
+                ),
+                "verifier": None,
+                "validation": validation,
+            }
+        # gate_decide short-circuits when self._verifier_svc is None
+        # (legacy trust-caller path). _verify_gate is only called when
+        # a verifier is attached, so we don't need a None-check here.
+        try:
+            v = self._verifier_svc.run(
+                task_id=task.id,
+                # story_file gives a useful audit anchor even though
+                # VerifierService.run treats workspace as primary scope.
+            )
+        except Exception as exc:
+            return {
+                "verified": False,
+                "reason": f"verifier raised {type(exc).__name__}: {exc}",
+                "verifier": None,
+                "validation": validation,
+            }
+        status = str(v.get("status") or "")
+        tier0 = str(v.get("tier0") or "")
+        ok_status = status in rule["expect_status"]
+        ok_tier0 = tier0 in rule["expect_tier0"]
+        if ok_status and ok_tier0:
+            return {
+                "verified": True,
+                "reason": (
+                    f"verifier passed: status={status} tier0={tier0} "
+                    f"({rule['expectation']})"
+                ),
+                "verifier": v,
+                "validation": validation,
+            }
+        summary = v.get("summary") or f"status={status} tier0={tier0}"
+        return {
+            "verified": False,
+            "reason": (
+                f"verifier rejected: {summary}; "
+                f"{rule['expectation']}"
+            ),
+            "verifier": v,
+            "validation": validation,
+        }
+
+    def gate_decide(
+        self,
+        task_id: str,
+        action: str,
+        reason: str = "",
+        override: bool = False,
+    ) -> dict:
+        """Resolve a pending gate on a task.
+
+        action='approve' flips gate_state to 'passed' and auto-advances
+        past the gate to the next non-gate step. action='reject' flips
+        gate_state to 'failed' and stores reason in task.gate_reason;
+        reject does NOT auto-advance.
+
+        When ``override`` is False (the default) and a VerifierService is
+        attached, action='approve' first calls verifier_service.run() and
+        only releases the gate if the verifier confirms the prior step's
+        validation kind. Manual-only validation kinds (story_complete,
+        plan_coverage) require ``override=True``. When ``override`` is
+        True, the verifier is bypassed and the audit row carries
+        actor='manual-override' plus the supplied reason.
+
+        Returns a dict shaped:
+          {'ok': bool, 'task_id', 'gate_step',
+           'gate_state', 'to_step' (on approve), 'reason' (on refusal),
+           'verifier' (when a verifier run informed the decision)}
+        """
+        if action not in ("approve", "reject"):
+            return {"ok": False, "task_id": task_id,
+                    "reason": f"unknown action {action!r}; "
+                              "expected 'approve' or 'reject'"}
+        if self._task_svc is None:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "no TaskService attached"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "unknown task"}
+
+        current_step = self._step_by_id(task.workflow_step)
+        if current_step is None or current_step["type"] != "gate":
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": task.workflow_step,
+                "gate_state": task.gate_state,
+                "reason": "task is not currently on a gate step",
+            }
+        # Conductor v2 follow-up (#79): allow manual recovery on failed
+        # gates. An explicit override=True on action='approve' supersedes
+        # the verifier's earlier ruling; the audit row tags actor=
+        # 'manual-override' so the recovery stays visible in task_history.
+        # 'reject' on a failed gate is still pointless (already failed).
+        if task.gate_state == "failed":
+            if not (action == "approve" and override):
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": task.workflow_step,
+                    "gate_state": task.gate_state,
+                    "reason": (
+                        "gate_state is 'failed'; recovery requires "
+                        "action='approve' with override=True"
+                    ),
+                }
+        elif task.gate_state != "pending":
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": task.workflow_step,
+                "gate_state": task.gate_state,
+                "reason": (
+                    f"gate_state is {task.gate_state!r}; "
+                    "gate_decide only acts on 'pending' (or 'failed' with override)"
+                ),
+            }
+
+        gate_step_id = task.workflow_step
+
+        if action == "reject":
+            self._task_svc.update(
+                task_id,
+                gate_state="failed",
+                gate_reason=reason,
+            )
+            self._task_svc.record_history(
+                task_id,
+                action="gate_decide",
+                details=f"gate={gate_step_id}; action=reject; reason={reason}",
+                actor="conductor",
+            )
+            return {
+                "ok": True,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": "failed",
+            }
+
+        # action == 'approve' - validation evidence is REQUIRED.
+        # Every approve must describe what was used to satisfy the gate
+        # (test run, screenshot, manual review, etc.). The reason text
+        # is the validation; without it the gate decision is opaque.
+        # This rule applies even when a verifier is consulted - the human
+        # narrative augments the machine check.
+        if not (reason and reason.strip()):
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": task.gate_state,
+                "reason": (
+                    "approve requires reason describing the validation "
+                    "used (test run, screenshot, manual review, etc.)"
+                ),
+            }
+        verifier_payload: Optional[dict] = None
+        verifier_validation: Optional[str] = None
+        verifier_reason = ""
+
+        if override:
+            # Manual override path — bypass the verifier entirely but
+            # tag the audit row so the override is auditable.
+            actor = "manual-override"
+            detail_bits = [
+                f"gate={gate_step_id}",
+                "action=approve",
+                "override=True",
+            ]
+            if reason:
+                detail_bits.append(f"reason={reason}")
+        elif self._verifier_svc is None:
+            # Legacy [1/4] behavior — no verifier wired (bare
+            # ConductorService used by unit tests and meta-only
+            # callers). Trust the caller's approve. ProjectContext
+            # always wires a verifier, so this path only fires for
+            # explicit no-verifier construction.
+            actor = "conductor"
+            detail_bits = [f"gate={gate_step_id}", "action=approve"]
+            if reason:
+                detail_bits.append(f"reason={reason}")
+        else:
+            # Verifier-driven path. Look up the prior step's validation
+            # kind and consult VerifierService. If the verifier rejects
+            # or no verifier is attached, fail the gate (do NOT advance)
+            # with the verifier's reason recorded on the task.
+            outcome = self._verify_gate(task, gate_step_id)
+            verifier_payload = outcome.get("verifier")
+            verifier_validation = outcome.get("validation")
+            verifier_reason = outcome.get("reason", "")
+            if outcome["verified"] is not True:
+                self._task_svc.update(
+                    task_id,
+                    gate_state="failed",
+                    gate_reason=verifier_reason,
+                )
+                self._task_svc.record_history(
+                    task_id,
+                    action="gate_decide",
+                    details=(
+                        f"gate={gate_step_id}; action=approve; "
+                        f"verifier=fail; validation="
+                        f"{verifier_validation or 'none'}; "
+                        f"reason={verifier_reason}"
+                    ),
+                    actor="conductor",
+                )
+                refusal = {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": "failed",
+                    "reason": verifier_reason,
+                    "validation": verifier_validation,
+                }
+                if verifier_payload is not None:
+                    refusal["verifier"] = verifier_payload
+                return refusal
+            actor = "conductor"
+            detail_bits = [
+                f"gate={gate_step_id}",
+                "action=approve",
+                f"verifier=pass; validation={verifier_validation}",
+            ]
+            if reason:
+                detail_bits.append(f"reason={reason}")
+
+        # Persist validation evidence to the row so it surfaces wherever
+        # gate_reason is rendered (TaskDetailPage, swimlane tooltips).
+        # reason is required upstream, so it's always present here.
+        if actor == "manual-override":
+            passed_gate_reason = f"manual override: {reason}"
+        elif verifier_validation:
+            passed_gate_reason = f"verified ({verifier_validation}): {reason}"
+        else:
+            passed_gate_reason = reason
+        self._task_svc.update(
+            task_id,
+            gate_state="passed",
+            gate_reason=passed_gate_reason,
+        )
+        self._task_svc.record_history(
+            task_id,
+            action="gate_decide",
+            details="; ".join(detail_bits),
+            actor=actor,
+        )
+
+        advance_result = self.advance_task(task_id)
+        response: dict = {
+            "ok": True,
+            "task_id": task_id,
+            "gate_step": gate_step_id,
+            "gate_state": "passed",
+            "to_step": advance_result.get("to_step", gate_step_id),
+            "auto_advanced": bool(advance_result.get("ok")),
+        }
+        if verifier_payload is not None:
+            response["verifier"] = verifier_payload
+        if verifier_validation is not None:
+            response["validation"] = verifier_validation
+        if override:
+            response["override"] = True
+        return response
+
     # Session-id prefixes used by smoke tests, dogfood probes, and the
     # bench harness. Rows with these ids carry near-zero token counts
     # and aren't real sessions — including them in averages drags the
@@ -826,3 +1340,58 @@ class ConductorService:
             return max(EPSILON_MIN, EPSILON_START * math.exp(-EPSILON_DECAY * total))
         except Exception:
             return EPSILON_START
+
+    # ------------------------------------------------------------------
+    # Conductor v2 visual surface (#79 follow-up):
+    # SPA /conductor page reads these to render "what tasks is the
+    # conductor driving and where are they in the SDLC?"
+    # ------------------------------------------------------------------
+
+    def managed_tasks(self) -> list[dict]:
+        """List tasks where conductor is engaged.
+
+        A task is "managed" when workflow_step is non-empty OR gate_state
+        is not 'none'. Tasks worked raw (status flips only) are not
+        included — they don't appear on the /conductor page.
+        """
+        if self._task_svc is None:
+            return []
+        try:
+            tasks = self._task_svc.list()
+        except Exception:
+            return []
+        out: list[dict] = []
+        for t in tasks:
+            step = getattr(t, "workflow_step", "") or ""
+            gate = getattr(t, "gate_state", "none") or "none"
+            if step == "" and gate == "none":
+                continue
+            out.append({
+                "id": t.id,
+                "title": t.title,
+                "status": t.status,
+                "workflow_step": step,
+                "gate_state": gate,
+                "gate_reason": getattr(t, "gate_reason", "") or "",
+            })
+        return out
+
+    def step_buckets(self) -> dict[str, int]:
+        """Count of conductor-managed tasks per workflow_step.
+
+        Used by the /conductor stepper to show "12 tasks at implement_tasks,
+        3 at red_gate" at a glance.
+        """
+        if self._task_svc is None:
+            return {}
+        try:
+            tasks = self._task_svc.list()
+        except Exception:
+            return {}
+        from collections import Counter
+        counter: Counter[str] = Counter()
+        for t in tasks:
+            step = getattr(t, "workflow_step", "") or ""
+            if step:
+                counter[step] += 1
+        return dict(counter)
