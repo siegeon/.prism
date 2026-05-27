@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.1"
+PRISM_VERSION = "6.1.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.2: MemoryPage groups by value + surfaces unused metadata. The "
+    "47-tile wall is now bucketed top-down: 'Proven' (recalled in real "
+    "sessions, emerald-ringed tiles), 'High value' (author marked "
+    "importance >= 7 but not yet recalled), 'Resting' (everything else). "
+    "Within each group, entries sort by a composite value score "
+    "(importance + recall_count*1.5 + effectiveness*5 + (gen-1)*0.5) "
+    "so proven beats declared. Tiles now surface: importance dot, recall "
+    "↻N with last-recall relative time, effectiveness +/- when |eff| "
+    ">= 0.1, generation chip when >1, classification chip alongside "
+    "type/status. New 'Group' pill bar (by value | classification | "
+    "domain | type) lets the user repivot; classification gets its own "
+    "tone map (foundational=violet, tactical=sage, strategic=amber). New "
+    "'Proven (recalled)' KPI counts the bucket.\n\n"
     "v6.1.1: MemoryPage as uniform tile grid + drill-in detail page + "
     "auto-summarized tile face + clickable /settings/activity prompt "
     "drilldown. (1) Each memory now renders as a uniform card (mirrors "

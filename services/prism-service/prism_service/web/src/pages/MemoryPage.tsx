@@ -6,6 +6,7 @@ import {
   Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel,
   type PillTone,
 } from "@/components/ui";
+import { relativeTime } from "@/lib/relativeTime";
 
 type Entry = {
   id?: string;
@@ -27,13 +28,18 @@ type Entry = {
   evidence?: Record<string, unknown>;
 };
 
+type GroupKey = "value" | "classification" | "domain" | "type";
+
+const GROUPS: { id: GroupKey; label: string }[] = [
+  { id: "value", label: "by value" },
+  { id: "classification", label: "by classification" },
+  { id: "domain", label: "by domain" },
+  { id: "type", label: "by type" },
+];
+
 const TYPES = ["all", "expertise", "convention", "decision", "anti-pattern"];
 const STATUSES = ["all", "active", "stale", "retired"];
 
-// v6.0.21 — semantic chip palette. Each memory-type/status/classification
-// label maps to one of the --accent-* token triples (bg / ring / fg) in
-// index.css so the page reads as more than "blue on blue on blue".
-// Unknown labels fall back to slate (the old --midground-base look).
 const TYPE_TONE: Record<string, PillTone> = {
   expertise: "teal",
   convention: "sage",
@@ -55,6 +61,12 @@ const STATUS_TONE: Record<string, PillTone> = {
   needs_review: "amber",
 };
 
+const CLASSIFICATION_TONE: Record<string, PillTone> = {
+  foundational: "violet",
+  tactical: "sage",
+  strategic: "amber",
+};
+
 // Importance 1-10 → a single colored dot. Low importance reads as
 // muted slate, mid as sage, high as amber, top as rose.
 function importanceTone(n: number): PillTone {
@@ -63,6 +75,38 @@ function importanceTone(n: number): PillTone {
   if (n >= 4) return "sage";
   return "slate";
 }
+
+// Composite value score — what "by value" means in concrete terms.
+//   - importance (1-10) is the declared value the author assigned at write
+//   - recall_count is proven usefulness (someone's session pulled it)
+//   - effectiveness (-1..1) is outcome correlation from completed tasks
+//   - generation > 1 indicates the memory has been refined, which is
+//     itself a signal of sustained relevance
+// Weighted so a memory with imp=7, recall=3, eff=0.5 (≈14) beats one
+// with imp=10, recall=0, eff=0 (=10): proven beats declared.
+function valueScore(e: Entry): number {
+  const imp = e.importance ?? 0;
+  const recall = e.recall_count ?? 0;
+  const eff = e.effectiveness ?? 0;
+  const gen = Math.max(0, (e.generation ?? 1) - 1);
+  return imp + recall * 1.5 + eff * 5 + gen * 0.5;
+}
+
+// v6.1.2 — "by value" view tiers entries into three buckets so the
+// most useful memories sit at the top instead of getting buried in a
+// 47-tile wall. Recalled memories are *proven* — they came up in real
+// sessions — so they always lead, regardless of declared importance.
+function valueBucket(e: Entry): "proven" | "high" | "rest" {
+  if ((e.recall_count ?? 0) > 0) return "proven";
+  if ((e.importance ?? 0) >= 7) return "high";
+  return "rest";
+}
+
+const VALUE_BUCKETS: { id: "proven" | "high" | "rest"; label: string; blurb: string }[] = [
+  { id: "proven", label: "Proven",   blurb: "Recalled in real sessions — these have earned their tile." },
+  { id: "high",   label: "High value", blurb: "Author marked importance ≥ 7. Not yet recalled." },
+  { id: "rest",   label: "Resting",   blurb: "Lower importance and untouched so far. Quiet, not useless." },
+];
 
 export default function MemoryPage() {
   const [project] = useProject();
@@ -76,6 +120,7 @@ export default function MemoryPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
+  const [groupBy, setGroupBy] = useState<GroupKey>("value");
 
   useEffect(() => {
     api.get<{ domains: string[]; stats: Record<string, { active: number; archived: number; total: number }> }>(`/api/memory/domains?project=${project}`)
@@ -116,14 +161,10 @@ export default function MemoryPage() {
     const load = () => api.get<{ entries: Entry[] }>(`/api/memory/entries?${params}`)
       .then((d) => setEntries(d.entries)).catch(() => { /* keep last */ });
     load();
-    // Re-fetch every 30s so the summary-worker's results appear without
-    // a manual refresh while the user is looking at the page.
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, [project, domain, type, status, bump]);
 
-  // v6.0.15 — stats values are {active, archived, total} objects since
-  // the v6.0.8 import added Graphiti supersede counts. Sum .active.
   const total = useMemo(
     () => Object.values(stats).reduce((a, b) => a + (b?.active ?? 0), 0),
     [stats],
@@ -132,6 +173,52 @@ export default function MemoryPage() {
     () => entries.filter((e) => !e.summary).length,
     [entries],
   );
+  const provenCount = useMemo(
+    () => entries.filter((e) => (e.recall_count ?? 0) > 0).length,
+    [entries],
+  );
+
+  // Group + sort. Each group's entries are sorted by valueScore desc so
+  // even within a domain or classification the most useful float up.
+  const grouped = useMemo<{ id: string; label: string; blurb?: string; tone?: PillTone; items: Entry[] }[]>(() => {
+    if (entries.length === 0) return [];
+    const buckets: Record<string, Entry[]> = {};
+    const order: string[] = [];
+    const push = (key: string, e: Entry) => {
+      if (!(key in buckets)) { buckets[key] = []; order.push(key); }
+      buckets[key].push(e);
+    };
+    if (groupBy === "value") {
+      for (const b of VALUE_BUCKETS) buckets[b.id] = [];
+      for (const e of entries) push(valueBucket(e), e);
+      return VALUE_BUCKETS
+        .filter((b) => buckets[b.id]?.length)
+        .map((b) => ({
+          id: b.id, label: b.label, blurb: b.blurb,
+          tone: b.id === "proven" ? "emerald" as PillTone
+            : b.id === "high" ? "amber" as PillTone
+            : "slate" as PillTone,
+          items: [...buckets[b.id]].sort((a, x) => valueScore(x) - valueScore(a)),
+        }));
+    }
+    const keyOf = (e: Entry): string => {
+      if (groupBy === "classification") return (e.classification || "unclassified").toLowerCase();
+      if (groupBy === "domain") return (e.domain || "—").toLowerCase();
+      return (e.type || "—").toLowerCase();
+    };
+    for (const e of entries) push(keyOf(e), e);
+    // Stable group order: by group size desc, ties broken by name.
+    order.sort((a, b) => buckets[b].length - buckets[a].length || a.localeCompare(b));
+    return order.map((k) => ({
+      id: k,
+      label: k,
+      tone:
+        groupBy === "classification" ? (CLASSIFICATION_TONE[k] ?? "slate")
+        : groupBy === "type" ? (TYPE_TONE[k] ?? "slate")
+        : toneFromLabel(k),
+      items: [...buckets[k]].sort((a, x) => valueScore(x) - valueScore(a)),
+    }));
+  }, [entries, groupBy]);
 
   return (
     <Page>
@@ -139,8 +226,8 @@ export default function MemoryPage() {
         <p className="text-sm opacity-60 flex-1">
           Persisted patterns, conventions, decisions, and failures —
           queried by every Claude session via <code className="opacity-80">memory_recall</code>.
-          The summary on each tile is minted by the memory-summary worker;
-          click a tile for the full description, evidence, and supersede chain.
+          Tiles lead with <em>proven</em> memories (recalled in real sessions);
+          click any tile for the full description, evidence, and supersede chain.
         </p>
         <button
           onClick={importClaudeMemories}
@@ -167,10 +254,19 @@ export default function MemoryPage() {
         <Kpi label="Entries" value={total} />
         <Kpi label="Domains" value={domains.length} />
         <Kpi label="Showing" value={entries.length} />
+        <Kpi label="Proven (recalled)" value={provenCount} />
         <Kpi label="Awaiting summary" value={pendingSummaries} />
       </section>
 
       <Card>
+        <SectionLabel>Group</SectionLabel>
+        <div className="flex flex-wrap gap-2 mb-4">
+          {GROUPS.map((g) => (
+            <Pill key={g.id} active={groupBy === g.id} onClick={() => setGroupBy(g.id)} tone="teal">
+              {g.label}
+            </Pill>
+          ))}
+        </div>
         <SectionLabel>Domain</SectionLabel>
         <div className="flex flex-wrap gap-2 mb-4">
           <Pill active={domain === "all"} onClick={() => setDomain("all")} tone="slate">all</Pill>
@@ -198,37 +294,53 @@ export default function MemoryPage() {
         </div>
       </Card>
 
-      <Card>
-        <SectionLabel>{entries.length} entr{entries.length === 1 ? "y" : "ies"}</SectionLabel>
-        {entries.length === 0 ? (
-          <Empty>No entries match these filters.</Empty>
-        ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
-            {entries.map((e, i) => (
-              <MemoryTile
-                key={e.id ?? `${e.name}-${i}`}
-                entry={e}
-                onClick={() => e.id && navigate(`/memory/${e.id}`)}
-              />
-            ))}
-          </div>
-        )}
-      </Card>
+      {entries.length === 0 ? (
+        <Card><Empty>No entries match these filters.</Empty></Card>
+      ) : (
+        grouped.map((g) => (
+          <Card key={g.id}>
+            <div className="flex items-baseline gap-3 flex-wrap mb-3">
+              <span
+                className="text-[11px] uppercase tracking-wider font-mono px-2 py-0.5 rounded ring-1"
+                style={{
+                  background: `var(--accent-${g.tone ?? "slate"}-bg)`,
+                  color: `var(--accent-${g.tone ?? "slate"}-fg)`,
+                  boxShadow: `inset 0 0 0 1px var(--accent-${g.tone ?? "slate"}-ring)`,
+                }}
+              >
+                {g.label}
+              </span>
+              <span className="text-[11px] opacity-60 font-mono">
+                {g.items.length} entr{g.items.length === 1 ? "y" : "ies"}
+              </span>
+              {g.blurb && (
+                <span className="text-[11px] opacity-50 flex-1 min-w-0">{g.blurb}</span>
+              )}
+            </div>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+              {g.items.map((e, i) => (
+                <MemoryTile
+                  key={e.id ?? `${e.name}-${i}`}
+                  entry={e}
+                  onClick={() => e.id && navigate(`/memory/${e.id}`)}
+                />
+              ))}
+            </div>
+          </Card>
+        ))
+      )}
     </Page>
   );
 }
 
 // ---------------------------------------------------------------------------
-// MemoryTile — uniform-sized card (v6.1.1)
+// MemoryTile — uniform-sized card (v6.1.2)
 //
-// Mirrors the conductor TaskTile pattern (auto-fill grid w/ minmax 280px)
-// so /memory and /conductor read as visual siblings. Each tile shows:
-//   - name (1-line clamp, bold)
-//   - summary line — the worker-minted plain-English rephrase, or a
-//     "Summarizing…" placeholder when the worker hasn't filled it yet
-//   - type / status / classification chips (semantic palette)
-//   - importance dot + recall ↻ count + domain in the meta footer
-// Whole tile is a button that routes to /memory/:id for the drill-in.
+// Surfaces the metadata that's been sitting unused on ExpertiseEntry:
+// importance dot, recall counter (bolded when proven), effectiveness
+// indicator when non-zero, last-recalled relative time, generation chip
+// when > 1, memory_type icon. Plus the existing type / status /
+// classification chips. Whole tile routes to /memory/:id.
 // ---------------------------------------------------------------------------
 function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
   const type = (entry.type ?? "").toLowerCase();
@@ -236,17 +348,36 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
   const classification = (entry.classification ?? "").toLowerCase();
   const typeTone: PillTone = TYPE_TONE[type] ?? "slate";
   const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
+  const classTone: PillTone = CLASSIFICATION_TONE[classification] ?? "slate";
   const importance = entry.importance ?? 0;
   const recall = entry.recall_count ?? 0;
+  const effectiveness = entry.effectiveness ?? 0;
+  const generation = entry.generation ?? 1;
+  const proven = recall > 0;
   const tooltip = `${entry.name ?? "—"}\nid: ${entry.id ?? "—"}\n\n${entry.description ?? ""}`;
   return (
     <button
       onClick={onClick}
       title={tooltip}
-      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-2 transition-colors min-h-[140px]"
+      className={
+        "text-left rounded-md border bg-[color:var(--surface-2)] p-3 flex flex-col gap-2 transition-colors min-h-[140px] " +
+        (proven
+          ? "border-[color:var(--accent-emerald-ring)] hover:border-[color:var(--accent-emerald-fg)]"
+          : "border-[color:var(--border-default)] hover:border-[color:var(--border-strong)]")
+      }
     >
-      <div className="text-[13px] leading-snug font-medium line-clamp-1 text-[color:var(--text-primary)]">
-        {entry.name ?? "—"}
+      <div className="flex items-start gap-2">
+        <div className="text-[13px] leading-snug font-medium line-clamp-1 text-[color:var(--text-primary)] flex-1 min-w-0">
+          {entry.name ?? "—"}
+        </div>
+        {generation > 1 && (
+          <span
+            className="text-[10px] font-mono px-1 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)] shrink-0"
+            title={`generation ${generation} — superseded ${generation - 1} earlier version${generation === 2 ? "" : "s"}`}
+          >
+            gen {generation}
+          </span>
+        )}
       </div>
       <div className={
         "text-[12px] leading-relaxed line-clamp-3 flex-1 " +
@@ -258,11 +389,9 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
       </div>
       <div className="flex flex-wrap items-center gap-1">
         {type && <TileBadge tone={typeTone}>{type}</TileBadge>}
+        {classification && <TileBadge tone={classTone}>{classification}</TileBadge>}
         {status && status !== "active" && (
           <TileBadge tone={statusTone}>{status}</TileBadge>
-        )}
-        {classification && (
-          <TileBadge tone="slate">{classification}</TileBadge>
         )}
       </div>
       <div className="flex items-center gap-2 text-[11px] font-mono text-[color:var(--text-muted)]">
@@ -276,8 +405,28 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
             imp {importance}
           </span>
         )}
-        {recall > 0 && (
-          <span title={`recalled ${recall} time${recall === 1 ? "" : "s"}`}>↻ {recall}</span>
+        {proven ? (
+          <span
+            className="text-[color:var(--accent-emerald-fg)] font-semibold"
+            title={`recalled ${recall} time${recall === 1 ? "" : "s"}${entry.last_recalled ? ` — last ${relativeTime(entry.last_recalled)} ago` : ""}`}
+          >
+            ↻ {recall}
+            {entry.last_recalled && (
+              <span className="opacity-60 font-normal"> · {relativeTime(entry.last_recalled)}</span>
+            )}
+          </span>
+        ) : (
+          <span className="opacity-40" title="never recalled in a session">↻ 0</span>
+        )}
+        {Math.abs(effectiveness) >= 0.1 && (
+          <span
+            className={effectiveness > 0
+              ? "text-[color:var(--accent-emerald-fg)]"
+              : "text-[color:var(--accent-rose-fg)]"}
+            title={`effectiveness ${effectiveness > 0 ? "+" : ""}${effectiveness.toFixed(2)} — outcome-correlated`}
+          >
+            {effectiveness > 0 ? "+" : ""}{effectiveness.toFixed(1)}
+          </span>
         )}
         {entry.domain && (
           <span className="ml-auto truncate text-[color:var(--text-secondary)]" title={`domain: ${entry.domain}`}>
