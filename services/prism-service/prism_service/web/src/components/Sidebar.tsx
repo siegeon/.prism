@@ -79,9 +79,8 @@ const SETTINGS_SECTIONS: Section[] = [
     items: [
       { to: "/settings/projects", label: "Projects", icon: FolderTree },
       { to: "/settings/connections", label: "Claude auth", icon: Plug },
-      { to: "/settings/jobs", label: "Jobs", icon: ListChecks },
+      { to: "/settings/activity", label: "Background activity", icon: Activity },
       { to: "/settings/logs", label: "Logs", icon: ScrollText },
-      { to: "/settings/workers", label: "Background workers", icon: Activity },
       { to: "/settings/service", label: "Service", icon: Info },
     ],
   },

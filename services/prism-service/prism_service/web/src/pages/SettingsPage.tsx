@@ -19,7 +19,7 @@ function isInTauri(): boolean {
   return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 }
 
-type SectionId = "projects" | "connections" | "jobs" | "logs" | "workers" | "service";
+type SectionId = "projects" | "connections" | "activity" | "logs" | "service";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
   projects: {
@@ -30,17 +30,13 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
     title: "Claude auth",
     description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. PRISM reads tokens from your host's ~/.claude directory (native install) or the bind-mounted /root/.claude (docker install), so any `claude login` you've already done is reused — no second login here.",
   },
-  jobs: {
-    title: "Jobs",
-    description: "Analyzer queue across every project — what's in flight, pending, or failed.",
+  activity: {
+    title: "Background activity",
+    description: "Live status of in-process background workers (transcript importer, drift reindex, understand drainer, governance, trash sweeper, auto-updater, opt-in reflection worker) and the analyzer queue across every project — what's running, what's in flight, what's pending or failed.",
   },
   logs: {
     title: "Logs",
     description: "Every PRISM-initiated claude -p call with timing, tokens, and assistant output.",
-  },
-  workers: {
-    title: "Background workers",
-    description: "Live status of the in-process background workers — transcript importer, drift reindex, understand drainer, governance, trash sweeper, auto-updater, and the opt-in reflection worker. Status, cadence, and role for each are read from /api/consolidation/workers. Read-only for now; start/stop controls are coming separately.",
   },
   service: {
     title: "Service",
@@ -48,12 +44,14 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "jobs", "logs", "workers", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "activity", "logs", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
-  // `/settings/auth` is the legacy v5.1.8 URL for what's now Connections.
-  // Keep it working so bookmarked links don't 404.
+  // Legacy URL aliases — keep bookmarked links and prior versions working.
+  // `auth` (v5.1.8) is now Connections; `jobs` and `workers` are now
+  // the unified `activity` page.
   if (raw === "auth") return "connections";
+  if (raw === "jobs" || raw === "workers") return "activity";
   return (raw && (KNOWN_SECTIONS as string[]).includes(raw)) ? (raw as SectionId) : "projects";
 }
 
@@ -214,24 +212,23 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      {section === "jobs" && (
-        <Card>
-          <SectionLabel>Jobs</SectionLabel>
-          <JobsPanel />
-        </Card>
+      {section === "activity" && (
+        <div className="space-y-6">
+          <Card>
+            <SectionLabel>Workers</SectionLabel>
+            <BackgroundWorkersPanel />
+          </Card>
+          <Card>
+            <SectionLabel>Jobs</SectionLabel>
+            <JobsPanel />
+          </Card>
+        </div>
       )}
 
       {section === "logs" && (
         <Card>
           <SectionLabel>Logs</SectionLabel>
           <ClaudeRunsPanel />
-        </Card>
-      )}
-
-      {section === "workers" && (
-        <Card>
-          <SectionLabel>Background workers</SectionLabel>
-          <BackgroundWorkersPanel />
         </Card>
       )}
 
@@ -1238,20 +1235,31 @@ function JobsPanel() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState<Job["state"] | "all">("all");
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastLoaded, setLastLoaded] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(Date.now());
 
   const load = useCallback(async () => {
+    setRefreshing(true);
     try {
       const q = filter === "all" ? "" : `&status=${filter}`;
       const r = await api.get<{ jobs: Job[] }>(`/api/jobs?limit=200${q}`);
       setJobs(r.jobs);
+      setLastLoaded(Date.now());
     } catch {
       setJobs([]);
     } finally {
       setLoaded(true);
+      setRefreshing(false);
     }
   }, [filter]);
 
   useEffect(() => { load(); }, [load]);
+  // Tick the freshness label every second so it ages live, like Workers.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
   // Poll while there's anything in flight or pending so the list
   // reflects what the drainer is actually doing.
   useEffect(() => {
@@ -1263,13 +1271,35 @@ function JobsPanel() {
     return () => clearInterval(t);
   }, [jobs, load]);
 
+  const ageLabel = lastLoaded
+    ? `Updated ${Math.max(0, Math.round((now - lastLoaded) / 1000))}s ago`
+    : "";
+  const inFlight = jobs.filter(
+    (j) => j.state === "pending" || j.state === "in_progress",
+  ).length;
+
   if (!loaded) {
     return <div className="text-sm opacity-60">Loading…</div>;
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
+    <>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-[11px] opacity-60 font-mono">
+          {jobs.length} job{jobs.length === 1 ? "" : "s"} · {inFlight} in flight
+        </span>
+        <span className="text-[11px] opacity-40 font-mono ml-auto">{ageLabel}</span>
+        <button
+          onClick={load}
+          disabled={refreshing}
+          className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+        >
+          {refreshing ? "refreshing…" : "Refresh now"}
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        <span className="text-[10px] uppercase tracking-wider opacity-50">filter:</span>
         {JOB_STATES.map((s) => {
           const isActive = filter === s;
           return (
@@ -1278,76 +1308,108 @@ function JobsPanel() {
               type="button"
               onClick={() => setFilter(s)}
               className={
-                "px-2 py-1 rounded-full text-[10px] uppercase tracking-wider border " +
+                "px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider border " +
                 (isActive
                   ? "bg-[color:var(--midground-base)]/15 border-[color:var(--midground-base)]/30"
-                  : "border-[color:var(--midground-base)]/15 opacity-70 hover:opacity-100")
+                  : "border-[color:var(--midground-base)]/15 opacity-60 hover:opacity-100")
               }
             >
               {s}
             </button>
           );
         })}
-        <span className="text-[11px] opacity-50 ml-auto">
-          {jobs.length} job{jobs.length === 1 ? "" : "s"}
-        </span>
       </div>
 
       {jobs.length === 0 ? (
-        <div className="text-sm opacity-60">
+        <Empty>
           {filter === "all"
             ? "No analyzer jobs yet — configure a repo on a project to enqueue some."
             : `No jobs in state "${filter}".`}
-        </div>
+        </Empty>
       ) : (
-        <ul className="divide-y divide-[color:var(--midground-base)]/10 -mx-2">
-          {jobs.map((j) => (
-            <li key={j.id} className="px-2 py-2">
-              <div className="flex items-center gap-3 flex-wrap text-xs">
-                <JobStatePill state={j.state} />
-                <span className="font-mono opacity-80">{j.analyzer}</span>
-                <span className="opacity-60">
-                  project <span className="font-mono">{j.project}</span>
-                </span>
-                <span className="opacity-50 font-mono">
-                  {j.target_sha.slice(0, 10)}
-                </span>
-                {j.attempts > 1 && (
-                  <span className="opacity-50">attempts {j.attempts}</span>
-                )}
-                <span className="opacity-50 ml-auto text-[11px]">
-                  {jobTimestamp(j)}
-                </span>
-              </div>
-              {j.state === "failed" && j.error && (
-                <pre className="mt-2 ml-2 text-[11px] whitespace-pre-wrap font-mono bg-rose-500/5 border border-rose-500/20 rounded-md p-3 text-rose-200 max-h-[200px] overflow-y-auto">
-                  {j.error}
-                </pre>
-              )}
-            </li>
-          ))}
+        <ul className="divide-y divide-[color:var(--midground-base)]/10">
+          {jobs.map((j) => {
+            const meta = analyzerMeta(j.analyzer);
+            const stateLabel = j.state === "in_progress" ? "running" : j.state;
+            return (
+              <li key={j.id} className="py-2 flex items-start gap-3 text-sm">
+                <JobStateDot state={j.state} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{meta.title}</span>
+                    <span className="text-[10px] opacity-50 font-mono">{stateLabel}</span>
+                    {j.attempts > 1 && (
+                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200/90">
+                        retried {j.attempts}×
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs opacity-60 mt-0.5 leading-relaxed">
+                    {meta.purpose && <span>{meta.purpose} </span>}
+                    <span className="opacity-75 font-mono">
+                      project {j.project} · sha {j.target_sha.slice(0, 10)} · {jobTimestamp(j)}
+                    </span>
+                  </div>
+                  {j.state === "failed" && j.error && (
+                    <pre className="mt-2 text-[11px] whitespace-pre-wrap font-mono bg-rose-500/5 border border-rose-500/20 rounded-md p-3 text-rose-200 max-h-[200px] overflow-y-auto">
+                      {j.error}
+                    </pre>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
-    </div>
+    </>
   );
 }
 
-function JobStatePill({ state }: { state: Job["state"] }) {
+// Human-readable label + one-line purpose for each analyzer. Keeps job
+// rows visually parallel to worker rows ("Transcript importer" + sentence)
+// instead of raw module names + identifier soup.
+const ANALYZER_META: Record<string, { title: string; purpose: string }> = {
+  onboarding_writer: {
+    title: "Onboarding writer",
+    purpose: "Drafts a README-grade onboarding document, drawing on the tour, architecture, and domain analyzers.",
+  },
+  tour_builder: {
+    title: "Tour builder",
+    purpose: "Designs a 5-15-step guided tour that teaches the project's architecture and key concepts.",
+  },
+  domain_analyzer: {
+    title: "Domain analyzer",
+    purpose: "Extracts the project's domain glossary — the nouns and verbs that describe what the system does in its own language.",
+  },
+  architecture_analyzer: {
+    title: "Architecture analyzer",
+    purpose: "Classifies every analyzed file into architectural layers (presentation, application, domain, infrastructure).",
+  },
+};
+
+function analyzerMeta(name: string): { title: string; purpose: string } {
+  const known = ANALYZER_META[name];
+  if (known) return known;
+  // Fallback for unknown analyzers — snake_case → Title case.
+  const title = name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  return { title, purpose: "" };
+}
+
+function JobStateDot({ state }: { state: Job["state"] }) {
+  // Mirror the worker status-dot styling so the rows look like siblings.
+  // Color encodes state: amber pending, sky in-progress, emerald completed,
+  // rose failed.
   const palette: Record<Job["state"], string> = {
-    pending: "bg-indigo-500/15 text-indigo-200",
-    in_progress: "bg-sky-500/15 text-sky-200",
-    completed: "bg-emerald-500/15 text-emerald-200",
-    failed: "bg-rose-500/15 text-rose-200",
+    pending: "bg-amber-400 shadow-[0_0_6px_2px_rgba(251,191,36,0.4)]",
+    in_progress: "bg-sky-400 shadow-[0_0_6px_2px_rgba(56,189,248,0.4)]",
+    completed: "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]",
+    failed: "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]",
   };
-  const label = state === "in_progress" ? "running" : state;
   return (
-    <span className={
-      "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] uppercase tracking-wider " +
-      palette[state]
-    }>
-      {state === "in_progress" && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-      {label}
-    </span>
+    <span
+      className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${palette[state]}`}
+      aria-label={state}
+    />
   );
 }
 
@@ -1429,10 +1491,14 @@ function BackgroundWorkersPanel() {
   if (workers === null) {
     return <div className="text-sm opacity-60">Loading…</div>;
   }
+  const running = workers.filter((w) => w.running).length;
   return (
     <>
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] opacity-50 font-mono">{ageLabel}</span>
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-[11px] opacity-60 font-mono">
+          {workers.length} worker{workers.length === 1 ? "" : "s"} · {running} running
+        </span>
+        <span className="text-[11px] opacity-40 font-mono ml-auto">{ageLabel}</span>
         <button
           onClick={load}
           disabled={refreshing}
