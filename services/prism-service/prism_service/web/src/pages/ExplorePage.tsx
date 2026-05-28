@@ -48,6 +48,10 @@ export default function ExplorePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // Ranked matches are the RESULT of the top search bar — they drop down
+  // under it on search and close when you pick one (so the canvas fly is
+  // visible). No standalone panel cluttering the page.
+  const [resultsOpen, setResultsOpen] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
@@ -64,6 +68,8 @@ export default function ExplorePage() {
       .then((d) => {
         setData(d);
         setSelected(d.context[0]?.file ?? null);
+        // Open the results dropdown only for an explicit typed search.
+        setResultsOpen(q.trim().length > 0 && d.ranked.length > 0);
         const files = d.mode === "focus" ? d.nodes.map((n) => n.id) : [];
         filesRef.current = files;
         postToViewer(files);
@@ -114,35 +120,59 @@ export default function ExplorePage() {
   const sel = selected ? ctxByFile.get(selected) : undefined;
 
   // Selecting a file opens its context bundle AND flies the canvas to it.
+  // Closing the dropdown lets the canvas fly + the sticky context show.
   const select = (file: string) => {
     if (!file) return;
     setSelected(file);
+    setResultsOpen(false);
     postToViewer([file]);
   };
 
   return (
     <Page>
-      <form onSubmit={submit} className="flex items-stretch gap-2">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask the graph — the canvas flies to your matches. Empty = whole-graph overview."
-            className="w-full rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:border-[color:var(--text-secondary)]"
-          />
-          {input && (
-            <button type="button" onClick={clear} title="Clear"
-              className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-90">
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-        <button type="submit" disabled={loading}
-          className="px-4 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] text-sm uppercase tracking-wider flex items-center gap-2 disabled:opacity-50">
-          <CornerDownLeft className="w-4 h-4" /> {loading ? "…" : "Understand"}
-        </button>
-      </form>
+      <div className="relative">
+        <form onSubmit={submit} className="flex items-stretch gap-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onFocus={() => { if (data && data.ranked.length > 0) setResultsOpen(true); }}
+              onKeyDown={(e) => { if (e.key === "Escape") setResultsOpen(false); }}
+              placeholder="Ask the graph — the canvas flies to your matches. Empty = whole-graph overview."
+              className="w-full rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] pl-9 pr-9 py-2.5 text-sm focus:outline-none focus:border-[color:var(--text-secondary)]"
+            />
+            {input && (
+              <button type="button" onClick={clear} title="Clear"
+                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-90">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <button type="submit" disabled={loading}
+            className="px-4 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] text-sm uppercase tracking-wider flex items-center gap-2 disabled:opacity-50">
+            <CornerDownLeft className="w-4 h-4" /> {loading ? "…" : "Understand"}
+          </button>
+        </form>
+
+        {/* Ranked matches = the result of the search bar. Drops down under
+            it, floats over the graph, closes when you pick a row. */}
+        {resultsOpen && data && data.ranked.length > 0 && (
+          <div className="absolute z-30 left-0 right-0 mt-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] shadow-2xl flex flex-col max-h-[55vh]">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border-default)]">
+              <span className="text-[11px] uppercase tracking-wider opacity-70">
+                {data.mode === "focus" ? "Ranked matches" : "Top hubs by PageRank"} · {data.ranked.length}
+              </span>
+              <button onClick={() => setResultsOpen(false)} title="Close" className="opacity-50 hover:opacity-90">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto px-2 py-1.5">
+              <RankedList data={data} selected={selected} onSelect={select} />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Compact stat strip — one line, no big boxes hogging vertical space */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
@@ -188,16 +218,6 @@ export default function ExplorePage() {
           on the RIGHT (sticky) so clicking never sends you scrolling. */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start">
         <div className="space-y-4 min-w-0">
-          <Card className="!p-5">
-            <SectionLabel>{data?.mode === "focus" ? "Ranked matches" : "Top hubs by PageRank"}</SectionLabel>
-            <div className="text-xs opacity-60 mb-3">
-              {data?.mode === "focus"
-                ? "Brain hybrid search — click a row to fly the canvas + see context →"
-                : "Centrality rank — click to focus the canvas + see context →"}
-            </div>
-            <RankedList data={data} selected={selected} onSelect={select} />
-          </Card>
-
           {(data?.communities?.length ?? 0) > 0 && (
             <Card className="!p-5">
               <SectionLabel>{data?.mode === "focus" ? "Communities in view" : "Communities"}</SectionLabel>

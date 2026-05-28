@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.13"
+PRISM_VERSION = "6.1.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.14: /explore — ranked matches are now the RESULT of the top "
+    "search bar, not a standalone panel. They drop down directly under the "
+    "bar on a typed search (floating over the graph so the canvas doesn't "
+    "move), and close when you pick a row (so the canvas fly + sticky "
+    "context are visible). Focusing the empty bar peeks Top hubs; Escape / "
+    "× / clear dismiss. Removed the lower ranked card that added nothing in "
+    "place. Below the graph now: communities + subgraph on the left, sticky "
+    "context on the right.\n\n"
     "v6.1.13: enrich scopes now read the SAME graph.json the Sigma viewer "
     "renders (incl. fallback_community 'comm:N' buckets for path-less "
     "files), so every super-node's key matches and gets an inferred name — "
