@@ -94,40 +94,42 @@ def _input_hash(files: list[str]) -> str:
 def hierarchy_scopes(project: str, min_files: int = 2) -> list[dict]:
     """Enumerate domain/service/module scopes from the code hierarchy.
 
-    Reads entities straight from graph.db, derives each file's l0/l1/l2
-    path keys via compute_node_hierarchy, and groups member files +
-    sample symbols per key. Larger clusters first. `min_files` drops the
-    one-file noise scopes so we don't spend inference on singletons.
+    Reads the SAME graph.json + hierarchy keys the Sigma viewer renders
+    (incl. the fallback_community -> 'comm:N' bucketing for path-less
+    files), so every super-node the user can see gets a scope_id that
+    matches — no straggler keeps its string-stitched junk label. Groups
+    member files + sample symbols per l0/l1/l2 key; larger clusters first;
+    `min_files` drops one-file singletons.
     """
+    import json as _json
     from prism_service.project_context import get_project
     from prism_service.services.graph_service import compute_node_hierarchy
     try:
         ctx = get_project(project)
-        db = str(ctx._data_dir / "graph.db")
+        json_path = ctx._data_dir / "graphify-src" / "graphify-out" / "graph.json"
     except Exception:
         return []
-    try:
-        conn = sqlite3.connect(db, timeout=5.0)
-        rows = conn.execute(
-            "SELECT file, name FROM entities WHERE file IS NOT NULL"
-        ).fetchall()
-        conn.close()
-    except sqlite3.Error:
+    if not json_path.exists():
         return []
+    try:
+        data = _json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    raw_nodes = [n for n in data.get("nodes", []) if n.get("file_type") != "rationale"]
 
     # key -> {level, files:set, symbols:list}
     groups: dict[str, dict] = {}
-    seen_file_keys: dict[str, set] = {}
-    for file, name in rows:
-        if not file:
-            continue
-        h = compute_node_hierarchy(file)
+    for n in raw_nodes:
+        sf = n.get("source_file") or ""
+        h = compute_node_hierarchy(sf, fallback_community=n.get("community"))
+        name = n.get("label") or n.get("id")
+        member = sf or (f"node:{n.get('id')}")
         for lvl in (0, 1, 2):
             key = h.get(f"l{lvl}")
             if not key:
                 continue
             g = groups.setdefault(key, {"level": lvl, "files": set(), "symbols": []})
-            g["files"].add(file)
+            g["files"].add(member)
             if name and len(g["symbols"]) < 24:
                 g["symbols"].append(name)
 

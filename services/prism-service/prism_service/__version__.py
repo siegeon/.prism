@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.12"
+PRISM_VERSION = "6.1.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.13: enrich scopes now read the SAME graph.json the Sigma viewer "
+    "renders (incl. fallback_community 'comm:N' buckets for path-less "
+    "files), so every super-node's key matches and gets an inferred name — "
+    "the 'prism service prism service' straggler became 'Base Model "
+    "Errors'. Re-run skipped 24 unchanged scopes (escape) and named only "
+    "the 1 new bucket.\n\n"
     "v6.1.12: Ultimate Graph narrative layer — clusters named by inference, "
     "not string-stitching (#50, slices 1/2/6). New graph_annotations table "
     "(scope_kind/scope_id/task, name, purpose, input_hash, provenance) keeps "
