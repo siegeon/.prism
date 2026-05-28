@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.2"
+PRISM_VERSION = "6.1.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.3: /conductor swimlanes no longer accumulate shipped work. "
+    "ConductorService.managed_tasks() + step_buckets() now filter out "
+    "status=done — on the prism dev instance, 14 of 15 visible lane "
+    "tiles were historical green_gate=passed tasks (every previous "
+    "ship), drowning the one actively-managed task. Done means done; "
+    "workflow_step stays on the row for audit but the conductor view "
+    "treats it as not-currently-managed. One-line change in "
+    "prism_service/services/conductor_service.py.\n\n"
     "v6.1.2: MemoryPage groups by value + surfaces unused metadata. The "
     "47-tile wall is now bucketed top-down: 'Proven' (recalled in real "
     "sessions, emerald-ringed tiles), 'High value' (author marked "

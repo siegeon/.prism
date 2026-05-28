@@ -1353,6 +1353,12 @@ class ConductorService:
         A task is "managed" when workflow_step is non-empty OR gate_state
         is not 'none'. Tasks worked raw (status flips only) are not
         included — they don't appear on the /conductor page.
+
+        v6.1.3: filter out status=done. Conductor swimlanes had been
+        accumulating every task that ever reached green_gate, polluting
+        the active view (14 of 15 visible tiles were done shipped work).
+        Done means done — it stays in the audit trail (workflow_step is
+        not cleared) but doesn't show as currently-managed work.
         """
         if self._task_svc is None:
             return []
@@ -1364,7 +1370,10 @@ class ConductorService:
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
             gate = getattr(t, "gate_state", "none") or "none"
+            status = getattr(t, "status", "") or ""
             if step == "" and gate == "none":
+                continue
+            if status == "done":
                 continue
             out.append({
                 "id": t.id,
@@ -1388,7 +1397,9 @@ class ConductorService:
         """Count of conductor-managed tasks per workflow_step.
 
         Used by the /conductor stepper to show "12 tasks at implement_tasks,
-        3 at red_gate" at a glance.
+        3 at red_gate" at a glance. v6.1.3: status=done excluded — same
+        rationale as managed_tasks (counters were inflated by historical
+        shipped work).
         """
         if self._task_svc is None:
             return {}
@@ -1400,6 +1411,7 @@ class ConductorService:
         counter: Counter[str] = Counter()
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
-            if step:
+            status = getattr(t, "status", "") or ""
+            if step and status != "done":
                 counter[step] += 1
         return dict(counter)
