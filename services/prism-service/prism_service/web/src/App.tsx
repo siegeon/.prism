@@ -7,6 +7,7 @@ import BrainPage from "@/pages/BrainPage";
 import DashboardPage from "@/pages/DashboardPage";
 import GraphPage from "@/pages/GraphPage";
 import MemoryPage from "@/pages/MemoryPage";
+import MemoryDetailPage from "@/pages/MemoryDetailPage";
 import TasksPage from "@/pages/TasksPage";
 import TaskDetailPage from "@/pages/TaskDetailPage";
 import ConductorPage from "@/pages/ConductorPage";
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="/brain" element={<BrainPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/memory/:id" element={<MemoryDetailPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/conductor" element={<ConductorPage />} />

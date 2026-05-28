@@ -108,3 +108,4 @@ services/prism-service/prism_service/web_dist/
 services/prism-service/build/
 services/prism-service/dist/
 services/prism-service/*.egg-info/
+.dev-data-verify/

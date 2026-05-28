@@ -1328,42 +1328,87 @@ function JobsPanel() {
         </Empty>
       ) : (
         <ul className="divide-y divide-[color:var(--midground-base)]/10">
-          {jobs.map((j) => {
-            const meta = analyzerMeta(j.analyzer);
-            const stateLabel = j.state === "in_progress" ? "running" : j.state;
-            return (
-              <li key={j.id} className="py-2 flex items-start gap-3 text-sm">
-                <JobStateDot state={j.state} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium">{meta.title}</span>
-                    <span className="text-[10px] opacity-50 font-mono">{stateLabel}</span>
-                    {j.attempts > 1 && (
-                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200/90">
-                        retried {j.attempts}×
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs opacity-60 mt-0.5 leading-relaxed">
-                    {meta.purpose && <span>{meta.purpose} </span>}
-                    <span className="opacity-75 font-mono">
-                      project {j.project} · sha {j.target_sha.slice(0, 10)} · {jobTimestamp(j)}
-                    </span>
-                  </div>
-                  {j.state === "failed" && j.error && (
-                    <pre className="mt-2 text-[11px] whitespace-pre-wrap font-mono bg-rose-500/5 border border-rose-500/20 rounded-md p-3 text-rose-200 max-h-[200px] overflow-y-auto">
-                      {j.error}
-                    </pre>
-                  )}
-                </div>
-              </li>
-            );
-          })}
+          {jobs.map((j) => <JobRow key={j.id} job={j} />)}
         </ul>
       )}
     </>
   );
 }
+
+// v6.1.1 — collapsible job row. Sibling of WorkerRow above. Analyzer
+// prompts are constructed by the drainer at run time and aren't yet
+// persisted on AnalysisJob (v6.2 roadmap), so the disclosure currently
+// shows the analyzer's purpose + a note pointing at where the prompt
+// lives in the codebase. Failed jobs always expand their stderr.
+function JobRow({ job }: { job: Job }) {
+  const [open, setOpen] = useState(false);
+  const meta = analyzerMeta(job.analyzer);
+  const stateLabel = job.state === "in_progress" ? "running" : job.state;
+  const failureOpen = job.state === "failed" && job.error;
+  return (
+    <li className="py-2 text-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left flex items-start gap-3 hover:bg-[color:var(--midground-base)]/[0.03] rounded-md -mx-2 px-2 py-1 cursor-pointer"
+        aria-expanded={open}
+      >
+        <JobStateDot state={job.state} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{meta.title}</span>
+            <span className="text-[10px] opacity-50 font-mono">{stateLabel}</span>
+            {job.attempts > 1 && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200/90">
+                retried {job.attempts}×
+              </span>
+            )}
+            <span className="text-[10px] opacity-40 font-mono ml-auto">
+              {open ? "hide ▴" : "show prompt ▾"}
+            </span>
+          </div>
+          <div className="text-xs opacity-60 mt-0.5 leading-relaxed">
+            {meta.purpose && <span>{meta.purpose} </span>}
+            <span className="opacity-75 font-mono">
+              project {job.project} · sha {job.target_sha.slice(0, 10)} · {jobTimestamp(job)}
+            </span>
+          </div>
+        </div>
+      </button>
+      {(open || failureOpen) && (
+        <div className="mt-2 ml-5 space-y-2">
+          {open && (
+            <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 text-[12px] leading-relaxed">
+              <div className="text-[10px] uppercase tracking-wider opacity-50 mb-2 font-mono">
+                analyzer prompt — assembled at run time
+              </div>
+              <p className="opacity-80">
+                {meta.purpose || "This analyzer constructs its prompt from the current source tree at run time."}{" "}
+                The exact prompt text is built by the drainer
+                (<span className="font-mono">prism_service/inference/analyzer_runner.py</span>)
+                using the <span className="font-mono">{job.analyzer}</span> template.
+                Persisting the rendered prompt on each AnalysisJob so it
+                renders here verbatim is on the v6.2 roadmap.
+              </p>
+              <div className="mt-2 text-[10px] opacity-50 font-mono">
+                job id <span className="opacity-80">{job.id}</span>
+                {job.result_path && (
+                  <> · result <span className="opacity-80">{job.result_path}</span></>
+                )}
+              </div>
+            </div>
+          )}
+          {failureOpen && (
+            <pre className="text-[11px] whitespace-pre-wrap font-mono bg-rose-500/5 border border-rose-500/20 rounded-md p-3 text-rose-200 max-h-[200px] overflow-y-auto">
+              {job.error}
+            </pre>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
 
 // Human-readable label + one-line purpose for each analyzer. Keeps job
 // rows visually parallel to worker rows ("Transcript importer" + sentence)
@@ -1448,6 +1493,16 @@ type Worker = {
   running: boolean;
   cadence_s: number;
   description: string;
+  // v6.1.1 — workers that shell out to claude carry a prompt so the
+  // drilldown can render the actual instructions driving them. Values:
+  //   "static"   — `prompt` is the literal template the worker sends
+  //   "dynamic"  — prompt is assembled per-run; `prompt` explains where
+  //                to look or what input it draws from
+  //   "per_job"  — the worker dispatches arbitrary jobs whose prompts
+  //                vary; click an individual job below to see its prompt
+  //   "none"     — pure Python work, no LLM involved
+  prompt_kind?: "static" | "dynamic" | "per_job" | "none";
+  prompt?: string;
 };
 
 function BackgroundWorkersPanel() {
@@ -1511,37 +1566,98 @@ function BackgroundWorkersPanel() {
         <Empty>No workers reported.</Empty>
       ) : (
       <ul className="divide-y divide-[color:var(--midground-base)]/10">
-      {workers.map((w) => (
-        <li key={w.id} className="py-2 flex items-start gap-3 text-sm">
-          <span
-            className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
-              w.running
-                ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
-                : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
-            }`}
-            aria-label={w.running ? "running" : "not running"}
-          />
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{w.label}</span>
-              {w.cadence_s > 0 && (
-                <span className="text-[10px] opacity-50 font-mono">
-                  every {w.cadence_s < 60 ? `${w.cadence_s}s` : `${Math.round(w.cadence_s / 60)}m`}
-                </span>
-              )}
-              {!w.running && (
-                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
-                  not running
-                </span>
-              )}
-            </div>
-            <div className="text-xs opacity-60 mt-0.5 leading-relaxed">{w.description}</div>
-          </div>
-        </li>
-      ))}
+      {workers.map((w) => <WorkerRow key={w.id} worker={w} />)}
     </ul>
       )}
     </>
+  );
+}
+
+
+// v6.1.1 — collapsible row that reveals the worker's claude prompt (or
+// a kind-specific explanation if no static prompt exists). Mirrors the
+// JobRow disclosure below so Workers and Jobs feel like siblings.
+function WorkerRow({ worker }: { worker: Worker }) {
+  const [open, setOpen] = useState(false);
+  const kind = worker.prompt_kind ?? "none";
+  const canExpand = kind !== "none";
+  return (
+    <li className="py-2 text-sm">
+      <button
+        type="button"
+        onClick={() => canExpand && setOpen((v) => !v)}
+        disabled={!canExpand}
+        className={
+          "w-full text-left flex items-start gap-3 " +
+          (canExpand ? "hover:bg-[color:var(--midground-base)]/[0.03] rounded-md -mx-2 px-2 py-1 cursor-pointer" : "")
+        }
+        aria-expanded={open}
+      >
+        <span
+          className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+            worker.running
+              ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+              : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+          }`}
+          aria-label={worker.running ? "running" : "not running"}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{worker.label}</span>
+            {worker.cadence_s > 0 && (
+              <span className="text-[10px] opacity-50 font-mono">
+                every {worker.cadence_s < 60
+                  ? `${worker.cadence_s}s`
+                  : `${Math.round(worker.cadence_s / 60)}m`}
+              </span>
+            )}
+            {!worker.running && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+                not running
+              </span>
+            )}
+            <PromptKindBadge kind={kind} />
+            {canExpand && (
+              <span className="text-[10px] opacity-40 font-mono ml-auto">
+                {open ? "hide prompt ▴" : "show prompt ▾"}
+              </span>
+            )}
+          </div>
+          <div className="text-xs opacity-60 mt-0.5 leading-relaxed">{worker.description}</div>
+        </div>
+      </button>
+      {canExpand && open && (
+        <div className="mt-2 ml-5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 text-[12px] leading-relaxed">
+          <div className="text-[10px] uppercase tracking-wider opacity-50 mb-2 font-mono">
+            {kind === "static" && "claude prompt — sent verbatim each cycle (with name/description substituted)"}
+            {kind === "dynamic" && "prompt construction — assembled per-run"}
+            {kind === "per_job" && "per-job prompts — see individual job rows below"}
+          </div>
+          <pre className="whitespace-pre-wrap font-mono text-[12px] opacity-90">
+            {worker.prompt || "(no prompt provided)"}
+          </pre>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function PromptKindBadge({ kind }: { kind: NonNullable<Worker["prompt_kind"]> }) {
+  if (kind === "none") return null;
+  const styles: Record<string, string> = {
+    static: "bg-teal-500/15 text-teal-300/90",
+    dynamic: "bg-amber-500/15 text-amber-300/90",
+    per_job: "bg-violet-500/15 text-violet-300/90",
+  };
+  const labels: Record<string, string> = {
+    static: "claude · static prompt",
+    dynamic: "claude · dynamic prompt",
+    per_job: "claude · per-job prompt",
+  };
+  return (
+    <span className={"text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded " + styles[kind]}>
+      {labels[kind]}
+    </span>
   );
 }
 

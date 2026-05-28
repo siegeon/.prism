@@ -1,7 +1,12 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel } from "@/components/ui";
+import {
+  Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel,
+  type PillTone,
+} from "@/components/ui";
+import { relativeTime } from "@/lib/relativeTime";
 
 type Entry = {
   id?: string;
@@ -10,6 +15,7 @@ type Entry = {
   classification?: string;
   status?: string;
   description?: string;
+  summary?: string;
   domain?: string;
   importance?: number;
   memory_type?: string;
@@ -22,17 +28,19 @@ type Entry = {
   evidence?: Record<string, unknown>;
 };
 
+type GroupKey = "value" | "classification" | "domain" | "type";
+
+const GROUPS: { id: GroupKey; label: string }[] = [
+  { id: "value", label: "by value" },
+  { id: "classification", label: "by classification" },
+  { id: "domain", label: "by domain" },
+  { id: "type", label: "by type" },
+];
+
 const TYPES = ["all", "expertise", "convention", "decision", "anti-pattern"];
 const STATUSES = ["all", "active", "stale", "retired"];
 
-// v6.0.21 — semantic chip palette. Each memory-type/status/classification
-// label maps to one of the --accent-* token triples (bg / ring / fg) in
-// index.css so the page reads as more than "blue on blue on blue".
-// Unknown labels fall back to slate (the old --midground-base look).
-type ChipTone =
-  | "teal" | "sage" | "amber" | "rose" | "violet" | "emerald" | "slate";
-
-const TYPE_TONE: Record<string, ChipTone> = {
+const TYPE_TONE: Record<string, PillTone> = {
   expertise: "teal",
   convention: "sage",
   decision: "amber",
@@ -41,40 +49,68 @@ const TYPE_TONE: Record<string, ChipTone> = {
   project: "amber",
   reference: "teal",
   user: "violet",
+  pattern: "teal",
+  failure: "rose",
 };
 
-const STATUS_TONE: Record<string, ChipTone> = {
+const STATUS_TONE: Record<string, PillTone> = {
   active: "emerald",
   stale: "amber",
   retired: "slate",
+  archived: "slate",
+  needs_review: "amber",
 };
 
-const TONE_CLASS: Record<ChipTone, string> = {
-  teal:    "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]",
-  sage:    "bg-[color:var(--accent-sage-bg)] text-[color:var(--accent-sage-fg)] ring-1 ring-inset ring-[color:var(--accent-sage-ring)]",
-  amber:   "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]",
-  rose:    "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] ring-1 ring-inset ring-[color:var(--accent-rose-ring)]",
-  violet:  "bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] ring-1 ring-inset ring-[color:var(--accent-violet-ring)]",
-  emerald: "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]",
-  slate:   "bg-[color:var(--accent-slate-bg)] text-[color:var(--accent-slate-fg)] ring-1 ring-inset ring-[color:var(--accent-slate-ring)]",
+const CLASSIFICATION_TONE: Record<string, PillTone> = {
+  foundational: "violet",
+  tactical: "sage",
+  strategic: "amber",
 };
-
-function chipClass(tone: ChipTone): string {
-  return `text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${TONE_CLASS[tone]}`;
-}
 
 // Importance 1-10 → a single colored dot. Low importance reads as
-// muted slate, mid as sage, high as amber, top as rose. Adds a visual
-// signal next to the "imp N" text without growing the row height.
-function importanceTone(n: number): ChipTone {
+// muted slate, mid as sage, high as amber, top as rose.
+function importanceTone(n: number): PillTone {
   if (n >= 9) return "rose";
   if (n >= 7) return "amber";
   if (n >= 4) return "sage";
   return "slate";
 }
 
+// Composite value score — what "by value" means in concrete terms.
+//   - importance (1-10) is the declared value the author assigned at write
+//   - recall_count is proven usefulness (someone's session pulled it)
+//   - effectiveness (-1..1) is outcome correlation from completed tasks
+//   - generation > 1 indicates the memory has been refined, which is
+//     itself a signal of sustained relevance
+// Weighted so a memory with imp=7, recall=3, eff=0.5 (≈14) beats one
+// with imp=10, recall=0, eff=0 (=10): proven beats declared.
+function valueScore(e: Entry): number {
+  const imp = e.importance ?? 0;
+  const recall = e.recall_count ?? 0;
+  const eff = e.effectiveness ?? 0;
+  const gen = Math.max(0, (e.generation ?? 1) - 1);
+  return imp + recall * 1.5 + eff * 5 + gen * 0.5;
+}
+
+// v6.1.2 — "by value" view tiers entries into three buckets so the
+// most useful memories sit at the top instead of getting buried in a
+// 47-tile wall. Recalled memories are *proven* — they came up in real
+// sessions — so they always lead, regardless of declared importance.
+function valueBucket(e: Entry): "proven" | "high" | "rest" {
+  if ((e.recall_count ?? 0) > 0) return "proven";
+  if ((e.importance ?? 0) >= 7) return "high";
+  return "rest";
+}
+
+const VALUE_BUCKETS: { id: "proven" | "high" | "rest"; label: string; blurb: string }[] = [
+  { id: "proven", label: "Proven",   blurb: "Recalled in real sessions — these have earned their tile." },
+  { id: "high",   label: "High value", blurb: "Author marked importance ≥ 7. Not yet recalled." },
+  { id: "rest",   label: "Resting",   blurb: "Lower importance and untouched so far. Quiet, not useless." },
+];
+
 export default function MemoryPage() {
   const [project] = useProject();
+  const navigate = useNavigate();
   const [domains, setDomains] = useState<string[]>([]);
   const [stats, setStats] = useState<Record<string, { active: number; archived: number; total: number }>>({});
   const [domain, setDomain] = useState<string>("all");
@@ -84,13 +120,7 @@ export default function MemoryPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
-  const [open, setOpen] = useState<Set<string>>(new Set());
-
-  const toggleOpen = (id: string) => {
-    const next = new Set(open);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    setOpen(next);
-  };
+  const [groupBy, setGroupBy] = useState<GroupKey>("value");
 
   useEffect(() => {
     api.get<{ domains: string[]; stats: Record<string, { active: number; archived: number; total: number }> }>(`/api/memory/domains?project=${project}`)
@@ -128,18 +158,67 @@ export default function MemoryPage() {
     if (domain !== "all") params.set("domain", domain);
     if (type !== "all") params.set("type", type);
     if (status !== "all") params.set("status", status);
-    api.get<{ entries: Entry[] }>(`/api/memory/entries?${params}`)
-      .then((d) => setEntries(d.entries)).catch(() => setEntries([]));
+    const load = () => api.get<{ entries: Entry[] }>(`/api/memory/entries?${params}`)
+      .then((d) => setEntries(d.entries)).catch(() => { /* keep last */ });
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
   }, [project, domain, type, status, bump]);
 
-  // v6.0.15 — stats values are {active, archived, total} objects since
-  // the v6.0.8 import added Graphiti supersede counts. Summing the raw
-  // values with `+` coerces them to strings and renders "[object Object]".
-  // Sum .active so the Entries Kpi matches what's actually filterable.
   const total = useMemo(
     () => Object.values(stats).reduce((a, b) => a + (b?.active ?? 0), 0),
     [stats],
   );
+  const pendingSummaries = useMemo(
+    () => entries.filter((e) => !e.summary).length,
+    [entries],
+  );
+  const provenCount = useMemo(
+    () => entries.filter((e) => (e.recall_count ?? 0) > 0).length,
+    [entries],
+  );
+
+  // Group + sort. Each group's entries are sorted by valueScore desc so
+  // even within a domain or classification the most useful float up.
+  const grouped = useMemo<{ id: string; label: string; blurb?: string; tone?: PillTone; items: Entry[] }[]>(() => {
+    if (entries.length === 0) return [];
+    const buckets: Record<string, Entry[]> = {};
+    const order: string[] = [];
+    const push = (key: string, e: Entry) => {
+      if (!(key in buckets)) { buckets[key] = []; order.push(key); }
+      buckets[key].push(e);
+    };
+    if (groupBy === "value") {
+      for (const b of VALUE_BUCKETS) buckets[b.id] = [];
+      for (const e of entries) push(valueBucket(e), e);
+      return VALUE_BUCKETS
+        .filter((b) => buckets[b.id]?.length)
+        .map((b) => ({
+          id: b.id, label: b.label, blurb: b.blurb,
+          tone: b.id === "proven" ? "emerald" as PillTone
+            : b.id === "high" ? "amber" as PillTone
+            : "slate" as PillTone,
+          items: [...buckets[b.id]].sort((a, x) => valueScore(x) - valueScore(a)),
+        }));
+    }
+    const keyOf = (e: Entry): string => {
+      if (groupBy === "classification") return (e.classification || "unclassified").toLowerCase();
+      if (groupBy === "domain") return (e.domain || "—").toLowerCase();
+      return (e.type || "—").toLowerCase();
+    };
+    for (const e of entries) push(keyOf(e), e);
+    // Stable group order: by group size desc, ties broken by name.
+    order.sort((a, b) => buckets[b].length - buckets[a].length || a.localeCompare(b));
+    return order.map((k) => ({
+      id: k,
+      label: k,
+      tone:
+        groupBy === "classification" ? (CLASSIFICATION_TONE[k] ?? "slate")
+        : groupBy === "type" ? (TYPE_TONE[k] ?? "slate")
+        : toneFromLabel(k),
+      items: [...buckets[k]].sort((a, x) => valueScore(x) - valueScore(a)),
+    }));
+  }, [entries, groupBy]);
 
   return (
     <Page>
@@ -147,7 +226,8 @@ export default function MemoryPage() {
         <p className="text-sm opacity-60 flex-1">
           Persisted patterns, conventions, decisions, and failures —
           queried by every Claude session via <code className="opacity-80">memory_recall</code>.
-          Backfill from Claude Code's auto-memory if this page is empty.
+          Tiles lead with <em>proven</em> memories (recalled in real sessions);
+          click any tile for the full description, evidence, and supersede chain.
         </p>
         <button
           onClick={importClaudeMemories}
@@ -174,9 +254,19 @@ export default function MemoryPage() {
         <Kpi label="Entries" value={total} />
         <Kpi label="Domains" value={domains.length} />
         <Kpi label="Showing" value={entries.length} />
+        <Kpi label="Proven (recalled)" value={provenCount} />
+        <Kpi label="Awaiting summary" value={pendingSummaries} />
       </section>
 
       <Card>
+        <SectionLabel>Group</SectionLabel>
+        <div className="flex flex-wrap gap-2 mb-4">
+          {GROUPS.map((g) => (
+            <Pill key={g.id} active={groupBy === g.id} onClick={() => setGroupBy(g.id)} tone="teal">
+              {g.label}
+            </Pill>
+          ))}
+        </div>
         <SectionLabel>Domain</SectionLabel>
         <div className="flex flex-wrap gap-2 mb-4">
           <Pill active={domain === "all"} onClick={() => setDomain("all")} tone="slate">all</Pill>
@@ -204,95 +294,161 @@ export default function MemoryPage() {
         </div>
       </Card>
 
-      <Card>
-        <SectionLabel>{entries.length} entr{entries.length === 1 ? "y" : "ies"}</SectionLabel>
-        {entries.length === 0 ? (
-          <Empty>No entries match these filters.</Empty>
-        ) : (
-          <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {entries.map((e, i) => {
-              const key = e.id ?? `${e.name}-${i}`;
-              const isOpen = open.has(key);
-              return (
-                <div key={key} className="py-3">
-                  <button
-                    onClick={() => toggleOpen(key)}
-                    className="w-full text-left flex items-center gap-3 text-sm hover:opacity-100"
-                  >
-                    <span className="text-xs opacity-50 w-4">{isOpen ? "▾" : "▸"}</span>
-                    <span className="font-medium flex-1 truncate">{e.name ?? "—"}</span>
-                    {typeof e.importance === "number" && (
-                      <span className="text-[10px] uppercase tracking-wider opacity-70 flex items-center gap-1.5" title="importance 1-10">
-                        <span
-                          className="inline-block w-2 h-2 rounded-full"
-                          style={{ background: `var(--accent-${importanceTone(e.importance)}-fg)` }}
-                          aria-hidden
-                        />
-                        imp {e.importance}
-                      </span>
-                    )}
-                    {typeof e.recall_count === "number" && e.recall_count > 0 && (
-                      <span className="text-[10px] uppercase tracking-wider opacity-50" title="times recalled">
-                        ↻ {e.recall_count}
-                      </span>
-                    )}
-                    {e.type && (
-                      <span className={chipClass(TYPE_TONE[e.type.toLowerCase()] ?? "slate")}>
-                        {e.type}
-                      </span>
-                    )}
-                    {e.classification && (
-                      <span className={chipClass(TYPE_TONE[e.classification.toLowerCase()] ?? "slate")}>
-                        {e.classification}
-                      </span>
-                    )}
-                    {e.status && (
-                      <span className={chipClass(STATUS_TONE[e.status.toLowerCase()] ?? "slate")}>
-                        {e.status}
-                      </span>
-                    )}
-                  </button>
-                  {!isOpen && e.description && (
-                    <div className="text-xs opacity-60 mt-1 ml-7 line-clamp-2">{e.description}</div>
-                  )}
-                  {isOpen && (
-                    <div className="ml-7 mt-2 space-y-3">
-                      {e.description && (
-                        <pre className="whitespace-pre-wrap text-[12px] leading-relaxed opacity-90 font-sans p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10">
-                          {e.description}
-                        </pre>
-                      )}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
-                        {e.id && <div><span className="opacity-50">id:</span> <span className="font-mono">{e.id}</span></div>}
-                        {e.memory_type && <div><span className="opacity-50">memory_type:</span> {e.memory_type}</div>}
-                        {typeof e.effectiveness === "number" && (
-                          <div>
-                            <span className="opacity-50">effectiveness:</span>{" "}
-                            <span className={e.effectiveness > 0 ? "text-emerald-300/90" : e.effectiveness < 0 ? "text-rose-300/90" : "opacity-70"}>
-                              {e.effectiveness.toFixed(2)}
-                            </span>
-                          </div>
-                        )}
-                        {typeof e.generation === "number" && <div><span className="opacity-50">gen:</span> {e.generation}</div>}
-                        {e.valid_at && <div><span className="opacity-50">valid since:</span> {e.valid_at.slice(0, 10)}</div>}
-                        {e.last_recalled && <div><span className="opacity-50">last recalled:</span> {e.last_recalled.slice(0, 10)}</div>}
-                      </div>
-                      {e.evidence && Object.keys(e.evidence).length > 0 && (
-                        <div className="text-[11px]">
-                          <span className="opacity-50">evidence:</span>
-                          <pre className="mt-1 p-2 rounded bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 whitespace-pre-wrap font-mono opacity-80">
-                            {JSON.stringify(e.evidence, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+      {entries.length === 0 ? (
+        <Card><Empty>No entries match these filters.</Empty></Card>
+      ) : (
+        grouped.map((g) => (
+          <Card key={g.id}>
+            <div className="flex items-baseline gap-3 flex-wrap mb-3">
+              <span
+                className="text-[11px] uppercase tracking-wider font-mono px-2 py-0.5 rounded ring-1"
+                style={{
+                  background: `var(--accent-${g.tone ?? "slate"}-bg)`,
+                  color: `var(--accent-${g.tone ?? "slate"}-fg)`,
+                  boxShadow: `inset 0 0 0 1px var(--accent-${g.tone ?? "slate"}-ring)`,
+                }}
+              >
+                {g.label}
+              </span>
+              <span className="text-[11px] opacity-60 font-mono">
+                {g.items.length} entr{g.items.length === 1 ? "y" : "ies"}
+              </span>
+              {g.blurb && (
+                <span className="text-[11px] opacity-50 flex-1 min-w-0">{g.blurb}</span>
+              )}
+            </div>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
+              {g.items.map((e, i) => (
+                <MemoryTile
+                  key={e.id ?? `${e.name}-${i}`}
+                  entry={e}
+                  onClick={() => e.id && navigate(`/memory/${e.id}`)}
+                />
+              ))}
+            </div>
+          </Card>
+        ))
+      )}
     </Page>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MemoryTile — uniform-sized card (v6.1.2)
+//
+// Surfaces the metadata that's been sitting unused on ExpertiseEntry:
+// importance dot, recall counter (bolded when proven), effectiveness
+// indicator when non-zero, last-recalled relative time, generation chip
+// when > 1, memory_type icon. Plus the existing type / status /
+// classification chips. Whole tile routes to /memory/:id.
+// ---------------------------------------------------------------------------
+function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
+  const type = (entry.type ?? "").toLowerCase();
+  const status = (entry.status ?? "").toLowerCase();
+  const classification = (entry.classification ?? "").toLowerCase();
+  const typeTone: PillTone = TYPE_TONE[type] ?? "slate";
+  const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
+  const classTone: PillTone = CLASSIFICATION_TONE[classification] ?? "slate";
+  const importance = entry.importance ?? 0;
+  const recall = entry.recall_count ?? 0;
+  const effectiveness = entry.effectiveness ?? 0;
+  const generation = entry.generation ?? 1;
+  const proven = recall > 0;
+  const tooltip = `${entry.name ?? "—"}\nid: ${entry.id ?? "—"}\n\n${entry.description ?? ""}`;
+  return (
+    <button
+      onClick={onClick}
+      title={tooltip}
+      className={
+        "text-left rounded-md border bg-[color:var(--surface-2)] p-3 flex flex-col gap-2 transition-colors min-h-[140px] " +
+        (proven
+          ? "border-[color:var(--accent-emerald-ring)] hover:border-[color:var(--accent-emerald-fg)]"
+          : "border-[color:var(--border-default)] hover:border-[color:var(--border-strong)]")
+      }
+    >
+      <div className="flex items-start gap-2">
+        <div className="text-[13px] leading-snug font-medium line-clamp-1 text-[color:var(--text-primary)] flex-1 min-w-0">
+          {entry.name ?? "—"}
+        </div>
+        {generation > 1 && (
+          <span
+            className="text-[10px] font-mono px-1 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)] shrink-0"
+            title={`generation ${generation} — superseded ${generation - 1} earlier version${generation === 2 ? "" : "s"}`}
+          >
+            gen {generation}
+          </span>
+        )}
+      </div>
+      <div className={
+        "text-[12px] leading-relaxed line-clamp-3 flex-1 " +
+        (entry.summary
+          ? "text-[color:var(--text-secondary)]"
+          : "text-[color:var(--text-muted)] italic")
+      }>
+        {entry.summary || "Summarizing…"}
+      </div>
+      <div className="flex flex-wrap items-center gap-1">
+        {type && <TileBadge tone={typeTone}>{type}</TileBadge>}
+        {classification && <TileBadge tone={classTone}>{classification}</TileBadge>}
+        {status && status !== "active" && (
+          <TileBadge tone={statusTone}>{status}</TileBadge>
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-[11px] font-mono text-[color:var(--text-muted)]">
+        {importance > 0 && (
+          <span className="inline-flex items-center gap-1" title={`importance ${importance}/10`}>
+            <span
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{ background: `var(--accent-${importanceTone(importance)}-fg)` }}
+              aria-hidden
+            />
+            imp {importance}
+          </span>
+        )}
+        {proven ? (
+          <span
+            className="text-[color:var(--accent-emerald-fg)] font-semibold"
+            title={`recalled ${recall} time${recall === 1 ? "" : "s"}${entry.last_recalled ? ` — last ${relativeTime(entry.last_recalled)} ago` : ""}`}
+          >
+            ↻ {recall}
+            {entry.last_recalled && (
+              <span className="opacity-60 font-normal"> · {relativeTime(entry.last_recalled)}</span>
+            )}
+          </span>
+        ) : (
+          <span className="opacity-40" title="never recalled in a session">↻ 0</span>
+        )}
+        {Math.abs(effectiveness) >= 0.1 && (
+          <span
+            className={effectiveness > 0
+              ? "text-[color:var(--accent-emerald-fg)]"
+              : "text-[color:var(--accent-rose-fg)]"}
+            title={`effectiveness ${effectiveness > 0 ? "+" : ""}${effectiveness.toFixed(2)} — outcome-correlated`}
+          >
+            {effectiveness > 0 ? "+" : ""}{effectiveness.toFixed(1)}
+          </span>
+        )}
+        {entry.domain && (
+          <span className="ml-auto truncate text-[color:var(--text-secondary)]" title={`domain: ${entry.domain}`}>
+            {entry.domain}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
+  return (
+    <span
+      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+      style={{
+        background: `var(--accent-${tone}-bg)`,
+        color: `var(--accent-${tone}-fg)`,
+        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
+      }}
+    >
+      {children}
+    </span>
   );
 }

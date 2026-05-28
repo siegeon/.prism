@@ -13,6 +13,10 @@ class ExpertiseEntry:
     type: str = ""  # pattern | convention | failure | decision
     name: str = ""
     description: str = ""
+    # Plain-English 1-2 sentence rephrase of `description`, generated
+    # asynchronously by the SummaryGeneratorWorker so the MemoryPage tile
+    # face is human-skimmable. Empty string until the worker fills it.
+    summary: str = ""
     classification: str = ""  # tactical | foundational | strategic
     recorded_at: str = ""  # ISO datetime
     outcomes: list[dict] = field(default_factory=list)
