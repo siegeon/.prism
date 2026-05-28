@@ -2571,6 +2571,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 depth=max(0, min(int(arguments.get("depth", 1)), 3)),
                 seed_files=arguments.get("seed_files") or None,
                 label=arguments.get("label"),
+                domain=arguments.get("domain") or None,
             )
             return [TextContent(type="text", text=_json(payload))]
 

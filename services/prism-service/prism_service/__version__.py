@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.17"
+PRISM_VERSION = "6.2.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.0: ONE Brain. Explore + Brain + Graph collapse into a single "
+    "/brain surface — the one place to explore the knowledge: code "
+    "connections (the Sigma graph), search over structured AND unstructured "
+    "knowledge (code, docs, comments, expertise via a domain filter), and "
+    "the context bundle as the spine. /graph and /explore now redirect to "
+    "/brain; sidebar Knowledge = Brain · Understand · Memory. Understand "
+    "stays its own surface (it derives structure/domain from the repo and "
+    "feeds the Brain). Folded in from the old pages: domain filter "
+    "(all/py/ts/md/expertise) wired through build_understanding -> "
+    "brain.search(domain=...) -> POST /api/brain/understand + "
+    "brain_understand tool; Reindex/Rebuild/Enrich controls. Page is now a "
+    "full-height flex column so it fits one screen (canvas fills available "
+    "space; panels in a bounded scroll strip). NOT folded yet: the Ask "
+    "Claude Q&A from old /brain (deferred — flag, not dropped).\n\n"
     "v6.1.17: /explore graph canvas shortened (clamp 70vh/900px -> "
     "52vh/640px) so the ranked dropdown, clusters-in-view, subgraph, and "
     "context panels fit without so much scrolling. Pairs with the v6.1.16 "

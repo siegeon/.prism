@@ -98,6 +98,7 @@ def build_understanding(
     depth: int = 1,
     seed_files: Optional[list[str]] = None,
     label: Optional[str] = None,
+    domain: Optional[str] = None,
 ) -> dict:
     """Build the unified understand payload for `project`.
 
@@ -123,7 +124,8 @@ def build_understanding(
     q = (query or "").strip()
     if not q:
         return _overview(graph, communities, central_all, limit)
-    return _focus(brain, graph, communities, central_all, q, limit, depth)
+    return _focus(brain, graph, communities, central_all, q, limit, depth,
+                  domain=domain)
 
 
 def _overview(graph, communities, central_all, limit: int) -> dict:
@@ -191,10 +193,14 @@ def _overview(graph, communities, central_all, limit: int) -> dict:
 
 
 def _focus(brain, graph, communities, central_all, q: str,
-           limit: int, depth: int) -> dict:
+           limit: int, depth: int, domain: Optional[str] = None) -> dict:
     """Typed-query view: Brain search is the ranked lens, its hit files +
-    1-hop neighbors are the subgraph, top hits carry context bundles."""
-    hits = brain.search(q, limit=limit) or []
+    1-hop neighbors are the subgraph, top hits carry context bundles.
+
+    `domain` filters the search to one slice of the brain — e.g. 'expertise'
+    or 'md' to reach the unstructured domain knowledge / docs / comments,
+    not just code."""
+    hits = brain.search(q, domain=domain, limit=limit) or []
     ranked: list[dict] = []
     seed_files: list[str] = []
     seen_files: set[str] = set()

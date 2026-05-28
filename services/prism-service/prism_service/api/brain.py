@@ -63,6 +63,9 @@ class UnderstandBody(BaseModel):
     # drive a focus payload seeded by them (label is the cluster name).
     seed_files: list[str] | None = None
     label: str | None = None
+    # Filter the search to one slice of the brain (e.g. 'expertise', 'md')
+    # to reach unstructured domain knowledge / docs, not just code.
+    domain: str | None = None
 
 
 @router.post("/understand")
@@ -81,6 +84,7 @@ def understand(body: UnderstandBody) -> dict:
             depth=max(0, min(int(body.depth), 3)),
             seed_files=body.seed_files or None,
             label=body.label,
+            domain=(body.domain or None),
         )
     except Exception as exc:  # unknown project, empty graph, etc.
         raise HTTPException(404, f"understand failed for '{body.project}': {exc}")

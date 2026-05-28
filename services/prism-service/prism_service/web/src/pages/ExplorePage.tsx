@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X } from "lucide-react";
+import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
+import { Card, Empty, ErrorBanner, Pill, SectionLabel, toneFromLabel } from "@/components/ui";
 import { communityColor, hexToRgba } from "@/lib/palette";
 import { cn } from "@/lib/utils";
+
+// The brain holds more than code: docs, comments, expertise/domain notes.
+// The domain filter slices the search to those — "expertise"/"md" reach the
+// unstructured knowledge the graph canvas alone doesn't show.
+const DOMAINS = ["all", "py", "ts", "md", "expertise"];
 
 // --- Ultimate Graph merge (siegeon/.prism#50, slice 4+5) -------------------
 // One page, ONE WebGL canvas as the centerpiece (the tuned, animated,
@@ -56,6 +61,8 @@ export default function ExplorePage() {
   // own legend (same enriched names/colors/counts) so the panel below is
   // never out of sync with what's actually in view.
   const [inView, setInView] = useState<{ level: number; levelName: string; items: { label: string; color: string; count: number }[] } | null>(null);
+  const [domain, setDomain] = useState("all");
+  const [busy, setBusy] = useState<string | null>(null);  // which control is running
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
@@ -66,9 +73,9 @@ export default function ExplorePage() {
     win.postMessage(files.length ? { type: "prism:search", files } : { type: "prism:clear" }, "*");
   }, []);
 
-  const run = useCallback((q: string) => {
+  const run = useCallback((q: string, dom: string = domain) => {
     setLoading(true); setError(null);
-    api.post<Understanding>("/api/brain/understand", { project, query: q, limit: 20, depth: 1 })
+    api.post<Understanding>("/api/brain/understand", { project, query: q, limit: 20, depth: 1, domain: dom === "all" ? null : dom })
       .then((d) => {
         setData(d);
         setSelected(d.context[0]?.file ?? null);
@@ -80,7 +87,17 @@ export default function ExplorePage() {
       })
       .catch((e) => { setData(null); setError(String(e?.message || e)); })
       .finally(() => setLoading(false));
-  }, [project, postToViewer]);
+  }, [project, postToViewer, domain]);
+
+  // Reindex Brain / Rebuild graph / Enrich clusters — the maintenance
+  // actions folded in from the old Brain + Graph pages, kept compact.
+  const runControl = useCallback((which: string, url: string) => {
+    setBusy(which); setError(null);
+    api.post(url, {})
+      .then(() => run(input.trim()))
+      .catch((e) => setError(String(e?.message || e)))
+      .finally(() => setBusy(null));
+  }, [run, input]);
 
   // Click-through FROM the canvas: a cluster / super-node / node was
   // clicked in the viewer; load the full Understand payload for its files.
@@ -134,8 +151,8 @@ export default function ExplorePage() {
   };
 
   return (
-    <Page>
-      <div className="relative">
+    <div className="h-full flex flex-col gap-3 px-5 py-4 min-w-[720px]">
+      <div className="relative shrink-0">
         <form onSubmit={submit} className="flex items-stretch gap-2">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
@@ -179,8 +196,24 @@ export default function ExplorePage() {
         )}
       </div>
 
+      {/* Domain filter (reach the brain's unstructured knowledge: docs,
+          comments, expertise) + maintenance controls folded from the old
+          Brain/Graph pages. */}
+      <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <span className="text-[10px] uppercase tracking-wider opacity-40 mr-1">domain</span>
+        {DOMAINS.map((d) => (
+          <Pill key={d} active={domain === d} tone={toneFromLabel(d)}
+            onClick={() => { setDomain(d); run(input.trim(), d); }}>{d}</Pill>
+        ))}
+        <div className="ml-auto flex items-center gap-1.5">
+          <Ctl label="Reindex" running={busy === "reindex"} onClick={() => runControl("reindex", `/api/brain/reindex?project=${project}`)} />
+          <Ctl label="Rebuild" running={busy === "rebuild"} onClick={() => runControl("rebuild", `/api/graph/rebuild?project=${project}`)} />
+          <Ctl label="Enrich" running={busy === "enrich"} onClick={() => runControl("enrich", `/api/graph/enrich?project=${project}`)} />
+        </div>
+      </div>
+
       {/* Compact stat strip — one line, no big boxes hogging vertical space */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs shrink-0">
         <span className="uppercase tracking-wider px-2 py-0.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]">
           {data ? data.mode : "—"}
         </span>
@@ -194,11 +227,12 @@ export default function ExplorePage() {
         </span>
       </div>
 
-      {error && <ErrorBanner>{error}</ErrorBanner>}
+      {error && <div className="shrink-0"><ErrorBanner>{error}</ErrorBanner></div>}
 
-      {/* CENTERPIECE — the one WebGL canvas, full width, steered by search */}
-      <Card className="!p-0 overflow-hidden">
-        <div className="px-5 pt-5 flex items-center gap-2">
+      {/* CENTERPIECE — the WebGL canvas fills the available height so the
+          page fits one screen; the panels sit in a bounded strip below. */}
+      <Card className="!p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
+        <div className="px-5 pt-3 pb-2 flex items-center gap-2 shrink-0">
           <Network className="w-4 h-4 opacity-60" />
           <SectionLabel>Graph</SectionLabel>
           <span className="text-xs opacity-50 ml-1">
@@ -211,17 +245,18 @@ export default function ExplorePage() {
           <iframe
             ref={iframeRef}
             src={viewerUrl}
-            className="w-full border-0 rounded-b-md mt-3"
-            style={{ height: "clamp(360px, 52vh, 640px)", background: "#0f0f1a" }}
+            className="w-full flex-1 min-h-0 border-0 rounded-b-md"
+            style={{ background: "#0f0f1a" }}
           />
         ) : (
-          <div className="px-5 pb-5 mt-3"><Empty>No graph yet — rebuild on /graph.</Empty></div>
+          <div className="px-5 pb-5"><Empty>No graph yet — rebuild on /graph.</Empty></div>
         )}
       </Card>
 
-      {/* Below the graph: clickable values on the LEFT, the result pinned
-          on the RIGHT (sticky) so clicking never sends you scrolling. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start">
+      {/* Panels in a bounded strip that scrolls internally — keeps the
+          whole page on one screen. Clickable values left, context right. */}
+      <div className="shrink-0 overflow-y-auto grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start"
+           style={{ maxHeight: "32vh" }}>
         <div className="space-y-4 min-w-0">
           {inView && inView.items.length > 0 && (
             <Card className="!p-5">
@@ -247,12 +282,12 @@ export default function ExplorePage() {
           )}
         </div>
 
-        {/* RESULT — pinned in view while you click around on the left */}
-        <div className="lg:sticky lg:top-4 min-w-0">
+        {/* RESULT — context for whatever you click on the left */}
+        <div className="min-w-0">
           <ContextRail sel={sel} selected={selected} mode={data?.mode} />
         </div>
       </div>
-    </Page>
+    </div>
   );
 }
 
@@ -415,6 +450,13 @@ function ContextRail({ sel, selected, mode }: { sel?: Ctx; selected: string | nu
   );
 }
 
+const Ctl = ({ label, running, onClick }: { label: string; running: boolean; onClick: () => void }) => (
+  <button onClick={onClick} disabled={running}
+    className="inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-[11px] uppercase tracking-wider disabled:opacity-50">
+    <RefreshCw className={cn("w-3 h-3", running && "animate-spin")} />
+    {running ? "…" : label}
+  </button>
+);
 const Stat = ({ label, v }: { label: string; v?: number }) => (
   <span className="flex items-baseline gap-1">
     <span className="font-mono tabular-nums text-[color:var(--text-primary)]">{v ?? "—"}</span>

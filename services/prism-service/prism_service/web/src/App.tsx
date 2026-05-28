@@ -1,12 +1,12 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
-import BrainPage from "@/pages/BrainPage";
 import DashboardPage from "@/pages/DashboardPage";
+// The unified Brain surface (graph connections + search + context bundle).
+// Lives in ExplorePage.tsx; it replaced the old separate Brain + Graph pages.
 import ExplorePage from "@/pages/ExplorePage";
-import GraphPage from "@/pages/GraphPage";
 import MemoryPage from "@/pages/MemoryPage";
 import MemoryDetailPage from "@/pages/MemoryDetailPage";
 import TasksPage from "@/pages/TasksPage";
@@ -30,9 +30,11 @@ export default function App() {
         <div className="flex-1 overflow-y-auto">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/brain" element={<BrainPage />} />
-            <Route path="/explore" element={<ExplorePage />} />
-            <Route path="/graph" element={<GraphPage />} />
+            {/* Brain = the one place to explore the knowledge. /graph and
+                the old /explore redirect here so nothing breaks. */}
+            <Route path="/brain" element={<ExplorePage />} />
+            <Route path="/explore" element={<Navigate to="/brain" replace />} />
+            <Route path="/graph" element={<Navigate to="/brain" replace />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/memory/:id" element={<MemoryDetailPage />} />
             <Route path="/tasks" element={<TasksPage />} />
