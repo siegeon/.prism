@@ -234,6 +234,12 @@ async def lifespan(_app: FastAPI):
             start_memory_summary_worker,
         )
         start_memory_summary_worker()
+
+        # Ultimate Graph narrative layer (#50) — names the code hierarchy
+        # (domain/service/module) with inference, escaping scopes whose
+        # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
+        from prism_service.services.graph_enrich import start_graph_enrich_worker
+        start_graph_enrich_worker()
     except Exception as e:
         print(f"Startup error: {e}", file=_sys.stderr, flush=True)
     yield

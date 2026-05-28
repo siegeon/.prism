@@ -134,6 +134,34 @@ def _graph_schema_migrations(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
 
+    # Ultimate Graph narrative layer (siegeon/.prism#50, slices 1/2/6).
+    # LLM-derived annotations on graph scopes (a hierarchy node or a
+    # community), kept SEPARATE from the deterministic structure so the
+    # narrative can never overwrite structural truth. input_hash is the
+    # idempotency / escape key: a background enrich job recomputes the
+    # hash of a scope's inputs (its member files) and skips ('escapes')
+    # when it matches the stored one — only changed scopes get re-inferred.
+    # provenance records who wrote it ('deterministic' / 'claude-...' /
+    # 'human'). UNIQUE(scope_kind, scope_id, task) = one current annotation
+    # per scope+task; re-enrichment overwrites in place.
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS graph_annotations ("
+            "  scope_kind TEXT NOT NULL,"     # 'hierarchy' | 'community'
+            "  scope_id   TEXT NOT NULL,"     # l-path key, or community id
+            "  task       TEXT NOT NULL,"     # 'name' | 'purpose' | 'audit' ...
+            "  name       TEXT,"
+            "  purpose    TEXT,"
+            "  input_hash TEXT,"
+            "  provenance TEXT,"
+            "  updated_at TEXT,"
+            "  PRIMARY KEY (scope_kind, scope_id, task)"
+            ")"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     # index on graphify_id for fast upsert
     try:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ent_graphify_id "
@@ -1154,6 +1182,82 @@ class GraphService:
         for f, (_c, comm) in best.items():
             out[f] = comm
         return out
+
+    # ----- Narrative layer: graph_annotations (Ultimate Graph) ---------
+    def get_annotation(self, scope_kind: str, scope_id: str,
+                       task: str = "name") -> Optional[dict]:
+        """Current annotation for a scope+task, or None. Callers use the
+        returned input_hash to decide whether to re-enrich ('escape' when
+        it still matches the live inputs)."""
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return None
+        try:
+            r = conn.execute(
+                "SELECT name, purpose, input_hash, provenance, updated_at "
+                "FROM graph_annotations WHERE scope_kind=? AND scope_id=? AND task=?",
+                (scope_kind, str(scope_id), task),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            conn.close()
+            return None
+        conn.close()
+        if not r:
+            return None
+        return {"name": r["name"], "purpose": r["purpose"],
+                "input_hash": r["input_hash"], "provenance": r["provenance"],
+                "updated_at": r["updated_at"]}
+
+    def upsert_annotation(self, scope_kind: str, scope_id: str, task: str,
+                          name: str, purpose: str, input_hash: str,
+                          provenance: str) -> bool:
+        """Write/replace the current annotation for a scope+task."""
+        from datetime import datetime, timezone
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+        except sqlite3.Error:
+            return False
+        try:
+            conn.execute(
+                "INSERT INTO graph_annotations "
+                "(scope_kind, scope_id, task, name, purpose, input_hash, "
+                " provenance, updated_at) VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(scope_kind, scope_id, task) DO UPDATE SET "
+                "  name=excluded.name, purpose=excluded.purpose, "
+                "  input_hash=excluded.input_hash, "
+                "  provenance=excluded.provenance, updated_at=excluded.updated_at",
+                (scope_kind, str(scope_id), task, name, purpose, input_hash,
+                 provenance, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.close()
+            return False
+        conn.close()
+        return True
+
+    def annotations_for(self, scope_kind: str, task: str = "name") -> dict:
+        """All current annotations of a kind+task as {scope_id: {...}}."""
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return {}
+        try:
+            rows = conn.execute(
+                "SELECT scope_id, name, purpose, provenance, updated_at "
+                "FROM graph_annotations WHERE scope_kind=? AND task=?",
+                (scope_kind, task),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            conn.close()
+            return {}
+        conn.close()
+        return {r["scope_id"]: {"name": r["name"], "purpose": r["purpose"],
+                                "provenance": r["provenance"],
+                                "updated_at": r["updated_at"]} for r in rows}
 
     def file_detail(self, path: str) -> dict:
         """Per-file detail for the layer drill's right-panel.

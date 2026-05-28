@@ -294,6 +294,10 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       const clusterLabel = community =>
         commLabelsMap.get(community) || commLabelsMap.get(String(community))
         || "unlabeled cluster";
+      // Enriched per-hierarchy-node names (LLM, from graph_annotations).
+      // Keyed by the same l0/l1/l2 path key buildSupers groups on, so a
+      // super-node prefers its real name over the path-derived mash-up.
+      const hierLabels = data.hierarchy_labels || {};
       // Track which abstraction level the camera ratio currently maps to.
       // Declared up here so the Sigma reducer closure (built farther down)
       // captures the live binding.
@@ -563,7 +567,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
             : key.startsWith("comm:")
               ? (clusterLabel(Number(key.slice(5))) || ("cluster " + key.slice(5)))
               : (key.split("/").pop() || key);
-          const labelText = (() => {
+          const labelText = hierLabels[key] || (() => {
             const dot = rawLabel.indexOf(" · ");
             return dot > 0 ? rawLabel.substring(0, dot) : rawLabel;
           })();
@@ -1769,10 +1773,27 @@ def _graphify_hierarchy(project_id: str):
         except sqlite3.Error:
             pass
 
+    # Ultimate Graph narrative layer: enriched per-hierarchy-node names
+    # ({l-path key: "Human Name"}) written by the background enrich worker.
+    # The viewer prefers these over the path-derived super-node labels, so
+    # domains/services/modules read as real names instead of path mash-ups.
+    hierarchy_labels: dict = {}
+    hierarchy_purposes: dict = {}
+    try:
+        for key, ann in ctx.graph_svc.annotations_for("hierarchy", "name").items():
+            if ann.get("name"):
+                hierarchy_labels[key] = ann["name"]
+            if ann.get("purpose"):
+                hierarchy_purposes[key] = ann["purpose"]
+    except Exception:
+        pass
+
     return JSONResponse({
         "nodes": out_nodes,
         "edges": raw_edges,
         "community_labels": comm_labels,
+        "hierarchy_labels": hierarchy_labels,
+        "hierarchy_purposes": hierarchy_purposes,
     })
 
 

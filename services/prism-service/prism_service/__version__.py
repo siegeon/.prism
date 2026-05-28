@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.11"
+PRISM_VERSION = "6.1.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.12: Ultimate Graph narrative layer — clusters named by inference, "
+    "not string-stitching (#50, slices 1/2/6). New graph_annotations table "
+    "(scope_kind/scope_id/task, name, purpose, input_hash, provenance) keeps "
+    "LLM narrative SEPARATE from structural truth. New "
+    "services/graph_enrich.py walks the code's own hierarchy (domain → "
+    "service → module via compute_node_hierarchy), and for each changed "
+    "scope asks `claude -p` for a short name + one-line purpose. ESCAPE "
+    "WHEN UNCHANGED: each scope's member files hash to input_hash; a scope "
+    "whose hash matches its stored annotation is skipped, so a steady graph "
+    "does zero inference. Background worker (PRISM_GRAPH_ENRICH_WORKER, "
+    "default on; mirrors memory_summary_worker) + manual POST "
+    "/api/graph/enrich + GET /api/graph/enrich/status. The Sigma viewer's "
+    "hierarchy.json now serves hierarchy_labels/hierarchy_purposes and the "
+    "super-node labels prefer them — so domains/services/modules read as "
+    "'PRISM Service Backend' / 'Web SPA Frontend' / 'Unit Test Suite' "
+    "instead of 'prism service prism service'. Provenance stamped "
+    "('claude @ <date>'); structure layer untouched.\n\n"
     "v6.1.11: /explore usability — (1) ONE color domain. The viewer's "
     "Clusters legend and the Understand community/subgraph chips now share "
     "the exact community->color mapping: new COMMUNITY_HEX + "
