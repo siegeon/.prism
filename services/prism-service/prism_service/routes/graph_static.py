@@ -833,6 +833,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       // focus toggleable with one click-stage.
       let focusedNode = null;
       let neighborSet = new Set();
+      // Search-driven highlight set (PRISM /explore merge). When the
+      // /explore page posts a matched file set, searchSet holds the
+      // matching leaf node ids; the reducers below light those and dim
+      // everything else. null = no active search (normal LOD behavior).
+      let searchSet = null;
       // Hover state: the hovered node grows 30% and its immediate
       // graph-space neighborhood is pushed radially outward to "make
       // space" visually. Push applied inside the node reducer on each
@@ -948,6 +953,19 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         defaultDrawNodeLabel: drawNodeLabel,
         defaultDrawNodeHover: drawNodeHover,
         nodeReducer: (node, data) => {
+          // Search highlight overrides LOD: matched leaves stay lit (and
+          // visible at any zoom band), everything else fades to a faint
+          // backdrop so the matched subgraph reads. Community color is
+          // preserved on the matches via data.color.
+          if (searchSet) {
+            if (searchSet.has(node)) {
+              return { ...data, hidden: false, forceLabel: true,
+                       zIndex: 5, size: (data.size || 3) * 1.9 };
+            }
+            return { ...data, hidden: false, label: "", zIndex: 0,
+                     color: "rgba(42,44,64,0.16)",
+                     size: (data.size || 3) * 0.55 };
+          }
           // Smooth LOD blend — alpha is interpolated through level
           // boundaries (smoothstep) so wheeling produces a continuous
           // crossfade between adjacent layers rather than a snap.
@@ -1014,6 +1032,18 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           return out;
         },
         edgeReducer: (edge, data) => {
+          // Search highlight: brighten edges inside the matched
+          // subgraph, hide the rest, so the connections between matches
+          // pop against the dimmed backdrop.
+          if (searchSet) {
+            const xt = g.extremities(edge);
+            if (searchSet.has(xt[0]) && searchSet.has(xt[1])) {
+              return { ...data, hidden: false, zIndex: 3,
+                       color: "rgba(150,180,255,0.9)",
+                       size: (data.size || 1) * 1.6 };
+            }
+            return { ...data, hidden: true };
+          }
           // Same smoothstep crossfade as nodes so super-edges fade
           // alongside super-nodes through the threshold.
           const a = smoothAlphas()[data.level];
@@ -1284,6 +1314,66 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           startPhysics();
         }
       });
+
+      // ----- External search drive (PRISM /explore merge) -----------
+      // The /explore page posts the file set its query matched; we light
+      // those leaves in-canvas, dim the rest, and fly the camera to fit.
+      // Same WebGL view, search just steers it — no second rendering
+      // path, community colors stay consistent.
+      let searchActive = false;
+      const _normPath = (p) => (p || "").replace(/\\\\/g, "/").toLowerCase();
+      function fitToNodes(ids) {
+        if (!ids.length) return;
+        let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+        for (const id of ids) {
+          const a = g.getNodeAttributes(id);
+          if (a.x < minx) minx = a.x;
+          if (a.y < miny) miny = a.y;
+          if (a.x > maxx) maxx = a.x;
+          if (a.y > maxy) maxy = a.y;
+        }
+        const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+        const t = renderer.normalizationFunction({ x: cx, y: cy });
+        const span = Math.max(maxx - minx, maxy - miny, 1);
+        const ratio = Math.max(0.08, Math.min(0.7, span / 35));
+        camera.animate({ x: t.x, y: t.y, ratio }, { duration: 650 });
+      }
+      function applySearch(files) {
+        const want = new Set((files || []).map(_normPath));
+        const ids = [];
+        g.forEachNode((id, a) => {
+          if (a.level === 3 && want.has(_normPath(a.source_file))) ids.push(id);
+        });
+        searchSet = ids.length ? new Set(ids) : null;
+        searchActive = true;
+        focusedNode = null; neighborSet = new Set(); focusPath = [];
+        if (currentLevel !== 3) setLevel(3);
+        statusEl.textContent = searchSet
+          ? `search · ${ids.length.toLocaleString()} matching symbols highlighted`
+          : "search · no symbols in this graph matched the query";
+        renderer.refresh();
+        if (searchSet) fitToNodes(ids);
+      }
+      function clearSearch() {
+        if (!searchActive && !searchSet) return;
+        searchSet = null; searchActive = false;
+        focusedNode = null; neighborSet = new Set(); focusPath = [];
+        if (currentLevel !== 0) setLevel(0);
+        camera.animatedReset({ duration: 450 });
+        renderer.refresh();
+      }
+      window.addEventListener("message", (ev) => {
+        const m = ev.data || {};
+        if (m && m.type === "prism:search") applySearch(m.files);
+        else if (m && m.type === "prism:clear") clearSearch();
+      });
+      // Tell the parent we're ready so it can (re)send the active query
+      // once the graph has finished building.
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: "prism:viewer-ready" }, "*");
+        }
+      } catch (e) { /* not embedded */ }
 
       // --- Legend / categories sidebar ----------------------------
       // Level-aware: at L0/L1/L2 it lists super-nodes ranked by member
