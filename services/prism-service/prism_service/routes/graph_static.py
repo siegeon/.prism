@@ -1374,6 +1374,18 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         const m = ev.data || {};
         if (m && m.type === "prism:search") applySearch(m.files);
         else if (m && m.type === "prism:clear") clearSearch();
+        else if (m && m.type === "prism:drill") {
+          // Quick-filter from a panel chip: bring that cluster to the top
+          // of its domain — drill the super-node (centers + dims siblings),
+          // or highlight a leaf community's files.
+          if (m.kind === "super" && m.id && g.hasNode(m.id)) {
+            drillIntoSuperNode(m.id);  // also emits prism:explore back up
+          } else if (m.kind === "community" && m.cid !== undefined && m.cid !== null) {
+            const files = leafFilesInCommunity(m.cid);
+            applySearch(files);
+            emitExplore(m.label || ("cluster " + m.cid), files);
+          }
+        }
       });
       // Tell the parent we're ready so it can (re)send the active query
       // once the graph has finished building.
@@ -1527,6 +1539,9 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
                 label: truncateLabel(it.label),
                 color: it.color,
                 count: it.count,
+                kind: it.kind,      // 'super' | 'community'
+                id: it.id,          // super-node id (drillable)
+                cid: it.cid,        // community id (L3)
               })),
             }, "*");
           }

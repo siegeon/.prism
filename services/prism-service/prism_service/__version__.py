@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.0"
+PRISM_VERSION = "6.2.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.1: Brain — the 'domains in view' chips are now a quick filter "
+    "INTO the graph. Clicking one drills the canvas to that cluster (top of "
+    "its domain, siblings dimmed) and refills the panels. The viewer's "
+    "prism:clusters message now carries each cluster's id/kind/cid; a new "
+    "prism:drill handler drills the super-node (drillIntoSuperNode, which "
+    "also posts members back up) or highlights a leaf community's files. "
+    "Panel chips became buttons.\n\n"
     "v6.2.0: ONE Brain. Explore + Brain + Graph collapse into a single "
     "/brain surface — the one place to explore the knowledge: code "
     "connections (the Sigma graph), search over structured AND unstructured "

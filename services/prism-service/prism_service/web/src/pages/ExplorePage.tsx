@@ -26,6 +26,9 @@ type Ranked = {
 type GNode = { id: string; label: string; kind: string; community?: number | null; centrality?: number; seed?: boolean };
 type GEdge = { from: string; to: string; weight: number };
 type Community = { id: number; label: string; size: number; summary: string; top_files: string[]; top_entities: string[] };
+// A cluster in the canvas legend, mirrored into the panel. Carries the
+// viewer's node id so clicking the panel chip can drill the canvas to it.
+type ClusterItem = { label: string; color: string; count: number; kind?: string; id?: string; cid?: number };
 type Ctx = {
   entity_id: string; file: string; community?: number | null;
   outline: { name: string; kind: string; line?: number | null }[];
@@ -60,7 +63,7 @@ export default function ExplorePage() {
   // The clusters currently on the canvas, mirrored up from the viewer's
   // own legend (same enriched names/colors/counts) so the panel below is
   // never out of sync with what's actually in view.
-  const [inView, setInView] = useState<{ level: number; levelName: string; items: { label: string; color: string; count: number }[] } | null>(null);
+  const [inView, setInView] = useState<{ level: number; levelName: string; items: ClusterItem[] } | null>(null);
   const [domain, setDomain] = useState("all");
   const [busy, setBusy] = useState<string | null>(null);  // which control is running
 
@@ -148,6 +151,14 @@ export default function ExplorePage() {
     setSelected(file);
     setResultsOpen(false);
     postToViewer([file]);
+  };
+
+  // Quick-filter from a "domains in view" chip: drill the canvas to that
+  // cluster (top of its domain, siblings dimmed). The viewer drills + posts
+  // its members back up, which refills the panels.
+  const drillCluster = (it: ClusterItem) => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "prism:drill", kind: it.kind, id: it.id, cid: it.cid, label: it.label }, "*");
   };
 
   return (
@@ -262,16 +273,17 @@ export default function ExplorePage() {
             <Card className="!p-5">
               <SectionLabel>{inView.levelName} in view · {inView.items.length}</SectionLabel>
               <div className="text-xs opacity-60 mb-2">
-                Exactly the clusters on the canvas right now — scroll/drill the graph to change this set.
+                Click a cluster to drill the graph to it — top of its domain, the rest dimmed.
               </div>
               <div className="flex flex-wrap gap-2">
                 {inView.items.map((it, i) => (
-                  <span key={it.label + i} title={it.label}
-                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border"
+                  <button key={it.label + i} title={`Drill into ${it.label}`}
+                    onClick={() => drillCluster(it)}
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border transition-colors hover:brightness-125"
                     style={{ borderColor: hexToRgba(it.color, 0.5), background: hexToRgba(it.color, 0.1) }}>
                     <span className="w-2 h-2 rounded-full" style={{ background: it.color }} />
                     {it.label} <span className="opacity-50">· {it.count}</span>
-                  </span>
+                  </button>
                 ))}
               </div>
             </Card>
