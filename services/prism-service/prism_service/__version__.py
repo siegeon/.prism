@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.3"
+PRISM_VERSION = "6.1.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.4: fix Tauri shell splash hang on cold-launch. The standalone "
+    "GUI was sitting at \"Starting backend…\" until its 30s timeout "
+    "because the backend served /api/version with no "
+    "Access-Control-Allow-Origin header — the webview origin "
+    "(tauri://localhost on Mac/Linux, http(s)://tauri.localhost on "
+    "Windows WebView2) is cross-origin, so the browser dropped the "
+    "response body and the splash never resolved. Added CORSMiddleware "
+    "in prism_service/main.py scoped to the Tauri origins (single "
+    "allow_origin_regex covers all three forms), allow_methods=['*'] so "
+    "the OPTIONS preflight stops returning 405. Same fix unblocks the "
+    "cross-origin /sse/sessions stream the SPA consumes once the splash "
+    "is past. Pinned by tests/unit/test_main_cors_headers.py — 6 cases "
+    "across {GET, OPTIONS preflight} × {tauri://localhost, "
+    "http://tauri.localhost, https://tauri.localhost}. Closes #88.\n\n"
     "v6.1.3: /conductor swimlanes no longer accumulate shipped work. "
     "ConductorService.managed_tasks() + step_buckets() now filter out "
     "status=done — on the prism dev instance, 14 of 15 visible lane "

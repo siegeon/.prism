@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -240,6 +241,19 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="PRISM Service", lifespan=lifespan)
+
+# The standalone Tauri shell loads its splash from a tauri:// origin and
+# polls /api/version cross-origin. Without these headers the webview sends
+# the request (server logs it, returns 200) but the browser silently drops
+# the response body — splash hangs at "Starting backend…" for 30s and
+# falls through to a misleading "install via pipx" error (issue #88).
+# Loopback-only socket so no allow_credentials needed.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^(tauri://localhost|https?://tauri\.localhost)$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # JSON API for the SPA + non-API routes (SSE, graph viewer).
 from prism_service.api import api_router
