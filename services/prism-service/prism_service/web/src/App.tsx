@@ -5,6 +5,7 @@ import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
 import BrainPage from "@/pages/BrainPage";
 import DashboardPage from "@/pages/DashboardPage";
+import ExplorePage from "@/pages/ExplorePage";
 import GraphPage from "@/pages/GraphPage";
 import MemoryPage from "@/pages/MemoryPage";
 import MemoryDetailPage from "@/pages/MemoryDetailPage";
@@ -30,6 +31,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/brain" element={<BrainPage />} />
+            <Route path="/explore" element={<ExplorePage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/memory/:id" element={<MemoryDetailPage />} />

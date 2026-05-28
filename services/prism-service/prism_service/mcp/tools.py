@@ -86,6 +86,46 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="brain_understand",
+        description=(
+            "Ultimate Graph merge — ONE retrieval that fuses Brain search "
+            "and the code graph into a single ranked, graph-aware view "
+            "(siegeon/.prism#50). Prefer this over chaining brain_search + "
+            "brain_find_references + brain_call_chain when you want to "
+            "understand an area of the codebase: it returns the ranked hits "
+            "AND their 1-hop neighbor subgraph AND a per-file context bundle "
+            "(outline, callers, callees, matched chunks) in one call. Empty "
+            "query = whole-graph overview ranked by PageRank centrality; "
+            "typed query = focused subgraph around the matches. Shape: "
+            "{ mode, nodes[], edges[], communities[], ranked[{entity_id, "
+            "score, why}], context[{file, outline, references, call_chain, "
+            "chunks, annotations}], open_questions[], layout_hint }. All "
+            "structural data carries provenance='deterministic'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to understand. Omit/empty for a "
+                    "whole-graph overview ranked by centrality.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max ranked hits / hubs (1-200)",
+                    "default": 20,
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Neighbor hops to pull into the subgraph "
+                    "(0-3). 1 = direct callers/callees.",
+                    "default": 1,
+                },
+            },
+            "required": [],
+        },
+    ),
+    Tool(
         name="brain_search_feedback",
         description=(
             "Record thumbs-up (signal='up') or thumbs-down (signal='down') "
@@ -1164,6 +1204,7 @@ TOOLS: list[Tool] = [
 
 INTERACTIVE_TOOL_NAMES: set[str] = {
     "brain_search",
+    "brain_understand",
     "brain_find_symbol",
     "brain_outline",
     "brain_find_references",
@@ -2508,6 +2549,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 domains=arguments.get("domains"),
             )
             return [TextContent(type="text", text=_json(results))]
+
+        if name == "brain_understand":
+            from prism_service.services import understand_view
+            payload = understand_view.build_understanding(
+                project_id,
+                arguments.get("query"),
+                limit=max(1, min(int(arguments.get("limit", 20)), 200)),
+                depth=max(0, min(int(arguments.get("depth", 1)), 3)),
+            )
+            return [TextContent(type="text", text=_json(payload))]
 
         if name == "brain_index_doc":
             path = arguments["path"]

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Activity, AppWindow, BookOpen, Brain, Eye, FolderTree, Info,
+  Activity, AppWindow, BookOpen, Brain, Compass, Eye, FolderTree, Info,
   Layers, LayoutDashboard, ListChecks, MessageSquare, Network, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
@@ -43,6 +43,10 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Knowledge",
     items: [
+      // Ultimate Graph merge (siegeon/.prism#50) — the unified search +
+      // graph lens. Prototype lives alongside Brain/Graph; replacing them
+      // is a later decision (see issue open questions).
+      { to: "/explore", label: "Explore", icon: Compass, staleKey: "graph" },
       { to: "/brain", label: "Brain", icon: Brain, staleKey: "brain" },
       { to: "/graph", label: "Graph", icon: Network, staleKey: "graph" },
       { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
