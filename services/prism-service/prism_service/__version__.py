@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.4"
+PRISM_VERSION = "6.1.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.5: Ultimate Graph slice 3 — PageRank centrality persisted on "
+    "entities at graph_rebuild. New _compute_pagerank() in "
+    "prism_service/services/graph_service.py runs a pure-Python power "
+    "iteration over (nodes, links) with damping=0.85, n_iter=30, "
+    "redistributing dangling-node mass uniformly so total stays 1.0 — "
+    "no new dep, networkx would be overkill for entity tables bounded "
+    "by repo size (typically <10k nodes). Schema migration adds "
+    "`centrality REAL DEFAULT 0` to entities + descending partial "
+    "index for cheap top-N reads. _import_graph_json now UPDATEs the "
+    "score on every rebuild, alongside the existing community pass. "
+    "New GraphService.top_central_entities() + GET /api/graph/central "
+    "expose the ranked list. /graph page gains a 'Top hubs by "
+    "PageRank' card under the Sigma viewer. First piece of the "
+    "Ultimate Graph epic (siegeon/.prism#50) — slices 1,2,4,5,6 "
+    "(annotation schema, graph_annotate/graph_jobs MCP tools, "
+    "/api/understand contract, /understand page, background enrichment "
+    "loop) follow on subsequent patches. Tests at "
+    "tests/unit/test_graph_pagerank.py — 5 cases covering ordering, "
+    "empty graphs, all-dangling, schema migration idempotency, and "
+    "top_central_entities desc ordering.\n\n"
     "v6.1.4: fix Tauri shell splash hang on cold-launch. The standalone "
     "GUI was sitting at \"Starting backend…\" until its 30s timeout "
     "because the backend served /api/version with no "
