@@ -294,6 +294,10 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       const clusterLabel = community =>
         commLabelsMap.get(community) || commLabelsMap.get(String(community))
         || "unlabeled cluster";
+      // Enriched per-hierarchy-node names (LLM, from graph_annotations).
+      // Keyed by the same l0/l1/l2 path key buildSupers groups on, so a
+      // super-node prefers its real name over the path-derived mash-up.
+      const hierLabels = data.hierarchy_labels || {};
       // Track which abstraction level the camera ratio currently maps to.
       // Declared up here so the Sigma reducer closure (built farther down)
       // captures the live binding.
@@ -563,7 +567,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
             : key.startsWith("comm:")
               ? (clusterLabel(Number(key.slice(5))) || ("cluster " + key.slice(5)))
               : (key.split("/").pop() || key);
-          const labelText = (() => {
+          const labelText = hierLabels[key] || (() => {
             const dot = rawLabel.indexOf(" · ");
             return dot > 0 ? rawLabel.substring(0, dot) : rawLabel;
           })();
@@ -833,6 +837,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       // focus toggleable with one click-stage.
       let focusedNode = null;
       let neighborSet = new Set();
+      // Search-driven highlight set (PRISM /explore merge). When the
+      // /explore page posts a matched file set, searchSet holds the
+      // matching leaf node ids; the reducers below light those and dim
+      // everything else. null = no active search (normal LOD behavior).
+      let searchSet = null;
       // Hover state: the hovered node grows 30% and its immediate
       // graph-space neighborhood is pushed radially outward to "make
       // space" visually. Push applied inside the node reducer on each
@@ -948,6 +957,19 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         defaultDrawNodeLabel: drawNodeLabel,
         defaultDrawNodeHover: drawNodeHover,
         nodeReducer: (node, data) => {
+          // Search highlight overrides LOD: matched leaves stay lit (and
+          // visible at any zoom band), everything else fades to a faint
+          // backdrop so the matched subgraph reads. Community color is
+          // preserved on the matches via data.color.
+          if (searchSet) {
+            if (searchSet.has(node)) {
+              return { ...data, hidden: false, forceLabel: true,
+                       zIndex: 5, size: (data.size || 3) * 1.9 };
+            }
+            return { ...data, hidden: false, label: "", zIndex: 0,
+                     color: "rgba(42,44,64,0.16)",
+                     size: (data.size || 3) * 0.55 };
+          }
           // Smooth LOD blend — alpha is interpolated through level
           // boundaries (smoothstep) so wheeling produces a continuous
           // crossfade between adjacent layers rather than a snap.
@@ -1014,6 +1036,18 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           return out;
         },
         edgeReducer: (edge, data) => {
+          // Search highlight: brighten edges inside the matched
+          // subgraph, hide the rest, so the connections between matches
+          // pop against the dimmed backdrop.
+          if (searchSet) {
+            const xt = g.extremities(edge);
+            if (searchSet.has(xt[0]) && searchSet.has(xt[1])) {
+              return { ...data, hidden: false, zIndex: 3,
+                       color: "rgba(150,180,255,0.9)",
+                       size: (data.size || 1) * 1.6 };
+            }
+            return { ...data, hidden: true };
+          }
           // Same smoothstep crossfade as nodes so super-edges fade
           // alongside super-nodes through the threshold.
           const a = smoothAlphas()[data.level];
@@ -1250,6 +1284,8 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         const suppressUntil = performance.now() + 1100;
         lastAutoDrillT = suppressUntil;
         lastAutoPopT = suppressUntil;
+        // Flow the drilled cluster's members through to Understand.
+        emitExplore(attrs.label || ownKey || "cluster", leafFilesUnderSuper(nodeId));
         return true;
       }
       renderer.on("clickNode", ({ node }) => {
@@ -1263,6 +1299,8 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           + `degree ${g.degree(node)}) — `
           + `click empty space to clear focus`;
         renderer.refresh();
+        // Single node -> its file flows through to the Understand panels.
+        emitExplore(attrs.label || node, [attrs.source_file]);
       });
       // Click on empty space backs all the way out — clears the
       // focus stack, drops the leaf-focus dim-highlight, and resets
@@ -1284,6 +1322,111 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           startPhysics();
         }
       });
+
+      // ----- External search drive (PRISM /explore merge) -----------
+      // The /explore page posts the file set its query matched; we light
+      // those leaves in-canvas, dim the rest, and fly the camera to fit.
+      // Same WebGL view, search just steers it — no second rendering
+      // path, community colors stay consistent.
+      let searchActive = false;
+      const _normPath = (p) => (p || "").replace(/\\\\/g, "/").toLowerCase();
+      function fitToNodes(ids) {
+        if (!ids.length) return;
+        let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+        for (const id of ids) {
+          const a = g.getNodeAttributes(id);
+          if (a.x < minx) minx = a.x;
+          if (a.y < miny) miny = a.y;
+          if (a.x > maxx) maxx = a.x;
+          if (a.y > maxy) maxy = a.y;
+        }
+        const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+        const t = renderer.normalizationFunction({ x: cx, y: cy });
+        const span = Math.max(maxx - minx, maxy - miny, 1);
+        const ratio = Math.max(0.08, Math.min(0.7, span / 35));
+        camera.animate({ x: t.x, y: t.y, ratio }, { duration: 650 });
+      }
+      function applySearch(files) {
+        const want = new Set((files || []).map(_normPath));
+        const ids = [];
+        g.forEachNode((id, a) => {
+          if (a.level === 3 && want.has(_normPath(a.source_file))) ids.push(id);
+        });
+        searchSet = ids.length ? new Set(ids) : null;
+        searchActive = true;
+        focusedNode = null; neighborSet = new Set(); focusPath = [];
+        if (currentLevel !== 3) setLevel(3);
+        statusEl.textContent = searchSet
+          ? `search · ${ids.length.toLocaleString()} matching symbols highlighted`
+          : "search · no symbols in this graph matched the query";
+        renderer.refresh();
+        if (searchSet) fitToNodes(ids);
+      }
+      function clearSearch() {
+        if (!searchActive && !searchSet) return;
+        searchSet = null; searchActive = false;
+        focusedNode = null; neighborSet = new Set(); focusPath = [];
+        if (currentLevel !== 0) setLevel(0);
+        camera.animatedReset({ duration: 450 });
+        renderer.refresh();
+      }
+      window.addEventListener("message", (ev) => {
+        const m = ev.data || {};
+        if (m && m.type === "prism:search") applySearch(m.files);
+        else if (m && m.type === "prism:clear") clearSearch();
+        else if (m && m.type === "prism:drill") {
+          // Quick-filter from a panel chip: bring that cluster to the top
+          // of its domain — drill the super-node (centers + dims siblings),
+          // or highlight a leaf community's files.
+          if (m.kind === "super" && m.id && g.hasNode(m.id)) {
+            drillIntoSuperNode(m.id);  // also emits prism:explore back up
+          } else if (m.kind === "community" && m.cid !== undefined && m.cid !== null) {
+            const files = leafFilesInCommunity(m.cid);
+            applySearch(files);
+            emitExplore(m.label || ("cluster " + m.cid), files);
+          }
+        }
+      });
+      // Tell the parent we're ready so it can (re)send the active query
+      // once the graph has finished building.
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: "prism:viewer-ready" }, "*");
+        }
+      } catch (e) { /* not embedded */ }
+
+      // ----- Click-through to Understand (PRISM /explore merge) ------
+      // The other half of the merge: clicking a cluster / super-node /
+      // node sends its member files UP to /explore, which loads the full
+      // Understand payload (ranked + context + subgraph) for them. Graph
+      // becomes the entry point to the knowledge, not just a picture.
+      function emitExplore(label, files) {
+        const uniq = [...new Set((files || []).filter(Boolean))];
+        if (!uniq.length) return;
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(
+              { type: "prism:explore", label: label || "selection", files: uniq }, "*");
+          }
+        } catch (e) { /* not embedded */ }
+      }
+      function leafFilesUnderSuper(superId) {
+        const a = g.getNodeAttributes(superId);
+        if (!a || a.level === undefined || a.level >= 3) return [];
+        const fld = "l" + a.level, key = a[fld];
+        const files = [];
+        g.forEachNode((id, na) => {
+          if (na.level === 3 && na[fld] === key && na.source_file) files.push(na.source_file);
+        });
+        return files;
+      }
+      function leafFilesInCommunity(cid) {
+        const files = [];
+        g.forEachNode((id, na) => {
+          if (na.level === 3 && na.community === cid && na.source_file) files.push(na.source_file);
+        });
+        return files;
+      }
 
       // --- Legend / categories sidebar ----------------------------
       // Level-aware: at L0/L1/L2 it lists super-nodes ranked by member
@@ -1344,7 +1487,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           // gesture.
           const drillable = item.kind === "super" && currentLevel < 3;
           div.title = drillable ? "Click to drill into " + display
-                                : (fullLabel || "");
+                                : "Click to explore in Understand · " + (fullLabel || display);
           div.innerHTML =
             `<div class="legend-dot" style="background:${item.color}"></div>`
             + `<span class="legend-label">${display}</span>`
@@ -1367,7 +1510,13 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
             renderer.refresh();
           });
           div.addEventListener("click", () => {
-            if (drillable) drillIntoSuperNode(item.id);
+            if (drillable) {
+              drillIntoSuperNode(item.id);
+            } else if (item.kind === "community") {
+              emitExplore(item.label, leafFilesInCommunity(item.cid));
+            } else if (item.kind === "super") {
+              emitExplore(item.label, leafFilesUnderSuper(item.id));
+            }
           });
           listEl.appendChild(div);
         }
@@ -1376,6 +1525,27 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           `L${currentLevel} (${LEVEL_NAMES[currentLevel]}) · `
           + `${items.length.toLocaleString()} categories · `
           + `${nodes.length.toLocaleString()} symbols total`;
+
+        // Mirror the in-view legend up to /explore so its "clusters in
+        // view" panel shows EXACTLY what the canvas shows (same enriched
+        // names, colors, counts), and stays in sync as the user drills.
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: "prism:clusters",
+              level: currentLevel,
+              levelName: LEVEL_NAMES[currentLevel],
+              items: items.map(it => ({
+                label: truncateLabel(it.label),
+                color: it.color,
+                count: it.count,
+                kind: it.kind,      // 'super' | 'community'
+                id: it.id,          // super-node id (drillable)
+                cid: it.cid,        // community id (L3)
+              })),
+            }, "*");
+          }
+        } catch (e) { /* not embedded */ }
       }
       rebuildLegend();
 
@@ -1636,10 +1806,27 @@ def _graphify_hierarchy(project_id: str):
         except sqlite3.Error:
             pass
 
+    # Ultimate Graph narrative layer: enriched per-hierarchy-node names
+    # ({l-path key: "Human Name"}) written by the background enrich worker.
+    # The viewer prefers these over the path-derived super-node labels, so
+    # domains/services/modules read as real names instead of path mash-ups.
+    hierarchy_labels: dict = {}
+    hierarchy_purposes: dict = {}
+    try:
+        for key, ann in ctx.graph_svc.annotations_for("hierarchy", "name").items():
+            if ann.get("name"):
+                hierarchy_labels[key] = ann["name"]
+            if ann.get("purpose"):
+                hierarchy_purposes[key] = ann["purpose"]
+    except Exception:
+        pass
+
     return JSONResponse({
         "nodes": out_nodes,
         "edges": raw_edges,
         "community_labels": comm_labels,
+        "hierarchy_labels": hierarchy_labels,
+        "hierarchy_purposes": hierarchy_purposes,
     })
 
 

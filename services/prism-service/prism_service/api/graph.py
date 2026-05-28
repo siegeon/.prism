@@ -150,6 +150,46 @@ def file_detail(
     return svc.file_detail(path)
 
 
+@router.post("/enrich")
+def enrich(
+    project: str = Query("default"),
+    max_scopes: int = Query(6, ge=1, le=40),
+) -> dict:
+    """Run one cluster-enrichment pass NOW (Ultimate Graph narrative layer,
+    #50). Names changed hierarchy scopes via inference; escapes scopes whose
+    files are unchanged. The background worker does this on a timer too —
+    this is the manual on-demand trigger."""
+    from prism_service.services import graph_enrich
+    try:
+        get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    return graph_enrich.enrich_project_once(project, max_scopes)
+
+
+@router.get("/enrich/status")
+def enrich_status(project: str = Query("default")) -> dict:
+    """How many hierarchy scopes are named vs still pending (changed)."""
+    from prism_service.services import graph_enrich
+    try:
+        graph = get_project(project).graph_svc
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    scopes = graph_enrich.hierarchy_scopes(project)
+    named = graph.annotations_for("hierarchy", "name")
+
+    def _pending(s) -> bool:
+        ann = graph.get_annotation("hierarchy", s["scope_id"], "name")
+        return ann is None or ann.get("input_hash") != s["input_hash"]
+
+    return {
+        "scopes": len(scopes),
+        "named": len([k for k, v in named.items() if v.get("name")]),
+        "pending": sum(1 for s in scopes if _pending(s)),
+        "worker_enabled": graph_enrich.is_enabled(),
+    }
+
+
 @router.post("/edges-between")
 def edges_between(
     body: EdgesBetweenBody,

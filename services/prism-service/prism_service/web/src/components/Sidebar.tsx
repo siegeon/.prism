@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, BookOpen, Brain, Eye, FolderTree, Info,
-  Layers, LayoutDashboard, ListChecks, MessageSquare, Network, Plug,
+  Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -43,8 +43,13 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Knowledge",
     items: [
+      // Ultimate Graph merge (siegeon/.prism#50): Brain is now the ONE place
+      // to explore the knowledge — code connections (graph) + search over
+      // structured & unstructured knowledge + the context bundle. The old
+      // separate Graph + Brain-search pages folded in here; /graph and
+      // /explore redirect to /brain. Understand stays its own surface (it
+      // derives structure/domain from the repo and feeds the Brain).
       { to: "/brain", label: "Brain", icon: Brain, staleKey: "brain" },
-      { to: "/graph", label: "Graph", icon: Network, staleKey: "graph" },
       { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
       { to: "/memory", label: "Memory", icon: BookOpen },
     ],

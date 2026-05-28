@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from prism_service.inference import claude_cli
 from prism_service.project_context import get_project
 from prism_service.services import source_service as ss
+from prism_service.services import understand_view
 
 router = APIRouter()
 
@@ -49,6 +50,44 @@ def search(
 def reindex(project: str = Query("default")) -> dict:
     count = _svc(project).incremental_reindex()
     return {"reindexed": count}
+
+
+class UnderstandBody(BaseModel):
+    # Empty/omitted query => whole-graph overview ranked by centrality.
+    query: str | None = None
+    project: str = "default"
+    limit: int = 20
+    depth: int = 1
+    # Cluster/selection click-through: when the canvas posts a clicked
+    # community / super-node / node, its member files arrive here and
+    # drive a focus payload seeded by them (label is the cluster name).
+    seed_files: list[str] | None = None
+    label: str | None = None
+    # Filter the search to one slice of the brain (e.g. 'expertise', 'md')
+    # to reach unstructured domain knowledge / docs, not just code.
+    domain: str | None = None
+
+
+@router.post("/understand")
+def understand(body: UnderstandBody) -> dict:
+    """Ultimate Graph merge (siegeon/.prism#50, slice 4).
+
+    One retrieval that fuses the Brain search lens and the Graph
+    spatial lens into a single ranked, graph-aware payload. Backs the
+    /explore SPA page and mirrors the `brain_understand` MCP tool.
+    """
+    try:
+        return understand_view.build_understanding(
+            body.project,
+            body.query,
+            limit=max(1, min(int(body.limit), 200)),
+            depth=max(0, min(int(body.depth), 3)),
+            seed_files=body.seed_files or None,
+            label=body.label,
+            domain=(body.domain or None),
+        )
+    except Exception as exc:  # unknown project, empty graph, etc.
+        raise HTTPException(404, f"understand failed for '{body.project}': {exc}")
 
 
 class AskBody(BaseModel):
