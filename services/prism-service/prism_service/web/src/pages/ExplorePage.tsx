@@ -52,6 +52,10 @@ export default function ExplorePage() {
   // under it on search and close when you pick one (so the canvas fly is
   // visible). No standalone panel cluttering the page.
   const [resultsOpen, setResultsOpen] = useState(false);
+  // The clusters currently on the canvas, mirrored up from the viewer's
+  // own legend (same enriched names/colors/counts) so the panel below is
+  // never out of sync with what's actually in view.
+  const [inView, setInView] = useState<{ level: number; levelName: string; items: { label: string; color: string; count: number }[] } | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
@@ -104,6 +108,7 @@ export default function ExplorePage() {
       const m = e.data;
       if (m?.type === "prism:viewer-ready") postToViewer(filesRef.current);
       else if (m?.type === "prism:explore") loadSelection(m.label || "selection", m.files || []);
+      else if (m?.type === "prism:clusters") setInView({ level: m.level, levelName: m.levelName, items: m.items || [] });
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
@@ -218,16 +223,19 @@ export default function ExplorePage() {
           on the RIGHT (sticky) so clicking never sends you scrolling. */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start">
         <div className="space-y-4 min-w-0">
-          {(data?.communities?.length ?? 0) > 0 && (
+          {inView && inView.items.length > 0 && (
             <Card className="!p-5">
-              <SectionLabel>{data?.mode === "focus" ? "Communities in view" : "Communities"}</SectionLabel>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {data!.communities.map((c) => (
-                  <span key={c.id} title={c.summary}
+              <SectionLabel>{inView.levelName} in view · {inView.items.length}</SectionLabel>
+              <div className="text-xs opacity-60 mb-2">
+                Exactly the clusters on the canvas right now — scroll/drill the graph to change this set.
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {inView.items.map((it, i) => (
+                  <span key={it.label + i} title={it.label}
                     className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border"
-                    style={{ borderColor: hexToRgba(commColor(c.id), 0.5), background: hexToRgba(commColor(c.id), 0.1) }}>
-                    <span className="w-2 h-2 rounded-full" style={{ background: commColor(c.id) }} />
-                    {c.label} <span className="opacity-50">· {c.size}</span>
+                    style={{ borderColor: hexToRgba(it.color, 0.5), background: hexToRgba(it.color, 0.1) }}>
+                    <span className="w-2 h-2 rounded-full" style={{ background: it.color }} />
+                    {it.label} <span className="opacity-50">· {it.count}</span>
                   </span>
                 ))}
               </div>

@@ -1513,6 +1513,24 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           `L${currentLevel} (${LEVEL_NAMES[currentLevel]}) · `
           + `${items.length.toLocaleString()} categories · `
           + `${nodes.length.toLocaleString()} symbols total`;
+
+        // Mirror the in-view legend up to /explore so its "clusters in
+        // view" panel shows EXACTLY what the canvas shows (same enriched
+        // names, colors, counts), and stays in sync as the user drills.
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+              type: "prism:clusters",
+              level: currentLevel,
+              levelName: LEVEL_NAMES[currentLevel],
+              items: items.map(it => ({
+                label: truncateLabel(it.label),
+                color: it.color,
+                count: it.count,
+              })),
+            }, "*");
+          }
+        } catch (e) { /* not embedded */ }
       }
       rebuildLegend();
 

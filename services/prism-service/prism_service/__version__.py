@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.14"
+PRISM_VERSION = "6.1.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.15: /explore — the clusters panel is now a live MIRROR of the "
+    "canvas legend, not a conflicting Leiden list. Before: 'Communities in "
+    "view' rendered graph_svc.communities() (Leiden, deterministic junk "
+    "labels like 'prism service prism service · encode') — ~25 of them "
+    "while the canvas showed 4 enriched hierarchy services. Invalid + "
+    "confusing. Now the viewer posts its in-view legend up "
+    "({type:'prism:clusters', level, levelName, items:[{label,color,"
+    "count}]}) on every rebuild, and the panel renders exactly that — same "
+    "enriched names, same colors, same counts — retitled '<level> in view' "
+    "and updating as you drill. One clustering, shown once.\n\n"
     "v6.1.14: /explore — ranked matches are now the RESULT of the top "
     "search bar, not a standalone panel. They drop down directly under the "
     "bar on a typed search (floating over the graph so the canvas doesn't "
