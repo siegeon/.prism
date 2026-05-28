@@ -3,7 +3,7 @@ import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X } fr
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
-import { ACCENT_HEX, hexToRgba } from "@/lib/palette";
+import { communityColor, hexToRgba } from "@/lib/palette";
 import { cn } from "@/lib/utils";
 
 // --- Ultimate Graph merge (siegeon/.prism#50, slice 4+5) -------------------
@@ -36,10 +36,9 @@ type Understanding = {
 };
 
 const base = (p: string) => (p || "").replace(/\\/g, "/").split("/").pop() || p;
-// Same community→color mapping the WebGL viewer uses, so a cluster reads the
-// same hue on the canvas and in the structured list below it.
-const commColor = (id?: number | null) =>
-  id == null ? "var(--text-label)" : ACCENT_HEX[Math.abs(id) % ACCENT_HEX.length];
+// communityColor() is the single shared domain (palette.ts) used by the
+// WebGL canvas, its Clusters legend, and these panels — same id, same hue.
+const commColor = communityColor;
 
 export default function ExplorePage() {
   const [project] = useProject();
@@ -185,40 +184,46 @@ export default function ExplorePage() {
         )}
       </Card>
 
-      {/* RAIL — ranked matches (what) + context bundle (why), below the graph */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card className="!p-5">
-          <SectionLabel>{data?.mode === "focus" ? "Ranked matches" : "Top hubs by PageRank"}</SectionLabel>
-          <div className="text-xs opacity-60 mb-3">
-            {data?.mode === "focus"
-              ? "Brain hybrid search — click a row to fly the canvas to it."
-              : "Centrality rank when there's no query — click to focus the canvas."}
-          </div>
-          <RankedList data={data} selected={selected} onSelect={select} />
-        </Card>
-        <ContextRail sel={sel} selected={selected} mode={data?.mode} />
+      {/* Below the graph: clickable values on the LEFT, the result pinned
+          on the RIGHT (sticky) so clicking never sends you scrolling. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start">
+        <div className="space-y-4 min-w-0">
+          <Card className="!p-5">
+            <SectionLabel>{data?.mode === "focus" ? "Ranked matches" : "Top hubs by PageRank"}</SectionLabel>
+            <div className="text-xs opacity-60 mb-3">
+              {data?.mode === "focus"
+                ? "Brain hybrid search — click a row to fly the canvas + see context →"
+                : "Centrality rank — click to focus the canvas + see context →"}
+            </div>
+            <RankedList data={data} selected={selected} onSelect={select} />
+          </Card>
+
+          {(data?.communities?.length ?? 0) > 0 && (
+            <Card className="!p-5">
+              <SectionLabel>{data?.mode === "focus" ? "Communities in view" : "Communities"}</SectionLabel>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {data!.communities.map((c) => (
+                  <span key={c.id} title={c.summary}
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border"
+                    style={{ borderColor: hexToRgba(commColor(c.id), 0.5), background: hexToRgba(commColor(c.id), 0.1) }}>
+                    <span className="w-2 h-2 rounded-full" style={{ background: commColor(c.id) }} />
+                    {c.label} <span className="opacity-50">· {c.size}</span>
+                  </span>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {data?.mode === "focus" && data.nodes.length > 0 && (
+            <Subgraph data={data} selected={selected} onSelect={select} />
+          )}
+        </div>
+
+        {/* RESULT — pinned in view while you click around on the left */}
+        <div className="lg:sticky lg:top-4 min-w-0">
+          <ContextRail sel={sel} selected={selected} mode={data?.mode} />
+        </div>
       </div>
-
-      {/* BELOW THE GRAPH — the same result, color-coded the structured way */}
-      {(data?.communities?.length ?? 0) > 0 && (
-        <Card className="!p-5">
-          <SectionLabel>{data?.mode === "focus" ? "Communities in view" : "Communities"}</SectionLabel>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {data!.communities.map((c) => (
-              <span key={c.id} title={c.summary}
-                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border"
-                style={{ borderColor: hexToRgba(commColor(c.id) as string, 0.5), background: hexToRgba(commColor(c.id) as string, 0.1) }}>
-                <span className="w-2 h-2 rounded-full" style={{ background: commColor(c.id) }} />
-                {c.label} <span className="opacity-50">· {c.size}</span>
-              </span>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {data?.mode === "focus" && data.nodes.length > 0 && (
-        <Subgraph data={data} selected={selected} onSelect={select} />
-      )}
     </Page>
   );
 }

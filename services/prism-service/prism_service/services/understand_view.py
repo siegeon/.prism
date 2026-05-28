@@ -256,7 +256,6 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
         if f:
             cent_by_file[f] = max(cent_by_file.get(f, 0.0),
                                   e.get("centrality", 0.0))
-    file_comm = _file_community_map(communities)
 
     # Dedup seeds, preserve order.
     seeds: list[str] = []
@@ -281,6 +280,10 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
                 break
 
     all_files = seeds + neighbor_files
+    # Resolve every file's true community from the entities table so the
+    # panel chips color-match the WebGL canvas exactly (not the sparse
+    # communities.top_files sample).
+    file_comm = graph.file_communities(all_files)
 
     def _node(f: str, seed: bool) -> dict:
         return {

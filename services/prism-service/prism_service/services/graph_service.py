@@ -1118,6 +1118,43 @@ class GraphService:
         conn.close()
         return [r[0] for r in rows if r[0]]
 
+    def file_communities(self, files: list[str]) -> dict:
+        """Map each file -> its dominant Leiden community id.
+
+        Resolves directly from the entities table (majority vote per file)
+        rather than the sparse communities.top_files sample, so callers can
+        color every file by its true community — the /explore panels use
+        this to match the WebGL canvas's per-node coloring exactly.
+        """
+        if not files:
+            return {}
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+        except sqlite3.Error:
+            return {}
+        placeholders = ",".join("?" for _ in files)
+        out: dict = {}
+        try:
+            rows = conn.execute(
+                f"SELECT file, community, COUNT(*) AS c FROM entities "
+                f"WHERE file IN ({placeholders}) AND community IS NOT NULL "
+                f"GROUP BY file, community",
+                list(files),
+            ).fetchall()
+        except sqlite3.Error:
+            conn.close()
+            return {}
+        conn.close()
+        best: dict = {}  # file -> (count, community)
+        for f, comm, c in rows:
+            if f is None or comm is None:
+                continue
+            if f not in best or c > best[f][0]:
+                best[f] = (c, int(comm))
+        for f, (_c, comm) in best.items():
+            out[f] = comm
+        return out
+
     def file_detail(self, path: str) -> dict:
         """Per-file detail for the layer drill's right-panel.
 

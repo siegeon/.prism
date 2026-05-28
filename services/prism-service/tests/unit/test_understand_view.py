@@ -43,6 +43,15 @@ class _FakeGraph:
     def file_detail(self, path):
         return self._details.get(path, {"entities": [], "inbound": [], "outbound": []})
 
+    def file_communities(self, files):
+        s = set(files)
+        m = {}
+        for e in self._central:
+            f = e.get("file")
+            if f in s and e.get("community") is not None:
+                m.setdefault(f, e["community"])
+        return m
+
     def edges_between_files(self, paths):
         s = set(paths)
         out = []

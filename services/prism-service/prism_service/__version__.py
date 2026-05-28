@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.10"
+PRISM_VERSION = "6.1.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.11: /explore usability — (1) ONE color domain. The viewer's "
+    "Clusters legend and the Understand community/subgraph chips now share "
+    "the exact community->color mapping: new COMMUNITY_HEX + "
+    "communityColor() in web/src/lib/palette.ts mirror the viewer's 14-hue "
+    "COMMUNITY_COLORS (base ++ lifted, #6b7280 null) byte-for-byte, so a "
+    "cluster reads as the same hue on the canvas and in the panels. "
+    "Previously the panels used only the 7 base hues (mod 7) vs the "
+    "viewer's mod 14 — same community, different color. (2) No more "
+    "scroll-to-see-results: the below-graph area is now clickable values "
+    "on the LEFT (ranked + communities + subgraph) with the Context bundle "
+    "pinned (lg:sticky) on the RIGHT, so clicking a value updates the "
+    "result in view instead of up-page.\n\n"
     "v6.1.10: Ultimate Graph — clusters click ALL THE WAY THROUGH to the "
     "Understand data. The canvas↔panels link is now two-way: clicking a "
     "cluster / super-node / node in the Sigma viewer (or a Clusters legend "

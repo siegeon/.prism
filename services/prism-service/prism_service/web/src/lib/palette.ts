@@ -38,6 +38,20 @@ export const ACCENT_HEX_LIFTED = [
   "#dde4eb", // slate lifted
 ] as const;
 
+/** The community→color domain. MUST stay byte-for-byte aligned with
+ * COMMUNITY_COLORS in routes/graph_static.py (base ++ lifted, same order)
+ * so a community reads as the SAME hue on the Sigma canvas, its Clusters
+ * legend, and the /explore Understand panels. colorFor() in the viewer is
+ * `COMMUNITY_COLORS[abs(id) % len]` with #6b7280 for null — mirror both. */
+export const COMMUNITY_HEX = [...ACCENT_HEX, ...ACCENT_HEX_LIFTED] as const;
+
+/** Resolve a community id to its canonical hue. Matches the viewer's
+ * colorFor() exactly (incl. the grey null fallback). */
+export function communityColor(id?: number | null): string {
+  if (id === null || id === undefined) return "#6b7280";
+  return COMMUNITY_HEX[Math.abs(id) % COMMUNITY_HEX.length];
+}
+
 /** Hex (#rrggbb) → rgba(r,g,b,a). Used to derive border + fill alphas
  * from a base hex without authoring rgba strings by hand. */
 export function hexToRgba(hex: string, alpha: number): string {
