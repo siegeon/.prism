@@ -53,6 +53,11 @@ _FA2_SETTINGS = {"gravity": 1.0, "scalingRatio": 8.0, "slowDown": 2.0}
 _SEED_WALK_CAP = 12
 _NEIGHBOR_CAP = 40
 _CONTEXT_CAP = 6
+# A cluster click can seed hundreds of files; the panel can't usefully show
+# them all (the canvas does). Keep only the most-central seeds — the hubs —
+# and report the true total so the UI can say "top N of M". The canvas still
+# holds the full set spatially.
+_MAX_SEEDS = 40
 
 
 def _basename(path: str) -> str:
@@ -265,6 +270,13 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
             seen_files.add(f)
             seeds.append(f)
 
+    # Rank seeds by centrality (hubs first) and cap — a 991-file cluster
+    # click would otherwise dump an unreadable wall; the canvas shows the
+    # full set, the panel shows the important members.
+    total_seed_files = len(seeds)
+    seeds.sort(key=lambda f: cent_by_file.get(f, 0.0), reverse=True)
+    seeds = seeds[:_MAX_SEEDS]
+
     neighbor_files: list[str] = []
     nbr_seen = set(seen_files)
     if depth >= 1:
@@ -335,6 +347,7 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
             "nodes": len(nodes), "edges": len(edges),
             "communities": len(present), "ranked": len(ranked),
             "seed_files": len(seeds), "neighbor_files": len(neighbor_files),
+            "total_seed_files": total_seed_files,
         },
         "provenance": "deterministic",
     }

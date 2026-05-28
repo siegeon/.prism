@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.15"
+PRISM_VERSION = "6.1.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.17: /explore graph canvas shortened (clamp 70vh/900px -> "
+    "52vh/640px) so the ranked dropdown, clusters-in-view, subgraph, and "
+    "context panels fit without so much scrolling. Pairs with the v6.1.16 "
+    "subgraph cap below.\n\n"
+    "v6.1.16: /explore — Subgraph panel handles big selections. A cluster "
+    "click could seed 200+ files into a flat chip wall. Now: backend caps "
+    "seeds to the top 40 by centrality (the hubs) and reports "
+    "total_seed_files; the panel ranks chips by centrality, shows the top "
+    "16 with a '+N more' expander into a bounded scroll area, and notes the "
+    "rest ('+N more in this cluster — explore on the canvas'). The WebGL "
+    "canvas remains the full spatial view; the panel is the ranked, bounded "
+    "index into it. _MAX_SEEDS=40 in understand_view; ChipGroup/ChipNode in "
+    "ExplorePage. Test: seed cap + total reported.\n\n"
     "v6.1.15: /explore — the clusters panel is now a live MIRROR of the "
     "canvas legend, not a conflicting Leiden list. Before: 'Communities in "
     "view' rendered graph_svc.communities() (Leiden, deterministic junk "

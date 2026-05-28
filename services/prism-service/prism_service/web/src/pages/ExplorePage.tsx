@@ -212,7 +212,7 @@ export default function ExplorePage() {
             ref={iframeRef}
             src={viewerUrl}
             className="w-full border-0 rounded-b-md mt-3"
-            style={{ height: "clamp(520px, 70vh, 900px)", background: "#0f0f1a" }}
+            style={{ height: "clamp(360px, 52vh, 640px)", background: "#0f0f1a" }}
           />
         ) : (
           <div className="px-5 pb-5 mt-3"><Empty>No graph yet — rebuild on /graph.</Empty></div>
@@ -279,39 +279,76 @@ function RankedList({ data, selected, onSelect }: {
   );
 }
 
-// The color-coded structured view of the focused subgraph — seed hits and
-// their 1-hop neighbors as community-colored chips, plus the relationship
-// count. Mirrors the canvas's coloring so the two read as one thing.
+const CHIP_CAP = 16;  // chips shown before "+N more" — a wall of 200 is the canvas's job
+
+const ChipNode = ({ n, selected, onSelect }: { n: GNode; selected: string | null; onSelect: (f: string) => void }) => (
+  <button onClick={() => onSelect(n.id)} title={n.id}
+    className={cn("inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border max-w-full transition-colors",
+      selected === n.id ? "ring-1 ring-[color:var(--text-secondary)]" : "")}
+    style={{ borderColor: hexToRgba(commColor(n.community), 0.5), background: hexToRgba(commColor(n.community), 0.08) }}>
+    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: commColor(n.community) }} />
+    <span className="truncate font-mono">{n.label}</span>
+  </button>
+);
+
+// One group of chips (seeds or neighbors), ranked by centrality, capped to
+// CHIP_CAP with an expander into a bounded scroll area. Keeps a 200-item
+// set skimmable — the hubs first, the rest one click away, the full picture
+// on the canvas.
+function ChipGroup({ label, total, nodes, selected, onSelect }: {
+  label: string; total: number; nodes: GNode[]; selected: string | null; onSelect: (f: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const sorted = useMemo(() => [...nodes].sort((a, b) => (b.centrality ?? 0) - (a.centrality ?? 0)), [nodes]);
+  const shown = open ? sorted : sorted.slice(0, CHIP_CAP);
+  const hiddenLoaded = sorted.length - shown.length;
+  const beyondLoaded = total - sorted.length;  // capped on the backend (canvas has them)
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">
+        {label} · {total}{total > nodes.length ? ` (top ${nodes.length} hubs)` : ""}
+      </div>
+      <div className={cn("flex flex-wrap gap-1.5", open && "max-h-52 overflow-y-auto pr-1")}>
+        {shown.map((n) => <ChipNode key={n.id} n={n} selected={selected} onSelect={onSelect} />)}
+      </div>
+      <div className="mt-1.5 flex items-center gap-3 text-[11px]">
+        {hiddenLoaded > 0 && !open && (
+          <button onClick={() => setOpen(true)} className="opacity-70 hover:opacity-100 underline-offset-2 hover:underline">
+            +{hiddenLoaded} more
+          </button>
+        )}
+        {open && sorted.length > CHIP_CAP && (
+          <button onClick={() => setOpen(false)} className="opacity-70 hover:opacity-100 underline-offset-2 hover:underline">
+            show fewer
+          </button>
+        )}
+        {beyondLoaded > 0 && (
+          <span className="opacity-40">+{beyondLoaded} more in this cluster — explore on the canvas ↑</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The color-coded structured view of the focused subgraph — the most-central
+// seed hubs + their 1-hop neighbors as community-colored chips. The canvas is
+// the full visual; this is the ranked, bounded index into it.
 function Subgraph({ data, selected, onSelect }: {
   data: Understanding; selected: string | null; onSelect: (f: string) => void;
 }) {
   const seeds = data.nodes.filter((n) => n.seed);
   const nbrs = data.nodes.filter((n) => !n.seed);
-  const Node = (n: GNode) => (
-    <button key={n.id} onClick={() => onSelect(n.id)} title={n.id}
-      className={cn("inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs border max-w-full transition-colors",
-        selected === n.id ? "ring-1 ring-[color:var(--text-secondary)]" : "")}
-      style={{ borderColor: hexToRgba(commColor(n.community) as string, 0.5), background: hexToRgba(commColor(n.community) as string, 0.08) }}>
-      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: commColor(n.community) }} />
-      <span className="truncate font-mono">{n.label}</span>
-    </button>
-  );
+  const totalSeeds = data.counts.total_seed_files ?? seeds.length;
   return (
     <Card className="!p-5">
       <SectionLabel>Subgraph &amp; relationships</SectionLabel>
       <div className="text-xs opacity-60 mb-3">
-        {data.counts.edges} call edges across {data.nodes.length} files · colored by community, same as the canvas · click a chip to fly there.
+        {data.counts.edges} call edges · ranked by centrality, colored by community (same as the canvas) · click a chip to fly there.
       </div>
       <div className="space-y-3">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">Seeds · {seeds.length}</div>
-          <div className="flex flex-wrap gap-1.5">{seeds.map(Node)}</div>
-        </div>
+        <ChipGroup label="Seed hubs" total={totalSeeds} nodes={seeds} selected={selected} onSelect={onSelect} />
         {nbrs.length > 0 && (
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">1-hop neighbors · {nbrs.length}</div>
-            <div className="flex flex-wrap gap-1.5 opacity-90">{nbrs.map(Node)}</div>
-          </div>
+          <ChipGroup label="1-hop neighbors" total={nbrs.length} nodes={nbrs} selected={selected} onSelect={onSelect} />
         )}
       </div>
     </Card>

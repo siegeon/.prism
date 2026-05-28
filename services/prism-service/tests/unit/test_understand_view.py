@@ -167,6 +167,26 @@ def test_seed_files_cluster_clickthrough(monkeypatch):
     assert out["context"][0]["file"] == "a.py"
 
 
+def test_seed_files_capped_to_top_central_hubs(monkeypatch):
+    """A big cluster click (hundreds of files) caps seeds to the most
+    central hubs and reports the true total, so the panel stays legible."""
+    central = [{"name": f"e{i}", "kind": "function", "file": f"f{i}.py",
+                "line": 1, "community": 1, "centrality": (200 - i) / 1000.0}
+               for i in range(200)]
+    details = {f"f{i}.py": {"entities": [], "inbound": [], "outbound": []}
+               for i in range(200)}
+    comms = [{"id": 1, "label": "Big", "size": 200, "summary": "",
+              "top_files": [], "top_entities": []}]
+    uv = _wire(monkeypatch, _FakeBrain([]), _FakeGraph(central, comms, details))
+    files = [f"f{i}.py" for i in range(200)]
+    out = uv.build_understanding("p", seed_files=files, label="Big")
+    seeds = [n for n in out["nodes"] if n["seed"]]
+    assert len(seeds) == 40                          # capped (_MAX_SEEDS)
+    assert out["counts"]["total_seed_files"] == 200  # true total reported
+    # the kept seeds are the most central (f0..f39 have highest centrality)
+    assert seeds[0]["id"] == "f0.py"
+
+
 def test_seed_files_take_precedence_over_query(monkeypatch):
     hits = [{"source_file": "b.py", "entity_name": "helper", "rrf_score": 0.9, "content": "x"}]
     uv = _wire(monkeypatch, _FakeBrain(hits), _FakeGraph(_CENTRAL, _COMMS, _DETAILS))
