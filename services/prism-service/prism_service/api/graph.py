@@ -104,6 +104,25 @@ def communities(project: str = Query("default")) -> dict:
     return {"communities": svc.communities()}
 
 
+@router.get("/central")
+def central(
+    project: str = Query("default"),
+    limit: int = Query(20, ge=1, le=200),
+) -> dict:
+    """Top-N entities by PageRank centrality (v6.1.5).
+
+    Returns ``{entities: [{name, kind, file, line, community, centrality}]}``
+    sorted by centrality desc. The score is recomputed each graph_rebuild
+    and persisted on entities.centrality; rows with centrality == 0 are
+    excluded (pre-v6.1.5 builds had no column).
+    """
+    try:
+        svc = get_project(project).graph_svc
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    return {"entities": svc.top_central_entities(limit=limit)}
+
+
 @router.get("/community-files")
 def community_files(
     community_id: int = Query(..., ge=0),

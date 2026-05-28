@@ -56,6 +56,10 @@ def _graph_schema_migrations(conn: sqlite3.Connection) -> None:
         # when the user-provided name doesn't match the canonical
         # name exactly. Indexed below for cheap fallback resolution.
         ("norm_label",      "ALTER TABLE entities ADD COLUMN norm_label TEXT"),
+        # v6.1.5 — PageRank centrality, computed at rebuild and used as
+        # the universal rank/RRF/Sigma-size signal. Defaults to 0 for
+        # rows that predate the migration.
+        ("centrality",      "ALTER TABLE entities ADD COLUMN centrality REAL DEFAULT 0"),
     ):
         if col not in ent_cols:
             try:
@@ -68,6 +72,16 @@ def _graph_schema_migrations(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ent_norm_label "
             "ON entities(norm_label) WHERE norm_label IS NOT NULL"
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    # v6.1.5 — index centrality descending so "top hubs" queries scan
+    # cheaply (LIMIT 20 from a table with a few thousand entities).
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ent_centrality "
+            "ON entities(centrality DESC) WHERE centrality > 0"
         )
         conn.commit()
     except sqlite3.OperationalError:
@@ -137,6 +151,50 @@ import re as _re
 from collections import Counter as _Counter
 
 _WORD_RE = _re.compile(r"[A-Za-z][A-Za-z0-9]*")
+
+
+def _compute_pagerank(
+    nodes: list[dict],
+    links: list[dict],
+    n_iter: int = 30,
+    damping: float = 0.85,
+) -> dict[str, float]:
+    """Power-iteration PageRank over the graphify (nodes, links) snapshot.
+
+    Returns ``{graphify_id: score}``. Pure-Python so no new dep is
+    pulled in for this single use; networkx would be overkill for an
+    entity table that's bounded by repo size (typically <10k nodes).
+
+    Dangling nodes (no outbound edges) redistribute their mass uniformly
+    every iteration so the score sum stays at 1.0. Empty graphs return
+    an empty dict.
+    """
+    node_ids = [n.get("id") for n in nodes if n.get("id")]
+    if not node_ids:
+        return {}
+    n = len(node_ids)
+    out_adj: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    valid = set(node_ids)
+    for link in links:
+        src = link.get("source") or link.get("_src")
+        tgt = link.get("target") or link.get("_tgt")
+        if src in valid and tgt in valid:
+            out_adj[src].append(tgt)
+    teleport = (1.0 - damping) / n
+    ranks: dict[str, float] = {nid: 1.0 / n for nid in node_ids}
+    for _ in range(n_iter):
+        # Mass from dangling nodes (no outbound edges) gets uniformly
+        # redistributed so the total mass stays 1.0.
+        dangling_mass = sum(ranks[nid] for nid in node_ids if not out_adj[nid])
+        new = {nid: teleport + damping * dangling_mass / n for nid in node_ids}
+        for src, targets in out_adj.items():
+            if not targets:
+                continue
+            share = damping * ranks[src] / len(targets)
+            for tgt in targets:
+                new[tgt] += share
+        ranks = new
+    return ranks
 
 
 def _basename_stem(path: str) -> str:
@@ -819,6 +877,26 @@ class GraphService:
                 except sqlite3.IntegrityError:
                     pass
 
+            # -- Compute + persist PageRank centrality -------------------
+            # v6.1.5 — universal node score for rank/RRF/Sigma sizing
+            # (Ultimate Graph slice 3). Runs after the entity insert so
+            # the UPDATE matches on graphify_id. Bounded by repo size; a
+            # ~10k-node graph converges well within the 30 iterations.
+            pagerank = _compute_pagerank(nodes, links)
+            if pagerank:
+                for gid, score in pagerank.items():
+                    try:
+                        conn.execute(
+                            "UPDATE entities SET centrality = ? "
+                            "WHERE graphify_id = ?",
+                            (float(score), gid),
+                        )
+                    except sqlite3.OperationalError:
+                        # centrality column missing — schema migration
+                        # likely raced; the next rebuild will retry.
+                        break
+                result["centrality_nodes"] = len(pagerank)
+
             # -- Derive + persist community labels -----------------------
             from collections import defaultdict
             buckets: dict[int, list[dict]] = defaultdict(list)
@@ -982,6 +1060,44 @@ class GraphService:
             })
         conn.close()
         return out
+
+    def top_central_entities(self, limit: int = 20) -> list[dict]:
+        """Top-N entities by PageRank centrality (v6.1.5).
+
+        Returns ``[{name, kind, file, line, community, centrality}, ...]``
+        sorted by centrality desc. Empty list when the column is missing
+        (pre-v6.1.5 graph.db) or the rebuild hasn't populated it.
+        """
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return []
+        try:
+            rows = conn.execute(
+                "SELECT name, kind, file, line, community, centrality "
+                "FROM entities "
+                "WHERE centrality > 0 "
+                "ORDER BY centrality DESC "
+                "LIMIT ?",
+                (max(1, min(int(limit), 200)),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            conn.close()
+            return []
+        conn.close()
+        return [
+            {
+                "name": r["name"] or "",
+                "kind": r["kind"] or "",
+                "file": r["file"] or "",
+                "line": int(r["line"]) if r["line"] is not None else None,
+                "community": (int(r["community"])
+                              if r["community"] is not None else None),
+                "centrality": float(r["centrality"] or 0.0),
+            }
+            for r in rows
+        ]
 
     def community_files(self, community_id: int) -> list[str]:
         """Distinct file paths whose entities belong to the given community."""

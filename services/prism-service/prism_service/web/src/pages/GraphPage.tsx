@@ -13,13 +13,26 @@ type Summary = {
   viewer_url: string;
 };
 
+type CentralEntity = {
+  name: string;
+  kind: string;
+  file: string;
+  line: number | null;
+  community: number | null;
+  centrality: number;
+};
+
 export default function GraphPage() {
   const [project] = useProject();
   const [data, setData] = useState<Summary | null>(null);
+  const [central, setCentral] = useState<CentralEntity[] | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
 
   const load = useCallback(() => {
     api.get<Summary>(`/api/graph/summary?project=${project}`).then(setData).catch(() => setData(null));
+    api.get<{ entities: CentralEntity[] }>(`/api/graph/central?project=${project}&limit=15`)
+      .then((r) => setCentral(r.entities))
+      .catch(() => setCentral([]));
   }, [project]);
 
   useEffect(load, [load]);
@@ -60,6 +73,34 @@ export default function GraphPage() {
               <div>No graph yet for this project — hit Rebuild.</div>
             </Empty>
           </div>
+        )}
+      </Card>
+
+      <Card className="!p-5">
+        <SectionLabel>Top hubs by PageRank</SectionLabel>
+        <div className="text-xs opacity-60 mb-3">
+          Universal centrality score persisted on every <code>graph_rebuild</code>.
+          Drives ranking, RRF boost, and Sigma node size as the Ultimate Graph
+          slices land.
+        </div>
+        {central && central.length > 0 ? (
+          <ol className="space-y-1.5 text-sm">
+            {central.map((e, i) => (
+              <li key={`${e.file}:${e.name}:${i}`} className="flex items-baseline gap-3">
+                <span className="opacity-40 font-mono w-6 text-right">{i + 1}.</span>
+                <span className="font-mono truncate">{e.name || "(anon)"}</span>
+                <span className="opacity-50 text-xs">{e.kind}</span>
+                <span className="opacity-40 text-xs truncate flex-1">{e.file}{e.line ? `:${e.line}` : ""}</span>
+                <span className="font-mono text-xs tabular-nums opacity-70">
+                  {e.centrality.toFixed(4)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <Empty>
+            <div>No centrality yet — rebuild on v6.1.5+ to compute PageRank.</div>
+          </Empty>
         )}
       </Card>
     </Page>
