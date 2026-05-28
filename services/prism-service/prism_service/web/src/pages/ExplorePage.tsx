@@ -73,6 +73,20 @@ export default function ExplorePage() {
       .finally(() => setLoading(false));
   }, [project, postToViewer]);
 
+  // Click-through FROM the canvas: a cluster / super-node / node was
+  // clicked in the viewer; load the full Understand payload for its files.
+  // We don't re-steer the canvas here — the viewer already drilled/focused
+  // on the click — we just fill the ranked + context + subgraph panels.
+  const loadSelection = useCallback((label: string, files: string[]) => {
+    if (!files.length) return;
+    setLoading(true); setError(null);
+    setInput(label);
+    api.post<Understanding>("/api/brain/understand", { project, seed_files: files, label, limit: 20, depth: 1 })
+      .then((d) => { setData(d); setSelected(d.context[0]?.file ?? null); })
+      .catch((e) => setError(String(e?.message || e)))
+      .finally(() => setLoading(false));
+  }, [project]);
+
   useEffect(() => { run(""); }, [run]);
   useEffect(() => {
     api.get<{ graph_json_exists: boolean; viewer_url: string }>(`/api/graph/summary?project=${project}`)
@@ -82,11 +96,13 @@ export default function ExplorePage() {
 
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      if (e.data?.type === "prism:viewer-ready") postToViewer(filesRef.current);
+      const m = e.data;
+      if (m?.type === "prism:viewer-ready") postToViewer(filesRef.current);
+      else if (m?.type === "prism:explore") loadSelection(m.label || "selection", m.files || []);
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [postToViewer]);
+  }, [postToViewer, loadSelection]);
 
   const submit = (e: React.FormEvent) => { e.preventDefault(); run(input.trim()); };
   const clear = () => { setInput(""); run(""); };

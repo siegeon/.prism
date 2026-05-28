@@ -139,3 +139,28 @@ def test_focus_depth_zero_skips_neighbors(monkeypatch):
 def test_empty_query_string_is_overview(monkeypatch):
     uv = _wire(monkeypatch, _FakeBrain([]), _FakeGraph(_CENTRAL, _COMMS, _DETAILS))
     assert uv.build_understanding("p", "   ")["mode"] == "overview"
+
+
+def test_seed_files_cluster_clickthrough(monkeypatch):
+    """Clicking a cluster posts its member files; the payload is focus,
+    ranked by centrality within the set, with 1-hop neighbors + context."""
+    uv = _wire(monkeypatch, _FakeBrain([]), _FakeGraph(_CENTRAL, _COMMS, _DETAILS))
+    out = uv.build_understanding("p", seed_files=["a.py"], label="Graph core")
+    assert out["mode"] == "focus"
+    assert out["query"] == "Graph core"
+    # a.py's entities ranked by centrality, no Brain search involved
+    assert out["ranked"][0]["name"] == "GraphService"
+    assert out["ranked"][0]["why"] == "in Graph core"
+    seed = [n["id"] for n in out["nodes"] if n["seed"]]
+    nbr = [n["id"] for n in out["nodes"] if not n["seed"]]
+    assert seed == ["a.py"]
+    assert set(nbr) == {"b.py", "c.py"}  # 1-hop from a.py
+    assert out["context"][0]["file"] == "a.py"
+
+
+def test_seed_files_take_precedence_over_query(monkeypatch):
+    hits = [{"source_file": "b.py", "entity_name": "helper", "rrf_score": 0.9, "content": "x"}]
+    uv = _wire(monkeypatch, _FakeBrain(hits), _FakeGraph(_CENTRAL, _COMMS, _DETAILS))
+    out = uv.build_understanding("p", "helper", seed_files=["a.py"], label="Graph core")
+    # seed_files wins — seeded by a.py, not the brain hit b.py
+    assert [n["id"] for n in out["nodes"] if n["seed"]] == ["a.py"]

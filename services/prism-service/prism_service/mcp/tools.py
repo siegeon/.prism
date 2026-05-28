@@ -121,6 +121,18 @@ TOOLS: list[Tool] = [
                     "(0-3). 1 = direct callers/callees.",
                     "default": 1,
                 },
+                "seed_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Seed the view from these files instead of "
+                    "a text query — e.g. the members of a cluster you want "
+                    "explained. Ranked by centrality within the set.",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Human label for a seed_files selection "
+                    "(e.g. the cluster name).",
+                },
             },
             "required": [],
         },
@@ -2557,6 +2569,8 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 arguments.get("query"),
                 limit=max(1, min(int(arguments.get("limit", 20)), 200)),
                 depth=max(0, min(int(arguments.get("depth", 1)), 3)),
+                seed_files=arguments.get("seed_files") or None,
+                label=arguments.get("label"),
             )
             return [TextContent(type="text", text=_json(payload))]
 

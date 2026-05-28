@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.1.9"
+PRISM_VERSION = "6.1.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.1.10: Ultimate Graph — clusters click ALL THE WAY THROUGH to the "
+    "Understand data. The canvas↔panels link is now two-way: clicking a "
+    "cluster / super-node / node in the Sigma viewer (or a Clusters legend "
+    "row) posts {type:'prism:explore', label, files} up to /explore, which "
+    "loads the full Understand payload seeded by those files (ranked by "
+    "centrality within the set + 1-hop subgraph + context bundles). New "
+    "seed_files+label path: understand_view.build_understanding gains a "
+    "`seed_files` branch (_focus_files + shared _assemble, refactored out "
+    "of _focus), threaded through POST /api/brain/understand and the "
+    "brain_understand MCP tool. graph_static.py emits the click events "
+    "(leafFilesUnderSuper / leafFilesInCommunity). Tests: 6 in "
+    "tests/unit/test_understand_view.py (overview, query-focus, seed-file "
+    "focus, seed precedence, depth=0, empty=overview).\n\n"
     "v6.1.9: /explore layout — the WebGL graph now owns the full width on "
     "its own row (taller, clamp(520px,70vh,900px)); the five big KPI boxes "
     "collapse to a single compact one-line stat strip; the ranked + "

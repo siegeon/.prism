@@ -58,6 +58,11 @@ class UnderstandBody(BaseModel):
     project: str = "default"
     limit: int = 20
     depth: int = 1
+    # Cluster/selection click-through: when the canvas posts a clicked
+    # community / super-node / node, its member files arrive here and
+    # drive a focus payload seeded by them (label is the cluster name).
+    seed_files: list[str] | None = None
+    label: str | None = None
 
 
 @router.post("/understand")
@@ -74,6 +79,8 @@ def understand(body: UnderstandBody) -> dict:
             body.query,
             limit=max(1, min(int(body.limit), 200)),
             depth=max(0, min(int(body.depth), 3)),
+            seed_files=body.seed_files or None,
+            label=body.label,
         )
     except Exception as exc:  # unknown project, empty graph, etc.
         raise HTTPException(404, f"understand failed for '{body.project}': {exc}")

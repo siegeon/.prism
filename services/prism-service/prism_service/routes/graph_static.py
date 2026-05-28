@@ -1280,6 +1280,8 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         const suppressUntil = performance.now() + 1100;
         lastAutoDrillT = suppressUntil;
         lastAutoPopT = suppressUntil;
+        // Flow the drilled cluster's members through to Understand.
+        emitExplore(attrs.label || ownKey || "cluster", leafFilesUnderSuper(nodeId));
         return true;
       }
       renderer.on("clickNode", ({ node }) => {
@@ -1293,6 +1295,8 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           + `degree ${g.degree(node)}) — `
           + `click empty space to clear focus`;
         renderer.refresh();
+        // Single node -> its file flows through to the Understand panels.
+        emitExplore(attrs.label || node, [attrs.source_file]);
       });
       // Click on empty space backs all the way out — clears the
       // focus stack, drops the leaf-focus dim-highlight, and resets
@@ -1375,6 +1379,39 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         }
       } catch (e) { /* not embedded */ }
 
+      // ----- Click-through to Understand (PRISM /explore merge) ------
+      // The other half of the merge: clicking a cluster / super-node /
+      // node sends its member files UP to /explore, which loads the full
+      // Understand payload (ranked + context + subgraph) for them. Graph
+      // becomes the entry point to the knowledge, not just a picture.
+      function emitExplore(label, files) {
+        const uniq = [...new Set((files || []).filter(Boolean))];
+        if (!uniq.length) return;
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(
+              { type: "prism:explore", label: label || "selection", files: uniq }, "*");
+          }
+        } catch (e) { /* not embedded */ }
+      }
+      function leafFilesUnderSuper(superId) {
+        const a = g.getNodeAttributes(superId);
+        if (!a || a.level === undefined || a.level >= 3) return [];
+        const fld = "l" + a.level, key = a[fld];
+        const files = [];
+        g.forEachNode((id, na) => {
+          if (na.level === 3 && na[fld] === key && na.source_file) files.push(na.source_file);
+        });
+        return files;
+      }
+      function leafFilesInCommunity(cid) {
+        const files = [];
+        g.forEachNode((id, na) => {
+          if (na.level === 3 && na.community === cid && na.source_file) files.push(na.source_file);
+        });
+        return files;
+      }
+
       // --- Legend / categories sidebar ----------------------------
       // Level-aware: at L0/L1/L2 it lists super-nodes ranked by member
       // count; at L3 it lists Leiden communities. Click an item to dim
@@ -1434,7 +1471,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
           // gesture.
           const drillable = item.kind === "super" && currentLevel < 3;
           div.title = drillable ? "Click to drill into " + display
-                                : (fullLabel || "");
+                                : "Click to explore in Understand · " + (fullLabel || display);
           div.innerHTML =
             `<div class="legend-dot" style="background:${item.color}"></div>`
             + `<span class="legend-label">${display}</span>`
@@ -1457,7 +1494,13 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
             renderer.refresh();
           });
           div.addEventListener("click", () => {
-            if (drillable) drillIntoSuperNode(item.id);
+            if (drillable) {
+              drillIntoSuperNode(item.id);
+            } else if (item.kind === "community") {
+              emitExplore(item.label, leafFilesInCommunity(item.cid));
+            } else if (item.kind === "super") {
+              emitExplore(item.label, leafFilesUnderSuper(item.id));
+            }
           });
           listEl.appendChild(div);
         }

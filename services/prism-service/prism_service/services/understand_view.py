@@ -91,12 +91,19 @@ def build_understanding(
     *,
     limit: int = 20,
     depth: int = 1,
+    seed_files: Optional[list[str]] = None,
+    label: Optional[str] = None,
 ) -> dict:
     """Build the unified understand payload for `project`.
 
-    `query` empty/None -> overview; otherwise focus. `limit` bounds both
-    the ranked list and (in focus mode) the Brain search width. `depth`
-    >= 1 pulls 1-hop neighbor files into the focus subgraph.
+    Three entry shapes, one payload:
+      * `seed_files` given -> cluster/selection focus (the canvas posting a
+        clicked community / super-node / node up into Understand).
+      * `query` non-empty   -> Brain hybrid-search focus.
+      * neither             -> whole-graph overview ranked by centrality.
+
+    `limit` bounds the ranked list (and Brain search width); `depth` >= 1
+    pulls 1-hop neighbor files into the focus subgraph.
     """
     ctx = get_project(project)
     brain = ctx.brain_svc
@@ -105,6 +112,9 @@ def build_understanding(
     communities = graph.communities()
     central_all = graph.top_central_entities(limit=200)
 
+    if seed_files:
+        return _focus_files(graph, communities, central_all, seed_files,
+                            label or "selected cluster", limit, depth)
     q = (query or "").strip()
     if not q:
         return _overview(graph, communities, central_all, limit)
@@ -180,14 +190,6 @@ def _focus(brain, graph, communities, central_all, q: str,
     """Typed-query view: Brain search is the ranked lens, its hit files +
     1-hop neighbors are the subgraph, top hits carry context bundles."""
     hits = brain.search(q, limit=limit) or []
-    cent_by_file: dict[str, float] = {}
-    for e in central_all:
-        f = e.get("file") or ""
-        if f:
-            cent_by_file[f] = max(cent_by_file.get(f, 0.0),
-                                  e.get("centrality", 0.0))
-    file_comm = _file_community_map(communities)
-
     ranked: list[dict] = []
     seed_files: list[str] = []
     seen_files: set[str] = set()
@@ -204,12 +206,70 @@ def _focus(brain, graph, communities, central_all, q: str,
         if f and f not in seen_files:
             seen_files.add(f)
             seed_files.append(f)
+    return _assemble(graph, communities, central_all, seed_files, ranked,
+                     q, depth)
 
-    # 1-hop neighbor files via file-level call edges.
+
+def _focus_files(graph, communities, central_all, files: list[str],
+                 label: str, limit: int, depth: int) -> dict:
+    """Cluster/selection-seeded view — the canvas posts a set of files (a
+    clicked community/super-node, or a single node) and we drive the full
+    Understand payload for them: ranked by centrality within the set, plus
+    the same 1-hop subgraph + context bundles. This is the click-through
+    that makes the graph the entry point to the knowledge ('ultimate
+    graph') — the two-way partner to search steering the canvas."""
+    want = [f for f in files if f]
+    sset = set(want)
+    ranked: list[dict] = []
+    for e in central_all:
+        if (e.get("file") or "") in sset:
+            ranked.append({
+                "entity_id": f"{e.get('file', '')}::{e.get('name', '')}",
+                "name": e.get("name", ""),
+                "kind": e.get("kind", ""),
+                "file": e.get("file", ""),
+                "line": e.get("line"),
+                "community": e.get("community"),
+                "score": e.get("centrality", 0.0),
+                "why": f"in {label}",
+            })
+        if len(ranked) >= limit:
+            break
+    if not ranked:  # centrality not populated — fall back to the files
+        for f in want[:limit]:
+            ranked.append({"entity_id": f, "name": _basename(f),
+                           "kind": "file", "file": f, "score": 0.0,
+                           "why": f"in {label}"})
+    return _assemble(graph, communities, central_all, want, ranked,
+                     label, depth)
+
+
+def _assemble(graph, communities, central_all, seed_files: list[str],
+              ranked: list[dict], query: str, depth: int) -> dict:
+    """Shared subgraph + context assembly for both focus paths. Given the
+    seed files and a ranked list, expands 1-hop neighbors, builds the
+    file-level nodes/edges, the present-community set, and per-seed context
+    bundles."""
+    cent_by_file: dict[str, float] = {}
+    for e in central_all:
+        f = e.get("file") or ""
+        if f:
+            cent_by_file[f] = max(cent_by_file.get(f, 0.0),
+                                  e.get("centrality", 0.0))
+    file_comm = _file_community_map(communities)
+
+    # Dedup seeds, preserve order.
+    seeds: list[str] = []
+    seen_files: set[str] = set()
+    for f in seed_files:
+        if f and f not in seen_files:
+            seen_files.add(f)
+            seeds.append(f)
+
     neighbor_files: list[str] = []
     nbr_seen = set(seen_files)
     if depth >= 1:
-        for f in seed_files[:_SEED_WALK_CAP]:
+        for f in seeds[:_SEED_WALK_CAP]:
             fd = graph.file_detail(f)
             for row in (fd.get("inbound", []) + fd.get("outbound", [])):
                 nf = row.get("from") or row.get("to")
@@ -220,7 +280,7 @@ def _focus(brain, graph, communities, central_all, q: str,
                 neighbor_files = neighbor_files[:_NEIGHBOR_CAP]
                 break
 
-    all_files = seed_files + neighbor_files
+    all_files = seeds + neighbor_files
 
     def _node(f: str, seed: bool) -> dict:
         return {
@@ -233,7 +293,7 @@ def _focus(brain, graph, communities, central_all, q: str,
             "provenance": "deterministic",
         }
 
-    nodes = ([_node(f, True) for f in seed_files]
+    nodes = ([_node(f, True) for f in seeds]
              + [_node(f, False) for f in neighbor_files])
     edges = [
         {**e, "provenance": "deterministic"}
@@ -244,7 +304,7 @@ def _focus(brain, graph, communities, central_all, q: str,
     present = [c for c in communities if c["id"] in present_ids]
 
     context: list[dict] = []
-    for f in seed_files[:_CONTEXT_CAP]:
+    for f in seeds[:_CONTEXT_CAP]:
         fd = graph.file_detail(f)
         chunks = [h["why"] for h in ranked if h["file"] == f and h["why"]][:3]
         context.append({
@@ -259,7 +319,7 @@ def _focus(brain, graph, communities, central_all, q: str,
         })
 
     return {
-        "query": q,
+        "query": query,
         "mode": "focus",
         "nodes": nodes,
         "edges": edges,
@@ -271,7 +331,7 @@ def _focus(brain, graph, communities, central_all, q: str,
         "counts": {
             "nodes": len(nodes), "edges": len(edges),
             "communities": len(present), "ranked": len(ranked),
-            "seed_files": len(seed_files), "neighbor_files": len(neighbor_files),
+            "seed_files": len(seeds), "neighbor_files": len(neighbor_files),
         },
         "provenance": "deterministic",
     }
