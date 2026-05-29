@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.6"
+PRISM_VERSION = "6.2.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.7: fix auto-update — it had silently stopped. Two root causes. "
+    "(1) The native (Tauri) shell version was hardcoded '0.1.0' in "
+    "tauri.conf.json and never bumped, so EVERY release published a "
+    "latest.json reporting version 0.1.0; installed native clients (also "
+    "0.1.0) compared equal and never saw a newer version -> no bundle "
+    "auto-update, ever. Fix: tauri.conf.json -> 6.2.7 AND release-tauri.yml "
+    "now injects PRISM_VERSION into tauri.conf.json at build time so it can "
+    "never drift again. Because current installs are all 0.1.0, 6.2.7 > "
+    "0.1.0 -> the whole native fleet updates via the Tauri updater on its "
+    "next check (works through the existing update path). (2) v6.2.4 made "
+    "the SERVICE pip auto-update OPT-IN (PRISM_AUTO_UPDATE default off), "
+    "which broke the in-place self-update server/docker installs relied on. "
+    "The silent-death cause was the os.execvp self-restart (already removed "
+    "in v6.2.4), NOT the apply; apply runs pip in the daemon thread + only "
+    "sets restart_required (no process replacement, UI loop keeps serving). "
+    "So default is restored to ON; set PRISM_AUTO_UPDATE=off to opt out. "
     "v6.2.6: dashboard — drop the unclear Workflow-lanes panel; add Token "
     "usage tracking. /api/dashboard/activity now returns a tokens block "
     "(per-day series + total/sessions/avg) summed from scores.db "

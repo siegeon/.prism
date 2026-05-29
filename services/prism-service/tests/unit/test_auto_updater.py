@@ -171,16 +171,19 @@ def test_restart_is_deferred_on_all_platforms():
     assert au._DEFER_RESTART is True
 
 
-def test_auto_apply_is_opt_in():
-    """#66: PRISM_AUTO_UPDATE defaults OFF — a long-lived daemon must not
-    pip-install into itself unattended."""
+def test_auto_apply_default_on_opt_out():
+    """v6.2.7: PRISM_AUTO_UPDATE defaults ON (opt-out) — auto-update was
+    silently broken while it defaulted off (v6.2.4-6.2.6). The #66
+    silent-death cause was the os.execvp self-restart (still deferred,
+    see test above), not the apply, so default-on is safe."""
     def _eval(env_val):
-        raw = (env_val if env_val is not None else "off").lower()
+        raw = (env_val if env_val is not None else "on").lower()
         return raw in ("on", "true", "1", "yes")
-    assert _eval(None) is False          # unset -> off
-    assert _eval("off") is False
+    assert _eval(None) is True            # unset -> on
+    assert _eval("off") is False          # explicit opt-out honored
+    assert _eval("false") is False
     assert _eval("on") is True
     assert _eval("1") is True
     # And the module honored the default at import time (env unset in CI).
     if not os.environ.get("PRISM_AUTO_UPDATE"):
-        assert au._AUTO_APPLY is False
+        assert au._AUTO_APPLY is True

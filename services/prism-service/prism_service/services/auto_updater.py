@@ -62,12 +62,15 @@ GITHUB_REPO = os.environ.get("PRISM_UPDATE_REPO", "siegeon/.prism")
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _USER_AGENT = f"prism-service/{PRISM_VERSION} (auto-updater)"
 _POLL_INTERVAL_S = int(os.environ.get("PRISM_AUTO_UPDATE_INTERVAL", "1800"))
-# Issue #66: auto-apply is now OPT-IN. A long-lived daemon silently
-# pip-installing a new wheel into itself (a multi-minute, blocking,
-# subprocess-heavy op inside the live server) wedged the UI port for
-# ~2 min and then vanished. Checking for updates stays on (so the SPA
-# can surface "update available"); APPLYING is off unless asked.
-_AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "off").lower() in (
+# Auto-apply is ON by default (restored in v6.2.7). The v6.2.4 silent
+# death was the os.execvp self-restart (removed below), NOT the apply
+# itself: apply now runs `pip install --upgrade` in THIS background
+# daemon thread (the asyncio UI loop on the main thread keeps serving —
+# subprocess.run releases the GIL while waiting) and only sets
+# restart_required=True; it never replaces the live process. Native
+# (Tauri) installs update via the Tauri updater bundle-swap instead, so
+# the pip path there simply no-ops. Set PRISM_AUTO_UPDATE=off to opt out.
+_AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "on").lower() in (
     "on", "true", "1", "yes",
 )
 # Issue #66: NEVER self-restart in-place. _self_restart() used os.execvp
