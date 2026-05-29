@@ -1184,6 +1184,30 @@ class GraphService:
         return out
 
     # ----- Narrative layer: graph_annotations (Ultimate Graph) ---------
+    _ANNOTATIONS_DDL = (
+        "CREATE TABLE IF NOT EXISTS graph_annotations ("
+        "  scope_kind TEXT NOT NULL,"
+        "  scope_id   TEXT NOT NULL,"
+        "  task       TEXT NOT NULL,"
+        "  name       TEXT,"
+        "  purpose    TEXT,"
+        "  input_hash TEXT,"
+        "  provenance TEXT,"
+        "  updated_at TEXT,"
+        "  PRIMARY KEY (scope_kind, scope_id, task)"
+        ")"
+    )
+
+    def _ensure_annotations_table(self, conn: "sqlite3.Connection") -> None:
+        """Create graph_annotations on demand so the pull-loop / read-join
+        works against a DB that has not been through a full graph rebuild
+        (the schema migration runs during ingest, not on construction)."""
+        try:
+            conn.execute(self._ANNOTATIONS_DDL)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
     def get_annotation(self, scope_kind: str, scope_id: str,
                        task: str = "name") -> Optional[dict]:
         """Current annotation for a scope+task, or None. Callers use the
@@ -1194,6 +1218,7 @@ class GraphService:
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return None
+        self._ensure_annotations_table(conn)
         try:
             r = conn.execute(
                 "SELECT name, purpose, input_hash, provenance, updated_at "
@@ -1219,6 +1244,7 @@ class GraphService:
             conn = sqlite3.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return False
+        self._ensure_annotations_table(conn)
         try:
             conn.execute(
                 "INSERT INTO graph_annotations "
@@ -1245,6 +1271,7 @@ class GraphService:
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return {}
+        self._ensure_annotations_table(conn)
         try:
             rows = conn.execute(
                 "SELECT scope_id, name, purpose, provenance, updated_at "
@@ -1258,6 +1285,181 @@ class GraphService:
         return {r["scope_id"]: {"name": r["name"], "purpose": r["purpose"],
                                 "provenance": r["provenance"],
                                 "updated_at": r["updated_at"]} for r in rows}
+
+    # ----- Durable annotation queue: graph_jobs (pull loop, #50) -------
+    _GRAPH_JOBS_DDL = (
+        "CREATE TABLE IF NOT EXISTS graph_jobs ("
+        "  brief_id   TEXT PRIMARY KEY,"
+        "  scope_kind TEXT NOT NULL,"
+        "  scope_id   TEXT NOT NULL,"
+        "  input_hash TEXT,"
+        "  status     TEXT NOT NULL DEFAULT 'pending',"
+        "  retries    INTEGER NOT NULL DEFAULT 0,"
+        "  session_id TEXT,"
+        "  queued_at  TEXT,"
+        "  updated_at TEXT,"
+        "  UNIQUE (scope_kind, scope_id, input_hash)"
+        ")"
+    )
+
+    def _ensure_jobs_table(self, conn: "sqlite3.Connection") -> None:
+        """Create graph_jobs on demand (same lazy pattern as annotations)."""
+        try:
+            conn.execute(self._GRAPH_JOBS_DDL)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    def insert_job(self, brief_id: str, scope_kind: str, scope_id: str,
+                   input_hash: str) -> bool:
+        """Insert a pending job. Idempotent on (scope_kind, scope_id,
+        input_hash) — a duplicate is silently ignored so re-sweeps don't
+        pile up dispensable work. Returns True if a NEW row was created."""
+        from datetime import datetime, timezone
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+        except sqlite3.Error:
+            return False
+        self._ensure_jobs_table(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO graph_jobs "
+                "(brief_id, scope_kind, scope_id, input_hash, status, "
+                " retries, queued_at, updated_at) "
+                "VALUES (?,?,?,?, 'pending', 0, ?, ?)",
+                (brief_id, scope_kind, str(scope_id), input_hash, now, now),
+            )
+            conn.commit()
+            created = cur.rowcount > 0
+        except sqlite3.OperationalError:
+            conn.close()
+            return False
+        conn.close()
+        return created
+
+    def claim_job(self, session_id: str) -> Optional[dict]:
+        """Atomically claim the oldest pending job (status -> dispensed)
+        and return it, or None. Mirrors JanitorService.check dispense-one."""
+        from datetime import datetime, timezone
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return None
+        self._ensure_jobs_table(conn)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM graph_jobs WHERE status='pending' "
+                "ORDER BY queued_at ASC, brief_id ASC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                conn.close()
+                return None
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "UPDATE graph_jobs SET status='dispensed', session_id=?, "
+                "updated_at=? WHERE brief_id=?",
+                (session_id, now, row["brief_id"]),
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.close()
+            return None
+        conn.close()
+        return {"brief_id": row["brief_id"], "scope_kind": row["scope_kind"],
+                "scope_id": row["scope_id"], "input_hash": row["input_hash"]}
+
+    def get_job(self, brief_id: str) -> Optional[dict]:
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return None
+        self._ensure_jobs_table(conn)
+        try:
+            r = conn.execute(
+                "SELECT * FROM graph_jobs WHERE brief_id=?", (brief_id,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            conn.close()
+            return None
+        conn.close()
+        if not r:
+            return None
+        return {"brief_id": r["brief_id"], "scope_kind": r["scope_kind"],
+                "scope_id": r["scope_id"], "input_hash": r["input_hash"],
+                "status": r["status"], "retries": r["retries"]}
+
+    def mark_job(self, brief_id: str, status: str) -> bool:
+        from datetime import datetime, timezone
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+        except sqlite3.Error:
+            return False
+        self._ensure_jobs_table(conn)
+        try:
+            conn.execute(
+                "UPDATE graph_jobs SET status=?, updated_at=? WHERE brief_id=?",
+                (status, datetime.now(timezone.utc).isoformat(), brief_id),
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.close()
+            return False
+        conn.close()
+        return True
+
+    def retry_job(self, brief_id: str, hard_limit: int) -> dict:
+        """Increment retries; status -> pending (redispensable) until the
+        hard limit, then -> abandoned. Returns {status, retries}."""
+        from datetime import datetime, timezone
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return {"status": "unknown", "retries": 0}
+        self._ensure_jobs_table(conn)
+        try:
+            r = conn.execute(
+                "SELECT retries FROM graph_jobs WHERE brief_id=?", (brief_id,)
+            ).fetchone()
+            if r is None:
+                conn.close()
+                return {"status": "unknown", "retries": 0}
+            n = (r["retries"] or 0) + 1
+            status = "abandoned" if n >= hard_limit else "pending"
+            conn.execute(
+                "UPDATE graph_jobs SET retries=?, status=?, updated_at=? "
+                "WHERE brief_id=?",
+                (n, status, datetime.now(timezone.utc).isoformat(), brief_id),
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.close()
+            return {"status": "unknown", "retries": 0}
+        conn.close()
+        return {"status": status, "retries": n}
+
+    def job_status_counts(self) -> dict:
+        """Queue depth by status for graph_annotate_status."""
+        try:
+            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return {}
+        self._ensure_jobs_table(conn)
+        try:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM graph_jobs GROUP BY status"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            conn.close()
+            return {}
+        conn.close()
+        return {r["status"]: int(r["n"]) for r in rows}
 
     def file_detail(self, path: str) -> dict:
         """Per-file detail for the layer drill's right-panel.

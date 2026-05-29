@@ -31,6 +31,7 @@ class ProjectContext:
         self._governance = None
         self._janitor_svc = None
         self._verifier_svc = None
+        self._graph_annotate_svc = None
 
     @property
     def brain_svc(self):
@@ -107,6 +108,13 @@ class ProjectContext:
                 scores_db=str(self._data_dir / "scores.db"),
             )
         return self._janitor_svc
+
+    @property
+    def graph_annotate_svc(self):
+        if self._graph_annotate_svc is None:
+            from prism_service.services.graph_annotate import GraphAnnotateService
+            self._graph_annotate_svc = GraphAnnotateService(self.graph_svc)
+        return self._graph_annotate_svc
 
     @property
     def verifier_svc(self):

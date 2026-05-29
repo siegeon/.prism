@@ -29,12 +29,19 @@ type Community = { id: number; label: string; size: number; summary: string; top
 // A cluster in the canvas legend, mirrored into the panel. Carries the
 // viewer's node id so clicking the panel chip can drill the canvas to it.
 type ClusterItem = { label: string; color: string; count: number; kind?: string; id?: string; cid?: number };
+type Annotation = {
+  scope_kind: "node" | "community" | "hierarchy";
+  scope_id: string;
+  name: string; purpose: string;
+  provenance: string;       // "deterministic" | "claude @ <date>"
+  updated_at?: string | null;
+};
 type Ctx = {
   entity_id: string; file: string; community?: number | null;
   outline: { name: string; kind: string; line?: number | null }[];
   references: { from: string; weight: number }[];
   call_chain: { to: string; weight: number }[];
-  chunks: string[]; annotations: unknown[];
+  chunks: string[]; annotations: Annotation[];
 };
 type Understanding = {
   query: string; mode: "overview" | "focus";
@@ -449,13 +456,32 @@ function ContextRail({ sel, selected, mode }: { sel?: Ctx; selected: string | nu
             {sel.call_chain.length === 0 ? <Faint>none</Faint> :
               sel.call_chain.map((r, i) => <Edge key={i} file={r.to} w={r.weight} />)}
           </Section>
-          <div>
-            <Label>Narrative</Label>
-            <div className="text-xs opacity-50 italic border border-dashed border-[color:var(--border-default)] rounded-md px-2 py-1.5">
-              LLM annotations land here once the background enrichment loop ships
-              (epic slices 1–2, 6). Structure above is deterministic.
-            </div>
-          </div>
+          <Section label={`Narrative · ${sel.annotations.length}`}>
+            {sel.annotations.length === 0 ? (
+              <Faint>no annotations yet — structure above is deterministic</Faint>
+            ) : (
+              <ul className="space-y-2">
+                {sel.annotations.map((a, i) => {
+                  const isLlm = a.provenance.startsWith("claude @");
+                  return (
+                    <li key={i} className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-2.5 py-2">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-medium text-[color:var(--text-primary)] truncate">{a.name}</span>
+                        <Pill tone={isLlm ? "violet" : "slate"} active>
+                          {isLlm ? a.provenance : "deterministic"}
+                        </Pill>
+                      </div>
+                      <p className="text-xs leading-relaxed opacity-80">{a.purpose}</p>
+                      <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-wider opacity-40">
+                        <span>{a.scope_kind}</span>
+                        {a.updated_at ? <span>{a.updated_at.slice(0, 10)}</span> : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Section>
         </div>
       )}
     </Card>

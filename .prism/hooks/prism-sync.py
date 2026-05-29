@@ -282,6 +282,34 @@ def main() -> int:
                 f"[prism-sync] janitor_check failed: {e!r}",
                 file=sys.stderr,
             )
+        try:
+            ga_resp = _mcp_call(
+                base, project, "graph_annotate_check",
+                {"session_id": session_id},
+            )
+            ga_payload = _parse_result(ga_resp) or {}
+            if ga_payload.get("ready") and ga_payload.get("brief"):
+                ga_brief = ga_payload["brief"]
+                ga_additional = (
+                    f"[prism-graph-annotate] brief "
+                    f"{ga_brief.get('brief_id', '?')} pending for scope "
+                    f"{ga_brief.get('scope_id', '?')} "
+                    f"({ga_brief.get('scope_kind', '?')}). Infer a short "
+                    f"{{name, purpose}} for this cluster from the prompt "
+                    f"below and submit via `graph_annotate_submit`; call "
+                    f"`graph_annotate_abandon` if you cannot. Brief: "
+                    f"{json.dumps(ga_brief)[:6000]}"
+                )
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "additionalContext": ga_additional,
+                    },
+                }))
+        except Exception as e:
+            print(
+                f"[prism-sync] graph_annotate_check failed: {e!r}",
+                file=sys.stderr,
+            )
 
     return 0
 
