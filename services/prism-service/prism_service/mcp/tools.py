@@ -863,6 +863,78 @@ TOOLS: list[Tool] = [
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
+    # ------------------------------------------------------------------
+    # Ultimate Graph annotation PULL loop (#50). DISTINCT from janitor_*:
+    # response schema is {name, purpose}; durable in graph.db graph_jobs.
+    # See services/graph_annotate.py.
+    # ------------------------------------------------------------------
+    Tool(
+        name="graph_annotate_enqueue",
+        description=(
+            "Sweep the graph's hierarchy + community scopes and enqueue "
+            "annotation briefs for scopes whose input_hash changed "
+            "(escape-when-unchanged). Idempotent on (scope_kind, scope_id, "
+            "input_hash). Returns {enqueued}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"project": {"type": "string"}},
+        },
+    ),
+    Tool(
+        name="graph_annotate_check",
+        description=(
+            "Return {ready, brief}. Dispenses at most one pending "
+            "annotation brief per call - the brief carries the rendered "
+            "graph_enrich prompt and a response_schema constrained to "
+            "{name, purpose}. Distinct from janitor_check (reflection)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="graph_annotate_submit",
+        description=(
+            "Post the session's inferred {name, purpose}. Server "
+            "schema-validates, persists via upsert_annotation with "
+            "provenance 'claude @ <date>', marks the job completed. "
+            "Malformed output is rejected and the brief stays dispensable."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "brief_id": {"type": "string"},
+                "output": {"type": "object"},
+            },
+            "required": ["brief_id", "output"],
+        },
+    ),
+    Tool(
+        name="graph_annotate_abandon",
+        description=(
+            "Give up on a dispensed annotation brief. Increments retries; "
+            "hard limit of 3 before status=abandoned."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "brief_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["brief_id"],
+        },
+    ),
+    Tool(
+        name="graph_annotate_status",
+        description=(
+            "Return annotation-queue depth by status "
+            "(pending/dispensed/completed/abandoned)."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
     Tool(
         name="memory_invalidate",
         description=(
@@ -1277,6 +1349,11 @@ LEARNING_TOOL_NAMES: set[str] = {
     "janitor_submit",
     "janitor_abandon",
     "janitor_status",
+    "graph_annotate_enqueue",
+    "graph_annotate_check",
+    "graph_annotate_submit",
+    "graph_annotate_abandon",
+    "graph_annotate_status",
     "memory_invalidate",
 }
 
@@ -1293,6 +1370,8 @@ AUTOMATION_TOOL_NAMES: set[str] = {
     "janitor_check",
     "janitor_mark_stale",
     "janitor_enqueue",
+    "graph_annotate_enqueue",
+    "graph_annotate_check",
     "verifier_run",
 }
 
@@ -1937,6 +2016,34 @@ def main() -> int:
                 f"[prism-sync] janitor_check failed: {e!r}",
                 file=sys.stderr,
             )
+        try:
+            ga_resp = _mcp_call(
+                base, project, "graph_annotate_check",
+                {"session_id": session_id},
+            )
+            ga_payload = _parse_result(ga_resp) or {}
+            if ga_payload.get("ready") and ga_payload.get("brief"):
+                ga_brief = ga_payload["brief"]
+                ga_additional = (
+                    f"[prism-graph-annotate] brief "
+                    f"{ga_brief.get('brief_id', '?')} pending for scope "
+                    f"{ga_brief.get('scope_id', '?')} "
+                    f"({ga_brief.get('scope_kind', '?')}). Infer a short "
+                    f"{{name, purpose}} for this cluster from the prompt "
+                    f"below and submit via `graph_annotate_submit`; call "
+                    f"`graph_annotate_abandon` if you cannot. Brief: "
+                    f"{json.dumps(ga_brief)[:6000]}"
+                )
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "additionalContext": ga_additional,
+                    },
+                }))
+        except Exception as e:
+            print(
+                f"[prism-sync] graph_annotate_check failed: {e!r}",
+                file=sys.stderr,
+            )
 
     return 0
 
@@ -2282,6 +2389,9 @@ def check_and_clear_cancel(project_id: str) -> bool:
 _NO_AUGMENT_TOOLS: frozenset[str] = frozenset({
     "janitor_enqueue", "janitor_mark_stale", "janitor_check",
     "janitor_submit", "janitor_abandon", "janitor_status",
+    "graph_annotate_enqueue", "graph_annotate_check",
+    "graph_annotate_submit", "graph_annotate_abandon",
+    "graph_annotate_status",
     "memory_invalidate", "prism_install", "prism_guide",
 })
 
@@ -3046,6 +3156,37 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 "stale": counts.get("stale", 0),
                 "last_nudge_at": recent_nudge["ts"] if recent_nudge else None,
             }))]
+
+        # ------------------------------------------------------------------
+        # Ultimate Graph annotation PULL loop (#50) - durable, {name,purpose}
+        # ------------------------------------------------------------------
+        if name == "graph_annotate_enqueue":
+            n = ctx.graph_annotate_svc.enqueue_project(
+                arguments.get("project") or project_id)
+            return [TextContent(type="text", text=_json({"enqueued": n}))]
+
+        if name == "graph_annotate_check":
+            res = ctx.graph_annotate_svc.check(
+                session_id=arguments["session_id"])
+            return [TextContent(type="text", text=_json(res))]
+
+        if name == "graph_annotate_submit":
+            res = ctx.graph_annotate_svc.submit(
+                brief_id=arguments["brief_id"],
+                output=arguments.get("output"),
+            )
+            return [TextContent(type="text", text=_json(res))]
+
+        if name == "graph_annotate_abandon":
+            res = ctx.graph_annotate_svc.abandon(
+                brief_id=arguments["brief_id"],
+                reason=arguments.get("reason", ""),
+            )
+            return [TextContent(type="text", text=_json(res))]
+
+        if name == "graph_annotate_status":
+            return [TextContent(type="text",
+                                text=_json(ctx.graph_annotate_svc.status()))]
 
         if name == "memory_recall":
             results = memory_svc.recall(
