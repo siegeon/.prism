@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.7"
+PRISM_VERSION = "6.2.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.8: dashboard charts are now responsive. PlotFigure hardcoded a "
+    "fixed pixel width (880/420), so on a wide/full-screen window the "
+    "graphs didn't fill their cards — they sat at a fixed size with empty "
+    "space beside them. PlotFigure now uses a ResizeObserver to measure its "
+    "container and feeds that width into Plot (overriding the spec width) so "
+    "every chart stretches to its card and re-flows on resize; height still "
+    "comes from the spec. Also: the Brain-activity (first) graph now uses "
+    "explicit log-spaced y ticks (0/10/100/1k/10k on the symlog axis) so "
+    "the huge indexing spikes and the single-digit search counts are both "
+    "readable, instead of linear ticks that buried everything under the "
+    "reindex peak. "
     "v6.2.7: fix auto-update — it had silently stopped. Two root causes. "
     "(1) The native (Tauri) shell version was hardcoded '0.1.0' in "
     "tauri.conf.json and never bumped, so EVERY release published a "

@@ -92,7 +92,7 @@ export default function DashboardPage() {
     return {
       ...plotBase, height: 210, marginLeft: 50, marginRight: 16, marginTop: 16, marginBottom: 26, width: 880,
       x: { type: "utc", label: null, ticks: 7, tickFormat: "%b %-d" },
-      y: { type: "symlog", label: "events / day", grid: true, ticks: 4 },
+      y: { type: "symlog", label: "events / day (log)", grid: true, domain: [0, 10000], ticks: [0, 10, 100, 1000, 10000], tickFormat: (d: number) => (d >= 1000 ? `${d / 1000}k` : `${d}`) },
       color: { domain: defs.map((d) => d[0]), range: defs.map((d) => d[2]), legend: true },
       marks: [
         Plot.ruleY([0], { stroke: "#8b97ad", strokeOpacity: 0.2 }),

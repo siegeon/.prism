@@ -5,8 +5,9 @@
  * trend cards. Everything is themed against the Hermes accent tokens so
  * the charts speak the same color language as the rest of the SPA.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Plot from "@observablehq/plot";
+import { cn } from "@/lib/utils";
 
 /** Accent foreground hexes mirrored from index.css --accent-*-fg, so
  *  Plot marks (which can't read CSS vars) match the pill/legend palette. */
@@ -24,18 +25,31 @@ export const plotBase = {
   style: { background: "transparent", color: "#8b97ad", fontSize: "10px", overflow: "visible" },
 };
 
-/** Renders an Observable Plot spec into a div. Parents should useMemo the
- *  `options` so the figure only re-renders when its data actually changes. */
+/** Renders an Observable Plot spec into a div, sized to fill its container.
+ *  A ResizeObserver feeds the measured width into Plot so charts stretch to
+ *  their card (the spec's own `width`, if any, is overridden) and re-flow on
+ *  resize. Height comes from the spec. Parents should useMemo the `options`. */
 export function PlotFigure({ options, className }: { options: Plot.PlotOptions; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const fig = Plot.plot(options);
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.floor(entries[0].contentRect.width);
+      if (w > 0) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !width) return;
+    const fig = Plot.plot({ ...options, width });
     el.append(fig);
     return () => { fig.remove(); };
-  }, [options]);
-  return <div ref={ref} className={className} />;
+  }, [options, width]);
+  return <div ref={ref} className={cn("w-full", className)} />;
 }
 
 /** Tiny axis-less trend line for KPI cards. Pure SVG — no Plot overhead. */
