@@ -53,22 +53,40 @@ def _data_dir() -> Path:
 
 
 def _pid_file() -> Path:
-    return _data_dir() / "prism.pid"
+    from prism_service.data_dir import pid_file
+    return pid_file()
 
 
 def _log_file() -> Path:
-    return _data_dir() / "prism.log"
+    from prism_service.data_dir import log_file
+    return log_file()
+
+
+def _write_pid(pid: int) -> None:
+    """Publish the pidfile atomically (write tmp + os.replace) so a crash
+    mid-write or a concurrent reader never sees a torn pidfile (#66)."""
+    p = _pid_file()
+    tmp = p.with_suffix(".pid.tmp")
+    tmp.write_text(str(pid), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def _is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     if sys.platform.startswith("win"):
+        # CSV + exact PID-column compare — the old `str(pid) in stdout`
+        # substring test false-positives (123 matches a row with 1234,
+        # or the pid appearing in an image name / memory column) (#66).
         out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, check=False,
         )
-        return str(pid) in (out.stdout or "")
+        import csv
+        for row in csv.reader((out.stdout or "").splitlines()):
+            if len(row) >= 2 and row[1].strip() == str(pid):
+                return True
+        return False
     try:
         os.kill(pid, 0)
         return True
@@ -76,6 +94,21 @@ def _is_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+
+
+def _daemon_http_alive(port: int | str) -> bool:
+    """Probe the daemon's own /api/version. Used as a lightweight identity
+    check so status/stop don't trust a recycled PID (#66). 127.0.0.1 only
+    (the WSL wslrelay trap, #64). No new dependency — stdlib urllib."""
+    import urllib.request
+    import urllib.error
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/version", timeout=0.5,
+        ) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
 
 
 def _read_pid() -> int:
@@ -105,8 +138,25 @@ def cmd_start(args: argparse.Namespace) -> int:
     if existing and _is_alive(existing):
         print(f"prism is already running (pid {existing})", file=sys.stderr)
         return 1
+    if existing:
+        # Confirmed-dead pid lingering on disk — clear it proactively so
+        # status/stop never report a stale daemon as running (#66). This
+        # used to only happen on an explicit `prism stop`.
+        print(f"removing stale pidfile (pid {existing} not alive)", file=sys.stderr)
+        _pid_file().unlink(missing_ok=True)
 
-    log = _log_file().open("ab", buffering=0)
+    # Rotate the prior run's log BEFORE opening the append handle so the
+    # file is size-bounded and the last run's tail (incl. any crash
+    # trace) is preserved as prism.log.1 rather than growing unbounded
+    # or being lost (#66). Rotating here — before the handle exists —
+    # avoids the Windows rename-while-open hazard.
+    from prism_service.data_dir import rotate_log_on_start
+    rotate_log_on_start(_log_file())
+    # Append (never truncate) so a restart keeps the prior run's tail.
+    # The child's stdout+stderr (every print() + uvicorn's default stderr
+    # logging) land here; the daemon also installs faulthandler/excepthook
+    # against this same stream (main._configure_logging) for crash traces.
+    log = _log_file().open("ab")
     creationflags = 0
     if sys.platform.startswith("win"):
         creationflags = 0x00000008 | 0x00000200  # DETACHED + NEW_PROCESS_GROUP
@@ -119,7 +169,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         close_fds=True,
         creationflags=creationflags,
     )
-    _pid_file().write_text(str(proc.pid), encoding="utf-8")
+    _write_pid(proc.pid)
     print(f"prism started (pid {proc.pid})")
     print(f"  data dir: {_data_dir()}")
     print(f"  ui:       http://localhost:{args.ui_port or os.environ.get('PRISM_UI_PORT', '7778')}/")
@@ -135,6 +185,18 @@ def cmd_stop(_args: argparse.Namespace) -> int:
         return 1
     if not _is_alive(pid):
         print(f"stale pidfile (pid {pid} not alive); cleaning up", file=sys.stderr)
+        _pid_file().unlink(missing_ok=True)
+        return 0
+    # PID is alive — but is it actually prism, or a recycled PID? If the
+    # daemon's /api/version doesn't answer, refuse to kill an innocent
+    # process; just clear the pidfile (#66).
+    ui = os.environ.get("PRISM_UI_PORT", "7778")
+    if not _daemon_http_alive(ui):
+        print(
+            f"pid {pid} is alive but not responding as prism on :{ui} — "
+            f"refusing to kill (possible recycled PID); clearing pidfile only",
+            file=sys.stderr,
+        )
         _pid_file().unlink(missing_ok=True)
         return 0
     try:
@@ -153,13 +215,25 @@ def cmd_stop(_args: argparse.Namespace) -> int:
 def cmd_status(_args: argparse.Namespace) -> int:
     from prism_service.__version__ import PRISM_VERSION
     pid = _read_pid()
-    alive = bool(pid) and _is_alive(pid)
+    ui = os.environ.get("PRISM_UI_PORT", "7778")
+    mcp = os.environ.get("PRISM_MCP_PORT", "7777")
+    pid_alive = bool(pid) and _is_alive(pid)
+    # "running" requires BOTH a live PID AND the daemon answering on its
+    # port — a live-but-unresponsive PID is a stale/recycled pidfile, not
+    # a running prism (#66).
+    responding = pid_alive and _daemon_http_alive(ui)
     print(f"prism-service v{PRISM_VERSION}")
     print(f"  data dir: {_data_dir()}")
-    print(f"  daemon:   {'running (pid ' + str(pid) + ')' if alive else 'stopped'}")
-    if alive:
-        ui = os.environ.get("PRISM_UI_PORT", "7778")
-        mcp = os.environ.get("PRISM_MCP_PORT", "7777")
+    if responding:
+        status = f"running (pid {pid})"
+    elif pid_alive:
+        status = f"stale pidfile (pid {pid} alive but not responding on :{ui})"
+    elif pid:
+        status = f"stopped (stale pidfile pid {pid})"
+    else:
+        status = "stopped"
+    print(f"  daemon:   {status}")
+    if responding:
         print(f"  ui:       http://localhost:{ui}/")
         print(f"  mcp:      http://localhost:{mcp}/mcp/")
     return 0

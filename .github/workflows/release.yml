@@ -92,6 +92,10 @@ jobs:
           npm run build
           # The wheel's MANIFEST.in / pyproject include-package-data
           # picks up web_dist/ as long as it exists at build time.
+          # Fail-fast (#66): a partial/failed SPA build used to ship an
+          # SPA-less wheel silently (the old `ls | head` printed nothing
+          # and exited 0). Now a missing index.html hard-fails the job.
+          test -f ../web_dist/index.html || { echo '::error::SPA build produced no web_dist/index.html'; exit 1; }
           ls -la ../web_dist | head -5
 
       - name: Build wheel + sdist
@@ -100,6 +104,8 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build --wheel --sdist
           ls -la dist/
+          # Guard (#66): never publish a wheel that is missing the SPA.
+          python -c "import zipfile, glob; w = glob.glob('dist/*.whl')[0]; names = zipfile.ZipFile(w).namelist(); assert any(n.endswith('web_dist/index.html') for n in names), 'wheel %s is missing web_dist/index.html' % w; print('OK: SPA present in', w)"
 
       - name: Create / update GitHub Release with wheel
         # softprops/action-gh-release creates the release for the tag

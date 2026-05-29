@@ -7,6 +7,8 @@ call or pip subprocess — those are integration concerns.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from prism_service.services import auto_updater as au
@@ -129,3 +131,56 @@ def test_apply_update_refuses_in_docker():
         au._state.in_docker = False
         au._state.update_available = False
         au._state.asset_url = None
+
+
+# ---------------------------------------------------------------------------
+# Issue #66 — the auto-updater must never silently kill the daemon
+# ---------------------------------------------------------------------------
+
+def test_maybe_apply_never_self_execs(monkeypatch):
+    """The actual #66 silent-death cause: _maybe_apply re-exec'd the live
+    process via os.execvp from a daemon thread (same PID, no traceback,
+    sockets dropped). It must NEVER call execvp on any platform now."""
+    called = {"execvp": False}
+    monkeypatch.setattr(au.os, "execvp",
+                        lambda *a, **k: called.__setitem__("execvp", True))
+    monkeypatch.setattr(au, "_AUTO_APPLY", True)
+    monkeypatch.setattr(au, "apply_update", lambda: {"ok": True})
+    with au._state_lock:
+        au._state.update_available = True
+        au._state.restart_required = False
+        au._state.latest_version = "9.9.9"
+    try:
+        au._maybe_apply()
+    finally:
+        with au._state_lock:
+            au._state.update_available = False
+            au._state.restart_required = False
+            au._state.latest_version = None
+    assert called["execvp"] is False
+
+
+def test_self_restart_helper_is_gone():
+    """The in-place re-exec helper was removed in #66 — its existence is
+    a regression risk, so assert it stays gone."""
+    assert not hasattr(au, "_self_restart")
+
+
+def test_restart_is_deferred_on_all_platforms():
+    """#66: never auto-restart in-place, regardless of OS."""
+    assert au._DEFER_RESTART is True
+
+
+def test_auto_apply_is_opt_in():
+    """#66: PRISM_AUTO_UPDATE defaults OFF — a long-lived daemon must not
+    pip-install into itself unattended."""
+    def _eval(env_val):
+        raw = (env_val if env_val is not None else "off").lower()
+        return raw in ("on", "true", "1", "yes")
+    assert _eval(None) is False          # unset -> off
+    assert _eval("off") is False
+    assert _eval("on") is True
+    assert _eval("1") is True
+    # And the module honored the default at import time (env unset in CI).
+    if not os.environ.get("PRISM_AUTO_UPDATE"):
+        assert au._AUTO_APPLY is False

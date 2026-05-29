@@ -1,0 +1,12 @@
+# The React SPA build output lives at prism_service/web_dist/ and is
+# gitignored (it's a build artifact). Without this directive the sdist
+# file-finder never sees it, so the default `python -m build`
+# (wheel-from-sdist) ships a wheel WITHOUT the SPA and the runtime
+# returns 503 "SPA build missing" — exactly issue #66 on the 5.3.20
+# pipx wheel. CI builds the SPA before packaging; this guarantees it is
+# carried into the sdist -> wheel regardless of the build flags used.
+recursive-include prism_service/web_dist *
+
+# Inference prompt templates + typing marker (mirror package-data).
+recursive-include prism_service/inference/prompts *.md
+include prism_service/py.typed

@@ -12,15 +12,16 @@ Design:
     tag is present AND a .whl asset is attached, the updater proceeds.
   * Background thread polls every PRISM_AUTO_UPDATE_INTERVAL seconds
     (default 1800 = 30 min). Set to 0 to disable.
-  * When a newer release is found and PRISM_AUTO_UPDATE=on (default),
-    the updater:
+  * When a newer release is found and PRISM_AUTO_UPDATE=on (OPT-IN as of
+    issue #66 — default OFF), the updater:
        1. Downloads the wheel to a temp file
        2. Calls `pip install --upgrade <wheel-path>` in the same
           interpreter (sys.executable)
-       3. Touches a `.restart-requested` sentinel so the daemon can
-          drop the new code on next graceful restart, OR forks a
-          self-restart subprocess (we can't os.execvp ourselves
-          safely from a running uvicorn worker).
+       3. Sets restart_required=True and surfaces it via
+          /api/update/status. It NEVER self-restarts in-place — doing
+          that via os.execvp from a daemon thread dropped the live
+          sockets with no traceback (#66). The new wheel takes effect on
+          the next managed/manual restart.
   * Service status (current version, latest known, last check, last
     error) is exposed via /api/update-status for the SPA's
     Settings → Service card.
@@ -61,10 +62,21 @@ GITHUB_REPO = os.environ.get("PRISM_UPDATE_REPO", "siegeon/.prism")
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _USER_AGENT = f"prism-service/{PRISM_VERSION} (auto-updater)"
 _POLL_INTERVAL_S = int(os.environ.get("PRISM_AUTO_UPDATE_INTERVAL", "1800"))
-_AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "on").lower() not in (
-    "off", "false", "0", "no",
+# Issue #66: auto-apply is now OPT-IN. A long-lived daemon silently
+# pip-installing a new wheel into itself (a multi-minute, blocking,
+# subprocess-heavy op inside the live server) wedged the UI port for
+# ~2 min and then vanished. Checking for updates stays on (so the SPA
+# can surface "update available"); APPLYING is off unless asked.
+_AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "off").lower() in (
+    "on", "true", "1", "yes",
 )
-_DEFER_RESTART = sys.platform.startswith("win")
+# Issue #66: NEVER self-restart in-place. _self_restart() used os.execvp
+# from the auto-updater DAEMON thread, replacing the process image (same
+# PID, no traceback, sockets dropped) — the exact silent-death signature
+# in the report. Defer the restart on ALL platforms; the new wheel takes
+# effect on the next managed/manual restart, and restart_required is
+# surfaced via /api/update/status.
+_DEFER_RESTART = True
 
 
 def _running_in_docker() -> bool:
@@ -357,34 +369,15 @@ def _maybe_apply() -> None:
         )
         return
     print(
-        f"[auto_updater] applied {target}; restart_required=True",
+        f"[auto_updater] applied {target}; restart_required=True "
+        f"(restart the daemon to pick up the new wheel)",
         file=sys.stderr, flush=True,
     )
-    if not _DEFER_RESTART:
-        _self_restart()
-
-
-def _self_restart() -> None:
-    """Re-exec the daemon so the freshly-installed wheel takes effect.
-
-    Linux/Mac: os.execvp replaces the current process image cleanly.
-    Windows: pip can't unlink the running python.exe of an active
-    daemon, so we never auto-restart there — the user / launcher
-    relaunches manually. The UI shows 'restart required to apply'.
-    """
-    if _DEFER_RESTART:
-        return
-    print(
-        "[auto_updater] re-exec to pick up new wheel",
-        file=sys.stderr, flush=True,
-    )
-    try:
-        os.execvp(sys.executable, [sys.executable, "-m", "prism_service.main"])
-    except OSError as e:
-        print(
-            f"[auto_updater] os.execvp failed: {e}; restart manually",
-            file=sys.stderr, flush=True,
-        )
+    # Issue #66: we deliberately do NOT self-restart. The previous
+    # os.execvp(...) from this daemon thread replaced the process image
+    # in place with no traceback and dropped the live sockets — the
+    # silent-death root cause. restart_required is surfaced via
+    # /api/update/status; a managed/manual restart applies the wheel.
 
 
 def start_auto_updater() -> None:

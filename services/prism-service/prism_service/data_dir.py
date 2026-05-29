@@ -54,6 +54,47 @@ def resolve_data_dir() -> Path:
     return root.resolve()
 
 
+def log_file() -> Path:
+    """The daemon's rotating log file. Shared by the CLI (`prism logs`)
+    and the in-process logging config (main._configure_logging) so the
+    launcher and the daemon never disagree on the path (issue #66)."""
+    return resolve_data_dir() / "prism.log"
+
+
+def pid_file() -> Path:
+    """The daemon pidfile. Shared by the CLI (start/stop/status) and the
+    daemon's own atexit/signal cleanup so whoever writes it and whoever
+    clears it agree on the path (issue #66)."""
+    return resolve_data_dir() / "prism.pid"
+
+
+LOG_MAX_BYTES = 5_000_000
+LOG_BACKUPS = 5
+
+
+def rotate_log_on_start(path: Path | None = None) -> None:
+    """Roll prism.log -> prism.log.1 (.2 …) once at startup if it has
+    grown past the cap, so the file is size-bounded and the PREVIOUS
+    run's tail (incl. any crash trace) survives the restart instead of
+    being lost (issue #66). Rotating only at startup — never mid-run —
+    sidesteps the Windows "can't rename a file another handle has open"
+    hazard a RotatingFileHandler would hit against the daemon's inherited
+    stdout fd or a `prism logs --follow` reader. Lives here (not in the
+    heavy main module) so the CLI can call it without importing FastAPI.
+    """
+    p = path or log_file()
+    try:
+        if not p.exists() or p.stat().st_size <= LOG_MAX_BYTES:
+            return
+        for i in range(LOG_BACKUPS - 1, 0, -1):
+            src = p.with_name(f"{p.name}.{i}")
+            if src.exists():
+                src.replace(p.with_name(f"{p.name}.{i + 1}"))
+        p.replace(p.with_name(f"{p.name}.1"))
+    except OSError:
+        pass  # best-effort; never block startup on log rotation
+
+
 def resolve_claude_home() -> Path:
     """Where PRISM should find the user's Claude Code config (~/.claude).
 
