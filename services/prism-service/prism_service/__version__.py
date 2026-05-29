@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.1"
+PRISM_VERSION = "6.2.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.2: enrich the LEIDEN COMMUNITIES too, not just the path "
+    "hierarchy. At L3/symbol level the legend showed Leiden clusters whose "
+    "deterministic labels all collapse to 'prism service · …' in a "
+    "single-service repo — no value. New community_scopes() enumerates each "
+    "community's member files + symbols; enrich_project_once now names both "
+    "kinds (hierarchy first, then communities with the remaining budget), "
+    "each escaping when unchanged. hierarchy.json overrides the "
+    "deterministic community_labels with the inferred names, so the L3 "
+    "legend + 'symbols in view' panel read meaningfully (e.g. 'Brain Search "
+    "Engine' instead of 'prism service prism service · encode'). Background "
+    "worker fills them over time.\n\n"
     "v6.2.1: Brain — the 'domains in view' chips are now a quick filter "
     "INTO the graph. Clicking one drills the canvas to that cluster (top of "
     "its domain, siblings dimmed) and refills the panels. The viewer's "

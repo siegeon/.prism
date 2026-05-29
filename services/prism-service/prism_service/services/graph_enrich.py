@@ -149,6 +149,55 @@ def hierarchy_scopes(project: str, min_files: int = 2) -> list[dict]:
     return scopes
 
 
+def community_scopes(project: str, min_size: int = 3) -> list[dict]:
+    """Enumerate Leiden communities (the clusters shown at L3 / symbol
+    level) with member files + sample symbols. These are what read as
+    'prism service · …' junk today because the deterministic labeler keys
+    off the dominant path — every cluster in a single-service repo collapses
+    to the same prefix. Inference names them by what they actually DO.
+    scope_id = the community id (string). level=None -> prompt says 'cluster'.
+    """
+    from prism_service.project_context import get_project
+    try:
+        ctx = get_project(project)
+        db = str(ctx._data_dir / "graph.db")
+    except Exception:
+        return []
+    try:
+        conn = sqlite3.connect(db, timeout=5.0)
+        rows = conn.execute(
+            "SELECT community, file, name FROM entities "
+            "WHERE community IS NOT NULL"
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        return []
+    groups: dict = {}
+    for cid, file, name in rows:
+        if cid is None:
+            continue
+        g = groups.setdefault(int(cid), {"files": set(), "symbols": []})
+        if file:
+            g["files"].add(file)
+        if name and len(g["symbols"]) < 24:
+            g["symbols"].append(name)
+    scopes = []
+    for cid, g in groups.items():
+        files = sorted(g["files"])
+        size = len(g["symbols"]) + len(files)
+        if size < min_size:
+            continue
+        scopes.append({
+            "scope_id": str(cid),
+            "level": None,            # render_prompt -> "cluster"
+            "files": files or [f"community:{cid}"],
+            "symbols": g["symbols"],
+            "input_hash": _input_hash(files + g["symbols"]),
+        })
+    scopes.sort(key=lambda s: len(s["symbols"]) + len(s["files"]), reverse=True)
+    return scopes
+
+
 def _basename(p: str) -> str:
     return os.path.basename((p or "").replace("\\", "/"))
 
@@ -206,40 +255,53 @@ def enrich_one(scope: dict, project: str) -> tuple[str, str]:
     return _parse(text)
 
 
-def enrich_project_once(project: str, max_per_cycle: int) -> dict:
-    """Enrich up to `max_per_cycle` CHANGED hierarchy scopes for a project.
+def _enrich_kind(graph, project, scope_kind, scopes, budget, out):
+    """Enrich up to `budget` CHANGED scopes of one kind. Escapes scopes
+    whose input_hash still matches. Returns how many of the budget remain."""
+    changed = []
+    for s in scopes:
+        existing = graph.get_annotation(scope_kind, s["scope_id"], "name")
+        if existing and existing.get("input_hash") == s["input_hash"]:
+            out["skipped"] += 1   # escape — unchanged
+        else:
+            changed.append(s)
+    out["pending"] += len(changed)
+    for s in changed[:budget]:
+        try:
+            name, purpose = enrich_one(s, project)
+        except Exception:
+            return 0  # auth missing — stop this cycle entirely
+        budget -= 1
+        if not name:
+            out["errors"] += 1
+            continue
+        prov = f"claude @ {time.strftime('%Y-%m-%d')}"
+        if graph.upsert_annotation(scope_kind, s["scope_id"], "name",
+                                   name, purpose, s["input_hash"], prov):
+            out["enriched"] += 1
+        else:
+            out["errors"] += 1
+    return budget
 
-    Escapes (does zero inference) when every scope's input_hash already
-    matches its stored annotation — the 'data hasn't changed' path."""
+
+def enrich_project_once(project: str, max_per_cycle: int) -> dict:
+    """Enrich up to `max_per_cycle` CHANGED scopes for a project — both the
+    path hierarchy (domain/service/module) AND the Leiden communities (the
+    L3 clusters). Escapes (does zero inference) when every scope's
+    input_hash already matches its stored annotation."""
     from prism_service.project_context import get_project
     out = {"project": project, "enriched": 0, "skipped": 0, "errors": 0, "pending": 0}
     try:
         graph = get_project(project).graph_svc
     except Exception:
         return out
-    scopes = hierarchy_scopes(project)
-    changed = []
-    for s in scopes:
-        existing = graph.get_annotation("hierarchy", s["scope_id"], "name")
-        if existing and existing.get("input_hash") == s["input_hash"]:
-            out["skipped"] += 1   # escape — unchanged
-        else:
-            changed.append(s)
-    out["pending"] = len(changed)
-    for s in changed[:max_per_cycle]:
-        try:
-            name, purpose = enrich_one(s, project)
-        except Exception:
-            break  # auth missing — stop this cycle
-        if not name:
-            out["errors"] += 1
-            continue
-        prov = f"claude @ {time.strftime('%Y-%m-%d')}"
-        if graph.upsert_annotation("hierarchy", s["scope_id"], "name",
-                                   name, purpose, s["input_hash"], prov):
-            out["enriched"] += 1
-        else:
-            out["errors"] += 1
+    # Hierarchy first (cheaper, fewer), then spend any remaining budget on
+    # communities (the bigger, noisier set the user sees at L3).
+    budget = _enrich_kind(graph, project, "hierarchy",
+                          hierarchy_scopes(project), max_per_cycle, out)
+    if budget > 0:
+        _enrich_kind(graph, project, "community",
+                     community_scopes(project), budget, out)
     return out
 
 

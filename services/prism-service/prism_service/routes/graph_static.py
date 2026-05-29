@@ -1821,6 +1821,19 @@ def _graphify_hierarchy(project_id: str):
     except Exception:
         pass
 
+    # Override the deterministic community labels (which collapse to
+    # "prism service · …" in a single-service repo) with the inference-
+    # derived names, so the L3 / symbol-level clusters read meaningfully.
+    try:
+        for cid_str, ann in ctx.graph_svc.annotations_for("community", "name").items():
+            if ann.get("name"):
+                try:
+                    comm_labels[int(cid_str)] = ann["name"]
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+
     return JSONResponse({
         "nodes": out_nodes,
         "edges": raw_edges,
