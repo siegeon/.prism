@@ -12,6 +12,11 @@ MCP runs on a separate uvicorn started in a background thread on MCP_PORT.
 
 from __future__ import annotations
 
+import atexit
+import faulthandler
+import logging
+import os
+import signal
 import sys as _sys
 import threading
 import time
@@ -34,6 +39,100 @@ from prism_service.config import (
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 _LOCK_FILE = DATA_DIR / ".mcp_started"
 WEB_DIST = Path(__file__).parent / "web_dist"
+
+_log = logging.getLogger("prism")
+_logging_configured = False
+
+
+def _configure_logging() -> None:
+    """Capture logs + crashes for every launch path (issue #66).
+
+    The daemon's stdout/stderr are redirected to prism.log by the CLI
+    (and by service_entry), so all the existing print()s and uvicorn's
+    default stderr logging already land in the file. This adds, IN
+    PROCESS so it holds on EVERY path (foreground/daemon/pipx/Tauri):
+      * rotation-on-start (bounded size, prior run preserved),
+      * faulthandler (a C-level traceback even when the interpreter is
+        too wedged to run Python — the silent-exit case),
+      * sys/threading excepthooks that LOG the full stack instead of
+        letting an uncaught exception die with only a bare print.
+    Deliberately does NOT reassign sys.stdout/stderr (that would break
+    pytest capture and isn't needed — the fd redirect already routes
+    them to the file). Idempotent.
+    """
+    global _logging_configured
+    if _logging_configured:
+        return
+    from prism_service.data_dir import log_file, rotate_log_on_start
+    rotate_log_on_start(log_file())
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    # basicConfig is a no-op if the root logger already has handlers, so
+    # set the level explicitly to guarantee INFO records surface.
+    logging.getLogger().setLevel(logging.INFO)
+    try:
+        faulthandler.enable()  # defaults to sys.stderr -> prism.log on the daemon
+    except (OSError, ValueError):
+        pass
+
+    def _log_uncaught(exc_type, exc_value, exc_tb):
+        _log.critical("uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+
+    _sys.excepthook = _log_uncaught
+    if hasattr(threading, "excepthook"):
+        threading.excepthook = lambda a: _log.critical(
+            "uncaught thread exception",
+            exc_info=(a.exc_type, a.exc_value, a.exc_traceback),
+        )
+    _logging_configured = True
+
+
+def _own_pidfile_cleanup() -> None:
+    """Unlink the pidfile only if it still names THIS process, so the
+    daemon clears its own pidfile on graceful exit (issue #66 fix #2)."""
+    from prism_service.data_dir import pid_file
+    p = pid_file()
+    try:
+        if p.exists() and p.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _install_mode() -> str:
+    """Classify how this copy was installed so the SPA-missing 503 can
+    suggest a remediation the user can actually run (issue #66)."""
+    try:
+        from prism_service.services.auto_updater import _running_in_docker
+        if _running_in_docker():
+            return "docker"
+    except Exception:
+        pass
+    # A sibling web/ source tree means this is a source / editable
+    # checkout where `npm run build` is meaningful.
+    if (Path(__file__).parent / "web").exists():
+        return "source"
+    return "pipx"
+
+
+def _spa_missing_payload() -> dict:
+    """The install-mode-aware 503 body for when web_dist/ is absent (#66)."""
+    mode = _install_mode()
+    if mode == "source":
+        remediation = "run `npm run build` in prism_service/web/"
+    elif mode == "docker":
+        remediation = "rebuild the image (the SPA is built at image-build time)"
+    else:
+        # pipx / pip install whose wheel shipped without web_dist/ — the
+        # source-only `npm` hint is unreachable for these users.
+        remediation = "run `prism update` (or `pip install --upgrade prism-service`)"
+    return {
+        "detail": f"SPA build missing — {remediation}.",
+        "install_mode": mode,
+        "remediation": remediation,
+    }
 
 
 def start_mcp_server():
@@ -184,6 +283,9 @@ async def lifespan(_app: FastAPI):
     quality, and the v5.1.6 understand_drainer). v5.1.7 reclaims a
     stale lock instead of bailing.
     """
+    # Idempotent — also covers the PyInstaller/Tauri service_entry path
+    # that boots uvicorn directly and never hits the __main__ block (#66).
+    _configure_logging()
     if _LOCK_FILE.exists():
         try:
             stale_tid = _LOCK_FILE.read_text(encoding="utf-8").strip()
@@ -240,8 +342,12 @@ async def lifespan(_app: FastAPI):
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
         from prism_service.services.graph_enrich import start_graph_enrich_worker
         start_graph_enrich_worker()
-    except Exception as e:
-        print(f"Startup error: {e}", file=_sys.stderr, flush=True)
+    except Exception:
+        # Issue #66: this used to `print(e)` and swallow the stack, so a
+        # half-broken boot left no traceback. Log the full stack to the
+        # rotated prism.log. Deliberately do NOT re-raise — keep the
+        # current limp-along behavior; visibility is the fix here.
+        _log.critical("lifespan startup failed", exc_info=True)
     yield
     _LOCK_FILE.unlink(missing_ok=True)
 
@@ -304,11 +410,33 @@ if WEB_DIST.exists():
 else:
     @app.get("/", include_in_schema=False)
     def _no_spa():
-        return JSONResponse(
-            {"detail": "SPA build missing — run `npm run build` in prism_service/web/ or rebuild the image."},
-            status_code=503,
-        )
+        return JSONResponse(_spa_missing_payload(), status_code=503)
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=UI_PORT)
+    _configure_logging()
+    # The daemon is the authority that clears its own pidfile on a
+    # graceful exit (issue #66 fix #2) — atexit covers normal exit and
+    # SIGTERM/SIGINT cover signalled shutdown. _own_pidfile_cleanup only
+    # unlinks if the file still names this PID, so it never deletes a
+    # newer daemon's pidfile.
+    atexit.register(_own_pidfile_cleanup)
+
+    def _on_signal(_signum, _frame):
+        _own_pidfile_cleanup()
+        raise SystemExit(0)
+
+    for _sig_name in ("SIGTERM", "SIGINT"):
+        _sig = getattr(signal, _sig_name, None)
+        if _sig is not None:
+            try:
+                signal.signal(_sig, _on_signal)
+            except (ValueError, OSError):
+                pass  # not in main thread / unsupported on this platform
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=UI_PORT)
+    except Exception:
+        # A bind failure or uvicorn-internal crash used to leave no
+        # record (issue #66). Guarantee a traceback in prism.log.
+        _log.critical("uvicorn exited abnormally", exc_info=True)
+        raise
