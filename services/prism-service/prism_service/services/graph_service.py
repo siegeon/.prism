@@ -1184,6 +1184,30 @@ class GraphService:
         return out
 
     # ----- Narrative layer: graph_annotations (Ultimate Graph) ---------
+    _ANNOTATIONS_DDL = (
+        "CREATE TABLE IF NOT EXISTS graph_annotations ("
+        "  scope_kind TEXT NOT NULL,"
+        "  scope_id   TEXT NOT NULL,"
+        "  task       TEXT NOT NULL,"
+        "  name       TEXT,"
+        "  purpose    TEXT,"
+        "  input_hash TEXT,"
+        "  provenance TEXT,"
+        "  updated_at TEXT,"
+        "  PRIMARY KEY (scope_kind, scope_id, task)"
+        ")"
+    )
+
+    def _ensure_annotations_table(self, conn: "sqlite3.Connection") -> None:
+        """Create graph_annotations on demand so the pull-loop / read-join
+        works against a DB that has not been through a full graph rebuild
+        (the schema migration runs during ingest, not on construction)."""
+        try:
+            conn.execute(self._ANNOTATIONS_DDL)
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
     def get_annotation(self, scope_kind: str, scope_id: str,
                        task: str = "name") -> Optional[dict]:
         """Current annotation for a scope+task, or None. Callers use the
@@ -1194,6 +1218,7 @@ class GraphService:
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return None
+        self._ensure_annotations_table(conn)
         try:
             r = conn.execute(
                 "SELECT name, purpose, input_hash, provenance, updated_at "
@@ -1219,6 +1244,7 @@ class GraphService:
             conn = sqlite3.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return False
+        self._ensure_annotations_table(conn)
         try:
             conn.execute(
                 "INSERT INTO graph_annotations "
@@ -1245,6 +1271,7 @@ class GraphService:
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return {}
+        self._ensure_annotations_table(conn)
         try:
             rows = conn.execute(
                 "SELECT scope_id, name, purpose, provenance, updated_at "

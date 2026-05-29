@@ -324,6 +324,36 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
     present_ids = {n["community"] for n in nodes if n["community"] is not None}
     present = [c for c in communities if c["id"] in present_ids]
 
+    # Narrative layer (Background-Agent pull-loop, #50): join the
+    # LLM/deterministic annotations stored in graph_annotations onto each
+    # per-file context bundle. Additive + contract-preserving — keyed by
+    # scope_id across the three scope kinds (node / community / hierarchy);
+    # an empty store leaves the field a present empty list.
+    from prism_service.services.graph_service import compute_node_hierarchy
+    ann_by_kind = {
+        kind: (graph.annotations_for(kind)
+               if hasattr(graph, "annotations_for") else {})
+        for kind in ("node", "community", "hierarchy")
+    }
+
+    def _annotations_for_file(f: str) -> list[dict]:
+        out: list[dict] = []
+        comm = file_comm.get(f)
+        hier = compute_node_hierarchy(f, fallback_community=comm)
+        candidates = {
+            "node": [f],
+            "community": [str(comm)] if comm is not None else [],
+            "hierarchy": [f, hier.get("l0"), hier.get("l1"), hier.get("l2")],
+        }
+        for kind, keys in candidates.items():
+            store = ann_by_kind.get(kind, {})
+            for key in keys:
+                if key and key in store:
+                    out.append({"scope_kind": kind, "scope_id": key,
+                                **store[key]})
+                    break  # one annotation per scope kind per file
+        return out
+
     context: list[dict] = []
     for f in seeds[:_CONTEXT_CAP]:
         fd = graph.file_detail(f)
@@ -336,7 +366,7 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
             "references": fd.get("inbound", []),
             "call_chain": fd.get("outbound", []),
             "chunks": chunks,
-            "annotations": [],  # narrative layer — filled by a later slice
+            "annotations": _annotations_for_file(f),
         })
 
     return {
