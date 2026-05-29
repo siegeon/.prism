@@ -278,7 +278,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // the LOD super-node assembly (after FA2) and the legend.
   async function loadGraph() {
       statusEl.textContent = "Fetching graph data...";
-      const data = await fetch(`/graphify-visual/${PROJECT_ID}/hierarchy.json`)
+      // Cache-bust: enrichment rewrites community_labels in the background,
+      // so a cached hierarchy.json would keep painting stale cluster names.
+      const data = await fetch(
+        `/graphify-visual/${PROJECT_ID}/hierarchy.json?_=${Date.now()}`,
+        { cache: "no-store" })
         .then(r => {
           if (!r.ok) throw new Error("hierarchy " + r.status);
           return r.json();
@@ -1821,13 +1825,26 @@ def _graphify_hierarchy(project_id: str):
     except Exception:
         pass
 
+    # Override the deterministic community labels (which collapse to
+    # "prism service · …" in a single-service repo) with the inference-
+    # derived names, so the L3 / symbol-level clusters read meaningfully.
+    try:
+        for cid_str, ann in ctx.graph_svc.annotations_for("community", "name").items():
+            if ann.get("name"):
+                try:
+                    comm_labels[int(cid_str)] = ann["name"]
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+
     return JSONResponse({
         "nodes": out_nodes,
         "edges": raw_edges,
         "community_labels": comm_labels,
         "hierarchy_labels": hierarchy_labels,
         "hierarchy_purposes": hierarchy_purposes,
-    })
+    }, headers={"Cache-Control": "no-store"})
 
 
 
