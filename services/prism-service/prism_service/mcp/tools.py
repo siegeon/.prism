@@ -2683,6 +2683,21 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "type": "session_outcome",
                     "session_id": str(arguments["session_id"]),
                 })
+            # AUTO WRITER (Stop path): the Stop hook POSTs record_session_outcome
+            # at session end. Tie this ending session to every in_progress task
+            # so association is captured server-side without an explicit
+            # task_link_session call. Best-effort, mirrors the task_update /
+            # memory record_outcome side-effect idiom: must NEVER break the
+            # primary session_outcomes record.
+            # DECISION (a1bed6bb): do NOT backfill historical
+            # verifier_runs/consolidation_candidates rows in this slice — out of
+            # scope; new associations accrue going forward only.
+            try:
+                _sid = str(arguments["session_id"])
+                for _t in task_svc.list(status="in_progress"):
+                    task_svc.link_session(_t.id, _sid)
+            except Exception:
+                pass  # best-effort — never break the session outcome record
             return [TextContent(type="text", text=_json({"recorded": ok}))]
 
         if name == "record_skill_usage":

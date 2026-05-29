@@ -194,6 +194,38 @@ def test_conductor_advance_stamps_task_session(project):
 
 
 # ----------------------------------------------------------------------
+# AUTO WRITER (Stop path) — record_session_outcome links in_progress tasks
+# ----------------------------------------------------------------------
+
+
+def test_record_session_outcome_links_in_progress_task(project):
+    """When a session ends (the Stop hook POSTs record_session_outcome
+    through this very dispatcher) while a task is status='in_progress',
+    the server-side writer must upsert a task_sessions row tying that
+    session_id to the in_progress task — without any explicit
+    task_link_session call from the hook."""
+    from prism_service.project_context import get_project
+
+    t = json.loads(_text(_call("task_create", {"title": "active task"})))
+    tid = t["id"]
+    # Put the task in_progress — the precondition for the auto-writer.
+    _call("task_update", {"id": tid, "status": "in_progress"})
+
+    # Session ends: the Stop hook's record_session_outcome lands here.
+    _call("record_session_outcome", {
+        "session_id": "S-stop", "duration_s": 90, "tokens_used": 2048,
+        "files_read": 4, "files_modified": 2, "skills_invoked": 1,
+    })
+
+    ctx = get_project(project)
+    linked = ctx.task_svc.sessions_for_task(tid)
+    assert any(s["session_id"] == "S-stop" for s in linked), (
+        "record_session_outcome did not auto-link the ending session to "
+        "the in_progress task (AUTO WRITER / Stop path criterion)"
+    )
+
+
+# ----------------------------------------------------------------------
 # API — GET /api/tasks/{id} extended with a `sessions` field
 # ----------------------------------------------------------------------
 
