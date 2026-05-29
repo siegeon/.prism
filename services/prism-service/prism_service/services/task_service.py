@@ -69,13 +69,22 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
 class TaskService:
     """Manages the tasks.db lifecycle and CRUD operations."""
 
-    def __init__(self, db_path: str, embed_fn: Optional[EmbedFn] = None) -> None:
+    def __init__(
+        self, db_path: str, embed_fn: Optional[EmbedFn] = None,
+        scores_db: Optional[str] = None,
+    ) -> None:
         self._db = sqlite3.connect(db_path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA busy_timeout=5000")
         self._db.executescript(_CREATE_TASKS_SQL)
         self._migrate_task_columns()
+        # LL task-session association lives in scores.db (alongside
+        # session_outcomes), not tasks.db — the JOIN the reader needs is
+        # over that one file. None in unit contexts that never touch the
+        # association surface; link_session / sessions_for_task degrade
+        # gracefully (no-op writer, [] reader) when unset.
+        self._scores_db: Optional[str] = scores_db
         # Optional — when provided, task create/update embeds
         # ``title + "\n" + description`` into ``tasks.embedding`` so
         # LL-06's cosine-similarity retrieval has vectors to work with.
@@ -394,3 +403,85 @@ class TaskService:
             )
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Task <-> session association (LL — activates task_sessions)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ensure_task_sessions(conn: sqlite3.Connection) -> None:
+        """Idempotently materialize the task_sessions table on an
+        isolated scores.db handle — the schema normally ships from
+        brain_engine, but the writer/reader may run before Brain has
+        opened that DB (e.g. conductor-only flows)."""
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS task_sessions ("
+            "task_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+            "started_at TEXT, ended_at TEXT, "
+            "PRIMARY KEY (task_id, session_id))"
+        )
+
+    def link_session(
+        self, task_id: str, session_id: str,
+        ended_at: Optional[str] = None,
+    ) -> bool:
+        """Upsert a task_sessions row tying `session_id` to `task_id`.
+
+        started_at semantics: stamped (UTC ISO8601) the FIRST time the
+        pair is linked and never overwritten on a re-link — it marks
+        when PRISM first observed the session working this task.
+        ended_at is refreshed whenever supplied (session-end signal).
+        Returns False (no-op) when no scores.db is bound.
+        """
+        if not self._scores_db:
+            return False
+        now = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(self._scores_db, timeout=5.0)
+        try:
+            self._ensure_task_sessions(conn)
+            conn.execute(
+                "INSERT INTO task_sessions "
+                "(task_id, session_id, started_at, ended_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(task_id, session_id) DO UPDATE SET "
+                "ended_at=COALESCE(excluded.ended_at, task_sessions.ended_at)",
+                (task_id, session_id, now, ended_at),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+
+    def sessions_for_task(self, task_id: str) -> list[dict]:
+        """Return the sessions linked to `task_id`, each row LEFT JOINed
+        against session_outcomes so the UI gets per-session timing +
+        token + file + skill metrics in one shape:
+          [{session_id, started_at, ended_at, duration_s, tokens_used,
+            files_read, files_modified, skills_invoked}]
+        Empty list when nothing is linked (backs the UI empty state).
+        """
+        if not self._scores_db:
+            return []
+        conn = sqlite3.connect(self._scores_db, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            self._ensure_task_sessions(conn)
+            rows = conn.execute(
+                "SELECT ts.session_id, ts.started_at, ts.ended_at, "
+                "COALESCE(so.duration_s, 0) AS duration_s, "
+                "COALESCE(so.tokens_used, 0) AS tokens_used, "
+                "COALESCE(so.files_read, 0) AS files_read, "
+                "COALESCE(so.files_modified, 0) AS files_modified, "
+                "COALESCE(so.skills_invoked, 0) AS skills_invoked "
+                "FROM task_sessions ts "
+                "LEFT JOIN session_outcomes so "
+                "ON so.session_id = ts.session_id "
+                "WHERE ts.task_id = ? "
+                "ORDER BY ts.started_at ASC",
+                (task_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]

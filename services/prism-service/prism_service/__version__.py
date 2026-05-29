@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.8"
+PRISM_VERSION = "6.2.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.9: activate the dormant task_sessions table — task<->session "
+    "association is now wired end-to-end. New task_link_session MCP verb "
+    "(in the task_* family + interactive profile) force-upserts a "
+    "task_sessions row; conductor advance_task / gate_decide auto-stamp "
+    "the row from their carried task_id + session_id; "
+    "TaskService.sessions_for_task LEFT JOINs session_outcomes for "
+    "per-session duration/tokens/files/skills. GET /api/tasks/{id} gains "
+    "a `sessions` field on the existing route, and TaskDetailPage renders "
+    "a 'Sessions (N)' card with per-session metrics + an explicit "
+    "0-session empty state. started_at is stamped on first link and never "
+    "overwritten; session_id is caller-passed (falls back to the MCP "
+    "request id when omitted). "
     "v6.2.8: dashboard charts are now responsive. PlotFigure hardcoded a "
     "fixed pixel width (880/420), so on a wide/full-screen window the "
     "graphs didn't fill their cards — they sat at a fixed size with empty "

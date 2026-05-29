@@ -949,6 +949,31 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="task_link_session",
+        description=(
+            "Force-link a Claude session to a task — upserts a "
+            "task_sessions(task_id, session_id) row so per-task session "
+            "history/metrics surface on the task view. session_id is "
+            "caller-passed; when omitted the active request session is "
+            "used. Rides the task_* family (single route), not a "
+            "parallel surface."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID to link"},
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Session to link. Optional — defaults to the "
+                        "active request session when omitted."
+                    ),
+                },
+            },
+            "required": ["task_id"],
+        },
+    ),
+    Tool(
         name="workflow_state",
         description="Get the current PRISM workflow state (active step, progress, session info)",
         inputSchema={
@@ -992,6 +1017,13 @@ TOOLS: list[Tool] = [
                 "validation": {
                     "type": "string",
                     "description": "Optional validation note recorded on the transition history row",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional session to associate with this task on "
+                        "advance (auto-writer into task_sessions)."
+                    ),
                 },
             },
             "required": ["id"],
@@ -1230,6 +1262,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "task_list",
     "task_next",
     "task_update",
+    "task_link_session",
     "workflow_state",
     "workflow_advance",
     "conductor_advance",
@@ -3105,6 +3138,25 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
             return [TextContent(type="text", text=_json(task))]
 
+        if name == "task_link_session":
+            # FORCED WRITER. session_id resolution: caller-passed wins;
+            # when omitted, fall back to the MCP request_id as the
+            # server-inferred session handle (no thread-locals).
+            tid = str(arguments["task_id"])
+            sid = arguments.get("session_id")
+            if not sid:
+                from prism_service.mcp.request_context import get_request_context
+                sid = get_request_context().request_id
+            if not sid:
+                return [TextContent(type="text", text=_json({
+                    "ok": False, "task_id": tid,
+                    "reason": "no session_id supplied and none inferable",
+                }))]
+            ok = task_svc.link_session(tid, str(sid))
+            return [TextContent(type="text", text=_json({
+                "ok": ok, "task_id": tid, "session_id": str(sid),
+            }))]
+
         # ------------------------------------------------------------------
         # Workflow tools
         # ------------------------------------------------------------------
@@ -3127,6 +3179,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             result = conductor_svc.advance_task(
                 task_id,
                 validation=arguments.get("validation"),
+                session_id=arguments.get("session_id"),
             )
             task = task_svc.get(task_id)
             result["task"] = task
@@ -3139,6 +3192,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 arguments["action"],
                 reason=arguments.get("reason", ""),
                 override=bool(arguments.get("override", False)),
+                session_id=arguments.get("session_id"),
             )
             task = task_svc.get(task_id)
             result["task"] = task
