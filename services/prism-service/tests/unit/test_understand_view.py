@@ -29,10 +29,15 @@ class _FakeBrain:
 
 
 class _FakeGraph:
-    def __init__(self, central, communities, details):
+    def __init__(self, central, communities, details, annotations=None):
         self._central = central
         self._communities = communities
         self._details = details  # file -> file_detail dict
+        # annotations: {scope_kind: {scope_id: {name, purpose, provenance, updated_at}}}
+        self._annotations = annotations or {}
+
+    def annotations_for(self, scope_kind, task="name"):
+        return dict(self._annotations.get(scope_kind, {}))
 
     def communities(self):
         return self._communities
@@ -193,3 +198,89 @@ def test_seed_files_take_precedence_over_query(monkeypatch):
     out = uv.build_understanding("p", "helper", seed_files=["a.py"], label="Graph core")
     # seed_files wins — seeded by a.py, not the brain hit b.py
     assert [n["id"] for n in out["nodes"] if n["seed"]] == ["a.py"]
+
+
+# --- Narrative annotation layer (Background-Agent pull-loop, #50) -----------
+# build_understanding must join graph.annotations_for(...) into the per-file
+# context 'annotations' field (was hardcoded [] at understand_view.py:339),
+# keyed by scope, for all three scope kinds — 'node', 'community', 'hierarchy'.
+# Additive + contract-preserving; each annotation carries provenance that
+# discriminates 'deterministic' from the LLM literal 'claude @ <date>'.
+
+_ANNOTATIONS = {
+    # node scope keys on the file path itself (no migration — free-text TEXT)
+    "node": {
+        "a.py": {"name": "Graph Service", "purpose": "Owns the code graph.",
+                 "provenance": "claude @ 2026-05-29",
+                 "updated_at": "2026-05-29T00:00:00+00:00"},
+    },
+    # community scope keys on the community id (as string)
+    "community": {
+        "1": {"name": "Graph Core", "purpose": "The graph pipeline.",
+              "provenance": "claude @ 2026-05-29",
+              "updated_at": "2026-05-29T00:00:00+00:00"},
+    },
+    # hierarchy scope keys on the hierarchy path key
+    "hierarchy": {
+        "a.py": {"name": "Backend", "purpose": "Service backend.",
+                 "provenance": "deterministic",
+                 "updated_at": "2026-05-29T00:00:00+00:00"},
+    },
+}
+
+
+def test_focus_joins_node_scope_annotation(monkeypatch):
+    """The per-file context bundle joins the node-scope annotation for that
+    file (was a hardcoded empty list) — name/purpose/provenance/updated_at."""
+    hits = [{"source_file": "a.py", "entity_name": "GraphService",
+             "rrf_score": 0.42, "content": "x"}]
+    uv = _wire(monkeypatch, _FakeBrain(hits),
+               _FakeGraph(_CENTRAL, _COMMS, _DETAILS, _ANNOTATIONS))
+    out = uv.build_understanding("p", "graph")
+    ctx = out["context"][0]
+    assert ctx["file"] == "a.py"
+    anns = ctx["annotations"]
+    assert anns, "node-scope annotation must be joined, not left empty"
+    node = [a for a in anns if a.get("scope_kind") == "node"]
+    assert node and node[0]["name"] == "Graph Service"
+    assert node[0]["purpose"] == "Owns the code graph."
+    assert node[0]["provenance"] == "claude @ 2026-05-29"
+    assert node[0]["updated_at"] == "2026-05-29T00:00:00+00:00"
+
+
+def test_focus_joins_community_and_hierarchy_scopes(monkeypatch):
+    """All three scope kinds are wired: a.py is in community 1, so the
+    community-scope annotation surfaces alongside node + hierarchy."""
+    hits = [{"source_file": "a.py", "entity_name": "GraphService",
+             "rrf_score": 0.42, "content": "x"}]
+    uv = _wire(monkeypatch, _FakeBrain(hits),
+               _FakeGraph(_CENTRAL, _COMMS, _DETAILS, _ANNOTATIONS))
+    out = uv.build_understanding("p", "graph")
+    kinds = {a["scope_kind"] for a in out["context"][0]["annotations"]}
+    assert {"node", "community", "hierarchy"} <= kinds
+
+
+def test_annotation_provenance_discriminates_llm_from_deterministic(monkeypatch):
+    """Provenance on each annotation distinguishes 'deterministic' from the
+    LLM literal 'claude @ <date>' so the narrative can't be mistaken for
+    structural truth."""
+    hits = [{"source_file": "a.py", "entity_name": "GraphService",
+             "rrf_score": 0.42, "content": "x"}]
+    uv = _wire(monkeypatch, _FakeBrain(hits),
+               _FakeGraph(_CENTRAL, _COMMS, _DETAILS, _ANNOTATIONS))
+    out = uv.build_understanding("p", "graph")
+    anns = out["context"][0]["annotations"]
+    provs = {a["provenance"] for a in anns}
+    assert "deterministic" in provs
+    assert any(p.startswith("claude @ ") for p in provs)
+
+
+def test_annotations_empty_when_store_empty(monkeypatch):
+    """Contract preserved: with no annotations stored, the field is still a
+    present empty list (additive, never breaks the shape)."""
+    hits = [{"source_file": "a.py", "entity_name": "GraphService",
+             "rrf_score": 0.42, "content": "x"}]
+    uv = _wire(monkeypatch, _FakeBrain(hits),
+               _FakeGraph(_CENTRAL, _COMMS, _DETAILS))  # no annotations
+    out = uv.build_understanding("p", "graph")
+    assert out["context"][0]["annotations"] == []
