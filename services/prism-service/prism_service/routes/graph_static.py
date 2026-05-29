@@ -278,7 +278,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // the LOD super-node assembly (after FA2) and the legend.
   async function loadGraph() {
       statusEl.textContent = "Fetching graph data...";
-      const data = await fetch(`/graphify-visual/${PROJECT_ID}/hierarchy.json`)
+      // Cache-bust: enrichment rewrites community_labels in the background,
+      // so a cached hierarchy.json would keep painting stale cluster names.
+      const data = await fetch(
+        `/graphify-visual/${PROJECT_ID}/hierarchy.json?_=${Date.now()}`,
+        { cache: "no-store" })
         .then(r => {
           if (!r.ok) throw new Error("hierarchy " + r.status);
           return r.json();
@@ -1840,7 +1844,7 @@ def _graphify_hierarchy(project_id: str):
         "community_labels": comm_labels,
         "hierarchy_labels": hierarchy_labels,
         "hierarchy_purposes": hierarchy_purposes,
-    })
+    }, headers={"Cache-Control": "no-store"})
 
 
 
