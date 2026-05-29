@@ -127,6 +127,18 @@ jobs:
           cd services/prism-service/desktop/tauri-shell
           npm install --no-audit --no-fund
 
+      # Keep the native bundle + latest.json version in lockstep with
+      # PRISM_VERSION. Without this the shell version was frozen at 0.1.0,
+      # so every release's latest.json reported 0.1.0 and installed native
+      # clients (also 0.1.0) never saw a newer version -> no auto-update.
+      - name: Sync Tauri version to PRISM_VERSION
+        shell: bash
+        run: |
+          cd services/prism-service
+          V=$(python -c "import re,pathlib; print(re.search(r'PRISM_VERSION\s*=\s*\"([^\"]+)\"', pathlib.Path('prism_service/__version__.py').read_text()).group(1))")
+          python -c "import json,pathlib; p=pathlib.Path('desktop/tauri-shell/src-tauri/tauri.conf.json'); d=json.loads(p.read_text()); d['version']='$V'; p.write_text(json.dumps(d, indent=2) + '\n')"
+          echo "tauri.conf.json version -> $V"; grep '\"version\"' desktop/tauri-shell/src-tauri/tauri.conf.json
+
       - name: Build + sign Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
