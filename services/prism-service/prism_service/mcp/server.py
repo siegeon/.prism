@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from urllib.parse import parse_qs
 
 import uvicorn
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
@@ -27,7 +27,12 @@ from prism_service.mcp.request_context import (
     get_request_context,
     use_request_context,
 )
-from prism_service.mcp.tools import handle_tool, tool_names_for_profile, tools_for_profile
+from prism_service.mcp.tools import (
+    TOOLS,
+    handle_tool,
+    tool_names_for_profile,
+    tools_for_profile,
+)
 
 # ---------------------------------------------------------------------------
 # MCP Server instance
@@ -47,12 +52,28 @@ async def call_tool(name: str, arguments: dict):
     """Dispatch a tool call to the handler, scoped to the current project."""
     ctx = get_request_context()
     if name not in tool_names_for_profile(ctx.tool_profile):
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Tool is not available for this MCP tool profile.",
-            "tool": name,
-            "tool_profile": ctx.tool_profile,
-            "hint": "Reconnect with ?tool_profile=all for maintenance-only tools.",
-        }, indent=2))]
+        # GH #99 part 3: a rejected (or unknown) tool must surface as
+        # CallToolResult.isError=True, not a bare TextContent list that
+        # the SDK stamps isError=False (a false-success that silently
+        # drops telemetry writes). Return the structured CallToolResult
+        # directly so the helpful payload survives (raising would lose it
+        # to str(e)).
+        known = name in {tool.name for tool in TOOLS}
+        if known:
+            error = "Tool is not available for this MCP tool profile."
+            hint = "Reconnect with ?tool_profile=all for maintenance-only tools."
+        else:
+            error = "Unknown tool — not registered on this MCP server."
+            hint = "Check the tool name; reconnect with ?tool_profile=all to list all tools."
+        return CallToolResult(
+            isError=True,
+            content=[TextContent(type="text", text=json.dumps({
+                "error": error,
+                "tool": name,
+                "tool_profile": ctx.tool_profile,
+                "hint": hint,
+            }, indent=2))],
+        )
     return await handle_tool(name, arguments, project_id=ctx.project_id)
 
 

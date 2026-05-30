@@ -37,6 +37,8 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 _WEB_SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
+# Repo-root workflow scripts the harness runs (E:/.prism/.claude/workflows).
+_WORKFLOWS = _SERVICE_ROOT.parent.parent / ".claude" / "workflows"
 
 
 def _isolated_project(tmp_path, pid="test-task-sessions"):
@@ -278,4 +280,121 @@ def test_task_detail_page_has_session_empty_state():
     # An explicit 0-session branch (e.g. sessions.length === 0 ? <empty>).
     assert "sessions.length === 0" in src, (
         "TaskDetailPage.tsx must render an explicit 0-session empty state"
+    )
+
+
+# ----------------------------------------------------------------------
+# WORKFLOW WIRING — the conductor SDLC workflow scripts (implement.js /
+# prototype.js) thread the driving Claude session into the association
+# backend. These are the USER-FACING seam: the JS the harness runs is
+# what actually emits task_link_session + session_id-on-advance. A green
+# backend with workflows that never pass a session is a false-green —
+# task_sessions stays empty in real drives. Source-structure asserts
+# (mirror the TaskDetailPage asserts above): read the workflow file and
+# assert the wiring substrings are present.
+# ----------------------------------------------------------------------
+
+
+def _implement_src():
+    return (_WORKFLOWS / "implement.js").read_text(encoding="utf-8")
+
+
+def _prototype_src():
+    return (_WORKFLOWS / "prototype.js").read_text(encoding="utf-8")
+
+
+def test_implement_normalizes_session_id_from_args():
+    """implement.js must lift an optional session_id off the parsed args
+    into a SID constant, alongside TASK_ID/DRY/STOP_AFTER. The id can ONLY
+    arrive via args (workflow JS has no env/process access)."""
+    src = _implement_src()
+    assert "_in.session_id" in src, (
+        "implement.js does not read session_id off the normalized args "
+        "(_in.session_id) — the driving session can only arrive via args"
+    )
+    assert "const SID" in src, (
+        "implement.js must normalize session_id into a SID constant"
+    )
+
+
+def test_implement_locate_links_session_to_task():
+    """implement.js Locate phase must instruct the locate agent to call
+    task_link_session(task_id, session_id=SID) — guarded on SID present —
+    so the FIRST step of a real drive ties the driving session to the
+    task (not the request_id default)."""
+    src = _implement_src()
+    assert "task_link_session" in src, (
+        "implement.js never instructs task_link_session — a real drive "
+        "would never link the driving session to the task"
+    )
+    # The link must carry the explicit SID, never fall through to the
+    # backend's request-session default.
+    assert "session_id=" in src and "${SID}" in src, (
+        "implement.js task_link_session must pass an explicit session_id "
+        "from SID, not rely on the request_id default path"
+    )
+
+
+def test_implement_threads_session_into_conductor_advance():
+    """implement.js advanceInstr() must thread session_id=SID into the
+    emitted conductor_advance call (guarded: omitted when SID empty), so
+    every non-gate step refreshes the task<->session link."""
+    src = _implement_src()
+    # Find the advanceInstr helper body and assert it threads SID into the
+    # emitted conductor_advance(...) call.
+    assert "advanceInstr" in src, "implement.js advanceInstr helper missing"
+    marker = "function advanceInstr"
+    idx = src.index(marker)
+    body = src[idx:idx + 600]
+    assert "conductor_advance" in body, "advanceInstr no longer emits conductor_advance"
+    assert "session_id" in body and "SID" in body, (
+        "advanceInstr() does not thread session_id=SID into the emitted "
+        "conductor_advance call — the per-step auto-writer link is lost"
+    )
+
+
+def test_implement_session_wiring_is_guarded():
+    """When SID is empty the emitted instructions must be byte-identical
+    to today — the wiring must be conditional on SID (a ternary/`&&` guard
+    that drops session_id entirely), never emit an empty session_id."""
+    src = _implement_src()
+    # A guard expression referencing SID must gate the emitted text (e.g.
+    # `SID ? ... : ''` or `SID && ...`). Bare unconditional interpolation
+    # of an empty SID would emit session_id="" and hit the default path.
+    assert ("SID ?" in src) or ("SID &&" in src), (
+        "implement.js session wiring is not guarded on SID — an empty SID "
+        "must yield today's byte-identical instruction, never session_id=\"\""
+    )
+
+
+def test_prototype_normalizes_session_id_guarded():
+    """prototype.js must normalize an optional session_id into SID, guarded
+    for the bare-string args case (only read session_id when _input is an
+    object)."""
+    src = _prototype_src()
+    assert "session_id" in src, (
+        "prototype.js does not read session_id off args"
+    )
+    assert "const SID" in src, (
+        "prototype.js must normalize session_id into a SID constant"
+    )
+    # Guard: object-shape check before reading session_id (bare-string args).
+    assert "typeof _input === 'object'" in src, (
+        "prototype.js must guard session_id read behind the _input-is-object "
+        "check (args may be a bare feature string)"
+    )
+
+
+def test_prototype_track_links_session_to_new_task():
+    """prototype.js Track phase must instruct task_link_session(task_id,
+    session_id=SID) right after task_create, and thread session_id=SID into
+    its conductor_advance calls — guarded on SID present."""
+    src = _prototype_src()
+    assert "task_link_session" in src, (
+        "prototype.js Track phase never instructs task_link_session — a "
+        "planning drive would never tie the driving session to the new task"
+    )
+    assert "${SID}" in src, (
+        "prototype.js must pass the explicit SID into task_link_session / "
+        "conductor_advance, not the request_id default"
     )

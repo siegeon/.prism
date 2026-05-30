@@ -1,0 +1,144 @@
+export const meta = {
+  name: 'prototype',
+  description: 'PRISM-first research → source fallback → synthesize plan → register as a conductor-tracked planning task. The engine behind the /prototype phase router.',
+  whenToUse: 'Run when starting a feature/phase router: mines PRISM knowledge first, fills gaps from source code, synthesizes a PRD-style plan, and parks the work in conductor\'s planning steps.',
+  phases: [
+    { title: 'Recall', detail: 'Mine PRISM brain + memory in parallel' },
+    { title: 'Coverage', detail: 'Judge what PRISM answered; list gaps' },
+    { title: 'Source dive', detail: 'One agent per gap greps/reads real source' },
+    { title: 'Plan', detail: 'Synthesize PRD-style plan from all evidence' },
+    { title: 'Track', detail: 'Create task + walk it through conductor planning steps' },
+  ],
+}
+
+// `args` can arrive as a JSON string (the harness serializes objects to a
+// string before the script sees them), a plain object, or a bare feature
+// string. Normalize all three.
+let _input = args
+if (typeof _input === 'string') {
+  try { _input = JSON.parse(_input) } catch { _input = { feature: _input } }
+}
+const feature = (_input && typeof _input === 'object' ? _input.feature : _input) || ''
+// The DRIVING Claude session id — passed via args by the orchestrator
+// (workflow JS has no env/process access). GUARDED for the bare-string args
+// case: only read session_id when _input is an object. Empty SID => today's
+// behavior (never emit task_link_session / session_id with an empty value).
+const SID = (_input && typeof _input === 'object' ? (_input.session_id || '') : '').trim()
+
+// Fail fast: never spawn the fleet or create a tracked task for a placeholder.
+if (!feature || /^unspecified feature/i.test(feature)) {
+  throw new Error('prototype workflow: no feature supplied. Invoke as Workflow({name:"prototype", args:{feature:"<what to plan>"}}). Refusing to plan a placeholder.')
+}
+
+const RECALL_SCHEMA = {
+  type: 'object',
+  required: ['findings', 'answered_aspects', 'confidence'],
+  properties: {
+    findings: { type: 'array', items: { type: 'object', required: ['source', 'summary'],
+      properties: { source: { type: 'string' }, summary: { type: 'string' } } } },
+    answered_aspects: { type: 'array', items: { type: 'string' } },
+    confidence: { type: 'number', description: '0-1 how well PRISM covers this feature' },
+  },
+}
+
+const COVERAGE_SCHEMA = {
+  type: 'object',
+  required: ['covered', 'gaps', 'need_source_dive'],
+  properties: {
+    covered: { type: 'array', items: { type: 'string' } },
+    gaps: { type: 'array', items: { type: 'string', description: 'a specific unanswered question to chase in source' } },
+    need_source_dive: { type: 'boolean' },
+  },
+}
+
+const SOURCE_SCHEMA = {
+  type: 'object',
+  required: ['gap', 'files', 'findings'],
+  properties: {
+    gap: { type: 'string' },
+    files: { type: 'array', items: { type: 'object', required: ['path', 'why'],
+      properties: { path: { type: 'string' }, why: { type: 'string' } } } },
+    findings: { type: 'string', description: 'what the source actually shows, with file:line refs' },
+  },
+}
+
+const PLAN_SCHEMA = {
+  type: 'object',
+  required: ['title', 'summary', 'actors', 'views', 'constraints', 'journeys', 'plan_steps', 'open_questions'],
+  properties: {
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    actors: { type: 'array', items: { type: 'string' } },
+    views: { type: 'array', items: { type: 'string' } },
+    constraints: { type: 'array', items: { type: 'string' } },
+    journeys: { type: 'array', items: { type: 'string' } },
+    plan_steps: { type: 'array', items: { type: 'string' } },
+    open_questions: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+const TRACK_SCHEMA = {
+  type: 'object',
+  required: ['task_id', 'current_step', 'steps_walked', 'notes'],
+  properties: {
+    task_id: { type: 'string' },
+    current_step: { type: 'string' },
+    steps_walked: { type: 'array', items: { type: 'string' } },
+    notes: { type: 'string' },
+  },
+}
+
+const PRISM_HINT = 'You have PRISM MCP tools available via ToolSearch. Load them first: ToolSearch("select:mcp__prism__brain_search,mcp__prism__memory_recall,mcp__prism__brain_understand"). Project is "prism".'
+
+// ── Phase 1: Recall (parallel mine of brain + memory) ──────────────────
+phase('Recall')
+const [brain, mem] = await parallel([
+  () => agent(
+    `${PRISM_HINT}\nUse brain_search (try 3-4 query variants) and brain_understand to find everything PRISM knows relevant to building this feature:\n\n"${feature}"\n\nFocus on existing skills, conductor/workflow plumbing, and any prior phase-router or PRD patterns. Return findings with source files and a confidence score for how well PRISM covers it.`,
+    { label: 'recall:brain', phase: 'Recall', schema: RECALL_SCHEMA }),
+  () => agent(
+    `${PRISM_HINT}\nUse memory_recall (try 3-4 query variants) to recall conventions, decisions, and expertise relevant to:\n\n"${feature}"\n\nReturn findings with source and a confidence score.`,
+    { label: 'recall:memory', phase: 'Recall', schema: RECALL_SCHEMA }),
+])
+
+const recallBlob = JSON.stringify({ brain, mem }, null, 2)
+
+// ── Phase 2: Coverage judgement ────────────────────────────────────────
+phase('Coverage')
+const coverage = await agent(
+  `Given this PRISM recall result for the feature "${feature}":\n\n${recallBlob}\n\nDecide what is genuinely ANSWERED vs what is still a GAP that requires reading actual source code. Be strict: a vague mention is not coverage. List each gap as a specific question. Set need_source_dive=true if any gap requires source inspection.`,
+  { label: 'coverage:judge', phase: 'Coverage', schema: COVERAGE_SCHEMA })
+
+// ── Phase 3: Source dive — one agent per gap, only if needed ────────────
+let sourceFindings = []
+if (coverage.need_source_dive && coverage.gaps.length) {
+  phase('Source dive')
+  log(`PRISM left ${coverage.gaps.length} gap(s) — diving into source`)
+  sourceFindings = (await parallel(coverage.gaps.slice(0, 6).map((gap) => () =>
+    agent(
+      `PRISM did not answer this gap for the feature "${feature}":\n\n"${gap}"\n\nResearch the REAL source under E:/.prism (use Grep, Glob, Read, and ToolSearch->mcp__prism__brain_call_chain if you need call flow). Cite concrete file:line. If the answer truly isn't in source either, say so explicitly.`,
+      { label: `source:${gap.slice(0, 30)}`, phase: 'Source dive', schema: SOURCE_SCHEMA }))
+  )).filter(Boolean)
+} else {
+  log('PRISM coverage sufficient — skipping source dive')
+}
+
+// ── Phase 4: Synthesize the plan / PRD ─────────────────────────────────
+phase('Plan')
+const evidence = JSON.stringify({ recall: { brain, mem }, coverage, sourceFindings }, null, 2)
+const plan = await agent(
+  `Synthesize a PRD-style plan for the feature "${feature}" using ONLY the evidence below — do not invent capabilities the evidence doesn't support. Where evidence is thin, put it in open_questions rather than asserting it.\n\nEVIDENCE:\n${evidence}`,
+  { label: 'plan:synthesize', phase: 'Plan', schema: PLAN_SCHEMA })
+
+// ── Phase 5: Register + track via conductor (planning steps only) ──────
+phase('Track')
+const planJson = JSON.stringify(plan, null, 2)
+const linkStep = SID
+  ? `\n1b. IMMEDIATELY AFTER task_create, call task_link_session(task_id=<the new task id>, session_id="${SID}") to tie this driving session to the new task (explicit session_id — never the request_id default).`
+  : ''
+const advSid = SID ? `, session_id="${SID}"` : ''
+const tracking = await agent(
+  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → verify_plan → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the first three steps.\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with a clear title derived from the plan, the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"]. Capture the returned task id.${linkStep}\n2. conductor_advance(id${advSid}) to move from review_previous_notes -> draft_story.\n3. The draft_story gate validation is "story_complete" (manual-only). Call conductor_gate(id, action="approve", override=true, reason="PRD synthesized by the prototype workflow: <one line>") to satisfy it.\n4. conductor_advance(id${advSid}) to reach verify_plan. STOP there — verify_plan is the planning/build boundary; do NOT enter write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
+  { label: 'track:conductor', phase: 'Track', schema: TRACK_SCHEMA })
+
+return { feature, coverage, sourceGapsChased: sourceFindings.length, plan, tracking }
