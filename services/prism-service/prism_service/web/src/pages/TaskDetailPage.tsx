@@ -55,6 +55,17 @@ type HistoryRow = {
   reason?: string;
 };
 
+type SessionRow = {
+  session_id: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_s?: number;
+  tokens_used?: number;
+  files_read?: number;
+  files_modified?: number;
+  skills_invoked?: number;
+};
+
 const STATUS_CYCLE: Record<string, string[]> = {
   pending: ["in_progress", "blocked", "done"],
   in_progress: ["done", "blocked", "pending"],
@@ -73,6 +84,7 @@ export default function TaskDetailPage() {
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,11 +92,12 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[] }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[] }>(
         `/api/tasks/${id}?project=${project}`,
       );
       setTask(d.task);
       setHistory(d.history ?? []);
+      setSessions(d.sessions ?? []);
       setError(null);
     } catch (e) {
       setError((e as Error).message ?? "task not found");
@@ -302,6 +315,44 @@ export default function TaskDetailPage() {
             </div>
           )}
         </div>
+      </Card>
+
+      <Card>
+        <SectionLabel>Sessions ({sessions.length})</SectionLabel>
+        {sessions.length === 0 ? (
+          <Empty>No Claude sessions linked to this task yet.</Empty>
+        ) : (
+          <ul className="divide-y divide-[color:var(--midground-base)]/10 mt-2">
+            {sessions.map((s) => (
+              <li key={s.session_id} className="py-3">
+                <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                  <span className="font-mono text-[12px] break-all">{s.session_id}</span>
+                  <span className="text-[11px] opacity-50">
+                    {s.started_at ? String(s.started_at).slice(0, 19) : "—"}
+                    {s.ended_at ? ` → ${String(s.ended_at).slice(0, 19)}` : ""}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {[
+                    ["duration", `${s.duration_s ?? 0}s`],
+                    ["tokens", String(s.tokens_used ?? 0)],
+                    ["read", String(s.files_read ?? 0)],
+                    ["modified", String(s.files_modified ?? 0)],
+                    ["skills", String(s.skills_invoked ?? 0)],
+                  ].map(([label, value]) => (
+                    <span
+                      key={label}
+                      className="text-[11px] px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10"
+                    >
+                      <span className="opacity-50">{label}</span>{" "}
+                      <span className="font-mono">{value}</span>
+                    </span>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
 
       <Card>

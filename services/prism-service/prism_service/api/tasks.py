@@ -29,10 +29,18 @@ def next_task(project: str = Query("default")) -> dict:
 
 @router.get("/{task_id}")
 def get_task(task_id: str, project: str = Query("default")) -> dict:
-    t = _svc(project).get(task_id)
+    svc = _svc(project)
+    t = svc.get(task_id)
     if not t:
         raise HTTPException(404, "task not found")
-    return {"task": t, "history": _svc(project).history(task_id)}
+    # `sessions` rides the EXISTING task-detail route (no parallel
+    # top-level route) — the linked Claude sessions JOINed with their
+    # session_outcomes metrics. Empty list when nothing is linked.
+    return {
+        "task": t,
+        "history": svc.history(task_id),
+        "sessions": svc.sessions_for_task(task_id),
+    }
 
 
 class TaskUpdate(BaseModel):

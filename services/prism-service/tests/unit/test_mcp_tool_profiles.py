@@ -24,9 +24,11 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # 17 original core tools + 2 Conductor v2 tools
     # (conductor_advance / conductor_gate) + 10 v5.1 understand_* tools
     # (T9 nine + understand_configure follow-up) + brain_understand
-    # (v6.1.6 Ultimate Graph merge retrieval).
-    assert len(names) == 30
+    # (v6.1.6 Ultimate Graph merge retrieval) + task_link_session
+    # (v6.2.9 task<->session association — rides the task_* family).
+    assert len(names) == 31
     assert "brain_understand" in names
+    assert "task_link_session" in names
     assert {
         "brain_search",
         "brain_call_chain",

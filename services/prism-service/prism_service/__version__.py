@@ -13,11 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.10"
+PRISM_VERSION = "6.2.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v6.2.9: Ultimate Graph narrative layer ships its final slice (#50) — the background-agent annotation PULL loop + the read-side join + the Explore Narrative panel. READ: understand_view.build_understanding now joins graph.annotations_for(node/community/hierarchy) into each per-file context bundle (was a hardcoded []), keyed by scope_id; each annotation carries {name, purpose, provenance, updated_at} and provenance discriminates 'deterministic' from 'claude @ <date>'. WRITE: new services/graph_annotate.py inverts graph_enrich's PRISM->claude -p PUSH into a JanitorService-style PULL — GraphAnnotateService.enqueue (reusing graph_enrich.hierarchy_scopes/community_scopes + the _input_hash escape-when-unchanged guard) -> check (dispenses exactly one brief, built via graph_enrich.render_prompt, response_schema constrained to {name, purpose}) -> submit (schema-validates before upsert_annotation, invalid rejected) -> abandon (retry with backoff). GraphService annotation methods now create graph_annotations on demand so the loop works without a full rebuild. UI: ExplorePage Narrative placeholder replaced with a Hermes Card/Section/Pill render of each annotation; a provenance Pill (violet for 'claude @', slate for deterministic) distinguishes the LLM narrative from structural truth. No <pre>JSON. Structure layer untouched. "
+    "v6.2.11: combined release of two workstreams off 6.2.8 — the Ultimate "
+    "Graph annotation layer (#50 final slice, was tagged 6.2.10) and "
+    "task<->session association (was tagged 6.2.9). "
+    "ANNOTATION LAYER: understand_view.build_understanding joins "
+    "graph.annotations_for(node/community/hierarchy) into each per-file "
+    "context bundle (was hardcoded []); provenance discriminates "
+    "'deterministic' from 'claude @ <date>'. New services/graph_annotate.py "
+    "is a durable PULL loop (graph_jobs queue, UNIQUE(scope_kind,scope_id,"
+    "input_hash)) reachable via graph_annotate_* MCP verbs + SessionStart-"
+    "hook brief delivery; ExplorePage renders a Narrative card with a "
+    "provenance Pill (violet 'claude @', slate deterministic). "
+    "TASK<->SESSION: the dormant task_sessions table is now wired end-to-end "
+    "— task_link_session MCP verb force-links; conductor advance/gate "
+    "auto-stamp; record_session_outcome links in_progress tasks on session "
+    "end; sessions_for_task LEFT JOINs session_outcomes; GET /api/tasks/{id} "
+    "returns a `sessions` field and TaskDetailPage renders a 'Sessions (N)' "
+    "card with per-session metrics + a 0-session empty state. "
     "v6.2.8: dashboard charts are now responsive. PlotFigure hardcoded a "
     "fixed pixel width (880/420), so on a wide/full-screen window the "
     "graphs didn't fill their cards — they sat at a fixed size with empty "
