@@ -793,6 +793,7 @@ class ConductorService:
         self,
         task_id: str,
         validation: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> dict:
         """Move a task to the next entry in WORKFLOW_STEPS.
 
@@ -879,6 +880,11 @@ class ConductorService:
             actor="conductor",
         )
 
+        # Conductor-path auto-writer: stamp/refresh the task_sessions row
+        # from the carried task_id + session so the association is
+        # captured even if the session never reaches the Stop hook.
+        self._stamp_session(task_id, session_id)
+
         return {
             "ok": True,
             "task_id": task_id,
@@ -886,6 +892,22 @@ class ConductorService:
             "to_step": next_id,
             "gate_state": new_gate_state,
         }
+
+    def _stamp_session(
+        self, task_id: str, session_id: Optional[str],
+    ) -> None:
+        """Best-effort upsert of a task_sessions row via the single
+        TaskService writer. No-op when no session is carried or the
+        writer is unavailable — must never break a transition."""
+        if not session_id:
+            return
+        link = getattr(self._task_svc, "link_session", None)
+        if not callable(link):
+            return
+        try:
+            link(task_id, session_id)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Gate verification helpers (issue #79 [3/4])
@@ -1004,6 +1026,7 @@ class ConductorService:
         action: str,
         reason: str = "",
         override: bool = False,
+        session_id: Optional[str] = None,
     ) -> dict:
         """Resolve a pending gate on a task.
 
@@ -1036,6 +1059,10 @@ class ConductorService:
         if task is None:
             return {"ok": False, "task_id": task_id,
                     "reason": "unknown task"}
+
+        # Conductor-path auto-writer: stamp/refresh the task_sessions row
+        # from the carried task_id + session on every gate decision.
+        self._stamp_session(task_id, session_id)
 
         current_step = self._step_by_id(task.workflow_step)
         if current_step is None or current_step["type"] != "gate":

@@ -63,6 +63,7 @@ class ProjectContext:
             from prism_service.services.task_service import TaskService
             self._task_svc = TaskService(
                 db_path=str(self._data_dir / "tasks.db"),
+                scores_db=str(self._data_dir / "scores.db"),
             )
         return self._task_svc
 
