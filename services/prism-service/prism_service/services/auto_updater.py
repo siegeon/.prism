@@ -82,6 +82,38 @@ _AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "on").lower() in (
 _DEFER_RESTART = True
 
 
+def _dev_mode() -> bool:
+    """True when this is a source-run dev instance (PRISM_DEV_MODE truthy).
+
+    Mirrors api/version._dev_mode env semantics: 1/true/yes/on are truthy
+    (case-insensitive); everything else is false. A dev instance is the
+    editable pip checkout — pip-installing a release wheel over it would
+    shadow the source and drop live sockets, so the apply/pip path is gated
+    on this (the version CHECK still runs). Read at CALL time, not import,
+    so tests / the launcher can set it after the module loads."""
+    return os.environ.get("PRISM_DEV_MODE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _auto_update_forced_on() -> bool:
+    """True only when PRISM_AUTO_UPDATE is EXPLICITLY set to a truthy value.
+
+    This is the dev-mode escape hatch: PRISM_DEV_MODE alone defaults apply
+    OFF, but an explicit PRISM_AUTO_UPDATE=on force-enables apply even in
+    dev (for testing the install path). Unset => not forced."""
+    raw = os.environ.get("PRISM_AUTO_UPDATE")
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("on", "true", "1", "yes")
+
+
+def _dev_mode_blocks_apply() -> bool:
+    """Apply is blocked when we're in dev mode AND the user has not
+    explicitly forced PRISM_AUTO_UPDATE=on."""
+    return _dev_mode() and not _auto_update_forced_on()
+
+
 def _running_in_docker() -> bool:
     """Docker installs auto-update via Watchtower (or manually). The
     in-process updater would `pip install` into a running container
@@ -216,6 +248,18 @@ def apply_update() -> dict:
     we can't safely os.execvp a uvicorn worker thread from inside it.
     """
     import sys as _sys
+
+    if _dev_mode_blocks_apply():
+        # Source-run dev instance: pip-installing the release wheel over the
+        # editable checkout shadows the source and drops live sockets. Block
+        # the apply path exactly like docker; the version CHECK still runs.
+        print(
+            "[auto_updater] dev mode — auto-apply disabled "
+            "(set PRISM_AUTO_UPDATE=on to force-enable in dev)",
+            file=_sys.stderr, flush=True,
+        )
+        return {"ok": False, "reason": "dev mode — auto-apply disabled "
+                "(PRISM_DEV_MODE set; export PRISM_AUTO_UPDATE=on to force)"}
 
     with _state_lock:
         if _state.in_docker:
@@ -353,6 +397,13 @@ def _maybe_apply() -> None:
     """If auto-apply is on and an update is available, apply it +
     request restart."""
     if not _AUTO_APPLY:
+        return
+    if _dev_mode_blocks_apply():
+        print(
+            "[auto_updater] dev mode — auto-apply disabled "
+            "(set PRISM_AUTO_UPDATE=on to force-enable in dev)",
+            file=sys.stderr, flush=True,
+        )
         return
     with _state_lock:
         if not _state.update_available:

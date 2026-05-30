@@ -135,7 +135,17 @@ def test_default_profile_blocks_hidden_tool_calls():
     with use_request_context(PrismRequestContext(tool_profile="interactive")):
         result = asyncio.run(call_tool("brain_index_doc", {"path": "x", "content": "y"}))
 
-    payload = json.loads(result[0].text)
+    # Shape-agnostic extraction: pre-fix call_tool returns a bare
+    # list[TextContent]; post-fix (GH #99 part 3) it returns
+    # types.CallToolResult. Either way the structured JSON rejection
+    # payload is in the (joined) text. The isError=true contract itself
+    # is pinned by tests/unit/test_mcp_profile_rejection_iserror.py,
+    # which drives the SDK's real CallToolRequest handler.
+    content = getattr(result, "content", result)
+    if not isinstance(content, (list, tuple)):
+        content = [content]
+    text = "".join(getattr(b, "text", "") or "" for b in content)
+    payload = json.loads(text)
     assert payload["error"] == "Tool is not available for this MCP tool profile."
     assert payload["tool"] == "brain_index_doc"
     assert payload["tool_profile"] == "interactive"

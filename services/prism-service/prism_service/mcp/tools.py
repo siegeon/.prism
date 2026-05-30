@@ -1406,6 +1406,13 @@ AUTOMATION_TOOL_NAMES: set[str] = {
     "graph_annotate_enqueue",
     "graph_annotate_check",
     "verifier_run",
+    # GH #99 part 3: the Stop hook fires these read/refresh nudges over
+    # the automation profile (stop_record_hook.py understand_refresh +
+    # understand_status). Granting them here keeps those calls from being
+    # silently rejected (now isError=true) drops. Least-privilege
+    # record_* split is unchanged.
+    "understand_refresh",
+    "understand_status",
 }
 
 TOOL_PROFILE_ALIASES: dict[str, str] = {
