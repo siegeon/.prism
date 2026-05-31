@@ -1,6 +1,8 @@
 """Memory API — expertise domains, filtered entries, domain stats."""
 
 import re
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -8,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from prism_service.data_dir import resolve_claude_home
 from prism_service.project_context import get_project
 from prism_service.services.claude_transcripts import path_to_slug
+from prism_service.services.memory_service import MemoryService
 
 router = APIRouter()
 
@@ -66,6 +69,15 @@ def domains(project: str = Query("default")) -> dict:
     return {"domains": svc.list_domains(), "stats": svc.domain_stats()}
 
 
+def _with_activation(entry, now=None) -> dict:
+    """Serialize an ExpertiseEntry to a dict with the activation score
+    computed at query time — the decay-aware selection prior the SPA and
+    the pruner both read. No new inference: pure arithmetic."""
+    d = asdict(entry)
+    d["activation"] = round(MemoryService.compute_activation(entry, now=now), 3)
+    return d
+
+
 @router.get("/entries")
 def entries(
     project: str = Query("default"),
@@ -92,7 +104,23 @@ def entries(
         rows = []
         for d in svc.list_domains():
             rows.extend(svc.list_entries(domain=d, **kwargs))
-    return {"entries": rows}
+    return {"entries": [_with_activation(r) for r in rows]}
+
+
+@router.get("/fading")
+def fading(
+    project: str = Query("default"),
+    limit: int = Query(20),
+    threshold: float = Query(6.0),
+) -> dict:
+    """Low-activation entries ordered ascending by activation (coldest
+    first) — the selection prior the background pruner reads. Default
+    threshold surfaces entries whose decay has pulled them well below a
+    mid-importance, never-recalled baseline."""
+    svc = _svc(project)
+    now = datetime.now(timezone.utc)
+    faders = svc.fading_entries(limit=limit, threshold=threshold, now=now)
+    return {"entries": [_with_activation(e, now=now) for e in faders]}
 
 
 @router.get("/entry/{entry_id}")

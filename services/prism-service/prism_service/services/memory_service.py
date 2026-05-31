@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import sqlite3
@@ -11,6 +12,18 @@ from pathlib import Path
 from typing import Optional
 
 from prism_service.models.memory import ExpertiseEntry
+
+# Activation score tunables (Tier 1). The selection prior the pruner reads is
+#   activation = importance + effectiveness * W1 - decay(elapsed_days) * W2
+# where decay() is a monotonically-increasing Ebbinghaus/ACT-R forgetting
+# curve on (now - last_recalled). Each recall stamps last_recalled, which
+# resets the decay clock (staircase reset). Kept as module-level constants so
+# the formula's knobs aren't buried as inline magic numbers.
+W1 = 0.5  # effectiveness weight — scaled so importance dominates the prior
+W2 = 3.0  # decay weight — how hard forgetting pulls activation down
+# decay(elapsed_days) = ln(1 + elapsed_days / TAU): 0 at elapsed=0, rising
+# without bound but sub-linearly, so old entries fade but never go infinite.
+DECAY_TAU = 7.0  # days — the e-folding scale of the forgetting curve
 
 
 _CREATE_RECALL_LOG_SQL = """
@@ -245,6 +258,65 @@ class MemoryService:
         except Exception:
             pass  # Best-effort — Brain may not be available
 
+    @staticmethod
+    def _decay(elapsed_days: float) -> float:
+        """Ebbinghaus-style forgetting curve: monotonically increasing in
+        elapsed time, 0 at elapsed=0, growing sub-linearly (log) thereafter."""
+        if elapsed_days <= 0:
+            return 0.0
+        return math.log1p(elapsed_days / DECAY_TAU)
+
+    @staticmethod
+    def compute_activation(
+        entry: ExpertiseEntry, now: Optional[datetime] = None,
+    ) -> float:
+        """Pure, deterministic activation score for an entry.
+
+        activation = importance + effectiveness * W1 - decay(elapsed_days) * W2
+
+        elapsed_days is (now - last_recalled) in days; a missing/unparseable
+        last_recalled is treated as elapsed=0 (no decay penalty until first
+        recall stamps a timestamp). No LLM, no DB — arithmetic on existing
+        ExpertiseEntry fields only.
+        """
+        if now is None:
+            now = datetime.now(timezone.utc)
+        elapsed_days = 0.0
+        if entry.last_recalled:
+            try:
+                last = datetime.fromisoformat(entry.last_recalled)
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                elapsed_days = max(0.0, (now - last).total_seconds() / 86400.0)
+            except (ValueError, TypeError):
+                elapsed_days = 0.0
+        base = float(entry.importance) + float(entry.effectiveness) * W1
+        return base - MemoryService._decay(elapsed_days) * W2
+
+    def fading_entries(
+        self,
+        limit: int = 20,
+        threshold: float = 0.0,
+        now: Optional[datetime] = None,
+    ) -> list[ExpertiseEntry]:
+        """Selection prior for the prune/forget runner.
+
+        Returns active, temporally-valid entries whose activation is below
+        `threshold`, sorted ascending by activation (coldest first), capped
+        at `limit`."""
+        if now is None:
+            now = datetime.now(timezone.utc)
+        candidates = [
+            e for e in self._all_entries()
+            if e.status == "active" and not e.invalid_at
+        ]
+        scored = [
+            (self.compute_activation(e, now=now), e) for e in candidates
+        ]
+        faders = [(a, e) for a, e in scored if a < threshold]
+        faders.sort(key=lambda pair: pair[0])
+        return [e for _, e in faders[:limit]]
+
     def recall(
         self,
         query: str,
@@ -294,9 +366,13 @@ class MemoryService:
             ]
             results.extend(extras)
 
-        # Sort by importance + effectiveness blend, then recall_count
+        # Sort by activation score (Ebbinghaus decay-aware), then recall_count.
+        # A freshly-recalled but low-importance entry outranks a stale
+        # high-importance one once decay bites — the staircase reset means
+        # each recall re-floats an entry to the top of its importance band.
+        _now = datetime.now(timezone.utc)
         results.sort(
-            key=lambda e: (e.importance + e.effectiveness * 2, e.recall_count),
+            key=lambda e: (self.compute_activation(e, now=_now), e.recall_count),
             reverse=True,
         )
 
