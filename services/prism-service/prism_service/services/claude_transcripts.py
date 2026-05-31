@@ -320,11 +320,20 @@ def import_unseen(
     scores_db: str,
     project_source_path: str,
     claude_home: Path | None = None,
+    override_dir: str | None = None,
 ) -> int:
     """Parse every transcript matching the project, insert any session
-    whose id isn't already in `session_outcomes`. Returns the import count."""
+    whose id isn't already in `session_outcomes`. Returns the import count.
+
+    v6.2.16 — when `override_dir` is set (the per-project claude_project_dir
+    config), read transcripts directly from `<override_dir>/*.jsonl` instead
+    of slug-scanning ~/.claude/projects; used when auto-discovery misses."""
     claude_home = claude_home or resolve_claude_home()
-    paths = transcripts_for(claude_home, project_source_path)
+    if override_dir and override_dir.strip():
+        d = Path(override_dir.strip())
+        paths = sorted(d.glob("*.jsonl")) if d.is_dir() else []
+    else:
+        paths = transcripts_for(claude_home, project_source_path)
     if not paths:
         return 0
     n = 0
@@ -437,6 +446,26 @@ def _enqueue_with_signals(
         excerpt = format_transcript_excerpt(signals_for_excerpt)
         if excerpt:
             scope["transcript_excerpt"] = excerpt
+        # v6.2.18 — noise filter. A session with NO usable signal would
+        # produce an empty consolidation_candidate the reflection loop can
+        # learn nothing from — these piled up (61 deep) and drained tokens.
+        # Skip enqueue when there's no task link AND every signal bucket is
+        # zero AND nothing was modified. The disk path never sets task_id,
+        # so we read metrics.get("task_id") (None here) but still guard on
+        # it so a future task-linked path is never filtered.
+        sc = scope["signal_counts"]
+        if (
+            metrics.get("task_id") is None
+            and all(int(sc.get(k) or 0) == 0 for k in sc)
+            and int(scope.get("files_modified", 0) or 0) == 0
+        ):
+            print(
+                f"[transcript_importer] skip noise candidate "
+                f"session={session_id}: no task, zero signals, "
+                f"no files modified",
+                flush=True,
+            )
+            return
         enqueue_for_session(
             scores_db, session_id, scope=scope, trigger="transcript_imported",
         )
@@ -466,13 +495,39 @@ def start_transcript_importer() -> None:
                 try:
                     ctx = get_project(pid)
                     scores_db = str(ctx._data_dir / "scores.db")
+                    from prism_service.services import claude_memory as cm
                     sp = _project_source_path(pid)
-                    if not sp:
+                    cpd = cm.configured_project_dir(pid)
+                    if not sp and not cpd:
                         continue
-                    n = import_unseen(scores_db, sp, claude_home)
+                    n = import_unseen(
+                        scores_db, sp or "", claude_home,
+                        override_dir=cpd or None,
+                    )
                     if n:
                         print(
                             f"[transcripts] {pid}: imported {n} session(s)",
+                            file=sys.stderr, flush=True,
+                        )
+                    # v6.2.16 — same cadence, bridge Claude Code auto-memory
+                    # (~/.claude/projects/<slug>/memory/*.md or a per-project
+                    # configured override) into PRISM Memory. Best-effort:
+                    # a memory-import failure must not stall transcript import.
+                    try:
+                        from prism_service.services import claude_memory as cm
+                        mres = cm.import_project_memories(
+                            pid, ctx.memory_svc, claude_home=claude_home,
+                        )
+                        if mres.get("imported"):
+                            print(
+                                f"[transcripts] {pid}: imported "
+                                f"{mres['imported']} memory entr(ies)",
+                                file=sys.stderr, flush=True,
+                            )
+                    except Exception as me:
+                        print(
+                            f"[transcripts] {pid}: memory import error "
+                            f"{type(me).__name__}: {me}",
                             file=sys.stderr, flush=True,
                         )
                 except Exception as e:

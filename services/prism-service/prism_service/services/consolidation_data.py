@@ -78,6 +78,20 @@ def get_unreflected_briefs(
             scope = {}
         d["signal_counts"] = scope.get("signal_counts") or {}
         d["transcript_excerpt"] = scope.get("transcript_excerpt") or ""
+        # v6.2.18 — flag legacy no-signal rows so the SPA can badge them
+        # "noise". New imports are filtered at enqueue time, but rows that
+        # predate the filter still sit pending until pruned; this lets the
+        # pending list show WHY a brief is empty instead of looking broken.
+        sc = d["signal_counts"]
+        if (
+            d.get("task_id") is None
+            and all(int(sc.get(k) or 0) == 0 for k in (
+                "pushbacks", "bg_signals", "tool_failures", "memory_writes",
+            ))
+        ):
+            d["skip_reason"] = "noise — no task, zero signals"
+        else:
+            d["skip_reason"] = ""
         out.append(d)
     return out
 
@@ -290,3 +304,44 @@ def backfill_from_sessions(scores_db: str, limit: int = 500) -> dict:
         else:
             skipped += 1
     return {"created": created, "skipped": skipped, "scanned": len(rows)}
+
+
+def prune_noise_candidates(scores_db: str) -> int:
+    """One-shot drain of the no-signal candidate pile.
+
+    DELETE every *pending* consolidation_candidate that carries no usable
+    signal — task_id IS NULL AND every signal_counts bucket is zero. This
+    is the cleanup companion to the v6.2.18 enqueue-time noise filter:
+    the filter stops new noise, this drains the backlog that accumulated
+    before it. Idempotent — a second call finds nothing and returns 0.
+    Returns the number of rows deleted.
+    """
+    if not Path(scores_db).exists():
+        return 0
+    conn = sqlite3.connect(scores_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, task_id, scope_json FROM consolidation_candidates "
+            "WHERE status='pending'"
+        ).fetchall()
+        doomed: list[str] = []
+        for r in rows:
+            if r["task_id"] is not None:
+                continue
+            try:
+                sc = json.loads(r["scope_json"] or "{}").get("signal_counts") or {}
+            except Exception:
+                sc = {}
+            if all(int(sc.get(k) or 0) == 0 for k in (
+                "pushbacks", "bg_signals", "tool_failures", "memory_writes",
+            )):
+                doomed.append(r["id"])
+        for cid in doomed:
+            conn.execute(
+                "DELETE FROM consolidation_candidates WHERE id=?", (cid,)
+            )
+        conn.commit()
+        return len(doomed)
+    finally:
+        conn.close()

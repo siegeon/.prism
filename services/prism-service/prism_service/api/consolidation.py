@@ -11,6 +11,7 @@ from prism_service.project_context import get_project
 from prism_service.services.consolidation_data import (
     get_queue_summary, get_unreflected_briefs, get_recent_runs,
     backfill_from_sessions, get_signal_rollup, get_trends,
+    prune_noise_candidates,
 )
 from prism_service.services.janitor_service import _DEFAULT_MCPS
 
@@ -96,18 +97,20 @@ def workers() -> dict:
         "label": memory_summary_worker.WORKER_LABEL,
         "running": memory_summary_enabled,
         "cadence_s": (
-            int(os.environ.get("PRISM_MEMORY_SUMMARY_WORKER_INTERVAL", "60"))
+            int(os.environ.get("PRISM_MEMORY_SUMMARY_WORKER_INTERVAL", "300"))
             if memory_summary_enabled else 0
         ),
         "description": (
             "Fills ExpertiseEntry.summary on active memories that ship "
-            "without one — each sweep takes the oldest few and runs "
-            "claude -p to mint a one-sentence rephrase for the "
-            "MemoryPage tile face. Defaults ON; "
-            "PRISM_MEMORY_SUMMARY_WORKER=off to disable."
+            "without one — each sweep takes the oldest 3 (MAX_PER_CYCLE) "
+            "and runs claude -p to mint a one-sentence rephrase for the "
+            "MemoryPage tile face. Defaults ON, every 300s (v6.2.18, "
+            "raised from 60s to bound token use). Costs claude quota — "
+            "set PRISM_MEMORY_SUMMARY_WORKER=off to disable."
             if memory_summary_enabled else
-            "OFF — set PRISM_MEMORY_SUMMARY_WORKER=on to fill the "
-            "summary field on the MemoryPage tile face."
+            "OFF (PRISM_MEMORY_SUMMARY_WORKER=off). Set "
+            "PRISM_MEMORY_SUMMARY_WORKER=on to fill the summary field "
+            "on the MemoryPage tile face."
         ),
         "prompt_kind": "static",
         "prompt": memory_summary_worker.SUMMARY_PROMPT_TEMPLATE,
@@ -254,3 +257,16 @@ def backfill(project: str = Query("default"), limit: int = Query(500, ge=1, le=5
     ctx = get_project(project)
     scores_db = str(ctx._data_dir / "scores.db")
     return backfill_from_sessions(scores_db, limit=limit)
+
+
+@router.post("/prune-noise")
+def prune_noise(project: str = Query("default")) -> dict:
+    """v6.2.18 — One-click drain of the no-signal candidate pile.
+
+    Deletes pending consolidation_candidates that carry no usable signal
+    (task_id NULL AND all signal_counts zero) — the backlog the v6.2.18
+    enqueue-time noise filter now prevents going forward. Idempotent:
+    a second call returns {deleted: 0}."""
+    ctx = get_project(project)
+    scores_db = str(ctx._data_dir / "scores.db")
+    return {"deleted": prune_noise_candidates(scores_db)}

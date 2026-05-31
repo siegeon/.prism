@@ -13,8 +13,8 @@ because the user explicitly requested the feature (the only way to get
 summaries on the tiles). Disable with PRISM_MEMORY_SUMMARY_WORKER=off.
 
 Env:
-  PRISM_MEMORY_SUMMARY_WORKER=off        # default on
-  PRISM_MEMORY_SUMMARY_WORKER_INTERVAL=60   # seconds between sweeps
+  PRISM_MEMORY_SUMMARY_WORKER=off          # default on; off disables it
+  PRISM_MEMORY_SUMMARY_WORKER_INTERVAL=300  # seconds between sweeps
   PRISM_MEMORY_SUMMARY_WORKER_MAX_PER_CYCLE=3
 """
 
@@ -57,12 +57,16 @@ def _env_truthy(name: str, default: bool) -> bool:
 
 
 def _interval_s() -> int:
+    # v6.2.18 — default raised 60s -> 300s. At 3 memories/cycle the old
+    # 60s cadence ran the worker (and `claude -p`) near-continuously for
+    # hours after a big auto-import backfill, draining tokens. 300s still
+    # drains a backlog steadily without holding a near-constant session.
     try:
         return max(15, int(os.environ.get(
-            "PRISM_MEMORY_SUMMARY_WORKER_INTERVAL", "60",
+            "PRISM_MEMORY_SUMMARY_WORKER_INTERVAL", "300",
         )))
     except ValueError:
-        return 60
+        return 300
 
 
 def _max_per_cycle() -> int:
