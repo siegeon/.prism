@@ -30,6 +30,14 @@ const STOP_AFTER = (_in.stop_after || '').trim() // e.g. 'red_gate' to halt the 
 // env/process access). Threaded into task_link_session + conductor_advance
 // so the task<->session JOIN resolves. GUARDED: empty SID => today's behavior.
 const SID = (_in.session_id || '').trim()
+// Telemetry run id for the agent-run spine (task f4498190). One drive of this
+// workflow == one run_id; every step's agent() emits a row under it. Sourced
+// from args when the orchestrator supplies one, else derived from SID/task.
+const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || `run-${Date.now()}`).trim()
+// Where the agent-run telemetry POSTs land. Defaults to the dev web port
+// (8888 on this box); overridable via args.api_base for the WSL release
+// topology (7778). The MCP daemon serves /api/* on the same FastAPI app.
+const API_BASE = (_in.api_base || 'http://127.0.0.1:8888').replace(/\/$/, '')
 
 // ── Conductor state machine (mirror of models/workflow.py:WORKFLOW_STEPS) ─
 // Only red_gate and green_gate are blocking gates. The *_complete/_coverage
@@ -75,6 +83,68 @@ const dryNote = DRY
 
 function preamble(role) {
   return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${CONVENTIONS}${dryNote}`
+}
+
+// ── Agent-run telemetry emitter (task f4498190) ─────────────────────────
+// ONE shared row builder + POST so the serial loop AND the parallel fanout
+// wrapper emit an IDENTICAL row shape — no telemetry gap between the two
+// execution paths. The agent_runs spine is idempotent on
+// (run_id, agent_id, step), so a retried step UPDATES rather than dupes.
+// Per-agent agentId/timing/tokens/tool_uses live in the harness journal +
+// completion notification; we thread whatever the step result + meta expose
+// (duration_ms/tokens/tool_uses), and ALWAYS thread the plumbed SID as
+// session_id. Guarded end-to-end: a failed POST never breaks the drive.
+async function postAgentRun(res, meta) {
+  if (DRY) return // dry-run never mutates / never POSTs telemetry
+  meta = meta || {}
+  const row = {
+    run_id: RUN_ID,
+    workflow_name: 'implement',
+    task_id: (res && res.task_id) || (typeof locate !== 'undefined' && locate.task_id) || TASK_ID,
+    session_id: SID,
+    agent_id: meta.agent_id || `${RUN_ID}:${meta.step || (res && res.step) || meta.label}`,
+    parent_agent_id: meta.parent_agent_id || null,
+    role: meta.role || null,
+    step: meta.step || (res && res.step) || meta.label || null,
+    model: meta.model || null,
+    started_at: meta.started_at || null,
+    ended_at: meta.ended_at || null,
+    duration_ms: meta.duration_ms != null ? meta.duration_ms : null,
+    tokens: meta.tokens != null ? meta.tokens : null,
+    tool_uses: meta.tool_uses != null ? meta.tool_uses : null,
+    ok: res ? res.ok === true : null,
+    gate_state: (res && res.gate_state) || meta.gate_state || null,
+    verdict_summary: (res && (res.validation || res.evidence)) || meta.verdict_summary || null,
+    evidence_ref: (res && res.evidence) ? String(res.evidence).slice(0, 200) : null,
+  }
+  try {
+    await fetch(`${API_BASE}/api/agent-runs/ingest?project=prism`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(row),
+    })
+  } catch (e) {
+    log(`agent-run telemetry POST failed (non-fatal): ${e && e.message}`)
+  }
+  return row
+}
+
+// Parallel fanout wrapper: run several step handlers concurrently and emit the
+// SAME telemetry row shape per branch via the shared postAgentRun emitter, so
+// a future parallel drive has NO telemetry gap vs the serial loop. Unused by
+// the default serial drive but kept on the same emitter contract.
+async function fanout(jobs) {
+  return Promise.all(jobs.map(async (j) => {
+    const started = Date.now()
+    const res = await j.run()
+    await postAgentRun(res, {
+      role: j.role, step: j.step, model: j.model,
+      started_at: new Date(started).toISOString(),
+      ended_at: new Date().toISOString(),
+      duration_ms: Date.now() - started,
+    })
+    return res
+  }))
 }
 
 // ── Schemas ─────────────────────────────────────────────────────────────
@@ -179,13 +249,29 @@ const HANDLERS = {
     { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
 }
 
+// Role each step's agent persona carries — mirrors the HANDLERS defaults so
+// the telemetry row's `role` matches the persona that actually ran the step.
+const ROLE_BY_STEP = {
+  review_previous_notes: 'sm', draft_story: 'sm', verify_plan: 'sm',
+  write_failing_tests: 'qa', red_gate: 'qa',
+  implement_tasks: 'dev', verify_green_state: 'qa', green_gate: 'lead',
+}
+
 // ── Deterministic drive: one step at a time, halt on failure/gate-reject ─
 const trace = []
 let halted = null
 for (let i = startIdx; i < ORDER.length; i++) {
   const stepId = ORDER[i]
+  const _t0 = Date.now()
   const res = await HANDLERS[stepId]()
   trace.push(res)
+  // Emit one agent-run telemetry row after this step's agent() returns —
+  // serial path; the parallel fanout() wrapper routes the SAME emitter.
+  await postAgentRun(res, {
+    role: ROLE_BY_STEP[stepId], step: stepId,
+    started_at: new Date(_t0).toISOString(),
+    ended_at: new Date().toISOString(), duration_ms: Date.now() - _t0,
+  })
   if (!res || res.ok !== true) {
     halted = { at: stepId, reason: (res && res.halt_reason) || 'step reported ok:false', result: res }
     break

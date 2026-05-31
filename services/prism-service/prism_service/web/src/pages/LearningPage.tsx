@@ -27,6 +27,43 @@ type Reflection = {
   candidate_trigger?: string | null;
 };
 
+type AgentRun = {
+  run_id?: string;
+  task_id?: string;
+  role?: string;
+  step?: string;
+  model?: string;
+  duration_ms?: number | null;
+  tokens?: number | null;
+  gate_state?: string;
+  ok?: boolean | null;
+  started_at?: string;
+};
+
+type PerStepAgg = {
+  step?: string;
+  n?: number;
+  avg_duration_ms?: number | null;
+  avg_tokens?: number | null;
+};
+type PerRoleAgg = {
+  role?: string;
+  n?: number;
+  total_tokens?: number | null;
+  avg_tokens?: number | null;
+};
+type AgentRunAggregates = {
+  per_step?: PerStepAgg[];
+  per_role?: PerRoleAgg[];
+  override_rate?: number;
+  total_runs?: number;
+};
+
+function fmtMs(ms?: number | null): string {
+  if (ms == null) return "—";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
 function ScorePill({ value }: { value: number | null | undefined }) {
   if (value == null || Number.isNaN(value)) {
     return <span className="font-mono opacity-60">—</span>;
@@ -50,6 +87,8 @@ export default function LearningPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [reflections, setReflections] = useState<Reflection[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [agentAgg, setAgentAgg] = useState<AgentRunAggregates>({});
 
   useEffect(() => {
     api
@@ -57,23 +96,114 @@ export default function LearningPage() {
         rows: Row[];
         variants: Variant[];
         recent_reflections?: Reflection[];
+        agent_runs?: AgentRunAggregates;
       }>(`/api/learning?project=${project}`)
       .then((d) => {
         setRows(d.rows ?? []);
         setVariants(d.variants ?? []);
         setReflections(d.recent_reflections ?? []);
+        setAgentAgg(d.agent_runs ?? {});
       })
       .catch(() => {
         setRows([]);
         setVariants([]);
         setReflections([]);
+        setAgentAgg({});
       });
+    // Per-task agent timeline: the raw agent-run rows (role/step/model/
+    // duration/tokens), newest-first, for the timeline panel below.
+    api
+      .get<{ rows: AgentRun[] }>(`/api/agent-runs?project=${project}`)
+      .then((d) => setAgentRuns(d.rows ?? []))
+      .catch(() => setAgentRuns([]));
   }, [project]);
 
   const lowN = variants.length > 0 && variants.every((v) => v.n < 20);
 
+  const overridePct = Math.round((agentAgg.override_rate ?? 0) * 100);
+
   return (
     <Page>
+      <Card raised>
+        <div className="flex items-baseline justify-between mb-3">
+          <SectionLabel>Agent runs · timeline</SectionLabel>
+          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+            per-task agent path · role / step / model / duration / tokens
+          </div>
+        </div>
+        {/* Cross-run aggregates: avg duration per step, override rate, token
+            cost per role — the Tier-3 self-heal signals. */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
+          <div className="rounded border border-[color:var(--border-default)]/40 p-2">
+            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              Avg duration per step
+            </div>
+            {(agentAgg.per_step ?? []).length === 0 ? (
+              <div className="text-xs opacity-50">—</div>
+            ) : (
+              (agentAgg.per_step ?? []).map((s) => (
+                <div key={s.step} className="flex justify-between text-xs py-0.5">
+                  <span className="font-mono opacity-80 truncate">{s.step}</span>
+                  <span className="font-mono opacity-60">{fmtMs(s.avg_duration_ms)}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="rounded border border-[color:var(--border-default)]/40 p-2">
+            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              Override rate
+            </div>
+            <div className="text-2xl font-mono text-amber-300">{overridePct}%</div>
+            <div className="text-[11px] opacity-50">
+              {agentAgg.total_runs ?? 0} runs · blind-verifier override signal
+            </div>
+          </div>
+          <div className="rounded border border-[color:var(--border-default)]/40 p-2">
+            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              Token cost per role
+            </div>
+            {(agentAgg.per_role ?? []).length === 0 ? (
+              <div className="text-xs opacity-50">—</div>
+            ) : (
+              (agentAgg.per_role ?? []).map((r) => (
+                <div key={r.role} className="flex justify-between text-xs py-0.5">
+                  <span className="font-mono opacity-80">{r.role ?? "—"}</span>
+                  <span className="font-mono opacity-60">{r.total_tokens ?? 0} tok</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        {agentRuns.length === 0 ? (
+          <Empty>
+            No agent runs yet — they populate as the{" "}
+            <span className="font-mono">implement</span> workflow drives steps
+            and POSTs telemetry to <span className="font-mono">/api/agent-runs/ingest</span>.
+          </Empty>
+        ) : (
+          <div className="divide-y divide-[color:var(--border-default)]/40">
+            {agentRuns.map((a, i) => (
+              <div key={`${a.run_id}-${a.step}-${i}`} className="py-2 flex items-center gap-3 text-sm">
+                <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] w-10">
+                  {a.role ?? "—"}
+                </span>
+                <span className="font-mono opacity-80 flex-1 truncate" title={a.task_id}>
+                  {a.step ?? "—"}
+                </span>
+                <span className="text-xs opacity-50 w-40 truncate font-mono">{a.model ?? "—"}</span>
+                <span className="font-mono text-xs opacity-60 w-16 text-right">{fmtMs(a.duration_ms)}</span>
+                <span className="font-mono text-xs opacity-60 w-20 text-right">{a.tokens ?? "—"} tok</span>
+                {a.gate_state && a.gate_state !== "none" && (
+                  <span className="text-[10px] uppercase tracking-wider text-amber-300/80 w-14">
+                    {a.gate_state}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Card raised>
         <div className="flex items-baseline justify-between mb-3">
           <SectionLabel>Recent reflections</SectionLabel>

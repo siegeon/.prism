@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Query
 
 from prism_service.project_context import get_project
+from prism_service.services.agent_runs_data import get_agent_run_aggregates
 from prism_service.services.learning_data import (
     get_learning_rows,
     get_recent_reflections,
@@ -27,4 +28,7 @@ def overview(
         # longer empty after a reflection runs (task_quality_rollup needs
         # a task_id; transcript-derived candidates only carry session_id).
         "recent_reflections": get_recent_reflections(scores_db, limit=reflections_limit),
+        # task f4498190 — agent-run telemetry aggregates feed the /learning
+        # agent-timeline panel (avg duration/step, override rate, token/role).
+        "agent_runs": get_agent_run_aggregates(scores_db),
     }
