@@ -35,6 +35,12 @@ class Task:
     workflow_step: str = ""
     gate_state: str = "none"  # none | pending | passed | failed
     gate_reason: str = ""
+    # Structural hierarchy (parent → children). Empty string = a root/
+    # top-level task. Distinct from `dependencies` (scheduling/blocking):
+    # parent_id answers "what epic do I belong to?", dependencies answers
+    # "what must finish before I can start?". The /tasks board shows only
+    # roots; a parent's children are reached by clicking into its detail.
+    parent_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:
