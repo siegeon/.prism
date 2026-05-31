@@ -291,9 +291,18 @@ class JanitorService:
         "invalidate_memory_ids", "confidence",
     )
 
-    def submit(self, candidate_id: str, output_json: dict) -> dict:
+    def submit(
+        self,
+        candidate_id: str,
+        output_json: dict,
+        op_type: str = "reflection",
+    ) -> dict:
         """Validate, write consolidation_runs, enrich rollup, store
-        new memories, invalidate old ones. Returns {accepted, error?}."""
+        new memories, invalidate old ones. Returns {accepted, error?}.
+
+        ``op_type`` names the memory-operation family (reflection / forget /
+        prune / distill / ...) so every verdict row is replayable + diffable.
+        """
         if not isinstance(output_json, dict):
             return {"accepted": False, "error": "output_json must be a dict"}
         missing = [f for f in self._REQUIRED_FIELDS if f not in output_json]
@@ -313,12 +322,13 @@ class JanitorService:
         self._db.execute(
             "INSERT INTO consolidation_runs "
             "(id, candidate_id, run_at, output_json, subagent_type, "
-            " confidence, schema_valid) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            " confidence, schema_valid, op_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
             (
                 run_id, candidate_id, self._iso(now),
                 json.dumps(output_json), "prism-reflect",
                 float(output_json.get("confidence") or 0.0),
+                op_type,
             ),
         )
         # Enrich rollup — upsert qualitative_score onto the task.

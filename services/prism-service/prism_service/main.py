@@ -336,6 +336,13 @@ async def lifespan(_app: FastAPI):
             start_memory_summary_worker,
         )
         start_memory_summary_worker()
+        # Tier-2 — generalised memory-operation chassis. Each MemoryOperation
+        # (forget / prune / distill / ...) is its own env-gated, interval
+        # daemon, off by default; PRISM_<OP_TYPE>_WORKER=on to enable one.
+        from prism_service.services.memory_ops_worker import (
+            start_memory_ops_workers,
+        )
+        start_memory_ops_workers()
 
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose

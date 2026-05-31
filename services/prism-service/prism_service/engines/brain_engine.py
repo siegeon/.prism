@@ -1031,7 +1031,8 @@ class Brain:
                 output_json TEXT,
                 subagent_type TEXT,
                 confidence REAL,
-                schema_valid INTEGER DEFAULT 1
+                schema_valid INTEGER DEFAULT 1,
+                op_type TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_consolidation_runs_candidate_id
                 ON consolidation_runs(candidate_id);
@@ -1052,6 +1053,24 @@ class Brain:
             CREATE INDEX IF NOT EXISTS idx_memory_meta_status
                 ON memory_meta(status);
         """)
+        # Migrate existing scores.db: add op_type to consolidation_runs so
+        # every memory-operation verdict (reflection / forget / prune /
+        # distill / ...) is replayable + diffable by op family. Existing
+        # rows keep op_type=NULL; the reflection path writes 'reflection'.
+        _runs_cols = {
+            row[1]
+            for row in self._scores.execute(
+                "PRAGMA table_info(consolidation_runs)"
+            ).fetchall()
+        }
+        if "op_type" not in _runs_cols:
+            try:
+                self._scores.execute(
+                    "ALTER TABLE consolidation_runs ADD COLUMN op_type TEXT"
+                )
+                self._scores.commit()
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------------
     # Internal helpers
