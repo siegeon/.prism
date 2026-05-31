@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     merged_at TEXT,
     workflow_step TEXT DEFAULT '',
     gate_state TEXT DEFAULT 'none',
-    gate_reason TEXT DEFAULT ''
+    gate_reason TEXT DEFAULT '',
+    parent_id TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -63,6 +64,8 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     ("workflow_step", "TEXT DEFAULT ''"),
     ("gate_state", "TEXT DEFAULT 'none'"),
     ("gate_reason", "TEXT DEFAULT ''"),
+    # Hierarchy (parent → children). Existing rows backfill to '' (root).
+    ("parent_id", "TEXT DEFAULT ''"),
 ]
 
 
@@ -164,6 +167,8 @@ class TaskService:
                         and row["gate_state"] is not None else "none"),
             gate_reason=(row["gate_reason"] if "gate_reason" in keys
                          and row["gate_reason"] is not None else ""),
+            parent_id=(row["parent_id"] if "parent_id" in keys
+                       and row["parent_id"] is not None else ""),
         )
 
     def _record_history(
@@ -200,6 +205,7 @@ class TaskService:
         tags: Optional[list[str]] = None,
         story_file: str = "",
         assigned_agent: str = "",
+        parent_id: str = "",
     ) -> Task:
         """Create a new task and return it."""
         task = Task(
@@ -210,13 +216,14 @@ class TaskService:
             assigned_agent=assigned_agent,
             dependencies=dependencies or [],
             tags=tags or [],
+            parent_id=parent_id,
         )
         self._db.execute(
             "INSERT INTO tasks "
             "(id, title, description, status, priority, story_file, "
             "assigned_agent, created_at, updated_at, completed_at, "
-            "blocked_reason, dependencies, tags) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "blocked_reason, dependencies, tags, parent_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -231,6 +238,7 @@ class TaskService:
                 task.blocked_reason,
                 json.dumps(task.dependencies),
                 json.dumps(task.tags),
+                task.parent_id,
             ),
         )
         self._db.commit()
@@ -314,7 +322,8 @@ class TaskService:
             "UPDATE tasks SET title=?, description=?, status=?, priority=?, "
             "story_file=?, assigned_agent=?, updated_at=?, completed_at=?, "
             "blocked_reason=?, dependencies=?, tags=?, "
-            "workflow_step=?, gate_state=?, gate_reason=? WHERE id=?",
+            "workflow_step=?, gate_state=?, gate_reason=?, parent_id=? "
+            "WHERE id=?",
             (
                 task.title,
                 task.description,
@@ -330,6 +339,7 @@ class TaskService:
                 task.workflow_step,
                 task.gate_state,
                 task.gate_reason,
+                task.parent_id,
                 task.id,
             ),
         )

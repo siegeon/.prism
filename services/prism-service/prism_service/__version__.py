@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.18"
+PRISM_VERSION = "6.2.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.19: Hierarchical tasks (parent → children) — first-class parent_id "
+    "on the Task model, distinct from dependencies (parent_id = structural "
+    "epic membership; dependencies = scheduling/blocking). Additive tasks.db "
+    "column (migrates existing DBs to '' = root). Threaded through "
+    "TaskService.create/update, GET/PATCH /api/tasks (TaskUpdate.parent_id), "
+    "and the task_create/task_update MCP tools. UI: the /tasks board now "
+    "shows ONLY root tasks; a parent card carries a child-count badge in its "
+    "top-right corner; TaskDetailPage gains a 'Child tasks (N/M done)' card "
+    "(click-through, status chips) plus a 'Parent ↑' backlink, and the back "
+    "button returns to the parent (from=/tasks/<id>) instead of the board. "
+    "Click-through navigation, not collapse. New unit tests at "
+    "tests/unit/test_task_hierarchy.py pin parent_id round-trip + the "
+    "roots/children partition. "
     "v6.2.18: Stop the consolidation noise pile + bound memory-summary "
     "token use. (1) The transcript importer no longer enqueues a "
     "consolidation_candidate for sessions with NO usable signal — "

@@ -48,6 +48,7 @@ class TaskUpdate(BaseModel):
     priority: Optional[int] = None
     assigned_agent: Optional[str] = None
     blocked_reason: Optional[str] = None
+    parent_id: Optional[str] = None
 
 
 @router.patch("/{task_id}")
