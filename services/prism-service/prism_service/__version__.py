@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.18"
+PRISM_VERSION = "6.2.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.19: Memory activation score + cheap selection prior (Tier 1). New "
+    "module-level constants W1/W2/DECAY_TAU on memory_service.py drive a pure, "
+    "deterministic compute_activation(entry, now) = importance + "
+    "effectiveness*W1 - decay(now - last_recalled)*W2, where decay() is an "
+    "Ebbinghaus/ACT-R log forgetting curve (0 at elapsed=0, rising "
+    "sub-linearly). recall() now ranks by activation (each recall stamps "
+    "last_recalled, a staircase reset that re-floats an entry) instead of the "
+    "old (importance + effectiveness*2, recall_count) blend. New "
+    "fading_entries(limit, threshold, now) returns active entries below a "
+    "low-activation threshold ascending (coldest first) — the prune/forget "
+    "selection prior. /api/memory/entries now carries an 'activation' float "
+    "per entry; new GET /api/memory/fading exposes the cold list for the "
+    "background pruner. MemoryPage.tsx: Entry.activation field, a muted/slate "
+    "'Fading' lane in the 'by value' grouping so decay is VISIBLE (UI-FIRST), "
+    "and an activation badge (teal when hot, slate when fading) on every tile. "
+    "No new inference — arithmetic on existing ExpertiseEntry fields only. New "
+    "tests: test_memory_activation_score / test_api_memory_activation / "
+    "test_memory_page_activation_ui. "
     "v6.2.18: Stop the consolidation noise pile + bound memory-summary "
     "token use. (1) The transcript importer no longer enqueues a "
     "consolidation_candidate for sessions with NO usable signal — "

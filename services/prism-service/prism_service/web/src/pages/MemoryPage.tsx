@@ -22,6 +22,10 @@ type Entry = {
   recall_count?: number;
   last_recalled?: string;
   effectiveness?: number;
+  // Server-computed activation score (Tier 1): importance + effectiveness*W1
+  // - Ebbinghaus decay(now - last_recalled)*W2. Higher = hotter; entries that
+  // fall below the fade threshold drift into the Fading lane.
+  activation?: number;
   valid_at?: string;
   invalid_at?: string;
   generation?: number;
@@ -92,20 +96,31 @@ function valueScore(e: Entry): number {
   return imp + recall * 1.5 + eff * 5 + gen * 0.5;
 }
 
-// v6.1.2 — "by value" view tiers entries into three buckets so the
-// most useful memories sit at the top instead of getting buried in a
-// 47-tile wall. Recalled memories are *proven* — they came up in real
-// sessions — so they always lead, regardless of declared importance.
-function valueBucket(e: Entry): "proven" | "high" | "rest" {
+// v6.2.19 — entries whose server-computed activation has decayed below this
+// fade line surface in their own muted lane so memory decay is VISIBLE in the
+// SPA (UI-FIRST), not headless. Mirrors the /api/memory/fading default.
+const FADE_THRESHOLD = 6.0;
+
+type ValueBucketId = "proven" | "high" | "rest" | "fading";
+
+// v6.1.2 — "by value" view tiers entries into buckets so the most useful
+// memories sit at the top instead of getting buried in a 47-tile wall.
+// Recalled memories are *proven* — they came up in real sessions — so they
+// always lead, regardless of declared importance. v6.2.19 adds a Fading lane:
+// an entry whose activation has decayed below the fade line (and which isn't
+// proven) drifts here so its decay is legible.
+function valueBucket(e: Entry): ValueBucketId {
   if ((e.recall_count ?? 0) > 0) return "proven";
+  if (e.activation !== undefined && e.activation < FADE_THRESHOLD) return "fading";
   if ((e.importance ?? 0) >= 7) return "high";
   return "rest";
 }
 
-const VALUE_BUCKETS: { id: "proven" | "high" | "rest"; label: string; blurb: string }[] = [
+const VALUE_BUCKETS: { id: ValueBucketId; label: string; blurb: string }[] = [
   { id: "proven", label: "Proven",   blurb: "Recalled in real sessions — these have earned their tile." },
   { id: "high",   label: "High value", blurb: "Author marked importance ≥ 7. Not yet recalled." },
   { id: "rest",   label: "Resting",   blurb: "Lower importance and untouched so far. Quiet, not useless." },
+  { id: "fading", label: "Fading",    blurb: "Activation has decayed below the fade line — recall to revive, or let the pruner forget." },
 ];
 
 export default function MemoryPage() {
@@ -197,6 +212,7 @@ export default function MemoryPage() {
           id: b.id, label: b.label, blurb: b.blurb,
           tone: b.id === "proven" ? "emerald" as PillTone
             : b.id === "high" ? "amber" as PillTone
+            : b.id === "fading" ? "slate" as PillTone
             : "slate" as PillTone,
           items: [...buckets[b.id]].sort((a, x) => valueScore(x) - valueScore(a)),
         }));
@@ -354,6 +370,8 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
   const effectiveness = entry.effectiveness ?? 0;
   const generation = entry.generation ?? 1;
   const proven = recall > 0;
+  const activation = entry.activation;
+  const fading = activation !== undefined && activation < FADE_THRESHOLD && !proven;
   const tooltip = `${entry.name ?? "—"}\nid: ${entry.id ?? "—"}\n\n${entry.description ?? ""}`;
   return (
     <button
@@ -395,6 +413,23 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
         )}
       </div>
       <div className="flex items-center gap-2 text-[11px] font-mono text-[color:var(--text-muted)]">
+        {activation !== undefined && (
+          <span
+            className={
+              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded ring-1 " +
+              (fading
+                ? "text-[color:var(--accent-slate-fg)]"
+                : "text-[color:var(--text-secondary)]")
+            }
+            style={{
+              background: `var(--accent-${fading ? "slate" : "teal"}-bg)`,
+              boxShadow: `inset 0 0 0 1px var(--accent-${fading ? "slate" : "teal"}-ring)`,
+            }}
+            title={`activation ${activation.toFixed(2)}${fading ? " — fading (decayed below the fade line)" : ""}`}
+          >
+            act {activation.toFixed(1)}
+          </span>
+        )}
         {importance > 0 && (
           <span className="inline-flex items-center gap-1" title={`importance ${importance}/10`}>
             <span
