@@ -1,23 +1,31 @@
 """Memory API — expertise domains, filtered entries, domain stats."""
 
+import re
 from dataclasses import asdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
 
-from prism_service.engines import understand_engine as ue
+from prism_service.data_dir import resolve_claude_home
 from prism_service.project_context import get_project
-from prism_service.services import claude_memory as cm
+from prism_service.services.claude_transcripts import path_to_slug
 from prism_service.services.memory_service import MemoryService
 
-# v6.2.16 — the Claude-auto-memory bridge moved to services/claude_memory.py
-# so the transcript-import poller can run it automatically. Re-exported here
-# for backward compat with anything importing them off this module.
-_CC_TYPE_MAP = cm._CC_TYPE_MAP
-_parse_claude_memory = cm.parse_claude_memory
-
 router = APIRouter()
+
+
+# v6.0.8 — bridge Claude Code's auto-memory markdown into PRISM. Each
+# .md has YAML frontmatter (name, description, metadata.type); we map
+# the metadata.type to PRISM's (type, classification, memory_type,
+# importance) tuple. Importance lean: feedback rules score high
+# because they're "do/don't do" guidance the model must obey.
+_CC_TYPE_MAP = {
+    "feedback":  ("convention", "tactical",     "procedural", 7),
+    "project":   ("decision",   "strategic",    "episodic",   6),
+    "user":      ("decision",   "foundational", "semantic",   5),
+    "reference": ("convention", "foundational", "semantic",   5),
+}
 
 
 def _svc(project: str):
@@ -27,10 +35,47 @@ def _svc(project: str):
         raise HTTPException(404, f"unknown project: {project}: {exc}")
 
 
+def _parse_claude_memory(path: Path) -> dict | None:
+    """Extract {name, description, body, metadata.type} from a Claude
+    Code memory .md. Returns None if frontmatter is missing or malformed."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    m = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
+    if not m:
+        return None
+    fm_raw, body = m.group(1), m.group(2).strip()
+    name = description = mtype = ""
+    for line in fm_raw.splitlines():
+        s = line.strip()
+        if s.startswith("name:"):
+            name = s.split(":", 1)[1].strip()
+        elif s.startswith("description:"):
+            description = s.split(":", 1)[1].strip().strip('"').strip("'")
+        elif s.startswith("type:"):
+            mtype = s.split(":", 1)[1].strip()
+    if not name:
+        return None
+    return {"name": name, "description": description, "body": body,
+            "metatype": mtype}
+
+
 @router.get("/domains")
 def domains(project: str = Query("default")) -> dict:
     svc = _svc(project)
     return {"domains": svc.list_domains(), "stats": svc.domain_stats()}
+
+
+def _with_activation(entry, now=None) -> dict:
+    """Serialize an ExpertiseEntry to a dict with the activation score
+    computed at query time — the decay-aware selection prior the SPA and
+    the pruner both read. No new inference: pure arithmetic."""
+    d = asdict(entry)
+    d["activation"] = round(MemoryService.compute_activation(entry, now=now), 3)
+    return d
 
 
 @router.get("/entries")
@@ -60,15 +105,6 @@ def entries(
         for d in svc.list_domains():
             rows.extend(svc.list_entries(domain=d, **kwargs))
     return {"entries": [_with_activation(r) for r in rows]}
-
-
-def _with_activation(entry, now=None) -> dict:
-    """Serialize an ExpertiseEntry to a dict with the activation score
-    computed at query time — the decay-aware selection prior the SPA and
-    the pruner both read. No new inference: pure arithmetic."""
-    d = asdict(entry)
-    d["activation"] = round(MemoryService.compute_activation(entry, now=now), 3)
-    return d
 
 
 @router.get("/fading")
@@ -109,81 +145,78 @@ def entry_detail(entry_id: str, project: str = Query("default")) -> dict:
 
 @router.post("/import-claude-memories")
 def import_claude_memories(project: str = Query("default")) -> dict:
-    """Backfill PRISM expertise from Claude Code's auto-memory markdown.
-
-    Delegates to services.claude_memory, which resolves the memory dir
-    via (1) per-project `claude_memory_path` override, then (2) the
-    slug-derived ~/.claude/projects/<slug>/memory default. Idempotent —
-    skips entries whose name + description already match. The same import
-    also runs automatically on the transcript-import poller (v6.2.16);
-    this endpoint stays for an on-demand backfill from the SPA."""
+    """Backfill PRISM expertise from Claude Code's auto-memory markdown
+    files at ~/.claude/projects/<slug>/memory/*.md. Idempotent:
+    memory_store dedupes on name + 85% description similarity, so
+    re-running is safe (existing entries are invalidated and
+    superseded with bumped generation, not duplicated)."""
     svc = _svc(project)
-    return cm.import_project_memories(project, svc)
-
-
-class ClaudeMemoryConfigBody(BaseModel):
-    # Absolute path to this project's ~/.claude/projects/<slug> folder.
-    # Sessions read <dir>/*.jsonl, memories read <dir>/memory/*.md.
-    # Empty / null clears the override and reverts to auto-discovery.
-    claude_project_dir: str | None = None
-
-
-def _memory_config(project: str) -> dict:
-    """Current per-project claude_project_dir override + what auto-discovery
-    would resolve to, so the SPA can show 'auto' vs 'overridden' for both
-    the session and memory importers."""
-    try:
-        cpd = (ue._read_state(project).get("claude_project_dir") or "").strip()
-    except Exception:
-        cpd = ""
-    mem_dir = cm.resolve_memory_dir(project)
-    return {
-        "project": project,
-        "claude_project_dir": cpd,
-        "memory_dir": str(mem_dir),
-        "auto_memory_dir": str(cm.auto_memory_dir(project)),
-        "sessions_dir": cpd or "(auto: slug scan of ~/.claude/projects)",
-        "memory_exists": mem_dir.is_dir(),
-    }
-
-
-@router.get("/claude-config")
-def get_claude_memory_config(project: str = Query("default")) -> dict:
-    return _memory_config(project)
-
-
-@router.post("/claude-config")
-def set_claude_memory_config(
-    body: ClaudeMemoryConfigBody, project: str = Query("default"),
-) -> dict:
-    """Set (or clear) the per-project Claude project-dir override, then run
-    a session + memory import immediately so the user sees the effect. A
-    non-empty path must exist and be a directory."""
-    from pathlib import Path
-    from prism_service.services import claude_transcripts as ct
-    svc = _svc(project)  # validates project exists
     ctx = get_project(project)
-    raw = (body.claude_project_dir or "").strip()
-    if raw and not Path(raw).is_dir():
-        raise HTTPException(
-            400,
-            f"claude_project_dir {raw!r} does not exist or is not a directory. "
-            "Paste the absolute path to this project's folder under "
-            "~/.claude/projects (it holds the *.jsonl transcripts and a "
-            "memory/ subdir), or leave it blank to auto-detect.",
-        )
+    # Resolve the slug from the project's understand source_path, falling
+    # back to the project id; either way maps to a slug under
+    # ~/.claude/projects/.
+    from prism_service.engines import understand_engine as ue
     try:
         state = ue._read_state(project)
+        source_path = (state.get("source_path") or "").strip()
     except Exception:
-        state = {}
-    if raw:
-        state["claude_project_dir"] = raw
-    else:
-        state.pop("claude_project_dir", None)
-    ue._write_state(project, state)
-    mem = cm.import_project_memories(project, svc)
-    scores_db = str(ctx._data_dir / "scores.db")
-    sp = (state.get("source_path") or "").strip()
-    sessions = ct.import_unseen(scores_db, sp, override_dir=raw or None)
-    return {**_memory_config(project),
-            "import_memories": mem, "import_sessions": sessions}
+        source_path = ""
+    slug = path_to_slug(source_path) if source_path else project
+    mem_dir = resolve_claude_home() / "projects" / slug / "memory"
+    if not mem_dir.is_dir():
+        return {
+            "imported": 0, "skipped": 0, "failed": 0,
+            "memory_dir": str(mem_dir),
+            "reason": "no memory directory for this project",
+        }
+    imported = skipped = failed = 0
+    details: list[dict] = []
+    for path in sorted(mem_dir.glob("*.md")):
+        if path.name == "MEMORY.md" or path.name.startswith("_"):
+            skipped += 1
+            continue
+        parsed = _parse_claude_memory(path)
+        if not parsed:
+            skipped += 1
+            details.append({"file": path.name, "result": "skip-no-frontmatter"})
+            continue
+        mtype = parsed["metatype"] or "feedback"
+        if mtype not in _CC_TYPE_MAP:
+            skipped += 1
+            details.append({"file": path.name, "result": f"skip-type-{mtype}"})
+            continue
+        ptype, classification, memtype, importance = _CC_TYPE_MAP[mtype]
+        full_desc = parsed["description"]
+        if parsed["body"]:
+            full_desc = (
+                f"{full_desc}\n\n{parsed['body']}" if full_desc else parsed["body"]
+            )
+        # Skip if an active entry with this name and identical description
+        # already exists — otherwise svc.store would supersede the old
+        # with a content-identical new one (Graphiti pattern), generating
+        # noise in the archive on every click.
+        existing = [
+            e for e in svc.list_entries(domain=mtype, status_filter="active")
+            if e.name == parsed["name"] and not e.invalid_at
+        ]
+        if existing and existing[0].description == full_desc:
+            skipped += 1
+            details.append({"file": path.name, "result": "skip-unchanged",
+                            "id": existing[0].id})
+            continue
+        try:
+            entry = svc.store(
+                domain=mtype, name=parsed["name"], description=full_desc,
+                type=ptype, classification=classification,
+                memory_type=memtype, importance=importance,
+                evidence={"source_file": str(path)},
+            )
+            imported += 1
+            details.append({"file": path.name, "result": "ok", "id": entry.id})
+        except Exception as exc:
+            failed += 1
+            details.append({"file": path.name, "result": f"fail-{exc}"})
+    return {
+        "imported": imported, "skipped": skipped, "failed": failed,
+        "memory_dir": str(mem_dir), "details": details,
+    }

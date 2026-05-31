@@ -17,6 +17,7 @@ type Task = {
   workflow_step?: string;
   gate_state?: string;
   gate_reason?: string;
+  parent_id?: string;
 };
 
 // Workflow tones — same convention TaskDetailPage uses for its status
@@ -66,11 +67,20 @@ export default function TasksPage() {
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
+  // Hierarchy: the board shows only root tasks (no parent_id). A parent's
+  // children are reached by clicking into its detail page. childCount maps
+  // each task id → how many tasks name it as parent, for the corner badge.
+  const childCount = new Map<string, number>();
+  for (const t of tasks) {
+    if (t.parent_id) childCount.set(t.parent_id, (childCount.get(t.parent_id) ?? 0) + 1);
+  }
+  const roots = tasks.filter((t) => !t.parent_id);
+
   return (
     <Page>
       <section className="flex flex-wrap gap-3">
         {COLUMNS.map((c) => (
-          <Kpi key={c.key} label={c.label} value={tasks.filter((t) => (t.status ?? "pending") === c.key).length} />
+          <Kpi key={c.key} label={c.label} value={roots.filter((t) => (t.status ?? "pending") === c.key).length} />
         ))}
       </section>
 
@@ -91,7 +101,7 @@ export default function TasksPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         {COLUMNS.map((col) => {
-          const items = tasks.filter((t) => (t.status ?? "pending") === col.key);
+          const items = roots.filter((t) => (t.status ?? "pending") === col.key);
           const colTone = STATUS_TONE[col.key] ?? "slate";
           return (
             <Card key={col.key} className="!p-4">
@@ -123,7 +133,22 @@ export default function TasksPage() {
                         onClick={() => t.id && navigate(`/tasks/${t.id}`, { state: { from: "/tasks" } })}
                         className="w-full text-left rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-3 hover:border-[color:var(--midground-base)]/40 hover:bg-[color:var(--background-base)]/50 transition-colors cursor-pointer"
                       >
-                        <div className="text-sm font-medium">{t.title ?? "—"}</div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="text-sm font-medium">{t.title ?? "—"}</div>
+                          {(childCount.get(t.id ?? "") ?? 0) > 0 && (
+                            <span
+                              title={`${childCount.get(t.id ?? "")} child task(s) — open to view`}
+                              className="shrink-0 text-[10px] font-mono leading-none px-1.5 py-1 rounded-full ring-1 ring-inset"
+                              style={{
+                                background: "var(--accent-violet-bg)",
+                                color: "var(--accent-violet-fg)",
+                                boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)",
+                              }}
+                            >
+                              {childCount.get(t.id ?? "")}
+                            </span>
+                          )}
+                        </div>
                         {conductorOn && (
                           <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                             {step && (
