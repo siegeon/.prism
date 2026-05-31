@@ -93,6 +93,9 @@ type Brief = {
   // serve empty values and just render no badges / no excerpt.
   signal_counts?: SignalCounts;
   transcript_excerpt?: string;
+  // v6.2.18 — set on legacy no-task / zero-signal rows so the row can
+  // show WHY it's empty (noise the enqueue filter now blocks going forward).
+  skip_reason?: string;
 };
 type Run = {
   id: string;
@@ -487,8 +490,16 @@ export default function ConsolidationPage() {
                           {sc.memory_writes} mem
                         </span>
                       )}
-                      {totalSignals === 0 && (
+                      {totalSignals === 0 && !b.skip_reason && (
                         <span className="text-[10px] uppercase tracking-wider opacity-40">no signals</span>
+                      )}
+                      {b.skip_reason && (
+                        <span
+                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300/90"
+                          title={`${b.skip_reason}. Use “Prune noise” to clear these — nothing for reflection to learn.`}
+                        >
+                          noise
+                        </span>
                       )}
                     </span>
                     <span className="text-xs opacity-60 w-32 truncate" title={b.trigger ?? ""}>
