@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.21"
+PRISM_VERSION = "6.2.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.22: Conductor transitions always link a session. The MCP "
+    "conductor_advance and conductor_gate handlers now fall back to the "
+    "active request handle (get_request_context().request_id) when no "
+    "session_id is threaded in — mirroring task_link_session. conductor_gate "
+    "did not even expose session_id, so a terminal-gate close-out NEVER "
+    "recorded a session; a workflow drive that omitted session_id left the "
+    "task with 0 attached sessions (the ed7292bd symptom: shipped via "
+    "PR #103 but the task showed no sessions). Both handlers now stamp a "
+    "task_sessions row on every transition. New regression "
+    "tests/unit/test_conductor_session_link.py pins that advance_task and "
+    "gate_decide propagate the session into task_sessions. "
     "v6.2.21: Memory-operation runner framework (Tier 2). New "
     "prism_service/services/memory_ops/ chassis generalises the single-purpose "
     "reflection runner into a typed, pluggable family of scheduled memory ops. "
