@@ -3342,10 +3342,20 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # ------------------------------------------------------------------
         if name == "conductor_advance":
             task_id = arguments["id"]
+            # Session capture: prefer the caller-threaded session_id (the human
+            # driving session a workflow passes as SID); else fall back to the
+            # MCP request handle so a conductor drive ALWAYS stamps a
+            # task_sessions row — mirrors task_link_session. Without this, a
+            # drive that omits session_id leaves the task with 0 linked
+            # sessions (the ed7292bd symptom).
+            _sid = arguments.get("session_id")
+            if not _sid:
+                from prism_service.mcp.request_context import get_request_context
+                _sid = get_request_context().request_id
             result = conductor_svc.advance_task(
                 task_id,
                 validation=arguments.get("validation"),
-                session_id=arguments.get("session_id"),
+                session_id=_sid,
             )
             task = task_svc.get(task_id)
             result["task"] = task
@@ -3353,12 +3363,21 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "conductor_gate":
             task_id = arguments["id"]
+            # Same session-capture fallback as conductor_advance. conductor_gate
+            # does not even expose session_id in its schema, so before this the
+            # gate transition NEVER linked a session — the request-handle
+            # fallback ensures a terminal gate (green_gate close-out) records
+            # the session that resolved it.
+            _sid = arguments.get("session_id")
+            if not _sid:
+                from prism_service.mcp.request_context import get_request_context
+                _sid = get_request_context().request_id
             result = conductor_svc.gate_decide(
                 task_id,
                 arguments["action"],
                 reason=arguments.get("reason", ""),
                 override=bool(arguments.get("override", False)),
-                session_id=arguments.get("session_id"),
+                session_id=_sid,
             )
             task = task_svc.get(task_id)
             result["task"] = task
