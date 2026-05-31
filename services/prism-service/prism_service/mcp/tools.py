@@ -974,6 +974,7 @@ TOOLS: list[Tool] = [
                 },
                 "story_file": {"type": "string", "description": "Associated story file path"},
                 "assigned_agent": {"type": "string", "description": "Agent persona to assign (sm, dev, qa)"},
+                "parent_id": {"type": "string", "description": "Parent task ID — makes this a child (subtask) of an epic. Children are hidden from the /tasks board and reached via the parent's detail page."},
             },
             "required": ["title"],
         },
@@ -1016,6 +1017,7 @@ TOOLS: list[Tool] = [
                 "priority": {"type": "integer", "description": "New priority"},
                 "assigned_agent": {"type": "string", "description": "New agent assignment"},
                 "blocked_reason": {"type": "string", "description": "Reason for blocking (when status=blocked)"},
+                "parent_id": {"type": "string", "description": "Re-parent this task under an epic (or '' to make it a root)."},
             },
             "required": ["id"],
         },
@@ -3263,6 +3265,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 tags=arguments.get("tags"),
                 story_file=arguments.get("story_file", ""),
                 assigned_agent=arguments.get("assigned_agent", ""),
+                parent_id=arguments.get("parent_id", ""),
             )
             return [TextContent(type="text", text=_json(task))]
 
@@ -3283,7 +3286,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("status", "priority", "assigned_agent", "blocked_reason"):
+            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             task = task_svc.update(arguments["id"], **update_kwargs)

@@ -31,6 +31,27 @@ const STOP_AFTER = (_in.stop_after || '').trim() // e.g. 'red_gate' to halt the 
 // so the task<->session JOIN resolves. GUARDED: empty SID => today's behavior.
 const SID = (_in.session_id || '').trim()
 
+// ── Model tiering ───────────────────────────────────────────────────────
+// Data-collection + planning steps run on the cheaper/faster Sonnet tier;
+// the steps that actually write code, verify green, or guard a blocking
+// gate stay on Opus. This cuts the wall-clock + token cost of orientation
+// (the slow part — locate alone was ~13 min of Opus round-trips) WITHOUT
+// weakening the steps where correctness is on the line. Override the whole
+// drive with args.model if a caller wants a single tier everywhere.
+const FORCE_MODEL = (_in.model || '').trim()
+const CHEAP = FORCE_MODEL || 'sonnet'   // locate / review / story / plan
+const HARD  = FORCE_MODEL || 'opus'     // tests / implement / verify / gates
+const STEP_MODEL = {
+  review_previous_notes: CHEAP,
+  draft_story: CHEAP,
+  verify_plan: CHEAP,
+  write_failing_tests: HARD,
+  red_gate: HARD,
+  implement_tasks: HARD,
+  verify_green_state: HARD,
+  green_gate: HARD,
+}
+
 // ── Conductor state machine (mirror of models/workflow.py:WORKFLOW_STEPS) ─
 // Only red_gate and green_gate are blocking gates. The *_complete/_coverage
 // validations on agent steps are advisory notes recorded on conductor_advance.
@@ -114,7 +135,7 @@ const pick = TASK_ID
 
 const locate = await agent(
   `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list — each item independently testable.\n- BRANCH: report the git branch the work will land on. If currently on main/master/staging/develop${DRY ? ', report the branch name you WOULD create (do not create it).' : ', create a feature branch off main (e.g. feat/<task-slug>) and switch to it, then report its name.'}\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") — do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id — never the request_id default).` : ''}\n\nReturn the structured locate result.`,
-  { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA })
+  { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA, model: CHEAP })
 
 const startStep = locate.current_step && ORDER.includes(locate.current_step)
   ? locate.current_step
@@ -148,35 +169,35 @@ const gateDoctrine = (expectWord, evidenceWord) =>
 const HANDLERS = {
   review_previous_notes: (role = 'sm') => agent(
     `${preamble(role)}\n\nSTEP review_previous_notes.\n\n${ctx}\n\nWORK: recall prior decisions, related stories, and conventions for this area (memory_recall + brain_search first). Summarize what a builder must respect (existing patterns, prior bugs, gotchas) with file:line. ${advanceInstr('review_previous_notes', 'reviewed prior notes/decisions/memory')}`,
-    { label: 'review_previous_notes', phase: 'Review notes', schema: STEP_SCHEMA }),
+    { label: 'review_previous_notes', phase: 'Review notes', schema: STEP_SCHEMA, model: STEP_MODEL.review_previous_notes }),
 
   draft_story: (role = 'sm') => agent(
     `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions. ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
-    { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
+    { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA, model: STEP_MODEL.draft_story }),
 
   verify_plan: (role = 'sm') => agent(
     `${preamble(role)}\n\nSTEP verify_plan (validation kind: plan_coverage — advisory).\n\n${ctx}\n\nWORK: verify the plan covers EVERY requirement and names the concrete files/functions each will touch (brain_call_chain for blast radius first, disk only for gaps). If a requirement has no plan, that is a coverage gap — state it. ${advanceInstr('verify_plan', 'plan covers all requirements; files identified')}`,
-    { label: 'verify_plan', phase: 'Verify plan', schema: STEP_SCHEMA }),
+    { label: 'verify_plan', phase: 'Verify plan', schema: STEP_SCHEMA, model: STEP_MODEL.verify_plan }),
 
   write_failing_tests: (role = 'qa') => agent(
     `${preamble(role)}\n\nSTEP write_failing_tests (validation kind: red_with_trace).\n\n${ctx}\n\nWORK: write the SMALLEST set of tests that pin the acceptance criteria and FAIL today (red). Put them where the suite lives (find it brain-first, then on disk). CRITICAL — pin the USER-FACING INTEGRATION, not just unit contracts: a test that merely imports a service class or calls a method will pass even if that code is DEAD (no MCP verb, no API field, no hook, no UI). That exact gap has shipped false-greens. For any wiring/feature task, assert the real seam end-to-end — the MCP verb is reachable through the tool DISPATCHER (not just defined), the API route returns the new field, a queue/store survives across SEPARATE calls (not one in-memory instance), the hook actually dispenses, the UI actually renders. If your only red tests are unit-level, you have NOT pinned the feature. ${DRY ? 'Report the test files and assertions you would add and the command that would prove red.' : 'Run the exact test command, confirm it FAILS for the right reason, and capture the failing trace.'}${commitInstr('test', 'red scaffold')} Record the command + result in evidence. ${advanceInstr('write_failing_tests', 'failing tests landed + committed; red trace captured')}`,
-    { label: 'write_failing_tests', phase: 'Red tests', schema: STEP_SCHEMA }),
+    { label: 'write_failing_tests', phase: 'Red tests', schema: STEP_SCHEMA, model: STEP_MODEL.write_failing_tests }),
 
   red_gate: (role = 'qa') => agent(
     `${preamble(role)}\n\nSTEP red_gate (BLOCKING gate). The verifier expects the suite to be RED (status=fail, tier0=fail) — that proves the tests bite before any implementation. On approve+pass the conductor auto-advances to implement_tasks.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would run the test command (expecting RED), then call conductor_gate(approve) with the red trace, and the expected to_step (implement_tasks). Do not call anything.' : gateDoctrine('RED (failing for the right reason)', 'red')}`,
-    { label: 'red_gate', phase: 'Red gate', schema: STEP_SCHEMA }),
+    { label: 'red_gate', phase: 'Red gate', schema: STEP_SCHEMA, model: STEP_MODEL.red_gate }),
 
   implement_tasks: (role = 'dev') => agent(
     `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
-    { label: 'implement_tasks', phase: 'Implement', schema: STEP_SCHEMA }),
+    { label: 'implement_tasks', phase: 'Implement', schema: STEP_SCHEMA, model: STEP_MODEL.implement_tasks }),
 
   verify_green_state: (role = 'qa') => agent(
     `${preamble(role)}\n\nSTEP verify_green_state (validation kind: green_full).\n\n${ctx}\n\nWORK: run the FULL relevant suite (not just the new tests) and verify every acceptance criterion is met. ${DRY ? 'Report the full command you would run.' : 'Capture the exact command + full-green result. If the ticket lists curl/UI verification, DO those against the running surface — tests-pass is not feature-works.'} If anything is red, set ok:false with the failure in halt_reason. ${advanceInstr('verify_green_state', 'full suite green; acceptance verified')}`,
-    { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA }),
+    { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA, model: STEP_MODEL.verify_green_state }),
 
   green_gate: (role = 'lead') => agent(
     `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then task_update(id="' + locate.task_id + '", status="done").'} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
-    { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
+    { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA, model: STEP_MODEL.green_gate }),
 }
 
 // ── Deterministic drive: one step at a time, halt on failure/gate-reject ─

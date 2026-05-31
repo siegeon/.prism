@@ -2355,6 +2355,27 @@ function ProjectEditor({
       .catch(() => setRuntime("native"));
   }, []);
 
+  // v6.2.16 — per-project Claude data folder. Blank = auto (slug scan of
+  // ~/.claude/projects). When set, BOTH the session importer (*.jsonl) and
+  // the memory importer (memory/*.md) read from it. Load current config so
+  // the field shows the override (or the auto path as a placeholder).
+  const [claudeDir, setClaudeDir] = useState("");
+  const [claudeCfg, setClaudeCfg] = useState<{
+    auto_memory_dir?: string;
+    memory_exists?: boolean;
+  } | null>(null);
+  useEffect(() => {
+    api
+      .get<{ claude_project_dir: string; auto_memory_dir: string; memory_exists: boolean }>(
+        `/api/memory/claude-config?project=${encodeURIComponent(name)}`,
+      )
+      .then((c) => {
+        setClaudeDir(c.claude_project_dir || "");
+        setClaudeCfg(c);
+      })
+      .catch(() => {});
+  }, [name]);
+
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (mode === "folder" && !folderPath.trim()) {
@@ -2382,6 +2403,13 @@ function ProjectEditor({
         ? { source_path: folderPath.trim() }
         : { remote_url: remote.trim(), tracked_ref: ref.trim() || "origin/main" };
       await api.post(`/api/understand/configure?project=${encodeURIComponent(name)}`, body);
+      // v6.2.16 — persist the per-project Claude data folder (blank clears
+      // it -> auto). The endpoint validates the path + runs an immediate
+      // session + memory import so the effect is visible right away.
+      await api.post(
+        `/api/memory/claude-config?project=${encodeURIComponent(name)}`,
+        { claude_project_dir: claudeDir.trim() },
+      );
       setScanStartedAt(startedAt);
       onSaved();
     } catch (e) {
@@ -2587,6 +2615,37 @@ function ProjectEditor({
           re-point, delete the project's source/ dir first.
         </div>
       )}
+      {/* v6.2.16 — Claude data folder: where PRISM reads this project's
+          sessions (transcripts) + memories (auto-memory). Blank = auto. */}
+      <label className="flex flex-col gap-1 min-w-0">
+        <span className="text-[10px] uppercase tracking-wider opacity-60">
+          Claude data folder{" "}
+          <span className="opacity-50 normal-case">(sessions + memories — optional)</span>
+        </span>
+        <input
+          value={claudeDir}
+          onChange={(e) => setClaudeDir(e.target.value)}
+          placeholder={
+            claudeCfg?.auto_memory_dir
+              ? `auto: ${claudeCfg.auto_memory_dir.replace(/[\\/]memory$/, "")}`
+              : "auto-detected from ~/.claude/projects/<slug>"
+          }
+          className="px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
+        />
+        <span className="text-[11px] opacity-60 leading-snug">
+          Leave blank to auto-detect. Point this at the project's{" "}
+          <span className="font-mono">~/.claude/projects/&lt;slug&gt;</span> folder
+          if PRISM isn't finding your sessions/memories — it reads{" "}
+          <span className="font-mono">*.jsonl</span> transcripts and{" "}
+          <span className="font-mono">memory/*.md</span> from there.
+          {claudeCfg && (
+            <span className={claudeCfg.memory_exists ? "text-emerald-300" : "text-amber-300"}>
+              {" "}
+              {claudeCfg.memory_exists ? "✓ memory dir found" : "• no memory dir found yet"}
+            </span>
+          )}
+        </span>
+      </label>
       {error && (
         <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
           {error}

@@ -37,8 +37,10 @@ def import_transcripts(project: str = Query("default")) -> dict:
     from prism_service.engines import understand_engine as ue
     state = ue._read_state(project)
     sp = (state.get("source_path") or "").strip()
-    if not sp:
+    from prism_service.services import claude_memory as cm
+    cpd = cm.configured_project_dir(project)
+    if not sp and not cpd:
         return {"imported": 0, "skipped_reason": "project has no source_path"}
     scores_db = str(ctx._data_dir / "scores.db")
-    n = ct.import_unseen(scores_db, sp)
-    return {"imported": n, "source_path": sp}
+    n = ct.import_unseen(scores_db, sp, override_dir=cpd or None)
+    return {"imported": n, "source_path": sp, "claude_project_dir": cpd}

@@ -44,6 +44,16 @@ type Task = {
   workflow_step?: string;
   gate_state?: string;
   gate_reason?: string;
+  parent_id?: string;
+};
+
+// Slim shape for the child-task list — only what the row renders.
+type ChildTask = {
+  id?: string;
+  title?: string;
+  status?: string;
+  priority?: number | string;
+  parent_id?: string;
 };
 
 type HistoryRow = {
@@ -77,14 +87,21 @@ export default function TaskDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = ((location.state as { from?: string } | null)?.from) === "/conductor"
-    ? "/conductor"
-    : "/tasks";
-  const backLabel = from === "/conductor" ? "back to conductor" : "back to tasks";
+  // `from` is the path the back button returns to. A child opened from its
+  // parent's detail carries from=/tasks/<parentId>, so back goes up to the
+  // parent rather than all the way out to the board.
+  const fromState = (location.state as { from?: string } | null)?.from;
+  const from = fromState || "/tasks";
+  const backLabel = from === "/conductor"
+    ? "back to conductor"
+    : from.startsWith("/tasks/")
+      ? "back to parent"
+      : "back to tasks";
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [children, setChildren] = useState<ChildTask[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +116,14 @@ export default function TaskDetailPage() {
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setError(null);
+      // Children aren't on the detail payload — derive them from the task
+      // list (parent_id === this id). Cheap, and keeps the API unchanged.
+      try {
+        const all = await api.get<{ tasks: ChildTask[] }>(`/api/tasks?project=${project}`);
+        setChildren((all.tasks ?? []).filter((t) => t.parent_id === id));
+      } catch {
+        setChildren([]);
+      }
     } catch (e) {
       setError((e as Error).message ?? "task not found");
     }
@@ -289,6 +314,55 @@ export default function TaskDetailPage() {
           <Empty>No description.</Empty>
         )}
       </Card>
+
+      {task.parent_id && (
+        <Card>
+          <SectionLabel>Parent</SectionLabel>
+          <button
+            onClick={() => navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })}
+            className="mt-2 text-sm underline decoration-dotted underline-offset-2 hover:opacity-100 font-mono"
+          >
+            ↑ {String(task.parent_id).slice(0, 8)}
+          </button>
+        </Card>
+      )}
+
+      {children.length > 0 && (
+        <Card>
+          <SectionLabel>
+            Child tasks ({children.filter((c) => (c.status ?? "") === "done").length}/{children.length} done)
+          </SectionLabel>
+          <div className="space-y-2 mt-2">
+            {children.map((c) => {
+              const cTone = STATUS_TONE[c.status ?? "pending"] ?? "slate";
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => c.id && navigate(`/tasks/${c.id}`, { state: { from: `/tasks/${id}` } })}
+                  className="w-full text-left rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-3 hover:border-[color:var(--midground-base)]/40 hover:bg-[color:var(--background-base)]/50 transition-colors flex items-center justify-between gap-3"
+                >
+                  <span className="text-sm font-medium">{c.title ?? c.id}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    {typeof c.priority !== "undefined" && (
+                      <span className="text-[10px] opacity-50 font-mono">p{c.priority}</span>
+                    )}
+                    <span
+                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                      style={{
+                        background: `var(--accent-${cTone}-bg)`,
+                        color: `var(--accent-${cTone}-fg)`,
+                        boxShadow: `inset 0 0 0 1px var(--accent-${cTone}-ring)`,
+                      }}
+                    >
+                      {c.status ?? "pending"}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       <Card>
         <SectionLabel>Metadata</SectionLabel>

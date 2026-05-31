@@ -112,9 +112,9 @@ export default function ConductorPage() {
                 key={s.id}
                 className="grid grid-cols-[14rem_1fr] gap-4 items-center py-3"
               >
-                <div className="flex items-center gap-2">
+                <div className="grid grid-cols-[1fr_2.25rem] items-center gap-2">
                   <span
-                    className="text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1"
+                    className="block w-full text-center text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1 truncate"
                     style={{
                       background: `var(--accent-${laneTone}-bg)`,
                       color: `var(--accent-${laneTone}-fg)`,
