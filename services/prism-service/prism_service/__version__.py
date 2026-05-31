@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.22"
+PRISM_VERSION = "6.2.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.23: Agent-run telemetry spine — per-agent/subagent tracking for "
+    "self-heal & self-learn. New scores.db agent_runs table (created in "
+    "brain_engine.py's CREATE TABLE block) keyed PK (run_id, agent_id, step) "
+    "so writes UPSERT idempotently. POST /api/agent-runs/ingest persists one "
+    "telemetry row; GET /api/agent-runs reads them back filtered by task_id/"
+    "session_id/workflow_name/role/step (resolves scores_db via "
+    "get_project(project)._data_dir, mirroring api/learning.py). New "
+    "services/agent_runs_data.py holds the pure upsert/read/rollup helpers; "
+    "get_task_agent_rollup rolls a task's runs into total token cost + the "
+    "ordered agent-path, and /api/learning now surfaces agent_runs aggregates "
+    "(avg duration/step, override rate, token cost/role). implement.js emits "
+    "one telemetry row via a shared postAgentRun emitter after EACH step's "
+    "agent() returns in the serial drive loop (and a fanout() wrapper reuses "
+    "the same emitter so parallel == serial shape), threading the plumbed SID "
+    "as session_id. UI: LearningPage gains an 'Agent runs · timeline' panel "
+    "(per-task role/step/model/duration/tokens) plus the cross-run aggregates. "
+    "New tests: test_api_agent_runs, test_learning_agent_timeline_ui, "
+    "test_implement_agent_run_emitter. "
     "v6.2.22: Conductor transitions always link a session. The MCP "
     "conductor_advance and conductor_gate handlers now fall back to the "
     "active request handle (get_request_context().request_id) when no "

@@ -941,6 +941,40 @@ class Brain:
                 timestamp TEXT DEFAULT (datetime('now'))
             );
 
+            -- Per-agent/subagent run telemetry spine (task f4498190). One row
+            -- per (run_id, agent_id, step); idempotent upsert so a re-POST of
+            -- the same triple UPDATES rather than duplicates. Feeds self-heal
+            -- (flagging error/stall/token-heavy steps) + the /learning agent
+            -- timeline panel + the per-task agent cost/path rollup.
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                run_id TEXT NOT NULL,
+                workflow_name TEXT,
+                task_id TEXT,
+                session_id TEXT,
+                agent_id TEXT NOT NULL,
+                parent_agent_id TEXT,
+                role TEXT,
+                step TEXT NOT NULL,
+                model TEXT,
+                started_at TEXT,
+                ended_at TEXT,
+                duration_ms INTEGER,
+                tokens INTEGER,
+                tool_uses INTEGER,
+                ok INTEGER,
+                gate_state TEXT,
+                verdict_summary TEXT,
+                evidence_ref TEXT,
+                recorded_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (run_id, agent_id, step)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id
+                ON agent_runs(task_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_session_id
+                ON agent_runs(session_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_workflow
+                ON agent_runs(workflow_name);
+
             -- ---- Learning-loop v5 tables (LL-01) ----------------------------
             -- Ties Claude sessions to PRISM tasks so per-task rollup joins
             -- through the full session history. Schema-only; populated by
