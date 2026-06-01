@@ -42,6 +42,23 @@ def is_weak_proof(value: object) -> bool:
     return s.startswith("<") and s.endswith(">")
 
 
+def green_gate_proof_note(files_modified: int, completion_proof: object) -> str:
+    """Advisory note appended to a green_gate close (annotate, never block).
+
+    Encodes the goalbuddy Judge doctrine "lots of files is not completion":
+      * code changed (files_modified>0) but no real completion_proof
+        -> BUSYWORK RISK: effort without demonstrated outcome.
+      * nothing changed and no proof -> ORACLE: no completion signal at all.
+      * a real completion_proof -> clean ('').
+    """
+    if not is_weak_proof(completion_proof):
+        return ""
+    if files_modified > 0:
+        return (f"  ⚠ busywork risk: {files_modified} file-change(s) but no "
+                f"completion_proof (effort ≠ outcome)")
+    return "  ⚠ oracle: no completion_proof recorded"
+
+
 class ConductorService:
     """Service layer for Conductor engine and scores.db queries.
 
@@ -1236,14 +1253,19 @@ class ConductorService:
             passed_gate_reason = f"verified ({verifier_validation}): {reason}"
         else:
             passed_gate_reason = reason
-        # Oracle (goalbuddy "no completion on weak proof"): at the terminal
-        # green_gate, flag a close with no real completion_proof. Advisory per
-        # the hooks doctrine — annotate the reason, never block — so it
-        # surfaces on the task/swimlane without breaking override-driven closes.
+        # Oracle + anti-busywork (goalbuddy): at the terminal green_gate, flag a
+        # close with no real completion_proof — and escalate to BUSYWORK RISK
+        # when code churned without an outcome ("lots of files is not
+        # completion"). Advisory per the hooks doctrine — annotate the reason,
+        # never block — so it surfaces without breaking override-driven closes.
         if gate_step_id == "green_gate":
             _proof = getattr(self._task_svc.get(task_id), "completion_proof", "")
-            if is_weak_proof(_proof):
-                passed_gate_reason += "  ⚠ oracle: no completion_proof recorded"
+            try:
+                _churn = sum(int(s.get("files_modified", 0) or 0)
+                             for s in self._task_svc.sessions_for_task(task_id))
+            except Exception:
+                _churn = 0
+            passed_gate_reason += green_gate_proof_note(_churn, _proof)
         self._task_svc.update(
             task_id,
             gate_state="passed",
