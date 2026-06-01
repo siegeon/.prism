@@ -41,6 +41,16 @@ class Task:
     # "what must finish before I can start?". The /tasks board shows only
     # roots; a parent's children are reached by clicking into its detail.
     parent_id: str = ""
+    # Oracle (ported from goalbuddy state.yaml goal.oracle/intake) — an
+    # upfront, observable completion signal defined BEFORE work starts and
+    # checked at green_gate, closing the "tests-pass ≠ feature-works" gap.
+    #   oracle           — the observable signal that proves the user outcome
+    #   proof_type       — test|demo|artifact|metric|review|
+    #                      source_backed_answer|decision
+    #   completion_proof — receipt-backed evidence captured when done
+    oracle: str = ""
+    proof_type: str = ""
+    completion_proof: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

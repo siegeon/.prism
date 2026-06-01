@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.24"
+PRISM_VERSION = "6.2.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.25: Oracle field (goalbuddy-ported) — first goalbuddy concept built. "
+    "Task gains oracle / proof_type / completion_proof: an upfront, observable "
+    "completion signal defined before work and checked at green_gate, closing "
+    "the tests-pass≠feature-works gap. Additive tasks.db columns (migrate to "
+    "''), threaded through TaskService.create/update, GET/PATCH /api/tasks, and "
+    "task_create/task_update MCP tools. New module-level is_weak_proof() in "
+    "conductor_service (ported verbatim from goalbuddy check-goal-state.mjs "
+    "isWeakProof: rejects ''/unknown/tbd/todo/none/<placeholder>); at the "
+    "terminal green_gate, gate_decide annotates the gate_reason with an "
+    "advisory '⚠ oracle: no completion_proof recorded' when proof is weak "
+    "(annotate, never block — hooks doctrine). TaskDetailPage renders an "
+    "'Oracle — observable completion signal' card (proof_type chip + oracle "
+    "text + completion_proof, amber not-yet-recorded state). Tests: "
+    "test_task_oracle.py (field round-trip, is_weak_proof port, green_gate "
+    "flag present/absent). Backs goalbuddy epic 56e3a518 child 1/3. "
     "v6.2.24: Memory-op runner FLEET (Tier 2) — four MemoryOperation families "
     "plug into the memory_ops chassis, each env-gated (off by default): "
     "merge (synthesize duplicate memories via the activation prior + Brain "
