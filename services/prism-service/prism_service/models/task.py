@@ -61,6 +61,14 @@ class Task:
     allowed_files: list[str] = field(default_factory=list)
     verify: list[str] = field(default_factory=list)
     stop_if: list[str] = field(default_factory=list)
+    # Rich plan rendering — a synthesized plan stored ON the task so the
+    # SPA can render it as a document instead of a raw <pre> blob:
+    #   plan_doc     — markdown of the proposed change (rendered below)
+    #   plan_diagram — Mermaid source for a sequence/UML diagram (on top)
+    # Both default to '' (additive, non-breaking); absent => the detail
+    # page falls back to the existing description view.
+    plan_doc: str = ""
+    plan_diagram: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

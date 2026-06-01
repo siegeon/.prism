@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.29"
+PRISM_VERSION = "6.2.30"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.30: Render task plans as rich HTML. Task gains plan_doc (markdown "
+    "proposed-change) + plan_diagram (Mermaid source) — additive tasks.db "
+    "columns (migrate to ''), threaded through TaskService.create/update + row "
+    "hydration, GET /api/tasks, and PATCH /api/tasks (TaskUpdate). New "
+    "web/src/components/plan/PlanView + Mermaid render a sequence/UML diagram on "
+    "top and the proposed change below (reusing OnboardingView's markdown "
+    "parser, PRISM typography — no <pre>/raw JSON); TaskDetailPage shows a Plan "
+    "card when either field is present, falling back to the Description card "
+    "when both are absent. prototype.js PLAN_SCHEMA emits plan_diagram/plan_doc "
+    "and the Track step persists them onto the task. mermaid added to "
+    "web/package.json. Tests: tests/integration/test_task_plan_doc.py (field "
+    "round-trip + additive-migration on a pre-existing DB). "
     "v6.2.28: Adaptive policy loop (Tier 3) — memory knobs self-tune from the "
     "recall→outcome signal. New AdaptivePolicyService + additive scores.db "
     "policy_knobs table nudges forget_cutoff / decay_weight / "

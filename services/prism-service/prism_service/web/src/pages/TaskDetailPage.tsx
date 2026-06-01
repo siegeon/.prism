@@ -6,6 +6,7 @@ import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@
 import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
+import PlanView from "@/components/plan/PlanView";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -51,6 +52,8 @@ type Task = {
   allowed_files?: string[];
   verify?: string[];
   stop_if?: string[];
+  plan_doc?: string;
+  plan_diagram?: string;
 };
 
 // Slim shape for the child-task list — only what the row renders.
@@ -310,16 +313,25 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
-      <Card>
-        <SectionLabel>Description</SectionLabel>
-        {task.description ? (
-          <pre className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed opacity-90 font-sans">
-            {task.description}
-          </pre>
-        ) : (
-          <Empty>No description.</Empty>
-        )}
-      </Card>
+      {(task.plan_doc || task.plan_diagram) ? (
+        <Card>
+          <SectionLabel>Plan</SectionLabel>
+          <div className="mt-2">
+            <PlanView diagram={task.plan_diagram} doc={task.plan_doc} />
+          </div>
+        </Card>
+      ) : (
+        <Card>
+          <SectionLabel>Description</SectionLabel>
+          {task.description ? (
+            <pre className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed opacity-90 font-sans">
+              {task.description}
+            </pre>
+          ) : (
+            <Empty>No description.</Empty>
+          )}
+        </Card>
+      )}
 
       {(task.oracle || task.proof_type || task.completion_proof) && (
         <Card>
