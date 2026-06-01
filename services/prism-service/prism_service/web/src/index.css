@@ -108,3 +108,19 @@ body {
 }
 
 @theme inline { --spacing: calc(0.25rem * var(--theme-spacing-mul, 1)); }
+
+/* Reduced-motion reset (task a5e0d9f5). Belt-and-braces alongside the
+   per-component useReducedMotion() guards: when the OS asks for reduced
+   motion, collapse all animation/transition/scroll-smoothing globally so
+   nothing travels or wobbles regardless of which surface authored it.
+   GPU props (transform/opacity) still apply their END state instantly. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

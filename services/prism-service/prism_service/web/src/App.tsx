@@ -1,4 +1,5 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { AnimatePresence } from "motion/react";
 import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
@@ -20,6 +21,12 @@ import UnderstandPage from "@/pages/UnderstandPage";
 import SettingsPage from "@/pages/SettingsPage";
 
 export default function App() {
+  // Route-swap transition: AnimatePresence mode="wait" keyed on the pathname
+  // lets the leaving page finish its exit before the next mounts. We pass an
+  // explicit `location` to <Routes> so AnimatePresence sees a stable tree to
+  // animate out. The single flex-1 overflow-y-auto scroll container is
+  // preserved as the wrapper, and the two <Navigate> redirects are untouched.
+  const location = useLocation();
   return (
     <div className="h-full w-full flex bg-[color:var(--background-base)] text-[color:var(--midground-base)] relative">
       <Backdrop />
@@ -28,7 +35,8 @@ export default function App() {
         <LiveStatusStrip />
         <PageHeader />
         <div className="flex-1 overflow-y-auto">
-          <Routes>
+          <AnimatePresence mode="wait">
+          <Routes location={location} key={location.pathname}>
             <Route path="/" element={<DashboardPage />} />
             {/* Brain = the one place to explore the knowledge. /graph and
                 the old /explore redirect here so nothing breaks. */}
@@ -48,6 +56,7 @@ export default function App() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
           </Routes>
+          </AnimatePresence>
         </div>
       </main>
     </div>

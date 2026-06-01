@@ -1482,6 +1482,9 @@ class ConductorService:
                 "created_at": getattr(t, "created_at", "") or "",
                 "updated_at": getattr(t, "updated_at", "") or "",
                 "tags": list(getattr(t, "tags", []) or []),
+                # Animated SDLC progress bar (a5e0d9f5): blended current-step
+                # fill so the tile bar tweens between polls.
+                "phase_progress": self.phase_progress(t.id),
             })
         return out
 
@@ -1507,3 +1510,122 @@ class ConductorService:
             if step and status != "done":
                 counter[step] += 1
         return dict(counter)
+
+    # ------------------------------------------------------------------
+    # phase_progress — blended current-step fill for the SDLC bar
+    # ------------------------------------------------------------------
+    #   pct = min(0.95, in_step_s / typical_s)  (time baseline)
+    #   OVERRIDDEN by children_done / children_total when child tasks exist.
+    # Drives the animated current-segment fill on the conductor tiles +
+    # TaskDetailPage header so the bar tweens between 5s polls instead of
+    # snapping at each advance.
+    _TYPICAL_S_FALLBACK = 900.0  # 15 min — positive default when no history
+
+    @staticmethod
+    def _parse_iso(ts: str) -> Optional[float]:
+        """ISO-8601 timestamp -> epoch seconds; None if unparseable."""
+        if not ts:
+            return None
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(ts).timestamp()
+        except Exception:
+            return None
+
+    def _median_step_s(self) -> float:
+        """Median gap between consecutive advance_task rows across all task
+        history — the empirical 'typical' time a task dwells in one step.
+        Falls back to a positive constant when there is no history yet."""
+        if self._task_svc is None:
+            return self._TYPICAL_S_FALLBACK
+        try:
+            tasks = self._task_svc.list()
+        except Exception:
+            return self._TYPICAL_S_FALLBACK
+        gaps: list[float] = []
+        for t in tasks:
+            try:
+                rows = self._task_svc.history(t.id)
+            except Exception:
+                continue
+            advs = [self._parse_iso(getattr(r, "timestamp", "") or "")
+                    for r in rows
+                    if getattr(r, "action", "") == "advance_task"]
+            advs = [a for a in advs if a is not None]
+            for a, b in zip(advs, advs[1:]):
+                if b > a:
+                    gaps.append(b - a)
+        if not gaps:
+            return self._TYPICAL_S_FALLBACK
+        gaps.sort()
+        n = len(gaps)
+        mid = n // 2
+        med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
+        return med if med > 0 else self._TYPICAL_S_FALLBACK
+
+    def _in_step_s(self, task_id: str) -> float:
+        """Seconds since the most recent advance_task row for this task —
+        how long it has dwelt in the current step. 0.0 when unknown."""
+        if self._task_svc is None:
+            return 0.0
+        try:
+            rows = self._task_svc.history(task_id)
+        except Exception:
+            return 0.0
+        last: Optional[float] = None
+        for r in rows:
+            if getattr(r, "action", "") == "advance_task":
+                ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+                if ts is not None:
+                    last = ts
+        if last is None:
+            return 0.0
+        from datetime import datetime, timezone
+        elapsed = datetime.now(timezone.utc).timestamp() - last
+        return elapsed if elapsed > 0 else 0.0
+
+    def phase_progress(self, task_id: str) -> dict:
+        """Blended estimate of how far through the CURRENT workflow step a
+        task is. Shape:
+          {pct, basis, in_step_s, typical_s,
+           children_done, children_total, tokens_since_step}
+        - baseline (basis='time'): min(0.95, in_step_s / typical_s) from the
+          median step history; the 0.95 ceiling means it never reads 'done'
+          before the actual advance.
+        - override (basis='children'): when child tasks exist (parent_id ==
+          task_id), pct is the exact children_done/children_total ratio.
+        """
+        typical_s = self._median_step_s()
+        in_step_s = self._in_step_s(task_id)
+
+        children_done = 0
+        children_total = 0
+        if self._task_svc is not None:
+            try:
+                for t in self._task_svc.list():
+                    if (getattr(t, "parent_id", "") or "") == task_id:
+                        children_total += 1
+                        if (getattr(t, "status", "") or "") == "done":
+                            children_done += 1
+            except Exception:
+                children_total = 0
+
+        if children_total > 0:
+            pct = children_done / children_total
+            basis = "children"
+        else:
+            ratio = in_step_s / typical_s if typical_s > 0 else 0.0
+            pct = min(0.95, ratio)
+            basis = "time"
+
+        return {
+            "pct": round(max(0.0, min(1.0, pct)), 6),
+            "basis": basis,
+            "in_step_s": round(in_step_s, 3),
+            "typical_s": round(typical_s, 3),
+            "children_done": children_done,
+            "children_total": children_total,
+            # Live token effort is imported on the ~60s session cadence, not
+            # computed here on the 5s poll path. 0 until that pipeline lands.
+            "tokens_since_step": 0,
+        }

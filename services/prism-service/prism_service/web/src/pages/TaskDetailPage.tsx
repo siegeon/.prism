@@ -1,5 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
@@ -7,6 +8,7 @@ import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
+import { EASE_OUT, DUR, staggerDelay } from "@/lib/motion";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -85,6 +87,21 @@ type SessionRow = {
   skills_invoked?: number;
 };
 
+// Staggered Card-stack wrapper: each card fades + rises into place with a
+// capped per-index delay, so the detail page assembles top-to-bottom on mount
+// instead of snapping in all at once. Collapses to opacity-only when reduced.
+function Stagger({ i, reduced, children }: { i: number; reduced: boolean | null; children: React.ReactNode }) {
+  return (
+    <motion.div
+      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: reduced ? 0 : DUR.enter, ease: EASE_OUT, delay: reduced ? 0 : staggerDelay(i) }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 const STATUS_CYCLE: Record<string, string[]> = {
   pending: ["in_progress", "blocked", "done"],
   in_progress: ["done", "blocked", "pending"],
@@ -114,6 +131,22 @@ export default function TaskDetailPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Reduced-motion guard for the staggered Card stack, toast, and status flash.
+  const reduced = useReducedMotion();
+  // Status-chip flash: keyed on the task.status VALUE change (NOT the click).
+  // The setStatus handler does a PATCH + reload round-trip, so the value only
+  // changes after the server confirms — this effect fires off that confirmed
+  // change, decoupled from the optimistic click.
+  const prevStatus = useRef<string | undefined>(undefined);
+  const [statusFlash, setStatusFlash] = useState(0);
+  const taskStatusValue = task?.status;
+  useEffect(() => {
+    if (taskStatusValue === undefined) return;
+    if (prevStatus.current !== undefined && prevStatus.current !== taskStatusValue) {
+      setStatusFlash((n) => n + 1);
+    }
+    prevStatus.current = taskStatusValue;
+  }, [taskStatusValue]);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -202,18 +235,33 @@ export default function TaskDetailPage() {
         ← {backLabel}
       </button>
 
-      {notice && (
-        <div className="fixed bottom-6 right-6 z-40 max-w-[420px] rounded-md border border-[color:var(--midground-base)]/20 bg-[color:var(--background-base)]/95 backdrop-blur-sm shadow-lg px-4 py-3 text-[12px]">
-          {notice}
-        </div>
-      )}
+      <AnimatePresence>
+        {notice && (
+          <motion.div
+            key="notice"
+            initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+            transition={{ duration: reduced ? 0 : DUR.enter, ease: EASE_OUT }}
+            className="fixed bottom-6 right-6 z-40 max-w-[420px] rounded-md border border-[color:var(--midground-base)]/20 bg-[color:var(--background-base)]/95 backdrop-blur-sm shadow-lg px-4 py-3 text-[12px]"
+          >
+            {notice}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="flex items-baseline justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl tracking-tight">{task.title ?? "Untitled task"}</h1>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span
-              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+            <motion.span
+              // Flash on the confirmed task.status value change (statusFlash
+              // bumps off the load() round-trip, not the optimistic click).
+              key={`status-${statusFlash}`}
+              initial={reduced ? false : { scale: 1 }}
+              animate={reduced ? {} : { scale: [1, 1.12, 1] }}
+              transition={{ duration: reduced ? 0 : DUR.chip, ease: EASE_OUT }}
+              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded inline-block"
               style={{
                 background: `var(--accent-${statusTone}-bg)`,
                 color: `var(--accent-${statusTone}-fg)`,
@@ -221,7 +269,7 @@ export default function TaskDetailPage() {
               }}
             >
               {taskStatus}
-            </span>
+            </motion.span>
             {typeof task.priority !== "undefined" && (
               <span
                 className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
@@ -284,6 +332,7 @@ export default function TaskDetailPage() {
       )}
 
       {conductorOn && (
+        <Stagger i={0} reduced={reduced}>
         <Card>
           <SectionLabel>Conductor</SectionLabel>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-3 text-[12px] mt-2 items-start">
@@ -311,16 +360,20 @@ export default function TaskDetailPage() {
             </div>
           </div>
         </Card>
+        </Stagger>
       )}
 
       {(task.plan_doc || task.plan_diagram) ? (
+        <Stagger i={1} reduced={reduced}>
         <Card>
           <SectionLabel>Plan</SectionLabel>
           <div className="mt-2">
             <PlanView diagram={task.plan_diagram} doc={task.plan_doc} />
           </div>
         </Card>
+        </Stagger>
       ) : (
+        <Stagger i={1} reduced={reduced}>
         <Card>
           <SectionLabel>Description</SectionLabel>
           {task.description ? (
@@ -331,6 +384,7 @@ export default function TaskDetailPage() {
             <Empty>No description.</Empty>
           )}
         </Card>
+        </Stagger>
       )}
 
       {(task.oracle || task.proof_type || task.completion_proof) && (

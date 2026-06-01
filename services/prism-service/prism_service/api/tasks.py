@@ -36,11 +36,21 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # `sessions` rides the EXISTING task-detail route (no parallel
     # top-level route) — the linked Claude sessions JOINed with their
     # session_outcomes metrics. Empty list when nothing is linked.
-    return {
+    out = {
         "task": t,
         "history": svc.history(task_id),
         "sessions": svc.sessions_for_task(task_id),
     }
+    # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
+    # reads the blended current-step fill. Best-effort — never break the
+    # detail route if conductor is unavailable.
+    try:
+        cond = get_project(project).conductor_svc
+        if cond is not None and hasattr(cond, "phase_progress"):
+            out["phase_progress"] = cond.phase_progress(task_id)
+    except Exception:
+        pass
+    return out
 
 
 class TaskUpdate(BaseModel):
