@@ -40,7 +40,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     parent_id TEXT DEFAULT '',
     oracle TEXT DEFAULT '',
     proof_type TEXT DEFAULT '',
-    completion_proof TEXT DEFAULT ''
+    completion_proof TEXT DEFAULT '',
+    allowed_files TEXT DEFAULT '[]',
+    verify TEXT DEFAULT '[]',
+    stop_if TEXT DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -73,6 +76,10 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     ("oracle", "TEXT DEFAULT ''"),
     ("proof_type", "TEXT DEFAULT ''"),
     ("completion_proof", "TEXT DEFAULT ''"),
+    # Worker contract (goalbuddy T003): JSON-encoded list columns.
+    ("allowed_files", "TEXT DEFAULT '[]'"),
+    ("verify", "TEXT DEFAULT '[]'"),
+    ("stop_if", "TEXT DEFAULT '[]'"),
 ]
 
 
@@ -183,6 +190,13 @@ class TaskService:
             completion_proof=(row["completion_proof"]
                               if "completion_proof" in keys
                               and row["completion_proof"] is not None else ""),
+            allowed_files=(json.loads(row["allowed_files"])
+                           if "allowed_files" in keys
+                           and row["allowed_files"] else []),
+            verify=(json.loads(row["verify"])
+                    if "verify" in keys and row["verify"] else []),
+            stop_if=(json.loads(row["stop_if"])
+                     if "stop_if" in keys and row["stop_if"] else []),
         )
 
     def _record_history(
@@ -223,6 +237,9 @@ class TaskService:
         oracle: str = "",
         proof_type: str = "",
         completion_proof: str = "",
+        allowed_files: Optional[list[str]] = None,
+        verify: Optional[list[str]] = None,
+        stop_if: Optional[list[str]] = None,
     ) -> Task:
         """Create a new task and return it."""
         task = Task(
@@ -237,14 +254,18 @@ class TaskService:
             oracle=oracle,
             proof_type=proof_type,
             completion_proof=completion_proof,
+            allowed_files=allowed_files or [],
+            verify=verify or [],
+            stop_if=stop_if or [],
         )
         self._db.execute(
             "INSERT INTO tasks "
             "(id, title, description, status, priority, story_file, "
             "assigned_agent, created_at, updated_at, completed_at, "
             "blocked_reason, dependencies, tags, parent_id, "
-            "oracle, proof_type, completion_proof) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "oracle, proof_type, completion_proof, "
+            "allowed_files, verify, stop_if) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -263,6 +284,9 @@ class TaskService:
                 task.oracle,
                 task.proof_type,
                 task.completion_proof,
+                json.dumps(task.allowed_files),
+                json.dumps(task.verify),
+                json.dumps(task.stop_if),
             ),
         )
         self._db.commit()
@@ -347,7 +371,8 @@ class TaskService:
             "story_file=?, assigned_agent=?, updated_at=?, completed_at=?, "
             "blocked_reason=?, dependencies=?, tags=?, "
             "workflow_step=?, gate_state=?, gate_reason=?, parent_id=?, "
-            "oracle=?, proof_type=?, completion_proof=? "
+            "oracle=?, proof_type=?, completion_proof=?, "
+            "allowed_files=?, verify=?, stop_if=? "
             "WHERE id=?",
             (
                 task.title,
@@ -368,6 +393,9 @@ class TaskService:
                 task.oracle,
                 task.proof_type,
                 task.completion_proof,
+                json.dumps(task.allowed_files),
+                json.dumps(task.verify),
+                json.dumps(task.stop_if),
                 task.id,
             ),
         )

@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.26"
+PRISM_VERSION = "6.2.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.27: Worker contract (goalbuddy state.yaml T003) — third + final "
+    "goalbuddy concept built; epic 56e3a518 now 3/3. Task gains allowed_files / "
+    "verify / stop_if (JSON list columns, additive tasks.db migration), wired "
+    "through TaskService.create/update, GET/PATCH /api/tasks, and "
+    "task_create/task_update MCP tools. implement.js implement step now treats "
+    "allowed_files as a HARD scope boundary and HALTS on stop_if (out-of-scope "
+    "file, ambiguity, 2x verify failure). New overlapping_allowed_files()/"
+    "can_run_parallel() in conductor_service (ported from goalbuddy "
+    "parallel-plan.mjs: parallel workers safe only with provably-disjoint "
+    "allowlists). TaskDetailPage renders a 'Worker contract — bounded slice' "
+    "card. Tests: test_task_worker_contract.py. "
     "v6.2.26: Anti-busywork audit (goalbuddy Judge doctrine) — second goalbuddy "
     "concept built. New green_gate_proof_note() in conductor_service encodes "
     "'lots of files is not completion': at the terminal green_gate, gate_decide "
