@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.25"
+PRISM_VERSION = "6.2.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.26: Anti-busywork audit (goalbuddy Judge doctrine) — second goalbuddy "
+    "concept built. New green_gate_proof_note() in conductor_service encodes "
+    "'lots of files is not completion': at the terminal green_gate, gate_decide "
+    "now sums files_modified across the task's linked sessions and, when code "
+    "churned but completion_proof is weak, annotates '⚠ busywork risk: N "
+    "file-change(s) but no completion_proof (effort ≠ outcome)'; no churn + no "
+    "proof stays the '⚠ oracle' note; a real proof is clean. Advisory per the "
+    "hooks doctrine — annotate, never block; surfaces in gate_reason on the "
+    "TaskDetailPage Conductor card + swimlane tooltips. Tests: "
+    "test_task_busywork.py (busywork / oracle / clean / placeholder branches). "
+    "Backs goalbuddy epic 56e3a518 child 2/3. "
     "v6.2.25: Oracle field (goalbuddy-ported) — first goalbuddy concept built. "
     "Task gains oracle / proof_type / completion_proof: an upfront, observable "
     "completion signal defined before work and checked at green_gate, closing "
