@@ -51,6 +51,16 @@ class Task:
     oracle: str = ""
     proof_type: str = ""
     completion_proof: str = ""
+    # Worker contract (ported from goalbuddy state.yaml task T003) — bounds an
+    # implementation slice so it stays explicit, verified, and reversible:
+    #   allowed_files — the file allowlist the dev step may touch
+    #   verify        — commands that prove the slice (e.g. the test cmd)
+    #   stop_if       — conditions that HALT the slice (out-of-scope file,
+    #                   ambiguous behavior, verification fails twice)
+    # Parallel workers are safe only with provably-disjoint allowed_files.
+    allowed_files: list[str] = field(default_factory=list)
+    verify: list[str] = field(default_factory=list)
+    stop_if: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.id:

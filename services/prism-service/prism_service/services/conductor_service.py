@@ -59,6 +59,25 @@ def green_gate_proof_note(files_modified: int, completion_proof: object) -> str:
     return "  ⚠ oracle: no completion_proof recorded"
 
 
+def overlapping_allowed_files(file_lists: list) -> set:
+    """Ported from goalbuddy scripts/parallel-plan.mjs: parallel workers are
+    safe ONLY when their allowed_files sets are provably disjoint. Returns the
+    set of files claimed by more than one worker (empty set == safe to run in
+    parallel)."""
+    seen: set = set()
+    clash: set = set()
+    for files in file_lists or []:
+        cur = set(files or [])
+        clash |= (cur & seen)
+        seen |= cur
+    return clash
+
+
+def can_run_parallel(file_lists: list) -> bool:
+    """True iff the given allowed_files sets are pairwise disjoint."""
+    return not overlapping_allowed_files(file_lists)
+
+
 class ConductorService:
     """Service layer for Conductor engine and scores.db queries.
 

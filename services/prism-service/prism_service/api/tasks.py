@@ -52,6 +52,9 @@ class TaskUpdate(BaseModel):
     oracle: Optional[str] = None
     proof_type: Optional[str] = None
     completion_proof: Optional[str] = None
+    allowed_files: Optional[list[str]] = None
+    verify: Optional[list[str]] = None
+    stop_if: Optional[list[str]] = None
 
 
 @router.patch("/{task_id}")
