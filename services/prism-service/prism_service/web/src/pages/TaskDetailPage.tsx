@@ -45,6 +45,9 @@ type Task = {
   gate_state?: string;
   gate_reason?: string;
   parent_id?: string;
+  oracle?: string;
+  proof_type?: string;
+  completion_proof?: string;
 };
 
 // Slim shape for the child-task list — only what the row renders.
@@ -314,6 +317,36 @@ export default function TaskDetailPage() {
           <Empty>No description.</Empty>
         )}
       </Card>
+
+      {(task.oracle || task.proof_type || task.completion_proof) && (
+        <Card>
+          <SectionLabel>Oracle — observable completion signal</SectionLabel>
+          <div className="mt-2 space-y-3 text-[13px]">
+            <div className="flex items-start gap-2 flex-wrap">
+              {task.proof_type && (
+                <span
+                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded shrink-0"
+                  style={{
+                    background: "var(--accent-violet-bg)",
+                    color: "var(--accent-violet-fg)",
+                    boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)",
+                  }}
+                  title="proof type"
+                >
+                  {task.proof_type}
+                </span>
+              )}
+              <span className="opacity-90 leading-relaxed">{task.oracle || <span className="opacity-50">— no oracle defined —</span>}</span>
+            </div>
+            <div>
+              <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">completion proof</div>
+              {task.completion_proof
+                ? <div className="leading-relaxed opacity-90">{task.completion_proof}</div>
+                : <div className="text-amber-300/90 text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {task.parent_id && (
         <Card>

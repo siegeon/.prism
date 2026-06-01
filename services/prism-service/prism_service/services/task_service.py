@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     workflow_step TEXT DEFAULT '',
     gate_state TEXT DEFAULT 'none',
     gate_reason TEXT DEFAULT '',
-    parent_id TEXT DEFAULT ''
+    parent_id TEXT DEFAULT '',
+    oracle TEXT DEFAULT '',
+    proof_type TEXT DEFAULT '',
+    completion_proof TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -66,6 +69,10 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     ("gate_reason", "TEXT DEFAULT ''"),
     # Hierarchy (parent → children). Existing rows backfill to '' (root).
     ("parent_id", "TEXT DEFAULT ''"),
+    # Oracle (goalbuddy-ported): upfront observable completion signal.
+    ("oracle", "TEXT DEFAULT ''"),
+    ("proof_type", "TEXT DEFAULT ''"),
+    ("completion_proof", "TEXT DEFAULT ''"),
 ]
 
 
@@ -169,6 +176,13 @@ class TaskService:
                          and row["gate_reason"] is not None else ""),
             parent_id=(row["parent_id"] if "parent_id" in keys
                        and row["parent_id"] is not None else ""),
+            oracle=(row["oracle"] if "oracle" in keys
+                    and row["oracle"] is not None else ""),
+            proof_type=(row["proof_type"] if "proof_type" in keys
+                        and row["proof_type"] is not None else ""),
+            completion_proof=(row["completion_proof"]
+                              if "completion_proof" in keys
+                              and row["completion_proof"] is not None else ""),
         )
 
     def _record_history(
@@ -206,6 +220,9 @@ class TaskService:
         story_file: str = "",
         assigned_agent: str = "",
         parent_id: str = "",
+        oracle: str = "",
+        proof_type: str = "",
+        completion_proof: str = "",
     ) -> Task:
         """Create a new task and return it."""
         task = Task(
@@ -217,13 +234,17 @@ class TaskService:
             dependencies=dependencies or [],
             tags=tags or [],
             parent_id=parent_id,
+            oracle=oracle,
+            proof_type=proof_type,
+            completion_proof=completion_proof,
         )
         self._db.execute(
             "INSERT INTO tasks "
             "(id, title, description, status, priority, story_file, "
             "assigned_agent, created_at, updated_at, completed_at, "
-            "blocked_reason, dependencies, tags, parent_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "blocked_reason, dependencies, tags, parent_id, "
+            "oracle, proof_type, completion_proof) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -239,6 +260,9 @@ class TaskService:
                 json.dumps(task.dependencies),
                 json.dumps(task.tags),
                 task.parent_id,
+                task.oracle,
+                task.proof_type,
+                task.completion_proof,
             ),
         )
         self._db.commit()
@@ -322,7 +346,8 @@ class TaskService:
             "UPDATE tasks SET title=?, description=?, status=?, priority=?, "
             "story_file=?, assigned_agent=?, updated_at=?, completed_at=?, "
             "blocked_reason=?, dependencies=?, tags=?, "
-            "workflow_step=?, gate_state=?, gate_reason=?, parent_id=? "
+            "workflow_step=?, gate_state=?, gate_reason=?, parent_id=?, "
+            "oracle=?, proof_type=?, completion_proof=? "
             "WHERE id=?",
             (
                 task.title,
@@ -340,6 +365,9 @@ class TaskService:
                 task.gate_state,
                 task.gate_reason,
                 task.parent_id,
+                task.oracle,
+                task.proof_type,
+                task.completion_proof,
                 task.id,
             ),
         )

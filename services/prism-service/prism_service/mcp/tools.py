@@ -975,6 +975,9 @@ TOOLS: list[Tool] = [
                 "story_file": {"type": "string", "description": "Associated story file path"},
                 "assigned_agent": {"type": "string", "description": "Agent persona to assign (sm, dev, qa)"},
                 "parent_id": {"type": "string", "description": "Parent task ID — makes this a child (subtask) of an epic. Children are hidden from the /tasks board and reached via the parent's detail page."},
+                "oracle": {"type": "string", "description": "The observable signal that proves the user outcome is actually met (the 'oracle' — defined before work starts). E.g. a test suite, demo, artifact, metric, review, or decision."},
+                "proof_type": {"type": "string", "description": "Kind of completion evidence: test|demo|artifact|metric|review|source_backed_answer|decision."},
+                "completion_proof": {"type": "string", "description": "Receipt-backed evidence the oracle is satisfied; recorded when done and checked (advisory) at green_gate."},
             },
             "required": ["title"],
         },
@@ -1018,6 +1021,9 @@ TOOLS: list[Tool] = [
                 "assigned_agent": {"type": "string", "description": "New agent assignment"},
                 "blocked_reason": {"type": "string", "description": "Reason for blocking (when status=blocked)"},
                 "parent_id": {"type": "string", "description": "Re-parent this task under an epic (or '' to make it a root)."},
+                "oracle": {"type": "string", "description": "Set/replace the oracle — the observable signal that proves the outcome."},
+                "proof_type": {"type": "string", "description": "test|demo|artifact|metric|review|source_backed_answer|decision."},
+                "completion_proof": {"type": "string", "description": "Receipt-backed evidence the oracle is satisfied (checked advisory at green_gate)."},
             },
             "required": ["id"],
         },
@@ -3266,6 +3272,9 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 story_file=arguments.get("story_file", ""),
                 assigned_agent=arguments.get("assigned_agent", ""),
                 parent_id=arguments.get("parent_id", ""),
+                oracle=arguments.get("oracle", ""),
+                proof_type=arguments.get("proof_type", ""),
+                completion_proof=arguments.get("completion_proof", ""),
             )
             return [TextContent(type="text", text=_json(task))]
 
@@ -3286,7 +3295,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id"):
+            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             task = task_svc.update(arguments["id"], **update_kwargs)
