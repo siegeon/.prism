@@ -151,6 +151,21 @@ def start_governance_timer():
                     get_project(pid).governance.run_cycle()
                 except Exception as e:
                     print(f"Governance cycle error ({pid}): {e}")
+                # FIX 4a — bounded retention sweep on the governance
+                # cadence: prune old completed candidates + cap stale
+                # session_outcomes so the queue/log can't grow forever.
+                try:
+                    from prism_service.services.consolidation_data import (
+                        retention_sweep,
+                    )
+                    scores_db = str(get_project(pid)._data_dir / "scores.db")
+                    rep = retention_sweep(scores_db)
+                    if rep.get("candidates_pruned") or rep.get(
+                        "session_outcomes_pruned"
+                    ):
+                        print(f"[retention] {pid}: pruned {rep}")
+                except Exception as e:
+                    print(f"Retention sweep error ({pid}): {e}")
         except Exception as e:
             print(f"Governance timer error: {e}")
         time.sleep(GOVERNANCE_INTERVAL_SECONDS)
@@ -343,6 +358,15 @@ async def lifespan(_app: FastAPI):
             start_memory_ops_workers,
         )
         start_memory_ops_workers()
+        # Tier-3 — adaptive policy. Self-tunes the memory knobs
+        # (forget_cutoff / decay_weight / merge_similarity_threshold) from
+        # the recall->outcome signal, persisting one policy_knobs row per
+        # tick. Env-gated PRISM_ADAPTIVE_POLICY_WORKER (default ON), daily
+        # cadence (PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL, default 3600s).
+        from prism_service.services.adaptive_policy import (
+            start_adaptive_policy_worker,
+        )
+        start_adaptive_policy_worker()
 
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose

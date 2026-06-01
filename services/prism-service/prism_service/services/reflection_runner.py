@@ -352,6 +352,23 @@ def run_one(
         except Exception as exc:
             skipped_mem.append({"reason": str(exc), "entry": nm})
 
+    # FIX 2b — feed the recall->outcome signal for a task-linked candidate
+    # so the adaptive policy has something to tune on. JanitorService.submit
+    # already wrote the Layer-B task_quality_rollup (qualitative_score) onto
+    # the task; here we close the loop by labelling that task's recalls with
+    # the outcome derived from the qualitative score (>=0.5 => positive).
+    task_id = row["task_id"]
+    if task_id:
+        try:
+            qscore = float(verdict.get("qualitative_score") or 0.0)
+            outcome = "positive" if qscore >= 0.5 else "negative"
+            mem = getattr(ctx, "memory_svc", None)
+            if mem is not None and hasattr(mem, "record_outcome"):
+                mem.record_outcome(task_id, outcome)
+        except Exception as exc:  # never fail the reflection on this
+            print(f"[reflection_runner] record_outcome({task_id}) failed: {exc}",
+                  flush=True)
+
     return ReflectionResult(
         ok=True, submitted=submitted, verdict=verdict,
         memories_stored=stored, memories_skipped=skipped_mem,
@@ -360,17 +377,25 @@ def run_one(
     )
 
 
-def next_pending_candidate_id(scores_db: str) -> str | None:
+def next_pending_candidate_id(
+    scores_db: str, exclude: set[str] | None = None,
+) -> str | None:
     """Return the oldest pending candidate id, or None if the queue is
-    empty. Used by the opt-in PRISM_REFLECTION_WORKER daemon."""
+    empty. Used by the PRISM_REFLECTION_WORKER daemon. ``exclude`` skips
+    ids the caller already classified as noise this cycle so the loop
+    advances past them instead of re-claiming the same head."""
     if not Path(scores_db).exists():
         return None
     conn = sqlite3.connect(scores_db)
     try:
-        row = conn.execute(
+        rows = conn.execute(
             "SELECT id FROM consolidation_candidates "
-            "WHERE status='pending' ORDER BY queued_at ASC LIMIT 1"
-        ).fetchone()
+            "WHERE status='pending' ORDER BY queued_at ASC"
+        ).fetchall()
     finally:
         conn.close()
-    return row[0] if row else None
+    skip = exclude or set()
+    for (cid,) in rows:
+        if cid not in skip:
+            return cid
+    return None

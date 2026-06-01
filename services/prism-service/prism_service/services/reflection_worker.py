@@ -21,15 +21,67 @@ errors) are logged but never crash the thread.
 
 from __future__ import annotations
 
+import json as _json
 import os
+import sqlite3
 import sys as _sys
 import threading
 import time
 from pathlib import Path
 
 
-def _env_truthy(name: str) -> bool:
-    return os.environ.get(name, "").lower() in ("1", "on", "true", "yes")
+def _is_noise_candidate(scores_db: str, candidate_id: str) -> bool:
+    """True when a candidate carries no usable signal — task_id NULL AND
+    every signal_counts bucket zero. Mirrors the v6.2.18 enqueue-time
+    noise filter so the self-draining loop reflects real signal only and
+    never burns claude tokens on an empty brief."""
+    try:
+        conn = sqlite3.connect(scores_db)
+        try:
+            row = conn.execute(
+                "SELECT task_id, scope_json FROM consolidation_candidates "
+                "WHERE id=?", (candidate_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    if not row:
+        return False
+    if row[0] is not None:
+        return False
+    try:
+        sc = (_json.loads(row[1] or "{}").get("signal_counts")) or {}
+    except Exception:
+        sc = {}
+    return all(int(sc.get(k) or 0) == 0 for k in (
+        "pushbacks", "bg_signals", "tool_failures", "memory_writes",
+    ))
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    """Mirror memory_summary_worker._env_truthy: tri-state with a default.
+
+    Recognises on/off synonyms; anything unset returns ``default``. The
+    reflection worker now defaults ON (the learning loop must self-drain),
+    so start_reflection_worker spawns without an explicit
+    PRISM_REFLECTION_WORKER=on, while =off still fully opts out.
+    """
+    raw = os.environ.get(name, "").lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return default
+
+
+def is_enabled() -> bool:
+    """Honor PRISM_REFLECTION_WORKER=off but default to ON.
+
+    Surfaced for /api/consolidation/workers so the activity panel's
+    'running' dot reflects reality, and read by start_reflection_worker.
+    """
+    return _env_truthy("PRISM_REFLECTION_WORKER", default=True)
 
 
 def _interval_s() -> int:
@@ -91,10 +143,20 @@ def run_once() -> dict:
             continue
 
         ran_here = 0
+        seen_noise: set[str] = set()
         for _ in range(n_max):
-            cid = next_pending_candidate_id(scores_db)
+            cid = next_pending_candidate_id(scores_db, exclude=seen_noise)
             if not cid:
                 break
+            # v6.2.29 — honor the noise filter at drain time. A no-signal
+            # candidate (task_id NULL, all signal_counts zero) is skipped,
+            # never dispatched to claude. Exclude it so the loop advances
+            # to the next real-signal candidate instead of spinning.
+            if _is_noise_candidate(scores_db, cid):
+                _log(f"{project}: skip noise candidate={cid}")
+                seen_noise.add(cid)
+                summary["skipped"] += 1
+                continue
             _log(f"{project}: dispatching reflection for candidate={cid}")
             try:
                 result = run_one(project=project, candidate_id=cid)
@@ -138,7 +200,7 @@ def start_reflection_worker() -> threading.Thread | None:
     Returns the thread (or None when disabled). Idempotent if called
     multiple times — the lifespan call site is the only legitimate
     one, but tests may opt in directly."""
-    if not _env_truthy("PRISM_REFLECTION_WORKER"):
+    if not is_enabled():
         return None
     t = threading.Thread(
         target=_loop, name="prism-reflection-worker", daemon=True,

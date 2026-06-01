@@ -96,11 +96,14 @@ def test_run_once_dispatches_run_one_for_pending(monkeypatch, tmp_path):
     )
     c = sqlite3.connect(str(scores))
     try:
+        # v6.2.29 — give the candidate a real signal so the drain-time
+        # noise filter (FIX 1c) dispatches it instead of skipping it.
         c.execute(
             "INSERT INTO consolidation_candidates "
-            "(id, task_id, session_id, trigger, status, queued_at) "
-            "VALUES (?, NULL, ?, ?, 'pending', ?)",
+            "(id, task_id, session_id, trigger, scope_json, status, queued_at) "
+            "VALUES (?, NULL, ?, ?, ?, 'pending', ?)",
             ("cand-1", "sess-1", "transcript_imported",
+             '{"signal_counts": {"pushbacks": 1}}',
              "2026-05-25T10:00:00+00:00"),
         )
         c.commit()
