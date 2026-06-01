@@ -55,6 +55,8 @@ class TaskUpdate(BaseModel):
     allowed_files: Optional[list[str]] = None
     verify: Optional[list[str]] = None
     stop_if: Optional[list[str]] = None
+    plan_doc: Optional[str] = None
+    plan_diagram: Optional[str] = None
 
 
 @router.patch("/{task_id}")

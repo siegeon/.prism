@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     completion_proof TEXT DEFAULT '',
     allowed_files TEXT DEFAULT '[]',
     verify TEXT DEFAULT '[]',
-    stop_if TEXT DEFAULT '[]'
+    stop_if TEXT DEFAULT '[]',
+    plan_doc TEXT DEFAULT '',
+    plan_diagram TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -80,6 +82,11 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     ("allowed_files", "TEXT DEFAULT '[]'"),
     ("verify", "TEXT DEFAULT '[]'"),
     ("stop_if", "TEXT DEFAULT '[]'"),
+    # Rich plan rendering — markdown proposed-change + Mermaid diagram
+    # stored on the task. Existing rows backfill to '' (no plan => the
+    # SPA keeps the current description view).
+    ("plan_doc", "TEXT DEFAULT ''"),
+    ("plan_diagram", "TEXT DEFAULT ''"),
 ]
 
 
@@ -197,6 +204,10 @@ class TaskService:
                     if "verify" in keys and row["verify"] else []),
             stop_if=(json.loads(row["stop_if"])
                      if "stop_if" in keys and row["stop_if"] else []),
+            plan_doc=(row["plan_doc"] if "plan_doc" in keys
+                      and row["plan_doc"] is not None else ""),
+            plan_diagram=(row["plan_diagram"] if "plan_diagram" in keys
+                          and row["plan_diagram"] is not None else ""),
         )
 
     def _record_history(
@@ -240,6 +251,8 @@ class TaskService:
         allowed_files: Optional[list[str]] = None,
         verify: Optional[list[str]] = None,
         stop_if: Optional[list[str]] = None,
+        plan_doc: str = "",
+        plan_diagram: str = "",
     ) -> Task:
         """Create a new task and return it."""
         task = Task(
@@ -257,6 +270,8 @@ class TaskService:
             allowed_files=allowed_files or [],
             verify=verify or [],
             stop_if=stop_if or [],
+            plan_doc=plan_doc,
+            plan_diagram=plan_diagram,
         )
         self._db.execute(
             "INSERT INTO tasks "
@@ -264,8 +279,8 @@ class TaskService:
             "assigned_agent, created_at, updated_at, completed_at, "
             "blocked_reason, dependencies, tags, parent_id, "
             "oracle, proof_type, completion_proof, "
-            "allowed_files, verify, stop_if) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "allowed_files, verify, stop_if, plan_doc, plan_diagram) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -287,6 +302,8 @@ class TaskService:
                 json.dumps(task.allowed_files),
                 json.dumps(task.verify),
                 json.dumps(task.stop_if),
+                task.plan_doc,
+                task.plan_diagram,
             ),
         )
         self._db.commit()
@@ -372,7 +389,8 @@ class TaskService:
             "blocked_reason=?, dependencies=?, tags=?, "
             "workflow_step=?, gate_state=?, gate_reason=?, parent_id=?, "
             "oracle=?, proof_type=?, completion_proof=?, "
-            "allowed_files=?, verify=?, stop_if=? "
+            "allowed_files=?, verify=?, stop_if=?, "
+            "plan_doc=?, plan_diagram=? "
             "WHERE id=?",
             (
                 task.title,
@@ -396,6 +414,8 @@ class TaskService:
                 json.dumps(task.allowed_files),
                 json.dumps(task.verify),
                 json.dumps(task.stop_if),
+                task.plan_doc,
+                task.plan_diagram,
                 task.id,
             ),
         )
