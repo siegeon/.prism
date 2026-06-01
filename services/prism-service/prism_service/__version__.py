@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.23"
+PRISM_VERSION = "6.2.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.24: Memory-op runner FLEET (Tier 2) — four MemoryOperation families "
+    "plug into the memory_ops chassis, each env-gated (off by default): "
+    "merge (synthesize duplicate memories via the activation prior + Brain "
+    "similarity, supersede the members), verify_staleness (flag memories whose "
+    "evidence source drifted content_hash past valid_at, re-verify still-true), "
+    "distill_procedural (cluster sessions by shared skills -> mint procedural "
+    "memories), forget (archive low-activation/low-effectiveness non-pinned "
+    "entries via invalid_at, never delete). registered_ops() returns all four; "
+    "consolidation_runs.op_type tags each verdict. Built in parallel worktrees, "
+    "targeted-tested (merge 5 / staleness 6 / distill 7 / forget 9 + framework). "
     "v6.2.23: Agent-run telemetry spine — per-agent/subagent tracking for "
     "self-heal & self-learn. New scores.db agent_runs table (created in "
     "brain_engine.py's CREATE TABLE block) keyed PK (run_id, agent_id, step) "
