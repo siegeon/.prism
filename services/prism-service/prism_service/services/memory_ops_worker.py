@@ -59,11 +59,24 @@ def _log(msg: str) -> None:
 def registered_ops() -> list[MemoryOperation]:
     """The built-in MemoryOperation instances the worker can schedule.
 
-    Empty for now — concrete op families (forget / prune / distill) register
-    here as they land. The worker + env-gating contract is what this Tier-2
-    task ships; the ops plug in behind the same chassis.
+    Each concrete op family plugs into the same chassis behind its own
+    env gate (PRISM_<OP_TYPE>_WORKER, off by default).
     """
-    return []
+    from prism_service.services.memory_ops.merge import MergeOperation
+    from prism_service.services.memory_ops.verify_staleness import (
+        VerifyStalenessOperation,
+    )
+    from prism_service.services.memory_ops.distill_procedural import (
+        DistillProceduralOperation,
+    )
+    from prism_service.services.memory_ops.forget import ForgetOperation
+
+    return [
+        MergeOperation(),
+        VerifyStalenessOperation(),
+        DistillProceduralOperation(),
+        ForgetOperation(),
+    ]
 
 
 def _is_op_enabled(op: MemoryOperation) -> bool:
