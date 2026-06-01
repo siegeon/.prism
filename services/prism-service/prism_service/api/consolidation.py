@@ -48,9 +48,8 @@ def workers() -> dict:
     RUNNING by design' string. v6.1.1 adds a `prompt` field on workers
     that shell out to claude_cli, so the /settings/activity drilldown
     can render the actual instructions that drive each one."""
-    reflection_on = os.environ.get("PRISM_REFLECTION_WORKER", "").lower() in (
-        "1", "on", "true", "yes",
-    )
+    from prism_service.services import reflection_worker
+    reflection_on = reflection_worker.is_enabled()
     reflection_interval = int(
         os.environ.get("PRISM_REFLECTION_WORKER_INTERVAL", "900")
     )
@@ -61,8 +60,9 @@ def workers() -> dict:
             "running": True,
             "cadence_s": reflection_interval,
             "description": (
-                "Opt-in (PRISM_REFLECTION_WORKER=on). Picks the oldest "
-                "pending consolidation_candidate every "
+                "Default ON (PRISM_REFLECTION_WORKER=off to opt out). "
+                "Picks the oldest real-signal pending "
+                "consolidation_candidate every "
                 f"{reflection_interval}s, dispatches the same headless "
                 "claude_cli path /api/consolidation/run-reflection uses, "
                 "and persists the verdict + minted memories."
@@ -114,6 +114,28 @@ def workers() -> dict:
         ),
         "prompt_kind": "static",
         "prompt": memory_summary_worker.SUMMARY_PROMPT_TEMPLATE,
+    }
+    from prism_service.services import adaptive_policy
+    adaptive_enabled = adaptive_policy.is_enabled()
+    adaptive_entry = {
+        "id": adaptive_policy.WORKER_ID,
+        "label": adaptive_policy.WORKER_LABEL,
+        "running": adaptive_enabled,
+        "cadence_s": (
+            int(os.environ.get("PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL", "3600"))
+            if adaptive_enabled else 0
+        ),
+        "description": (
+            "Self-tunes the memory knobs (forget_cutoff / decay_weight / "
+            "merge_similarity_threshold) from the recall->outcome signal, "
+            "persisting one policy_knobs row per tick for the /learning "
+            "'Adaptive policy' panel. Default ON, daily cadence — set "
+            "PRISM_ADAPTIVE_POLICY_WORKER=off to disable."
+            if adaptive_enabled else
+            "OFF (PRISM_ADAPTIVE_POLICY_WORKER=off). Set "
+            "PRISM_ADAPTIVE_POLICY_WORKER=on to self-tune memory knobs."
+        ),
+        "prompt_kind": "none",
     }
     return {
         "workers": [
@@ -178,6 +200,7 @@ def workers() -> dict:
             },
             reflection_entry,
             memory_summary_entry,
+            adaptive_entry,
         ],
     }
 
@@ -257,6 +280,27 @@ def backfill(project: str = Query("default"), limit: int = Query(500, ge=1, le=5
     ctx = get_project(project)
     scores_db = str(ctx._data_dir / "scores.db")
     return backfill_from_sessions(scores_db, limit=limit)
+
+
+@router.post("/drain")
+def drain(project: str = Query("default")) -> dict:
+    """FIX 1d — one-call backlog drain. Runs the reflection worker once,
+    pinned to this project, to process the existing pending real-signal
+    candidates in a single request (the noise filter still skips no-signal
+    briefs). Reports how many it ran. The PRISM_REFLECTION_WORKER daemon
+    does the same on a cadence; this is the manual catch-up button."""
+    import os as _os
+    from prism_service.services import reflection_worker as rw
+    prev = _os.environ.get("PRISM_REFLECTION_WORKER_PROJECT")
+    _os.environ["PRISM_REFLECTION_WORKER_PROJECT"] = project
+    try:
+        summary = rw.run_once()
+    finally:
+        if prev is None:
+            _os.environ.pop("PRISM_REFLECTION_WORKER_PROJECT", None)
+        else:
+            _os.environ["PRISM_REFLECTION_WORKER_PROJECT"] = prev
+    return {"drained": summary.get("ran", 0), **summary}
 
 
 @router.post("/prune-noise")

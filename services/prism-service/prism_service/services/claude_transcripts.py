@@ -280,7 +280,12 @@ def format_transcript_excerpt(signals: dict) -> str:
     if pushbacks:
         parts.append(f"Pushbacks ({len(pushbacks)}):")
         for p in pushbacks:
-            parts.append(f"- [{p.get('ts','')}] user: {p.get('text','')}")
+            # Real path passes dicts {ts,text}; tolerate bare strings too
+            # so a malformed/legacy signal can't crash the enqueue path.
+            if isinstance(p, dict):
+                parts.append(f"- [{p.get('ts','')}] user: {p.get('text','')}")
+            else:
+                parts.append(f"- user: {p}")
     bg = signals.get("bg_signals") or []
     if bg:
         parts.append(f"\nBackground protocol ({len(bg)}):")
@@ -425,8 +430,17 @@ def _enqueue_with_signals(
 ) -> None:
     """Wrap enqueue_for_session with a rich scope built from signals."""
     try:
-        from prism_service.services.consolidation_data import enqueue_for_session
+        from prism_service.services.consolidation_data import (
+            enqueue_for_session, resolve_task_id_for_session,
+        )
         signals = metrics.get("signals") or {}
+        # FIX 2a — the disk path has no task_id of its own, but a session
+        # that was task-linked (task_sessions) must stamp that task_id onto
+        # the candidate so /learning's Layer-B rollup fills. Resolve it here
+        # so the noise filter below also sees the link.
+        task_id = metrics.get("task_id") or resolve_task_id_for_session(
+            scores_db, session_id,
+        )
         skill_invocations = metrics.get("skill_invocations") or []
         scope: dict = {
             "files_read": metrics.get("files_read", 0),
@@ -455,7 +469,7 @@ def _enqueue_with_signals(
         # it so a future task-linked path is never filtered.
         sc = scope["signal_counts"]
         if (
-            metrics.get("task_id") is None
+            task_id is None
             and all(int(sc.get(k) or 0) == 0 for k in sc)
             and int(scope.get("files_modified", 0) or 0) == 0
         ):
@@ -468,6 +482,7 @@ def _enqueue_with_signals(
             return
         enqueue_for_session(
             scores_db, session_id, scope=scope, trigger="transcript_imported",
+            task_id=task_id,
         )
     except Exception:
         pass  # never break the metrics insert path

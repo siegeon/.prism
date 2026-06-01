@@ -27,9 +27,42 @@ surfacing — a clean, testable first version.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import sys as _sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
+
+WORKER_ID = "adaptive_policy_worker"
+WORKER_LABEL = "Adaptive policy"
+
+
+def _env_truthy(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return default
+
+
+def is_enabled() -> bool:
+    """Honor PRISM_ADAPTIVE_POLICY_WORKER but default to ON so the
+    self-tuning loop runs without an explicit opt-in (surfaced for
+    /api/consolidation/workers)."""
+    return _env_truthy("PRISM_ADAPTIVE_POLICY_WORKER", default=True)
+
+
+def _interval_s() -> int:
+    # Daily-ish by default — knob nudges are meant to drift slowly.
+    try:
+        return max(60, int(os.environ.get(
+            "PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL", "3600",
+        )))
+    except ValueError:
+        return 3600
 
 # Frozen-constant baselines the loop nudges away from. forget_cutoff mirrors
 # memory_ops.forget.FADING_THRESHOLD (the value it replaces as a consumer).
@@ -251,3 +284,56 @@ class AdaptivePolicyService:
         finally:
             conn.close()
         return [dict(r) for r in rows]
+
+
+def _log(msg: str) -> None:
+    print(f"[{WORKER_ID}] {msg}", file=_sys.stderr, flush=True)
+
+
+def run_once() -> dict:
+    """FIX 3a — one worker tick. For every project, tune + persist the
+    knobs off the recall->outcome signal. Returns a small summary the
+    /settings/activity panel + tests can inspect."""
+    from prism_service.project_context import get_project, get_all_projects
+    summary: dict = {"projects": [], "tuned": 0, "errors": 0}
+    try:
+        projects = get_all_projects()
+    except Exception as exc:
+        _log(f"get_all_projects failed: {exc}")
+        return summary
+    for project in projects:
+        try:
+            ctx = get_project(project)
+            scores_db = str(ctx._data_dir / "scores.db")
+            if not Path(scores_db).exists():
+                continue
+            mem = getattr(ctx, "memory_svc", None)
+            AdaptivePolicyService(scores_db, mem).tune(project=project)
+            summary["tuned"] += 1
+            summary["projects"].append(project)
+        except Exception as exc:
+            _log(f"{project}: tune failed: {exc}")
+            summary["errors"] += 1
+    return summary
+
+
+def _loop() -> None:
+    interval = _interval_s()
+    _log(f"started; interval={interval}s")
+    while True:
+        try:
+            run_once()
+        except Exception as exc:
+            _log(f"run_once raised: {exc}")
+        time.sleep(interval)
+
+
+def start_adaptive_policy_worker() -> threading.Thread | None:
+    """Spawn the daemon thread unless PRISM_ADAPTIVE_POLICY_WORKER=off."""
+    if not is_enabled():
+        return None
+    t = threading.Thread(
+        target=_loop, name="prism-adaptive-policy-worker", daemon=True,
+    )
+    t.start()
+    return t

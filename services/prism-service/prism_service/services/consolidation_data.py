@@ -243,17 +243,45 @@ def get_recent_runs(scores_db: str, limit: int = 20) -> list[dict]:
 # on insert, and an on-demand backfill endpoint sweeps everything
 # historical. Idempotent on session_id, so calling twice is a no-op.
 
+def resolve_task_id_for_session(scores_db: str, session_id: str) -> str | None:
+    """Return the task_id linked to ``session_id`` via task_sessions, or
+    None. The transcript disk path has no task_id of its own; when a
+    session was task-linked (conductor_advance/task_link_session writes
+    task_sessions), the consolidation_candidate must carry that task_id
+    so /learning's Layer-B rollup can fill (FIX 2a)."""
+    if not session_id or not Path(scores_db).exists():
+        return None
+    conn = sqlite3.connect(scores_db)
+    try:
+        try:
+            row = conn.execute(
+                "SELECT task_id FROM task_sessions WHERE session_id=? "
+                "ORDER BY started_at DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None  # table absent on a fresh db
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
 def enqueue_for_session(
     scores_db: str,
     session_id: str,
     scope: dict | None = None,
     trigger: str = "session_completed",
+    task_id: str | None = None,
 ) -> str | None:
     """Insert a pending consolidation_candidate for ``session_id`` if one
     doesn't already exist. Returns the new candidate id, or None when
-    the session already had one (idempotent)."""
+    the session already had one (idempotent). When ``task_id`` is None it
+    is resolved from task_sessions so a task-linked session stamps its
+    task_id onto the candidate (FIX 2a)."""
     if not session_id or not Path(scores_db).exists():
         return None
+    if task_id is None:
+        task_id = resolve_task_id_for_session(scores_db, session_id)
     conn = sqlite3.connect(scores_db)
     conn.row_factory = sqlite3.Row
     try:
@@ -267,9 +295,9 @@ def enqueue_for_session(
         conn.execute(
             "INSERT INTO consolidation_candidates "
             "(id, task_id, session_id, trigger, scope_json, status, queued_at) "
-            "VALUES (?, NULL, ?, ?, ?, 'pending', ?)",
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
             (
-                cid, session_id, trigger,
+                cid, task_id, session_id, trigger,
                 json.dumps(scope or {}),
                 datetime.now(timezone.utc).isoformat(),
             ),
@@ -345,3 +373,67 @@ def prune_noise_candidates(scores_db: str) -> int:
         return len(doomed)
     finally:
         conn.close()
+
+
+# Default retention windows — how long a completed candidate / session
+# outcome is kept before the governance sweep prunes it.
+_CANDIDATE_RETENTION_DAYS = 30
+_SESSION_OUTCOME_CAP = 5000
+
+
+def retention_sweep(
+    scores_db: str,
+    candidate_retention_days: int = _CANDIDATE_RETENTION_DAYS,
+    session_outcome_cap: int = _SESSION_OUTCOME_CAP,
+    now: datetime | None = None,
+) -> dict:
+    """FIX 4a — bounded, idempotent retention sweep on the governance
+    cadence.
+
+    Deletes ONLY rows that have aged out, never the working set:
+      * consolidation_candidates with status='completed' whose
+        completed_at is older than ``candidate_retention_days`` — pending
+        candidates (any age) and recent completed rows always survive;
+      * the oldest session_outcomes beyond ``session_outcome_cap`` rows,
+        so the session log can't grow unbounded.
+
+    Returns {candidates_pruned, session_outcomes_pruned} so the timer can
+    log what it pruned. Idempotent — a second call finds nothing aged out
+    and prunes 0.
+    """
+    report = {"candidates_pruned": 0, "session_outcomes_pruned": 0}
+    if not Path(scores_db).exists():
+        return report
+    if now is None:
+        now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=candidate_retention_days)).isoformat()
+    conn = sqlite3.connect(scores_db)
+    try:
+        cur = conn.execute(
+            "DELETE FROM consolidation_candidates "
+            "WHERE status='completed' AND completed_at IS NOT NULL "
+            "AND completed_at < ?",
+            (cutoff,),
+        )
+        report["candidates_pruned"] = cur.rowcount or 0
+        # Cap session_outcomes to the newest N rows (archive the tail by
+        # deleting it — the reflected signal already lives in candidates).
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM session_outcomes"
+            ).fetchone()[0]
+            if total > session_outcome_cap:
+                cur2 = conn.execute(
+                    "DELETE FROM session_outcomes WHERE session_id IN ("
+                    "  SELECT session_id FROM session_outcomes "
+                    "  ORDER BY timestamp DESC LIMIT -1 OFFSET ?"
+                    ")",
+                    (session_outcome_cap,),
+                )
+                report["session_outcomes_pruned"] = cur2.rowcount or 0
+        except sqlite3.OperationalError:
+            pass  # session_outcomes absent on a bare db
+        conn.commit()
+    finally:
+        conn.close()
+    return report

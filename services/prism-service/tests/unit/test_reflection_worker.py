@@ -12,11 +12,26 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 
-def test_start_reflection_worker_returns_none_when_disabled(monkeypatch):
-    """Off by default — a zero-LLM service shouldn't burn tokens
-    unprompted."""
-    from prism_service.services.reflection_worker import start_reflection_worker
+def test_start_reflection_worker_starts_by_default(monkeypatch):
+    """FIX 1a (task fc2d8aeb) — DEFAULT ON. The self-sustaining loop must
+    drain pending candidates without an explicit PRISM_REFLECTION_WORKER=on,
+    mirroring memory_summary_worker.is_enabled(default=True)."""
+    from prism_service.services import reflection_worker as rw
     monkeypatch.delenv("PRISM_REFLECTION_WORKER", raising=False)
+    # Keep the daemon from looping forever.
+    monkeypatch.setattr(rw, "run_once", lambda: {
+        "projects": [], "ran": 0, "errors": 0, "skipped": 0,
+    })
+    monkeypatch.setattr(rw, "_loop", lambda: rw.run_once())
+    t = rw.start_reflection_worker()
+    assert t is not None, "worker must spawn by default (env unset)"
+    t.join(timeout=2)
+
+
+def test_start_reflection_worker_returns_none_when_off(monkeypatch):
+    """FIX 1b — PRISM_REFLECTION_WORKER=off preserves the opt-out."""
+    from prism_service.services.reflection_worker import start_reflection_worker
+    monkeypatch.setenv("PRISM_REFLECTION_WORKER", "off")
     assert start_reflection_worker() is None
 
 
@@ -81,11 +96,14 @@ def test_run_once_dispatches_run_one_for_pending(monkeypatch, tmp_path):
     )
     c = sqlite3.connect(str(scores))
     try:
+        # v6.2.29 — give the candidate a real signal so the drain-time
+        # noise filter (FIX 1c) dispatches it instead of skipping it.
         c.execute(
             "INSERT INTO consolidation_candidates "
-            "(id, task_id, session_id, trigger, status, queued_at) "
-            "VALUES (?, NULL, ?, ?, 'pending', ?)",
+            "(id, task_id, session_id, trigger, scope_json, status, queued_at) "
+            "VALUES (?, NULL, ?, ?, ?, 'pending', ?)",
             ("cand-1", "sess-1", "transcript_imported",
+             '{"signal_counts": {"pushbacks": 1}}',
              "2026-05-25T10:00:00+00:00"),
         )
         c.commit()
@@ -126,7 +144,8 @@ def test_run_once_dispatches_run_one_for_pending(monkeypatch, tmp_path):
 
 def test_workers_endpoint_reflects_env_state(monkeypatch):
     """/api/consolidation/workers shows the reflection worker as
-    running/cadence when the env var is on."""
+    running/cadence. FIX 1a — DEFAULT ON: with the env var UNSET the
+    worker reports running=True; only =off flips it to running=False."""
     from prism_service.api.consolidation import workers
 
     monkeypatch.setenv("PRISM_REFLECTION_WORKER", "on")
@@ -136,7 +155,16 @@ def test_workers_endpoint_reflects_env_state(monkeypatch):
     assert rw_entry["running"] is True
     assert rw_entry["cadence_s"] == 300
 
+    # Env UNSET -> still running (default ON).
     monkeypatch.delenv("PRISM_REFLECTION_WORKER")
+    payload = workers()
+    rw_entry = [w for w in payload["workers"] if w["id"] == "reflection_worker"][0]
+    assert rw_entry["running"] is True, (
+        "reflection worker must default ON when the env var is unset"
+    )
+
+    # Explicit off -> not running.
+    monkeypatch.setenv("PRISM_REFLECTION_WORKER", "off")
     payload = workers()
     rw_entry = [w for w in payload["workers"] if w["id"] == "reflection_worker"][0]
     assert rw_entry["running"] is False
