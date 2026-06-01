@@ -48,6 +48,9 @@ type Task = {
   oracle?: string;
   proof_type?: string;
   completion_proof?: string;
+  allowed_files?: string[];
+  verify?: string[];
+  stop_if?: string[];
 };
 
 // Slim shape for the child-task list — only what the row renders.
@@ -344,6 +347,33 @@ export default function TaskDetailPage() {
                 ? <div className="leading-relaxed opacity-90">{task.completion_proof}</div>
                 : <div className="text-amber-300/90 text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
             </div>
+          </div>
+        </Card>
+      )}
+
+      {((task.allowed_files?.length ?? 0) > 0 || (task.verify?.length ?? 0) > 0 || (task.stop_if?.length ?? 0) > 0) && (
+        <Card>
+          <SectionLabel>Worker contract — bounded slice</SectionLabel>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4 text-[12px]">
+            {[
+              ["allowed_files", task.allowed_files, "emerald"],
+              ["verify", task.verify, "teal"],
+              ["stop_if", task.stop_if, "rose"],
+            ].map(([label, items, tone]) => (
+              <div key={label as string}>
+                <div className="opacity-50 mb-1 uppercase tracking-wider text-[11px]">{label as string}</div>
+                {((items as string[] | undefined)?.length ?? 0) > 0 ? (
+                  <ul className="space-y-1">
+                    {(items as string[]).map((it, i) => (
+                      <li key={i} className="font-mono text-[11px] px-1.5 py-0.5 rounded inline-block mr-1 mb-1"
+                          style={{ background: `var(--accent-${tone as string}-bg)`, color: `var(--accent-${tone as string}-fg)` }}>
+                        {it}
+                      </li>
+                    ))}
+                  </ul>
+                ) : <span className="opacity-40">—</span>}
+              </div>
+            ))}
           </div>
         </Card>
       )}
