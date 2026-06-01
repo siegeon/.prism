@@ -26,6 +26,22 @@ EPSILON_MIN = 0.05
 EPSILON_DECAY = 0.05
 
 
+def is_weak_proof(value: object) -> bool:
+    """Ported from goalbuddy scripts/check-goal-state.mjs isWeakProof().
+
+    A completion proof / oracle signal is "weak" when it is absent or a
+    placeholder — i.e. it does not actually evidence the outcome. Used to
+    flag (advisory) a green_gate close that carries no real proof.
+    """
+    if value is None:
+        return True
+    s = str(value).strip().lower()
+    if s in ("", "unknown", "tbd", "todo", "none"):
+        return True
+    # placeholder tokens like "<fill me>" / "<observable signal>"
+    return s.startswith("<") and s.endswith(">")
+
+
 class ConductorService:
     """Service layer for Conductor engine and scores.db queries.
 
@@ -1220,6 +1236,14 @@ class ConductorService:
             passed_gate_reason = f"verified ({verifier_validation}): {reason}"
         else:
             passed_gate_reason = reason
+        # Oracle (goalbuddy "no completion on weak proof"): at the terminal
+        # green_gate, flag a close with no real completion_proof. Advisory per
+        # the hooks doctrine — annotate the reason, never block — so it
+        # surfaces on the task/swimlane without breaking override-driven closes.
+        if gate_step_id == "green_gate":
+            _proof = getattr(self._task_svc.get(task_id), "completion_proof", "")
+            if is_weak_proof(_proof):
+                passed_gate_reason += "  ⚠ oracle: no completion_proof recorded"
         self._task_svc.update(
             task_id,
             gate_state="passed",

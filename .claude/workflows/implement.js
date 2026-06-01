@@ -33,7 +33,7 @@ const SID = (_in.session_id || '').trim()
 // Telemetry run id for the agent-run spine (task f4498190). One drive of this
 // workflow == one run_id; every step's agent() emits a row under it. Sourced
 // from args when the orchestrator supplies one, else derived from SID/task.
-const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || `run-${Date.now()}`).trim()
+const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || 'run-adhoc').trim()
 // Where the agent-run telemetry POSTs land. Defaults to the dev web port
 // (8888 on this box); overridable via args.api_base for the WSL release
 // topology (7778). The MCP daemon serves /api/* on the same FastAPI app.
@@ -135,14 +135,9 @@ async function postAgentRun(res, meta) {
 // the default serial drive but kept on the same emitter contract.
 async function fanout(jobs) {
   return Promise.all(jobs.map(async (j) => {
-    const started = Date.now()
     const res = await j.run()
-    await postAgentRun(res, {
-      role: j.role, step: j.step, model: j.model,
-      started_at: new Date(started).toISOString(),
-      ended_at: new Date().toISOString(),
-      duration_ms: Date.now() - started,
-    })
+    // Timing is stamped server-side on ingest (workflow scripts forbid client clocks).
+    await postAgentRun(res, { role: j.role, step: j.step, model: j.model })
     return res
   }))
 }
@@ -221,7 +216,7 @@ const HANDLERS = {
     { label: 'review_previous_notes', phase: 'Review notes', schema: STEP_SCHEMA }),
 
   draft_story: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions. ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
+    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) — the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). If the task has none, record it: task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="test").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
   verify_plan: (role = 'sm') => agent(
@@ -237,7 +232,7 @@ const HANDLERS = {
     { label: 'red_gate', phase: 'Red gate', schema: STEP_SCHEMA }),
 
   implement_tasks: (role = 'dev') => agent(
-    `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
+    `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. WORKER CONTRACT (goalbuddy-ported): re-read this task via task_list — if it defines allowed_files, treat that allowlist as a HARD scope boundary: do NOT edit any file outside it. Honor stop_if — if you need a file outside allowed_files, the behavior is ambiguous, or verification fails twice, STOP: set ok:false and put the triggered stop_if condition in halt_reason rather than pushing through. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
     { label: 'implement_tasks', phase: 'Implement', schema: STEP_SCHEMA }),
 
   verify_green_state: (role = 'qa') => agent(
@@ -245,7 +240,7 @@ const HANDLERS = {
     { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA }),
 
   green_gate: (role = 'lead') => agent(
-    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then task_update(id="' + locate.task_id + '", status="done").'} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
+    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then RECORD THE COMPLETION PROOF (oracle contract): task_update(id="' + locate.task_id + '", status="done", proof_type="test", completion_proof="<the exact full-suite command + its green result + a one-line acceptance summary; receipt-backed evidence, NOT a placeholder>"). A real completion_proof clears the green_gate oracle / anti-busywork check (effort is not outcome).'} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
     { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
 }
 
@@ -262,16 +257,12 @@ const trace = []
 let halted = null
 for (let i = startIdx; i < ORDER.length; i++) {
   const stepId = ORDER[i]
-  const _t0 = Date.now()
   const res = await HANDLERS[stepId]()
   trace.push(res)
   // Emit one agent-run telemetry row after this step's agent() returns —
   // serial path; the parallel fanout() wrapper routes the SAME emitter.
-  await postAgentRun(res, {
-    role: ROLE_BY_STEP[stepId], step: stepId,
-    started_at: new Date(_t0).toISOString(),
-    ended_at: new Date().toISOString(), duration_ms: Date.now() - _t0,
-  })
+  // Timing is stamped server-side on ingest (workflow scripts forbid client clocks).
+  await postAgentRun(res, { role: ROLE_BY_STEP[stepId], step: stepId })
   if (!res || res.ok !== true) {
     halted = { at: stepId, reason: (res && res.halt_reason) || 'step reported ok:false', result: res }
     break
