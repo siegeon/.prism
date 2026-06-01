@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.27"
+PRISM_VERSION = "6.2.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.2.28: Adaptive policy loop (Tier 3) — memory knobs self-tune from the "
+    "recall→outcome signal. New AdaptivePolicyService + additive scores.db "
+    "policy_knobs table nudges forget_cutoff / decay_weight / "
+    "merge_similarity_threshold (clamped, append-only history). get_active_knobs "
+    "is consumed live by GET /api/learning/policy + AdaptivePolicyService; "
+    "feeding tuned knobs back into forget behavior is deferred (regressed the "
+    "runner's default-cutoff tests). GET /api/learning/policy returns "
+    "knobs+history+per-op verdict "
+    "accuracy; LearningPage gains an 'Adaptive policy' panel. Tier-2 prompt "
+    "self-tuning + bandit deferred. "
     "v6.2.27: Worker contract (goalbuddy state.yaml T003) — third + final "
     "goalbuddy concept built; epic 56e3a518 now 3/3. Task gains allowed_files / "
     "verify / stop_if (JSON list columns, additive tasks.db migration), wired "

@@ -3,6 +3,10 @@
 from fastapi import APIRouter, Query
 
 from prism_service.project_context import get_project
+from prism_service.services.adaptive_policy import (
+    AdaptivePolicyService,
+    get_active_knobs,
+)
 from prism_service.services.agent_runs_data import get_agent_run_aggregates
 from prism_service.services.learning_data import (
     get_learning_rows,
@@ -31,4 +35,19 @@ def overview(
         # task f4498190 — agent-run telemetry aggregates feed the /learning
         # agent-timeline panel (avg duration/step, override rate, token/role).
         "agent_runs": get_agent_run_aggregates(scores_db),
+    }
+
+
+@router.get("/policy")
+def policy(project: str = Query("default")) -> dict:
+    """Tier-3 adaptive policy — current tuned knobs + tuning history + the
+    per-op verdict accuracy table. Backs the /learning 'Adaptive policy' panel.
+    """
+    ctx = get_project(project)
+    scores_db = str(ctx._data_dir / "scores.db")
+    svc = AdaptivePolicyService(scores_db, mem=getattr(ctx, "memory_svc", None))
+    return {
+        "knobs": get_active_knobs(scores_db),
+        "history": svc.history(),
+        "op_accuracy": svc.op_verdict_accuracy(),
     }
