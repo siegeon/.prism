@@ -33,7 +33,7 @@ const SID = (_in.session_id || '').trim()
 // Telemetry run id for the agent-run spine (task f4498190). One drive of this
 // workflow == one run_id; every step's agent() emits a row under it. Sourced
 // from args when the orchestrator supplies one, else derived from SID/task.
-const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || `run-${Date.now()}`).trim()
+const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || 'run-adhoc').trim()
 // Where the agent-run telemetry POSTs land. Defaults to the dev web port
 // (8888 on this box); overridable via args.api_base for the WSL release
 // topology (7778). The MCP daemon serves /api/* on the same FastAPI app.
@@ -135,14 +135,9 @@ async function postAgentRun(res, meta) {
 // the default serial drive but kept on the same emitter contract.
 async function fanout(jobs) {
   return Promise.all(jobs.map(async (j) => {
-    const started = Date.now()
     const res = await j.run()
-    await postAgentRun(res, {
-      role: j.role, step: j.step, model: j.model,
-      started_at: new Date(started).toISOString(),
-      ended_at: new Date().toISOString(),
-      duration_ms: Date.now() - started,
-    })
+    // Timing is stamped server-side on ingest (workflow scripts forbid client clocks).
+    await postAgentRun(res, { role: j.role, step: j.step, model: j.model })
     return res
   }))
 }
@@ -262,16 +257,12 @@ const trace = []
 let halted = null
 for (let i = startIdx; i < ORDER.length; i++) {
   const stepId = ORDER[i]
-  const _t0 = Date.now()
   const res = await HANDLERS[stepId]()
   trace.push(res)
   // Emit one agent-run telemetry row after this step's agent() returns —
   // serial path; the parallel fanout() wrapper routes the SAME emitter.
-  await postAgentRun(res, {
-    role: ROLE_BY_STEP[stepId], step: stepId,
-    started_at: new Date(_t0).toISOString(),
-    ended_at: new Date().toISOString(), duration_ms: Date.now() - _t0,
-  })
+  // Timing is stamped server-side on ingest (workflow scripts forbid client clocks).
+  await postAgentRun(res, { role: ROLE_BY_STEP[stepId], step: stepId })
   if (!res || res.ok !== true) {
     halted = { at: stepId, reason: (res && res.halt_reason) || 'step reported ok:false', result: res }
     break
