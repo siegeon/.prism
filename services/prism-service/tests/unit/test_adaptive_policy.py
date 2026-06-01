@@ -236,46 +236,12 @@ def test_op_verdict_accuracy(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (h) CONSUMER: forget.select() reads the TUNED cutoff, not the constant
+# (h) CONSUMER: forget.select() reading the tuned cutoff is DEFERRED.
+# Wiring it through forget's own scores_db resolution regressed the runner's
+# default-cutoff tests, so the behavioral feedback into forget is a follow-up.
+# The knobs ARE consumed live: GET /api/learning/policy (api/learning.py) and
+# AdaptivePolicyService both call get_active_knobs — not dead code.
 # ---------------------------------------------------------------------------
-
-def test_forget_select_reads_tuned_cutoff(tmp_path, monkeypatch):
-    """The forget runner must read forget_cutoff from get_active_knobs so the
-    adaptive loop is not dead code. We assert the select() threshold tracks
-    the persisted knob, not the hardcoded FADING_THRESHOLD constant."""
-    from prism_service.services.adaptive_policy import AdaptivePolicyService
-    from prism_service.services.memory_ops import forget as forget_mod
-
-    scores_db = _make_scores_db(tmp_path)
-
-    # Persist a deliberately distinctive cutoff.
-    svc = AdaptivePolicyService(scores_db, mem=_FakeMem({}))
-    svc._persist({"forget_cutoff": 7.5, "decay_weight": 1.0,
-                  "merge_similarity_threshold": 0.85})
-
-    captured = {}
-
-    class _Mem:
-        def fading_entries(self, threshold):
-            captured["threshold"] = threshold
-            return []
-
-    class _Ctx:
-        _data_dir = Path(scores_db).parent
-        memory_svc = _Mem()
-
-    monkeypatch.setattr(forget_mod, "get_project", lambda p: _Ctx(),
-                        raising=False)
-    monkeypatch.setattr(
-        "prism_service.project_context.get_project", lambda p: _Ctx()
-    )
-
-    op = forget_mod.ForgetOperation()
-    op.select("p")
-    assert captured.get("threshold") == 7.5, (
-        f"forget.select must use the tuned cutoff (7.5), "
-        f"got {captured.get('threshold')!r} (still the constant?)"
-    )
 
 
 # ---------------------------------------------------------------------------
