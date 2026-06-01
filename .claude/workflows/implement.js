@@ -216,7 +216,7 @@ const HANDLERS = {
     { label: 'review_previous_notes', phase: 'Review notes', schema: STEP_SCHEMA }),
 
   draft_story: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions. ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
+    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) — the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). If the task has none, record it: task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="test").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
   verify_plan: (role = 'sm') => agent(
@@ -240,7 +240,7 @@ const HANDLERS = {
     { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA }),
 
   green_gate: (role = 'lead') => agent(
-    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then task_update(id="' + locate.task_id + '", status="done").'} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
+    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then RECORD THE COMPLETION PROOF (oracle contract): task_update(id="' + locate.task_id + '", status="done", proof_type="test", completion_proof="<the exact full-suite command + its green result + a one-line acceptance summary; receipt-backed evidence, NOT a placeholder>"). A real completion_proof clears the green_gate oracle / anti-busywork check (effort is not outcome).'} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
     { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
 }
 
