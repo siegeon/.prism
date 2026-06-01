@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from prism_service.project_context import get_project
+from prism_service.services.adaptive_policy import get_active_knobs
 from prism_service.services.memory_ops.base import MemoryOperation
 
 
@@ -68,7 +70,6 @@ class ForgetOperation(MemoryOperation):
     provenance = {"source": "forget", "op": "principled-archival"}
 
     def _ctx(self, project: str):
-        from prism_service.project_context import get_project
         return get_project(project)
 
     def _scores_db(self, project: str) -> str:
@@ -98,8 +99,18 @@ class ForgetOperation(MemoryOperation):
         """
         ctx = self._ctx(project)
         mem = ctx.memory_svc
+        # Tier-3 adaptive: the fading threshold is the tuned `forget_cutoff`
+        # knob, not the frozen FADING_THRESHOLD constant. The constant is the
+        # default/floor get_active_knobs falls back to before the loop runs.
         try:
-            faders = mem.fading_entries(threshold=FADING_THRESHOLD)
+            scores_db = self._scores_db(project)
+            cutoff = float(get_active_knobs(scores_db).get(
+                "forget_cutoff", FADING_THRESHOLD
+            ))
+        except Exception:
+            cutoff = FADING_THRESHOLD
+        try:
+            faders = mem.fading_entries(threshold=cutoff)
         except Exception:
             return []
         survivors = [

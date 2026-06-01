@@ -1086,6 +1086,22 @@ class Brain:
                 ON memory_meta(session_id);
             CREATE INDEX IF NOT EXISTS idx_memory_meta_status
                 ON memory_meta(status);
+
+            -- Tier-3 adaptive policy: each row is one tuning of the memory
+            -- knobs (forget_cutoff / decay_weight / merge_similarity_threshold)
+            -- computed from the recall->outcome signal. Append-only — the
+            -- newest row is the active policy, older rows are the history the
+            -- /learning panel charts and a future bandit would replay.
+            CREATE TABLE IF NOT EXISTS policy_knobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forget_cutoff REAL,
+                decay_weight REAL,
+                merge_similarity_threshold REAL,
+                rationale TEXT,
+                tuned_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_policy_knobs_tuned_at
+                ON policy_knobs(tuned_at);
         """)
         # Migrate existing scores.db: add op_type to consolidation_runs so
         # every memory-operation verdict (reflection / forget / prune /

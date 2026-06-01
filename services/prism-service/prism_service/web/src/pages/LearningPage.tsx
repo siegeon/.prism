@@ -59,6 +59,29 @@ type AgentRunAggregates = {
   total_runs?: number;
 };
 
+// Tier-3 adaptive policy — tuned memory knobs + per-op verdict accuracy.
+type PolicyKnobs = {
+  forget_cutoff?: number;
+  decay_weight?: number;
+  merge_similarity_threshold?: number;
+};
+type PolicyHistory = PolicyKnobs & {
+  id?: number;
+  rationale?: string;
+  tuned_at?: string;
+};
+type OpAccuracy = {
+  op_type?: string;
+  n?: number;
+  accuracy?: number;
+  decisions?: Record<string, number>;
+};
+type PolicyResponse = {
+  knobs?: PolicyKnobs;
+  history?: PolicyHistory[];
+  op_accuracy?: OpAccuracy[];
+};
+
 function fmtMs(ms?: number | null): string {
   if (ms == null) return "—";
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
@@ -89,6 +112,7 @@ export default function LearningPage() {
   const [reflections, setReflections] = useState<Reflection[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [agentAgg, setAgentAgg] = useState<AgentRunAggregates>({});
+  const [policy, setPolicy] = useState<PolicyResponse>({});
 
   useEffect(() => {
     api
@@ -116,14 +140,77 @@ export default function LearningPage() {
       .get<{ rows: AgentRun[] }>(`/api/agent-runs?project=${project}`)
       .then((d) => setAgentRuns(d.rows ?? []))
       .catch(() => setAgentRuns([]));
+    // Tier-3 adaptive policy: current tuned knobs + history + op accuracy.
+    api
+      .get<PolicyResponse>(`/api/learning/policy?project=${project}`)
+      .then((d) => setPolicy(d ?? {}))
+      .catch(() => setPolicy({}));
   }, [project]);
 
   const lowN = variants.length > 0 && variants.every((v) => v.n < 20);
 
   const overridePct = Math.round((agentAgg.override_rate ?? 0) * 100);
+  const knobs = policy.knobs ?? {};
+  const opAccuracy = policy.op_accuracy ?? [];
 
   return (
     <Page>
+      <Card raised>
+        <div className="flex items-baseline justify-between mb-3">
+          <SectionLabel>Adaptive policy</SectionLabel>
+          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+            Tier-3 · knobs self-tuned from recall→outcome · per-op verdict accuracy
+          </div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div className="rounded border border-[color:var(--border-default)]/40 p-2">
+            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              Tuned knobs
+            </div>
+            <div className="flex justify-between text-xs py-0.5">
+              <span className="font-mono opacity-80">forget_cutoff</span>
+              <span className="font-mono opacity-60">
+                {knobs.forget_cutoff?.toFixed?.(2) ?? "—"}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs py-0.5">
+              <span className="font-mono opacity-80">decay_weight</span>
+              <span className="font-mono opacity-60">
+                {knobs.decay_weight?.toFixed?.(2) ?? "—"}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs py-0.5">
+              <span className="font-mono opacity-80">merge_similarity_threshold</span>
+              <span className="font-mono opacity-60">
+                {knobs.merge_similarity_threshold?.toFixed?.(2) ?? "—"}
+              </span>
+            </div>
+          </div>
+          <div className="rounded border border-[color:var(--border-default)]/40 p-2">
+            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              Per-op verdict accuracy
+            </div>
+            {opAccuracy.length === 0 ? (
+              <div className="text-xs opacity-50">—</div>
+            ) : (
+              opAccuracy.map((o) => (
+                <div key={o.op_type} className="flex justify-between text-xs py-0.5">
+                  <span className="font-mono opacity-80">{o.op_type}</span>
+                  <span className="font-mono opacity-60">
+                    {o.accuracy?.toFixed?.(2) ?? "—"} · n={o.n ?? 0}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        {(policy.history ?? []).length === 0 && (
+          <div className="mt-2 text-[11px] opacity-50">
+            No tunings yet — knobs show defaults until the adaptive loop runs.
+          </div>
+        )}
+      </Card>
+
       <Card raised>
         <div className="flex items-baseline justify-between mb-3">
           <SectionLabel>Agent runs · timeline</SectionLabel>
