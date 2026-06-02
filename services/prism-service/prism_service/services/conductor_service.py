@@ -1463,10 +1463,18 @@ class ConductorService:
             step = getattr(t, "workflow_step", "") or ""
             gate = getattr(t, "gate_state", "none") or "none"
             status = getattr(t, "status", "") or ""
-            if step == "" and gate == "none":
-                continue
             if status == "done":
                 continue
+            if step == "" and gate == "none":
+                # Claimed by a workflow but pre-first-advance (the Locate /
+                # draft_story intake window): surface in a synthetic leading
+                # "intake" lane so just-started work is VISIBLE on /conductor
+                # instead of invisible. A truly idle backlog task (pending,
+                # untouched) stays hidden.
+                if status == "in_progress":
+                    step = self.INTAKE_STEP
+                else:
+                    continue
             out.append({
                 "id": t.id,
                 "title": t.title,
@@ -1507,8 +1515,16 @@ class ConductorService:
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
             status = getattr(t, "status", "") or ""
-            if step and status != "done":
-                counter[step] += 1
+            if status == "done":
+                continue
+            if not step:
+                # Mirror managed_tasks: claimed-but-pre-step in_progress work
+                # counts under the synthetic intake lane; idle backlog doesn't.
+                if status == "in_progress":
+                    step = self.INTAKE_STEP
+                else:
+                    continue
+            counter[step] += 1
         return dict(counter)
 
     # ------------------------------------------------------------------
@@ -1519,6 +1535,13 @@ class ConductorService:
     # Drives the animated current-segment fill on the conductor tiles +
     # TaskDetailPage header so the bar tweens between 5s polls instead of
     # snapping at each advance.
+    # Synthetic leading lane for tasks a workflow has claimed (status
+    # in_progress) but not yet advanced into review_previous_notes — keeps
+    # just-started work visible on /conductor instead of invisible. NOT a real
+    # WORKFLOW_STEPS entry (advance/gate state machine is untouched); display
+    # only. The first conductor_advance moves the task into review_previous_notes.
+    INTAKE_STEP = "intake"
+
     _TYPICAL_S_FALLBACK = 900.0  # 15 min — positive default when no history
 
     def _project_source_path(self) -> str:

@@ -373,6 +373,13 @@ async def lifespan(_app: FastAPI):
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
         from prism_service.services.graph_enrich import start_graph_enrich_worker
         start_graph_enrich_worker()
+        # Phase 1 of epic 4fd1e6b4 — in-process event bus + concurrency-
+        # capped, budget-governed consumer pool. SUBSTRATE only this phase:
+        # handlers are wrap/no-op, no emitter is wired live, nothing shells
+        # `claude -p`. The pool will become the single inference chokepoint
+        # in Phases 2-3. Disable via PRISM_EVENT_POOL_INTERVAL=0.
+        from prism_service.services.event_pool import start_event_pool
+        start_event_pool()
     except Exception:
         # Issue #66: this used to `print(e)` and swallow the stack, so a
         # half-broken boot left no traceback. Log the full stack to the
