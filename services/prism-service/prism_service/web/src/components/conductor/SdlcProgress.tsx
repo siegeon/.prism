@@ -2,8 +2,9 @@
 // -frame estimate from the server `phase_progress` field: between the 5s polls
 // the current-step fill is EXTRAPOLATED from wall-clock time so the bar creeps,
 // the % readout ticks in decimals, and a mm:ss in-step timer counts up every
-// second — unmistakably real-time. A sweeping shimmer marks the active step as
-// alive. Completed steps solid (emerald); future muted. GPU-only; tokens only.
+// second. The state pill reflects the REAL task status (in progress / done /
+// blocked) — NOT a guessed activity ping — with a shimmer + pulse while the
+// task is actively in progress. Completed steps solid (emerald); future muted.
 import { useEffect, useRef, useState } from "react";
 import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
@@ -29,9 +30,14 @@ function fmtClock(s: number): string {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-// Live current-step fill. Children basis = EXACT done/total (holds steady).
-// Time basis = extrapolated asymptotic creep (1 - e^(-t/typical)) that always
-// inches upward but never claims "done" before the conductor advances.
+// Real task status → label + accent tone (honest; no guessed "idle").
+const STATUS_META: Record<string, { label: string; tone: string }> = {
+  in_progress: { label: "in progress", tone: "teal" },
+  done: { label: "done", tone: "emerald" },
+  blocked: { label: "blocked", tone: "rose" },
+  pending: { label: "pending", tone: "slate" },
+};
+
 function liveFraction(p: PhaseProgress, elapsedS: number): number {
   if ((p.basis ?? "time") === "children" && (p.children_total ?? 0) > 0) {
     return Math.min(1, (p.children_done ?? 0) / (p.children_total ?? 1));
@@ -44,11 +50,13 @@ function liveFraction(p: PhaseProgress, elapsedS: number): number {
 export default function SdlcProgress({
   step,
   phase,
+  status,
   reduced,
   showCaption = true,
 }: {
   step?: string;
   phase?: PhaseProgress | null;
+  status?: string;
   reduced?: boolean | null;
   showCaption?: boolean;
 }) {
@@ -59,49 +67,38 @@ export default function SdlcProgress({
   const tokFrac = Math.max(0, Math.min(1, tokens / 500_000));
   const seed = Math.max(0, Math.min(1, phase?.pct ?? 0));
 
-  // Overall task progress toward DONE: completed steps + the current phase's
-  // fraction, over all 8 steps. Only nears 100% as the whole task completes —
-  // never because one step ran long.
+  const meta = STATUS_META[(status ?? "").toLowerCase()] ?? { label: status || "", tone: "slate" };
+  // "live" = the task is genuinely being worked (status in_progress) — the
+  // honest basis for the shimmer + pulse, instead of a laggy token delta.
+  const live = (status ?? "").toLowerCase() === "in_progress";
+
+  // Overall task progress toward DONE: completed steps + current phase fraction.
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
-  const fill = useMotionValue(seed);
-  const widthPct = useTransform(fill, (v) => `${(v * 100).toFixed(3)}%`);
   const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
   const [liveInStep, setLiveInStep] = useState(phase?.in_step_s ?? 0);
-  // "active" = token spend on this step rose recently (the real work signal).
-  // Flat tokens + a ticking clock = idle/stuck; rising tokens = progressing.
-  const [active, setActive] = useState(false);
-  const prevTokens = useRef(tokens);
-  const lastGrowAt = useRef(-1e9);
+  // current-SEGMENT fill (within the active step) drives just that segment.
+  const segFill = useMotionValue(seed);
+  const segWidth = useTransform(segFill, (v) => `${(v * 100).toFixed(3)}%`);
 
-  // Re-anchor the extrapolation clock on each fresh server value, and note
-  // when the token count grew (so we can show active vs idle honestly).
   const anchor = useRef({ t0: 0 });
   useEffect(() => {
     anchor.current.t0 = performance.now();
-    if (tokens > prevTokens.current) lastGrowAt.current = performance.now();
-    prevTokens.current = tokens;
-  }, [phase, tokens]);
+  }, [phase]);
 
   const lastPctAt = useRef(0);
   const lastClockAt = useRef(0);
-  // The frame loop ALWAYS runs (it carries information — the live % + timer —
-  // not just decoration); only the shimmer/easing below are gated on reduced.
   useAnimationFrame((t) => {
     if (!phase || curIdx < 0) return;
     const elapsedS = (performance.now() - anchor.current.t0) / 1000;
-    const wf = liveFraction(phase, elapsedS); // within the current phase (0..0.97)
-    fill.set(wf); // the current SEGMENT fills by its own phase fraction
+    const wf = liveFraction(phase, elapsedS);
+    segFill.set(wf);
     if (t - lastPctAt.current > 120) {
       lastPctAt.current = t;
-      // headline = OVERALL task progress, so it only nears 100% as the whole
-      // task completes — not because the current step ran long.
       setLiveLabel(((curIdx + wf) / steps.length) * 100);
     }
     if (t - lastClockAt.current > 500) {
       lastClockAt.current = t;
       setLiveInStep((phase.in_step_s ?? 0) + elapsedS);
-      // active if tokens grew within the importer's cadence window (~90s).
-      setActive(tokens > 0 && performance.now() - lastGrowAt.current < 90_000);
     }
   });
 
@@ -128,9 +125,9 @@ export default function SdlcProgress({
               <div key={s.id} className={base} title={stepLabel(s.id)} style={{ background: "var(--surface-3)" }}>
                 <motion.div
                   className="absolute inset-y-0 left-0 rounded-full"
-                  style={{ width: widthPct, background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
+                  style={{ width: segWidth, background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
                 />
-                {!reduced && active && (
+                {!reduced && live && (
                   <motion.div
                     className="absolute inset-y-0 left-0 w-1/2 pointer-events-none"
                     style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent)" }}
@@ -163,13 +160,13 @@ export default function SdlcProgress({
             <span className="flex items-center gap-1.5 shrink-0 tabular-nums">
               <motion.span
                 className="inline-block h-1.5 w-1.5 rounded-full"
-                style={{ background: active ? "var(--accent-emerald-fg)" : "var(--text-muted)" }}
-                animate={!reduced && active ? { opacity: [1, 0.25, 1] } : { opacity: active ? 1 : 0.4 }}
-                transition={!reduced && active ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+                style={{ background: `var(--accent-${meta.tone}-fg)` }}
+                animate={!reduced && live ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
+                transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
               <span>{fmtClock(liveInStep)}</span>
               <span className="opacity-70">· {fmtTokens(tokens)} tok</span>
-              <span className={active ? "" : "opacity-60"}>· {active ? "active" : "idle"}</span>
+              {meta.label && <span style={{ color: `var(--accent-${meta.tone}-fg)` }}>· {meta.label}</span>}
             </span>
           </div>
           {tokens > 0 && (

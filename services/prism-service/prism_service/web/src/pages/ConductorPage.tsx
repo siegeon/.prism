@@ -218,7 +218,7 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
       {/* Real-time SDLC phase progress — bar fills the current step from the
           server phase_progress estimate (time / children / token effort). */}
       <div className="mt-2 pt-2.5 border-t border-[color:var(--border-default)]/60">
-        <SdlcProgress step={task.workflow_step} phase={task.phase_progress} reduced={reduced} />
+        <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} />
       </div>
     </button>
   );
