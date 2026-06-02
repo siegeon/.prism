@@ -34,10 +34,10 @@ const SID = (_in.session_id || '').trim()
 // workflow == one run_id; every step's agent() emits a row under it. Sourced
 // from args when the orchestrator supplies one, else derived from SID/task.
 const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || 'run-adhoc').trim()
-// Where the agent-run telemetry POSTs land. Defaults to the dev web port
-// (8888 on this box); overridable via args.api_base for the WSL release
-// topology (7778). The MCP daemon serves /api/* on the same FastAPI app.
-const API_BASE = (_in.api_base || 'http://127.0.0.1:8888').replace(/\/$/, '')
+// Where the agent-run telemetry POSTs + pre-flight daemon check land.
+// Defaults to the native-app FastAPI port (7778), which serves /api/* alongside
+// the MCP surface; override via args.api_base for a dev topology (e.g. 8888).
+const API_BASE = (_in.api_base || 'http://127.0.0.1:7778').replace(/\/$/, '')
 
 // ── Conductor state machine (mirror of models/workflow.py:WORKFLOW_STEPS) ─
 // Only red_gate and green_gate are blocking gates. The *_complete/_coverage
@@ -64,7 +64,7 @@ const PRISM_TOOLS = 'You have PRISM MCP tools via ToolSearch. Load what you need
 const KNOWLEDGE = [
   'KNOWLEDGE PROTOCOL — Brain is the primary repository, disk is the fallback:',
   '1. FIRST query the Brain: brain_search (try 3-4 query variants), brain_understand for a subgraph, brain_call_chain for blast radius, memory_recall for conventions/decisions.',
-  '2. ONLY for what the Brain does not answer, fall back to Grep/Glob/Read on source under E:/.prism.',
+  '2. ONLY for what the Brain does not answer, fall back to Grep/Glob/Read on source under the working project repo (the git toplevel of the current working directory).',
   '3. Read before you cite. Every claim about code carries a concrete file:line. Never cite an unread source.',
 ].join('\n')
 
@@ -201,7 +201,7 @@ const PREFLIGHT_SCHEMA = {
 }
 phase('Pre-flight')
 const preflight = await agent(
-  `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD — run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 — a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap — the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. datenow_clean=false on ANY match — PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/api/version\` must be 200 — the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean${DRY ? '' : ' AND daemon_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main — rebase or branch fresh off main", "client clock in <file>:<line> — PRISM server-stamps time, remove it (mx-9945f2)", or "daemon down on :8888 — start dev (prism-dev) before driving".`,
+  `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD — run these READ-ONLY checks against the WORKING PROJECT REPO and fail FAST. First resolve its root: ROOT=$(git rev-parse --show-toplevel 2>/dev/null) — if empty, cwd is not inside a git repo, so set sane_branch=false and halt_reason=\"not inside a git repo — run the drive from the project working tree\". Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 — a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C \"$ROOT\" fetch -q origin main\`, read \`git -C \"$ROOT\" rev-parse --abbrev-ref HEAD\` and \`git -C \"$ROOT\" rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap — the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C \"$ROOT\" grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\` (vacuously clean when the working repo ships no workflow scripts). datenow_clean=false on ANY match — PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' ${API_BASE}/api/version\` must be 200 — the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean${DRY ? '' : ' AND daemon_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main — rebase or branch fresh off main", "client clock in <file>:<line> — PRISM server-stamps time, remove it (mx-9945f2)", or "daemon unreachable at ${API_BASE} — start PRISM (prism start) before driving".`,
   { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA })
 if (!preflight.ok) {
   throw new Error(`PRE-FLIGHT HALT — ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok}]`)
