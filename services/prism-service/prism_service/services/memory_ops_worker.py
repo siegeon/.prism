@@ -62,6 +62,13 @@ def registered_ops() -> list[MemoryOperation]:
     Each concrete op family plugs into the same chassis behind its own
     env gate (PRISM_<OP_TYPE>_WORKER, off by default).
     """
+    # MERGE_RETIRED_TO_BUS (Phase 3, epic 4fd1e6b4): MergeOperation's
+    # dedup/supersede DETECTION now runs deterministically on the
+    # memory.written bus handler (only ambiguous conflicts escalate to
+    # claude), so it no longer needs its own always-on polling daemon. It
+    # stays REGISTERED here (off by default via its env gate, like every op)
+    # for the manual/opt-in op path — it is simply not relied on as the
+    # primary dedup loop any more.
     from prism_service.services.memory_ops.merge import MergeOperation
     from prism_service.services.memory_ops.verify_staleness import (
         VerifyStalenessOperation,
