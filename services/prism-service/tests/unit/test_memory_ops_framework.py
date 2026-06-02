@@ -385,12 +385,19 @@ def test_memory_ops_worker_env_gate_starts_thread(monkeypatch):
 
 
 def test_memory_ops_worker_registered_in_main_lifespan():
-    """A worker defined but never called from main.py is DEAD. Assert the
-    lifespan startup actually wires start_memory_ops_workers()."""
+    """Phase 4 (epic 4fd1e6b4): the VerifyStaleness/Forget memory ops are
+    no longer spawned as their own threads from the lifespan — they are folded
+    into the single maintenance clock. The chassis stays (run_once_for /
+    start_memory_ops_workers remain importable for the manual/opt-in path), but
+    the lifespan now wires the consolidated clock instead."""
     main_py = (
         _SERVICE_ROOT / "prism_service" / "main.py"
     ).read_text(encoding="utf-8")
-    assert "start_memory_ops_workers" in main_py, (
-        "main.py lifespan must call start_memory_ops_workers() "
-        "(alongside start_reflection_worker / start_memory_summary_worker)"
+    assert "start_memory_ops_workers()" not in main_py, (
+        "start_memory_ops_workers() must no longer be spawned from the "
+        "lifespan (VerifyStaleness/Forget folded into the maintenance clock)"
+    )
+    assert "start_maintenance_clock" in main_py, (
+        "main.py lifespan must wire start_maintenance_clock (the consolidated "
+        "home of the folded memory-ops passes)"
     )

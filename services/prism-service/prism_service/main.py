@@ -315,9 +315,7 @@ async def lifespan(_app: FastAPI):
         _LOCK_FILE.write_text(str(threading.get_ident()))
         _install_stackdump_handler()
         threading.Thread(target=start_mcp_server, daemon=True).start()
-        threading.Thread(target=start_governance_timer, daemon=True).start()
         threading.Thread(target=start_drift_timer, daemon=True).start()
-        threading.Thread(target=start_quality_timer, daemon=True).start()
         from prism_service.services.understand_drainer import start_understand_drainer
         threading.Thread(target=start_understand_drainer, daemon=True).start()
         # v5.3.0 — sweep .trash/ (renamed-on-delete project dirs) until
@@ -345,25 +343,24 @@ async def lifespan(_app: FastAPI):
         # always-on reflection drain is retired — the transcript importer
         # still produces the candidate + emits SESSION_IMPORTED, and the
         # session.imported handler reflects on it via the bus.
-        # Tier-2 — generalised memory-operation chassis. Each MemoryOperation
-        # (forget / prune / distill / ...) is its own env-gated, interval
-        # daemon, off by default; PRISM_<OP_TYPE>_WORKER=on to enable one.
-        # MERGE_RETIRED_TO_BUS: the Memory Ops Merge op is removed from the
-        # always-on fleet (registered_ops) — memory.written does dedup/
-        # supersede DETECTION deterministically on the bus instead.
-        from prism_service.services.memory_ops_worker import (
-            start_memory_ops_workers,
-        )
-        start_memory_ops_workers()
-        # Tier-3 — adaptive policy. Self-tunes the memory knobs
-        # (forget_cutoff / decay_weight / merge_similarity_threshold) from
-        # the recall->outcome signal, persisting one policy_knobs row per
-        # tick. Env-gated PRISM_ADAPTIVE_POLICY_WORKER (default ON), daily
-        # cadence (PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL, default 3600s).
-        from prism_service.services.adaptive_policy import (
-            start_adaptive_policy_worker,
-        )
-        start_adaptive_policy_worker()
+        # Phase 4 (epic 4fd1e6b4) — the genuinely WALL-CLOCK memory duties
+        # are now folded into ONE maintenance/heartbeat clock instead of 4-5
+        # independent daemon threads. Each tick iterates every project once
+        # and runs, in sequence, the five memory passes behind their OWN
+        # cadence gates: governance (TTL+decay+dup-detect + retention sweep),
+        # verify_staleness, forget, adaptive-policy retune, and quality-vs-git.
+        # All prior env gates / cadence overrides are honored
+        # (PRISM_GOVERNANCE_INTERVAL, PRISM_QUALITY_INTERVAL,
+        # PRISM_ADAPTIVE_POLICY_WORKER[_INTERVAL], PRISM_<OP>_WORKER). The old
+        # per-duty spawns are RETIRED from the lifespan: the governance memory
+        # passes, the memory-ops VerifyStaleness/Forget fleet, the Tier-3
+        # adaptive-policy worker, and the quality timer no longer run their own
+        # threads. (drift_timer + the event pool stay separate, out of scope.)
+        # MERGE_RETIRED_TO_BUS (Phase 3) still holds — the Memory Ops Merge op
+        # remains retired onto the memory.written bus handler and is NOT one of
+        # the five wall-clock passes the maintenance clock folds.
+        from prism_service.services.maintenance_clock import start_maintenance_clock
+        start_maintenance_clock()
 
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose
