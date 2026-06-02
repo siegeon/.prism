@@ -464,10 +464,46 @@ if __name__ == "__main__":
                 signal.signal(_sig, _on_signal)
             except (ValueError, OSError):
                 pass  # not in main thread / unsupported on this platform
+    # Build an explicit Config+Server (instead of uvicorn.run) so we hold
+    # the Server handle. The auto-updater's daemon thread can then REQUEST
+    # a restart (a flag, never an in-thread execv — #66), and a watcher
+    # flips server.should_exit so uvicorn drains the loop + closes sockets.
+    # Once .run() returns (sockets fully closed) we os.execv from THIS main
+    # thread to flip the served version. Supervisor-agnostic: bare daemon
+    # re-execs in place; an external supervisor respawns on the clean exit.
+    from prism_service.services import auto_updater as _au
+
+    _config = uvicorn.Config(app, host="0.0.0.0", port=UI_PORT)
+    _server = uvicorn.Server(_config)
+
+    def _restart_watcher() -> None:
+        # Poll the daemon-thread-set flag; when set, ask uvicorn to drain
+        # and stop. The actual os.execv happens on the main thread AFTER
+        # _server.run() returns, so live sockets are closed first.
+        while not _server.should_exit:
+            if _au.restart_requested():
+                _log.info("auto-update restart requested; draining uvicorn")
+                _server.should_exit = True
+                return
+            time.sleep(2.0)
+
+    threading.Thread(
+        target=_restart_watcher, daemon=True, name="prism-restart-watcher",
+    ).start()
+
     try:
-        uvicorn.run(app, host="0.0.0.0", port=UI_PORT)
+        _server.run()
     except Exception:
         # A bind failure or uvicorn-internal crash used to leave no
         # record (issue #66). Guarantee a traceback in prism.log.
         _log.critical("uvicorn exited abnormally", exc_info=True)
         raise
+
+    # Reached only after a graceful stop. If the stop was triggered by an
+    # auto-update restart request, re-exec the upgraded image from the MAIN
+    # thread now that the sockets are closed (#66-safe). Otherwise this is a
+    # normal shutdown and we just fall through to exit.
+    if _au.restart_requested():
+        _own_pidfile_cleanup()
+        _log.info("uvicorn stopped; performing main-thread re-exec (auto-update)")
+        _au.perform_restart()

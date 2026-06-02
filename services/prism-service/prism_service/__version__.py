@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.2"
+PRISM_VERSION = "6.3.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.3: Auto-update finally FLIPS the running version (5th recurrence). The "
+    "poller downloaded the wheel + pip-installed it but _DEFER_RESTART=True meant "
+    "nothing ever restarted, so the live daemon served the OLD version forever. "
+    "New request/perform restart SEAM in services/auto_updater.py: after a "
+    "successful apply the DAEMON thread only calls request_restart() (sets a flag "
+    "— NEVER os.execv/execvp, so the #66 silent-death guard stays intact); the "
+    "MAIN thread (main.py, now an explicit uvicorn Config+Server) runs a watcher "
+    "that flips server.should_exit on restart_requested(), drains + closes the "
+    "sockets, then os.execv's `python -m prism_service.main` from the main thread "
+    "via perform_restart() — so the served version flips with no manual step, "
+    "supervisor-agnostic (bare daemon re-execs in place; an external supervisor "
+    "respawns on the clean exit). _DEFER_RESTART now False; restart_auto is "
+    "truthful (= not _DEFER_RESTART = True). Dev-mode/docker/AUTO_UPDATE=off/"
+    "INTERVAL=0 guards preserved. Stale docstrings corrected (api/update.py "
+    "apply() no longer claims 'Linux/Mac self-execs after success'; auto_updater "
+    "module/comment docstrings describe the real main-thread re-exec). Tests: "
+    "tests/integration/test_auto_update_restart_handoff.py (seam + main-thread "
+    "exec + restart_auto) + updated tests/unit/test_auto_updater.py. "
     "v6.3.2: Conductor tiles now show LIVE token effort instead of 0 tok. Two "
     "bugs fixed: (1) phase_progress only read the post-hoc session_outcomes "
     "table, which is empty for an in-progress task — it now also sums "

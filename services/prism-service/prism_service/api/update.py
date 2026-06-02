@@ -34,9 +34,11 @@ def check() -> dict:
 def apply() -> dict:
     """Download the latest wheel and pip-install it. Returns a result
     dict — caller (SPA) checks `ok` to decide whether to prompt for a
-    restart. On Linux/Mac the auto-updater self-execs after success;
-    on Windows it surfaces `restart_required=True` and the user / CLI
-    restarts manually."""
+    restart. On success the apply sets `restart_required=True` and the
+    auto-updater requests a restart that the MAIN thread performs
+    (graceful uvicorn stop, then os.execv) so the served version flips on
+    its own — supervisor-agnostic, no manual step. The result's
+    `restart_auto` reflects whether that automatic restart will fire."""
     result = auto_updater.apply_update()
     if not result.get("ok"):
         # 409 = "not ready / no update / already up to date" — let the
