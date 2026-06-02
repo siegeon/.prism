@@ -12,6 +12,7 @@ import MemoryPage from "@/pages/MemoryPage";
 import MemoryDetailPage from "@/pages/MemoryDetailPage";
 import TasksPage from "@/pages/TasksPage";
 import TaskDetailPage from "@/pages/TaskDetailPage";
+import TaskTextPage from "@/pages/TaskTextPage";
 import ConductorPage from "@/pages/ConductorPage";
 import SessionsPage from "@/pages/SessionsPage";
 import RetrievalsPage from "@/pages/RetrievalsPage";
@@ -47,6 +48,7 @@ export default function App() {
             <Route path="/memory/:id" element={<MemoryDetailPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
+            <Route path="/tasks/:id/:section" element={<TaskTextPage />} />
             <Route path="/conductor" element={<ConductorPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/retrievals" element={<RetrievalsPage />} />

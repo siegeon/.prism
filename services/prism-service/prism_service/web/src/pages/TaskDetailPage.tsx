@@ -142,50 +142,12 @@ function Checkbox({ done, reduced }: { done: boolean; reduced: boolean | null })
   );
 }
 
-// Progressive disclosure for long, receipt-style text (gate validation,
-// completion proof): a one-line summary by default; click ▸ to expand the full
-// text into a bordered, scrollable panel. No walls of raw text inline.
+// Long receipt-style text (gate validation, completion proof) is NOT shown
+// inline or in a collapse — clicking the summary row navigates to a DEDICATED
+// screen (TaskTextPage at /tasks/:id/:section). oneLine builds that summary.
 function oneLine(s: string, n = 96): string {
   const f = s.replace(/\s+/g, " ").trim();
   return f.length > n ? f.slice(0, n) + "…" : f;
-}
-
-function Disclosure({ summary, children, reduced }: { summary: string; children: React.ReactNode; reduced: boolean | null }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 text-left w-full group"
-        title={open ? "collapse" : "expand"}
-      >
-        <span
-          className="text-[color:var(--text-muted)] shrink-0 transition-transform duration-150"
-          style={{ transform: open ? "rotate(90deg)" : "none" }}
-        >
-          ▸
-        </span>
-        <span className="text-[12px] leading-snug opacity-80 group-hover:opacity-100 truncate">
-          {open ? "Hide details" : summary}
-        </span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={reduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
-            animate={reduced ? { opacity: 1 } : { opacity: 1, height: "auto" }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
-            transition={{ duration: reduced ? 0 : DUR.enter, ease: EASE_OUT }}
-            className="overflow-hidden"
-          >
-            <div className="mt-2 text-[12px] leading-relaxed opacity-90 whitespace-pre-wrap rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 max-h-[340px] overflow-y-auto">
-              {children}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
 }
 
 const STATUS_CYCLE: Record<string, string[]> = {
@@ -448,7 +410,13 @@ export default function TaskDetailPage() {
                   : "reason"}
               </div>
               {task.gate_reason
-                ? <Disclosure summary={oneLine(task.gate_reason)} reduced={reduced}>{task.gate_reason}</Disclosure>
+                ? <button
+                    onClick={() => navigate(`/tasks/${id}/validation`, { state: { from: `/tasks/${id}` } })}
+                    className="flex items-center gap-1.5 text-left w-full group"
+                  >
+                    <span className="text-[12px] leading-snug opacity-80 group-hover:opacity-100 truncate">{oneLine(task.gate_reason)}</span>
+                    <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
+                  </button>
                 : <span className="opacity-50">-</span>}
             </div>
           </div>
@@ -503,7 +471,13 @@ export default function TaskDetailPage() {
             <div>
               <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">completion proof</div>
               {task.completion_proof
-                ? <Disclosure summary={oneLine(task.completion_proof)} reduced={reduced}>{task.completion_proof}</Disclosure>
+                ? <button
+                    onClick={() => navigate(`/tasks/${id}/proof`, { state: { from: `/tasks/${id}` } })}
+                    className="flex items-center gap-1.5 text-left w-full group"
+                  >
+                    <span className="leading-relaxed opacity-80 group-hover:opacity-100 truncate">{oneLine(task.completion_proof)}</span>
+                    <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
+                  </button>
                 : <div className="text-amber-300/90 text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
             </div>
           </div>
