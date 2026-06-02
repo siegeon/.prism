@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.0"
+PRISM_VERSION = "6.3.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.1: Clean up /conductor for the animated SDLC tiles. Swimlane rows "
+    "open from py-3 to py-4 and the lane->tile auto-fill grid widens "
+    "(minmax 220px->250px) + opens (gap-2->gap-3) so each tile's embedded "
+    "~2x-height SdlcProgress bar reads uncluttered. TaskTile gains a coherent "
+    "hierarchy: an explicit 'SDLC' SectionLabel on the progress block plus "
+    "click-to-expand progressive disclosure of gate_reason (local expand "
+    "state, not tooltip-only). SdlcProgress current-step fill now tweens "
+    "SMOOTHLY between the 5s polls via useSpring (suppressed when reduced), "
+    "instead of a hard segFill.set jump; reduced stays threaded "
+    "page->TaskTile->SdlcProgress. UI-only. "
     "v6.3.0: Animate conductor tasks + real-time SDLC phase progress. New "
     "web/src/lib/motion.ts motion vocabulary (EASE_OUT/EASE_IN, DUR enter>exit, "
     "SPRING_SNAPPY bounce<0.1, capped 0.04s stagger); board AnimatePresence + "

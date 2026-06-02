@@ -114,7 +114,7 @@ export default function ConductorPage() {
             return (
               <div
                 key={s.id}
-                className="grid grid-cols-[14rem_1fr] gap-4 items-center py-3"
+                className="grid grid-cols-[14rem_1fr] gap-4 items-center py-4"
               >
                 <div className="flex items-center gap-2">
                   <span
@@ -135,7 +135,7 @@ export default function ConductorPage() {
                   {tasksHere.length === 0 ? (
                     <span className="text-[11px] opacity-30 italic">empty</span>
                   ) : (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
                       {tasksHere.map((t) => (
                         <TaskTile key={t.id} task={t} reduced={reduced} onClick={() =>
                           navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -181,12 +181,17 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
   const shortId = task.id.slice(0, 8);
   const owner = task.assigned_agent || "unassigned";
   const tags = (task.tags ?? []).slice(0, 3);
-  const title = `${task.title}\nid: ${task.id}${showGate ? `\ngate: ${gateLabel(gate as any)}${task.gate_reason ? "\n" + task.gate_reason : ""}` : ""}`;
+  const gateReason = task.gate_reason?.trim() || "";
+  const [showReason, setShowReason] = useState(false);
+  const title = `${task.title}\nid: ${task.id}`;
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
       title={title}
-      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors"
+      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors cursor-pointer"
     >
       <div className="text-[13px] leading-snug font-medium line-clamp-2 text-[color:var(--text-primary)]">
         {task.title}
@@ -197,6 +202,22 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
           <TileBadge tone={gateTone}>{gateLabel(gate as any)}</TileBadge>
         )}
       </div>
+      {gateReason && (
+        <div className="text-[11px] text-[color:var(--text-muted)]">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }}
+            className="font-mono uppercase tracking-wider text-[10px] opacity-70 hover:opacity-100 transition-opacity"
+          >
+            {showReason ? "▾" : "▸"} gate reason
+          </button>
+          {showReason && (
+            <p className="mt-1 leading-snug text-[color:var(--text-secondary)] whitespace-pre-wrap break-words">
+              {gateReason}
+            </p>
+          )}
+        </div>
+      )}
       <div className="text-[11px] font-mono text-[color:var(--text-muted)]">
         p{priority} · {age} · id {shortId}
       </div>
@@ -216,11 +237,14 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
         </div>
       )}
       {/* Real-time SDLC phase progress — bar fills the current step from the
-          server phase_progress estimate (time / children / token effort). */}
-      <div className="mt-2 pt-2.5 border-t border-[color:var(--border-default)]/60">
+          server phase_progress estimate (time / children / token effort).
+          Its own labelled section so the progress reads at a glance instead of
+          competing with the meta/owner lines above it. */}
+      <div className="mt-auto pt-2.5 border-t border-[color:var(--border-default)]/60 flex flex-col gap-1.5">
+        <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">SDLC</span>
         <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} />
       </div>
-    </button>
+    </div>
   );
 }
 
