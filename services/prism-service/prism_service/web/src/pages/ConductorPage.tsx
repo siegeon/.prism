@@ -9,6 +9,7 @@ import {
 import { relativeTime } from "@/lib/relativeTime";
 import { useReducedMotion } from "motion/react";
 import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import TokenTurns from "@/components/conductor/TokenTurns";
 
 type ManagedTask = {
   id: string;
@@ -140,7 +141,7 @@ export default function ConductorPage() {
                   {tasksHere.length === 0 ? (
                     <span className="text-[11px] opacity-30 italic">empty</span>
                   ) : (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-3">
                       {tasksHere.map((t) => (
                         <TaskTile key={t.id} task={t} reduced={reduced} onClick={() =>
                           navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -198,6 +199,7 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
       title={title}
       className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors cursor-pointer"
     >
+      {/* Header — title + status/gate, full width above the split. */}
       <div className="text-[13px] leading-snug font-medium line-clamp-2 text-[color:var(--text-primary)]">
         {task.title}
       </div>
@@ -223,31 +225,47 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
           )}
         </div>
       )}
-      <div className="text-[11px] font-mono text-[color:var(--text-muted)]">
-        p{priority} · {age} · id {shortId}
-      </div>
-      <div className="text-[11px] text-[color:var(--text-muted)]">
-        owner: <span className="text-[color:var(--text-secondary)]">{owner}</span>
-      </div>
-      {tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-0.5">
-          {tags.map((tag) => (
-            <span
-              key={tag}
-              className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)]"
-            >
-              {tag}
-            </span>
-          ))}
+
+      {/* Two-column body: identity/meta + SDLC phase on the LEFT, the live
+          per-turn burn graph on the RIGHT. The graph is the only token surface
+          on the tile (rate), the left is the only meta surface — no overlap. */}
+      <div className="mt-1 grid grid-cols-[1fr_44%] gap-3 items-stretch">
+        <div className="flex flex-col gap-1.5 min-w-0">
+          <div className="text-[11px] font-mono text-[color:var(--text-muted)] truncate">
+            p{priority} · {age} · id {shortId}
+          </div>
+          <div className="text-[11px] text-[color:var(--text-muted)] truncate">
+            owner: <span className="text-[color:var(--text-secondary)]">{owner}</span>
+          </div>
+          {tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)]"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+          {/* Real-time SDLC phase progress — bar fills the current step from the
+              server phase_progress estimate. hideTokens: the graph owns token
+              info, so the caption drops its tok readout (no duplication). */}
+          <div className="mt-auto pt-2 border-t border-[color:var(--border-default)]/60 flex flex-col gap-1.5">
+            <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">SDLC</span>
+            <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} hideTokens />
+          </div>
         </div>
-      )}
-      {/* Real-time SDLC phase progress — bar fills the current step from the
-          server phase_progress estimate (time / children / token effort).
-          Its own labelled section so the progress reads at a glance instead of
-          competing with the meta/owner lines above it. */}
-      <div className="mt-auto pt-2.5 border-t border-[color:var(--border-default)]/60 flex flex-col gap-1.5">
-        <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">SDLC</span>
-        <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} />
+
+        <div className="border-l border-[color:var(--border-default)]/60 pl-3">
+          <TokenTurns
+            turns={task.phase_progress?.token_turns}
+            total={task.phase_progress?.turns}
+            live={status === "in_progress"}
+            reduced={reduced}
+          />
+        </div>
       </div>
     </div>
   );

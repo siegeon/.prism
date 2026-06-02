@@ -1,0 +1,101 @@
+// Live per-turn token BURN-RATE graph for the conductor tile (the "work
+// getting done" panel). One bar per recent assistant turn, height ∝ that
+// turn's tok/s; the array is the live tail off the on-disk transcript, so the
+// bars FLOW right as new turns land on each 5s poll. Deliberately the ONLY
+// place token effort is shown on the tile — the cumulative number lives
+// nowhere else on the card, so the graph (rate) and nothing else (no integral
+// readout) means zero duplication.
+import { motion } from "motion/react";
+import type { TokenTurn } from "./SdlcProgress";
+
+function fmtRate(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${Math.round(n)}`;
+}
+
+export default function TokenTurns({
+  turns,
+  total,
+  live,
+  reduced,
+}: {
+  turns?: TokenTurn[];
+  total?: number;
+  live?: boolean;
+  reduced?: boolean | null;
+}) {
+  const series = turns ?? [];
+  const count = total ?? series.length;
+  const peak = series.reduce((m, t) => Math.max(m, t.tok_s), 0) || 1;
+  const latest = series.length ? series[series.length - 1] : null;
+
+  return (
+    <div className="flex flex-col gap-1.5 h-full">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">
+          burn · tok/s by turn
+        </span>
+        <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums text-[color:var(--text-muted)]">
+          {live && (
+            <motion.span
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{ background: "var(--accent-amber-fg)" }}
+              animate={!reduced ? { opacity: [1, 0.25, 1] } : { opacity: 1 }}
+              transition={!reduced ? { duration: 1.1, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+            />
+          )}
+          <span className="text-[color:var(--text-secondary)]">{count}</span> turns
+        </span>
+      </div>
+
+      {/* Bar field — flex row, newest on the right. Each bar tweens its height
+          between polls so the field flows as the live tail advances. */}
+      <div className="relative flex-1 min-h-[56px] flex items-end gap-[2px] rounded bg-[color:var(--surface-2)]/40 px-1.5 pt-1.5 pb-1 overflow-hidden">
+        {series.length === 0 ? (
+          <span className="absolute inset-0 grid place-items-center text-[10px] font-mono opacity-30 italic">
+            awaiting first turn…
+          </span>
+        ) : (
+          series.map((t, i) => {
+            const isLast = i === series.length - 1;
+            const h = Math.max(0.06, t.tok_s / peak);
+            return (
+              <motion.div
+                key={i}
+                className="flex-1 min-w-[2px] rounded-t-sm"
+                style={{
+                  transformOrigin: "bottom",
+                  background: isLast ? "var(--accent-amber-fg)" : "var(--accent-amber-bg)",
+                  boxShadow: isLast ? "0 0 6px var(--accent-amber-fg)" : "inset 0 0 0 1px var(--accent-amber-ring)",
+                  opacity: isLast ? 1 : 0.55 + 0.4 * (i / series.length),
+                }}
+                title={`${fmtRate(t.tok_s)} tok/s · ${t.out} tok / ${t.dt_s}s`}
+                initial={false}
+                animate={{ height: `${h * 100}%` }}
+                transition={{ duration: reduced ? 0 : 0.4, ease: [0.16, 1, 0.3, 1] }}
+              />
+            );
+          })
+        )}
+        {/* live pulse glow over the newest bar while the task is being worked */}
+        {!reduced && live && latest && (
+          <motion.span
+            className="pointer-events-none absolute bottom-1 right-1.5 h-1 w-1 rounded-full"
+            style={{ background: "var(--accent-amber-fg)" }}
+            animate={{ opacity: [0.9, 0.2, 0.9], scale: [1, 1.6, 1] }}
+            transition={{ duration: 1.3, repeat: Infinity, ease: "easeInOut" }}
+          />
+        )}
+      </div>
+
+      {/* Single rate readout — the live (latest-turn) burn + the window peak.
+          The ONLY numeric token figures on the tile. */}
+      <div className="flex items-baseline justify-between text-[10px] font-mono tabular-nums text-[color:var(--text-muted)]">
+        <span>
+          <span className="text-[color:var(--accent-amber-fg)]">{latest ? fmtRate(latest.tok_s) : "—"}</span> tok/s now
+        </span>
+        <span className="opacity-60">peak {fmtRate(peak)}</span>
+      </div>
+    </div>
+  );
+}

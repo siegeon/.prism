@@ -769,6 +769,31 @@ def live_token_events_for_session(
     return out
 
 
+def live_token_turns_for_session(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+    limit: int = 40,
+) -> list[dict]:
+    """Recent per-turn burn-RATE series for the conductor tile's live graph.
+    Thin wrapper over live_token_events_for_session: takes the merged, sorted
+    (epoch, output_tokens) timeline, keeps the last `limit` turns, and derives
+    {out, dt_s, tok_s} per turn where dt_s is wall-clock since the previous
+    turn and tok_s = out / dt_s. Idle gaps > 600s and clock skew clamp to a 1s
+    window so a long pause never reads as a phantom rate spike. [] when none."""
+    raw = live_token_events_for_session(session_id, project_path, claude_home)
+    if not raw:
+        return []
+    raw = raw[-limit:]
+    out: list[dict] = []
+    prev_ts = raw[0][0]
+    for ts, tok in raw:
+        dt = ts - prev_ts
+        if dt <= 0 or dt > 600:
+            dt = 1.0
+        prev_ts = ts
+        out.append({"out": tok, "dt_s": round(dt, 2), "tok_s": round(tok / dt, 1)})
+    return out
+
+
 def current_session_id(
     project_path: str, claude_home: Path | None = None,
 ) -> str:

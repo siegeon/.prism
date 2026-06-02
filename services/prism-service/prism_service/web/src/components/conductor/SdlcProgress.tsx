@@ -12,6 +12,8 @@ import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/
 import { useSpring } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
 
+export type TokenTurn = { out: number; dt_s: number; tok_s: number };
+
 export type PhaseProgress = {
   pct?: number;
   basis?: string;
@@ -20,6 +22,10 @@ export type PhaseProgress = {
   children_done?: number;
   children_total?: number;
   tokens_since_step?: number;
+  // Per-turn burn series (oldest..newest) + honest total turn count — drives
+  // the live TokenTurns graph beside each conductor tile.
+  token_turns?: TokenTurn[];
+  turns?: number;
 };
 
 function fmtTokens(t: number): string {
@@ -56,12 +62,16 @@ export default function SdlcProgress({
   status,
   reduced,
   showCaption = true,
+  hideTokens = false,
 }: {
   step?: string;
   phase?: PhaseProgress | null;
   status?: string;
   reduced?: boolean | null;
   showCaption?: boolean;
+  // When the tile renders a dedicated TokenTurns graph, suppress the caption's
+  // token readout + the amber token bar so token info isn't duplicated.
+  hideTokens?: boolean;
 }) {
   const steps = WORKFLOW_STEPS_ORDERED;
   const curIdx = steps.findIndex((s) => s.id === step);
@@ -175,11 +185,11 @@ export default function SdlcProgress({
                 transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
               <span>{fmtClock(liveInStep)}</span>
-              <span className="opacity-70">· {fmtTokens(tokens)} tok</span>
+              {!hideTokens && <span className="opacity-70">· {fmtTokens(tokens)} tok</span>}
               {meta.label && <span style={{ color: `var(--accent-${meta.tone}-fg)` }}>· {meta.label}</span>}
             </span>
           </div>
-          {tokens > 0 && (
+          {!hideTokens && tokens > 0 && (
             <div className="mt-0.5 h-[2px] w-full rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
               <motion.div
                 className="h-full rounded-full"
