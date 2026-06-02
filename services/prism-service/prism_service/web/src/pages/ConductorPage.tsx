@@ -103,13 +103,15 @@ export default function ConductorPage() {
       <Card>
         <SectionLabel>SDLC swimlanes</SectionLabel>
         <p className="text-[11px] opacity-60 mt-1 mb-3">
-          Conductor forces opt-in tasks through these 8 steps top-to-bottom. Tasks worked
-          without conductor (status flips only) don't appear here. Click a task pill to open it.
+          A workflow-claimed task lands in <b>Intake</b> the moment it's picked up, then conductor
+          forces it through the 8 SDLC steps top-to-bottom. Tasks worked without conductor
+          (status flips only) don't appear here. Click a task pill to open it.
         </p>
         <div className="divide-y divide-[color:var(--midground-base)]/10">
           {WORKFLOW_STEPS_ORDERED.map((s) => {
             const isGate = s.type === "gate";
-            const laneTone = isGate ? "slate" : (PERSONA_TONE[s.persona] ?? "slate");
+            const isIntake = s.type === "intake";
+            const laneTone = isIntake ? "violet" : isGate ? "slate" : (PERSONA_TONE[s.persona] ?? "slate");
             const tasksHere = tasksByStep[s.id] ?? [];
             return (
               <div
@@ -125,9 +127,12 @@ export default function ConductorPage() {
                       boxShadow: `inset 0 0 0 1px var(--accent-${laneTone}-ring)`,
                     }}
                   >
-                    {isGate ? `🚪 ${stepLabel(s.id)}` : stepLabel(s.id)}
+                    {isGate ? `🚪 ${stepLabel(s.id)}` : isIntake ? "⏳ intake" : stepLabel(s.id)}
                   </span>
-                  {!isGate && (
+                  {isIntake && (
+                    <span className="text-[10px] uppercase opacity-50 font-mono">claimed</span>
+                  )}
+                  {!isGate && !isIntake && (
                     <span className="text-[10px] uppercase opacity-50 font-mono">{s.persona}</span>
                   )}
                 </div>

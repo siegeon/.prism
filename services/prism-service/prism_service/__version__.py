@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.7"
+PRISM_VERSION = "6.3.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.8: /conductor 'Intake' swimlane — a workflow-claimed task (status "
+    "in_progress, workflow_step='') now shows in a new leading violet Intake "
+    "lane the MOMENT it's picked up, instead of being invisible until its first "
+    "conductor_advance (the recurring 'I don't see it being worked in conductor' "
+    "gap). conductor_service.managed_tasks()/step_buckets() surface in_progress "
+    "+ empty-step tasks as synthetic step INTAKE_STEP='intake' (pending backlog "
+    "+ done stay hidden); DISPLAY-ONLY — the WORKFLOW_STEPS advance/gate state "
+    "machine is untouched, the first conductor_advance moves the task out of "
+    "Intake into review_previous_notes. ConductorPage + workflowChips prepend "
+    "the intake lane (SdlcProgress renders it as segment 0). "
     "v6.3.7: Phase 2 of epic 4fd1e6b4 — wire the THREE real emitters onto the "
     "Phase-1 learning bus (services/event_pool.py get_bus()), timers still "
     "dual-running. (1) memory_store (mcp/tools.py) emits MEMORY_WRITTEN after "

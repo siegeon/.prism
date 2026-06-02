@@ -5,6 +5,7 @@
 
 export type WorkflowStep =
   | ""
+  | "intake"
   | "review_previous_notes"
   | "draft_story"
   | "verify_plan"
@@ -17,6 +18,7 @@ export type WorkflowStep =
 export type GateState = "none" | "pending" | "passed" | "failed";
 
 const STEP_TONE: Record<string, string> = {
+  intake: "violet",
   review_previous_notes: "teal",
   draft_story: "teal",
   verify_plan: "teal",
@@ -70,7 +72,8 @@ export function conductorEngaged(
   return Boolean((step && step !== "") || (gate && gate !== "none"));
 }
 
-export const WORKFLOW_STEPS_ORDERED: { id: string; persona: string; type: "agent" | "gate" }[] = [
+export const WORKFLOW_STEPS_ORDERED: { id: string; persona: string; type: "agent" | "gate" | "intake" }[] = [
+  { id: "intake", persona: "", type: "intake" },
   { id: "review_previous_notes", persona: "sm", type: "agent" },
   { id: "draft_story", persona: "sm", type: "agent" },
   { id: "verify_plan", persona: "sm", type: "agent" },
