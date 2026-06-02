@@ -42,16 +42,23 @@ from typing import Callable, Optional
 
 # --- Event types -----------------------------------------------------------
 # The three events the learning pipeline migrates onto in Phases 2-3.
+# Pinned as MODULE-LEVEL constants — the oracle imports ep.SESSION_IMPORTED
+# etc. directly; EventType is kept as a thin namespaced alias.
+SESSION_IMPORTED = "session.imported"
+MEMORY_WRITTEN = "memory.written"
+MEMORY_RECALLED_OUTCOME = "memory.recalled+outcome"
+
+
 class EventType:
-    SESSION_IMPORTED = "session.imported"
-    MEMORY_WRITTEN = "memory.written"
-    MEMORY_RECALLED_OUTCOME = "memory.recalled+outcome"
+    SESSION_IMPORTED = SESSION_IMPORTED
+    MEMORY_WRITTEN = MEMORY_WRITTEN
+    MEMORY_RECALLED_OUTCOME = MEMORY_RECALLED_OUTCOME
 
 
 ALL_EVENT_TYPES = (
-    EventType.SESSION_IMPORTED,
-    EventType.MEMORY_WRITTEN,
-    EventType.MEMORY_RECALLED_OUTCOME,
+    SESSION_IMPORTED,
+    MEMORY_WRITTEN,
+    MEMORY_RECALLED_OUTCOME,
 )
 
 
@@ -157,15 +164,31 @@ class EventBus:
     def __init__(self) -> None:
         self._q: "queue.Queue[Event]" = queue.Queue()
         self._handlers: dict[str, list[Handler]] = {}
+        # Event types carrying at least one inference (claude -p) handler.
+        # The budget governor only charges these; non-inference dispatch is
+        # free and never circuit-broken.
+        self._inference_types: set[str] = set()
         self._lock = threading.Lock()
 
-    def register(self, event_type: str, handler: Handler) -> None:
+    def register_handler(
+        self, event_type: str, handler: Handler, inference: bool = False
+    ) -> None:
+        """Register a handler. `inference=True` marks it as one that shells
+        `claude -p`, so the pool's budget governor accounts for it (and
+        circuit-breaks when over budget)."""
         with self._lock:
             self._handlers.setdefault(event_type, []).append(handler)
+            if inference:
+                self._inference_types.add(event_type)
 
     def handlers_for(self, event_type: str) -> list[Handler]:
         with self._lock:
             return list(self._handlers.get(event_type, ()))
+
+    def is_inference(self, event_type: str) -> bool:
+        """Whether dispatching this event type would shell `claude -p`."""
+        with self._lock:
+            return event_type in self._inference_types
 
     def emit(self, event: Event) -> None:
         """Enqueue and return at once. Backpressure-free by contract."""
@@ -185,7 +208,8 @@ class EventBus:
         except queue.Empty:
             return None
 
-    def qsize(self) -> int:
+    def queue_depth(self) -> int:
+        """Number of events waiting on the bus (pinned oracle name)."""
         return self._q.qsize()
 
 
@@ -210,19 +234,17 @@ def _noop_handler(event: Event) -> None:  # pragma: no cover - trivial
     return None
 
 
+def default_registry() -> dict[str, list[Handler]]:
+    """The Phase-1 default handler map: one wrap/no-op handler per event
+    type. Exposed so callers register the same no-op surface and Phase 3
+    has a single place to swap in the real migrated handlers."""
+    return {et: [_noop_handler] for et in ALL_EVENT_TYPES}
+
+
 def _register_default_handlers(bus: EventBus) -> None:
-    for et in ALL_EVENT_TYPES:
-        bus.register(et, _noop_handler)
-
-
-def _requires_inference(event: Event) -> bool:
-    """Whether dispatching this event would shell `claude -p`.
-
-    Phase 1 treats EVERY registered event as inference-bearing for the
-    governor's accounting (handlers are no-op, so the charge is
-    synthetic) — this is what the circuit-break test exercises. Phase
-    2-3 will refine this to the real per-handler cost."""
-    return event.type in ALL_EVENT_TYPES
+    for et, handlers in default_registry().items():
+        for h in handlers:
+            bus.register_handler(et, h)
 
 
 _LOG_PREFIX = "[event_pool]"
@@ -248,86 +270,133 @@ class ConsumerPool:
         bus: EventBus,
         *,
         max_concurrency: Optional[int] = None,
-        budget: Optional[int] = None,
+        per_interval_call_budget: Optional[int] = None,
     ) -> None:
         self._bus = bus
         cap = max_concurrency if max_concurrency is not None else _max_concurrency()
         self._sem = threading.Semaphore(cap)
         self._cap = cap
         self.governor = BudgetGovernor(
-            budget if budget is not None else _budget_per_interval()
+            per_interval_call_budget
+            if per_interval_call_budget is not None
+            else _budget_per_interval()
         )
+        self._stop = threading.Event()
+        self._drain_thread: Optional[threading.Thread] = None
 
-    def _dispatch(self, event: Event) -> None:
-        """Run every handler for the event under the concurrency cap.
+    def _run_handlers(self, event: Event) -> None:
+        """Run every handler for the event; a handler exception is logged
+        but never crashes the pool."""
+        for handler in self._bus.handlers_for(event.type):
+            try:
+                handler(event)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"handler {event.type} raised: {exc}")
 
-        The Semaphore bounds how many handlers shell inference at once;
-        a handler exception is logged but never crashes the pool."""
-        with self._sem:
-            for handler in self._bus.handlers_for(event.type):
+    # -- continuous (live daemon) mode -------------------------------------
+    def start_draining(self) -> None:
+        """Spin a background thread that claims + dispatches continuously,
+        each dispatch bounded by the concurrency cap. emit() stays
+        backpressure-free because handlers run here, off the caller."""
+        if self._drain_thread is not None:
+            return
+        self._stop.clear()
+        self._drain_thread = threading.Thread(
+            target=self._drain_loop, name="prism-event-pool-drain", daemon=True
+        )
+        self._drain_thread.start()
+
+    def stop_draining(self) -> None:
+        self._stop.set()
+        t = self._drain_thread
+        if t is not None:
+            t.join(timeout=2.0)
+        self._drain_thread = None
+
+    def _drain_loop(self) -> None:
+        while not self._stop.is_set():
+            if not self._sem.acquire(timeout=0.05):
+                continue
+            event = self._bus.claim_one()
+            if event is None:
+                # Queue drained — refresh the budget so the next burst gets a
+                # full allowance, then idle briefly.
+                self.governor.reset()
+                self._sem.release()
+                time.sleep(0.01)
+                continue
+            if self._bus.is_inference(event.type) and not self.governor.try_charge():
+                # CIRCUIT-BREAK: defer for the maintenance clock to batch.
+                self._bus.requeue(event)
+                self._sem.release()
+                time.sleep(0.01)
+                continue
+
+            def _work(ev: Event = event) -> None:
                 try:
-                    handler(event)
-                except Exception as exc:  # noqa: BLE001
-                    _log(f"handler {event.type} raised: {exc}")
+                    self._run_handlers(ev)
+                finally:
+                    self._sem.release()
 
-    def _tick(self) -> int:
-        """Claim ONE event and dispatch it, honoring the budget.
+            threading.Thread(
+                target=_work, name="prism-event-dispatch", daemon=True
+            ).start()
 
-        Returns 1 if an event was dispatched, 0 if the queue was empty
-        or the item was circuit-broken (re-queued). One-per-tick mirrors
-        understand_drainer._MAX_JOBS_PER_PROJECT_PER_TICK=1."""
-        event = self._bus.claim_one()
-        if event is None:
-            return 0
-        if _requires_inference(event) and not self.governor.try_charge():
-            # CIRCUIT-BREAK: over budget for this interval. Re-queue for
-            # the maintenance clock to batch later — never shell `claude
-            # -p` in real time, never drop the item.
-            self._bus.requeue(event)
-            return 0
-        self._dispatch(event)
-        return 1
-
-    def drain_tick(self, max_events: int = 1) -> int:
-        """Drain up to `max_events` claims this sweep. Default 1 keeps the
-        claim-one-per-tick shape; the loop calls it once per interval."""
-        ran = 0
-        for _ in range(max_events):
-            if self._tick() == 0:
+    # -- one-shot (maintenance clock) mode ---------------------------------
+    def drain_once(self) -> list[Event]:
+        """Synchronously drain the events queued right now. Returns the list
+        of items CIRCUIT-BROKEN (deferred) because the per-interval budget
+        was exhausted — deferred items are re-queued, never dropped."""
+        deferred: list[Event] = []
+        for _ in range(self._bus.queue_depth()):
+            event = self._bus.claim_one()
+            if event is None:
                 break
-            ran += 1
-        return ran
+            if self._bus.is_inference(event.type) and not self.governor.try_charge():
+                self._bus.requeue(event)
+                deferred.append(event)
+                continue
+            self._run_handlers(event)
+        return deferred
 
 
 # --- daemon lifecycle ------------------------------------------------------
-def _loop(pool: ConsumerPool, interval: int) -> None:
-    """Reset the per-interval budget, sweep the queue, sleep. The budget
-    resets at the TOP of each interval so deferred items get a fresh
-    allowance on the next tick — that's the maintenance-clock batching."""
+def _drain_tick(pool: ConsumerPool) -> list[Event]:
+    """One maintenance-clock tick: reset the per-interval budget, then
+    synchronously drain the queue. Budget resets at the TOP of each tick so
+    deferred items get a fresh allowance — that's the batching. Module-level
+    so the lifecycle test can monkeypatch it."""
+    pool.governor.reset()
+    return pool.drain_once()
+
+
+def _loop(pool: ConsumerPool, interval: int, initial_delay: int = 0) -> None:
+    if initial_delay > 0:
+        time.sleep(initial_delay)
     _log(f"started; interval={interval}s cap={pool._cap}")
     while True:
         try:
-            pool.governor.reset()
-            # Drain more than one per sweep so a fresh budget actually
-            # works through any deferred backlog this interval.
-            pool.drain_tick(max_events=pool._cap)
+            _drain_tick(pool)
         except Exception as exc:  # noqa: BLE001
             _log(f"sweep failed: {exc}")
         time.sleep(interval)
 
 
-def start_event_pool() -> Optional[threading.Thread]:
-    """Daemon-thread entrypoint, mirroring start_reflection_worker.
+def start_event_pool(
+    interval_s: Optional[int] = None, initial_delay_s: int = 0
+) -> Optional[threading.Thread]:
+    """Daemon-thread entrypoint, mirroring start_understand_drainer.
 
-    Returns the thread, or None when disabled via
-    PRISM_EVENT_POOL_INTERVAL=0. Registered in main.py lifespan."""
-    interval = _interval_s()
+    `interval_s` defaults to PRISM_EVENT_POOL_INTERVAL (env); pass 0 to
+    disable (short-circuits before any drain). `initial_delay_s` staggers
+    startup like the other workers. Registered in main.py lifespan."""
+    interval = _interval_s() if interval_s is None else interval_s
     if interval <= 0:
         _log("disabled (PRISM_EVENT_POOL_INTERVAL=0)")
         return None
     pool = ConsumerPool(get_bus())
     t = threading.Thread(
-        target=_loop, args=(pool, interval),
+        target=_loop, args=(pool, interval, initial_delay_s),
         name="prism-event-pool", daemon=True,
     )
     t.start()
