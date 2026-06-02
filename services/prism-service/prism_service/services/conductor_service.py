@@ -1521,6 +1521,24 @@ class ConductorService:
     # snapping at each advance.
     _TYPICAL_S_FALLBACK = 900.0  # 15 min — positive default when no history
 
+    def _project_source_path(self) -> str:
+        """Resolve this project's source tree from the scores.db location
+        (.../projects/<project_id>/scores.db) so phase_progress can read the
+        live transcript on disk. Cached; '' when not in folder mode."""
+        cached = getattr(self, "_src_path_cache", None)
+        if cached is not None:
+            return cached
+        src = ""
+        try:
+            from pathlib import Path
+            from prism_service.services.claude_transcripts import _project_source_path
+            project_id = Path(self._scores_db).parent.name
+            src = _project_source_path(project_id) or ""
+        except Exception:
+            src = ""
+        self._src_path_cache = src
+        return src
+
     @staticmethod
     def _parse_iso(ts: str) -> Optional[float]:
         """ISO-8601 timestamp -> epoch seconds; None if unparseable."""
@@ -1618,16 +1636,31 @@ class ConductorService:
             pct = min(0.95, ratio)
             basis = "time"
 
-        # Real token effort: sum tokens across the sessions linked to this task
-        # (the importer populates sessions.tokens_used). Per-message timestamps
-        # aren't imported, so this is task-TOTAL spend, not a per-step slice —
-        # but it's a real, growing number the bar surfaces as "N tok".
+        # Real token effort, summed across the sessions linked to this task.
+        # session_outcomes.tokens_used is only written once a session is
+        # imported (post-hoc), so an IN-PROGRESS task reads 0 there — we also
+        # read the LIVE transcript on disk and take the larger of the two, so
+        # a running session ("seeing ourselves") shows a real, growing number.
         tokens = 0
         if self._task_svc is not None:
             try:
+                source_path = self._project_source_path()
+                live_fn = None
+                if source_path:
+                    from prism_service.services.claude_transcripts import (
+                        live_tokens_for_session as live_fn,
+                    )
                 for s in self._task_svc.sessions_for_task(task_id):
+                    sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
-                    tokens += int(used or 0)
+                    outcome_tok = int(used or 0)
+                    live_tok = 0
+                    if live_fn and sid:
+                        try:
+                            live_tok = int(live_fn(sid, source_path) or 0)
+                        except Exception:
+                            live_tok = 0
+                    tokens += max(outcome_tok, live_tok)
             except Exception:
                 tokens = 0
 

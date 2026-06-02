@@ -572,3 +572,115 @@ def _project_source_path(project_id: str) -> str:
         return (state.get("source_path") or "").strip()
     except Exception:
         return ""
+
+
+# ---------------------------------------------------------------------------
+# LIVE token read (conductor SDLC bar). The post-hoc `session_outcomes` table
+# is only written when the importer sees a session — so an IN-PROGRESS task
+# always reads 0 tok there. These helpers sum `output_tokens` straight off the
+# transcript JSONL on disk, in real time, including the workflow-subagent
+# transcripts filed under <slug>/<session-uuid>/ (they carry the parent
+# sessionId, so their spend belongs to the same session). Keyed by (mtime,size)
+# so the 5s conductor poll never re-reads an unchanged multi-MB transcript.
+# ---------------------------------------------------------------------------
+
+# path -> (mtime, size, output_tokens)
+_TOKEN_CACHE: dict[str, tuple[float, int, int]] = {}
+
+
+def _sum_output_tokens(path: Path) -> int:
+    """Sum assistant `output_tokens` across one transcript JSONL. Cached on
+    (mtime, size) so unchanged files cost nothing on repeat polls."""
+    try:
+        st = path.stat()
+    except OSError:
+        return 0
+    key = str(path)
+    cached = _TOKEN_CACHE.get(key)
+    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return cached[2]
+    total = 0
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            usage = (evt.get("message") or {}).get("usage") or {}
+            if usage:
+                total += int(usage.get("output_tokens") or 0)
+    except OSError:
+        return cached[2] if cached else 0
+    _TOKEN_CACHE[key] = (st.st_mtime, st.st_size, total)
+    return total
+
+
+def _session_id_of(path: Path) -> str:
+    """Read just the first `sessionId` from a transcript, '' if none."""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            sid = evt.get("sessionId") or evt.get("session_id")
+            if sid:
+                return str(sid)
+    except OSError:
+        pass
+    return ""
+
+
+def live_tokens_for_session(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+) -> int:
+    """Sum live `output_tokens` for `session_id` across its on-disk transcript
+    AND any workflow-subagent transcripts nested under <slug>/<session_id>/.
+    Returns 0 when nothing is found (caller falls back to session_outcomes)."""
+    if not session_id or not project_path:
+        return 0
+    claude_home = claude_home or resolve_claude_home()
+    projects_dir = claude_home / "projects"
+    if not projects_dir.is_dir():
+        return 0
+    total = 0
+    seen: set[Path] = set()
+    for sub in projects_dir.iterdir():
+        if not sub.is_dir() or not slug_matches(sub.name, project_path):
+            continue
+        main = sub / f"{session_id}.jsonl"
+        if main.is_file() and main not in seen:
+            total += _sum_output_tokens(main)
+            seen.add(main)
+        # Subagent transcripts (workflow agents) live under the session dir
+        # and carry the parent sessionId — their spend is part of this session.
+        sess_dir = sub / session_id
+        if sess_dir.is_dir():
+            for f in sess_dir.rglob("*.jsonl"):
+                if f not in seen:
+                    total += _sum_output_tokens(f)
+                    seen.add(f)
+    return total
+
+
+def current_session_id(
+    project_path: str, claude_home: Path | None = None,
+) -> str:
+    """Best-effort id of the project's ACTIVE Claude session — the sessionId
+    of the most-recently-modified matching transcript. Used as the conductor
+    link fallback so we stamp a REAL, resolvable session instead of the MCP
+    request handle (which maps to no transcript and no token data)."""
+    if not project_path:
+        return ""
+    claude_home = claude_home or resolve_claude_home()
+    paths = transcripts_for(claude_home, project_path)
+    if not paths:
+        return ""
+    newest = max(paths, key=lambda p: p.stat().st_mtime)
+    return _session_id_of(newest) or newest.stem

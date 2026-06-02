@@ -7,6 +7,9 @@
 // task is actively in progress. Completed steps solid (emerald); future muted.
 import { useEffect, useRef, useState } from "react";
 import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/react";
+// useSpring tweens the current-step fill between 5s polls; its config keys off
+// `reduced` so prefers-reduced-motion collapses the tween (see segSpring below).
+import { useSpring } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
 
 export type PhaseProgress = {
@@ -77,8 +80,15 @@ export default function SdlcProgress({
   const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
   const [liveInStep, setLiveInStep] = useState(phase?.in_step_s ?? 0);
   // current-SEGMENT fill (within the active step) drives just that segment.
+  // The animation frame writes the raw live fraction to `segFill`; a spring
+  // tweens the DISPLAYED value smoothly between the 5s poll snapshots instead
+  // of hard-jumping. Under prefers-reduced-motion the spring collapses to a
+  // stiff, damping-pinned pass-through so the bar tracks without easing.
   const segFill = useMotionValue(seed);
-  const segWidth = useTransform(segFill, (v) => `${(v * 100).toFixed(3)}%`);
+  const segSpring = useSpring(segFill, reduced
+    ? { stiffness: 1000, damping: 100, restDelta: 0.001 }
+    : { stiffness: 90, damping: 22, restDelta: 0.0005 });
+  const segWidth = useTransform(segSpring, (v) => `${(Math.max(0, Math.min(1, v)) * 100).toFixed(3)}%`);
 
   const anchor = useRef({ t0: 0 });
   useEffect(() => {

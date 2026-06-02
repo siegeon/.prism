@@ -155,6 +155,11 @@ def test_index_css_appends_prefers_reduced_motion_reset_after_line_110():
 # ---------------------------------------------------------------------------
 
 def test_prism_version_bumped_to_6_3_0():
+    # The animation feature shipped AT 6.3.0; assert a floor (>= 6.3.0) rather
+    # than exact equality so later patch bumps (e.g. the 6.3.1 /conductor
+    # cleanup) don't regress this guard. Exact-version `==` asserts are an
+    # anti-pattern — they break on every legitimate patch.
     from prism_service.__version__ import PRISM_VERSION
-    assert PRISM_VERSION == "6.3.0", \
-        "PRISM_VERSION must be bumped to 6.3.0 for the conductor-animation feature"
+    parts = tuple(int(x) for x in PRISM_VERSION.split("."))
+    assert parts >= (6, 3, 0), \
+        "PRISM_VERSION must be >= 6.3.0 for the conductor-animation feature"

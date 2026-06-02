@@ -13,10 +13,32 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.0"
+PRISM_VERSION = "6.3.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.2: Conductor tiles now show LIVE token effort instead of 0 tok. Two "
+    "bugs fixed: (1) phase_progress only read the post-hoc session_outcomes "
+    "table, which is empty for an in-progress task — it now also sums "
+    "output_tokens straight off the on-disk transcript JSONL (parent + nested "
+    "workflow-subagent transcripts) and takes the max, so a running session "
+    "shows a real, growing number. New claude_transcripts.live_tokens_for_session "
+    "(mtime/size cached so the 5s poll never re-reads unchanged transcripts) + "
+    "current_session_id. (2) conductor_advance/conductor_gate fell back to the "
+    "MCP request_id when no session_id was passed — a phantom that maps to no "
+    "transcript and no token row, so every workflow-driven task linked dead "
+    "sessions. New _resolve_link_session_id() resolves the real active "
+    "transcript session, keeping request_id only as last resort. "
+    "v6.3.1: Clean up /conductor for the animated SDLC tiles. Swimlane rows "
+    "open from py-3 to py-4 and the lane->tile auto-fill grid widens "
+    "(minmax 220px->250px) + opens (gap-2->gap-3) so each tile's embedded "
+    "~2x-height SdlcProgress bar reads uncluttered. TaskTile gains a coherent "
+    "hierarchy: an explicit 'SDLC' SectionLabel on the progress block plus "
+    "click-to-expand progressive disclosure of gate_reason (local expand "
+    "state, not tooltip-only). SdlcProgress current-step fill now tweens "
+    "SMOOTHLY between the 5s polls via useSpring (suppressed when reduced), "
+    "instead of a hard segFill.set jump; reduced stays threaded "
+    "page->TaskTile->SdlcProgress. UI-only. "
     "v6.3.0: Animate conductor tasks + real-time SDLC phase progress. New "
     "web/src/lib/motion.ts motion vocabulary (EASE_OUT/EASE_IN, DUR enter>exit, "
     "SPRING_SNAPPY bounce<0.1, capped 0.04s stagger); board AnimatePresence + "
