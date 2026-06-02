@@ -43,28 +43,28 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
             patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
-    # 11 daemon threads as of v6.3.10 (epic 4fd1e6b4 Phase 3 RETIRED the
-    # Reflection Worker + Memory Summary Worker timers onto the event-pool
-    # bus — their spawn calls are gone; 13 -> 11):
-    #   7 explicit in main.py — mcp + governance + drift + quality +
-    #     understand_drainer + trash_sweeper + transcript_importer
+    # 9 daemon threads as of v6.3.12 (epic 4fd1e6b4: Phase 3 RETIRED the
+    # Reflection + Memory Summary timers onto the event-pool bus; Phase 4
+    # FOLDED governance + quality + adaptive-policy into ONE maintenance_clock;
+    # 13 -> 11 -> 9):
+    #   5 explicit in main.py — mcp + drift + understand_drainer +
+    #     trash_sweeper + transcript_importer
     #   1 from start_auto_updater() (always starts)
     #   1 from start_graph_enrich_worker() (defaults ON, v6.2.0+)
-    #   1 from start_adaptive_policy_worker() (defaults ON, v6.2.29 / FIX 3a —
-    #     PRISM_ADAPTIVE_POLICY_WORKER=off to opt out)
-    #   1 from start_event_pool() (defaults ON, epic 4fd1e6b4 Phase 1 /
-    #     event_pool.py — now runs the REAL migrated handlers; the retired
-    #     Reflection + Memory Summary work happens here via the bus)
-    # RETIRED (no longer spawned, Phase 3): start_reflection_worker() and
-    # start_memory_summary_worker() — session.imported / memory.written
-    # handlers do that work on the bus now.
-    # start_memory_ops_workers() is OFF by default (no PRISM_<OP>_WORKER set)
-    # so it adds 0 here.
+    #   1 from start_event_pool() (defaults ON, Phase 1 — runs the REAL
+    #     migrated reflection/dedup/credit handlers on the bus)
+    #   1 from the maintenance_clock (Phase 4 — single heartbeat running
+    #     governance TTL/decay/dup, verify-staleness, forget, adaptive retune,
+    #     quality-vs-git, each behind its own cadence gate)
+    # RETIRED (no longer spawned): start_reflection_worker(),
+    # start_memory_summary_worker() (Phase 3); start_governance_timer,
+    # start_quality_timer, start_adaptive_policy_worker (Phase 4 — folded into
+    # maintenance_clock). start_memory_ops_workers() is OFF by default (0 here).
     # patch("prism_service.main.threading.Thread") mutates the global
     # threading module, so threads started inside the indirectly-imported
     # services are also intercepted.
     started = [c for c in mock_t.return_value.start.mock_calls]
-    assert len(started) == 11
+    assert len(started) == 9
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -77,8 +77,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    # Same 11 threads — see test_lifespan_starts_threads_when_no_lock.
-    assert len(started) == 11  # threads started despite the stale lock
+    # Same 9 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 9  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err
