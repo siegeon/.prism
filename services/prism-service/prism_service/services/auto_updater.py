@@ -17,11 +17,17 @@ Design:
        1. Downloads the wheel to a temp file
        2. Calls `pip install --upgrade <wheel-path>` in the same
           interpreter (sys.executable)
-       3. Sets restart_required=True and surfaces it via
-          /api/update/status. It NEVER self-restarts in-place — doing
-          that via os.execvp from a daemon thread dropped the live
-          sockets with no traceback (#66). The new wheel takes effect on
-          the next managed/manual restart.
+       3. Sets restart_required=True AND *requests* a restart of the
+          live process so the served version actually flips (task
+          bc9b1a88, 5th recurrence). The request/perform seam keeps the
+          #66 guard intact: the daemon thread only sets a flag
+          (request_restart) — it NEVER calls os.execv/os.execvp itself.
+          The MAIN thread (which owns uvicorn) observes the flag,
+          gracefully stops the server (drains the loop / closes
+          sockets), and only THEN os.execv's a fresh process image
+          (perform_restart). #66's silent death was an in-thread execvp
+          from this daemon thread dropping live sockets with no
+          traceback — that path stays gone.
   * Service status (current version, latest known, last check, last
     error) is exposed via /api/update-status for the SPA's
     Settings → Service card.
@@ -30,10 +36,10 @@ Honest scope limits:
   * Docker installs ignore this entirely (the running container has no
     pip to upgrade against itself, and Watchtower handles their case).
     The updater short-circuits if it detects /.dockerenv.
-  * Linux/Mac get clean in-place upgrade. Windows pip-upgrade-while-
-    running has historically been flaky (pip can't replace a running
-    .exe); on Windows we write the sentinel and surface "restart to
-    apply" in the UI instead of trying the auto-restart.
+  * The restart is supervisor-agnostic: the main-thread os.execv
+    re-execs in place under a bare `prism start --daemon` (the pidfile
+    manager does not respawn), and a clean exit lets an external
+    supervisor respawn — both land on the new version.
 """
 
 from __future__ import annotations
@@ -73,13 +79,81 @@ _POLL_INTERVAL_S = int(os.environ.get("PRISM_AUTO_UPDATE_INTERVAL", "1800"))
 _AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "on").lower() in (
     "on", "true", "1", "yes",
 )
-# Issue #66: NEVER self-restart in-place. _self_restart() used os.execvp
-# from the auto-updater DAEMON thread, replacing the process image (same
-# PID, no traceback, sockets dropped) — the exact silent-death signature
-# in the report. Defer the restart on ALL platforms; the new wheel takes
-# effect on the next managed/manual restart, and restart_required is
-# surfaced via /api/update/status.
-_DEFER_RESTART = True
+# Issue #66: NEVER os.execvp/os.execv from THIS daemon thread. The old
+# _self_restart() did exactly that, replacing the process image in place
+# (same PID, no traceback, sockets dropped) — the silent-death signature.
+# The safe seam (task bc9b1a88): the daemon thread only REQUESTS a restart
+# (request_restart -> sets _restart_requested), and the MAIN thread that
+# owns uvicorn observes it, gracefully stops the server, and only THEN
+# calls perform_restart() (os.execv). So the restart is no longer deferred
+# forever on all platforms — it is handed to the main thread.
+_DEFER_RESTART = False
+
+# Main-thread restart handoff. The daemon thread sets this flag after a
+# successful apply; the uvicorn main thread polls restart_requested(),
+# drains + stops the server, then calls perform_restart(). _restart_lock
+# guards the flag; never call os.execv off the main thread.
+_restart_requested_flag = False
+_restart_lock = threading.RLock()
+
+
+def request_restart() -> None:
+    """Daemon-thread-safe: ASK the main thread to restart the process.
+
+    This NEVER execs — it only flips a flag. The main thread polls
+    restart_requested() and performs the real os.execv via
+    perform_restart(). Keeping the exec off this thread is the #66 guard.
+    """
+    global _restart_requested_flag
+    with _restart_lock:
+        _restart_requested_flag = True
+
+
+def restart_requested() -> bool:
+    """True once a successful apply has requested a main-thread restart."""
+    with _restart_lock:
+        return _restart_requested_flag
+
+
+def clear_restart_request() -> None:
+    """Reset the restart request (used by tests and after a perform)."""
+    global _restart_requested_flag
+    with _restart_lock:
+        _restart_requested_flag = False
+
+
+def perform_restart(server=None, drain_timeout_s: float = 10.0) -> None:
+    """Re-exec the current process image. MAIN-THREAD ONLY.
+
+    Drains the running uvicorn server FIRST (close sockets, #66), then
+    re-execs `sys.executable -m prism_service.main` so the freshly-imported
+    interpreter picks up the upgraded wheel and the served version flips.
+
+    If `server` is passed, it is gracefully signalled to stop before the
+    exec — `server.should_exit = True` (uvicorn drains its loop) and, if a
+    `stop()` method exists, that is invoked too. When main.py already ran
+    the server to completion before calling this, pass server=None.
+
+    Supervisor-agnostic: a bare daemon re-execs in place; under an external
+    supervisor the clean exit triggers a respawn. Guarded by _DEFER_RESTART
+    so an operator can hard-disable the exec.
+    """
+    if _DEFER_RESTART:
+        return
+    if server is not None:
+        # Signal a graceful drain so listening sockets close before exec.
+        try:
+            server.should_exit = True
+        except Exception:
+            pass
+        stop = getattr(server, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception:
+                pass
+    argv = [sys.executable, "-m", "prism_service.main"]
+    os.execv(sys.executable, argv)
 
 
 def _dev_mode() -> bool:
@@ -243,9 +317,11 @@ def apply_update() -> dict:
       * no update available yet (call check_for_update first)
       * no .whl asset on the latest release
 
-    On success, sets restart_required=True. The actual restart is the
-    caller's responsibility — see daemon.request_restart() — because
-    we can't safely os.execvp a uvicorn worker thread from inside it.
+    On success, sets restart_required=True. It does NOT exec here — the
+    actual restart is performed from the MAIN thread (see
+    request_restart()/perform_restart()), because os.execv off a daemon
+    thread drops live sockets with no traceback (#66). _maybe_apply()
+    calls request_restart() after this returns ok.
     """
     import sys as _sys
 
@@ -423,15 +499,16 @@ def _maybe_apply() -> None:
         )
         return
     print(
-        f"[auto_updater] applied {target}; restart_required=True "
-        f"(restart the daemon to pick up the new wheel)",
+        f"[auto_updater] applied {target}; requesting main-thread restart "
+        f"to flip the served version",
         file=sys.stderr, flush=True,
     )
-    # Issue #66: we deliberately do NOT self-restart. The previous
-    # os.execvp(...) from this daemon thread replaced the process image
-    # in place with no traceback and dropped the live sockets — the
-    # silent-death root cause. restart_required is surfaced via
-    # /api/update/status; a managed/manual restart applies the wheel.
+    # Issue #66 guard: do NOT exec from THIS daemon thread (that dropped
+    # live sockets with no traceback). Only REQUEST the restart; the
+    # uvicorn main thread observes restart_requested(), gracefully stops
+    # the server, and then calls perform_restart() (os.execv) once the
+    # sockets are closed. This is what finally flips the served version.
+    request_restart()
 
 
 def start_auto_updater() -> None:

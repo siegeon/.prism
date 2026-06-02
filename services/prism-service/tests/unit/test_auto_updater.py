@@ -166,9 +166,28 @@ def test_self_restart_helper_is_gone():
     assert not hasattr(au, "_self_restart")
 
 
-def test_restart_is_deferred_on_all_platforms():
-    """#66: never auto-restart in-place, regardless of OS."""
-    assert au._DEFER_RESTART is True
+def test_restart_is_handed_to_main_thread_not_deferred_forever():
+    """Task bc9b1a88 (5th recurrence): the #66 guard is "never execvp from the
+    DAEMON thread" — NOT "never restart at all". The old _DEFER_RESTART=True
+    meant nothing ever restarted and the served version never flipped. The safe
+    design hands the restart to the MAIN thread, so the all-platforms hard-defer
+    must be gone and the request/perform seam must exist."""
+    assert getattr(au, "_DEFER_RESTART", False) is not True, \
+        "_DEFER_RESTART must no longer be hard True — restart is handed to main"
+    assert hasattr(au, "request_restart"), "need request_restart() handoff"
+    assert hasattr(au, "restart_requested"), "need restart_requested() poll"
+    assert hasattr(au, "perform_restart"), "need perform_restart() main-thread exec"
+
+
+def test_stale_self_exec_docstring_is_corrected():
+    """The api/update.py apply() docstring used to LIE: 'On Linux/Mac the
+    auto-updater self-execs after success'. No such self-exec ever existed, and
+    the new design re-execs from the MAIN thread on every platform. The stale
+    Linux/Mac claim must be gone."""
+    from prism_service.api import update as update_api
+    doc = update_api.apply.__doc__ or ""
+    assert "self-execs after success" not in doc, \
+        "stale Linux/Mac self-exec claim must be removed from apply() docstring"
 
 
 def test_auto_apply_default_on_opt_out():
