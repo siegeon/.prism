@@ -504,6 +504,13 @@ if __name__ == "__main__":
     # thread now that the sockets are closed (#66-safe). Otherwise this is a
     # normal shutdown and we just fall through to exit.
     if _au.restart_requested():
-        _own_pidfile_cleanup()
+        # Do NOT unlink the pidfile here: os.execv replaces the process
+        # image IN PLACE (same PID, no fork), so the pidfile that names
+        # this PID stays valid across the re-exec — and the re-exec'd
+        # `-m prism_service.main` never re-writes it (only `prism start`
+        # does). Clearing it would leave a live daemon (same PID, new
+        # version) with no pidfile, so `prism status`/`prism stop` would
+        # report it as not running. atexit's cleanup does not fire on
+        # os.execv either, so the file correctly survives the flip.
         _log.info("uvicorn stopped; performing main-thread re-exec (auto-update)")
         _au.perform_restart()

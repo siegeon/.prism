@@ -219,3 +219,54 @@ def test_apply_update_restart_auto_is_true(monkeypatch):
     assert result["ok"] is True, result
     assert result["restart_auto"] is True, \
         "restart_auto must be True now that the restart happens automatically"
+
+
+# ---------------------------------------------------------------------------
+# Pidfile must SURVIVE the in-place re-exec. os.execv replaces the process
+# image with the SAME PID, so the pidfile that names this PID stays valid —
+# and the re-exec'd `-m prism_service.main` never re-writes it. If the
+# restart path unlinked the pidfile first, a live daemon (same PID, new
+# version) would be left with no pidfile and `prism status`/`prism stop`
+# would report it as not running — breaking the bare `prism start --daemon`
+# (pidfile manager) acceptance criterion.
+# ---------------------------------------------------------------------------
+
+def test_perform_restart_does_not_touch_pidfile(monkeypatch, tmp_path):
+    """perform_restart() must NOT unlink the pidfile — execv keeps the PID,
+    so the file stays valid across the flip."""
+    from prism_service.data_dir import pid_file
+    monkeypatch.setenv("PRISM_DATA_DIR", str(tmp_path))
+    pf = pid_file()
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text(str(__import__("os").getpid()), encoding="utf-8")
+
+    monkeypatch.setattr(au.os, "execv", lambda *a, **k: None)
+    _arm_update_available()
+    au.request_restart()
+    try:
+        au.perform_restart(server=None)
+    finally:
+        _reset_state()
+    assert pf.exists(), \
+        "perform_restart must leave the pidfile in place (execv keeps the PID)"
+
+
+def test_main_restart_branch_does_not_clear_pidfile():
+    """Regression: the main.py auto-update re-exec branch must NOT call
+    _own_pidfile_cleanup() before perform_restart(). execv preserves the PID,
+    so clearing the pidfile would orphan a live, upgraded daemon from the
+    pidfile manager. Asserted against the source so the contract can't silently
+    regress (the branch lives under `if __name__ == '__main__'`)."""
+    import inspect
+    from prism_service import main as main_mod
+
+    src = inspect.getsource(main_mod)
+    # Isolate the restart branch (after the 'performing main-thread re-exec'
+    # log line) and assert no pidfile cleanup precedes perform_restart there.
+    marker = "performing main-thread re-exec"
+    assert marker in src, "restart branch log marker missing"
+    branch = src[src.index("if _au.restart_requested():"):]
+    perform_idx = branch.index("perform_restart()")
+    before_perform = branch[:perform_idx]
+    assert "_own_pidfile_cleanup()" not in before_perform, \
+        "must NOT unlink the pidfile before the in-place execv re-exec"

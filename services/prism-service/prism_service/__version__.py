@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.3"
+PRISM_VERSION = "6.3.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.4: Auto-update restart (v6.3.3) must not orphan the pidfile. The "
+    "main-thread re-exec branch in main.py used to call _own_pidfile_cleanup() "
+    "before perform_restart(), but os.execv replaces the process image IN PLACE "
+    "(same PID) and the re-exec'd `-m prism_service.main` never re-writes the "
+    "pidfile (only `prism start` does) — so clearing it left a live, upgraded "
+    "daemon (same PID) with NO pidfile, and `prism status`/`prism stop` reported "
+    "it as not running. Fix: do not unlink the pidfile before the in-place "
+    "re-exec (it stays valid across execv; atexit cleanup does not fire on "
+    "execv). Regression tests: perform_restart leaves the pidfile, and the "
+    "main.py restart branch contains no pidfile cleanup before perform_restart. "
     "v6.3.3: Auto-update finally FLIPS the running version (5th recurrence). The "
     "poller downloaded the wheel + pip-installed it but _DEFER_RESTART=True meant "
     "nothing ever restarted, so the live daemon served the OLD version forever. "
