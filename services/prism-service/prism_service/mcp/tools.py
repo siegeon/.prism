@@ -3173,6 +3173,25 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                         _c.commit()
                     finally:
                         _c.close()
+            # Phase 2 (epic 4fd1e6b4): announce the durable write on the
+            # learning bus AFTER memory_svc.store committed. Best-effort,
+            # mirrors the memory_meta side-effect idiom — a bus failure
+            # must never break the primary write. Handlers are wrap/no-op
+            # this phase (dual-run), so this is observable-only.
+            try:
+                from prism_service.services import event_pool as _ep
+                _mid = None
+                for _attr in ("id", "entry_id", "memory_id"):
+                    _mid = (result.get(_attr) if isinstance(result, dict)
+                            else getattr(result, _attr, None))
+                    if _mid:
+                        break
+                _ep.get_bus().emit(_ep.Event(
+                    type=_ep.MEMORY_WRITTEN,
+                    payload={"memory_id": _mid},
+                ))
+            except Exception:
+                pass  # best-effort — never break the memory write
             return [TextContent(type="text", text=_json(result))]
 
         if name == "memory_invalidate":
@@ -3345,9 +3364,25 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             if new_status in ("done", "blocked"):
                 outcome = "positive" if new_status == "done" else "negative"
                 try:
-                    memory_svc.record_outcome(arguments["id"], outcome)
+                    _updated = memory_svc.record_outcome(arguments["id"], outcome)
                 except Exception:
-                    pass  # best-effort — don't break task updates
+                    _updated = 0  # best-effort — don't break task updates
+                # Phase 2 (epic 4fd1e6b4): emit memory.recalled+outcome ONLY
+                # when an outcome was actually attached (record_outcome updated
+                # >0 recall_log rows). Best-effort; handlers are wrap/no-op.
+                if _updated and _updated > 0:
+                    try:
+                        from prism_service.services import event_pool as _ep
+                        _ep.get_bus().emit(_ep.Event(
+                            type=_ep.MEMORY_RECALLED_OUTCOME,
+                            payload={
+                                "task_id": arguments["id"],
+                                "outcome": outcome,
+                                "updated": _updated,
+                            },
+                        ))
+                    except Exception:
+                        pass  # best-effort — never break task updates
 
             return [TextContent(type="text", text=_json(task))]
 

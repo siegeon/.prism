@@ -414,6 +414,20 @@ def import_unseen(
                         scores_db, metrics["session_id"],
                         metrics, ts_iso,
                     )
+                    # Phase 2 (epic 4fd1e6b4): announce the imported session
+                    # on the learning bus AFTER conn.commit, ALONGSIDE (not
+                    # instead of) _enqueue_with_signals (dual-run). The event
+                    # names the import FACT, so it emits unconditionally even
+                    # when the v6.2.18 noise filter skips the enqueue.
+                    # Best-effort — a bus failure must never break the import.
+                    try:
+                        from prism_service.services import event_pool as _ep
+                        _ep.get_bus().emit(_ep.Event(
+                            type=_ep.SESSION_IMPORTED,
+                            payload={"session_id": metrics["session_id"]},
+                        ))
+                    except Exception:
+                        pass  # best-effort — never break the import path
             except sqlite3.Error:
                 continue
         conn.commit()
