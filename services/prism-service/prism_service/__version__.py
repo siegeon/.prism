@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.10"
+PRISM_VERSION = "6.3.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.11: Redesign the /conductor task card around a LIVE per-turn burn "
+    "graph. New claude_transcripts.live_token_turns_for_session — a thin "
+    "burn-RATE wrapper over the existing live_token_events_for_session (the "
+    "6.3.9 task-timeline reader) — takes the merged, sorted per-turn (epoch, "
+    "output_tokens) timeline, keeps the last 40 turns, and derives {out, "
+    "dt_s, tok_s} where tok_s = output_tokens / wall-clock since the prior "
+    "turn (idle gaps > 600s and clock skew clamp to a 1s window, never a "
+    "phantom spike). conductor_service.phase_progress now returns "
+    "token_turns[] + an honest total `turns` count alongside the cumulative "
+    "tokens_since_step. UI: new components/conductor/TokenTurns renders an "
+    "animated bar field (one bar per turn, height proportional to tok/s, "
+    "newest bar glows + pulses while in_progress, bars tween height between "
+    "the 5s polls so the field FLOWS as the live tail advances). TaskTile is "
+    "now a two-column card — identity/meta + the SDLC phase bar on the LEFT, "
+    "the burn graph on the RIGHT — and the swimlane auto-fill grid widens "
+    "(minmax 250px->380px) to seat it. No information duplication: the graph "
+    "is the SOLE token surface (rate), so SdlcProgress gained a hideTokens "
+    "prop that drops its tok caption + amber token bar when present. Empty "
+    "state reads 'awaiting first turn'. "
     "v6.3.10: Phase 3 of epic 4fd1e6b4 — the REAL learning handlers run on "
     "the Phase-1 event bus and the polling memory timers are retired. New "
     "services/event_handlers.py: session.imported reflects as ONE coalesced "

@@ -52,12 +52,16 @@ def test_swimlane_rows_get_more_vertical_breathing_room():
 def test_tile_autofill_grid_widens_and_gaps_for_progress_bar():
     src = _read(_CONDUCTOR)
     # 220px tiles are too narrow once the multi-segment SDLC bar + caption sit
-    # inside; widen the auto-fill min and open the inter-tile gap.
+    # inside; the v6.3.9 two-column redesign (meta + SDLC on the left, the live
+    # per-turn burn graph on the right) needs even more room, so the auto-fill
+    # min widened to >=360px. Keep the inter-tile gap open.
     assert "minmax(220px" not in src, \
         "tile auto-fill min must widen past 220px for the progress bar"
-    assert ("minmax(240px" in src or "minmax(250px" in src
-            or "minmax(260px" in src), \
-        "tile auto-fill min must widen to >=240px"
+    import re
+    m = re.search(r"auto-fill,minmax\((\d+)px", src)
+    assert m, "tile grid must use an auto-fill minmax(<n>px ...) track"
+    assert int(m.group(1)) >= 360, \
+        "tile auto-fill min must widen to >=360px to seat the two-column card + burn graph"
     # The tile grid gap was gap-2; open it so tiles don't feel cluttered.
     assert "minmax(" in src
     grid_line = next(ln for ln in src.splitlines() if "auto-fill,minmax(" in ln)

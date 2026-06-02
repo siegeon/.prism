@@ -1665,13 +1665,21 @@ class ConductorService:
         # read the LIVE transcript on disk and take the larger of the two, so
         # a running session ("seeing ourselves") shows a real, growing number.
         tokens = 0
+        # Per-turn burn series (oldest..newest) merged across the task's live
+        # sessions — the conductor tile's "work getting done" graph. Each entry
+        # is {out, dt_s, tok_s}; complementary to the cumulative `tokens_since_
+        # step` (the graph is the derivative, the number is the integral — no
+        # duplication). Empty for a task with no on-disk transcript yet.
+        token_turns: list[dict] = []
         if self._task_svc is not None:
             try:
                 source_path = self._project_source_path()
                 live_fn = None
+                turns_fn = None
                 if source_path:
                     from prism_service.services.claude_transcripts import (
                         live_tokens_for_session as live_fn,
+                        live_token_turns_for_session as turns_fn,
                     )
                 for s in self._task_svc.sessions_for_task(task_id):
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
@@ -1684,8 +1692,17 @@ class ConductorService:
                         except Exception:
                             live_tok = 0
                     tokens += max(outcome_tok, live_tok)
+                    if turns_fn and sid:
+                        try:
+                            token_turns.extend(turns_fn(sid, source_path) or [])
+                        except Exception:
+                            pass
             except Exception:
                 tokens = 0
+        # Bound the payload to the most recent turns (the live tail is what the
+        # animated graph shows); `turns` keeps the honest total count.
+        total_turns = len(token_turns)
+        token_turns = token_turns[-40:]
 
         return {
             "pct": round(max(0.0, min(1.0, pct)), 6),
@@ -1696,4 +1713,7 @@ class ConductorService:
             "children_total": children_total,
             # Task-total linked-session tokens (see note above).
             "tokens_since_step": tokens,
+            # Per-turn burn rate series + honest total turn count.
+            "token_turns": token_turns,
+            "turns": total_turns,
         }
