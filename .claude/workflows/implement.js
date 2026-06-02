@@ -77,12 +77,25 @@ const CONVENTIONS = [
   '- If the change is user-visible, patch-bump PRISM_VERSION in the same commit.',
 ].join('\n')
 
+// SELF-HEAL doctrine (implement-workflow reliability). Injected into every step
+// agent's preamble so a failed step / genuine gate-reject / runtime error
+// triggers a knowledge-ladder climb instead of a dead halt. NOTE: the RESEARCH
+// rung is WebSearch/WebFetch today; Context7 MCP (clean library docs) is a
+// not-yet-wired follow-up.
+const SELF_HEAL = [
+  'SELF-HEAL DOCTRINE — when a step fails, a gate GENUINELY rejects (NOT the verifier-blind case above), or a tool/runtime error fires, climb the ladder before giving up:',
+  '1. PRISM-FIRST: brain_search + memory_recall for a known resolution. PRISM is the knowledge AND time authority — it server-stamps run timestamps; never reach for a client clock.',
+  '2. RESEARCH: if PRISM has no answer, research best practices via WebSearch/WebFetch and cite sources.',
+  '3. APPLY the smallest fix.',
+  '4. RECORD: memory_store(type="failure", with file:line + the fix) so PRISM HAS THE ANSWER next time — failures become memories.',
+].join('\n')
+
 const dryNote = DRY
   ? '\n\nDRY-RUN MODE: Do NOT write files, do NOT run conductor_advance/conductor_gate/task_update, do NOT mutate anything. Only gather context and report exactly what you WOULD do. Treat the conductor transition as simulated and report the to_step you would expect.'
   : ''
 
 function preamble(role) {
-  return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${CONVENTIONS}${dryNote}`
+  return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${CONVENTIONS}\n\n${SELF_HEAL}${dryNote}`
 }
 
 // ── Agent-run telemetry emitter (task f4498190) ─────────────────────────
@@ -170,6 +183,30 @@ const STEP_SCHEMA = {
     halt_reason: { type: 'string', description: 'set ONLY if the step failed or a gate rejected; empty otherwise' },
   },
 }
+
+// ── Phase: Pre-flight (fail fast) ───────────────────────────────────────
+// AC1: assert the run can even succeed BEFORE the drive — turns 7-min-to-fail
+// runs into ~5-second fails with one actionable line. Workflow scripts have no
+// fs/process access, so the checks run inside the first agent (read-only bash).
+const PREFLIGHT_SCHEMA = {
+  type: 'object',
+  required: ['ok', 'sane_branch', 'datenow_clean', 'daemon_ok', 'halt_reason'],
+  properties: {
+    ok: { type: 'boolean' },
+    sane_branch: { type: 'boolean' },
+    datenow_clean: { type: 'boolean' },
+    daemon_ok: { type: 'boolean' },
+    halt_reason: { type: 'string', description: 'ONE actionable remediation line if ok=false; empty otherwise' },
+  },
+}
+phase('Pre-flight')
+const preflight = await agent(
+  `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD — run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 — a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap — the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. datenow_clean=false on ANY match — PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/api/version\` must be 200 — the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean${DRY ? '' : ' AND daemon_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main — rebase or branch fresh off main", "client clock in <file>:<line> — PRISM server-stamps time, remove it (mx-9945f2)", or "daemon down on :8888 — start dev (prism-dev) before driving".`,
+  { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA })
+if (!preflight.ok) {
+  throw new Error(`PRE-FLIGHT HALT — ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok}]`)
+}
+log(`Pre-flight OK — branch sane, workflow scripts clock-clean (PRISM owns time)${DRY ? '' : ', daemon reachable'}.`)
 
 // ── Phase: Locate ───────────────────────────────────────────────────────
 phase('Locate')
