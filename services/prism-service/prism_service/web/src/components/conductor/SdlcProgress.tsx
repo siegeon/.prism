@@ -1,0 +1,190 @@
+// Segmented 8-step SDLC progress bar (task a5e0d9f5). Renders a LIVE, frame-by
+// -frame estimate from the server `phase_progress` field: between the 5s polls
+// the current-step fill is EXTRAPOLATED from wall-clock time so the bar creeps,
+// the % readout ticks in decimals, and a mm:ss in-step timer counts up every
+// second — unmistakably real-time. A sweeping shimmer marks the active step as
+// alive. Completed steps solid (emerald); future muted. GPU-only; tokens only.
+import { useEffect, useRef, useState } from "react";
+import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/react";
+import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
+
+export type PhaseProgress = {
+  pct?: number;
+  basis?: string;
+  in_step_s?: number;
+  typical_s?: number;
+  children_done?: number;
+  children_total?: number;
+  tokens_since_step?: number;
+};
+
+function fmtTokens(t: number): string {
+  if (t >= 1000) return `${(t / 1000).toFixed(t >= 10000 ? 0 : 1)}k`;
+  return `${t}`;
+}
+
+function fmtClock(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+// Live current-step fill. Children basis = EXACT done/total (holds steady).
+// Time basis = extrapolated asymptotic creep (1 - e^(-t/typical)) that always
+// inches upward but never claims "done" before the conductor advances.
+function liveFraction(p: PhaseProgress, elapsedS: number): number {
+  if ((p.basis ?? "time") === "children" && (p.children_total ?? 0) > 0) {
+    return Math.min(1, (p.children_done ?? 0) / (p.children_total ?? 1));
+  }
+  const typical = Math.max(1, p.typical_s ?? 30);
+  const liveSeconds = (p.in_step_s ?? 0) + Math.max(0, elapsedS);
+  return Math.min(0.97, 1 - Math.exp(-liveSeconds / typical));
+}
+
+export default function SdlcProgress({
+  step,
+  phase,
+  reduced,
+  showCaption = true,
+}: {
+  step?: string;
+  phase?: PhaseProgress | null;
+  reduced?: boolean | null;
+  showCaption?: boolean;
+}) {
+  const steps = WORKFLOW_STEPS_ORDERED;
+  const curIdx = steps.findIndex((s) => s.id === step);
+  const tokens = phase?.tokens_since_step ?? 0;
+  const basis = phase?.basis ?? "time";
+  const tokFrac = Math.max(0, Math.min(1, tokens / 500_000));
+  const seed = Math.max(0, Math.min(1, phase?.pct ?? 0));
+
+  // Overall task progress toward DONE: completed steps + the current phase's
+  // fraction, over all 8 steps. Only nears 100% as the whole task completes —
+  // never because one step ran long.
+  const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
+  const fill = useMotionValue(seed);
+  const widthPct = useTransform(fill, (v) => `${(v * 100).toFixed(3)}%`);
+  const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
+  const [liveInStep, setLiveInStep] = useState(phase?.in_step_s ?? 0);
+  // "active" = token spend on this step rose recently (the real work signal).
+  // Flat tokens + a ticking clock = idle/stuck; rising tokens = progressing.
+  const [active, setActive] = useState(false);
+  const prevTokens = useRef(tokens);
+  const lastGrowAt = useRef(-1e9);
+
+  // Re-anchor the extrapolation clock on each fresh server value, and note
+  // when the token count grew (so we can show active vs idle honestly).
+  const anchor = useRef({ t0: 0 });
+  useEffect(() => {
+    anchor.current.t0 = performance.now();
+    if (tokens > prevTokens.current) lastGrowAt.current = performance.now();
+    prevTokens.current = tokens;
+  }, [phase, tokens]);
+
+  const lastPctAt = useRef(0);
+  const lastClockAt = useRef(0);
+  // The frame loop ALWAYS runs (it carries information — the live % + timer —
+  // not just decoration); only the shimmer/easing below are gated on reduced.
+  useAnimationFrame((t) => {
+    if (!phase || curIdx < 0) return;
+    const elapsedS = (performance.now() - anchor.current.t0) / 1000;
+    const wf = liveFraction(phase, elapsedS); // within the current phase (0..0.97)
+    fill.set(wf); // the current SEGMENT fills by its own phase fraction
+    if (t - lastPctAt.current > 120) {
+      lastPctAt.current = t;
+      // headline = OVERALL task progress, so it only nears 100% as the whole
+      // task completes — not because the current step ran long.
+      setLiveLabel(((curIdx + wf) / steps.length) * 100);
+    }
+    if (t - lastClockAt.current > 500) {
+      lastClockAt.current = t;
+      setLiveInStep((phase.in_step_s ?? 0) + elapsedS);
+      // active if tokens grew within the importer's cadence window (~90s).
+      setActive(tokens > 0 && performance.now() - lastGrowAt.current < 90_000);
+    }
+  });
+
+  return (
+    <div className="w-full">
+      <div className="flex items-stretch gap-[3px] h-2.5">
+        {steps.map((s, i) => {
+          const isGate = s.type === "gate";
+          const done = curIdx >= 0 && i < curIdx;
+          const current = i === curIdx;
+          const base = "relative flex-1 rounded-full overflow-hidden";
+          if (done) {
+            return (
+              <div
+                key={s.id}
+                className={base}
+                title={stepLabel(s.id)}
+                style={{ background: "var(--accent-emerald-bg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
+              />
+            );
+          }
+          if (current) {
+            return (
+              <div key={s.id} className={base} title={stepLabel(s.id)} style={{ background: "var(--surface-3)" }}>
+                <motion.div
+                  className="absolute inset-y-0 left-0 rounded-full"
+                  style={{ width: widthPct, background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
+                />
+                {!reduced && active && (
+                  <motion.div
+                    className="absolute inset-y-0 left-0 w-1/2 pointer-events-none"
+                    style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent)" }}
+                    initial={{ x: "-100%" }}
+                    animate={{ x: "260%" }}
+                    transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                )}
+              </div>
+            );
+          }
+          return (
+            <div
+              key={s.id}
+              className={base}
+              title={stepLabel(s.id)}
+              style={{ background: "var(--surface-2)", opacity: isGate ? 0.45 : 0.7 }}
+            />
+          );
+        })}
+      </div>
+
+      {showCaption && curIdx >= 0 && (
+        <>
+          <div className="mt-1 flex items-center justify-between text-[10px] font-mono text-[color:var(--text-muted)]">
+            <span className="uppercase tracking-wider truncate">
+              {stepLabel(steps[curIdx].id)} · {liveLabel.toFixed(2)}%
+              {basis === "children" && phase?.children_total ? ` · ${phase.children_done}/${phase.children_total}` : ""}
+            </span>
+            <span className="flex items-center gap-1.5 shrink-0 tabular-nums">
+              <motion.span
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ background: active ? "var(--accent-emerald-fg)" : "var(--text-muted)" }}
+                animate={!reduced && active ? { opacity: [1, 0.25, 1] } : { opacity: active ? 1 : 0.4 }}
+                transition={!reduced && active ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+              />
+              <span>{fmtClock(liveInStep)}</span>
+              <span className="opacity-70">· {fmtTokens(tokens)} tok</span>
+              <span className={active ? "" : "opacity-60"}>· {active ? "active" : "idle"}</span>
+            </span>
+          </div>
+          {tokens > 0 && (
+            <div className="mt-0.5 h-[2px] w-full rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: "var(--accent-amber-bg)", opacity: 0.7 }}
+                initial={false}
+                animate={{ width: `${tokFrac * 100}%` }}
+                transition={{ duration: reduced ? 0 : 0.24 }}
+              />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

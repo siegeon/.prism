@@ -8,7 +8,8 @@ import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
-import { EASE_OUT, DUR, staggerDelay } from "@/lib/motion";
+import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -56,6 +57,7 @@ type Task = {
   stop_if?: string[];
   plan_doc?: string;
   plan_diagram?: string;
+  phase_progress?: PhaseProgress | null;
 };
 
 // Slim shape for the child-task list — only what the row renders.
@@ -99,6 +101,44 @@ function Stagger({ i, reduced, children }: { i: number; reduced: boolean | null;
     >
       {children}
     </motion.div>
+  );
+}
+
+// Animated checkbox for the child-task checklist — empty square when pending,
+// emerald fill + spring-tick check when the child is done (feeds the
+// current-segment sub-step fill server-side via children_done/total).
+function Checkbox({ done, reduced }: { done: boolean; reduced: boolean | null }) {
+  return (
+    <span
+      className="inline-flex items-center justify-center h-4 w-4 rounded shrink-0"
+      style={{
+        background: done ? "var(--accent-emerald-bg)" : "var(--surface-3)",
+        boxShadow: `inset 0 0 0 1px var(--accent-${done ? "emerald" : "slate"}-ring)`,
+      }}
+    >
+      <AnimatePresence>
+        {done && (
+          <motion.svg
+            key="tick"
+            viewBox="0 0 16 16"
+            className="h-3 w-3"
+            initial={reduced ? { opacity: 0 } : { scale: 0, opacity: 0 }}
+            animate={reduced ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={reduced ? { duration: 0 } : SPRING_SNAPPY}
+          >
+            <path
+              d="M3.5 8.5l3 3 6-6.5"
+              fill="none"
+              stroke="var(--accent-emerald-fg)"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </motion.svg>
+        )}
+      </AnimatePresence>
+    </span>
   );
 }
 
@@ -151,10 +191,12 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[] }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      setTask(d.task);
+      // phase_progress rides at the TOP LEVEL of the response (not nested in
+      // task) — merge it onto the task so the SDLC bar reads task.phase_progress.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setError(null);
@@ -171,7 +213,9 @@ export default function TaskDetailPage() {
     }
   }, [id, project]);
 
-  useEffect(() => { load(); }, [load]);
+  // Poll every 5s so the SDLC progress bar, child checklist, and token-effort
+  // label update in real-time as the conductor advances the task.
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
   useEffect(() => {
     if (!notice) return;
@@ -335,6 +379,9 @@ export default function TaskDetailPage() {
         <Stagger i={0} reduced={reduced}>
         <Card>
           <SectionLabel>Conductor</SectionLabel>
+          <div className="mt-3 mb-1">
+            <SdlcProgress step={task.workflow_step} phase={task.phase_progress} reduced={reduced} />
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-3 text-[12px] mt-2 items-start">
             <div>
               <div className="opacity-50 mb-1">step</div>
@@ -470,7 +517,10 @@ export default function TaskDetailPage() {
                   onClick={() => c.id && navigate(`/tasks/${c.id}`, { state: { from: `/tasks/${id}` } })}
                   className="w-full text-left rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-3 hover:border-[color:var(--midground-base)]/40 hover:bg-[color:var(--background-base)]/50 transition-colors flex items-center justify-between gap-3"
                 >
-                  <span className="text-sm font-medium">{c.title ?? c.id}</span>
+                  <span className="flex items-center gap-3 min-w-0">
+                    <Checkbox done={(c.status ?? "") === "done"} reduced={reduced} />
+                    <span className="text-sm font-medium truncate">{c.title ?? c.id}</span>
+                  </span>
                   <span className="flex items-center gap-2 shrink-0">
                     {typeof c.priority !== "undefined" && (
                       <span className="text-[10px] opacity-50 font-mono">p{c.priority}</span>

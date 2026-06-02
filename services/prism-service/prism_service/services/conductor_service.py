@@ -1618,6 +1618,19 @@ class ConductorService:
             pct = min(0.95, ratio)
             basis = "time"
 
+        # Real token effort: sum tokens across the sessions linked to this task
+        # (the importer populates sessions.tokens_used). Per-message timestamps
+        # aren't imported, so this is task-TOTAL spend, not a per-step slice —
+        # but it's a real, growing number the bar surfaces as "N tok".
+        tokens = 0
+        if self._task_svc is not None:
+            try:
+                for s in self._task_svc.sessions_for_task(task_id):
+                    used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
+                    tokens += int(used or 0)
+            except Exception:
+                tokens = 0
+
         return {
             "pct": round(max(0.0, min(1.0, pct)), 6),
             "basis": basis,
@@ -1625,7 +1638,6 @@ class ConductorService:
             "typical_s": round(typical_s, 3),
             "children_done": children_done,
             "children_total": children_total,
-            # Live token effort is imported on the ~60s session cadence, not
-            # computed here on the 5s poll path. 0 until that pipeline lands.
-            "tokens_since_step": 0,
+            # Task-total linked-session tokens (see note above).
+            "tokens_since_step": tokens,
         }

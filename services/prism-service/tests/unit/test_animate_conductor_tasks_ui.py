@@ -150,10 +150,11 @@ def test_index_css_appends_prefers_reduced_motion_reset_after_line_110():
 
 
 # ---------------------------------------------------------------------------
-# Version patch-bump 6.2.30 -> 6.2.31
+# Version bump -> 6.3.0 (minor: animations + real-time phase progress feature;
+# rolls up the never-shipped 6.2.31)
 # ---------------------------------------------------------------------------
 
-def test_prism_version_patch_bumped_to_6_2_31():
+def test_prism_version_bumped_to_6_3_0():
     from prism_service.__version__ import PRISM_VERSION
-    assert PRISM_VERSION == "6.2.31", \
-        "PRISM_VERSION must be patch-bumped from 6.2.30 to 6.2.31 in the same commit"
+    assert PRISM_VERSION == "6.3.0", \
+        "PRISM_VERSION must be bumped to 6.3.0 for the conductor-animation feature"

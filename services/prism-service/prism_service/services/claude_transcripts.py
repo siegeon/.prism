@@ -510,9 +510,16 @@ def start_transcript_importer() -> None:
                 try:
                     ctx = get_project(pid)
                     scores_db = str(ctx._data_dir / "scores.db")
-                    from prism_service.services import claude_memory as cm
+                    # claude_memory is an OPTIONAL add-on (the auto-memory
+                    # bridge). It must never gate session/token import — if it's
+                    # unavailable, guard the import so import_unseen still runs.
+                    # (Bug: an unguarded import here zeroed ALL token import.)
+                    try:
+                        from prism_service.services import claude_memory as cm
+                    except Exception:
+                        cm = None
                     sp = _project_source_path(pid)
-                    cpd = cm.configured_project_dir(pid)
+                    cpd = cm.configured_project_dir(pid) if cm else None
                     if not sp and not cpd:
                         continue
                     n = import_unseen(
