@@ -6,6 +6,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, Empty } from "@/components/ui";
+import EvidenceView from "@/components/EvidenceView";
 
 type Task = {
   id?: string;
@@ -63,7 +64,7 @@ export default function TaskTextPage() {
         ) : !meta ? (
           <Empty>Unknown section.</Empty>
         ) : text ? (
-          <pre className="whitespace-pre-wrap text-[13px] leading-relaxed opacity-90 font-sans">{text}</pre>
+          <EvidenceView text={text} />
         ) : (
           <Empty>Nothing recorded.</Empty>
         )}
