@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.12"
+PRISM_VERSION = "6.3.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.13: task-detail Timeline per-turn token pills now actually render. "
+    "Root cause: TaskService.history() returns TaskHistory DATACLASSES, but "
+    "_attach_turn_tokens assumed dicts (h.get / h[...] / isinstance dict) so it "
+    "AttributeError'd on the first row and the swallow-all except hid it — "
+    "per-turn attribution had never reached the JSON. get_task now converts "
+    "history rows to dicts before attribution. AND the pills now show for ALL "
+    "tasks, not just ones with a written task↔session link: api/tasks "
+    "_attach_turn_tokens falls back to wall-clock attribution across the "
+    "project's on-disk transcripts (new claude_transcripts."
+    "project_token_events_in_window) when a task has no usable linked-session "
+    "events — the work is on disk regardless of the link. Fallback is bounded "
+    "to the task's turn span and idle-clamped at 600s (the burn-graph "
+    "threshold) so a long-parked task's closing turn can't vacuum up the spend "
+    "other tasks burned during the gap; linked-session events stay "
+    "authoritative (no clamp). "
     "v6.3.12: Phase 4 of epic 4fd1e6b4 — fold the genuinely wall-clock memory "
     "duties into ONE maintenance/heartbeat clock. New "
     "services/maintenance_clock.py: a single daemon thread iterates every "
