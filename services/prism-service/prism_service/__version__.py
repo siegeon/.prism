@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.4"
+PRISM_VERSION = "6.3.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.5: Phase 1 of epic 4fd1e6b4 (consolidate memory workers into one "
+    "event-driven learning pipeline) — in-process event bus + concurrency-"
+    "capped, budget-governed consumer pool SUBSTRATE. New "
+    "services/event_pool.py: EventBus.emit() enqueues + returns immediately "
+    "(fire-and-forget; the caller never awaits a handler — backpressure), a "
+    "ConsumerPool claim-one-per-tick loop (modeled on the Understand Drainer) "
+    "dispatches under a HARD Semaphore concurrency cap (= max simultaneous "
+    "`claude -p`), and a per-interval BudgetGovernor CIRCUIT-BREAKS on breach "
+    "by RE-QUEUEing the over-budget item for the maintenance clock to batch "
+    "later (never dropped, never shelled in real time). Three event types "
+    "defined (session.imported / memory.written / memory.recalled+outcome); "
+    "handlers registered wrap/NO-OP — zero behavior change vs. the current "
+    "timer workers this phase (live emitters + real handlers are Phases 2-3). "
+    "Daemon-thread entrypoint start_event_pool() follows the worker lifecycle "
+    "pattern (is_enabled() env tri-state, _loop, disable via "
+    "PRISM_EVENT_POOL_INTERVAL=0), wired into main.py lifespan. Tests: "
+    "tests/unit/test_event_bus_pool.py pins backpressure + circuit-break "
+    "(deferred-not-dropped) + the concurrency cap. "
     "v6.3.4: Auto-update restart (v6.3.3) must not orphan the pidfile. The "
     "main-thread re-exec branch in main.py used to call _own_pidfile_cleanup() "
     "before perform_restart(), but os.execv replaces the process image IN PLACE "
