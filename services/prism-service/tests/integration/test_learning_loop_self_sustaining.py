@@ -362,17 +362,30 @@ def test_completed_reflection_writes_rollup_and_feeds_outcome(
 
 
 def test_adaptive_policy_worker_is_registered_in_lifespan():
-    """FIX 3a — main.py wires up an env-gated adaptive-policy worker
-    (PRISM_ADAPTIVE_POLICY_WORKER) alongside the other lifespan workers."""
+    """FIX 3a + Phase 4 (epic 4fd1e6b4) — the adaptive-policy retune is no
+    longer its OWN lifespan thread; it is folded into the single maintenance
+    clock as the 'adaptive' pass (still env-gated by
+    PRISM_ADAPTIVE_POLICY_WORKER). The lifespan now wires the consolidated
+    clock instead of start_adaptive_policy_worker()."""
     main_src = (_SERVICE_ROOT / "prism_service" / "main.py").read_text(
         encoding="utf-8"
     )
-    assert "PRISM_ADAPTIVE_POLICY_WORKER" in main_src, (
-        "main.py lifespan must register an env-gated adaptive-policy worker"
+    assert "start_adaptive_policy_worker()" not in main_src, (
+        "start_adaptive_policy_worker() must no longer be spawned from the "
+        "lifespan (folded into the maintenance clock)"
     )
-    assert "adaptive_policy" in main_src, (
-        "main.py must import/start the adaptive-policy worker"
+    assert "start_maintenance_clock" in main_src, (
+        "main.py lifespan must wire start_maintenance_clock (the consolidated "
+        "home of the adaptive retune pass)"
     )
+    # The env gate that governs the adaptive pass remains honored — now via
+    # maintenance_clock.pass_enabled()/pass_cadences().
+    from prism_service.services import maintenance_clock as mc
+    assert "adaptive" in mc.PASS_ORDER
+    assert "PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL" in (
+        (_SERVICE_ROOT / "prism_service" / "services" / "maintenance_clock.py")
+        .read_text(encoding="utf-8")
+    ), "the maintenance clock must honor PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL"
 
 
 def test_adaptive_policy_worker_persists_knob_row(tmp_path, monkeypatch):
@@ -416,16 +429,26 @@ def test_adaptive_policy_worker_persists_knob_row(tmp_path, monkeypatch):
 
 
 def test_adaptive_policy_worker_in_workers_endpoint(monkeypatch):
-    """FIX 3b — /api/consolidation/workers lists the adaptive-policy
-    worker so the /settings/activity + /learning panels can render it."""
+    """FIX 3b + Phase 4 — the adaptive-policy retune duty now surfaces on
+    /api/consolidation/workers as part of the consolidated maintenance_clock
+    entry (the separate adaptive_policy_worker row was folded). The clock entry
+    must name the 'adaptive' pass so /settings/activity + /learning panels can
+    still tell the operator it is running."""
     from prism_service.api.consolidation import workers
 
     monkeypatch.setenv("PRISM_ADAPTIVE_POLICY_WORKER", "on")
     payload = workers()
-    ids = {w["id"] for w in payload["workers"]}
-    assert "adaptive_policy_worker" in ids or "adaptive_policy" in ids, (
-        f"adaptive-policy worker must appear in /api/consolidation/workers; "
-        f"got {sorted(ids)}"
+    by_id = {w["id"]: w for w in payload["workers"]}
+    assert "maintenance_clock" in by_id, (
+        f"the consolidated maintenance_clock must appear in "
+        f"/api/consolidation/workers; got {sorted(by_id)}"
+    )
+    assert "adaptive_policy_worker" not in by_id, (
+        "the separate adaptive_policy_worker row must be folded into "
+        "maintenance_clock"
+    )
+    assert "adaptive" in by_id["maintenance_clock"]["description"].lower(), (
+        "the maintenance_clock description must name the adaptive retune pass"
     )
 
 

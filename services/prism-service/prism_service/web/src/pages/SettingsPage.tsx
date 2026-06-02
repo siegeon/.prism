@@ -1505,6 +1505,11 @@ type Worker = {
   prompt?: string;
 };
 
+// Backend-driven panel: renders whatever GET /api/consolidation/workers
+// returns. Phase 4 (epic 4fd1e6b4) folded the prior 4-5 separate memory
+// timers into ONE consolidated "Memory maintenance clock" (id maintenance_clock),
+// so this panel now surfaces that single Maintenance clock row in place of the
+// old governance_timer + adaptive_policy_worker entries.
 function BackgroundWorkersPanel() {
   const [workers, setWorkers] = useState<Worker[] | null>(null);
   const [error, setError] = useState<string | null>(null);

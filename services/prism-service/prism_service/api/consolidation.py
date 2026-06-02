@@ -115,25 +115,39 @@ def workers() -> dict:
         "prompt_kind": "static",
         "prompt": memory_summary_worker.SUMMARY_PROMPT_TEMPLATE,
     }
-    from prism_service.services import adaptive_policy
-    adaptive_enabled = adaptive_policy.is_enabled()
-    adaptive_entry = {
-        "id": adaptive_policy.WORKER_ID,
-        "label": adaptive_policy.WORKER_LABEL,
-        "running": adaptive_enabled,
-        "cadence_s": (
-            int(os.environ.get("PRISM_ADAPTIVE_POLICY_WORKER_INTERVAL", "3600"))
-            if adaptive_enabled else 0
-        ),
+    # Phase 4 (epic 4fd1e6b4) — the five wall-clock memory duties
+    # (governance TTL+decay+dup, verify_staleness, forget, adaptive retune,
+    # quality-vs-git) are folded into ONE maintenance clock. This single entry
+    # REPLACES the prior separate governance_timer + adaptive_policy_worker
+    # (+ any VerifyStaleness/Forget per-op) rows.
+    from prism_service.services import maintenance_clock as mc
+    _cadences = mc.pass_cadences()
+    _enabled = mc.pass_enabled()
+    _on = [n for n in mc.PASS_ORDER if _enabled.get(n)]
+    _off = [n for n in mc.PASS_ORDER if not _enabled.get(n)]
+
+    def _fmt_cadence(s: int) -> str:
+        if s % 3600 == 0:
+            return f"{s // 3600}h"
+        if s % 60 == 0:
+            return f"{s // 60}m"
+        return f"{s}s"
+
+    _per_pass = ", ".join(f"{n}~{_fmt_cadence(_cadences[n])}" for n in mc.PASS_ORDER)
+    maintenance_entry = {
+        "id": mc.WORKER_ID,
+        "label": mc.WORKER_LABEL,
+        "running": mc.is_enabled(),
+        "cadence_s": mc.heartbeat_interval_s(),
         "description": (
-            "Self-tunes the memory knobs (forget_cutoff / decay_weight / "
-            "merge_similarity_threshold) from the recall->outcome signal, "
-            "persisting one policy_knobs row per tick for the /learning "
-            "'Adaptive policy' panel. Default ON, daily cadence — set "
-            "PRISM_ADAPTIVE_POLICY_WORKER=off to disable."
-            if adaptive_enabled else
-            "OFF (PRISM_ADAPTIVE_POLICY_WORKER=off). Set "
-            "PRISM_ADAPTIVE_POLICY_WORKER=on to self-tune memory knobs."
+            "ONE heartbeat thread (folds the prior 4-5 separate memory "
+            "timers). Each tick iterates every project and runs, in sequence, "
+            "five memory passes — each behind its OWN cadence gate: "
+            f"{_per_pass}. Passes ON: {', '.join(_on) or 'none'}. "
+            f"Passes OFF (env-gated): {', '.join(_off) or 'none'}. Honors "
+            "PRISM_GOVERNANCE_INTERVAL / PRISM_QUALITY_INTERVAL / "
+            "PRISM_ADAPTIVE_POLICY_WORKER[_INTERVAL] / PRISM_<OP>_WORKER; "
+            "disable the whole fold with PRISM_MAINTENANCE_CLOCK=off."
         ),
         "prompt_kind": "none",
     }
@@ -175,14 +189,6 @@ def workers() -> dict:
                 ),
             },
             {
-                "id": "governance_timer",
-                "label": "Governance",
-                "running": True,
-                "cadence_s": 3600,
-                "description": "Per-domain health checks + janitor sweeps.",
-                "prompt_kind": "none",
-            },
-            {
                 "id": "trash_sweeper",
                 "label": "Trash sweeper",
                 "running": True,
@@ -200,7 +206,7 @@ def workers() -> dict:
             },
             reflection_entry,
             memory_summary_entry,
-            adaptive_entry,
+            maintenance_entry,
         ],
     }
 

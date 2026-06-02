@@ -13,10 +13,32 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.11"
+PRISM_VERSION = "6.3.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.12: Phase 4 of epic 4fd1e6b4 — fold the genuinely wall-clock memory "
+    "duties into ONE maintenance/heartbeat clock. New "
+    "services/maintenance_clock.py: a single daemon thread iterates every "
+    "project once per tick and runs, in a FIXED sequence, the five memory "
+    "passes (governance TTL+decay+dup-detect + retention sweep, "
+    "verify_staleness, forget, adaptive-policy retune, quality-vs-git) each "
+    "behind its OWN independent cadence gate (per-pass last-run timestamps; "
+    "quality ~6h, adaptive ~1h, governance 5m). All prior env gates / cadence "
+    "overrides honored (PRISM_GOVERNANCE_INTERVAL, PRISM_QUALITY_INTERVAL, "
+    "PRISM_ADAPTIVE_POLICY_WORKER[_INTERVAL], PRISM_<OP>_WORKER). The 4-5 "
+    "separate lifespan spawns are RETIRED: start_governance_timer + "
+    "start_quality_timer threads, start_memory_ops_workers() "
+    "(VerifyStaleness/Forget), and start_adaptive_policy_worker() no longer "
+    "spawn independent threads. GET /api/consolidation/workers now reports ONE "
+    "maintenance_clock entry (running / heartbeat-cadence / per-pass "
+    "description) in place of the prior governance_timer + "
+    "adaptive_policy_worker rows; the /settings/activity BackgroundWorkersPanel "
+    "(backend-driven) auto-reflects it. drift_timer (Brain reindex) + the "
+    "event pool stay separate (out of scope). Tests: "
+    "tests/unit/test_maintenance_clock_cadence.py + "
+    "test_maintenance_clock_ui.py + "
+    "tests/integration/test_maintenance_clock_consolidation.py. "
     "v6.3.11: Redesign the /conductor task card around a LIVE per-turn burn "
     "graph. New claude_transcripts.live_token_turns_for_session — a thin "
     "burn-RATE wrapper over the existing live_token_events_for_session (the "
