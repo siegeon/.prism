@@ -1516,6 +1516,29 @@ def _json(obj: Any) -> str:
     return json.dumps(_serialise(obj), indent=2, default=str)
 
 
+def _resolve_link_session_id() -> str:
+    """Fallback session id to stamp into task_sessions when a conductor
+    advance/gate omits one. Prefers the REAL active transcript session for
+    the request's project (so the link maps to actual token data); falls
+    back to the MCP request handle only when no transcript can be found —
+    that preserves the "always stamp something" guarantee without making a
+    phantom id the default (which left conductor tiles stuck at 0 tok)."""
+    from prism_service.mcp.request_context import get_request_context
+    ctx = get_request_context()
+    try:
+        from prism_service.services.claude_transcripts import (
+            _project_source_path, current_session_id,
+        )
+        src = _project_source_path(ctx.project_id)
+        if src:
+            real = current_session_id(src)
+            if real:
+                return real
+    except Exception:
+        pass
+    return ctx.request_id
+
+
 # ---------------------------------------------------------------------------
 # Self-documenting guide (returned by prism_guide tool)
 # ---------------------------------------------------------------------------
@@ -3367,15 +3390,11 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         if name == "conductor_advance":
             task_id = arguments["id"]
             # Session capture: prefer the caller-threaded session_id (the human
-            # driving session a workflow passes as SID); else fall back to the
-            # MCP request handle so a conductor drive ALWAYS stamps a
-            # task_sessions row — mirrors task_link_session. Without this, a
-            # drive that omits session_id leaves the task with 0 linked
-            # sessions (the ed7292bd symptom).
-            _sid = arguments.get("session_id")
-            if not _sid:
-                from prism_service.mcp.request_context import get_request_context
-                _sid = get_request_context().request_id
+            # driving session a workflow passes as SID); else resolve the REAL
+            # active transcript session so the linked id maps to actual token
+            # data. The MCP request handle is the last-resort stamp only — on
+            # its own it links a phantom (no transcript, no tokens → 0 tok).
+            _sid = arguments.get("session_id") or _resolve_link_session_id()
             result = conductor_svc.advance_task(
                 task_id,
                 validation=arguments.get("validation"),
@@ -3387,15 +3406,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "conductor_gate":
             task_id = arguments["id"]
-            # Same session-capture fallback as conductor_advance. conductor_gate
-            # does not even expose session_id in its schema, so before this the
-            # gate transition NEVER linked a session — the request-handle
-            # fallback ensures a terminal gate (green_gate close-out) records
-            # the session that resolved it.
-            _sid = arguments.get("session_id")
-            if not _sid:
-                from prism_service.mcp.request_context import get_request_context
-                _sid = get_request_context().request_id
+            # Same session-capture fallback as conductor_advance — resolve the
+            # real active transcript session (not the phantom request handle) so
+            # the terminal gate links a session that carries token data.
+            _sid = arguments.get("session_id") or _resolve_link_session_id()
             result = conductor_svc.gate_decide(
                 task_id,
                 arguments["action"],

@@ -142,10 +142,13 @@ def test_reduced_motion_stays_threaded_end_to_end():
 
 
 # ---------------------------------------------------------------------------
-# Version patch-bump 6.3.0 -> 6.3.1
+# Version patch-bump — the /conductor cleanup landed in 6.3.1; the live-token
+# fix consolidated onto the same branch as 6.3.2. Assert a >= 6.3.1 floor so
+# the bump is verified without re-breaking on every subsequent patch.
 # ---------------------------------------------------------------------------
 
 def test_prism_version_patch_bumped_from_6_3_0():
     from prism_service.__version__ import PRISM_VERSION
-    assert PRISM_VERSION == "6.3.1", \
-        "PRISM_VERSION must be patch-bumped to 6.3.1 for the /conductor cleanup"
+    parts = tuple(int(x) for x in PRISM_VERSION.split("."))
+    assert parts >= (6, 3, 1), \
+        f"PRISM_VERSION must be >= 6.3.1 for the /conductor cleanup; got {PRISM_VERSION}"
