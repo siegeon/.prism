@@ -769,6 +769,42 @@ def live_token_events_for_session(
     return out
 
 
+def project_token_events_in_window(
+    project_path: str, since: float, until: float,
+    claude_home: Path | None = None,
+) -> list[tuple[float, int]]:
+    """Per-turn (epoch_s, output_tokens) across ALL transcripts matching the
+    project whose events fall in [since, until], sorted ascending.
+
+    The task-timeline attribution fallback: a task that was never explicitly
+    link_session'd still has the work that produced its turns on disk, so we
+    bucket the project's transcript spend into the task's history window by
+    wall-clock. Files are pruned by mtime (a transcript last written before
+    `since` cannot hold in-window events) and per-file reads are cached on
+    (mtime,size) via _token_events. Best-effort: when two tasks were worked in
+    the SAME window their spend can't be told apart, so this only fills the gap
+    when no authoritative linked-session events exist. [] when none match."""
+    if not project_path or until <= since:
+        return []
+    claude_home = claude_home or resolve_claude_home()
+    projects_dir = claude_home / "projects"
+    if not projects_dir.is_dir():
+        return []
+    out: list[tuple[float, int]] = []
+    for sub in projects_dir.iterdir():
+        if not sub.is_dir() or not slug_matches(sub.name, project_path):
+            continue
+        for f in sub.rglob("*.jsonl"):
+            try:
+                if f.stat().st_mtime < since:
+                    continue
+            except OSError:
+                continue
+            out.extend((ep, tok) for ep, tok in _token_events(f) if since <= ep <= until)
+    out.sort(key=lambda e: e[0])
+    return out
+
+
 def live_token_turns_for_session(
     session_id: str, project_path: str, claude_home: Path | None = None,
     limit: int = 40,

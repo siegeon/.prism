@@ -1,5 +1,6 @@
 """Tasks API — kanban list, detail, transitions, history."""
 
+import dataclasses
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -31,6 +32,7 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
         from prism_service.services.claude_transcripts import (
             _project_source_path,
             live_token_events_for_session,
+            project_token_events_in_window,
         )
 
         src = _project_source_path(project)
@@ -55,6 +57,15 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
             sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
             if sid:
                 events.extend(live_token_events_for_session(sid, src))
+        fallback = False
+        if not events:
+            # No authoritative linked-session spend (the task↔session link was
+            # never written, or the linked id maps to no transcript). Fall back
+            # to wall-clock attribution across the project's transcripts so the
+            # timeline still shows real per-turn tokens — the work is on disk
+            # regardless of the link. Bounded to the task's turn span.
+            events = project_token_events_in_window(src, bounds[0][0], bounds[-1][0])
+            fallback = True
         if not events:
             return
 
@@ -62,10 +73,18 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
 
         edges = [b[0] for b in bounds]
         sums = [0] * len(history)
+        # Fallback attribution gets an idle clamp: a turn that closed a long
+        # gap (the task was parked, not worked) must not vacuum up the spend
+        # other tasks burned during that gap. 600s mirrors the conductor
+        # burn-graph's idle/skew threshold. Linked-session events are this
+        # task's own spend, so they skip the clamp.
+        IDLE_CLAMP_S = 600.0
         for ev_ts, tok in events:
             # window (edges[k-1], edges[k]] -> the turn that closed it (bounds[k]).
             k = bisect.bisect_left(edges, ev_ts)
             if 1 <= k < len(bounds):
+                if fallback and (edges[k] - ev_ts) > IDLE_CLAMP_S:
+                    continue
                 sums[bounds[k][1]] += tok
         for i, h in enumerate(history):
             if sums[i] > 0 and isinstance(h, dict):
@@ -90,12 +109,21 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     t = svc.get(task_id)
     if not t:
         raise HTTPException(404, "task not found")
+    # history() yields TaskHistory dataclasses — convert to plain dicts here so
+    # _attach_turn_tokens can read timestamps and stamp `turn_tokens` (a
+    # dataclass has no .get/__setitem__, and a setattr'd non-field attribute
+    # would be dropped by jsonable_encoder's asdict). This is why per-turn
+    # token pills never surfaced before — the attach silently AttributeError'd.
+    history = [
+        dataclasses.asdict(h) if dataclasses.is_dataclass(h) else dict(h)
+        for h in svc.history(task_id)
+    ]
     # `sessions` rides the EXISTING task-detail route (no parallel
     # top-level route) — the linked Claude sessions JOINed with their
     # session_outcomes metrics. Empty list when nothing is linked.
     out = {
         "task": t,
-        "history": svc.history(task_id),
+        "history": history,
         "sessions": svc.sessions_for_task(task_id),
     }
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
