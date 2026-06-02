@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.2.30"
+PRISM_VERSION = "6.3.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.0: Animate conductor tasks + real-time SDLC phase progress. New "
+    "web/src/lib/motion.ts motion vocabulary (EASE_OUT/EASE_IN, DUR enter>exit, "
+    "SPRING_SNAPPY bounce<0.1, capped 0.04s stagger); board AnimatePresence + "
+    "motion.div layout reorder + step/gate chip cross-fade; route transitions "
+    "via AnimatePresence mode=wait; index.css prefers-reduced-motion reset + "
+    "useReducedMotion guards throughout. NEW server seam ConductorService."
+    "phase_progress() -> {pct,basis,in_step_s,typical_s,children_done,"
+    "children_total,tokens_since_step} (time baseline min(0.95,in/typical), "
+    "children-done override, live token effort), on GET /api/conductor/state "
+    "managed_tasks + GET /api/tasks/{id}. New components/conductor/SdlcProgress "
+    "renders a segmented 8-step bar (done solid / current animated fill tweening "
+    "between polls / future muted) on conductor tiles (~2x height) AND the "
+    "TaskDetailPage Conductor card; child tasks render as an animated checkbox "
+    "checklist (spring tick) feeding the sub-step fill; detail page polls 5s for "
+    "live updates. Rolls up the unshipped 6.2.31. "
     "v6.2.30: Render task plans as rich HTML. Task gains plan_doc (markdown "
     "proposed-change) + plan_diagram (Mermaid source) — additive tasks.db "
     "columns (migrate to ''), threaded through TaskService.create/update + row "

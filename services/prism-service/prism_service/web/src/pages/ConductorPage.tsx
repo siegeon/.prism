@@ -7,6 +7,8 @@ import {
   stepLabel, gateLabel, WORKFLOW_STEPS_ORDERED,
 } from "@/lib/workflowChips";
 import { relativeTime } from "@/lib/relativeTime";
+import { useReducedMotion } from "motion/react";
+import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
 
 type ManagedTask = {
   id: string;
@@ -21,6 +23,7 @@ type ManagedTask = {
   created_at?: string;
   updated_at?: string;
   tags?: string[];
+  phase_progress?: PhaseProgress | null;
 };
 
 type State = {
@@ -52,6 +55,7 @@ const STATUS_TONE: Record<string, PillTone> = {
 export default function ConductorPage() {
   const [project] = useProject();
   const navigate = useNavigate();
+  const reduced = useReducedMotion();
   const [data, setData] = useState<State | null>(null);
 
   const load = useCallback(() => {
@@ -133,7 +137,7 @@ export default function ConductorPage() {
                   ) : (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
                       {tasksHere.map((t) => (
-                        <TaskTile key={t.id} task={t} onClick={() =>
+                        <TaskTile key={t.id} task={t} reduced={reduced} onClick={() =>
                           navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
                         } />
                       ))}
@@ -165,7 +169,7 @@ export default function ConductorPage() {
 //   - owner: {assigned_agent or 'unassigned'}
 //   - up to 3 tag chips
 // ---------------------------------------------------------------------------
-function TaskTile({ task, onClick }: { task: ManagedTask; onClick: () => void }) {
+function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: boolean | null; onClick: () => void }) {
   const status = (task.status ?? "").toLowerCase();
   const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
   const gate = task.gate_state ?? "none";
@@ -211,6 +215,11 @@ function TaskTile({ task, onClick }: { task: ManagedTask; onClick: () => void })
           ))}
         </div>
       )}
+      {/* Real-time SDLC phase progress — bar fills the current step from the
+          server phase_progress estimate (time / children / token effort). */}
+      <div className="mt-2 pt-2.5 border-t border-[color:var(--border-default)]/60">
+        <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} />
+      </div>
     </button>
   );
 }

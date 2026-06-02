@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Kpi, toneFromLabel, type PillTone } from "@/components/ui";
 import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
+import { EASE_OUT, EASE_IN, DUR, SPRING_SNAPPY } from "@/lib/motion";
 
 type Task = {
   id?: string;
@@ -57,6 +59,9 @@ function priorityTone(p: number | string | undefined): PillTone {
 export default function TasksPage() {
   const [project] = useProject();
   const navigate = useNavigate();
+  // Board motion respects the OS reduced-motion preference: when set, cards
+  // fade/snap with no travel or FLIP reorder. Guards every motion below.
+  const reduced = useReducedMotion();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [next, setNext] = useState<Task | null>(null);
 
@@ -122,14 +127,36 @@ export default function TasksPage() {
                 <div className="text-xs opacity-40 text-center py-6">empty</div>
               ) : (
                 <div className="space-y-2">
+                  <AnimatePresence initial={false}>
                   {items.map((t) => {
                     const pTone = priorityTone(t.priority);
                     const step = t.workflow_step ?? "";
                     const gate = t.gate_state ?? "none";
                     const conductorOn = step !== "" || gate !== "none";
                     return (
-                      <button
+                      <motion.div
+                        // Stable layoutId on the TASK ID (never the array
+                        // index) so FLIP recognises the same card across the
+                        // 5s poll — animating cross-column reorder instead of
+                        // a hard cut. transform/opacity only (GPU).
                         key={t.id}
+                        layout={reduced ? false : true}
+                        layoutId={t.id}
+                        initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.97 }}
+                        transition={
+                          reduced
+                            ? { duration: 0 }
+                            : {
+                                layout: SPRING_SNAPPY,
+                                opacity: { duration: DUR.enter, ease: EASE_OUT },
+                                y: { duration: DUR.enter, ease: EASE_OUT },
+                                scale: { duration: DUR.exit, ease: EASE_IN },
+                              }
+                        }
+                      >
+                      <button
                         onClick={() => t.id && navigate(`/tasks/${t.id}`, { state: { from: "/tasks" } })}
                         className="w-full text-left rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-3 hover:border-[color:var(--midground-base)]/40 hover:bg-[color:var(--background-base)]/50 transition-colors cursor-pointer"
                       >
@@ -152,20 +179,38 @@ export default function TasksPage() {
                         {conductorOn && (
                           <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                             {step && (
-                              <span
-                                className={stepChipClass(step)}
-                                title={`conductor step: ${step}`}
-                              >
-                                {stepLabel(step)}
-                              </span>
+                              // Cross-fade the step chip's --accent tone when
+                              // the SDLC step advances. Keyed on the step value
+                              // so AnimatePresence swaps in the new tone with a
+                              // subtle scale pulse drawing the eye to the change.
+                              <AnimatePresence mode="wait" initial={false}>
+                                <motion.span
+                                  key={step}
+                                  className={stepChipClass(step)}
+                                  title={`conductor step: ${step}`}
+                                  initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
+                                  animate={reduced ? { opacity: 1 } : { opacity: 1, scale: [1, 1.04, 1] }}
+                                  exit={{ opacity: 0 }}
+                                  transition={{ duration: reduced ? 0 : DUR.chip, ease: EASE_OUT }}
+                                >
+                                  {stepLabel(step)}
+                                </motion.span>
+                              </AnimatePresence>
                             )}
                             {gate !== "none" && (
-                              <span
-                                className={gateChipClass(gate as any)}
-                                title={t.gate_reason || `gate ${gate}`}
-                              >
-                                gate {gateLabel(gate as any)}
-                              </span>
+                              <AnimatePresence mode="wait" initial={false}>
+                                <motion.span
+                                  key={gate}
+                                  className={gateChipClass(gate as any)}
+                                  title={t.gate_reason || `gate ${gate}`}
+                                  initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
+                                  animate={reduced ? { opacity: 1 } : { opacity: 1, scale: [1, 1.04, 1] }}
+                                  exit={{ opacity: 0 }}
+                                  transition={{ duration: reduced ? 0 : DUR.chip, ease: EASE_OUT }}
+                                >
+                                  gate {gateLabel(gate as any)}
+                                </motion.span>
+                              </AnimatePresence>
                             )}
                           </div>
                         )}
@@ -203,8 +248,10 @@ export default function TasksPage() {
                           })}
                         </div>
                       </button>
+                      </motion.div>
                     );
                   })}
+                  </AnimatePresence>
                 </div>
               )}
             </Card>
