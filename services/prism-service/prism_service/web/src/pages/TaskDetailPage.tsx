@@ -69,13 +69,21 @@ type ChildTask = {
   parent_id?: string;
 };
 
+// Matches the /api/tasks/:id history rows: an append-only audit log where
+// each turn carries who acted (actor), what kind of turn (action), a free-text
+// `details` blob (the transition + validation/reason), and a timestamp. The
+// API also stamps `turn_tokens` = output_tokens spent in this turn's window
+// when the linked-session transcripts are readable (best-effort, often unset).
+// (The old shape assumed from_status/to_status/reason fields that the API
+// never sends — which is why every row used to render as a bare "— → —".)
 type HistoryRow = {
-  id?: string;
+  id?: string | number;
   task_id?: string;
+  actor?: string;
+  action?: string;
+  details?: string;
   timestamp?: string;
-  from_status?: string;
-  to_status?: string;
-  reason?: string;
+  turn_tokens?: number;
 };
 
 type SessionRow = {
@@ -148,6 +156,218 @@ function Checkbox({ done, reduced }: { done: boolean; reduced: boolean | null })
 function oneLine(s: string, n = 96): string {
   const f = s.replace(/\s+/g, " ").trim();
   return f.length > n ? f.slice(0, n) + "…" : f;
+}
+
+// ── Timeline (task turns) ──────────────────────────────────────────────
+// The History card renders the audit log as a readable turn-by-turn
+// timeline: each turn shows its wall-clock time, how long after the
+// previous turn it fired (elapsed), who acted, the kind of turn, the
+// state transition it carried, the tokens spent in that window (when the
+// transcript is readable), and an expandable validation/reason.
+
+// "11:54:41" from an ISO timestamp (keeps the recorded local wall clock).
+function clockOf(ts?: string): string {
+  return ts ? String(ts).slice(11, 19) : "";
+}
+// "2026-06-02" from an ISO timestamp.
+function dayOf(ts?: string): string {
+  return ts ? String(ts).slice(0, 10) : "";
+}
+// Human gap between two turns: "24s" / "3m 12s" / "1h 4m".
+function fmtGap(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+// "476.9k" / "512" — compact token count.
+function fmtTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+const ACTION_TONE: Record<string, PillTone> = {
+  created: "violet",
+  updated: "slate",
+  advance_task: "teal",
+  gate_decide: "amber",
+};
+
+// Flow fields whose `from -> to` is short enough to show as transition
+// pills (everything else is a content edit summarized as "edited <field>").
+const FLOW_FIELDS = ["workflow_step", "status", "gate_state", "priority", "assigned_agent"];
+
+type Transition = { field?: string; from?: string; to?: string };
+
+// Pull a short state transition out of the free-text `details` blob, if any.
+function parseTransition(action?: string, details?: string): Transition | null {
+  const d = details ?? "";
+  if (action === "advance_task") {
+    const from = /(?:^|;\s*)from=([^;]*)/.exec(d)?.[1]?.trim();
+    const to = /(?:^|;\s*)to=([^;]*)/.exec(d)?.[1]?.trim();
+    return from || to ? { field: "step", from, to } : null;
+  }
+  if (action === "gate_decide") {
+    const gate = /(?:^|;\s*)gate=([^;]*)/.exec(d)?.[1]?.trim();
+    const act = /(?:^|;\s*)action=([^;]*)/.exec(d)?.[1]?.trim();
+    return { field: gate ? `gate · ${gate}` : "gate", to: act };
+  }
+  if (action === "updated") {
+    // Flow-field values are simple tokens (no quotes/arrows), so [^']* is safe.
+    for (const f of FLOW_FIELDS) {
+      const m = new RegExp(`${f}:\\s*'([^']*)'\\s*->\\s*'([^']*)'`).exec(d);
+      if (m) return { field: f === "workflow_step" ? "step" : f.replace(/_/g, " "), from: m[1], to: m[2] };
+    }
+  }
+  return null;
+}
+
+// Grab the trailing "<key>=..." value (validation / reason live at the end).
+function grabKV(key: string, d: string): string {
+  return new RegExp(`${key}=([\\s\\S]*)$`).exec(d)?.[1]?.trim() ?? "";
+}
+
+// One-line gist of the turn: the validation/reason for advances & gates, the
+// title for creation, or "edited <field>" for content updates.
+function turnSummary(action?: string, details?: string): string {
+  const d = (details ?? "").trim();
+  if (action === "advance_task") return grabKV("validation", d);
+  if (action === "gate_decide") return grabKV("reason", d) || grabKV("validation", d);
+  if (action === "created") return /title='([\s\S]*?)'/.exec(d)?.[1] ?? d;
+  if (action === "updated") {
+    if (parseTransition(action, d)) return "";
+    const f = /^([a-z_]+):/.exec(d)?.[1];
+    return f ? `edited ${f.replace(/_/g, " ")}` : d;
+  }
+  return d;
+}
+
+function TonePill({ tone, children }: { tone: PillTone; children: React.ReactNode }) {
+  return (
+    <span
+      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+      style={{
+        background: `var(--accent-${tone}-bg)`,
+        color: `var(--accent-${tone}-fg)`,
+        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function StateChip({ children, tone }: { children: React.ReactNode; tone?: PillTone }) {
+  return (
+    <code
+      className="text-[11px] font-mono px-1.5 py-0.5 rounded"
+      style={{
+        background: tone ? `var(--accent-${tone}-bg)` : "var(--surface-2)",
+        color: tone ? `var(--accent-${tone}-fg)` : "var(--text-secondary)",
+      }}
+    >
+      {children}
+    </code>
+  );
+}
+
+function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRow; isFirst: boolean }) {
+  const [open, setOpen] = useState(false);
+  const tone = ACTION_TONE[row.action ?? ""] ?? "slate";
+  const trans = parseTransition(row.action, row.details);
+  const summary = turnSummary(row.action, row.details);
+  const full = (row.details ?? "").trim();
+  // Expand is offered when the gist is truncated, or when the raw details
+  // carry more than the gist (e.g. a long override reason / plan rewrite).
+  const expandable = summary.length > 140 || (full.length > 0 && full !== summary && full.length > 140);
+
+  const gap = prev?.timestamp && row.timestamp
+    ? new Date(row.timestamp).getTime() - new Date(prev.timestamp).getTime()
+    : NaN;
+  const tokens = typeof row.turn_tokens === "number" && row.turn_tokens > 0 ? row.turn_tokens : 0;
+
+  return (
+    <li className="relative pl-5 py-3">
+      {/* rail dot */}
+      <span
+        className="absolute left-0 top-[18px] h-2 w-2 rounded-full -translate-x-1/2"
+        style={{ background: `var(--accent-${tone}-fg)`, boxShadow: `0 0 0 3px var(--background-base)` }}
+      />
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-[12px] opacity-80">{clockOf(row.timestamp)}</span>
+          {isFirst && <span className="font-mono text-[10px] opacity-40">{dayOf(row.timestamp)}</span>}
+          <TonePill tone={tone}>{(row.action ?? "—").replace(/_/g, " ")}</TonePill>
+          {row.actor ? <span className="text-[11px] opacity-60 font-mono">{row.actor}</span> : null}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {tokens > 0 && (
+            <span
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+              style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}
+              title="output tokens spent in this turn's window"
+            >
+              {fmtTokens(tokens)} tok
+            </span>
+          )}
+          {Number.isFinite(gap) && !isFirst && (
+            <span className="text-[10px] font-mono opacity-40" title="time since previous turn">
+              +{fmtGap(gap)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {trans && (
+        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+          {trans.field && <span className="text-[10px] uppercase tracking-wider opacity-40 mr-0.5">{trans.field}</span>}
+          {trans.from ? <StateChip>{trans.from}</StateChip> : <span className="text-[10px] opacity-40">start</span>}
+          <span className="opacity-40 text-[12px]">→</span>
+          {trans.to ? <StateChip tone={tone}>{trans.to}</StateChip> : <span className="opacity-40 text-[12px]">—</span>}
+        </div>
+      )}
+
+      {summary && (
+        <button
+          type="button"
+          disabled={!expandable}
+          onClick={() => expandable && setOpen((o) => !o)}
+          className={`mt-1.5 text-left w-full text-[12px] leading-relaxed opacity-75 ${expandable ? "hover:opacity-100 cursor-pointer" : "cursor-default"}`}
+        >
+          {open ? full : oneLine(summary, 140)}
+          {expandable && <span className="ml-1.5 opacity-50 text-[10px] uppercase tracking-wider">{open ? "less" : "more"}</span>}
+        </button>
+      )}
+    </li>
+  );
+}
+
+function Timeline({ rows, tokens }: { rows: HistoryRow[]; tokens?: number }) {
+  const first = rows[0]?.timestamp;
+  const last = rows[rows.length - 1]?.timestamp;
+  const span = first && last ? new Date(last).getTime() - new Date(first).getTime() : NaN;
+  // Prefer the sum of per-turn attributed tokens; fall back to the task-total
+  // the conductor reports (phase_progress.tokens_since_step) when unattributed.
+  const attributed = rows.reduce((a, r) => a + (typeof r.turn_tokens === "number" ? r.turn_tokens : 0), 0);
+  const headerTokens = attributed > 0 ? attributed : (typeof tokens === "number" ? tokens : 0);
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] opacity-50 mb-1">
+        <span>{rows.length} turn{rows.length === 1 ? "" : "s"}</span>
+        {Number.isFinite(span) && span > 0 && <span>· spanning {fmtGap(span)}</span>}
+        {headerTokens > 0 && <span>· ~{fmtTokens(headerTokens)} tokens total</span>}
+      </div>
+      <ul className="border-l border-[color:var(--midground-base)]/15 ml-1 divide-y divide-[color:var(--midground-base)]/10">
+        {rows.map((h, i) => (
+          <TimelineRow key={String(h.id ?? i)} row={h} prev={rows[i - 1]} isFirst={i === 0} />
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 const STATUS_CYCLE: Record<string, string[]> = {
@@ -629,19 +849,11 @@ export default function TaskDetailPage() {
       </Card>
 
       <Card>
-        <SectionLabel>History ({history.length})</SectionLabel>
+        <SectionLabel>Timeline ({history.length})</SectionLabel>
         {history.length === 0 ? (
-          <Empty>No transitions recorded.</Empty>
+          <Empty>No turns recorded.</Empty>
         ) : (
-          <ul className="divide-y divide-[color:var(--midground-base)]/10 mt-2">
-            {history.map((h, i) => (
-              <li key={i} className="py-2 text-[12px] font-mono">
-                <span className="opacity-60">{String(h.timestamp ?? "").slice(0, 19)}</span>
-                <span className="mx-2 opacity-80">{h.from_status ?? "—"} → {h.to_status ?? "—"}</span>
-                {h.reason && <span className="opacity-60">({h.reason})</span>}
-              </li>
-            ))}
-          </ul>
+          <Timeline rows={history} tokens={task.phase_progress?.tokens_since_step} />
         )}
       </Card>
     </Page>

@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.4"
+PRISM_VERSION = "6.3.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.5: Task-detail History becomes a readable TIMELINE of turns. The "
+    "old card rendered every audit row as a bare '— → —' because the SPA typed "
+    "history with from_status/to_status/reason fields the API never sends "
+    "(it sends actor/action/details/timestamp). TaskDetailPage now parses each "
+    "turn into wall-clock time, an action chip + actor, the real state "
+    "transition (e.g. STEP review_previous_notes → draft_story), the elapsed "
+    "gap since the previous turn, an expandable validation/reason gist, and a "
+    "per-turn token count. NEW per-turn tokens: GET /api/tasks/{id} now stamps "
+    "history rows with `turn_tokens` = output_tokens bucketed into each turn's "
+    "(prev, this] window, summed across the task's linked-session transcripts "
+    "(new claude_transcripts.live_token_events_for_session / _token_events, "
+    "mtime/size-cached like live_tokens_for_session; best-effort — unset when "
+    "folder mode is off or no transcript is readable). UI-forward; additive, "
+    "no schema change. "
     "v6.3.4: Auto-update restart (v6.3.3) must not orphan the pidfile. The "
     "main-thread re-exec branch in main.py used to call _own_pidfile_cleanup() "
     "before perform_restart(), but os.execv replaces the process image IN PLACE "

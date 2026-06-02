@@ -669,6 +669,92 @@ def live_tokens_for_session(
     return total
 
 
+# path -> (mtime, size, [(epoch_s, output_tokens), ...]) — same (mtime,size)
+# caching discipline as _sum_output_tokens, but a KEYED timeline of assistant
+# turns so token spend can be attributed to a wall-clock window (e.g. the
+# turn-to-turn interval on the task-detail timeline).
+_TOKEN_EVENTS_CACHE: dict[str, tuple[float, int, list[tuple[float, int]]]] = {}
+
+
+def _parse_iso_epoch(ts: str) -> float | None:
+    """ISO-8601 (UTC 'Z' or numeric offset) -> POSIX seconds; None on garbage."""
+    if not ts:
+        return None
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _token_events(path: Path) -> list[tuple[float, int]]:
+    """Per-assistant-turn (timestamp_epoch, output_tokens) for one transcript,
+    sorted ascending. Cached on (mtime, size) so a steady file costs nothing."""
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = str(path)
+    cached = _TOKEN_EVENTS_CACHE.get(key)
+    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return cached[2]
+    out: list[tuple[float, int]] = []
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            usage = (evt.get("message") or {}).get("usage") or {}
+            tok = int(usage.get("output_tokens") or 0)
+            if tok <= 0:
+                continue
+            ep = _parse_iso_epoch(evt.get("timestamp") or "")
+            if ep is None:
+                continue
+            out.append((ep, tok))
+    except OSError:
+        return cached[2] if cached else []
+    out.sort(key=lambda e: e[0])
+    _TOKEN_EVENTS_CACHE[key] = (st.st_mtime, st.st_size, out)
+    return out
+
+
+def live_token_events_for_session(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+) -> list[tuple[float, int]]:
+    """Like live_tokens_for_session, but returns the per-turn
+    (epoch_s, output_tokens) timeline across the parent transcript AND nested
+    workflow-subagent transcripts, sorted ascending. Empty when none found.
+    Lets a caller bucket spend into arbitrary wall-clock windows."""
+    if not session_id or not project_path:
+        return []
+    claude_home = claude_home or resolve_claude_home()
+    projects_dir = claude_home / "projects"
+    if not projects_dir.is_dir():
+        return []
+    out: list[tuple[float, int]] = []
+    seen: set[Path] = set()
+    for sub in projects_dir.iterdir():
+        if not sub.is_dir() or not slug_matches(sub.name, project_path):
+            continue
+        main = sub / f"{session_id}.jsonl"
+        if main.is_file() and main not in seen:
+            out.extend(_token_events(main))
+            seen.add(main)
+        sess_dir = sub / session_id
+        if sess_dir.is_dir():
+            for f in sess_dir.rglob("*.jsonl"):
+                if f not in seen:
+                    out.extend(_token_events(f))
+                    seen.add(f)
+    out.sort(key=lambda e: e[0])
+    return out
+
+
 def current_session_id(
     project_path: str, claude_home: Path | None = None,
 ) -> str:
