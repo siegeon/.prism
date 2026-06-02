@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.9"
+PRISM_VERSION = "6.3.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.10: Phase 3 of epic 4fd1e6b4 — the REAL learning handlers run on "
+    "the Phase-1 event bus and the polling memory timers are retired. New "
+    "services/event_handlers.py: session.imported reflects as ONE coalesced "
+    "pass (claims the project's pending candidates, deterministically skips "
+    "noise via reflection_worker._is_noise_candidate, reads existing memory "
+    "via memory_recall BEFORE writing so a near-dup REINFORCES the match "
+    "instead of minting a duplicate row); memory.written does dedup/supersede "
+    "DETECTION deterministically (string-sim + entity/predicate match, ZERO "
+    "claude) and only summarizes a true novelty via claude --model haiku, with "
+    "an input-hash skip so a re-emit is a no-op; memory.recalled+outcome is "
+    "ZERO-LLM per-memory credit assignment (recomputes effectiveness on ONLY "
+    "this recall_log's entries; global knob nudge is a SECONDARY output). "
+    "event_pool.default_registry() now wires these real handlers (no more "
+    "_noop_handler) and registers session.imported + memory.written "
+    "inference=True so the BudgetGovernor charges/circuit-breaks them. Timers "
+    "retired from main.py lifespan: Reflection Worker + Memory Summary Worker "
+    "spawn calls removed, Memory Ops Merge dropped from registered_ops() "
+    "(MERGE_RETIRED_TO_BUS), transcript->candidate reflection drain retired "
+    "(TRANSCRIPT_CANDIDATE_RETIRED_TO_BUS) — the importer still emits "
+    "SESSION_IMPORTED. Tests: tests/integration/test_event_handlers_phase3.py "
+    "(14/14 green). "
     "v6.3.9: Task-detail History becomes a readable TIMELINE of turns. The "
     "old card rendered every audit row as a bare '— → —' because the SPA typed "
     "history with from_status/to_status/reason fields the API never sends "

@@ -336,24 +336,21 @@ async def lifespan(_app: FastAPI):
         # them) and backfills the user's historical sessions.
         from prism_service.services.claude_transcripts import start_transcript_importer
         threading.Thread(target=start_transcript_importer, daemon=True).start()
-        # v6.0.18 — opt-in background reflection. Off by default (a
-        # zero-LLM service shouldn't burn claude tokens unprompted);
-        # set PRISM_REFLECTION_WORKER=on to drain pending briefs every
-        # PRISM_REFLECTION_WORKER_INTERVAL seconds.
-        from prism_service.services.reflection_worker import start_reflection_worker
-        start_reflection_worker()
-        # v6.1.1 — fills ExpertiseEntry.summary on memories that ship
-        # without one so the MemoryPage tile face is a human-readable
-        # sentence instead of dense engineering prose. Defaults ON
-        # (the feature is only useful when summaries actually fill);
-        # disable with PRISM_MEMORY_SUMMARY_WORKER=off.
-        from prism_service.services.memory_summary_worker import (
-            start_memory_summary_worker,
-        )
-        start_memory_summary_worker()
+        # Phase 3 (epic 4fd1e6b4) — TIMERS RETIRED ONTO THE BUS. The
+        # Reflection Worker and Memory Summary Worker no longer run on their
+        # own polling clocks; session.imported reflects (coalesced, read-
+        # before-write) and memory.written summarizes (haiku) on the event
+        # pool below. Their dual-run flags are gone with the spawn calls.
+        # TRANSCRIPT_CANDIDATE_RETIRED_TO_BUS: the transcript->candidate
+        # always-on reflection drain is retired — the transcript importer
+        # still produces the candidate + emits SESSION_IMPORTED, and the
+        # session.imported handler reflects on it via the bus.
         # Tier-2 — generalised memory-operation chassis. Each MemoryOperation
         # (forget / prune / distill / ...) is its own env-gated, interval
         # daemon, off by default; PRISM_<OP_TYPE>_WORKER=on to enable one.
+        # MERGE_RETIRED_TO_BUS: the Memory Ops Merge op is removed from the
+        # always-on fleet (registered_ops) — memory.written does dedup/
+        # supersede DETECTION deterministically on the bus instead.
         from prism_service.services.memory_ops_worker import (
             start_memory_ops_workers,
         )

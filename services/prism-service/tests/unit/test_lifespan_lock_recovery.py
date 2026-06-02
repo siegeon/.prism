@@ -43,26 +43,28 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
             patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
-    # 13 daemon threads as of v6.3.7 (epic 4fd1e6b4 Phase 1 added the
-    # event-pool daemon — dual-run alongside the existing timers):
+    # 11 daemon threads as of v6.3.10 (epic 4fd1e6b4 Phase 3 RETIRED the
+    # Reflection Worker + Memory Summary Worker timers onto the event-pool
+    # bus — their spawn calls are gone; 13 -> 11):
     #   7 explicit in main.py — mcp + governance + drift + quality +
     #     understand_drainer + trash_sweeper + transcript_importer
     #   1 from start_auto_updater() (always starts)
-    #   1 from start_memory_summary_worker() (defaults ON, v6.1.1+)
     #   1 from start_graph_enrich_worker() (defaults ON, v6.2.0+)
-    #   1 from start_reflection_worker() (defaults ON, v6.2.29 / FIX 1a —
-    #     PRISM_REFLECTION_WORKER=off to opt out)
     #   1 from start_adaptive_policy_worker() (defaults ON, v6.2.29 / FIX 3a —
     #     PRISM_ADAPTIVE_POLICY_WORKER=off to opt out)
     #   1 from start_event_pool() (defaults ON, epic 4fd1e6b4 Phase 1 /
-    #     event_pool.py — PRISM_EVENT_POOL_INTERVAL=0 to opt out)
+    #     event_pool.py — now runs the REAL migrated handlers; the retired
+    #     Reflection + Memory Summary work happens here via the bus)
+    # RETIRED (no longer spawned, Phase 3): start_reflection_worker() and
+    # start_memory_summary_worker() — session.imported / memory.written
+    # handlers do that work on the bus now.
     # start_memory_ops_workers() is OFF by default (no PRISM_<OP>_WORKER set)
     # so it adds 0 here.
     # patch("prism_service.main.threading.Thread") mutates the global
     # threading module, so threads started inside the indirectly-imported
     # services are also intercepted.
     started = [c for c in mock_t.return_value.start.mock_calls]
-    assert len(started) == 13
+    assert len(started) == 11
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -75,8 +77,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    # Same 13 threads — see test_lifespan_starts_threads_when_no_lock.
-    assert len(started) == 13  # threads started despite the stale lock
+    # Same 11 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 11  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err

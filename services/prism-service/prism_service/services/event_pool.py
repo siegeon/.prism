@@ -234,17 +234,30 @@ def _noop_handler(event: Event) -> None:  # pragma: no cover - trivial
     return None
 
 
+# Event types whose handler shells `claude -p` — registered inference=True so
+# the BudgetGovernor charges + circuit-breaks them. recalled+outcome is pure
+# arithmetic (zero LLM) and is deliberately absent.
+_INFERENCE_EVENT_TYPES = (SESSION_IMPORTED, MEMORY_WRITTEN)
+
+
 def default_registry() -> dict[str, list[Handler]]:
-    """The Phase-1 default handler map: one wrap/no-op handler per event
-    type. Exposed so callers register the same no-op surface and Phase 3
-    has a single place to swap in the real migrated handlers."""
-    return {et: [_noop_handler] for et in ALL_EVENT_TYPES}
+    """The Phase-3 default handler map: the REAL migrated learning handler
+    per event type (no more wrap/no-op). This is the single swap point the
+    process-singleton bus registers through, so every emitter hits the
+    migrated behavior."""
+    from prism_service.services import event_handlers as eh
+
+    return {
+        SESSION_IMPORTED: [eh.handle_session_imported],
+        MEMORY_WRITTEN: [eh.handle_memory_written],
+        MEMORY_RECALLED_OUTCOME: [eh.handle_recalled_outcome],
+    }
 
 
 def _register_default_handlers(bus: EventBus) -> None:
     for et, handlers in default_registry().items():
         for h in handlers:
-            bus.register_handler(et, h)
+            bus.register_handler(et, h, inference=et in _INFERENCE_EVENT_TYPES)
 
 
 _LOG_PREFIX = "[event_pool]"
