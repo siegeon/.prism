@@ -25,10 +25,13 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # (conductor_advance / conductor_gate) + 10 v5.1 understand_* tools
     # (T9 nine + understand_configure follow-up) + brain_understand
     # (v6.1.6 Ultimate Graph merge retrieval) + task_link_session
-    # (v6.2.9 task<->session association — rides the task_* family).
-    assert len(names) == 31
+    # (v6.2.9 task<->session association — rides the task_* family)
+    # + register_claude_source (v6.3.16 — Claude reports its own
+    # transcript source instead of slug-guessing; task b6650506).
+    assert len(names) == 32
     assert "brain_understand" in names
     assert "task_link_session" in names
+    assert "register_claude_source" in names
     assert {
         "brain_search",
         "brain_call_chain",
