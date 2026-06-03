@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from prism_service.data_dir import resolve_claude_home
 from prism_service.project_context import get_project
@@ -141,6 +141,49 @@ def entry_detail(entry_id: str, project: str = Query("default")) -> dict:
     ]
     chain.sort(key=lambda e: e.generation)
     return {"entry": entry, "chain": chain}
+
+
+@router.get("/claude-config")
+def get_claude_config(project: str = Query("default")) -> dict:
+    """Return the per-project Claude transcript source dir.
+
+    ``source`` is 'explicit' when a claude_project_dir is persisted (reported
+    by Claude via register_claude_source, or set in Settings), else 'auto'
+    (PRISM falls back to slug auto-discovery)."""
+    from prism_service.engines import understand_engine as ue
+    try:
+        state = ue._read_state(project)
+    except Exception:
+        state = {}
+    cpd = (state.get("claude_project_dir") or "").strip()
+    return {
+        "project": project,
+        "claude_project_dir": cpd,
+        "source": "explicit" if cpd else "auto",
+    }
+
+
+@router.post("/claude-config")
+def set_claude_config(
+    project: str = Query("default"),
+    body: dict = Body(...),
+) -> dict:
+    """Persist the per-project Claude transcript source dir via the same
+    understand_state.json writer the MCP tool uses. Blank clears it (back to
+    auto slug discovery)."""
+    from prism_service.engines import understand_engine as ue
+    new_dir = (body.get("claude_project_dir") or "").strip()
+    state = ue._read_state(project)
+    if new_dir:
+        state["claude_project_dir"] = new_dir
+    else:
+        state.pop("claude_project_dir", None)
+    ue._write_state(project, state)
+    return {
+        "project": project,
+        "claude_project_dir": new_dir,
+        "source": "explicit" if new_dir else "auto",
+    }
 
 
 @router.post("/import-claude-memories")
