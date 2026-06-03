@@ -32,7 +32,7 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
   activity: {
     title: "Background activity",
-    description: "Live status of in-process background workers (transcript importer, drift reindex, understand drainer, governance, trash sweeper, auto-updater, opt-in reflection worker) and the analyzer queue across every project — what's running, what's in flight, what's pending or failed.",
+    description: "Live status of in-process background work: the event-driven memory learning pipeline (throughput, queue depth, in-flight) and the single maintenance clock (last/next sweep), plus the non-memory infra workers (transcript importer, drift reindex, understand drainer, trash sweeper, auto-updater) and the analyzer queue across every project.",
   },
   logs: {
     title: "Logs",
@@ -1487,12 +1487,36 @@ type ServiceInfo = {
   mcp_endpoint: string;
 };
 
+// Phase 5 (epic 4fd1e6b4): per-pass consolidation receipt — one-line summary
+// + click-to-expand detail (progressive disclosure, no raw JSON wall).
+type ConsolidationReceipt = {
+  extracted: number;
+  deduped: number;
+  superseded: number;
+  retired: number;
+  at?: string | null;
+};
+
 type Worker = {
   id: string;
+  // Phase 5: the memory concern collapses into a "pipeline" row (event
+  // throughput) + a "clock" row (maintenance heartbeat). Everything else is
+  // a plain "worker" row. The panel branches its render on this.
+  kind?: "worker" | "pipeline" | "clock";
   label: string;
   running: boolean;
   cadence_s: number;
   description: string;
+  // Pipeline-row readouts (kind === "pipeline").
+  events_per_min?: number;
+  queue_depth?: number;
+  last_event_ts?: number | null;
+  in_flight?: number;
+  receipt?: ConsolidationReceipt | null;
+  // Clock-row readouts (kind === "clock").
+  interval_s?: number;
+  last_sweep?: number | null;
+  next_sweep?: number | null;
   // v6.1.1 — workers that shell out to claude carry a prompt so the
   // drilldown can render the actual instructions driving them. Values:
   //   "static"   — `prompt` is the literal template the worker sends
@@ -1571,7 +1595,15 @@ function BackgroundWorkersPanel() {
         <Empty>No workers reported.</Empty>
       ) : (
       <ul className="divide-y divide-[color:var(--midground-base)]/10">
-      {workers.map((w) => <WorkerRow key={w.id} worker={w} />)}
+      {workers.map((w) =>
+        w.kind === "pipeline" ? (
+          <PipelineRow key={w.id} worker={w} now={now} />
+        ) : w.kind === "clock" ? (
+          <ClockRow key={w.id} worker={w} now={now} />
+        ) : (
+          <WorkerRow key={w.id} worker={w} />
+        )
+      )}
     </ul>
       )}
     </>
@@ -1638,11 +1670,153 @@ function WorkerRow({ worker }: { worker: Worker }) {
             {kind === "dynamic" && "prompt construction — assembled per-run"}
             {kind === "per_job" && "per-job prompts — see individual job rows below"}
           </div>
-          <pre className="whitespace-pre-wrap font-mono text-[12px] opacity-90">
+          <div className="whitespace-pre-wrap font-mono text-[12px] opacity-90">
             {worker.prompt || "(no prompt provided)"}
-          </pre>
+          </div>
         </div>
       )}
+    </li>
+  );
+}
+
+// Phase 5: shared bits for the collapsed pipeline + clock rows.
+function StatusDot({ running }: { running: boolean }) {
+  return (
+    <span
+      className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+        running
+          ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+          : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+      }`}
+      aria-label={running ? "running" : "not running"}
+    />
+  );
+}
+
+function Readout({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[16px] font-mono leading-none">{value}</span>
+      <span className="text-[10px] uppercase tracking-wider opacity-50 mt-1">{label}</span>
+    </div>
+  );
+}
+
+function agoLabel(ts: number | null | undefined, now: number): string {
+  if (!ts) return "never";
+  const secs = Math.max(0, Math.round(now / 1000 - ts));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  return `${Math.round(secs / 3600)}h ago`;
+}
+
+function inLabel(ts: number | null | undefined, now: number): string {
+  if (!ts) return "—";
+  const secs = Math.round(ts - now / 1000);
+  if (secs <= 0) return "due now";
+  if (secs < 60) return `in ${secs}s`;
+  if (secs < 3600) return `in ${Math.round(secs / 60)}m`;
+  return `in ${Math.round(secs / 3600)}h`;
+}
+
+// Event-driven learning pipeline row — events/min, queue depth, last event,
+// in-flight count + a progressive-disclosure consolidation receipt.
+function PipelineRow({ worker, now }: { worker: Worker; now: number }) {
+  const [open, setOpen] = useState(false);
+  const r = worker.receipt ?? null;
+  const summary = r
+    ? `${r.extracted} extracted · ${r.deduped} deduped · ${r.superseded} superseded · ${r.retired} retired`
+    : "no consolidation passes yet";
+  return (
+    <li className="py-3 text-sm">
+      <div className="flex items-start gap-3">
+        <StatusDot running={worker.running} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{worker.label}</span>
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90">
+              pipeline
+            </span>
+            {!worker.running && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+                not running
+              </span>
+            )}
+          </div>
+          <div className="text-xs opacity-60 mt-0.5 leading-relaxed">{worker.description}</div>
+          <div className="mt-3 grid grid-cols-4 gap-4">
+            <Readout label="events/min" value={Math.round(worker.events_per_min ?? 0)} />
+            <Readout label="queue depth" value={worker.queue_depth ?? 0} />
+            <Readout label="last event" value={agoLabel(worker.last_event_ts, now)} />
+            <Readout label="in-flight" value={worker.in_flight ?? 0} />
+          </div>
+          {/* Progressive-disclosure consolidation receipt: one-line summary,
+              click to expand the per-pass detail. No raw JSON. */}
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="mt-3 w-full text-left flex items-center gap-2 text-[12px] rounded-md -mx-2 px-2 py-1 hover:bg-[color:var(--midground-base)]/[0.03] cursor-pointer"
+            aria-expanded={open}
+          >
+            <span className="text-[10px] uppercase tracking-wider opacity-50">last consolidation</span>
+            <span className="font-mono opacity-80 truncate">{summary}</span>
+            <span className="text-[10px] opacity-40 font-mono ml-auto">
+              {open ? "hide ▴" : "detail ▾"}
+            </span>
+          </button>
+          {open && r && (
+            <div className="mt-2 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 grid grid-cols-4 gap-4">
+              <Readout label="extracted" value={r.extracted} />
+              <Readout label="deduped" value={r.deduped} />
+              <Readout label="superseded" value={r.superseded} />
+              <Readout label="retired" value={r.retired} />
+              {r.at && (
+                <div className="col-span-4 text-[11px] opacity-50 font-mono">
+                  ran {agoLabel(Date.parse(r.at) / 1000, now)}
+                </div>
+              )}
+            </div>
+          )}
+          {open && !r && (
+            <div className="mt-2 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 text-[12px] opacity-60">
+              No consolidation pass has run yet — receipts appear here once the
+              pipeline mints or supersedes memories.
+            </div>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+// Maintenance-clock row — interval, last sweep, next sweep.
+function ClockRow({ worker, now }: { worker: Worker; now: number }) {
+  const interval = worker.interval_s ?? worker.cadence_s ?? 0;
+  const intervalLabel = interval < 60 ? `${interval}s` : `${Math.round(interval / 60)}m`;
+  return (
+    <li className="py-3 text-sm">
+      <div className="flex items-start gap-3">
+        <StatusDot running={worker.running} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">{worker.label}</span>
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300/90">
+              clock
+            </span>
+            {!worker.running && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+                not running
+              </span>
+            )}
+          </div>
+          <div className="text-xs opacity-60 mt-0.5 leading-relaxed">{worker.description}</div>
+          <div className="mt-3 grid grid-cols-3 gap-4">
+            <Readout label="interval" value={intervalLabel} />
+            <Readout label="last sweep" value={agoLabel(worker.last_sweep, now)} />
+            <Readout label="next sweep" value={inLabel(worker.next_sweep, now)} />
+          </div>
+        </div>
+      </div>
     </li>
   );
 }

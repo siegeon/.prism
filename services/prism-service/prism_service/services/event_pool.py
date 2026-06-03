@@ -36,8 +36,9 @@ import queue
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
 
 
 # --- Event types -----------------------------------------------------------
@@ -169,6 +170,16 @@ class EventBus:
         # free and never circuit-broken.
         self._inference_types: set[str] = set()
         self._lock = threading.Lock()
+        # --- Phase 5 (epic 4fd1e6b4): pipeline-row metrics --------------
+        # The Background Activity event-pipeline row reports throughput,
+        # last-event timestamp, and in-flight count. We keep a rolling
+        # window of emit timestamps (events/min = count in the last 60s),
+        # the most recent emit stamp, and a live in-flight counter the
+        # ConsumerPool bumps around each dispatch.
+        self._emit_ts: Deque[float] = deque(maxlen=4096)
+        self._last_event_ts: Optional[float] = None
+        self._in_flight = 0
+        self._metrics_lock = threading.Lock()
 
     def register_handler(
         self, event_type: str, handler: Handler, inference: bool = False
@@ -192,6 +203,10 @@ class EventBus:
 
     def emit(self, event: Event) -> None:
         """Enqueue and return at once. Backpressure-free by contract."""
+        now = time.time()
+        with self._metrics_lock:
+            self._emit_ts.append(now)
+            self._last_event_ts = now
         self._q.put(event)
 
     def requeue(self, event: Event) -> None:
@@ -211,6 +226,33 @@ class EventBus:
     def queue_depth(self) -> int:
         """Number of events waiting on the bus (pinned oracle name)."""
         return self._q.qsize()
+
+    # --- Phase 5 pipeline-row metrics --------------------------------------
+    def events_per_min(self) -> float:
+        """Throughput: events emitted in the trailing 60s. The pipeline row's
+        events/min readout. Zero until events start flowing."""
+        cutoff = time.time() - 60.0
+        with self._metrics_lock:
+            return float(sum(1 for t in self._emit_ts if t >= cutoff))
+
+    def last_event_ts(self) -> Optional[float]:
+        """Epoch seconds of the most recent emit, or None if no event has ever
+        flowed — drives the pipeline row's 'last event Xs ago' readout."""
+        with self._metrics_lock:
+            return self._last_event_ts
+
+    def in_flight(self) -> int:
+        """Events claimed off the bus but not yet finished dispatching. The
+        ConsumerPool brackets each dispatch with mark_in_flight/mark_done."""
+        with self._metrics_lock:
+            return self._in_flight
+
+    def mark_in_flight(self, delta: int = 1) -> None:
+        with self._metrics_lock:
+            self._in_flight = max(0, self._in_flight + delta)
+
+    def mark_done(self) -> None:
+        self.mark_in_flight(-1)
 
 
 # Process-wide singleton — the one bus emitters (Phase 2) attach to.
@@ -345,10 +387,13 @@ class ConsumerPool:
                 time.sleep(0.01)
                 continue
 
+            self._bus.mark_in_flight()
+
             def _work(ev: Event = event) -> None:
                 try:
                     self._run_handlers(ev)
                 finally:
+                    self._bus.mark_done()
                     self._sem.release()
 
             threading.Thread(
@@ -369,7 +414,11 @@ class ConsumerPool:
                 self._bus.requeue(event)
                 deferred.append(event)
                 continue
-            self._run_handlers(event)
+            self._bus.mark_in_flight()
+            try:
+                self._run_handlers(event)
+            finally:
+                self._bus.mark_done()
         return deferred
 
 
