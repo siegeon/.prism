@@ -41,120 +41,28 @@ def overview(
 
 
 @router.get("/workers")
-def workers() -> dict:
-    """v6.0.9 — Honest snapshot of what's running vs what isn't. v6.0.18
-    splits the reflection_worker entry by PRISM_REFLECTION_WORKER env
-    state so the panel reports reality rather than a fixed 'NOT
-    RUNNING by design' string. v6.1.1 adds a `prompt` field on workers
-    that shell out to claude_cli, so the /settings/activity drilldown
-    can render the actual instructions that drive each one."""
-    from prism_service.services import reflection_worker
-    reflection_on = reflection_worker.is_enabled()
-    reflection_interval = int(
-        os.environ.get("PRISM_REFLECTION_WORKER_INTERVAL", "900")
-    )
-    if reflection_on:
-        reflection_entry = {
-            "id": "reflection_worker",
-            "label": "Reflection worker",
-            "running": True,
-            "cadence_s": reflection_interval,
-            "description": (
-                "Default ON (PRISM_REFLECTION_WORKER=off to opt out). "
-                "Picks the oldest real-signal pending "
-                "consolidation_candidate every "
-                f"{reflection_interval}s, dispatches the same headless "
-                "claude_cli path /api/consolidation/run-reflection uses, "
-                "and persists the verdict + minted memories."
-            ),
-            "prompt_kind": "dynamic",
-            "prompt": (
-                "Reflection prompts are assembled per-candidate from the "
-                "JanitorService brief. Preview the next one via "
-                "GET /api/consolidation/next-brief; the runner template "
-                "lives in services/reflection_runner.py."
-            ),
-        }
-    else:
-        reflection_entry = {
-            "id": "reflection_worker",
-            "label": "Reflection worker",
-            "running": False,
-            "cadence_s": 0,
-            "description": (
-                "OFF — set PRISM_REFLECTION_WORKER=on (and optionally "
-                "PRISM_REFLECTION_WORKER_INTERVAL, default 900s) to "
-                "drain pending briefs automatically. Until then, "
-                "/learning + /memory only fill when you click Reflect "
-                "on /consolidation or run /prism-reflect from a session."
-            ),
-            "prompt_kind": "none",
-        }
-    from prism_service.services import memory_summary_worker
-    memory_summary_enabled = memory_summary_worker.is_enabled()
-    memory_summary_entry = {
-        "id": memory_summary_worker.WORKER_ID,
-        "label": memory_summary_worker.WORKER_LABEL,
-        "running": memory_summary_enabled,
-        "cadence_s": (
-            int(os.environ.get("PRISM_MEMORY_SUMMARY_WORKER_INTERVAL", "300"))
-            if memory_summary_enabled else 0
-        ),
-        "description": (
-            "Fills ExpertiseEntry.summary on active memories that ship "
-            "without one — each sweep takes the oldest 3 (MAX_PER_CYCLE) "
-            "and runs claude -p to mint a one-sentence rephrase for the "
-            "MemoryPage tile face. Defaults ON, every 300s (v6.2.18, "
-            "raised from 60s to bound token use). Costs claude quota — "
-            "set PRISM_MEMORY_SUMMARY_WORKER=off to disable."
-            if memory_summary_enabled else
-            "OFF (PRISM_MEMORY_SUMMARY_WORKER=off). Set "
-            "PRISM_MEMORY_SUMMARY_WORKER=on to fill the summary field "
-            "on the MemoryPage tile face."
-        ),
-        "prompt_kind": "static",
-        "prompt": memory_summary_worker.SUMMARY_PROMPT_TEMPLATE,
-    }
-    # Phase 4 (epic 4fd1e6b4) — the five wall-clock memory duties
-    # (governance TTL+decay+dup, verify_staleness, forget, adaptive retune,
-    # quality-vs-git) are folded into ONE maintenance clock. This single entry
-    # REPLACES the prior separate governance_timer + adaptive_policy_worker
-    # (+ any VerifyStaleness/Forget per-op) rows.
-    from prism_service.services import maintenance_clock as mc
-    _cadences = mc.pass_cadences()
-    _enabled = mc.pass_enabled()
-    _on = [n for n in mc.PASS_ORDER if _enabled.get(n)]
-    _off = [n for n in mc.PASS_ORDER if not _enabled.get(n)]
+def workers(project: str = Query("default")) -> dict:
+    """Honest snapshot of what's running vs what isn't.
 
-    def _fmt_cadence(s: int) -> str:
-        if s % 3600 == 0:
-            return f"{s // 3600}h"
-        if s % 60 == 0:
-            return f"{s // 60}m"
-        return f"{s}s"
-
-    _per_pass = ", ".join(f"{n}~{_fmt_cadence(_cadences[n])}" for n in mc.PASS_ORDER)
-    maintenance_entry = {
-        "id": mc.WORKER_ID,
-        "label": mc.WORKER_LABEL,
-        "running": mc.is_enabled(),
-        "cadence_s": mc.heartbeat_interval_s(),
-        "description": (
-            "ONE heartbeat thread (folds the prior 4-5 separate memory "
-            "timers). Each tick iterates every project and runs, in sequence, "
-            "five memory passes — each behind its OWN cadence gate: "
-            f"{_per_pass}. Passes ON: {', '.join(_on) or 'none'}. "
-            f"Passes OFF (env-gated): {', '.join(_off) or 'none'}. Honors "
-            "PRISM_GOVERNANCE_INTERVAL / PRISM_QUALITY_INTERVAL / "
-            "PRISM_ADAPTIVE_POLICY_WORKER[_INTERVAL] / PRISM_<OP>_WORKER; "
-            "disable the whole fold with PRISM_MAINTENANCE_CLOCK=off."
-        ),
-        "prompt_kind": "none",
-    }
+    Phase 5 (epic 4fd1e6b4) COLLAPSES the memory concern. The discrete
+    reflection_worker + memory_summary_worker rows are gone; the memory
+    learning pipeline is now presented as:
+      - kind=="pipeline" rows — the event-driven learning pipeline (events
+        flow through the EventBus → ConsumerPool), reporting live throughput
+        (events_per_min), queue depth, last-event timestamp, and in-flight
+        count, plus a per-pass consolidation receipt for progressive
+        disclosure.
+      - kind=="clock"    row  — the single Phase-4 maintenance clock,
+        reporting interval / last sweep / next sweep.
+    Non-memory infra/brain workers (transcript importer, drift reindex,
+    understand drainer, trash sweeper, auto-updater) stay listed separately
+    as kind=="worker" rows. Each row carries a `kind` so the SPA panel can
+    branch its render."""
     return {
         "workers": [
             {
                 "id": "transcript_importer",
+                "kind": "worker",
                 "label": "Transcript importer",
                 "running": True,
                 "cadence_s": 60,
@@ -168,6 +76,7 @@ def workers() -> dict:
             },
             {
                 "id": "drift_timer",
+                "kind": "worker",
                 "label": "Brain drift reindex",
                 "running": True,
                 "cadence_s": 1800,
@@ -176,6 +85,7 @@ def workers() -> dict:
             },
             {
                 "id": "understand_drainer",
+                "kind": "worker",
                 "label": "Understand analyzer drainer",
                 "running": True,
                 "cadence_s": 0,
@@ -190,6 +100,7 @@ def workers() -> dict:
             },
             {
                 "id": "trash_sweeper",
+                "kind": "worker",
                 "label": "Trash sweeper",
                 "running": True,
                 "cadence_s": 30,
@@ -198,16 +109,124 @@ def workers() -> dict:
             },
             {
                 "id": "auto_updater",
+                "kind": "worker",
                 "label": "Auto-updater",
                 "running": True,
                 "cadence_s": 1800,
                 "description": "Polls GitHub Releases, applies newer wheel via pip.",
                 "prompt_kind": "none",
             },
-            reflection_entry,
-            memory_summary_entry,
-            maintenance_entry,
+            _event_pipeline_row(project),
+            _maintenance_clock_row(),
         ],
+    }
+
+
+def _event_pipeline_row(project: str) -> dict:
+    """The collapsed event-driven learning pipeline row (kind=='pipeline').
+
+    Sources live metrics off the process-singleton EventBus (event_pool):
+    throughput, queue depth, last-event timestamp, and in-flight count — the
+    four readouts that replace the discrete reflection_worker /
+    memory_summary_worker rows. Also carries the latest per-pass
+    consolidation receipt (extracted / deduped / superseded / retired) for
+    the panel's progressive-disclosure summary."""
+    from prism_service.services import event_pool as ep
+    bus = ep.get_bus()
+    return {
+        "id": "memory_learning_pipeline",
+        "kind": "pipeline",
+        "label": "Memory learning pipeline",
+        "running": ep.is_enabled(),
+        "cadence_s": ep._interval_s(),
+        "events_per_min": bus.events_per_min(),
+        "queue_depth": bus.queue_depth(),
+        "last_event_ts": bus.last_event_ts(),
+        "in_flight": bus.in_flight(),
+        "receipt": _latest_consolidation_receipt(project),
+        "description": (
+            "Event-driven learning: session.imported / memory.written / "
+            "memory.recalled+outcome flow through the in-process EventBus to "
+            "the budget-governed consumer pool — the single claude -p "
+            "chokepoint that replaced the old reflection + memory-summary "
+            "timers. Folds reflection + summary minting onto one pipeline."
+        ),
+    }
+
+
+def _latest_consolidation_receipt(project: str) -> dict | None:
+    """Last consolidation pass receipt for progressive disclosure: how many
+    memories the most recent reflection extracted / deduped / superseded /
+    retired. Reads the recent runs already surfaced by the consolidation
+    overview; returns None when there are no runs yet."""
+    try:
+        ctx = get_project(project)
+        scores_db = str(ctx._data_dir / "scores.db")
+        if not Path(scores_db).exists():
+            return None
+        runs = get_recent_runs(scores_db, limit=1)
+        if not runs:
+            return None
+        r = runs[0] or {}
+        payload = _json.loads(r.get("output_json") or "{}")
+        new_mem = payload.get("new_memories") or []
+        invalidated = payload.get("invalidate_memory_ids") or []
+        return {
+            "extracted": len(new_mem) if isinstance(new_mem, list)
+            else int(payload.get("extracted", 0) or 0),
+            "deduped": int(payload.get("deduped", 0) or 0),
+            "superseded": len(invalidated) if isinstance(invalidated, list)
+            else int(payload.get("superseded", 0) or 0),
+            "retired": int(payload.get("retired", 0) or 0),
+            "at": r.get("run_at"),
+        }
+    except Exception:
+        return None
+
+
+def _maintenance_clock_row() -> dict:
+    """The single Phase-4 maintenance clock row (kind=='clock').
+
+    The five wall-clock memory duties (governance TTL+decay+dup,
+    verify_staleness, forget, adaptive retune, quality-vs-git) are folded
+    into ONE heartbeat. Reports interval / last sweep / next sweep alongside
+    each pass's own cadence gate."""
+    from prism_service.services import maintenance_clock as mc
+    _cadences = mc.pass_cadences()
+    _enabled = mc.pass_enabled()
+    _on = [n for n in mc.PASS_ORDER if _enabled.get(n)]
+    _off = [n for n in mc.PASS_ORDER if not _enabled.get(n)]
+
+    def _fmt_cadence(s: int) -> str:
+        if s % 3600 == 0:
+            return f"{s // 3600}h"
+        if s % 60 == 0:
+            return f"{s // 60}m"
+        return f"{s}s"
+
+    _per_pass = ", ".join(f"{n}~{_fmt_cadence(_cadences[n])}" for n in mc.PASS_ORDER)
+    return {
+        "id": mc.WORKER_ID,
+        "kind": "clock",
+        "label": mc.WORKER_LABEL,
+        "running": mc.is_enabled(),
+        "cadence_s": mc.heartbeat_interval_s(),
+        "interval_s": mc.heartbeat_interval_s(),
+        "last_sweep": mc.last_sweep_ts(),
+        "next_sweep": mc.next_sweep_ts(),
+        "passes": {n: {"cadence_s": _cadences[n], "enabled": _enabled.get(n, False)}
+                   for n in mc.PASS_ORDER},
+        "description": (
+            "ONE heartbeat thread (folds the prior 4-5 separate memory "
+            "timers). Each tick iterates every project and runs, in sequence, "
+            "five memory passes — each behind its OWN cadence gate: "
+            f"{_per_pass}. Passes ON: {', '.join(_on) or 'none'}. "
+            f"Passes OFF (env-gated): {', '.join(_off) or 'none'}. Honors "
+            "PRISM_GOVERNANCE_INTERVAL / PRISM_QUALITY_INTERVAL / "
+            "PRISM_ADAPTIVE_POLICY_WORKER[_INTERVAL] / PRISM_<OP>_WORKER; "
+            "disable the whole fold with PRISM_MAINTENANCE_CLOCK=off."
+        ),
+        "prompt_kind": "none",
     }
 
 

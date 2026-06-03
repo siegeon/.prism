@@ -39,6 +39,35 @@ def _now() -> float:
     return time.time()
 
 
+# --- Phase 5 (epic 4fd1e6b4): heartbeat observability ----------------------
+# The Background Activity clock row reports last sweep + next sweep. The loop
+# stamps this each tick; the API reads it (None until the first tick).
+_last_sweep_ts: float | None = None
+_last_sweep_lock = threading.Lock()
+
+
+def _stamp_sweep() -> None:
+    global _last_sweep_ts
+    with _last_sweep_lock:
+        _last_sweep_ts = time.time()
+
+
+def last_sweep_ts() -> float | None:
+    """Epoch seconds of the most recent heartbeat tick, or None if the clock
+    has not ticked yet."""
+    with _last_sweep_lock:
+        return _last_sweep_ts
+
+
+def next_sweep_ts() -> float | None:
+    """Projected epoch of the next tick: last sweep + the heartbeat interval.
+    None until the clock has ticked once."""
+    last = last_sweep_ts()
+    if last is None:
+        return None
+    return last + heartbeat_interval_s()
+
+
 def _log(msg: str) -> None:
     print(f"[{WORKER_ID}] {msg}", file=_sys.stderr, flush=True)
 
@@ -253,6 +282,7 @@ def _loop(interval_s: int, initial_delay_s: float) -> None:
     )
     while True:
         try:
+            _stamp_sweep()
             enabled = pass_enabled()
             adaptive_ran_this_tick = False
             for pid in get_all_projects():

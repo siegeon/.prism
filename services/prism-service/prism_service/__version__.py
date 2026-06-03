@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.13"
+PRISM_VERSION = "6.3.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.14: Phase 5 of epic 4fd1e6b4 — COLLAPSE the Background Activity UI "
+    "for the memory concern into ~2 pipeline rows + 1 maintenance-clock row. "
+    "GET /api/consolidation/workers no longer emits the discrete "
+    "reflection_worker / memory_summary_worker rows; instead it emits a "
+    "kind=='pipeline' row (the event-driven learning pipeline) carrying live "
+    "EventBus metrics — events_per_min, queue_depth, last_event_ts, in_flight "
+    "— plus the latest per-pass consolidation receipt (extracted / deduped / "
+    "superseded / retired), and a kind=='clock' row (the Phase-4 maintenance "
+    "heartbeat) carrying interval_s / last_sweep / next_sweep. New EventBus "
+    "metrics in services/event_pool.py (rolling 60s emit window + last-event "
+    "stamp + ConsumerPool-bracketed in-flight counter) and a module-level "
+    "last/next-sweep stamp in services/maintenance_clock.py. SettingsPage "
+    "BackgroundWorkersPanel branches on row kind: PipelineRow renders the four "
+    "throughput readouts + a one-line consolidation receipt summary with "
+    "click-to-expand per-pass detail (progressive disclosure, Hermes "
+    "primitives, no <pre>/JSON.stringify); ClockRow renders interval / last "
+    "sweep / next sweep. Non-memory infra/brain workers stay listed "
+    "separately. Tests: tests/integration/"
+    "test_activity_collapse_pipelines_clock.py + "
+    "tests/unit/test_activity_pipelines_clock_ui.py (12 green). "
     "v6.3.13: task-detail Timeline per-turn token pills now actually render. "
     "Root cause: TaskService.history() returns TaskHistory DATACLASSES, but "
     "_attach_turn_tokens assumed dicts (h.get / h[...] / isinstance dict) so it "
