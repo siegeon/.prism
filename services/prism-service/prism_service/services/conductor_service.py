@@ -59,6 +59,46 @@ def green_gate_proof_note(files_modified: int, completion_proof: object) -> str:
     return "  ⚠ oracle: no completion_proof recorded"
 
 
+# Artifact-looking signals that evidence a real, demonstrable UI surface:
+# an agent-browser / verify screenshot vs the dev :8888 surface, or a
+# Playwright assertion. A pytest/unit line alone is NOT a UI artifact.
+_UI_ARTIFACT_SIGNALS = (
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
+    "screenshot", "agent-browser", "playwright", ":8888", "127.0.0.1:8888",
+)
+
+
+def ui_artifact_gate_reason(tags: object, proof_type: object,
+                            completion_proof: object) -> str:
+    """STRAND C — demonstrable-UI requirement at green_gate (task 56458db1).
+
+    Returns a non-empty REJECTION reason when a `ui`-tagged task's
+    green_gate close lacks a real UI artifact; returns "" (no objection)
+    otherwise. UI-FIRST mandate: every feature ships a UI surface, so a
+    `ui` task cannot green-gate on a pytest/unit line alone.
+
+    A `ui` task PASSES only when BOTH hold:
+      * proof_type == 'demo' (an explicit demonstrable-UI proof), and
+      * completion_proof cites a real UI artifact path (agent-browser /
+        verify screenshot vs :8888, or a Playwright assertion).
+
+    Non-`ui` tasks are UNAFFECTED (returns "").
+    """
+    tag_set = {str(t).strip().lower() for t in (tags or [])}
+    if "ui" not in tag_set:
+        return ""
+    if str(proof_type or "").strip().lower() != "demo":
+        return ("ui task: green_gate requires proof_type='demo' with a real "
+                "UI artifact (agent-browser/verify screenshot vs :8888 or a "
+                "Playwright assertion) — not a pytest/unit line alone")
+    proof = str(completion_proof or "").lower()
+    if not any(sig in proof for sig in _UI_ARTIFACT_SIGNALS):
+        return ("ui task: completion_proof cites no UI artifact — a "
+                "demonstrable UI surface needs an agent-browser/verify "
+                "screenshot path (vs :8888) or a Playwright assertion")
+    return ""
+
+
 def overlapping_allowed_files(file_lists: list) -> set:
     """Ported from goalbuddy scripts/parallel-plan.mjs: parallel workers are
     safe ONLY when their allowed_files sets are provably disjoint. Returns the
@@ -1192,6 +1232,37 @@ class ConductorService:
                     "used (test run, screenshot, manual review, etc.)"
                 ),
             }
+        # STRAND C — demonstrable-UI requirement at green_gate (task
+        # 56458db1). A `ui`-tagged task cannot green-gate on a pytest/unit
+        # line alone; it needs proof_type='demo' + a real UI artifact path.
+        # This rule runs ahead of BOTH the override and the verifier paths
+        # (the verifier is blind to the working tree per implement.js:46-54),
+        # so a `ui` task is rejected here even when the verifier passes or an
+        # operator overrides. Non-`ui` tasks return "" and are unaffected.
+        if gate_step_id == "green_gate":
+            ui_reason = ui_artifact_gate_reason(
+                getattr(task, "tags", None),
+                getattr(task, "proof_type", ""),
+                getattr(task, "completion_proof", ""),
+            )
+            if ui_reason:
+                self._task_svc.update(
+                    task_id, gate_state="failed", gate_reason=ui_reason,
+                )
+                self._task_svc.record_history(
+                    task_id,
+                    action="gate_decide",
+                    details=(f"gate={gate_step_id}; action=approve; "
+                             f"ui-artifact=fail; reason={ui_reason}"),
+                    actor="conductor",
+                )
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": "failed",
+                    "reason": ui_reason,
+                }
         verifier_payload: Optional[dict] = None
         verifier_validation: Optional[str] = None
         verifier_reason = ""
