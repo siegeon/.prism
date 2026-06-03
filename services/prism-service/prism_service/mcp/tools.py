@@ -138,6 +138,41 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="register_claude_source",
+        description=(
+            "Tell PRISM where THIS Claude instance keeps its session "
+            "transcripts for a project, instead of PRISM guessing from the "
+            "host home + slug math. Claude knows its own cwd and config dir, "
+            "so it can report the real ~/.claude/projects/<slug> folder. "
+            "PRISM resolves resolve_claude_home()/projects/path_to_slug(cwd) "
+            "(honoring CLAUDE_CONFIG_DIR over the home dir), validates the "
+            "folder exists and holds *.jsonl transcripts, and persists it as "
+            "the project's claude_project_dir so the 60s import poller reads "
+            "the right folder regardless of slug skew or host. Idempotent — "
+            "re-registering updates the stored dir. Returns { ok, "
+            "resolved_dir, jsonl_count, project }."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project": {
+                    "type": "string",
+                    "description": "PRISM project id to attach the source to.",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Claude's working directory for the project "
+                    "(slugified into the ~/.claude/projects/<slug> folder).",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional active Claude session id (advisory).",
+                },
+            },
+            "required": ["project", "cwd"],
+        },
+    ),
+    Tool(
         name="brain_search_feedback",
         description=(
             "Record thumbs-up (signal='up') or thumbs-down (signal='down') "
@@ -1358,6 +1393,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "conductor_advance",
     "conductor_gate",
     "context_bundle",
+    "register_claude_source",
 } | UNDERSTAND_TOOL_NAMES
 
 # Splice the understand_* tools into the registration list so the
@@ -2765,6 +2801,42 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 domain=arguments.get("domain") or None,
             )
             return [TextContent(type="text", text=_json(payload))]
+
+        if name == "register_claude_source":
+            from prism_service.data_dir import resolve_claude_home
+            from prism_service.engines import understand_engine as ue
+            from prism_service.services.claude_transcripts import path_to_slug
+
+            target_project = (arguments.get("project") or project_id).strip()
+            cwd = (arguments.get("cwd") or "").strip()
+            if not cwd:
+                return [TextContent(type="text", text=_json({
+                    "ok": False, "error": "cwd is required", "project": target_project,
+                }))]
+            resolved = resolve_claude_home() / "projects" / path_to_slug(cwd)
+            jsonl = sorted(resolved.glob("*.jsonl")) if resolved.is_dir() else []
+            if not resolved.is_dir() or not jsonl:
+                return [TextContent(type="text", text=_json({
+                    "ok": False,
+                    "error": (
+                        "no Claude transcript dir with *.jsonl at the resolved "
+                        "path — check cwd / CLAUDE_CONFIG_DIR"
+                    ),
+                    "resolved_dir": str(resolved),
+                    "jsonl_count": len(jsonl),
+                    "project": target_project,
+                }))]
+            # Persist via the SAME writer the Settings editor uses; idempotent.
+            state = ue._read_state(target_project)
+            state["claude_project_dir"] = str(resolved)
+            ue._write_state(target_project, state)
+            return [TextContent(type="text", text=_json({
+                "ok": True,
+                "resolved_dir": str(resolved),
+                "jsonl_count": len(jsonl),
+                "project": target_project,
+                "source": "explicit",
+            }))]
 
         if name == "brain_index_doc":
             path = arguments["path"]

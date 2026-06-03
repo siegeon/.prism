@@ -206,10 +206,16 @@ export default function SettingsPage() {
       )}
 
       {section === "connections" && (
-        <Card>
-          <SectionLabel>Claude auth</SectionLabel>
-          <ClaudeAuthCard />
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <SectionLabel>Claude auth</SectionLabel>
+            <ClaudeAuthCard />
+          </Card>
+          <Card>
+            <SectionLabel>Claude source</SectionLabel>
+            <ClaudeSourceCard project={active} />
+          </Card>
+        </div>
       )}
 
       {section === "activity" && (
@@ -472,6 +478,106 @@ type ClaudeAuthStatus = {
   login_command: string;
   instructions: string;
 };
+
+type ClaudeConfig = {
+  project: string;
+  claude_project_dir: string;
+  source: "auto" | "explicit";
+};
+
+/** Per-project Claude transcript source. PRISM normally guesses the
+ * ~/.claude/projects/<slug> folder from the host home + a slug of the
+ * project path; when that misses (cross-host, odd drive, slug skew) the
+ * customer's Claude can report its real dir via the register_claude_source
+ * MCP tool, or the dir can be set here. 'explicit' = reported/edited,
+ * 'auto' = falling back to slug discovery. Rendered with Hermes primitives,
+ * never a raw JSON dump. */
+function ClaudeSourceCard({ project }: { project: string }) {
+  const [config, setConfig] = useState<ClaudeConfig | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const c = await api.get<ClaudeConfig>(
+        `/api/memory/claude-config?project=${encodeURIComponent(project)}`,
+      );
+      setConfig(c);
+      setDraft(c.claude_project_dir ?? "");
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  }, [project]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post(
+        `/api/memory/claude-config?project=${encodeURIComponent(project)}`,
+        { claude_project_dir: draft.trim() },
+      );
+      await load();
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!config) {
+    return <div className="text-sm opacity-60">Loading…</div>;
+  }
+
+  const isExplicit = config.source === "explicit";
+  return (
+    <form onSubmit={save} className="space-y-3 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="opacity-60">Project</span>
+        <span className="font-mono text-xs">{config.project}</span>
+        <span
+          className={
+            "ml-auto rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] " +
+            (isExplicit
+              ? "bg-emerald-400/15 text-emerald-200"
+              : "bg-[color:var(--midground-base)]/10 opacity-70")
+          }
+        >
+          {isExplicit ? "explicit (reported by Claude)" : "auto (slug)"}
+        </span>
+      </div>
+      <p className="text-xs opacity-60 leading-relaxed">
+        The ~/.claude/projects/&lt;slug&gt; folder PRISM imports session
+        transcripts from. Leave blank to auto-discover from the project path;
+        set it (or let Claude report it via register_claude_source) when the
+        slug does not match.
+      </p>
+      <label className="block">
+        <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">
+          claude_project_dir
+        </span>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="auto — leave blank to guess from the project path"
+          className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs"
+        />
+      </label>
+      {error && <ErrorBanner>{error}</ErrorBanner>}
+      <button
+        type="submit"
+        disabled={saving}
+        className="rounded-md border border-[color:var(--midground-base)]/15 px-3 py-1.5 text-xs hover:bg-[color:var(--midground-base)]/[0.06] disabled:opacity-50"
+      >
+        {saving ? "Saving…" : "Save source"}
+      </button>
+    </form>
+  );
+}
 
 function ClaudeAuthCard() {
   const [status, setStatus] = useState<ClaudeAuthStatus | null>(null);
