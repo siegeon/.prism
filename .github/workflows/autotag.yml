@@ -1,0 +1,60 @@
+name: Auto-tag PRISM_VERSION on landing (cascade into release)
+
+# STRAND A — kill version stranding (task 56458db1).
+# When a PRISM_VERSION patch-bump LANDS on main, push the matching
+# v<version> git tag so release.yml's existing `push: tags: v*` trigger
+# fires and publishes the GitHub Release wheel — with NO manual /ship.
+# Idempotent: if the v<version> tag already exists, this is a clean no-op
+# (never a duplicate/erroring push).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/prism-service/**'
+
+permissions:
+  contents: write
+
+jobs:
+  autotag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read PRISM_VERSION and compute tag name
+        id: ver
+        run: |
+          VERSION_FILE="services/prism-service/prism_service/__version__.py"
+          VERSION="$(grep -E '^PRISM_VERSION' "$VERSION_FILE" \
+            | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read PRISM_VERSION from $VERSION_FILE"
+            exit 1
+          fi
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed release tag: $TAG"
+
+      - name: Create + push tag only if missing (idempotent)
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          git fetch --tags --force
+          # Idempotency guard: a re-run on main with the tag already
+          # present is a clean no-op, never a duplicate/erroring push.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
+            || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — no-op (already released)."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG (auto-tagged on landing)"
+          git push origin "$TAG"
+          echo "Pushed $TAG — cascades into release.yml (push: tags: v*)."

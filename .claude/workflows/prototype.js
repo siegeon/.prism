@@ -135,6 +135,28 @@ const plan = await agent(
   `Synthesize a PRD-style plan for the feature "${feature}" using ONLY the evidence below — do not invent capabilities the evidence doesn't support. Where evidence is thin, put it in open_questions rather than asserting it.\n\nAlso emit TWO rich-render fields:\n- plan_diagram: a valid Mermaid diagram (sequenceDiagram for actor↔system journeys, or classDiagram/flowchart for structure) capturing the core flow of this change. Raw Mermaid source only — no code fences.\n- plan_doc: a markdown PROPOSED-CHANGE doc using ## headings and - bullets (proposed change, plan steps, open questions). No raw JSON, no <pre>.\n\nEVIDENCE:\n${evidence}`,
   { label: 'plan:synthesize', phase: 'Plan', schema: PLAN_SCHEMA })
 
+// ── Phase-merge gate doctrine (stacked-epic stranding fix, task 56458db1) ──
+// The implement workflow cuts EVERY task branch off origin/main, so a
+// stacked multi-phase epic's phase N+1 depends on un-merged phase N
+// substrate and hard-halts (memory project_implement_branches_off_main).
+// The phase router MUST therefore enforce a PHASE-MERGE GATE: when this
+// plan decomposes into sequential phases, register them with an explicit
+// dependency chain (phase N+1 depends_on phase N) and gate each launch so
+// phase N is MERGED TO MAIN — its [conductor:<id>] commit reachable from
+// origin/main — BEFORE phase N+1 launches. Phase N is also auto-tagged on
+// landing (autotag.yml, STRAND A), so the merge both unblocks the next
+// phase and publishes. PR #130's dependency-aware base in implement.js
+// (Locate path b) stays as the substrate SAFETY NET, not a replacement for
+// merging in order.
+const PHASE_MERGE_GATE_DOCTRINE =
+  'PHASE-MERGE GATE (multi-phase epics): if this plan is more than one '
+  + 'phase, register the phases as an ORDERED dependency chain — phase N+1 '
+  + 'carries dependencies=[<phase N task id>] (sequential, in order) so it '
+  + 'cannot launch until phase N is DONE. The merge gate: phase N must be '
+  + 'MERGED TO MAIN (its [conductor:<id>] commit reachable from origin/main, '
+  + 'auto-tagged by autotag.yml) BEFORE the next phase is launched. Do NOT '
+  + 'kick phase N+1 off bare main while phase N is still un-merged.'
+
 // ── Phase 5: Register + track via conductor (planning steps only) ──────
 phase('Track')
 const planJson = JSON.stringify(plan, null, 2)
@@ -143,7 +165,7 @@ const linkStep = SID
   : ''
 const advSid = SID ? `, session_id="${SID}"` : ''
 const tracking = await agent(
-  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → verify_plan → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the first three steps.\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with a clear title derived from the plan, the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.${linkStep}\n2. conductor_advance(id${advSid}) to move from review_previous_notes -> draft_story.\n3. The draft_story gate validation is "story_complete" (manual-only). Call conductor_gate(id, action="approve", override=true, reason="PRD synthesized by the prototype workflow: <one line>") to satisfy it.\n4. conductor_advance(id${advSid}) to reach verify_plan. STOP there — verify_plan is the planning/build boundary; do NOT enter write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
+  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → verify_plan → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the first three steps.\n\n${PHASE_MERGE_GATE_DOCTRINE}\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with a clear title derived from the plan, the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.${linkStep}\n2. conductor_advance(id${advSid}) to move from review_previous_notes -> draft_story.\n3. The draft_story gate validation is "story_complete" (manual-only). Call conductor_gate(id, action="approve", override=true, reason="PRD synthesized by the prototype workflow: <one line>") to satisfy it.\n4. conductor_advance(id${advSid}) to reach verify_plan. STOP there — verify_plan is the planning/build boundary; do NOT enter write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
   { label: 'track:conductor', phase: 'Track', schema: TRACK_SCHEMA })
 
 return { feature, coverage, sourceGapsChased: sourceFindings.length, plan, tracking }

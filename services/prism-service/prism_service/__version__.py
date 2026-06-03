@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.14"
+PRISM_VERSION = "6.3.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.15: Harden the release pipeline — kill version/phase stranding & "
+    "blind green-gates (task 56458db1). STRAND A: new "
+    ".github/workflows/autotag.yml — on push to main scoped to "
+    "services/prism-service/**, reads PRISM_VERSION from __version__.py, and "
+    "(idempotently — git rev-parse/ls-remote guard) creates+pushes the "
+    "v<version> tag, which cascades into release.yml's existing `push: tags: "
+    "v*` trigger to publish the GitHub Release wheel with NO manual /ship. "
+    "STRAND B: prototype.js (the phase router) gains a PHASE-MERGE GATE "
+    "doctrine — multi-phase epics register phases as an ordered dependency "
+    "chain and gate each launch so phase N is MERGED TO MAIN before phase "
+    "N+1 launches; PR #130's dependency-aware base in implement.js Locate "
+    "path (b) stays as the substrate safety net (regression-guarded). "
+    "STRAND C: conductor_service.gate_decide is now UI-aware — new "
+    "module-level ui_artifact_gate_reason() REJECTS green_gate for a "
+    "`ui`-tagged task unless proof_type=='demo' AND completion_proof cites a "
+    "real UI artifact (agent-browser/verify screenshot vs :8888 or a "
+    "Playwright assertion); runs ahead of both the override and verifier "
+    "paths (the verifier is blind to the working tree). Non-`ui` tasks are "
+    "unaffected. Tests: tests/integration/test_autotag_release_pipeline.py + "
+    "test_phase_merge_and_dep_base.py + test_green_gate_ui_artifact.py "
+    "(19 green). "
     "v6.3.14: Phase 5 of epic 4fd1e6b4 — COLLAPSE the Background Activity UI "
     "for the memory concern into ~2 pipeline rows + 1 maintenance-clock row. "
     "GET /api/consolidation/workers no longer emits the discrete "
