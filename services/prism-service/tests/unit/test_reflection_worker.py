@@ -142,29 +142,33 @@ def test_run_once_dispatches_run_one_for_pending(monkeypatch, tmp_path):
     assert summary["errors"] == 0
 
 
-def test_workers_endpoint_reflects_env_state(monkeypatch):
-    """/api/consolidation/workers shows the reflection worker as
-    running/cadence. FIX 1a — DEFAULT ON: with the env var UNSET the
-    worker reports running=True; only =off flips it to running=False."""
+def test_workers_endpoint_collapses_reflection_into_pipeline():
+    """Phase 5 (epic 4fd1e6b4) COLLAPSED the memory concern. The discrete
+    reflection_worker / memory_summary_worker rows are RETIRED from
+    /api/consolidation/workers; the reflection duty now flows through the
+    event-driven learning pipeline (kind=='pipeline') and the wall-clock
+    duties through the single maintenance clock (kind=='clock'). This test
+    pins that new collapsed contract (it superseded the pre-consolidation
+    'reflection_worker row reflects PRISM_REFLECTION_WORKER env state' test)."""
     from prism_service.api.consolidation import workers
 
-    monkeypatch.setenv("PRISM_REFLECTION_WORKER", "on")
-    monkeypatch.setenv("PRISM_REFLECTION_WORKER_INTERVAL", "300")
     payload = workers()
-    rw_entry = [w for w in payload["workers"] if w["id"] == "reflection_worker"][0]
-    assert rw_entry["running"] is True
-    assert rw_entry["cadence_s"] == 300
+    ids = {w["id"] for w in payload["workers"]}
 
-    # Env UNSET -> still running (default ON).
-    monkeypatch.delenv("PRISM_REFLECTION_WORKER")
-    payload = workers()
-    rw_entry = [w for w in payload["workers"] if w["id"] == "reflection_worker"][0]
-    assert rw_entry["running"] is True, (
-        "reflection worker must default ON when the env var is unset"
+    # The discrete memory-worker rows are gone.
+    assert "reflection_worker" not in ids, (
+        "Phase 5 retired the discrete reflection_worker row — the reflection "
+        "duty is folded into the memory_learning_pipeline row."
     )
+    assert "memory_summary_worker" not in ids
 
-    # Explicit off -> not running.
-    monkeypatch.setenv("PRISM_REFLECTION_WORKER", "off")
-    payload = workers()
-    rw_entry = [w for w in payload["workers"] if w["id"] == "reflection_worker"][0]
-    assert rw_entry["running"] is False
+    # The memory concern is now a single pipeline row + a single clock row.
+    pipeline = [w for w in payload["workers"] if w.get("kind") == "pipeline"]
+    clock = [w for w in payload["workers"] if w.get("kind") == "clock"]
+    assert len(pipeline) == 1, "exactly one event-driven learning pipeline row"
+    assert len(clock) == 1, "exactly one maintenance-clock row"
+
+    # The pipeline row carries the four live throughput readouts.
+    p = pipeline[0]
+    for key in ("events_per_min", "queue_depth", "last_event_ts", "in_flight"):
+        assert key in p, f"pipeline row must expose {key}"
