@@ -39,14 +39,18 @@ def _read(p: Path) -> str:
 # Lane / tile spacing opens up for the embedded animated progress bar
 # ---------------------------------------------------------------------------
 
-def test_swimlane_rows_get_more_vertical_breathing_room():
+def test_conductor_uses_flat_tile_list_not_swimlanes():
     src = _read(_CONDUCTOR)
-    # The lane row is currently cramped at py-3; with the ~2x progress bar in
-    # each tile the lanes must open up. Pin a larger vertical lane rhythm.
-    assert "py-3\n" not in src and "py-3\"" not in src, \
-        "swimlane rows must no longer use the cramped py-3 vertical padding"
-    assert ("py-4" in src or "py-5" in src), \
-        "swimlane rows must adopt a roomier vertical padding (py-4/py-5)"
+    # SUPERSEDED by the v6.3.19 redesign: the 9 literal SDLC swimlanes were
+    # dropped for a flat tile list (one tile per managed task). The lane
+    # two-column grid (grid-cols-[14rem_1fr]) and the per-step lane iteration
+    # must be gone; managed tasks render through a single auto-fill tile grid.
+    assert "grid-cols-[14rem_1fr]" not in src, \
+        "the literal swimlane lane grid must be gone (flat tile list now)"
+    assert "auto-fill,minmax(" in src, \
+        "managed tasks must render through the flat auto-fill tile grid"
+    assert "managed.map(" in src, \
+        "the flat tile list must map over managed tasks directly (no per-lane grouping)"
 
 
 def test_tile_autofill_grid_widens_and_gaps_for_progress_bar():
@@ -76,17 +80,18 @@ def test_tile_autofill_grid_widens_and_gaps_for_progress_bar():
 # labelled section, not an unmarked strip competing with the meta lines.
 # ---------------------------------------------------------------------------
 
-def test_tile_progress_section_has_an_explicit_label():
+def test_tile_renders_animated_stepper_and_phase_label():
     src = _read(_CONDUCTOR)
-    # Scope to the TaskTile function so the page-level "SDLC swimlanes"
-    # SectionLabel can't satisfy this. The tile progress block is currently
-    # just a top-bordered <div> with no rendered label, so it competes with
-    # the owner/meta lines. Render an at-a-glance label as a JSX text node.
+    # SUPERSEDED by v6.3.19: the SDLC bar + "SDLC" text label were replaced by
+    # an animated dot stepper (SdlcDots) plus the current-phase label moved to
+    # the tile's top-right. The tile must render BOTH so progress still reads
+    # at a glance. Scope to the TaskTile function (the SdlcDots definition also
+    # lives later in the file, but the JSX <SdlcDots/> usage is in the tile).
     tile = src[src.index("function TaskTile"):]
-    assert (">SDLC<" in tile or ">SDLC " in tile or ">SDLC\n" in tile
-            or "SDLC progress<" in tile or "progress</" in tile.lower()), \
-        "the TaskTile progress section must RENDER an explicit 'SDLC'/" \
-        "'progress' label (JSX text node, not just a comment) so the " \
+    assert "<SdlcDots" in tile, \
+        "the TaskTile must render the animated SDLC dot stepper (<SdlcDots/>)"
+    assert "stepChipClass(stepId)" in tile and "{phaseLabel}" in tile, \
+        "the TaskTile must render the current-phase label (top-right) so the " \
         "information hierarchy reads at a glance"
 
 

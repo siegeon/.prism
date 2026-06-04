@@ -180,6 +180,33 @@ def test_register_persists_claude_project_dir_via_state_writer(
     assert state.get("claude_project_dir") == str(home / "projects" / slug)
 
 
+def test_register_persists_source_path_for_live_token_graph(
+    isolated_projects, claude_home_with_jsonl
+):
+    """The agent's MCP registration must ALSO set source_path (= the cwd), so
+    the LIVE conductor token / burn graph — which resolves transcripts via
+    _project_source_path() -> source_path, NOT claude_project_dir — reads the
+    SAME folder the agent registered. Before this fix register set only
+    claude_project_dir (the import poller), so the token graph fell back to a
+    stale/empty source_path -> empty (#134) or a wrong-session 40/flatline."""
+    from prism_service.mcp.tools import handle_tool
+    from prism_service.services.claude_transcripts import _project_source_path
+
+    _home, _slug, cwd = claude_home_with_jsonl
+    asyncio.run(
+        handle_tool(
+            "register_claude_source",
+            {"project": "proj-cc", "cwd": cwd},
+            project_id="proj-cc",
+        )
+    )
+    state = ue._read_state("proj-cc")
+    assert state.get("source_path") == cwd, \
+        "register_claude_source must persist source_path=cwd for the token graph"
+    # The live-token-graph resolver reads it back as the project's source path.
+    assert _project_source_path("proj-cc") == cwd
+
+
 def test_configured_project_dir_reads_persisted_value(
     isolated_projects, claude_home_with_jsonl
 ):

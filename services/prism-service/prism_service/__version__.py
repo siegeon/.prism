@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.18"
+PRISM_VERSION = "6.3.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.19: /conductor redesigned around visual work-progress — dropped the "
+    "9 literal SDLC swimlanes for a flat tile list; each tile now carries an "
+    "animated dot stepper that fills to the task's current phase, with the "
+    "phase label moved to the tile's top-right. Removed the KPI counts header "
+    "and the create-task affordance (the page is purely the visual "
+    "representation of work happening to each task). Token-graph fix: "
+    "register_claude_source (MCP) now persists source_path (= the agent's cwd) "
+    "alongside claude_project_dir, so an external agent's ONE registration "
+    "drives the LIVE conductor token/burn graph too — not just the import "
+    "poller — resolving the empty (#134) and wrong-session '40 turns + "
+    "flatline' graphs. The per-turn tok/s rate now floors sub-second dt at 1s "
+    "so a rapid tool->assistant pair no longer reads as a megatoken/s phantom. "
     "v6.3.18: /conductor SDLC swimlane step-label pills now render at a "
     "uniform fixed width (w-40, centered) so the lane rail reads as an "
     "aligned column instead of ragged text-sized pills. "

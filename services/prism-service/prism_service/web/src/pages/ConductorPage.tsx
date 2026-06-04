@@ -1,14 +1,14 @@
-import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Empty, type PillTone } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import {
-  stepLabel, gateLabel, WORKFLOW_STEPS_ORDERED,
+  stepLabel, gateLabel, stepChipClass, WORKFLOW_STEPS_ORDERED,
 } from "@/lib/workflowChips";
 import { relativeTime } from "@/lib/relativeTime";
 import { useReducedMotion } from "motion/react";
-import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
 
 type ManagedTask = {
@@ -32,12 +32,6 @@ type State = {
   step_buckets?: Record<string, number>;
 };
 
-const PERSONA_TONE: Record<string, string> = {
-  sm: "teal",
-  dev: "amber",
-  qa: "violet",
-};
-
 const GATE_TONE: Record<string, PillTone> = {
   pending: "amber",
   passed: "emerald",
@@ -58,30 +52,6 @@ export default function ConductorPage() {
   const navigate = useNavigate();
   const reduced = useReducedMotion();
   const [data, setData] = useState<State | null>(null);
-  // 'create task -> enter conductor' onboarding affordance.
-  const [newTitle, setNewTitle] = useState("");
-  const [creating, setCreating] = useState(false);
-
-  const createAndEnter = async () => {
-    if (!newTitle.trim()) return;
-    setCreating(true);
-    try {
-      const r = await fetch(`/api/tasks?project=${project}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle.trim(), enter_conductor: true }),
-      });
-      const b = await r.json().catch(() => ({}));
-      setNewTitle("");
-      if (b.task?.id) {
-        navigate(`/tasks/${b.task.id}`, { state: { from: "/conductor" } });
-      } else {
-        load();
-      }
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const load = useCallback(() => {
     api.get<State>(`/api/conductor/state?project=${project}`).then(setData).catch(() => setData(null));
@@ -91,122 +61,25 @@ export default function ConductorPage() {
 
   const managed = data?.managed_tasks ?? [];
 
-  const pendingGates = useMemo(() => managed.filter(t => t.gate_state === "pending").length, [managed]);
-  const failedGates = useMemo(() => managed.filter(t => t.gate_state === "failed").length, [managed]);
-  const modalStep = useMemo(() => {
-    const buckets: Record<string, number> = {};
-    for (const t of managed) {
-      const s = t.workflow_step ?? "";
-      if (s) buckets[s] = (buckets[s] ?? 0) + 1;
-    }
-    const entries = Object.entries(buckets);
-    if (entries.length === 0) return "—";
-    entries.sort((a, b) => b[1] - a[1]);
-    return stepLabel(entries[0][0]);
-  }, [managed]);
-
-  // Group tasks by their workflow_step; preserves order matching the lane.
-  const tasksByStep = useMemo(() => {
-    const m: Record<string, ManagedTask[]> = {};
-    for (const t of managed) {
-      const s = t.workflow_step ?? "";
-      if (!s) continue;
-      (m[s] ??= []).push(t);
-    }
-    return m;
-  }, [managed]);
-
   return (
     <Page>
-      <section className="flex flex-wrap gap-3">
-        <Kpi label="Under management" value={managed.length} />
-        <Kpi label="Pending gates" value={pendingGates} />
-        <Kpi label="Failed gates" value={failedGates} />
-        <Kpi label="Modal step" value={modalStep} />
-      </section>
-
       <Card>
-        <SectionLabel>Create task → enter conductor</SectionLabel>
-        <p className="text-[11px] opacity-60 mt-1 mb-2">
-          Spin up a new task and drop it straight onto the SDLC swimlanes — it enters
-          conductor at intake and you land on its detail page to drive it.
-        </p>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") createAndEnter(); }}
-            placeholder="New task title…"
-            className="flex-1 text-sm rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] px-3 py-1.5"
-          />
-          <button
-            type="button"
-            disabled={creating || !newTitle.trim()}
-            onClick={createAndEnter}
-            className="text-[11px] uppercase tracking-wider px-4 py-1.5 rounded disabled:opacity-40"
-            style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
-          >
-            {creating ? "Creating…" : "Create + enter"}
-          </button>
-        </div>
-      </Card>
-
-      <Card>
-        <SectionLabel>SDLC swimlanes</SectionLabel>
+        <SectionLabel>Under conductor</SectionLabel>
         <p className="text-[11px] opacity-60 mt-1 mb-3">
-          A workflow-claimed task lands in <b>Intake</b> the moment it's picked up, then conductor
-          forces it through the 8 SDLC steps top-to-bottom. Tasks worked without conductor
-          (status flips only) don't appear here. Click a task pill to open it.
+          Workflow-claimed tasks moving through the 8-step SDLC. Each tile's stepper fills to the
+          task's current phase (shown top-right) and advances automatically as the conductor drives
+          it. Tasks worked without conductor (status flips only) don't appear here. Click a tile to open it.
         </p>
-        <div className="divide-y divide-[color:var(--midground-base)]/10">
-          {WORKFLOW_STEPS_ORDERED.map((s) => {
-            const isGate = s.type === "gate";
-            const isIntake = s.type === "intake";
-            const laneTone = isIntake ? "violet" : isGate ? "slate" : (PERSONA_TONE[s.persona] ?? "slate");
-            const tasksHere = tasksByStep[s.id] ?? [];
-            return (
-              <div
-                key={s.id}
-                className="grid grid-cols-[14rem_1fr] gap-4 items-center py-4"
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="inline-flex shrink-0 items-center justify-center w-40 whitespace-nowrap text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1"
-                    style={{
-                      background: `var(--accent-${laneTone}-bg)`,
-                      color: `var(--accent-${laneTone}-fg)`,
-                      boxShadow: `inset 0 0 0 1px var(--accent-${laneTone}-ring)`,
-                    }}
-                  >
-                    {isGate ? `🚪 ${stepLabel(s.id)}` : isIntake ? "⏳ intake" : stepLabel(s.id)}
-                  </span>
-                  {isIntake && (
-                    <span className="text-[10px] uppercase opacity-50 font-mono">claimed</span>
-                  )}
-                  {!isGate && !isIntake && (
-                    <span className="text-[10px] uppercase opacity-50 font-mono">{s.persona}</span>
-                  )}
-                </div>
-                <div className="min-h-[1.5rem]">
-                  {tasksHere.length === 0 ? (
-                    <span className="text-[11px] opacity-30 italic">empty</span>
-                  ) : (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-3">
-                      {tasksHere.map((t) => (
-                        <TaskTile key={t.id} task={t} reduced={reduced} onClick={() =>
-                          navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
-                        } />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {managed.length === 0 && (
+        {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
+        ) : (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-3">
+            {managed.map((t) => (
+              <TaskTile key={t.id} task={t} reduced={reduced} onClick={() =>
+                navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
+              } />
+            ))}
+          </div>
         )}
       </Card>
     </Page>
@@ -232,6 +105,8 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
   const gateTone: PillTone = GATE_TONE[gate] ?? "slate";
+  const stepId = task.workflow_step ?? "";
+  const phaseLabel = stepId ? stepLabel(stepId) : (status === "done" ? "done" : "queued");
   const priority = task.priority ?? 0;
   const updated = task.updated_at || task.created_at || "";
   const age = relativeTime(updated);
@@ -250,10 +125,17 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
       title={title}
       className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors cursor-pointer"
     >
-      {/* Header — title + status/gate, full width above the split. */}
-      <div className="text-[13px] leading-snug font-medium line-clamp-2 text-[color:var(--text-primary)]">
-        {task.title}
+      {/* Header — title (left) + current SDLC phase (top-right). */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-[13px] leading-snug font-medium line-clamp-2 text-[color:var(--text-primary)]">
+          {task.title}
+        </div>
+        <span className={`${stepChipClass(stepId)} shrink-0 whitespace-nowrap`} title={`SDLC phase: ${phaseLabel}`}>
+          {phaseLabel}
+        </span>
       </div>
+      {/* Animated SDLC stepper — dots fill to the current phase as the task advances. */}
+      <SdlcDots step={stepId} reduced={reduced} />
       <div className="flex flex-wrap items-center gap-1">
         <TileBadge tone={statusTone}>{status || "—"}</TileBadge>
         {showGate && (
@@ -300,13 +182,6 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
               ))}
             </div>
           )}
-          {/* Real-time SDLC phase progress — bar fills the current step from the
-              server phase_progress estimate. hideTokens: the graph owns token
-              info, so the caption drops its tok readout (no duplication). */}
-          <div className="mt-auto pt-2 border-t border-[color:var(--border-default)]/60 flex flex-col gap-1.5">
-            <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">SDLC</span>
-            <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} hideTokens />
-          </div>
         </div>
 
         <div className="border-l border-[color:var(--border-default)]/60 pl-3">
@@ -334,5 +209,50 @@ function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) 
     >
       {children}
     </span>
+  );
+}
+
+// SdlcDots — the animated SDLC stepper. One node per WORKFLOW_STEPS_ORDERED
+// step (circle for an agent/intake step, rounded square for a gate); nodes
+// before the current step read "done" (emerald), the current node pulses
+// teal with a ring, later nodes are muted. Color/size transition on advance
+// so a task visibly moves between phases (motion suppressed under reduced).
+function SdlcDots({ step, reduced }: { step?: string; reduced: boolean | null }) {
+  const steps = WORKFLOW_STEPS_ORDERED;
+  const curIdx = steps.findIndex((s) => s.id === (step ?? ""));
+  return (
+    <div
+      className="flex items-center"
+      role="img"
+      aria-label={curIdx < 0 ? "SDLC not started" : `SDLC phase ${curIdx + 1} of ${steps.length}: ${stepLabel(steps[curIdx].id)}`}
+    >
+      {steps.map((s, i) => {
+        const done = curIdx >= 0 && i < curIdx;
+        const current = i === curIdx;
+        const reached = done || current;
+        const isGate = s.type === "gate";
+        return (
+          <div key={s.id} className="flex items-center" title={stepLabel(s.id) || s.id}>
+            {i > 0 && (
+              <span
+                className={reduced ? "" : "transition-colors duration-500"}
+                style={{ height: "1px", width: "0.55rem", background: reached ? "var(--accent-emerald-fg)" : "var(--border-default)" }}
+              />
+            )}
+            <span
+              className={[
+                isGate ? "rounded-[2px]" : "rounded-full",
+                current ? "w-2.5 h-2.5" : "w-2 h-2",
+                reduced ? "" : "transition-all duration-500",
+              ].join(" ")}
+              style={{
+                background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
+                boxShadow: current ? "0 0 0 2px var(--accent-teal-ring)" : "none",
+              }}
+            />
+          </div>
+        );
+      })}
+    </div>
   );
 }
