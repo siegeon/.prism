@@ -71,6 +71,70 @@ function Row({ label, v, bad }: { label: string; v: number; bad: boolean }) {
   );
 }
 
+type Drift = { understand?: boolean; graph?: boolean; brain?: boolean };
+
+// Drift / staleness card: shows which source-derived indexes have fallen
+// behind the project's pinned SHA, with a re-sync action wired to
+// POST /api/staleness/resync (rebuilds the graph + advances last_analyzed_sha).
+function StalenessCard({ project }: { project: string }) {
+  const [drift, setDrift] = useState<Drift>({});
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .get<Drift>(`/api/staleness?project=${encodeURIComponent(project)}`)
+      .then(setDrift)
+      .catch(() => setDrift({}));
+  }, [project]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const resync = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await fetch(`/api/staleness/resync?project=${encodeURIComponent(project)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const b = await r.json().catch(() => ({}));
+      setNote(r.ok ? "Re-synced." : `Re-sync failed: ${b.detail ?? r.statusText}`);
+      load();
+    } catch (e) {
+      setNote(`Re-sync failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const anyStale = Boolean(drift.understand || drift.graph || drift.brain);
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <SectionLabel>Drift / staleness</SectionLabel>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={resync}
+          className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+          style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)" }}
+        >
+          {busy ? "Re-syncing…" : "Re-sync"}
+        </button>
+      </div>
+      <div className="space-y-1.5 mt-2 text-sm">
+        <Row label="understand" v={drift.understand ? 1 : 0} bad={Boolean(drift.understand)} />
+        <Row label="graph" v={drift.graph ? 1 : 0} bad={Boolean(drift.graph)} />
+        <Row label="brain" v={drift.brain ? 1 : 0} bad={Boolean(drift.brain)} />
+      </div>
+      <div className="text-[11px] opacity-60 mt-2">
+        {note ?? (anyStale ? "Some indexes are behind the pinned SHA — re-sync to rebuild." : "All indexes current.")}
+      </div>
+    </Card>
+  );
+}
+
 export default function DashboardPage() {
   const [project] = useProject();
   const [data, setData] = useState<State | null>(null);
@@ -164,6 +228,8 @@ export default function DashboardPage() {
         <SectionLabel>Brain activity · last 14 days</SectionLabel>
         {pulse ? <PlotFigure options={pulse} className="w-full" /> : <Empty>No activity yet.</Empty>}
       </Card>
+
+      <StalenessCard project={project} />
 
       {/* Trend KPIs — movement, not static inventory */}
       <section className="flex flex-wrap gap-3">

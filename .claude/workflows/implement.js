@@ -75,6 +75,8 @@ const CONVENTIONS = [
   '- Hooks are advisory (exit 0) — never block tool execution.',
   '- Destructive ops: validate paths, never -ErrorAction SilentlyContinue, no inline destructive PowerShell.',
   '- If the change is user-visible, patch-bump PRISM_VERSION in the same commit.',
+  '- TASK-BOARD HYGIENE (hard): NEVER call task_create for a ROOT/parent task. You are driving ONE task through its SDLC — its internal breakdown is narration, NOT new board tasks. The board shows only the top-level task; sub-work is tracked by commits and the conductor steps, not by spawning siblings.',
+  '- The ONLY task_create you may issue is a DISPOSABLE verification fixture (e.g. a throwaway task to put a conductor gate into a pending state so you can exercise the gate UI). It MUST set parent_id="<the task id this workflow is driving>" so it stays OFF the root board, MUST be tagged "ephemeral-fixture", and MUST be set status="cancelled" the moment the verification screenshot/assertion is captured. Prefer reusing the driven task itself over creating any fixture.',
 ].join('\n')
 
 // SELF-HEAL doctrine (implement-workflow reliability). Injected into every step

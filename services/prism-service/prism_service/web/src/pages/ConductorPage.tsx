@@ -58,6 +58,30 @@ export default function ConductorPage() {
   const navigate = useNavigate();
   const reduced = useReducedMotion();
   const [data, setData] = useState<State | null>(null);
+  // 'create task -> enter conductor' onboarding affordance.
+  const [newTitle, setNewTitle] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  const createAndEnter = async () => {
+    if (!newTitle.trim()) return;
+    setCreating(true);
+    try {
+      const r = await fetch(`/api/tasks?project=${project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle.trim(), enter_conductor: true }),
+      });
+      const b = await r.json().catch(() => ({}));
+      setNewTitle("");
+      if (b.task?.id) {
+        navigate(`/tasks/${b.task.id}`, { state: { from: "/conductor" } });
+      } else {
+        load();
+      }
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const load = useCallback(() => {
     api.get<State>(`/api/conductor/state?project=${project}`).then(setData).catch(() => setData(null));
@@ -102,6 +126,33 @@ export default function ConductorPage() {
       </section>
 
       <Card>
+        <SectionLabel>Create task → enter conductor</SectionLabel>
+        <p className="text-[11px] opacity-60 mt-1 mb-2">
+          Spin up a new task and drop it straight onto the SDLC swimlanes — it enters
+          conductor at intake and you land on its detail page to drive it.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createAndEnter(); }}
+            placeholder="New task title…"
+            className="flex-1 text-sm rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] px-3 py-1.5"
+          />
+          <button
+            type="button"
+            disabled={creating || !newTitle.trim()}
+            onClick={createAndEnter}
+            className="text-[11px] uppercase tracking-wider px-4 py-1.5 rounded disabled:opacity-40"
+            style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+          >
+            {creating ? "Creating…" : "Create + enter"}
+          </button>
+        </div>
+      </Card>
+
+      <Card>
         <SectionLabel>SDLC swimlanes</SectionLabel>
         <p className="text-[11px] opacity-60 mt-1 mb-3">
           A workflow-claimed task lands in <b>Intake</b> the moment it's picked up, then conductor
@@ -121,7 +172,7 @@ export default function ConductorPage() {
               >
                 <div className="flex items-center gap-2">
                   <span
-                    className="text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1"
+                    className="inline-flex shrink-0 items-center justify-center w-40 whitespace-nowrap text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1"
                     style={{
                       background: `var(--accent-${laneTone}-bg)`,
                       color: `var(--accent-${laneTone}-fg)`,

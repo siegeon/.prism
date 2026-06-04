@@ -113,6 +113,40 @@ export default function LearningPage() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [agentAgg, setAgentAgg] = useState<AgentRunAggregates>({});
   const [policy, setPolicy] = useState<PolicyResponse>({});
+  // Editable Tier-3 knobs (set / revert) — drafts overlay the active values.
+  const [knobDraft, setKnobDraft] = useState<Record<string, string>>({});
+  const [knobBusy, setKnobBusy] = useState(false);
+  const [knobNote, setKnobNote] = useState<string | null>(null);
+
+  const loadPolicy = () =>
+    api
+      .get<PolicyResponse>(`/api/learning/policy?project=${project}`)
+      .then((d) => { setPolicy(d ?? {}); setKnobDraft({}); })
+      .catch(() => setPolicy({}));
+
+  const saveKnobs = async (action: "set" | "revert") => {
+    setKnobBusy(true);
+    try {
+      const payload: Record<string, unknown> = { action };
+      if (action === "set") {
+        for (const [k, v] of Object.entries(knobDraft)) {
+          if (v.trim() !== "") payload[k] = Number(v);
+        }
+      }
+      const r = await fetch(`/api/learning/policy?project=${project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const b = await r.json().catch(() => ({}));
+      setKnobNote(r.ok && b.ok !== false ? `${action} ok` : `${action} failed: ${b.detail ?? r.statusText}`);
+      await loadPolicy();
+    } catch (e) {
+      setKnobNote(`${action} failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setKnobBusy(false);
+    }
+  };
 
   useEffect(() => {
     api
@@ -165,25 +199,43 @@ export default function LearningPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div className="rounded border border-[color:var(--border-default)]/40 p-2">
             <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
-              Tuned knobs
+              Tuned knobs (editable)
             </div>
-            <div className="flex justify-between text-xs py-0.5">
-              <span className="font-mono opacity-80">forget_cutoff</span>
-              <span className="font-mono opacity-60">
-                {knobs.forget_cutoff?.toFixed?.(2) ?? "—"}
-              </span>
-            </div>
-            <div className="flex justify-between text-xs py-0.5">
-              <span className="font-mono opacity-80">decay_weight</span>
-              <span className="font-mono opacity-60">
-                {knobs.decay_weight?.toFixed?.(2) ?? "—"}
-              </span>
-            </div>
-            <div className="flex justify-between text-xs py-0.5">
-              <span className="font-mono opacity-80">merge_similarity_threshold</span>
-              <span className="font-mono opacity-60">
-                {knobs.merge_similarity_threshold?.toFixed?.(2) ?? "—"}
-              </span>
+            {([
+              ["forget_cutoff", knobs.forget_cutoff],
+              ["decay_weight", knobs.decay_weight],
+              ["merge_similarity_threshold", knobs.merge_similarity_threshold],
+            ] as const).map(([k, val]) => (
+              <div key={k} className="flex justify-between items-center text-xs py-0.5 gap-2">
+                <span className="font-mono opacity-80">{k}</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={knobDraft[k] ?? (typeof val === "number" ? String(val) : "")}
+                  onChange={(e) => setKnobDraft((d) => ({ ...d, [k]: e.target.value }))}
+                  className="w-20 text-right font-mono text-xs rounded bg-[color:var(--surface-2)] border border-[color:var(--border-default)] px-1 py-0.5"
+                />
+              </div>
+            ))}
+            <div className="flex gap-2 mt-2">
+              <button
+                type="button"
+                disabled={knobBusy}
+                onClick={() => saveKnobs("set")}
+                className="text-[10px] uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
+                style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                disabled={knobBusy}
+                onClick={() => saveKnobs("revert")}
+                className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 disabled:opacity-40"
+              >
+                Revert
+              </button>
+              {knobNote && <span className="text-[10px] opacity-60 self-center">{knobNote}</span>}
             </div>
           </div>
           <div className="rounded border border-[color:var(--border-default)]/40 p-2">

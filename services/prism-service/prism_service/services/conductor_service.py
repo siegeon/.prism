@@ -1534,7 +1534,10 @@ class ConductorService:
             step = getattr(t, "workflow_step", "") or ""
             gate = getattr(t, "gate_state", "none") or "none"
             status = getattr(t, "status", "") or ""
-            if status == "done":
+            # Terminal statuses leave the conductor view: done is shipped,
+            # cancelled is abandoned. Both keep their workflow_step in the
+            # audit trail but must not render as currently-managed tiles.
+            if status in ("done", "cancelled"):
                 continue
             if step == "" and gate == "none":
                 # Claimed by a workflow but pre-first-advance (the Locate /
@@ -1586,7 +1589,7 @@ class ConductorService:
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
             status = getattr(t, "status", "") or ""
-            if status == "done":
+            if status in ("done", "cancelled"):
                 continue
             if not step:
                 # Mirror managed_tasks: claimed-but-pre-step in_progress work

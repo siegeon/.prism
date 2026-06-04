@@ -1,10 +1,13 @@
 """Learning API — Layer-A quality rows + variant performance rankings."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from prism_service.project_context import get_project
 from prism_service.services.adaptive_policy import (
+    DEFAULT_KNOBS,
+    KNOB_BOUNDS,
     AdaptivePolicyService,
+    _clamp,
     get_active_knobs,
 )
 from prism_service.services.agent_runs_data import get_agent_run_aggregates
@@ -51,3 +54,36 @@ def policy(project: str = Query("default")) -> dict:
         "history": svc.history(),
         "op_accuracy": svc.op_verdict_accuracy(),
     }
+
+
+@router.post("/policy")
+def set_policy(project: str = Query("default"), body: dict = Body(...)) -> dict:
+    """Manually SET or REVERT the Tier-3 adaptive knobs from the SPA.
+
+    body.action=='revert' restores DEFAULT_KNOBS. Otherwise body carries one
+    or more knob values (forget_cutoff/decay_weight/merge_similarity_threshold)
+    that are clamped to KNOB_BOUNDS and persisted as a new policy_knobs row —
+    get_active_knobs reads the latest, so the change takes effect immediately.
+    """
+    ctx = get_project(project)
+    scores_db = str(ctx._data_dir / "scores.db")
+    svc = AdaptivePolicyService(scores_db, mem=getattr(ctx, "memory_svc", None))
+    action = (body.get("action") or "set").strip()
+
+    if action == "revert":
+        svc._persist(dict(DEFAULT_KNOBS), rationale="manual revert to defaults (SPA)")
+        return {"ok": True, "action": "revert", "knobs": get_active_knobs(scores_db)}
+
+    current = dict(get_active_knobs(scores_db))
+    touched = False
+    for k in KNOB_BOUNDS:
+        if k in body and body[k] is not None:
+            try:
+                current[k] = _clamp(k, float(body[k]))
+                touched = True
+            except (TypeError, ValueError):
+                raise HTTPException(422, f"{k} must be a number")
+    if not touched:
+        raise HTTPException(422, "no knob values supplied")
+    svc._persist(current, rationale="manual set (SPA)")
+    return {"ok": True, "action": "set", "knobs": get_active_knobs(scores_db)}

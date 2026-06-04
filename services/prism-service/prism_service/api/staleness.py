@@ -7,7 +7,7 @@ sidebar polls this every few seconds.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from prism_service.engines import understand_engine as ue
 from prism_service.project_context import get_project
@@ -83,3 +83,34 @@ def staleness(project: str = Query("default")) -> dict:
         "graph": src_stale or legacy,
         "brain": src_stale or legacy,
     }
+
+
+@router.post("/resync")
+def resync(project: str = Query("default")) -> dict:
+    """Re-sync the source-derived indexes and clear the drift signal.
+
+    Rebuilds the graph for ``project`` (the same path as POST /api/graph/rebuild)
+    and advances the project's ``last_analyzed_sha`` to the current source HEAD
+    so the graph/brain staleness flags clear. Backs the SPA drift card's
+    'Re-sync' action — previously api/staleness.py had no write surface.
+    """
+    try:
+        ctx = get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    out: dict = {"project": project}
+    try:
+        out["rebuild"] = ctx.graph_svc.rebuild()
+    except Exception as exc:
+        out["rebuild_error"] = str(exc)
+    # Advance the analyzed SHA so the source-derived staleness flags clear.
+    try:
+        state = ue._read_state(project)
+        if (state.get("remote_url") or "").strip() and ss.is_cloned(project):
+            state["last_analyzed_sha"] = ss.current_sha(project)
+            ue._write_state(project, state)
+            out["last_analyzed_sha"] = state["last_analyzed_sha"]
+    except Exception as exc:
+        out["sha_error"] = str(exc)
+    out["staleness"] = staleness(project)
+    return out

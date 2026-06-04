@@ -399,6 +399,10 @@ export default function TaskDetailPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Operable conductor gate: a REQUIRED reason + an override checkbox feed
+  // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
+  const [gateReason, setGateReason] = useState("");
+  const [gateOverride, setGateOverride] = useState(false);
   // Reduced-motion guard for the staggered Card stack, toast, and status flash.
   const reduced = useReducedMotion();
   // Status-chip flash: keyed on the task.status VALUE change (NOT the click).
@@ -463,6 +467,42 @@ export default function TaskDetailPage() {
       load();
     } catch (e) {
       setNotice(`Update failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Approve / Reject a pending gate. action='approve' releases the gate (and
+  // auto-advances); 'reject' flips gate_state to 'failed' and stores the
+  // reason on task.gate_reason. Reason is REQUIRED for both.
+  const gateDecide = async (action: "approve" | "reject") => {
+    if (!gateReason.trim()) {
+      setNotice("A reason is required to resolve the gate.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/conductor/gate?project=${project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: id,
+          action,
+          reason: gateReason.trim(),
+          override: gateOverride,
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (body.ok === false) {
+        setNotice(`Gate ${action} refused: ${body.reason ?? "unknown"}`);
+      } else {
+        setNotice(`Gate ${action}d. ${body.to_step ? `→ ${body.to_step}` : ""}`);
+        setGateReason("");
+        setGateOverride(false);
+      }
+      load();
+    } catch (e) {
+      setNotice(`Gate ${action} failed: ${(e as Error).message ?? e}`);
     } finally {
       setBusy(false);
     }
@@ -640,6 +680,50 @@ export default function TaskDetailPage() {
                 : <span className="opacity-50">-</span>}
             </div>
           </div>
+
+          {task.gate_state === "pending" && (
+            <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
+              <div className="opacity-50 mb-2 text-[11px] uppercase tracking-wider">
+                Resolve gate
+              </div>
+              <textarea
+                value={gateReason}
+                onChange={(e) => setGateReason(e.target.value)}
+                required
+                placeholder="Reason (required) — why approve or reject this gate?"
+                rows={3}
+                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
+              />
+              <label className="flex items-center gap-2 mt-2 text-[12px] opacity-80 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={gateOverride}
+                  onChange={(e) => setGateOverride(e.target.checked)}
+                />
+                override (bypass the verifier and release on manual judgment)
+              </label>
+              <div className="flex gap-2 mt-3">
+                <button
+                  type="button"
+                  disabled={busy || !gateReason.trim()}
+                  onClick={() => gateDecide("approve")}
+                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !gateReason.trim()}
+                  onClick={() => gateDecide("reject")}
+                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
         </Card>
         </Stagger>
       )}

@@ -5,6 +5,7 @@ import { useProject } from "@/lib/project";
 import {
   Page, Card, SectionLabel, Empty, ErrorBanner, type PillTone,
 } from "@/components/ui";
+import EvidenceView from "@/components/EvidenceView";
 
 type Entry = {
   id?: string;
@@ -74,6 +75,12 @@ export default function MemoryDetailPage() {
   const [chain, setChain] = useState<Entry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // edit / retire / supersede affordances, backed by POST
+  // /api/memory/entry/:id/action (the same store/update path memory_store uses).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionNote, setActionNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -120,6 +127,38 @@ export default function MemoryDetailPage() {
     );
   }
 
+  const doAction = async (
+    action: "edit" | "retire" | "supersede",
+    payload: Record<string, unknown> = {},
+  ) => {
+    setActionBusy(true);
+    try {
+      const r = await fetch(
+        `/api/memory/entry/${encodeURIComponent(id)}/action?project=${project}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, ...payload }),
+        },
+      );
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok || b.ok === false) {
+        setActionNote(`${action} failed: ${b.detail ?? r.statusText}`);
+      } else {
+        setActionNote(`${action} ok.`);
+        setEditing(false);
+        if (action === "supersede" && b.entry?.id) {
+          navigate(`/memory/${b.entry.id}`);
+          return;
+        }
+      }
+    } catch (e) {
+      setActionNote(`${action} failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const type = (entry.type ?? "").toLowerCase();
   const status = (entry.status ?? "").toLowerCase();
   const classification = (entry.classification ?? "").toLowerCase();
@@ -155,10 +194,75 @@ export default function MemoryDetailPage() {
       </header>
 
       <Card>
-        <SectionLabel>Description</SectionLabel>
-        <pre className="whitespace-pre-wrap text-[13px] leading-relaxed font-sans p-4 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]">
-          {entry.description || "(empty)"}
-        </pre>
+        <div className="flex items-center justify-between gap-3">
+          <SectionLabel>Description</SectionLabel>
+          <div className="flex items-center gap-1.5">
+            {!editing && (
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => { setDraft(entry.description ?? ""); setEditing(true); }}
+                className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+              >
+                Edit
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={actionBusy || status === "retired"}
+              onClick={() => doAction("retire")}
+              className="text-[10px] uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
+              style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)" }}
+            >
+              Retire
+            </button>
+          </div>
+        </div>
+        {actionNote && <div className="text-[11px] opacity-70 mt-1">{actionNote}</div>}
+        {editing ? (
+          <div className="mt-2 space-y-2">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={8}
+              className="w-full text-[13px] rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] p-3 leading-relaxed resize-y font-sans"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => doAction("edit", { description: draft })}
+                className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+              >
+                Save edit
+              </button>
+              <button
+                type="button"
+                disabled={actionBusy}
+                onClick={() => doAction("supersede", { description: draft })}
+                className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}
+                title="store a new generation under the same name (archives this one)"
+              >
+                Supersede
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-1">
+            {entry.description
+              ? <EvidenceView text={entry.description} />
+              : <Empty>(empty)</Empty>}
+          </div>
+        )}
       </Card>
 
       <Card>
@@ -205,9 +309,7 @@ export default function MemoryDetailPage() {
       {entry.evidence && Object.keys(entry.evidence).length > 0 && (
         <Card>
           <SectionLabel>Evidence</SectionLabel>
-          <pre className="text-[12px] leading-relaxed font-mono p-3 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] overflow-x-auto">
-            {JSON.stringify(entry.evidence, null, 2)}
-          </pre>
+          <EvidenceTable evidence={entry.evidence} />
         </Card>
       )}
 
@@ -281,6 +383,53 @@ function Badge({ tone, children }: { tone: PillTone; children: React.ReactNode }
     >
       {children}
     </span>
+  );
+}
+
+// Evidence rendered as a key/value table (no raw JSON.stringify). Known keys
+// — file_paths, commit, pr — render as links; everything else as readable text.
+function EvidenceTable({ evidence }: { evidence: Record<string, unknown> }) {
+  const REPO = "https://github.com/siegeon/.prism";
+  const renderVal = (key: string, val: unknown): React.ReactNode => {
+    if (Array.isArray(val)) {
+      return (
+        <ul className="space-y-0.5">
+          {val.map((v, i) => <li key={i}>{renderVal(key, v)}</li>)}
+        </ul>
+      );
+    }
+    const s = String(val ?? "");
+    if (key === "file_paths" || key === "file_path") {
+      return <span className="font-mono text-[12px] text-[color:var(--accent-teal-fg)] break-all">{s}</span>;
+    }
+    if (key === "commit") {
+      return (
+        <a href={`${REPO}/commit/${s}`} target="_blank" rel="noreferrer"
+           className="font-mono text-[12px] underline decoration-dotted text-[color:var(--accent-violet-fg)]">
+          {s.slice(0, 12)}
+        </a>
+      );
+    }
+    if (key === "pr") {
+      const num = s.replace(/[^0-9]/g, "");
+      return (
+        <a href={`${REPO}/pull/${num}`} target="_blank" rel="noreferrer"
+           className="font-mono text-[12px] underline decoration-dotted text-[color:var(--accent-violet-fg)]">
+          #{num || s}
+        </a>
+      );
+    }
+    return <span className="text-[13px] break-words">{s}</span>;
+  };
+  return (
+    <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2 mt-1 text-sm">
+      {Object.entries(evidence).map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-[color:var(--text-label)] font-mono text-[12px]">{k}</dt>
+          <dd className="min-w-0">{renderVal(k, v)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
