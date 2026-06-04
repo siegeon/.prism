@@ -1,0 +1,58 @@
+name: PR checks (tsc + pytest + SPA build)
+
+# The real quality gate for this repo. Before this workflow, nothing
+# re-checked tsc/pytest/build on a PR — release.yml / release-tauri.yml
+# only fire AFTER the tag push (post-merge), so a red change could land on
+# main unblocked. This runs the same local gates /ship enforces, on every
+# PR into main, so "tests pass on the PR" is a real, enforced condition.
+
+on:
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR cancels the in-flight run — saves minutes and
+# always reflects the latest head.
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "services/prism-service[dev]"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install SPA deps
+        working-directory: services/prism-service/prism_service/web
+        # npm install (not ci) — package-lock.json is gitignored on this repo.
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript build (tsc -b)
+        working-directory: services/prism-service/prism_service/web
+        run: npx tsc -b
+
+      - name: SPA build (fail if web_dist is empty)
+        working-directory: services/prism-service/prism_service/web
+        run: |
+          npm run build
+          test -f ../web_dist/index.html || { echo '::error::SPA build produced no web_dist/index.html'; exit 1; }
+
+      - name: Pytest (unit)
+        working-directory: services/prism-service
+        run: python -m pytest tests/unit -q
