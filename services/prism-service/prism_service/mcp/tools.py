@@ -148,9 +148,13 @@ TOOLS: list[Tool] = [
             "(honoring CLAUDE_CONFIG_DIR over the home dir), validates the "
             "folder exists and holds *.jsonl transcripts, and persists it as "
             "the project's claude_project_dir so the 60s import poller reads "
-            "the right folder regardless of slug skew or host. Idempotent — "
-            "re-registering updates the stored dir. Returns { ok, "
-            "resolved_dir, jsonl_count, project }."
+            "the right folder regardless of slug skew or host. It ALSO persists "
+            "the cwd as the project's source_path, so the LIVE conductor token "
+            "/ burn graph (which resolves transcripts via source_path) reads "
+            "the SAME folder — one registration drives imports AND the live "
+            "token graph (fixes empty / wrong-session token graphs). Idempotent "
+            "— re-registering updates both. Returns { ok, resolved_dir, "
+            "source_path, jsonl_count, project }."
         ),
         inputSchema={
             "type": "object",
@@ -2827,12 +2831,23 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "project": target_project,
                 }))]
             # Persist via the SAME writer the Settings editor uses; idempotent.
+            # Set BOTH keys off the agent-declared cwd so ONE MCP registration
+            # drives EVERY transcript consumer, not just the import poller:
+            #   - claude_project_dir = the resolved ~/.claude/projects/<slug>
+            #     transcript dir (read by the 60s import poller).
+            #   - source_path = the cwd itself, which _project_source_path()
+            #     reads and slug-matches to resolve the LIVE conductor token /
+            #     burn graph. Before this, an agent could register the right
+            #     folder yet the token graph still read a stale/empty
+            #     source_path -> empty (#134) or a wrong-session 40/flatline.
             state = ue._read_state(target_project)
             state["claude_project_dir"] = str(resolved)
+            state["source_path"] = cwd
             ue._write_state(target_project, state)
             return [TextContent(type="text", text=_json({
                 "ok": True,
                 "resolved_dir": str(resolved),
+                "source_path": cwd,
                 "jsonl_count": len(jsonl),
                 "project": target_project,
                 "source": "explicit",

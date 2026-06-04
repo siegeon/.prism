@@ -823,7 +823,13 @@ def live_token_turns_for_session(
     prev_ts = raw[0][0]
     for ts, tok in raw:
         dt = ts - prev_ts
-        if dt <= 0 or dt > 600:
+        # Clamp to a sane wall-clock window. Transcript timestamps are message
+        # WRITE times, not generation durations, so a rapid tool-result ->
+        # assistant pair can land <1s apart and make out/dt read as a
+        # megatoken/s phantom (the "peak 1369.1k tok/s" spike that flatlines
+        # every other bar). Floor sub-second / zero / negative gaps at 1s, and
+        # cap idle gaps at the 600s ceiling.
+        if dt < 1.0 or dt > 600:
             dt = 1.0
         prev_ts = ts
         out.append({"out": tok, "dt_s": round(dt, 2), "tok_s": round(tok / dt, 1)})
