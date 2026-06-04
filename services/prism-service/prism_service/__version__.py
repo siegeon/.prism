@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.18"
+PRISM_VERSION = "6.3.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.19: /conductor redesigned around visual work-progress — dropped the "
+    "9 literal SDLC swimlanes for a flat tile list; each tile now carries an "
+    "animated dot stepper that fills to the task's current phase, with the "
+    "phase label moved to the tile's top-right. Removed the KPI counts header "
+    "and the create-task affordance (the page is purely the visual "
+    "representation of work happening to each task). "
     "v6.3.18: /conductor SDLC swimlane step-label pills now render at a "
     "uniform fixed width (w-40, centered) so the lane rail reads as an "
     "aligned column instead of ragged text-sized pills. "
