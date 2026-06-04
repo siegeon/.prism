@@ -120,6 +120,41 @@ function normalizeQueue(q: unknown): QueueRow[] {
   return [];
 }
 
+// Structured render of the brief scope (was a raw JSON.stringify blob): an
+// indented key/value tree, recursing into nested objects/arrays. Leaves render
+// as readable mono values, never a JSON dump.
+function ScopeTree({ value, depth = 0 }: { value: unknown; depth?: number }): React.ReactElement {
+  if (value === null || value === undefined) {
+    return <span className="opacity-40 text-[11px] font-mono">—</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="opacity-40 text-[11px] font-mono">[]</span>;
+    return (
+      <ul className="space-y-0.5">
+        {value.map((v, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="opacity-30 text-[11px] font-mono select-none">–</span>
+            <ScopeTree value={v} depth={depth + 1} />
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (typeof value === "object") {
+    return (
+      <div className={depth > 0 ? "pl-3 border-l border-[color:var(--midground-base)]/10" : ""}>
+        {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
+          <div key={k} className="flex gap-2 items-baseline flex-wrap py-0.5">
+            <span className="text-[11px] font-mono opacity-50 shrink-0">{k}:</span>
+            <ScopeTree value={v} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return <span className="text-[11px] font-mono opacity-85 break-words">{String(value)}</span>;
+}
+
 export default function ConsolidationPage() {
   const [project] = useProject();
   const [queue, setQueue] = useState<QueueRow[]>([]);
@@ -421,9 +456,9 @@ export default function ConsolidationPage() {
                   {preview.scope && (
                     <div>
                       <span className="opacity-50">scope (full):</span>
-                      <pre className="mt-1 p-2 rounded bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/10 whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto text-[11px]">
-                        {JSON.stringify(preview.scope, null, 2)}
-                      </pre>
+                      <div className="mt-1 p-2 rounded bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/10 max-h-96 overflow-auto">
+                        <ScopeTree value={preview.scope} />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -578,9 +613,9 @@ export default function ConsolidationPage() {
                     </div>
                   )}
                   {isOpen && hasExcerpt && (
-                    <pre className="mt-2 ml-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 text-[11px] leading-relaxed whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto">
+                    <div className="mt-2 ml-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 text-[11px] leading-relaxed whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto">
                       {b.transcript_excerpt}
-                    </pre>
+                    </div>
                   )}
                 </div>
               );

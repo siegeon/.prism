@@ -143,6 +143,59 @@ def entry_detail(entry_id: str, project: str = Query("default")) -> dict:
     return {"entry": entry, "chain": chain}
 
 
+@router.post("/entry/{entry_id}/action")
+def entry_action(
+    entry_id: str,
+    project: str = Query("default"),
+    body: dict = Body(...),
+) -> dict:
+    """Operate on a memory entry from the SPA: edit / retire / supersede.
+
+    * edit      — patch description/importance/name in place (update_entry).
+    * retire    — mark the entry status='retired' (kept for the audit trail).
+    * supersede — store a NEW generation under the same name; the existing
+                  active entry is auto-archived by MemoryService.store's
+                  temporal-dedup path.
+    """
+    svc = _svc(project)
+    entry = svc.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(404, f"unknown entry: {entry_id}")
+    action = (body.get("action") or "").strip()
+
+    if action == "retire":
+        updated = svc.update_entry(entry_id, status="retired")
+        return {"ok": updated is not None, "action": "retire", "entry": updated}
+
+    if action == "edit":
+        patch = {}
+        for k in ("description", "name", "importance"):
+            if k in body and body[k] is not None:
+                patch[k] = body[k]
+        if not patch:
+            raise HTTPException(422, "edit requires at least one of description/name/importance")
+        updated = svc.update_entry(entry_id, **patch)
+        return {"ok": updated is not None, "action": "edit", "entry": updated}
+
+    if action == "supersede":
+        desc = body.get("description")
+        if not desc:
+            raise HTTPException(422, "supersede requires a new description")
+        new_entry = svc.store(
+            domain=entry.domain,
+            name=entry.name,
+            description=desc,
+            type=entry.type,
+            classification=entry.classification,
+            evidence=dict(entry.evidence or {}),
+            importance=int(body.get("importance", entry.importance)),
+            memory_type=entry.memory_type,
+        )
+        return {"ok": True, "action": "supersede", "entry": new_entry}
+
+    raise HTTPException(422, f"unknown action {action!r}; expected edit|retire|supersede")
+
+
 @router.get("/claude-config")
 def get_claude_config(project: str = Query("default")) -> dict:
     """Return the per-project Claude transcript source dir.

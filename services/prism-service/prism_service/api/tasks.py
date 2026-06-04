@@ -98,6 +98,40 @@ def list_tasks(project: str = Query("default")) -> dict:
     return {"tasks": _svc(project).list()}
 
 
+class TaskCreate(BaseModel):
+    title: str
+    description: str = ""
+    priority: int = 0
+    tags: Optional[list[str]] = None
+    enter_conductor: bool = False
+
+
+@router.post("")
+def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
+    """Create a task from the SPA, optionally entering it into conductor.
+
+    Backs the /conductor 'create task -> enter conductor' onboarding
+    affordance. When enter_conductor is true the new task is immediately
+    advanced into the workflow (same path as the MCP conductor_advance tool)
+    so it appears on the SDLC swimlanes right away.
+    """
+    if not (body.title or "").strip():
+        raise HTTPException(422, "title is required")
+    ctx = get_project(project)
+    task = ctx.task_svc.create(
+        title=body.title.strip(),
+        description=body.description or "",
+        priority=body.priority or 0,
+        tags=body.tags or [],
+    )
+    advanced = None
+    if body.enter_conductor:
+        cond = getattr(ctx, "conductor_svc", None)
+        if cond is not None:
+            advanced = cond.advance_task(task.id, validation="entered via SPA onboarding")
+    return {"task": task, "advanced": advanced}
+
+
 @router.get("/next")
 def next_task(project: str = Query("default")) -> dict:
     return {"next": _svc(project).next_task()}
