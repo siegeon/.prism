@@ -13,10 +13,13 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.17"
+PRISM_VERSION = "6.3.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.18: /conductor SDLC swimlane step-label pills now render at a "
+    "uniform fixed width (w-40, centered) so the lane rail reads as an "
+    "aligned column instead of ragged text-sized pills. "
     "v6.3.17: Close UI-FIRST coverage gaps (task 3c706250) — make the "
     "conductor gate OPERABLE from the SPA, kill raw dumps & dead pages, and "
     "wire the orphaned admin surfaces. BACKEND: api/conductor.py gains "

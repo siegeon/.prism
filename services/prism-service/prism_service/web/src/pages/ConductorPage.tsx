@@ -172,7 +172,7 @@ export default function ConductorPage() {
               >
                 <div className="flex items-center gap-2">
                   <span
-                    className="text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1"
+                    className="inline-flex shrink-0 items-center justify-center w-40 whitespace-nowrap text-[10px] uppercase tracking-wider font-mono px-2 py-1 rounded ring-1"
                     style={{
                       background: `var(--accent-${laneTone}-bg)`,
                       color: `var(--accent-${laneTone}-fg)`,
