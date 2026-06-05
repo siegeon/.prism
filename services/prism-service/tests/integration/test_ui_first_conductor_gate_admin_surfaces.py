@@ -174,6 +174,30 @@ def test_post_conductor_advance_moves_task(tmp_path, monkeypatch):
     assert task_svc.get(t.id).workflow_step == "review_previous_notes"
 
 
+def test_managed_tasks_and_buckets_show_only_top_level(tmp_path, monkeypatch):
+    """Conductor swimlanes mirror the /tasks board: top-level tasks only.
+
+    A subtask (parent_id set) — even one actively at a workflow step — must
+    NOT appear as its own tile or inflate a step bucket; it lives under its
+    parent's detail page. Regression for the demo/verification subtasks that
+    were cluttering /conductor.
+    """
+    _, task_svc, cond = _client(tmp_path, monkeypatch)
+
+    parent = task_svc.create(title="parent epic")
+    _drive_to_red_gate(task_svc, cond, parent.id)
+
+    child = task_svc.create(title="verify subtask", parent_id=parent.id)
+    _drive_to_red_gate(task_svc, cond, child.id)
+
+    ids = {row["id"] for row in cond.managed_tasks()}
+    assert parent.id in ids, "top-level task must show on /conductor"
+    assert child.id not in ids, "subtask must NOT show as a standalone tile"
+
+    # step_buckets must agree: exactly one task at red_gate (the parent).
+    assert cond.step_buckets().get("red_gate") == 1, cond.step_buckets()
+
+
 # =====================================================================
 # Half B/C — frontend raw-dump + dead-page hygiene (disk scan of the
 # real SPA source). These pin the USER-FACING render, not a unit shim.
