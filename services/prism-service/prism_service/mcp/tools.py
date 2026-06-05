@@ -1569,9 +1569,14 @@ def _resolve_link_session_id() -> str:
         from prism_service.services.claude_transcripts import (
             _project_source_path, current_session_id,
         )
+        from prism_service.services import claude_memory
         src = _project_source_path(ctx.project_id)
-        if src:
-            real = current_session_id(src)
+        # Resolve the explicit claude_project_dir so folder-mode / cwd-mismatch
+        # (#134) — where src='' — still stamps a REAL session id instead of the
+        # phantom MCP request handle (which maps to no transcript).
+        override_dir = claude_memory.configured_project_dir(ctx.project_id) or ""
+        if src or override_dir:
+            real = current_session_id(src, override_dir=override_dir)
             if real:
                 return real
     except Exception:

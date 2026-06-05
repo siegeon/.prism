@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.21"
+PRISM_VERSION = "6.3.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.22: conductor per-task token HONESTY (follow-up to #134/#137). "
+    "current_session_id (claude_transcripts.py) gains an override_dir param "
+    "mirroring the v6.3.21 readers — with project_path empty but override_dir "
+    "set it resolves the active transcript's sessionId via _override_session_"
+    "paths, so _resolve_link_session_id (mcp/tools.py) now stamps the REAL "
+    "session id (not the phantom ctx.request_id MCP handle) in folder-mode / "
+    "cwd-mismatch (#134), reducing wall-clock-fallback reliance. phase_progress "
+    "(conductor_service.py) applies the project-wide wall-clock fallback ONLY "
+    "when the driven task status=='in_progress' — a pending/parked task with no "
+    "authoritative live_events stays honestly blank (no painting another task's "
+    "burn, killing the 2625-turns duplication). New tokens_source field "
+    "('linked'|'wallclock'): when wall-clock-derived, tokens_since_step is fed "
+    "from the SAME fallback events (==series sum, >0) so the graph and the "
+    "number agree (no '2625 turns / 0 tokens' contradiction). TokenTurns.tsx "
+    "consumes the tokens_source prop — 'wallclock' renders dimmed + labelled "
+    "'project activity (approximate)'. Tests: tests/unit/test_conductor_token_"
+    "source.py (oracle a/b/c + UI guard, 8 green). "
     "v6.3.21: conductor token/burn graph — fix empty phase_progress.token_turns "
     "(issues #134, #137). The three live transcript readers "
     "(live_tokens_for_session, live_token_events_for_session, "

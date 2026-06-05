@@ -200,6 +200,12 @@ def test_phase_progress_falls_back_for_mcp_handle_sessions(tmp_path, monkeypatch
     t = task_svc.create(title="mcp-handle tile")
     cond.advance_task(t.id)
     task_svc.link_session(t.id, mcp_handle)
+    # Honesty gate (#647d9c41, follow-up to #137): the project-wide wall-clock
+    # fallback now fires ONLY for the task actually being worked. This oracle's
+    # intent — an MCP-handle task still shows its turns via the fallback — holds
+    # for an in_progress task; a parked/pending one stays honestly blank (pinned
+    # by tests/unit/test_conductor_token_source.py).
+    task_svc.update(t.id, status="in_progress")
 
     _patch_resolvers(monkeypatch, source_path=str(tmp_path / "src"), override_dir=str(d))
 

@@ -18,22 +18,32 @@ export default function TokenTurns({
   total,
   live,
   reduced,
+  tokens_source,
 }: {
   turns?: TokenTurn[];
   total?: number;
   live?: boolean;
   reduced?: boolean | null;
+  // 'linked' = authoritative per-task series; 'wallclock' = project-wide
+  // approximate fallback — render dimmed + labelled so the number is never
+  // presented as authoritative per-task truth.
+  tokens_source?: "linked" | "wallclock";
 }) {
   const series = turns ?? [];
   const count = total ?? series.length;
   const peak = series.reduce((m, t) => Math.max(m, t.tok_s), 0) || 1;
   const latest = series.length ? series[series.length - 1] : null;
+  const approximate = tokens_source === "wallclock";
 
   return (
-    <div className="flex flex-col gap-1.5 h-full">
+    <div
+      className="flex flex-col gap-1.5 h-full"
+      style={approximate ? { opacity: 0.55 } : undefined}
+      title={approximate ? "project activity (approximate)" : undefined}
+    >
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">
-          burn · tok/s by turn
+          {approximate ? "project activity (approximate)" : "burn · tok/s by turn"}
         </span>
         <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums text-[color:var(--text-muted)]">
           {live && (
