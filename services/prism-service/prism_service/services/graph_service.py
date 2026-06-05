@@ -821,6 +821,33 @@ class GraphService:
         conn = sqlite3.connect(self._graph_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
+            # issue #136 — fresh folder-mode project never indexes.
+            # On a brand-new project this connection's graph.db was never
+            # initialized by BrainEngine._init_graph_schema, so the base
+            # entities/relationships tables don't exist yet and the DELETE
+            # below raised `no such table: relationships`. Create the base
+            # schema first (mirrors brain_engine.py:801-817, idempotent via
+            # IF NOT EXISTS) BEFORE the graphify-column migrations + the
+            # snapshot DELETE/re-import. Safe on already-initialized DBs.
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS entities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    kind TEXT DEFAULT 'unknown',
+                    file TEXT,
+                    line INTEGER,
+                    UNIQUE(name, file)
+                );
+                CREATE TABLE IF NOT EXISTS relationships (
+                    source_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
+                    target_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
+                    relation TEXT,
+                    PRIMARY KEY (source_id, target_id, relation)
+                );
+                CREATE INDEX IF NOT EXISTS idx_ent_name ON entities(name);
+                CREATE INDEX IF NOT EXISTS idx_rel_src ON relationships(source_id);
+                CREATE INDEX IF NOT EXISTS idx_rel_tgt ON relationships(target_id);
+            """)
             _graph_schema_migrations(conn)
             # Wipe + re-import: the graph is a full snapshot, not an incremental diff
             conn.execute("DELETE FROM relationships")
