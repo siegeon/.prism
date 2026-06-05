@@ -13,10 +13,32 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.20"
+PRISM_VERSION = "6.3.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.21: conductor token/burn graph — fix empty phase_progress.token_turns "
+    "(issues #134, #137). The three live transcript readers "
+    "(live_tokens_for_session, live_token_events_for_session, "
+    "project_token_events_in_window in claude_transcripts.py) gain an "
+    "`override_dir` param mirroring import_unseen's v6.2.16 pattern: when set, "
+    "read <override_dir>/<sid>.jsonl + nested <override_dir>/<sid>/*.jsonl "
+    "directly (via new _override_session_paths) instead of slug-scanning "
+    "~/.claude/projects. phase_progress now resolves override_dir via "
+    "claude_memory.configured_project_dir and fires the live read when EITHER "
+    "source_path OR override_dir is set (#134 — folder-mode/cwd-mismatched "
+    "projects no longer skip token reads). It builds the FULL uncapped per-turn "
+    "series from live_token_events_for_session and computes total_turns BEFORE "
+    "the [-40:] tail slice, so `turns` reports the honest total (>40) while "
+    "token_turns stays tail-capped (#137 secondary). New wall-clock fallback: "
+    "when linked-session events are empty (only unresolvable 32-hex MCP "
+    "handles), it calls project_token_events_in_window over the task's full "
+    "history window (#137 primary). A single shared token_turns_from_events "
+    "helper applies the 1s/600s clamp so the rate-derivation logic isn't "
+    "duplicated between the live path and the fallback. Tests: "
+    "tests/unit/test_phase_progress_token_turns.py (override_dir population w/ "
+    "empty source_path; MCP-handle window fallback; honest turns>40 with "
+    "tail-capped token_turns). "
     "v6.3.20: fix a fresh folder-mode project never indexing (issue #136). "
     "On a brand-new project, bootstrap ingest aborted with `OperationalError: "
     "no such table: relationships` from graph.rebuild: graphify produced "

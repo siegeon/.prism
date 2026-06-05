@@ -84,6 +84,20 @@ def _conductor(tmp_path):
     scores_db = str(proj_dir / "scores.db")
     task_svc = TaskService(str(proj_dir / "tasks.db"), scores_db=scores_db)
     cond = ConductorService(scores_db, enable_engine=False, task_svc=task_svc)
+    # session_outcomes is normally created by brain_engine; materialize it here
+    # (conductor-only flow) so sessions_for_task's LEFT JOIN resolves instead of
+    # OperationalError-ing to [] — mirrors test_conductor_live_tokens.py setup.
+    import sqlite3
+    conn = sqlite3.connect(scores_db)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_outcomes ("
+            "session_id TEXT PRIMARY KEY, duration_s REAL, tokens_used INTEGER, "
+            "files_read INTEGER, files_modified INTEGER, skills_invoked INTEGER)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return task_svc, cond
 
 
