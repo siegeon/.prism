@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.19"
+PRISM_VERSION = "6.3.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.20: fix a fresh folder-mode project never indexing (issue #136). "
+    "On a brand-new project, bootstrap ingest aborted with `OperationalError: "
+    "no such table: relationships` from graph.rebuild: graphify produced "
+    "graph.json fine, but GraphService._import_graph_json opens its OWN sqlite "
+    "connection to graph.db and ran `_graph_schema_migrations(conn)` (which "
+    "only ALTERs existing entities/relationships + CREATEs communities) then "
+    "`DELETE FROM relationships` WITHOUT ever creating the base "
+    "entities/relationships tables — those are created only by "
+    "BrainEngine._init_graph_schema, which never ran against that fresh "
+    "graph.db. graph.db ended with only ['communities','graph_annotations'], "
+    "brain.db stayed empty, and doc_count was pinned at 0 forever (reindex is "
+    "incremental — a no-op). Fix: _import_graph_json now runs the base-schema "
+    "DDL (CREATE TABLE IF NOT EXISTS entities/relationships + idx_ent_name/"
+    "idx_rel_src/idx_rel_tgt, mirroring brain_engine.py:801-817) BEFORE the "
+    "graphify-column migrations and the snapshot DELETE/re-import. Idempotent — "
+    "safe on already-initialized projects and on a second ingest. Regression: "
+    "tests/unit/test_import_graph_base_schema.py + test_graph_import_base_"
+    "schema.py (open a fresh empty graph.db, import, assert entities+"
+    "relationships present with non-zero counts; red pre-fix at the DELETE, "
+    "green after). "
     "v6.3.19: /conductor redesigned around visual work-progress — dropped the "
     "9 literal SDLC swimlanes for a flat tile list; each tile now carries an "
     "animated dot stepper that fills to the task's current phase, with the "
