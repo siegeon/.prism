@@ -26,6 +26,9 @@ export type PhaseProgress = {
   // the live TokenTurns graph beside each conductor tile.
   token_turns?: TokenTurn[];
   turns?: number;
+  // 'linked' = authoritative per-task series; 'wallclock' = project-wide
+  // approximate fallback (TokenTurns renders it dimmed + labelled).
+  tokens_source?: "linked" | "wallclock";
 };
 
 function fmtTokens(t: number): string {

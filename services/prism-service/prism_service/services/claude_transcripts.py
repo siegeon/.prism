@@ -909,11 +909,23 @@ def live_token_turns_for_session(
 
 def current_session_id(
     project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
 ) -> str:
     """Best-effort id of the project's ACTIVE Claude session — the sessionId
     of the most-recently-modified matching transcript. Used as the conductor
     link fallback so we stamp a REAL, resolvable session instead of the MCP
-    request handle (which maps to no transcript and no token data)."""
+    request handle (which maps to no transcript and no token data).
+
+    `override_dir` (mirrors the v6.3.21 readers): when set, resolve the active
+    session from <override_dir>/*.jsonl directly (via _override_session_paths
+    with a blank session_id) instead of slug-scanning ~/.claude/projects. This
+    lets folder-mode / cwd-mismatched projects (project_path empty) still stamp
+    a REAL session id off the explicit claude_project_dir (#134)."""
+    if override_dir and override_dir.strip():
+        paths = _override_session_paths(override_dir, "")
+        if paths:
+            newest = max(paths, key=lambda p: p.stat().st_mtime)
+            return _session_id_of(newest) or newest.stem
     if not project_path:
         return ""
     claude_home = claude_home or resolve_claude_home()

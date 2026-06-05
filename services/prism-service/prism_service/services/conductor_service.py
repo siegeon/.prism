@@ -1791,6 +1791,10 @@ class ConductorService:
         # duplication). Empty for a task with no on-disk transcript yet.
         token_turns: list[dict] = []
         total_turns = 0
+        # 'linked' = series came from authoritative per-session live events (or
+        # is honestly empty); 'wallclock' = the project-wide fallback supplied
+        # it. The SPA dims/labels the 'wallclock' case as approximate.
+        tokens_source = "linked"
         if self._task_svc is not None:
             try:
                 source_path = self._project_source_path()
@@ -1837,7 +1841,19 @@ class ConductorService:
                 # sessions are unresolvable 32-hex MCP handles has no live
                 # events — bucket the project's transcript spend across the
                 # task's history window so the tile still shows real turns.
-                if not live_events and window_fn:
+                # HONESTY GATE (#647d9c41): the fallback is project-WIDE, so it
+                # can only honestly apply to the ONE task actually being worked.
+                # A pending/parked task with no authoritative events stays
+                # blank (tokens_source='linked') rather than borrowing another
+                # task's burn. Only an in_progress task fills via wall-clock.
+                task_status = ""
+                try:
+                    driven = self._task_svc.get(task_id)
+                    task_status = (getattr(driven, "status", "") or "") if driven else ""
+                except Exception:
+                    task_status = ""
+                if (not live_events and window_fn
+                        and task_status == "in_progress"):
                     now = self._now_epoch()
                     # Bracket the task's history span, but floor `since` at a
                     # generous lookback so a young task whose work is already on
@@ -1853,6 +1869,13 @@ class ConductorService:
                         ) or []
                     except Exception:
                         live_events = []
+                    if live_events:
+                        # The series is project-wide/approximate — tag it AND
+                        # feed tokens_since_step from the SAME events so the
+                        # graph (rate) and the number (integral) agree (no
+                        # '2625 turns / 0 tokens' contradiction, PROBLEM 2).
+                        tokens_source = "wallclock"
+                        tokens = sum(int(tok) for _ep, tok in live_events)
                 if turns_from:
                     full_turns = turns_from(live_events)
                     total_turns = len(full_turns)
@@ -1872,4 +1895,7 @@ class ConductorService:
             # Per-turn burn rate series + honest total turn count.
             "token_turns": token_turns,
             "turns": total_turns,
+            # 'linked' (authoritative/empty) | 'wallclock' (project-wide
+            # approximate fallback — the SPA dims + labels it).
+            "tokens_source": tokens_source,
         }

@@ -190,6 +190,7 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
             total={task.phase_progress?.turns}
             live={status === "in_progress"}
             reduced={reduced}
+            tokens_source={task.phase_progress?.tokens_source}
           />
         </div>
       </div>
