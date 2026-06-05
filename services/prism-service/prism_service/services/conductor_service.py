@@ -1617,6 +1617,10 @@ class ConductorService:
     INTAKE_STEP = "intake"
 
     _TYPICAL_S_FALLBACK = 900.0  # 15 min — positive default when no history
+    # Floor for the wall-clock token fallback window: a young task whose work is
+    # already on disk (just-linked unresolvable MCP handle, #137) gets at least
+    # this much lookback so the burn graph isn't an empty [created, now] window.
+    _FALLBACK_LOOKBACK_S = 6 * 3600.0  # 6h
 
     def _project_source_path(self) -> str:
         """Resolve this project's source tree from the scores.db location
@@ -1635,6 +1639,47 @@ class ConductorService:
             src = ""
         self._src_path_cache = src
         return src
+
+    def _project_override_dir(self) -> str:
+        """Resolve this project's explicit Claude transcript dir
+        (claude_project_dir / override_dir) so the live token read works for a
+        folder-mode project whose source_path is empty or cwd-mismatched (#134).
+        Cached; '' when unconfigured."""
+        cached = getattr(self, "_override_dir_cache", None)
+        if cached is not None:
+            return cached
+        val = ""
+        try:
+            from pathlib import Path
+            from prism_service.services import claude_memory
+            project_id = Path(self._scores_db).parent.name
+            val = claude_memory.configured_project_dir(project_id) or ""
+        except Exception:
+            val = ""
+        self._override_dir_cache = val
+        return val
+
+    @staticmethod
+    def _now_epoch() -> float:
+        """Server clock as POSIX seconds (UTC)."""
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).timestamp()
+
+    def _task_window_start(self, task_id: str) -> float:
+        """Earliest history timestamp for the task (its work window start) so
+        the wall-clock fallback brackets the FULL task span, not just the
+        current step. Falls back to (now - in_step_s) when history is empty."""
+        if self._task_svc is not None:
+            try:
+                rows = self._task_svc.history(task_id)
+                stamps = [self._parse_iso(getattr(r, "timestamp", "") or "")
+                          for r in rows]
+                stamps = [s for s in stamps if s is not None]
+                if stamps:
+                    return min(stamps)
+            except Exception:
+                pass
+        return self._now_epoch() - self._in_step_s(task_id)
 
     @staticmethod
     def _parse_iso(ts: str) -> Optional[float]:
@@ -1745,16 +1790,32 @@ class ConductorService:
         # step` (the graph is the derivative, the number is the integral — no
         # duplication). Empty for a task with no on-disk transcript yet.
         token_turns: list[dict] = []
+        total_turns = 0
         if self._task_svc is not None:
             try:
                 source_path = self._project_source_path()
+                override_dir = self._project_override_dir()
+                # Fire the live read when EITHER a source_path OR an explicit
+                # claude_project_dir (override_dir) is set — a folder-mode
+                # project with no source_path still reads tokens via the
+                # registered transcript dir (#134).
+                live_enabled = bool(source_path or override_dir)
                 live_fn = None
-                turns_fn = None
-                if source_path:
+                events_fn = None
+                window_fn = None
+                turns_from = None
+                if live_enabled:
                     from prism_service.services.claude_transcripts import (
                         live_tokens_for_session as live_fn,
-                        live_token_turns_for_session as turns_fn,
+                        live_token_events_for_session as events_fn,
+                        project_token_events_in_window as window_fn,
+                        token_turns_from_events as turns_from,
                     )
+                # Build the FULL uncapped per-turn event timeline across the
+                # task's live sessions; total_turns is computed off the UNCAPPED
+                # series so `turns` stays honest even past the 40-turn tail cap.
+                live_events: list[tuple[float, int]] = []
+                since_ts = None
                 for s in self._task_svc.sessions_for_task(task_id):
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
@@ -1762,21 +1823,42 @@ class ConductorService:
                     live_tok = 0
                     if live_fn and sid:
                         try:
-                            live_tok = int(live_fn(sid, source_path) or 0)
+                            live_tok = int(live_fn(sid, source_path, override_dir=override_dir) or 0)
                         except Exception:
                             live_tok = 0
                     tokens += max(outcome_tok, live_tok)
-                    if turns_fn and sid:
+                    if events_fn and sid:
                         try:
-                            token_turns.extend(turns_fn(sid, source_path) or [])
+                            live_events.extend(events_fn(sid, source_path, override_dir=override_dir) or [])
                         except Exception:
                             pass
+                live_events.sort(key=lambda e: e[0])
+                # Wall-clock fallback (#137 primary): a task whose only linked
+                # sessions are unresolvable 32-hex MCP handles has no live
+                # events — bucket the project's transcript spend across the
+                # task's history window so the tile still shows real turns.
+                if not live_events and window_fn:
+                    now = self._now_epoch()
+                    # Bracket the task's history span, but floor `since` at a
+                    # generous lookback so a young task whose work is already on
+                    # disk (the just-linked MCP-handle case) still captures its
+                    # recent turns instead of an empty [created≈now, now] window.
+                    since_ts = min(
+                        self._task_window_start(task_id),
+                        now - self._FALLBACK_LOOKBACK_S,
+                    )
+                    try:
+                        live_events = window_fn(
+                            source_path, since_ts, now, override_dir=override_dir
+                        ) or []
+                    except Exception:
+                        live_events = []
+                if turns_from:
+                    full_turns = turns_from(live_events)
+                    total_turns = len(full_turns)
+                    token_turns = full_turns[-40:]
             except Exception:
                 tokens = 0
-        # Bound the payload to the most recent turns (the live tail is what the
-        # animated graph shows); `turns` keeps the honest total count.
-        total_turns = len(token_turns)
-        token_turns = token_turns[-40:]
 
         return {
             "pct": round(max(0.0, min(1.0, pct)), 6),

@@ -651,13 +651,49 @@ def _session_id_of(path: Path) -> str:
     return ""
 
 
+def _override_session_paths(override_dir: str, session_id: str) -> list[Path]:
+    """Transcript paths for `session_id` under an explicit `override_dir` (the
+    per-project claude_project_dir): the flat <dir>/<sid>.jsonl plus every
+    nested workflow-subagent transcript under <dir>/<sid>/. Mirrors the
+    slug-scan layout so the override path reads exactly what the live path does.
+    When session_id is blank, returns every <dir>/*.jsonl (the window read)."""
+    d = Path(override_dir.strip())
+    if not d.is_dir():
+        return []
+    if not session_id:
+        return sorted(d.glob("*.jsonl"))
+    out: list[Path] = []
+    seen: set[Path] = set()
+    main = d / f"{session_id}.jsonl"
+    if main.is_file():
+        out.append(main)
+        seen.add(main)
+    sess_dir = d / session_id
+    if sess_dir.is_dir():
+        for f in sess_dir.rglob("*.jsonl"):
+            if f not in seen:
+                out.append(f)
+                seen.add(f)
+    return out
+
+
 def live_tokens_for_session(
     session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
 ) -> int:
     """Sum live `output_tokens` for `session_id` across its on-disk transcript
     AND any workflow-subagent transcripts nested under <slug>/<session_id>/.
-    Returns 0 when nothing is found (caller falls back to session_outcomes)."""
-    if not session_id or not project_path:
+    Returns 0 when nothing is found (caller falls back to session_outcomes).
+
+    When `override_dir` is set (the per-project claude_project_dir), read
+    <override_dir>/<sid>.jsonl + nested <override_dir>/<sid>/ directly instead
+    of slug-scanning ~/.claude/projects (v6.3.21, mirrors import_unseen)."""
+    if not session_id:
+        return 0
+    if override_dir and override_dir.strip():
+        return sum(_sum_output_tokens(p)
+                   for p in _override_session_paths(override_dir, session_id))
+    if not project_path:
         return 0
     claude_home = claude_home or resolve_claude_home()
     projects_dir = claude_home / "projects"
@@ -739,12 +775,24 @@ def _token_events(path: Path) -> list[tuple[float, int]]:
 
 def live_token_events_for_session(
     session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
 ) -> list[tuple[float, int]]:
     """Like live_tokens_for_session, but returns the per-turn
     (epoch_s, output_tokens) timeline across the parent transcript AND nested
     workflow-subagent transcripts, sorted ascending. Empty when none found.
-    Lets a caller bucket spend into arbitrary wall-clock windows."""
-    if not session_id or not project_path:
+    Lets a caller bucket spend into arbitrary wall-clock windows.
+
+    `override_dir` (v6.3.21): when set, read <override_dir>/<sid>.jsonl +
+    nested <override_dir>/<sid>/ directly instead of slug-scanning."""
+    if not session_id:
+        return []
+    if override_dir and override_dir.strip():
+        out: list[tuple[float, int]] = []
+        for p in _override_session_paths(override_dir, session_id):
+            out.extend(_token_events(p))
+        out.sort(key=lambda e: e[0])
+        return out
+    if not project_path:
         return []
     claude_home = claude_home or resolve_claude_home()
     projects_dir = claude_home / "projects"
@@ -772,6 +820,7 @@ def live_token_events_for_session(
 def project_token_events_in_window(
     project_path: str, since: float, until: float,
     claude_home: Path | None = None,
+    override_dir: str | None = None,
 ) -> list[tuple[float, int]]:
     """Per-turn (epoch_s, output_tokens) across ALL transcripts matching the
     project whose events fall in [since, until], sorted ascending.
@@ -783,25 +832,64 @@ def project_token_events_in_window(
     `since` cannot hold in-window events) and per-file reads are cached on
     (mtime,size) via _token_events. Best-effort: when two tasks were worked in
     the SAME window their spend can't be told apart, so this only fills the gap
-    when no authoritative linked-session events exist. [] when none match."""
-    if not project_path or until <= since:
+    when no authoritative linked-session events exist. [] when none match.
+
+    `override_dir` (v6.3.21): when set, bucket every <override_dir>/**/*.jsonl
+    transcript directly instead of slug-scanning ~/.claude/projects."""
+    if until <= since:
+        return []
+    out: list[tuple[float, int]] = []
+
+    def _bucket(f: Path) -> None:
+        try:
+            if f.stat().st_mtime < since:
+                return
+        except OSError:
+            return
+        out.extend((ep, tok) for ep, tok in _token_events(f) if since <= ep <= until)
+
+    if override_dir and override_dir.strip():
+        d = Path(override_dir.strip())
+        if d.is_dir():
+            for f in d.rglob("*.jsonl"):
+                _bucket(f)
+        out.sort(key=lambda e: e[0])
+        return out
+    if not project_path:
         return []
     claude_home = claude_home or resolve_claude_home()
     projects_dir = claude_home / "projects"
     if not projects_dir.is_dir():
         return []
-    out: list[tuple[float, int]] = []
     for sub in projects_dir.iterdir():
         if not sub.is_dir() or not slug_matches(sub.name, project_path):
             continue
         for f in sub.rglob("*.jsonl"):
-            try:
-                if f.stat().st_mtime < since:
-                    continue
-            except OSError:
-                continue
-            out.extend((ep, tok) for ep, tok in _token_events(f) if since <= ep <= until)
+            _bucket(f)
     out.sort(key=lambda e: e[0])
+    return out
+
+
+def token_turns_from_events(events: list[tuple[float, int]]) -> list[dict]:
+    """Derive the per-turn burn-RATE series {out, dt_s, tok_s} from a sorted
+    (epoch, output_tokens) timeline, applying the SHARED 1s/600s clamp. Single
+    source of truth so the live path and the wall-clock fallback can't drift.
+
+    Clamp rationale: transcript timestamps are message WRITE times, not
+    generation durations, so a rapid tool-result -> assistant pair can land <1s
+    apart and make out/dt read as a megatoken/s phantom (the "peak 1369.1k
+    tok/s" spike that flatlines every other bar). Floor sub-second / zero /
+    negative gaps at 1s, and cap idle gaps at the 600s ceiling."""
+    if not events:
+        return []
+    out: list[dict] = []
+    prev_ts = events[0][0]
+    for ts, tok in events:
+        dt = ts - prev_ts
+        if dt < 1.0 or dt > 600:
+            dt = 1.0
+        prev_ts = ts
+        out.append({"out": tok, "dt_s": round(dt, 2), "tok_s": round(tok / dt, 1)})
     return out
 
 
@@ -812,28 +900,11 @@ def live_token_turns_for_session(
     """Recent per-turn burn-RATE series for the conductor tile's live graph.
     Thin wrapper over live_token_events_for_session: takes the merged, sorted
     (epoch, output_tokens) timeline, keeps the last `limit` turns, and derives
-    {out, dt_s, tok_s} per turn where dt_s is wall-clock since the previous
-    turn and tok_s = out / dt_s. Idle gaps > 600s and clock skew clamp to a 1s
-    window so a long pause never reads as a phantom rate spike. [] when none."""
+    {out, dt_s, tok_s} per turn via token_turns_from_events. [] when none."""
     raw = live_token_events_for_session(session_id, project_path, claude_home)
     if not raw:
         return []
-    raw = raw[-limit:]
-    out: list[dict] = []
-    prev_ts = raw[0][0]
-    for ts, tok in raw:
-        dt = ts - prev_ts
-        # Clamp to a sane wall-clock window. Transcript timestamps are message
-        # WRITE times, not generation durations, so a rapid tool-result ->
-        # assistant pair can land <1s apart and make out/dt read as a
-        # megatoken/s phantom (the "peak 1369.1k tok/s" spike that flatlines
-        # every other bar). Floor sub-second / zero / negative gaps at 1s, and
-        # cap idle gaps at the 600s ceiling.
-        if dt < 1.0 or dt > 600:
-            dt = 1.0
-        prev_ts = ts
-        out.append({"out": tok, "dt_s": round(dt, 2), "tok_s": round(tok / dt, 1)})
-    return out
+    return token_turns_from_events(raw[-limit:])
 
 
 def current_session_id(
