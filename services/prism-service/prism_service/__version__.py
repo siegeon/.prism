@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.23"
+PRISM_VERSION = "6.3.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.24: /conductor swimlanes show TOP-LEVEL tasks only. "
+    "ConductorService.managed_tasks() and step_buckets() now skip any task "
+    "with a parent_id (mirroring the /tasks board's root-only filter) on top "
+    "of the existing done/cancelled exclusion — so demo/verification subtasks "
+    "stop rendering as standalone tiles and inflating step counts. Regression "
+    "test test_managed_tasks_and_buckets_show_only_top_level pins it. "
     "v6.3.23: /conductor (and all project-scoped views) cold-start on a "
     "NON-EMPTY project instead of the empty 'default' (follow-up to #137 "
     "item 3). Backend: GET /api/projects (api/projects.py) keeps its flat "

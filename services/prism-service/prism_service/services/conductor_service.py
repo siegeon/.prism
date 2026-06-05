@@ -1539,6 +1539,11 @@ class ConductorService:
             # audit trail but must not render as currently-managed tiles.
             if status in ("done", "cancelled"):
                 continue
+            # Conductor mirrors the /tasks board: only TOP-LEVEL tasks are
+            # tiles. Subtasks (parent_id set) belong under their parent's
+            # detail page, never as standalone swimlane cards.
+            if getattr(t, "parent_id", ""):
+                continue
             if step == "" and gate == "none":
                 # Claimed by a workflow but pre-first-advance (the Locate /
                 # draft_story intake window): surface in a synthetic leading
@@ -1590,6 +1595,8 @@ class ConductorService:
             step = getattr(t, "workflow_step", "") or ""
             status = getattr(t, "status", "") or ""
             if status in ("done", "cancelled"):
+                continue
+            if getattr(t, "parent_id", ""):
                 continue
             if not step:
                 # Mirror managed_tasks: claimed-but-pre-step in_progress work
