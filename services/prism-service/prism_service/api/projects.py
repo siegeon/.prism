@@ -10,6 +10,7 @@ specify a project falls back to it, so the endpoint refuses to delete.
 from __future__ import annotations
 
 import re
+import sqlite3
 from threading import Thread
 from typing import Optional
 
@@ -25,10 +26,32 @@ from prism_service.services import trash as trash_svc
 router = APIRouter()
 
 
+def _count_tasks(name: str) -> int:
+    """Cheap per-project task row count — a single COUNT(*) against the
+    project's tasks.db, NOT a full TaskService.list() load. Mirrors the
+    dashboard.py _count() pattern (best-effort: a missing db / table
+    reports 0 so the cold-start resolver always gets a key per project)."""
+    db = project_data_dir(name) / "tasks.db"
+    if not db.exists():
+        return 0
+    try:
+        c = sqlite3.connect(str(db))
+        v = c.execute("SELECT COUNT(*) FROM tasks").fetchone()
+        c.close()
+        return int(v[0]) if v else 0
+    except Exception:
+        return 0
+
+
 @router.get("")
 def list_projects() -> dict:
+    # `projects` stays the flat list for backward-compat; `task_counts`
+    # is additive so the SPA cold-start resolver (lib/project.ts) can pick
+    # the busiest non-'default' project on first load instead of landing on
+    # the empty 'default' blank state (follow-up to #137 item 3).
     projects = get_all_projects() or []
-    return {"projects": projects}
+    task_counts = {name: _count_tasks(name) for name in projects}
+    return {"projects": projects, "task_counts": task_counts}
 
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")

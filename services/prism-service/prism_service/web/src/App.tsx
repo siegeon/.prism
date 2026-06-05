@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AnimatePresence } from "motion/react";
+import { resolveInitialProject } from "@/lib/project";
 import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
@@ -28,6 +30,10 @@ export default function App() {
   // animate out. The single flex-1 overflow-y-auto scroll container is
   // preserved as the wrapper, and the two <Navigate> redirects are untouched.
   const location = useLocation();
+  // Cold-start resolver (v6.3.23): on first mount with no persisted project
+  // and no ?project= deep-link, land on the busiest non-'default' project so
+  // /conductor opens on real work instead of the empty 'default' blank state.
+  useEffect(() => { void resolveInitialProject(); }, []);
   return (
     <div className="h-full w-full flex bg-[color:var(--background-base)] text-[color:var(--midground-base)] relative">
       <Backdrop />
