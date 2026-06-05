@@ -275,8 +275,19 @@ def test_learning_page_tier3_knobs_editable():
     assert has_write, "LearningPage Tier-3 knobs must be editable, not view-only"
 
 
-def test_conductor_page_has_create_task_onboarding_affordance():
+def test_conductor_page_is_purely_visual_work_progress():
+    """v6.3.19 redesigned /conductor as flat tiles that are PURELY the visual
+    representation of work happening to each task — the v6.3.17 'create task ->
+    enter conductor' onboarding affordance (and the KPI counts header) were
+    deliberately removed (commit 1b57471). Pin that the page renders the work
+    tiles and no longer carries the create-task affordance, so the stale
+    v6.3.17 contract can't silently creep back in."""
     src = _read("ConductorPage.tsx")
-    assert re.search(r"create.{0,12}task", src, re.IGNORECASE), (
-        "ConductorPage must offer a 'create task -> enter conductor' affordance"
+    # The page still renders the conductor work surface (tiles / managed tasks).
+    assert re.search(r"conductor", src, re.IGNORECASE), src[:200]
+    # The removed create-task affordance must stay gone (only `created_at`
+    # field reads are allowed — those are not the affordance).
+    assert not re.search(r"create[\s_-]{0,3}task", src, re.IGNORECASE), (
+        "ConductorPage create-task affordance was intentionally removed in "
+        "v6.3.19 (purely-visual work-progress page) — it must not return"
     )
