@@ -48,6 +48,50 @@ export function setProject(p: string) {
   listeners.forEach((fn) => fn(p));
 }
 
+let _coldStartResolved = false;
+
+/**
+ * One-time cold-start resolver (v6.3.23, follow-up to #137 item 3). Runs
+ * ONCE at app mount. When there is NO persisted selection in localStorage
+ * AND no `?project=` URL param, fetch /api/projects and persist the
+ * non-'default' project with the highest task_count — so /conductor and
+ * the other project-scoped views open on a project that actually has work,
+ * not the empty 'default' blank state.
+ *
+ * Explicit choices always win: a persisted localStorage selection or a
+ * `?project=` deep-link short-circuit before any fetch (we never override
+ * an explicit choice). Falls back to 'default' when every non-default
+ * project is empty (all task_counts 0). Best-effort — a fetch failure
+ * leaves the existing 'default' fallback untouched.
+ */
+export async function resolveInitialProject(): Promise<void> {
+  if (_coldStartResolved) return;
+  _coldStartResolved = true;
+  if (typeof window === "undefined") return;
+  // Explicit choice wins — never override a deep-link or a prior selection.
+  if (_readUrlProject()) return;
+  if (localStorage.getItem(KEY)) return;
+  try {
+    const res = await fetch("/api/projects");
+    if (!res.ok) return;
+    const data: { projects?: string[]; task_counts?: Record<string, number> } =
+      await res.json();
+    const counts = data.task_counts || {};
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [name, count] of Object.entries(counts)) {
+      if (name === "default") continue;
+      if (count > bestCount) { best = name; bestCount = count; }
+    }
+    // Re-check: another tab / the picker may have persisted while we awaited.
+    if (best && bestCount > 0 && !localStorage.getItem(KEY)) {
+      setProject(best);
+    }
+  } catch {
+    /* network/parse failure — keep the 'default' fallback */
+  }
+}
+
 export function useProject(): [string, (p: string) => void] {
   const [p, setP] = useState<string>(getProject);
   useEffect(() => {

@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.22"
+PRISM_VERSION = "6.3.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.23: /conductor (and all project-scoped views) cold-start on a "
+    "NON-EMPTY project instead of the empty 'default' (follow-up to #137 "
+    "item 3). Backend: GET /api/projects (api/projects.py) keeps its flat "
+    "`projects` list (backward-compat) and adds an additive `task_counts` "
+    "{project: int} map via a cheap per-project SELECT COUNT(*) FROM tasks "
+    "against each tasks.db (new _count_tasks, mirroring dashboard.py's "
+    "_count pattern — NOT a full TaskService.list() load; empty project "
+    "reports 0). Frontend: lib/project.ts gains exported async "
+    "resolveInitialProject() — invoked once at App.tsx mount; when there is "
+    "NO persisted localStorage selection AND no ?project= URL param it "
+    "fetches /api/projects and setProject()s the highest-task_count "
+    "non-'default' project (broadcasts to the header picker), falling back "
+    "to 'default' only when every non-default project is empty. A persisted "
+    "selection or a ?project= deep-link always wins (explicit choice never "
+    "overridden). PageHeader picker unchanged. Tests: "
+    "tests/unit/test_projects_task_counts.py (17 green). "
     "v6.3.22: conductor per-task token HONESTY (follow-up to #134/#137). "
     "current_session_id (claude_transcripts.py) gains an override_dir param "
     "mirroring the v6.3.21 readers — with project_path empty but override_dir "
