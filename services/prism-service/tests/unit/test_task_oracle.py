@@ -71,7 +71,10 @@ def _drive_to_green_gate(task_svc, cond, t):
         step = task_svc.get(t.id).workflow_step
         gate = task_svc.get(t.id).gate_state
         if gate == "pending":
-            cond.gate_decide(t.id, "approve", reason="ok", override=True)
+            cond.gate_decide(
+                t.id, "approve",
+                reason="walk; independent re-run: pytest -> 1 failed",
+                override=True, actor="walk-bot", session_id="walk-bot")
         else:
             cond.advance_task(t.id, validation="step")
         guard += 1
@@ -79,11 +82,19 @@ def _drive_to_green_gate(task_svc, cond, t):
 
 
 def test_green_gate_flags_missing_completion_proof(tmp_path):
+    # Hardened by task 3826dac3: a proofless green_gate is no longer merely
+    # ANNOTATED with the oracle advisory — it is now REJECTED outright by
+    # the proof-carrying artifact tooth (override cannot bypass it). A
+    # self-attested 'full green' carries no captured full-suite-green
+    # artifact, so the gate fails and stays on green_gate.
     task_svc, cond = _services(tmp_path)
     t = task_svc.create(title="no proof")  # completion_proof == ""
     _drive_to_green_gate(task_svc, cond, t)
-    cond.gate_decide(t.id, "approve", reason="full green", override=True)
-    assert "no completion_proof recorded" in task_svc.get(t.id).gate_reason
+    result = cond.gate_decide(t.id, "approve", reason="full green",
+                              override=True)
+    assert result["ok"] is False
+    assert "artifact" in (result.get("reason") or "").lower()
+    assert task_svc.get(t.id).gate_state == "failed"
 
 
 def test_green_gate_clean_when_proof_present(tmp_path):

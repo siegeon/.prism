@@ -109,6 +109,12 @@ class TaskService:
         # association surface; link_session / sessions_for_task degrade
         # gracefully (no-op writer, [] reader) when unset.
         self._scores_db: Optional[str] = scores_db
+        # In-memory fallback for the task<->session association when no
+        # scores.db is bound (unit contexts). Keeps link_session /
+        # sessions_for_task honest — the NO-SELF-OVERRIDE actor guard
+        # (task 3826dac3) must still see who produced the work even when
+        # the durable task_sessions table is absent.
+        self._session_links: dict[str, dict[str, dict]] = {}
         # Optional — when provided, task create/update embeds
         # ``title + "\n" + description`` into ``tasks.embedding`` so
         # LL-06's cosine-similarity retrieval has vectors to work with.
@@ -517,11 +523,19 @@ class TaskService:
         pair is linked and never overwritten on a re-link — it marks
         when PRISM first observed the session working this task.
         ended_at is refreshed whenever supplied (session-end signal).
-        Returns False (no-op) when no scores.db is bound.
+        Falls back to an in-memory link when no scores.db is bound so the
+        association (and the NO-SELF-OVERRIDE actor guard reading it) still
+        works in unit contexts.
         """
-        if not self._scores_db:
-            return False
         now = datetime.now(timezone.utc).isoformat()
+        if not self._scores_db:
+            task_links = self._session_links.setdefault(task_id, {})
+            row = task_links.setdefault(
+                session_id, {"session_id": session_id, "started_at": now,
+                             "ended_at": None})
+            if ended_at is not None:
+                row["ended_at"] = ended_at
+            return True
         conn = sqlite3.connect(self._scores_db, timeout=5.0)
         try:
             self._ensure_task_sessions(conn)
@@ -547,7 +561,12 @@ class TaskService:
         Empty list when nothing is linked (backs the UI empty state).
         """
         if not self._scores_db:
-            return []
+            return [
+                {"session_id": r["session_id"], "started_at": r["started_at"],
+                 "ended_at": r["ended_at"], "duration_s": 0, "tokens_used": 0,
+                 "files_read": 0, "files_modified": 0, "skills_invoked": 0}
+                for r in self._session_links.get(task_id, {}).values()
+            ]
         conn = sqlite3.connect(self._scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:

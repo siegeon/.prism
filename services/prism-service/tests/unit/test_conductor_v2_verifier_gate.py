@@ -82,8 +82,14 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
         if snap.workflow_step == gate_id and snap.gate_state == "pending":
             return
         if snap.gate_state == "pending":
-            cond.gate_decide(task_id, action="approve",
-                             reason="walk_to_gate intermediate", override=True)
+            # Proof-carrying contract (task 3826dac3): an override clearing
+            # the red_gate intermediate must carry a real failing-test trace
+            # + a distinct actor, else the artifact tooth rejects it.
+            cond.gate_decide(
+                task_id, action="approve",
+                reason=("walk_to_gate intermediate; independent re-run: "
+                        "pytest -q -> 1 failed"),
+                override=True, actor="walk-bot", session_id="walk-bot")
             continue
         cond.advance_task(task_id)
 
@@ -130,7 +136,8 @@ def test_red_gate_passes_when_verifier_reports_fail_with_tier0_fail(tmp_path):
     _walk_to_gate(cond, t.id, _red_gate_id())
 
     result = cond.gate_decide(
-        t.id, action="approve", reason="test: red gate happy path"
+        t.id, action="approve",
+        reason="test: red gate happy path; pytest -q -> 1 failed (trace)"
     )
 
     assert result["ok"] is True
@@ -149,7 +156,8 @@ def test_red_gate_auto_advances_past_gate_after_verifier_pass(tmp_path):
     _walk_to_gate(cond, t.id, _red_gate_id())
 
     cond.gate_decide(
-        t.id, action="approve", reason="test: auto-advance past red gate"
+        t.id, action="approve",
+        reason="test: auto-advance past red gate; pytest -q -> 1 failed"
     )
 
     refreshed = task_svc.get(t.id)
@@ -168,7 +176,8 @@ def test_green_gate_passes_when_verifier_pass_with_tier0_pass(tmp_path):
     _walk_to_gate(cond, t.id, _green_gate_id())
 
     result = cond.gate_decide(
-        t.id, action="approve", reason="test: green gate happy path"
+        t.id, action="approve",
+        reason="test: green gate happy path; pytest -q -> 42 passed, 0 failed"
     )
     assert result["ok"] is True
     assert result["gate_state"] == "passed"
@@ -272,7 +281,8 @@ def test_passed_gate_records_verifier_pass_in_task_history(tmp_path):
     _walk_to_gate(cond, t.id, _red_gate_id())
 
     cond.gate_decide(
-        t.id, action="approve", reason="test: history captures verifier pass"
+        t.id, action="approve",
+        reason="test: history captures verifier pass; pytest -q -> 1 failed"
     )
 
     rows = task_svc.history(t.id)
@@ -295,7 +305,8 @@ def test_override_bypasses_verifier_and_passes_gate(tmp_path):
     _walk_to_gate(cond, t.id, _red_gate_id())
 
     result = cond.gate_decide(
-        t.id, action="approve", reason="qa says it's fine",
+        t.id, action="approve",
+        reason="qa says it's fine; independent re-run: pytest -q -> 1 failed",
         override=True,
     )
     assert result["ok"] is True
@@ -314,7 +325,8 @@ def test_override_history_row_is_tagged_manual_override(tmp_path):
     _walk_to_gate(cond, t.id, _red_gate_id())
 
     cond.gate_decide(t.id, action="approve",
-                     reason="urgent ship", override=True)
+                     reason="urgent ship; independent re-run: pytest -> 1 failed",
+                     override=True)
 
     rows = task_svc.history(t.id)
     gate_rows = [r for r in rows if r.action == "gate_decide"]
@@ -340,7 +352,8 @@ def test_approve_without_verifier_attached_falls_back_to_legacy_trust(tmp_path):
     _walk_to_gate(cond, t.id, _red_gate_id())
 
     result = cond.gate_decide(
-        t.id, action="approve", reason="test: legacy trust-caller"
+        t.id, action="approve",
+        reason="test: legacy trust-caller; pytest -q -> 1 failed"
     )
     assert result["ok"] is True
     assert result["gate_state"] == "passed"
@@ -391,7 +404,8 @@ def test_late_attach_verifier_service(tmp_path):
                          "summary": "red"})
     cond.attach_verifier_service(late)
     result = cond.gate_decide(
-        t.id, action="approve", reason="test: late-bind verifier"
+        t.id, action="approve",
+        reason="test: late-bind verifier; pytest -q -> 1 failed"
     )
     assert result["ok"] is True
     assert late.calls and late.calls[0]["task_id"] == t.id

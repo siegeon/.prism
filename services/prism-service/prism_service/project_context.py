@@ -94,10 +94,20 @@ class ProjectContext:
             # #79 [3/4]) can consult it. attach_verifier_service() is
             # also exposed for late binding when callers (tests, MCP)
             # build a ConductorService bare.
+            # project_root = the host agent checkout (the working tree the
+            # driver edits). _verify_gate hands it to verifier.run() so Tier0
+            # scopes the REAL diff, not the daemon cwd (task 3826dac3).
+            # CLAUDE_PROJECT_DIR is the hook-provided host root; fall back to
+            # the daemon cwd so the seam is never None in production.
+            import os
+            project_root = (os.environ.get("PRISM_PROJECT_ROOT")
+                            or os.environ.get("CLAUDE_PROJECT_DIR")
+                            or os.getcwd())
             self._conductor_svc = ConductorService(
                 scores_db=str(self._data_dir / "scores.db"),
                 task_svc=self.task_svc,
                 verifier_svc=self.verifier_svc,
+                project_root=project_root,
             )
         return self._conductor_svc
 

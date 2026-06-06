@@ -99,6 +99,100 @@ def ui_artifact_gate_reason(tags: object, proof_type: object,
     return ""
 
 
+# --- Proof-carrying artifacts, generalized to ALL gates (task 3826dac3) ---
+# The ui-artifact tooth proved that self-attested strings are not proof. We
+# generalize it: red_gate requires a committed FAILING-TEST TRACE; green_gate
+# requires a captured FULL-SUITE-GREEN artifact. The artifact SHAPE is
+# machine-validated (test verb + a failing/passing signal) and override
+# CANNOT bypass it — override only skips the verifier, never the artifact.
+
+# A failing-test trace must name a test runner AND a failure signal — a bare
+# "trust me" string is rejected. The runner signal is satisfied by a runner
+# name OR a committed test reference (a test-file path / nodeid).
+_TEST_RUNNER_SIGNALS = ("pytest", "unittest", "jest", "vitest", "go test",
+                        "cargo test", "npm test", "tox", " test",
+                        "test_", "tests/", "_test.", ".py::", "test suite",
+                        "tests pass", "tests passed", "suite")
+_FAIL_SIGNALS = ("fail", "error", "assert", "traceback", "raised",
+                 " f ", "exit 1", "exitcode=1", "non-zero", " red")
+_PASS_SIGNALS = ("passed", "pass", "0 failed", "all green", "green",
+                 "exit 0", "exitcode=0", " ok")
+
+
+def _artifact_text(completion_proof: object, reason: object) -> str:
+    """Concatenated lower-cased proof surface: the task's committed
+    completion_proof PLUS the decision reason (an independent verifier
+    pastes its re-run output into the override reason)."""
+    return f"{completion_proof or ''}\n{reason or ''}".lower()
+
+
+def red_gate_artifact_reason(completion_proof: object, reason: object) -> str:
+    """Return a REJECTION reason when a red_gate close carries no committed
+    failing-test trace (a test-runner invocation + a failure signal), else
+    "". Machine-validated shape — a self-attested 'red landed' is rejected."""
+    text = _artifact_text(completion_proof, reason)
+    has_runner = any(s in text for s in _TEST_RUNNER_SIGNALS)
+    has_fail = any(s in text for s in _FAIL_SIGNALS)
+    if has_runner and has_fail:
+        return ""
+    return ("red_gate requires a committed failing-test trace artifact "
+            "(a test-runner invocation + a real failure signal in "
+            "completion_proof or the re-run output) — a self-attested "
+            "string is not proof")
+
+
+def green_gate_artifact_reason(completion_proof: object, reason: object) -> str:
+    """Return a REJECTION reason when a green_gate close carries no captured
+    full-suite-green artifact, else "". The artifact is satisfied by EITHER
+    a test-runner invocation + a pass signal, OR a demonstrable-UI artifact
+    (agent-browser/verify screenshot vs :8888, a Playwright assertion) — a
+    ui feature's green proof is its rendered surface. A self-attested
+    'looks green to me' carries neither and is rejected."""
+    text = _artifact_text(completion_proof, reason)
+    has_runner = any(s in text for s in _TEST_RUNNER_SIGNALS)
+    has_pass = any(s in text for s in _PASS_SIGNALS)
+    has_ui_artifact = any(sig in text for sig in _UI_ARTIFACT_SIGNALS)
+    if (has_runner and has_pass) or has_ui_artifact:
+        return ""
+    return ("green_gate requires a captured full-suite-green artifact "
+            "(a test-runner invocation + a pass/test-count signal, or a "
+            "demonstrable-UI screenshot/Playwright artifact in "
+            "completion_proof or the re-run output) — a self-attested "
+            "string is not proof")
+
+
+def gate_artifact_reason(gate_step_id: str, completion_proof: object,
+                         reason: object) -> str:
+    """Dispatch the proof-carrying artifact check by gate. "" when the gate
+    has no artifact tooth (only red_gate/green_gate do today)."""
+    if gate_step_id == "red_gate":
+        return red_gate_artifact_reason(completion_proof, reason)
+    if gate_step_id == "green_gate":
+        return green_gate_artifact_reason(completion_proof, reason)
+    return ""
+
+
+def same_actor_override_reason(override_actor: object,
+                               work_actors: object) -> str:
+    """NO SELF-OVERRIDE (task 3826dac3). A gate cannot be cleared by the
+    SAME actor that produced the work — the driver overriding its own gate
+    is forbidden. Override is demoted to a distinct-actor exception: an
+    independent verifier sub-agent (fresh context) must be the one to
+    override. Returns a REJECTION reason when override_actor is among the
+    work-producing actors, else "" (a distinct actor is allowed)."""
+    actor = str(override_actor or "").strip().lower()
+    if not actor:
+        return ""
+    produced = {str(a or "").strip().lower() for a in (work_actors or [])}
+    produced.discard("")
+    if actor in produced:
+        return (f"same-actor override forbidden: actor {override_actor!r} "
+                "produced the work on this task and cannot clear its own "
+                "gate — an independent verifier (distinct actor) must "
+                "re-run the claimed command and override")
+    return ""
+
+
 def overlapping_allowed_files(file_lists: list) -> set:
     """Ported from goalbuddy scripts/parallel-plan.mjs: parallel workers are
     safe ONLY when their allowed_files sets are provably disjoint. Returns the
@@ -131,10 +225,17 @@ class ConductorService:
         enable_engine: bool = True,
         task_svc: Optional[Any] = None,
         verifier_svc: Optional[Any] = None,
+        project_root: Optional[str] = None,
     ) -> None:
         self._scores_db = scores_db
         self._conductor = None
         self._available = False
+        # Conductor v2 (task 3826dac3): the host project root = the AGENT
+        # CHECKOUT the driver works in. _verify_gate hands this concrete
+        # workspace to verifier.run() so Tier0 scopes the real diff rather
+        # than the MCP daemon cwd (which has no diff -> status=error). Wired
+        # by ProjectContext after construction; None = legacy (daemon cwd).
+        self._project_root = project_root
         # Conductor v2 (issue #79 [1/4]): optional TaskService reference
         # consumed by advance_task / gate_decide. Wired by ProjectContext
         # after both services exist; kept optional so legacy callers
@@ -177,6 +278,13 @@ class ConductorService:
         override is verified against the prior step's validation kind.
         """
         self._verifier_svc = verifier_svc
+
+    def attach_project_root(self, project_root: Optional[str]) -> None:
+        """Attach (or replace) the host project root = the agent checkout.
+        ProjectContext wires this so _verify_gate scopes verifier.run() to
+        the real working tree (the diff under verification), not the daemon
+        cwd. None reverts to legacy daemon-cwd scoping."""
+        self._project_root = project_root
 
     # ------------------------------------------------------------------
     # Delegated methods
@@ -1075,11 +1183,14 @@ class ConductorService:
         # (legacy trust-caller path). _verify_gate is only called when
         # a verifier is attached, so we don't need a None-check here.
         try:
-            v = self._verifier_svc.run(
-                task_id=task.id,
-                # story_file gives a useful audit anchor even though
-                # VerifierService.run treats workspace as primary scope.
-            )
+            run_kwargs: dict[str, Any] = {"task_id": task.id}
+            # Pass the agent checkout so Tier0 scopes the real diff. Without
+            # it verifier.run() falls back to the daemon cwd (no diff ->
+            # status=error 'nothing to verify'). project_root is the host
+            # working tree wired by ProjectContext.attach_project_root.
+            if self._project_root:
+                run_kwargs["workspace"] = str(self._project_root)
+            v = self._verifier_svc.run(**run_kwargs)
         except Exception as exc:
             return {
                 "verified": False,
@@ -1119,6 +1230,7 @@ class ConductorService:
         reason: str = "",
         override: bool = False,
         session_id: Optional[str] = None,
+        actor: Optional[str] = None,
     ) -> dict:
         """Resolve a pending gate on a task.
 
@@ -1151,6 +1263,17 @@ class ConductorService:
         if task is None:
             return {"ok": False, "task_id": task_id,
                     "reason": "unknown task"}
+
+        # NO SELF-OVERRIDE (task 3826dac3): capture the actors that PRODUCED
+        # the work BEFORE _stamp_session links this decision's own session,
+        # so an independent verifier's fresh session isn't counted as a
+        # work-producer and wrongly blocked from overriding.
+        prior_work_actors: list[str] = []
+        try:
+            prior_work_actors = [s.get("session_id")
+                                 for s in self._task_svc.sessions_for_task(task_id)]
+        except Exception:
+            prior_work_actors = []
 
         # Conductor-path auto-writer: stamp/refresh the task_sessions row
         # from the carried task_id + session on every gate decision.
@@ -1266,15 +1389,42 @@ class ConductorService:
         verifier_payload: Optional[dict] = None
         verifier_validation: Optional[str] = None
         verifier_reason = ""
+        override_actor = actor   # who is clearing the gate (caller)
 
         if override:
+            # NO SELF-OVERRIDE (task 3826dac3): the actor who PRODUCED the
+            # work cannot clear its own gate. An independent verifier
+            # sub-agent (distinct actor, fresh context) must override. The
+            # work-producing actors are the sessions linked PRIOR to this
+            # decision (captured before _stamp_session above).
+            same_actor = same_actor_override_reason(override_actor,
+                                                    prior_work_actors)
+            if same_actor:
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate_step_id}; action=approve; "
+                             f"override=True; self-override=rejected; "
+                             f"actor={override_actor}"),
+                    actor="conductor",
+                )
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": task.gate_state,
+                    "reason": same_actor,
+                }
             # Manual override path — bypass the verifier entirely but
-            # tag the audit row so the override is auditable.
+            # tag the audit row so the override is auditable. Override is a
+            # separately-logged exception; the DISTINCT override actor is
+            # recorded in detail_bits below (the history actor stays
+            # 'manual-override' so the recovery class is greppable).
             actor = "manual-override"
             detail_bits = [
                 f"gate={gate_step_id}",
                 "action=approve",
                 "override=True",
+                f"override-actor={override_actor or 'unspecified'}",
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
@@ -1333,6 +1483,35 @@ class ConductorService:
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
+
+        # PROOF-CARRYING ARTIFACTS generalized to red_gate + green_gate
+        # (task 3826dac3). red_gate requires a committed failing-test trace;
+        # green_gate a captured full-suite-green. The artifact SHAPE is
+        # machine-validated and override CANNOT bypass it — this runs AFTER
+        # the verifier consult (so the non-override path still scopes the
+        # real diff) yet ahead of the passing persist, on every approve path.
+        artifact_reason = gate_artifact_reason(
+            gate_step_id,
+            getattr(self._task_svc.get(task_id), "completion_proof", ""),
+            reason,
+        )
+        if artifact_reason:
+            self._task_svc.update(
+                task_id, gate_state="failed", gate_reason=artifact_reason,
+            )
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; "
+                         f"artifact=fail; reason={artifact_reason}"),
+                actor="conductor",
+            )
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": "failed",
+                "reason": artifact_reason,
+            }
 
         # Persist validation evidence to the row so it surfaces wherever
         # gate_reason is rendered (TaskDetailPage, swimlane tooltips).

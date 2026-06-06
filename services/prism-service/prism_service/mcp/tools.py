@@ -1207,8 +1207,27 @@ TOOLS: list[Tool] = [
                         "'manual-override'. Required for manual-only "
                         "validation kinds (story_complete, plan_coverage) "
                         "and for the terminal green_gate (no machine-"
-                        "sensible test)."
+                        "sensible test). NO SELF-OVERRIDE: an override by "
+                        "the SAME actor that produced the work is rejected "
+                        "— an independent verifier (distinct actor) must "
+                        "re-run the claimed command. Override also cannot "
+                        "bypass the proof-carrying artifact requirement "
+                        "(red_gate needs a committed failing-test trace; "
+                        "green_gate a captured full-suite-green)."
                     ),
+                },
+                "actor": {
+                    "type": "string",
+                    "description": (
+                        "Who is clearing the gate. On an override, this "
+                        "must be DISTINCT from the actor(s) that produced "
+                        "the work (the sessions linked to the task) — a "
+                        "same-actor self-override is rejected."
+                    ),
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Active Claude session id (links task<->session).",
                 },
             },
             "required": ["id", "action", "reason"],
@@ -3537,12 +3556,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # real active transcript session (not the phantom request handle) so
             # the terminal gate links a session that carries token data.
             _sid = arguments.get("session_id") or _resolve_link_session_id()
+            # actor = who is clearing the gate; defaults to the linking
+            # session so the NO-SELF-OVERRIDE guard can compare it against
+            # the work-producing sessions (task 3826dac3).
+            _actor = arguments.get("actor") or _sid
             result = conductor_svc.gate_decide(
                 task_id,
                 arguments["action"],
                 reason=arguments.get("reason", ""),
                 override=bool(arguments.get("override", False)),
                 session_id=_sid,
+                actor=_actor,
             )
             task = task_svc.get(task_id)
             result["task"] = task

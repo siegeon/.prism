@@ -90,8 +90,10 @@ def _walk_to_green_gate(cond, task_id: str) -> None:
         if snap.workflow_step == _green_gate_id() and snap.gate_state == "pending":
             return
         if snap.gate_state == "pending":
-            cond.gate_decide(task_id, action="approve",
-                             reason="walk intermediate", override=True)
+            cond.gate_decide(
+                task_id, action="approve",
+                reason="walk intermediate; independent re-run: pytest -> 1 failed",
+                override=True, actor="walk-bot", session_id="walk-bot")
             continue
         cond.advance_task(task_id)
 
