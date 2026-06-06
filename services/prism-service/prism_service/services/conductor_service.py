@@ -2100,20 +2100,17 @@ class ConductorService:
                 live_enabled = bool(source_path or override_dir)
                 live_fn = None
                 events_fn = None
-                window_fn = None
                 turns_from = None
                 if live_enabled:
                     from prism_service.services.claude_transcripts import (
                         live_tokens_for_session as live_fn,
                         live_token_events_for_session as events_fn,
-                        project_token_events_in_window as window_fn,
                         token_turns_from_events as turns_from,
                     )
                 # Build the FULL uncapped per-turn event timeline across the
                 # task's live sessions; total_turns is computed off the UNCAPPED
                 # series so `turns` stays honest even past the 40-turn tail cap.
                 live_events: list[tuple[float, int]] = []
-                since_ts = None
                 for s in self._task_svc.sessions_for_task(task_id):
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
@@ -2131,45 +2128,17 @@ class ConductorService:
                         except Exception:
                             pass
                 live_events.sort(key=lambda e: e[0])
-                # Wall-clock fallback (#137 primary): a task whose only linked
-                # sessions are unresolvable 32-hex MCP handles has no live
-                # events — bucket the project's transcript spend across the
-                # task's history window so the tile still shows real turns.
-                # HONESTY GATE (#647d9c41): the fallback is project-WIDE, so it
-                # can only honestly apply to the ONE task actually being worked.
-                # A pending/parked task with no authoritative events stays
-                # blank (tokens_source='linked') rather than borrowing another
-                # task's burn. Only an in_progress task fills via wall-clock.
-                task_status = ""
-                try:
-                    driven = self._task_svc.get(task_id)
-                    task_status = (getattr(driven, "status", "") or "") if driven else ""
-                except Exception:
-                    task_status = ""
-                if (not live_events and window_fn
-                        and task_status == "in_progress"):
-                    now = self._now_epoch()
-                    # Bracket the task's history span, but floor `since` at a
-                    # generous lookback so a young task whose work is already on
-                    # disk (the just-linked MCP-handle case) still captures its
-                    # recent turns instead of an empty [created≈now, now] window.
-                    since_ts = min(
-                        self._task_window_start(task_id),
-                        now - self._FALLBACK_LOOKBACK_S,
-                    )
-                    try:
-                        live_events = window_fn(
-                            source_path, since_ts, now, override_dir=override_dir
-                        ) or []
-                    except Exception:
-                        live_events = []
-                    if live_events:
-                        # The series is project-wide/approximate — tag it AND
-                        # feed tokens_since_step from the SAME events so the
-                        # graph (rate) and the number (integral) agree (no
-                        # '2625 turns / 0 tokens' contradiction, PROBLEM 2).
-                        tokens_source = "wallclock"
-                        tokens = sum(int(tok) for _ep, tok in live_events)
+                # PER-TASK-EXCLUSIVE (owner decision, task 5ecbbfb8): the tile
+                # shows ONLY this task's authoritative linked-session activity.
+                # The old #134/#137 project-WIDE wall-clock fallback (bucket the
+                # project's transcript spend across the task window when the
+                # task's only links are unresolvable MCP handles) is DROPPED —
+                # it painted parked/worked tiles with another task's burn and
+                # produced the "2625 turns / 0 tokens" contradiction. With no
+                # authoritative live_events the series stays honestly empty:
+                # tokens_source=='linked', token_turns==[], turns==0,
+                # tokens_since_step==0. The empty state ("awaiting first turn")
+                # is the honest render; never borrow project-wide activity.
                 if turns_from:
                     full_turns = turns_from(live_events)
                     total_turns = len(full_turns)

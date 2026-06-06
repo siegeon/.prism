@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.28"
+PRISM_VERSION = "6.3.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.29: conductor per-task tile shows task-EXCLUSIVE activity only "
+    "(task 5ecbbfb8, owner decision). phase_progress (conductor_service.py) "
+    "DROPS the #134/#137 project-WIDE wall-clock fallback that bucketed the "
+    "project's transcript spend across an in_progress task's history window "
+    "when its only links were unresolvable MCP handles — it painted parked/"
+    "worked tiles with another task's burn (the '2625 turns / 0 tokens' "
+    "contradiction). With no authoritative linked-session events the series is "
+    "now honestly empty: tokens_source=='linked', token_turns==[], turns==0, "
+    "tokens_since_step==0; the tile renders its existing 'awaiting first turn' "
+    "empty state, never 'project activity (approximate)'. A task WITH real "
+    "linked-session events still reports its own per-task series. The "
+    "current_session_id(override_dir) + _resolve_link_session_id override-dir "
+    "resolution and TokenTurns.tsx tokens_source prop (from v6.3.22) are "
+    "retained. Tests: tests/unit/test_conductor_token_source.py (8 green). "
     "v6.3.28: task-detail Activity Gantt (Way 1) — real transcript-backed "
     "session lanes render as wall-time bars + gate honesty markers (override "
     "hollow '!' / verified solid '✓'); synthetic gate-actor labels "
