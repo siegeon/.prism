@@ -29,6 +29,12 @@ export type PhaseProgress = {
   // 'linked' = authoritative per-task series; 'wallclock' = project-wide
   // approximate fallback (TokenTurns renders it dimmed + labelled).
   tokens_source?: "linked" | "wallclock";
+  // Forward-projected seconds to the terminal gate (learned per-step medians;
+  // sharpens over time). eta_sample_n = current step's sample count.
+  eta_s?: number | null;
+  eta_sample_n?: number;
+  // Full-SDLC time budget — the countdown bar drains eta_s against this.
+  eta_total_s?: number | null;
 };
 
 function fmtTokens(t: number): string {
@@ -40,6 +46,13 @@ function fmtClock(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+// Coarse remaining-time label for the ETA readout.
+function fmtEta(s: number): string {
+  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+  if (s >= 60) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s)}s`;
 }
 
 // Real task status → label + accent tone (honest; no guessed "idle").
@@ -188,6 +201,15 @@ export default function SdlcProgress({
                 transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
               <span>{fmtClock(liveInStep)}</span>
+              {live && (phase?.eta_s ?? 0) > 5 && (
+                <span
+                  className="opacity-70"
+                  style={{ color: "var(--accent-teal-fg)" }}
+                  title={`ETA — forward-projected from learned per-step medians${phase?.eta_sample_n != null ? ` (current step n=${phase.eta_sample_n})` : ""}`}
+                >
+                  · ~{fmtEta(phase!.eta_s!)} left{(phase?.eta_sample_n ?? 0) < 2 ? " rough" : ""}
+                </span>
+              )}
               {!hideTokens && <span className="opacity-70">· {fmtTokens(tokens)} tok</span>}
               {meta.label && <span style={{ color: `var(--accent-${meta.tone}-fg)` }}>· {meta.label}</span>}
             </span>
