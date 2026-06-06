@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.27"
+PRISM_VERSION = "6.3.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.28: task-detail Activity Gantt (Way 1) — real transcript-backed "
+    "session lanes render as wall-time bars + gate honesty markers (override "
+    "hollow '!' / verified solid '✓'); synthetic gate-actor labels "
+    "(qa-red-gate-*, *-verifier-*) NO LONGER leak as bare session rows. New "
+    "api/tasks._build_timeline rides GET /api/tasks/{id} as a `timeline` block; "
+    "TaskActivityGantt.tsx + TaskDetailPage realSessions UUID filter. "
     "v6.3.27: Learned per-step ETA on the conductor tile (task 68a9720e) + "
     "the gate-verifier ROOT FIX. ETA: conductor_service gains _per_step_typical "
     "(median dwell per workflow step, learned from advance_task history) and "

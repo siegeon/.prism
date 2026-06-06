@@ -169,7 +169,10 @@ def test_tier0_runs_full_suite_not_only_changed_test_files(tmp_path):
     captured: dict = {}
 
     def fake_run_tool(cmd, workspace, timeout_s=60.0):
-        if cmd and cmd[0] == "pytest":
+        # Tier0 invokes pytest as `[sys.executable, "-m", "pytest", ...]`
+        # (cd44b22 — venv-only installs expose `python -m pytest`, not a
+        # bare `pytest` on PATH), so detect it by membership, not cmd[0].
+        if cmd and "pytest" in cmd:
             captured["pytest_cmd"] = list(cmd)
         return (0, "1 passed", "")
 

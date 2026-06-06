@@ -281,7 +281,15 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
     # Runs whenever pytest is available as a PATH binary OR an importable
     # module (so a venv-only `python -m pytest` install still gates).
     if py_files and _pytest_available():
-        rc, out, err = _run_tool(["pytest", "-q", "--no-header"], workspace, timeout_s=600.0)
+        # Invoke via the running interpreter, NOT a bare `pytest`: on Windows
+        # `pytest` isn't on PATH (it's a venv Scripts entry), so the bare cmd
+        # raised [WinError 2] -> exit 127 -> the suite was SKIPPED and the gate
+        # saw a FALSE pass (0 tests run). sys.executable is the daemon's
+        # interpreter, which has pytest importable, so `-m pytest` always runs.
+        import sys as _sys
+        rc, out, err = _run_tool(
+            [_sys.executable, "-m", "pytest", "-q", "--no-header"],
+            workspace, timeout_s=600.0)
         claims.append(_claim(0, "tooling.pytest", "<full-suite>", rc, out, err))
     return claims
 

@@ -277,8 +277,11 @@ def test_task_detail_page_renders_sessions_section():
 
 def test_task_detail_page_has_session_empty_state():
     src = (_WEB_SRC / "pages" / "TaskDetailPage.tsx").read_text(encoding="utf-8")
-    # An explicit 0-session branch (e.g. sessions.length === 0 ? <empty>).
-    assert "sessions.length === 0" in src, (
+    # An explicit 0-session branch (e.g. realSessions.length === 0 ? <empty>).
+    # The Sessions list now renders the UUID-filtered `realSessions` (synthetic
+    # gate-actor labels surface as Activity-Gantt markers, not bare rows), so the
+    # empty-state branch keys off realSessions.length (task ade01b38).
+    assert "Sessions.length === 0" in src, (
         "TaskDetailPage.tsx must render an explicit 0-session empty state"
     )
 

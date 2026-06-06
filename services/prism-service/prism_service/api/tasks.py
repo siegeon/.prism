@@ -1,6 +1,7 @@
 """Tasks API — kanban list, detail, transitions, history."""
 
 import dataclasses
+import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -137,6 +138,83 @@ def next_task(project: str = Query("default")) -> dict:
     return {"next": _svc(project).next_task()}
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _build_timeline(history: list, sessions: list) -> dict:
+    """Typed activity timeline backing the task-detail Gantt (Way 1).
+
+    Two row kinds, deliberately NOT one-size-fits-all:
+      * lanes  — REAL transcript-backed work sessions (UUID id), positioned as
+        wall-time bars. Synthetic gate-actor labels (qa-red-gate-*, *-verifier-*)
+        are EXCLUDED here — they were never sessions; they surface as gate
+        markers instead. This is the fix for the bare-row leak.
+      * gates  — one marker per gate RESOLUTION (the deciding gate_decide row),
+        carrying honesty (real-verifier vs override), actor, and proof summary.
+    """
+    from datetime import datetime, timezone
+
+    def _epoch(ts: object) -> float | None:
+        try:
+            return datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    now = datetime.now(timezone.utc).timestamp()
+    hstamps = [e for e in (_epoch(h.get("timestamp")) for h in history
+                           if isinstance(h, dict)) if e is not None]
+    start = min(hstamps) if hstamps else now
+    end = max(now, max(hstamps) if hstamps else now)
+
+    lanes = []
+    for s in sessions or []:
+        sid = s.get("session_id", "") if isinstance(s, dict) else ""
+        if not _UUID_RE.match(sid or ""):
+            continue  # synthetic actor label -> not a work session lane
+        st = _epoch(s.get("started_at")) or start
+        dur = float(s.get("duration_s") or 0)
+        en = _epoch(s.get("ended_at")) or (st + dur if dur else end)
+        lanes.append({
+            "session_id": sid, "start": st, "end": max(en, st),
+            "duration_s": s.get("duration_s") or 0,
+            "skills": s.get("skills_invoked") or 0,
+            "live": s.get("ended_at") is None,
+        })
+
+    gates = []
+    for h in history:
+        if not isinstance(h, dict) or h.get("action") != "gate_decide":
+            continue
+        det = str(h.get("details") or "")
+        # Skip the intermediate REJECTED attempt (verifier=fail, not yet
+        # overridden) — show only the row that RESOLVED the gate.
+        if "verifier=fail" in det and "override=True" not in det:
+            continue
+        ts = _epoch(h.get("timestamp"))
+        if ts is None:
+            continue
+        gm = re.search(r"gate=(\w+?)_gate", det)
+        gate = gm.group(1) if gm else "gate"
+        override = ("override=True" in det
+                    or (h.get("actor") or "") == "manual-override")
+        am = re.search(r"override-actor=([^\s;]+)", det)
+        actor = am.group(1) if am else (h.get("actor") or "")
+        # Real suite result needs 2+ digits so "0/1 pass" can't masquerade as a
+        # green suite; red gates carry a "trace" proof instead.
+        pm = re.search(r"(\d{2,})\s+passed", det)
+        proof = (f"suite {pm.group(1)}✓" if pm
+                 else "trace" if "trace" in det.lower() else "")
+        gates.append({
+            "gate": gate, "ts": ts, "actor": actor, "override": override,
+            "verified": not override, "proof": proof, "reason": det[:200],
+        })
+
+    return {"window": {"start": start, "end": end},
+            "lanes": lanes, "gates": gates}
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, project: str = Query("default")) -> dict:
     svc = _svc(project)
@@ -163,6 +241,8 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
     # (prev, this] wall-clock window) onto the history rows. Best-effort.
     _attach_turn_tokens(out["history"], out["sessions"], project)
+    # Way 1 — typed activity Gantt (real session lanes + gate markers).
+    out["timeline"] = _build_timeline(out["history"], out["sessions"])
     # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
     # reads the blended current-step fill. Best-effort — never break the
     # detail route if conductor is unavailable.
