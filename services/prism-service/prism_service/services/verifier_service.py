@@ -174,6 +174,18 @@ def _git_changed_files(
             files.extend(
                 ln.strip() for ln in out2.stdout.splitlines() if ln.strip()
             )
+        # Drop data/build noise that is NOT source-under-review. The dev data
+        # dir (PRISM_DATA_DIR=.dev-data) lives inside the repo untracked and
+        # holds thousands of vendored files (venvs, graphify-src, site-
+        # packages) that would swamp Tier0's scope and never represent a code
+        # claim — leaving the real changed files invisible in the noise.
+        _NOISE_SEGS = {".dev-data", ".venvs", "node_modules", "web_dist",
+                       "site-packages", ".git", "__pycache__",
+                       ".mypy_cache", ".pytest_cache"}
+        files = [
+            f for f in files
+            if not (_NOISE_SEGS & set(f.replace("\\", "/").split("/")))
+        ]
         # Dedupe preserving order
         seen: set[str] = set()
         deduped: list[str] = []

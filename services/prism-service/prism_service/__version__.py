@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.26"
+PRISM_VERSION = "6.3.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.27: Learned per-step ETA on the conductor tile (task 68a9720e) + "
+    "the gate-verifier ROOT FIX. ETA: conductor_service gains _per_step_typical "
+    "(median dwell per workflow step, learned from advance_task history) and "
+    "_eta_s (forward-projects remaining = current-step + sum of remaining steps; "
+    "global-median fallback for <2 samples), surfaced as eta_s/eta_sample_n/"
+    "eta_total_s on phase_progress; the tile renders a '~Xm left' chip + a "
+    "draining MM:SS countdown bar (SdlcProgress/ConductorPage). VERIFIER FIX "
+    "(why gates kept overriding): _verify_gate scopes Tier0 to the COMMITTED "
+    "branch diff via baseline_rev=merge-base(origin/main,HEAD) and "
+    "_git_changed_files drops .dev-data/venv/cache noise (2166->43 files) so the "
+    "gate runs the committed suite; project_root derives from the checkout "
+    "location (parents[3] w/ .git) so it stays wired across daemon bounces. "
+    "Gates now verify on REAL proof instead of falling back to override. "
     "v6.3.26: SDLC source-of-truth write-back doctrine (task 3826dac3) — "
     "completes the gate-teeth work below with implement.js's workflow half: "
     "verify_plan gains a proactive, grounding-gated research rung that BLOCKS "
