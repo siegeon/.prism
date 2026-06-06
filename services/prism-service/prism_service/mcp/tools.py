@@ -1017,6 +1017,7 @@ TOOLS: list[Tool] = [
                 "oracle": {"type": "string", "description": "The observable signal that proves the user outcome is actually met (the 'oracle' — defined before work starts). E.g. a test suite, demo, artifact, metric, review, or decision."},
                 "proof_type": {"type": "string", "description": "Kind of completion evidence: test|demo|artifact|metric|review|source_backed_answer|decision."},
                 "completion_proof": {"type": "string", "description": "Receipt-backed evidence the oracle is satisfied; recorded when done and checked (advisory) at green_gate."},
+                "likely_misfire": {"type": "string", "description": "How this task could pass-but-be-WRONG (the goalbuddy 'misfire' — recorded upfront and audited advisory at green_gate when completion_proof doesn't address it). The cheapest defense against false-greens."},
                 "allowed_files": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: the file allowlist this slice may touch. Parallel workers are safe only with disjoint allowlists."},
                 "verify": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: commands that prove the slice (e.g. the test command)."},
                 "stop_if": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: conditions that HALT the slice (need files outside allowed_files, behavior ambiguous, verification fails twice)."},
@@ -1068,6 +1069,7 @@ TOOLS: list[Tool] = [
                 "oracle": {"type": "string", "description": "Set/replace the oracle — the observable signal that proves the outcome."},
                 "proof_type": {"type": "string", "description": "test|demo|artifact|metric|review|source_backed_answer|decision."},
                 "completion_proof": {"type": "string", "description": "Receipt-backed evidence the oracle is satisfied (checked advisory at green_gate)."},
+                "likely_misfire": {"type": "string", "description": "How this task could pass-but-be-WRONG (audited advisory at green_gate)."},
                 "allowed_files": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: set the file allowlist for the slice."},
                 "verify": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: set the verify commands."},
                 "stop_if": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: set the stop conditions."},
@@ -3438,6 +3440,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 oracle=arguments.get("oracle", ""),
                 proof_type=arguments.get("proof_type", ""),
                 completion_proof=arguments.get("completion_proof", ""),
+                likely_misfire=arguments.get("likely_misfire", ""),
                 allowed_files=arguments.get("allowed_files"),
                 verify=arguments.get("verify"),
                 stop_if=arguments.get("stop_if"),
@@ -3463,7 +3466,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             task = task_svc.update(arguments["id"], **update_kwargs)

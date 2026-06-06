@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -57,6 +58,37 @@ def green_gate_proof_note(files_modified: int, completion_proof: object) -> str:
         return (f"  ⚠ busywork risk: {files_modified} file-change(s) but no "
                 f"completion_proof (effort ≠ outcome)")
     return "  ⚠ oracle: no completion_proof recorded"
+
+
+def green_gate_misfire_note(likely_misfire: object,
+                            completion_proof: object) -> str:
+    """Advisory note (annotate, never block) for the goalbuddy GAP-2 misfire.
+
+    A `likely_misfire` records how a task could pass-but-be-WRONG. At
+    green_gate we want the completion_proof to VISIBLY address that risk;
+    if it doesn't, flag it (the recurring false-green / tests-pass≠
+    feature-works failure mode). Mirrors green_gate_proof_note: silent
+    when there's nothing to say.
+
+    * no misfire recorded            -> '' (nothing to audit)
+    * misfire recorded AND the proof references it -> '' (addressed)
+    * misfire recorded but the proof ignores it    -> a "⚠ misfire" note
+
+    "Addresses" is a deliberately cheap heuristic: the proof shares a
+    meaningful word (len>4) with the recorded misfire. Advisory only — a
+    false-silent here costs nothing the proof-note tooth doesn't catch.
+    """
+    misfire = str(likely_misfire or "").strip()
+    if not misfire:
+        return ""
+    proof = str(completion_proof or "").lower()
+    if proof:
+        misfire_words = {w for w in re.findall(r"[a-z]{5,}", misfire.lower())}
+        if any(w in proof for w in misfire_words):
+            return ""
+    return ("  ⚠ misfire: a likely pass-but-wrong risk was recorded but the "
+            "completion_proof does not visibly address it "
+            f"(\"{misfire[:80]}\")")
 
 
 # Artifact-looking signals that evidence a real, demonstrable UI surface:
@@ -1563,6 +1595,12 @@ class ConductorService:
             except Exception:
                 _churn = 0
             passed_gate_reason += green_gate_proof_note(_churn, _proof)
+            # goalbuddy GAP-2: audit the recorded pass-but-wrong risk.
+            # Advisory — annotate when the completion_proof doesn't address
+            # the misfire, silent otherwise.
+            _misfire = getattr(self._task_svc.get(task_id),
+                               "likely_misfire", "")
+            passed_gate_reason += green_gate_misfire_note(_misfire, _proof)
         self._task_svc.update(
             task_id,
             gate_state="passed",

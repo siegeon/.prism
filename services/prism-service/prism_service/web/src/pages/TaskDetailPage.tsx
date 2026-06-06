@@ -53,6 +53,7 @@ type Task = {
   oracle?: string;
   proof_type?: string;
   completion_proof?: string;
+  likely_misfire?: string;
   allowed_files?: string[];
   verify?: string[];
   stop_if?: string[];
@@ -760,7 +761,7 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
-      {(task.oracle || task.proof_type || task.completion_proof) && (
+      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire) && (
         <Card>
           <SectionLabel>Oracle — observable completion signal</SectionLabel>
           <div className="mt-2 space-y-3 text-[13px]">
@@ -792,6 +793,15 @@ export default function TaskDetailPage() {
                   </button>
                 : <div className="text-amber-300/90 text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
             </div>
+            {task.likely_misfire && (
+              <div>
+                <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">likely misfire — how this could pass-but-be-wrong</div>
+                <div className="flex items-start gap-1.5 text-amber-300/90 leading-relaxed">
+                  <span className="shrink-0">⚠</span>
+                  <span className="opacity-90">{task.likely_misfire}</span>
+                </div>
+              </div>
+            )}
           </div>
         </Card>
       )}

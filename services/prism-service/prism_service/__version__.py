@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.29"
+PRISM_VERSION = "6.3.32"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.32: likely_misfire — task cards record & audit how a task could "
+    "pass-but-be-WRONG (goalbuddy GAP-2, task 7bdb5701). New Task.likely_misfire "
+    "(models/task.py) round-trips the same DB serialize/deserialize path as the "
+    "oracle block (additive tasks.db column, migrate to ''); threaded through "
+    "TaskService.create/update, GET/PATCH /api/tasks (TaskCreate + TaskUpdate), "
+    "and the task_create/task_update MCP tools (schema + arg plumbing). New "
+    "module-level green_gate_misfire_note() in conductor_service mirrors "
+    "green_gate_proof_note: at the terminal green_gate it appends an ADVISORY "
+    "'misfire' note (annotate, never block) when a likely_misfire is recorded "
+    "but the completion_proof does not visibly address it (shared-word "
+    "heuristic), silent when the proof addresses it or no misfire is set. "
+    "TaskDetailPage renders the misfire beside the oracle in the Oracle card "
+    "(UI-FIRST, amber). Tests: tests/unit/test_task_misfire.py. "
     "v6.3.29: conductor per-task tile shows task-EXCLUSIVE activity only "
     "(task 5ecbbfb8, owner decision). phase_progress (conductor_service.py) "
     "DROPS the #134/#137 project-WIDE wall-clock fallback that bucketed the "
