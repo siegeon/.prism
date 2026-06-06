@@ -100,9 +100,27 @@ class ProjectContext:
             # CLAUDE_PROJECT_DIR is the hook-provided host root; fall back to
             # the daemon cwd so the seam is never None in production.
             import os
+            from pathlib import Path
+
+            def _checkout_root() -> str:
+                # Editable/dev: this package lives INSIDE the repo working
+                # tree, so derive the checkout root from __file__ (parents[3]
+                # == repo root). This keeps the gate verifier wired to the REAL
+                # checkout regardless of the detached daemon's cwd or a bounce
+                # that dropped PRISM_PROJECT_ROOT — the env-loss that made the
+                # verifier go blind and forced gate overrides. Falls back to
+                # cwd when not in a source tree (installed wheel).
+                try:
+                    root = Path(__file__).resolve().parents[3]
+                    if (root / ".git").exists():
+                        return str(root)
+                except (IndexError, OSError):
+                    pass
+                return os.getcwd()
+
             project_root = (os.environ.get("PRISM_PROJECT_ROOT")
                             or os.environ.get("CLAUDE_PROJECT_DIR")
-                            or os.getcwd())
+                            or _checkout_root())
             self._conductor_svc = ConductorService(
                 scores_db=str(self._data_dir / "scores.db"),
                 task_svc=self.task_svc,
