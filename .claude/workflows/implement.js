@@ -182,7 +182,14 @@ const STEP_SCHEMA = {
     gate_state: { type: 'string' },
     validation: { type: 'string', description: 'the validation note/evidence passed to conductor' },
     evidence: { type: 'string', description: 'what was done, with file:line and the exact verification command + result' },
-    halt_reason: { type: 'string', description: 'set ONLY if the step failed or a gate rejected; empty otherwise' },
+    // AC7 — cite-your-source tier contract: every step DECLARES which knowledge
+    // tier actually answered it (brain=why / grep=how / web=new-practice). A
+    // step that cites NOTHING, or the WRONG tier (e.g. grepping for the WHY, or
+    // claiming brain when only disk grep was consulted), is a mis-tiered cite
+    // and is REJECTED — set ok:false with the mis-tier in halt_reason rather
+    // than passing a tier-less / mis-tiered step.
+    source_tier: { type: 'string', enum: ['brain', 'grep', 'web'], description: 'which tier answered this step: brain=WHY (decisions/rationale via brain_search/memory_recall), grep=HOW (concrete code mechanics via disk Grep/Read), web=NEW-PRACTICE (an unground-able approach validated by a cited WebSearch). A step citing nothing or the WRONG tier (e.g. grep for the WHY) is a mis-tiered cite and must be REJECTED.' },
+    halt_reason: { type: 'string', description: 'set ONLY if the step failed, a gate rejected, OR the cite is empty/mis-tiered; empty otherwise' },
   },
 }
 
@@ -260,7 +267,7 @@ const HANDLERS = {
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
   verify_plan: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP verify_plan (validation kind: plan_coverage — advisory).\n\n${ctx}\n\nWORK: verify the plan covers EVERY requirement and names the concrete files/functions each will touch (brain_call_chain for blast radius first, disk only for gaps). If a requirement has no plan, that is a coverage gap — state it. ${advanceInstr('verify_plan', 'plan covers all requirements; files identified')}`,
+    `${preamble(role)}\n\nSTEP verify_plan (validation kind: plan_coverage — advisory).\n\n${ctx}\n\nWORK: verify the plan covers EVERY requirement and names the concrete files/functions each will touch (brain_call_chain for blast radius first, disk only for gaps). If a requirement has no plan, that is a coverage gap — state it.\n\nPROACTIVE RESEARCH RUNG (size-gated, grounding-gated — AC6): for each non-trivial approach in the plan, classify its grounding. If the approach is UNGROUNDED in Brain AND grep — neither brain_search/memory_recall (the WHY) nor disk Grep/Read of existing source (the HOW) can ground the chosen technique, i.e. it is a NEW practice not yet present in this codebase — then this step BLOCKS: do NOT pass verify_plan until a cited WebSearch / best-practice pass exists for that approach. Set ok:false with the ungrounded approach named in halt_reason UNLESS you have run a WebSearch and can cite the source (url/title) that validates the best-practice. SIZE GATE: a trivial / one-line / pattern-already-in-repo approach is grounded by grep and needs NO web rung — only an ungrounded, non-trivial NEW practice triggers the blocking research requirement. Set source_tier="web" only when this rung actually fired; otherwise brain (why) or grep (how). ${advanceInstr('verify_plan', 'plan covers all requirements; files identified; ungrounded approaches research-cited')}`,
     { label: 'verify_plan', phase: 'Verify plan', schema: STEP_SCHEMA }),
 
   write_failing_tests: (role = 'qa') => agent(
@@ -280,7 +287,7 @@ const HANDLERS = {
     { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA }),
 
   green_gate: (role = 'lead') => agent(
-    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then RECORD THE COMPLETION PROOF (oracle contract): task_update(id="' + locate.task_id + '", status="done", proof_type="test", completion_proof="<the exact full-suite command + its green result + a one-line acceptance summary; receipt-backed evidence, NOT a placeholder>"). A real completion_proof clears the green_gate oracle / anti-busywork check (effort is not outcome).'} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
+    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then RECORD THE COMPLETION PROOF (oracle contract): task_update(id="' + locate.task_id + '", status="done", proof_type="test", completion_proof="<the exact full-suite command + its green result + a one-line acceptance summary; receipt-backed evidence, NOT a placeholder>"). A real completion_proof clears the green_gate oracle / anti-busywork check (effort is not outcome).'}${DRY ? '' : ` Then — MANDATORY WHY-CAPTURE ON SUCCESS (AC5): a clean terminal pass is a DECISION, and the WHY must be written back to the source of truth, not just on failure (SELF_HEAL rung 4 covers only failures). Call memory_store(type="decision", ...) carrying the full WHY contract: the DECISION made, its RATIONALE, the REJECTED ALTERNATIVES (what you did NOT do and why), and concrete file:line refs to the change. memory_recall must surface this decision memory after a clean drive — a terminal success that records completion_proof but no decision memory has NOT written the WHY back.`} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
     { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
 }
 
