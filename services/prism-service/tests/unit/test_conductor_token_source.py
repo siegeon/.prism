@@ -26,12 +26,16 @@ THE FIX this file pins:
   (a) current_session_id gains override_dir; _resolve_link_session_id resolves
       override_dir via claude_memory.configured_project_dir and returns the REAL
       session id (not ctx.request_id) when source_path='' + override_dir-set.
-  (b) phase_progress applies the wall-clock fallback ONLY when the driven task's
-      status == 'in_progress'. A pending task with no authoritative turns →
-      token_turns empty + a NEW tokens_source field == 'linked'. An in_progress
-      task with no live events → wall-clock fill tagged tokens_source=='wallclock'.
-  (c) when tokens_source=='wallclock', tokens_since_step is fed from the SAME
-      fallback events: > 0 AND == the series event sum (no graph/number lie).
+  (b) phase_progress drops the project-wide wall-clock fallback entirely for the
+      per-task tile (owner decision: task-exclusive activity ONLY). A pending OR
+      in_progress task with no authoritative linked-session turns → token_turns
+      empty, turns==0, tokens_since_step==0, tokens_source=='linked'. An
+      in_progress task WITH real linked events still reports its own per-task
+      series (tokens_source=='linked').
+
+NOTE: the legacy wall-clock-fill tests (in_progress→'wallclock' and
+  wallclock-tokens_since_step==series-sum) were the OLD contract that this task
+  reverses; they are replaced by the linked/empty/0 assertions below.
 
 These pin the REAL seams: the link resolver through its request-context entry
 and the conductor service's phase_progress reading through the actual resolvers
@@ -212,15 +216,20 @@ def test_pending_task_no_authoritative_turns_stays_linked_and_empty(tmp_path, mo
     )
 
 
-def test_in_progress_task_no_live_events_fills_via_wallclock(tmp_path, monkeypatch):
-    """An IN_PROGRESS task whose only linked session is an unresolvable MCP
-    handle fills via the project-wide wall-clock fallback, tagged
-    tokens_source=='wallclock'."""
+def test_in_progress_task_no_live_events_stays_linked_and_empty(tmp_path, monkeypatch):
+    """REVERSED CONTRACT (per-task tile, owner decision): an IN_PROGRESS task
+    whose only linked session is an unresolvable MCP handle must NOT borrow the
+    project-wide wall-clock burn. The per-task tile shows task-exclusive activity
+    ONLY, so with no authoritative linked-session events the series is honestly
+    empty: tokens_source=='linked', token_turns==[], turns==0,
+    tokens_since_step==0. (Drops the #134/#137 wall-clock fallback.)"""
     task_svc, cond = _conductor(tmp_path)
     mcp_handle = "deadbeefdeadbeefdeadbeefdeadbeef"
     real_sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
     d = tmp_path / "claudedir"
     now = time.time()
+    # There IS project activity on disk (a DIFFERENT, unlinked session) — the
+    # old code bucketed this into the worked task's window via wall-clock.
     _write_transcript(d / f"{real_sid}.jsonl",
                       [(now - 40, 80), (now - 25, 120), (now - 5, 160)], sid=real_sid)
 
@@ -231,45 +240,51 @@ def test_in_progress_task_no_live_events_fills_via_wallclock(tmp_path, monkeypat
     _patch_resolvers(monkeypatch, source_path=str(tmp_path / "src"), override_dir=str(d))
 
     pp = cond.phase_progress(t.id)
-    assert pp["token_turns"], (
-        "an in_progress task with no live events must fill via the wall-clock "
-        "fallback — got empty series"
-    )
-    assert pp["tokens_source"] == "wallclock", (
-        f"wall-clock-derived series must be tagged tokens_source=='wallclock', "
+    assert pp["tokens_source"] == "linked", (
+        f"an in_progress task with no linked-session events must stay "
+        f"tokens_source=='linked' (no project-wide wall-clock fallback), "
         f"got {pp['tokens_source']!r}"
     )
+    assert pp["token_turns"] == [], (
+        f"per-task tile must show task-exclusive activity only — no project-wide "
+        f"burn may leak in. Got {len(pp['token_turns'])} turns"
+    )
+    assert pp["turns"] == 0, f"turns must be 0, got {pp['turns']}"
+    assert pp["tokens_since_step"] == 0, (
+        f"tokens_since_step must be 0 (no project-wide token sum leaks in), "
+        f"got {pp['tokens_since_step']}"
+    )
 
 
-# ----------------------------------------------------------------------
-# Oracle (c) — wall-clock tokens_since_step == series sum (no graph/number lie).
-# ----------------------------------------------------------------------
-
-def test_wallclock_tokens_since_step_equals_series_sum(tmp_path, monkeypatch):
-    """When tokens_source=='wallclock', tokens_since_step is fed from the SAME
-    fallback events: > 0 AND == the sum of the series' per-turn output tokens.
-    No '2625 turns / 0 tokens' contradiction."""
+def test_in_progress_task_with_linked_events_still_reports_real_per_task(tmp_path, monkeypatch):
+    """An IN_PROGRESS task WITH real authoritative linked-session events still
+    reports its own per-task series: token_turns non-empty, turns>0, real
+    tokens, tokens_source=='linked'. The reversal only drops the project-wide
+    fallback — it must NOT suppress genuine per-task linkage."""
     task_svc, cond = _conductor(tmp_path)
-    mcp_handle = "deadbeefdeadbeefdeadbeefdeadbeef"
-    real_sid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    real_sid = "ffffffff-ffff-ffff-ffff-ffffffffffff"
     d = tmp_path / "claudedir"
     now = time.time()
     turns_in = [(now - 40, 80), (now - 25, 120), (now - 5, 160)]
     _write_transcript(d / f"{real_sid}.jsonl", turns_in, sid=real_sid)
 
-    t = task_svc.create(title="worked tile sum")
+    t = task_svc.create(title="real linked tile")
     cond.advance_task(t.id)
-    task_svc.link_session(t.id, mcp_handle)
+    # Link the REAL transcript session id (resolvable -> live events flow).
+    task_svc.link_session(t.id, real_sid)
     task_svc.update(t.id, status="in_progress")
     _patch_resolvers(monkeypatch, source_path=str(tmp_path / "src"), override_dir=str(d))
 
     pp = cond.phase_progress(t.id)
-    assert pp["tokens_source"] == "wallclock", pp["tokens_source"]
-    series_sum = sum(int(turn["out"]) for turn in pp["token_turns"])
-    assert series_sum > 0, "wall-clock series must carry real per-turn tokens"
-    assert pp["tokens_since_step"] == series_sum, (
-        f"tokens_since_step ({pp['tokens_since_step']}) must equal the wall-clock "
-        f"series sum ({series_sum}) — the graph and the number must agree"
+    assert pp["tokens_source"] == "linked", pp["tokens_source"]
+    assert pp["token_turns"], (
+        "an in_progress task with real linked-session events must report its "
+        "own per-task burn series — got empty"
+    )
+    assert pp["turns"] > 0, f"turns must reflect the real series, got {pp['turns']}"
+    assert pp["tokens_since_step"] > 0, (
+        f"tokens_since_step must reflect real linked tokens, "
+        f"got {pp['tokens_since_step']}"
     )
 
 
