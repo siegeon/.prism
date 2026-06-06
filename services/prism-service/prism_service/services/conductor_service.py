@@ -1156,6 +1156,23 @@ class ConductorService:
         "plan_coverage": None,
     }
 
+    @staticmethod
+    def _merge_base_baseline(workspace: str) -> Optional[str]:
+        """merge-base(origin/main, HEAD) for the checkout — the branch point,
+        so Tier0 scopes the COMMITTED branch diff (committed test/impl files),
+        not just the working tree. Falls back to origin/main, then None."""
+        import subprocess
+        for args in (["git", "merge-base", "origin/main", "HEAD"],
+                     ["git", "rev-parse", "origin/main"]):
+            try:
+                r = subprocess.run(args, cwd=workspace, capture_output=True,
+                                   text=True, timeout=10)
+                if r.returncode == 0 and r.stdout.strip():
+                    return r.stdout.strip().splitlines()[0]
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                continue
+        return None
+
     def _verify_gate(self, task, gate_step_id: str) -> dict:
         """Consult the attached VerifierService for the gate's expected
         validation. Returns a dict shaped:
@@ -1190,6 +1207,17 @@ class ConductorService:
             # working tree wired by ProjectContext.attach_project_root.
             if self._project_root:
                 run_kwargs["workspace"] = str(self._project_root)
+                # Scope Tier0 to the COMMITTED BRANCH diff, not just the
+                # working tree. In a source-run dev checkout the working tree
+                # is only untracked .dev-data noise, so a branch's COMMITTED
+                # red tests were invisible (git diff HEAD shows nothing for
+                # committed files) and Tier0 ran 0 of them — which is why every
+                # gate fell back to override. baseline = merge-base(origin/main,
+                # HEAD); `git diff <baseline>` then includes the branch's
+                # committed test/impl files so the gate verifies on real proof.
+                base = self._merge_base_baseline(str(self._project_root))
+                if base:
+                    run_kwargs["baseline_rev"] = base
             v = self._verifier_svc.run(**run_kwargs)
         except Exception as exc:
             return {
