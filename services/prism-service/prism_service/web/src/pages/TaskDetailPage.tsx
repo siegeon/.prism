@@ -9,6 +9,7 @@ import {
 } from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
 import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 
 // Same status → tone map as TasksPage so the detail-page status chip
@@ -395,6 +396,7 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [children, setChildren] = useState<ChildTask[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -423,7 +425,7 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null }>(
         `/api/tasks/${id}?project=${project}`,
       );
       // phase_progress rides at the TOP LEVEL of the response (not nested in
@@ -431,6 +433,7 @@ export default function TaskDetailPage() {
       setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
+      setTimeline(d.timeline ?? null);
       setError(null);
       // Children aren't on the detail payload — derive them from the task
       // list (parent_id === this id). Cheap, and keeps the API unchanged.
@@ -537,6 +540,11 @@ export default function TaskDetailPage() {
   const statusTone = STATUS_TONE[taskStatus] ?? "slate";
   const pTone = priorityTone(task.priority);
   const conductorOn = (task.workflow_step ?? "") !== "" || (task.gate_state ?? "none") !== "none";
+  // Only transcript-backed (UUID) sessions are real work sessions. Synthetic
+  // gate-actor labels (qa-red-gate-*, *-verifier-*) surface as gate markers in
+  // the Activity Gantt, never as bare session rows.
+  const realSessions = sessions.filter((s) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.session_id));
 
   return (
     <Page>
@@ -895,12 +903,21 @@ export default function TaskDetailPage() {
       </Card>
 
       <Card>
-        <SectionLabel>Sessions ({sessions.length})</SectionLabel>
-        {sessions.length === 0 ? (
+        <SectionLabel>Activity</SectionLabel>
+        {timeline ? (
+          <TaskActivityGantt timeline={timeline} reduced={reduced} />
+        ) : (
+          <Empty>No activity recorded yet.</Empty>
+        )}
+      </Card>
+
+      <Card>
+        <SectionLabel>Sessions ({realSessions.length})</SectionLabel>
+        {realSessions.length === 0 ? (
           <Empty>No Claude sessions linked to this task yet.</Empty>
         ) : (
           <ul className="divide-y divide-[color:var(--midground-base)]/10 mt-2">
-            {sessions.map((s) => (
+            {realSessions.map((s) => (
               <li key={s.session_id} className="py-3">
                 <div className="flex items-baseline justify-between gap-3 flex-wrap">
                   <span className="font-mono text-[12px] break-all">{s.session_id}</span>
