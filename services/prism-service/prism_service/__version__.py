@@ -17,6 +17,14 @@ PRISM_VERSION = "6.3.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.26: SDLC source-of-truth write-back doctrine (task 3826dac3) — "
+    "completes the gate-teeth work below with implement.js's workflow half: "
+    "verify_plan gains a proactive, grounding-gated research rung that BLOCKS "
+    "an ungrounded approach until a cited WebSearch exists (AC6); STEP_SCHEMA "
+    "gains a source_tier cite contract (brain=why / grep=how / web=new-"
+    "practice) with mis-tier reject (AC7); green_gate now mandates a success-"
+    "path memory_store(type=decision) capturing rationale + rejected "
+    "alternatives + file:line, not only on failure (AC5). "
     "v6.3.25: Reinforce SDLC gates — REAL proof, no self-override (task "
     "3826dac3). (1) ConductorService gains project_root (= the agent "
     "checkout, wired by ProjectContext from CLAUDE_PROJECT_DIR); "
