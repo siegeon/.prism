@@ -1909,6 +1909,75 @@ class ConductorService:
         med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
         return med if med > 0 else self._TYPICAL_S_FALLBACK
 
+    def _per_step_typical(self) -> tuple[dict, dict]:
+        """Per-step median dwell time, LEARNED from advance_task history (so it
+        sharpens as tasks complete). Returns ({step: median_s}, {step: n}). A
+        step's dwell = gap between the advance INTO it and the next advance;
+        the gap is attributed to the to-step of the EARLIER advance row."""
+        import re as _re
+        out: dict = {}
+        counts: dict = {}
+        if self._task_svc is None:
+            return out, counts
+        try:
+            tasks = self._task_svc.list()
+        except Exception:
+            return out, counts
+        buckets: dict = {}
+        for t in tasks:
+            try:
+                rows = self._task_svc.history(t.id)
+            except Exception:
+                continue
+            advs = []
+            for r in rows:
+                if getattr(r, "action", "") != "advance_task":
+                    continue
+                ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+                m = _re.search(r"to=(\w+)", getattr(r, "details", "") or "")
+                if ts is not None and m:
+                    advs.append((ts, m.group(1)))
+            for (a_ts, a_step), (b_ts, _b) in zip(advs, advs[1:]):
+                if b_ts > a_ts:
+                    buckets.setdefault(a_step, []).append(b_ts - a_ts)
+        for step, gaps in buckets.items():
+            gaps.sort()
+            n = len(gaps)
+            mid = n // 2
+            med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
+            if med > 0:
+                out[step] = med
+                counts[step] = n
+        return out, counts
+
+    def _eta_s(self, current_step: str, in_step_s: float,
+               global_typical: float) -> tuple[Optional[float], int, Optional[float]]:
+        """Forward-projected seconds remaining to the terminal gate: per-step
+        learned medians for the current + remaining WORKFLOW_STEPS (global
+        median fallback for a step with < 2 samples). Returns
+        (eta_s, sample_n, total_s) — sample_n is the current step's sample count
+        (confidence); total_s is the full-SDLC budget (the countdown bar drains
+        eta_s against it). Recomputed every call, so it auto-sharpens."""
+        try:
+            from prism_service.models.workflow import WORKFLOW_STEPS
+            steps = [s["id"] for s in WORKFLOW_STEPS]
+        except Exception:
+            return None, 0, None
+        if current_step not in steps:
+            return None, 0, None
+        per, counts = self._per_step_typical()
+
+        def typ(step: str) -> float:
+            v = per.get(step)
+            return v if (v and counts.get(step, 0) >= 2) else global_typical
+
+        idx = steps.index(current_step)
+        remaining = max(0.0, typ(current_step) - in_step_s)
+        for s in steps[idx + 1:]:
+            remaining += typ(s)
+        total = sum(typ(s) for s in steps)
+        return remaining, counts.get(current_step, 0), total
+
     def _in_step_s(self, task_id: str) -> float:
         """Seconds since the most recent advance_task row for this task —
         how long it has dwelt in the current step. 0.0 when unknown."""
@@ -1943,6 +2012,17 @@ class ConductorService:
         """
         typical_s = self._median_step_s()
         in_step_s = self._in_step_s(task_id)
+
+        # ETA — forward projection over the remaining steps (learned per-step
+        # medians; sharpens over time). Only meaningful while in the workflow.
+        cur_step = ""
+        if self._task_svc is not None:
+            try:
+                _t = self._task_svc.get(task_id)
+                cur_step = (getattr(_t, "workflow_step", "") or "") if _t else ""
+            except Exception:
+                cur_step = ""
+        eta_s, eta_n, eta_total = self._eta_s(cur_step, in_step_s, typical_s)
 
         children_done = 0
         children_total = 0
@@ -2074,6 +2154,11 @@ class ConductorService:
             "basis": basis,
             "in_step_s": round(in_step_s, 3),
             "typical_s": round(typical_s, 3),
+            # Forward-projected seconds remaining to the terminal gate, + the
+            # current step's sample count (confidence). null when not in-flow.
+            "eta_s": round(eta_s, 1) if eta_s is not None else None,
+            "eta_sample_n": eta_n,
+            "eta_total_s": round(eta_total, 1) if eta_total is not None else None,
             "children_done": children_done,
             "children_total": children_total,
             # Task-total linked-session tokens (see note above).

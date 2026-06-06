@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
@@ -7,7 +7,7 @@ import {
   stepLabel, gateLabel, stepChipClass, WORKFLOW_STEPS_ORDERED,
 } from "@/lib/workflowChips";
 import { relativeTime } from "@/lib/relativeTime";
-import { useReducedMotion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
 
@@ -141,6 +141,15 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
         {showGate && (
           <TileBadge tone={gateTone}>{gateLabel(gate as any)}</TileBadge>
         )}
+        {status === "in_progress" && (task.phase_progress?.eta_s ?? 0) > 5 && (
+          <span
+            className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+            style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
+            title={`ETA to done — forward-projected from learned per-step medians${task.phase_progress?.eta_sample_n != null ? ` (current step n=${task.phase_progress.eta_sample_n})` : ""}`}
+          >
+            ~{fmtEtaTile(task.phase_progress!.eta_s!)} left{(task.phase_progress?.eta_sample_n ?? 0) < 2 ? " ~rough" : ""}
+          </span>
+        )}
       </div>
       {gateReason && (
         <div className="text-[11px] text-[color:var(--text-muted)]">
@@ -194,6 +203,64 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
           />
         </div>
       </div>
+      {status === "in_progress" && (task.phase_progress?.eta_s ?? 0) > 5 && (task.phase_progress?.eta_total_s ?? 0) > 0 && (
+        <EtaCountdownBar
+          etaS={task.phase_progress!.eta_s!}
+          totalS={task.phase_progress!.eta_total_s!}
+          reduced={reduced}
+        />
+      )}
+    </div>
+  );
+}
+
+// Coarse remaining-time label for the tile ETA chip.
+function fmtEtaTile(s: number): string {
+  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+  if (s >= 60) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s)}s`;
+}
+
+// Prominent ETA countdown bar pinned to the bottom of the tile: a teal fill
+// that DRAINS left→right as the projected time-to-done elapses, with the live
+// MM:SS remaining centered in it. Ticks every second off a local anchor and
+// re-anchors whenever a fresh poll changes eta_s, so it stays honest.
+function EtaCountdownBar({ etaS, totalS, reduced }: {
+  etaS: number; totalS: number; reduced: boolean | null;
+}) {
+  const [remaining, setRemaining] = useState(etaS);
+  const anchor = useRef({ at: Date.now(), eta: etaS });
+  useEffect(() => {
+    anchor.current = { at: Date.now(), eta: etaS };
+    setRemaining(etaS);
+    const id = setInterval(() => {
+      const elapsed = (Date.now() - anchor.current.at) / 1000;
+      setRemaining(Math.max(0, anchor.current.eta - elapsed));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [etaS]);
+  const frac = totalS > 0 ? Math.max(0.015, Math.min(1, remaining / totalS)) : 0;
+  const mm = Math.floor(remaining / 60);
+  const ss = Math.floor(remaining % 60);
+  return (
+    <div
+      className="mt-2 relative h-5 w-full rounded-sm overflow-hidden"
+      style={{ background: "var(--surface-2)" }}
+      title="ETA to done — drains as the projected time-to-done elapses (learned per-step medians)"
+    >
+      <motion.div
+        className="absolute inset-y-0 left-0"
+        style={{ background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
+        initial={false}
+        animate={{ width: `${frac * 100}%` }}
+        transition={{ duration: reduced ? 0 : 1, ease: "linear" }}
+      />
+      <span
+        className="absolute inset-0 grid place-items-center text-[10px] font-mono tabular-nums uppercase tracking-wider"
+        style={{ color: "var(--text-secondary)" }}
+      >
+        ETA {mm}:{String(ss).padStart(2, "0")} left
+      </span>
     </div>
   );
 }
