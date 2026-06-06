@@ -17,10 +17,12 @@ tile blank or lying for real tasks:
 
   (#137 primary) Only sessions_for_task feeds the read, so a task whose ONLY
     linked sessions are unresolvable 32-hex MCP handles (no transcript by that
-    id) renders blank. The fix: a wall-clock fallback over
-    project_token_events_in_window(source_path, since, now, override_dir=...)
-    derives the same {out, dt_s, tok_s} series — bounded to the task's history
-    window — when the linked-session turns come back empty.
+    id) renders blank. NOTE: the project-wide wall-clock fallback that #137
+    originally added here was REVERSED by task 5ecbbfb8 (owner decision: the
+    per-task tile shows task-EXCLUSIVE activity ONLY). An MCP-handle-only task
+    now stays honestly empty instead of borrowing the project window burn —
+    see test_phase_progress_no_wallclock_fallback_for_mcp_handle_sessions below
+    and tests/unit/test_conductor_token_source.py.
 
   (#137 secondary) The series is built from the 40-CAPPED
     live_token_turns_for_session and `total_turns` is len() AFTER per-session
@@ -182,12 +184,15 @@ def test_phase_progress_populates_from_override_dir_empty_source(tmp_path, monke
 
 
 # ----------------------------------------------------------------------
-# Oracle (b) — MCP-handle fallback to the wall-clock window read (#137).
-# A task whose ONLY linked session is an unresolvable 32-hex MCP handle
-# still shows token_turns via project_token_events_in_window(override_dir).
+# Oracle (b) — REVERSED CONTRACT (task 5ecbbfb8, owner decision): the per-task
+# tile shows task-EXCLUSIVE activity ONLY. The old #137 project-wide wall-clock
+# fallback (an in_progress MCP-handle task borrowing the project's window burn)
+# is DROPPED — superseded by tests/unit/test_conductor_token_source.py. An
+# in_progress task whose only link is an unresolvable MCP handle now stays
+# honestly empty rather than painting another task's burn.
 # ----------------------------------------------------------------------
 
-def test_phase_progress_falls_back_for_mcp_handle_sessions(tmp_path, monkeypatch):
+def test_phase_progress_no_wallclock_fallback_for_mcp_handle_sessions(tmp_path, monkeypatch):
     task_svc, cond = _conductor(tmp_path)
     # The only linked "session" is a 32-hex MCP request handle — there is NO
     # transcript named <handle>.jsonl. The work is on disk under a DIFFERENT id.
@@ -200,20 +205,20 @@ def test_phase_progress_falls_back_for_mcp_handle_sessions(tmp_path, monkeypatch
     t = task_svc.create(title="mcp-handle tile")
     cond.advance_task(t.id)
     task_svc.link_session(t.id, mcp_handle)
-    # Honesty gate (#647d9c41, follow-up to #137): the project-wide wall-clock
-    # fallback now fires ONLY for the task actually being worked. This oracle's
-    # intent — an MCP-handle task still shows its turns via the fallback — holds
-    # for an in_progress task; a parked/pending one stays honestly blank (pinned
-    # by tests/unit/test_conductor_token_source.py).
+    # Even an in_progress task no longer borrows the project-wide wall-clock burn
+    # (task 5ecbbfb8 reverses the #134/#137 fallback for the per-task surface).
     task_svc.update(t.id, status="in_progress")
 
     _patch_resolvers(monkeypatch, source_path=str(tmp_path / "src"), override_dir=str(d))
 
     pp = cond.phase_progress(t.id)
-    assert pp["token_turns"], (
-        "token_turns must fall back to the wall-clock window read when the only "
-        "linked session is an unresolvable MCP handle (#137 primary)"
+    assert pp["token_turns"] == [], (
+        "the per-task tile must NOT borrow project-wide wall-clock burn for an "
+        "MCP-handle-only task — task-exclusive activity ONLY (task 5ecbbfb8)"
     )
+    assert pp["tokens_source"] == "linked", pp["tokens_source"]
+    assert pp["turns"] == 0, pp["turns"]
+    assert pp["tokens_since_step"] == 0, pp["tokens_since_step"]
 
 
 # ----------------------------------------------------------------------
