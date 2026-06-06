@@ -181,7 +181,8 @@ def test_advance_past_gate_when_gate_state_passed(tmp_path):
         cond.advance_task(t.id)
 
     decided = cond.gate_decide(
-        t.id, action="approve", reason="test: approve and advance"
+        t.id, action="approve",
+        reason="test: approve and advance; pytest -q -> 1 failed"
     )
 
     assert decided["ok"] is True
@@ -304,7 +305,8 @@ def test_task_history_captures_every_transition(tmp_path):
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
     cond.gate_decide(
-        t.id, action="approve", reason="test: audit trail"
+        t.id, action="approve",
+        reason="test: audit trail; pytest -q -> 1 failed"
     )  # auto-advances past gate
 
     actions = [h.action for h in task_svc.history(t.id)]

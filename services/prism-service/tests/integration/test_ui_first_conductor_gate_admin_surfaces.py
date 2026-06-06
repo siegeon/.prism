@@ -115,7 +115,9 @@ def test_post_conductor_gate_approve_persists_decision(tmp_path, monkeypatch):
         json={
             "task_id": t.id,
             "action": "approve",
-            "reason": "red trace looked good",
+            # Proof-carrying contract (task 3826dac3): an override red_gate
+            # close must carry a real failing-test trace.
+            "reason": "red trace looked good; independent re-run: pytest -> 1 failed",
             "override": True,
         },
     )

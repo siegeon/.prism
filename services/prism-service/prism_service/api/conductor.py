@@ -51,6 +51,8 @@ def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
         reason=body.get("reason", "") or "",
         override=bool(body.get("override", False)),
         session_id=body.get("session_id"),
+        # NO-SELF-OVERRIDE actor (task 3826dac3): defaults to the session.
+        actor=body.get("actor") or body.get("session_id"),
     )
 
 

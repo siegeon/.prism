@@ -81,11 +81,16 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
         if snap.workflow_step == gate_id and snap.gate_state == "pending":
             return
         if snap.gate_state == "pending":
-            # Intermediate gates are cleared with a plain override so the
-            # walk reaches the target gate on today's code too; the actor
+            # Intermediate gates are cleared with an override that carries a
+            # real proof-trace + a distinct actor, so the walk reaches the
+            # target gate under the new proof-carrying contract. The actor
             # guard is exercised only on the gate-under-test calls below.
-            cond.gate_decide(task_id, action="approve",
-                             reason="walk intermediate", override=True)
+            cond.gate_decide(
+                task_id, action="approve",
+                reason=("walk intermediate; independent re-run: "
+                        "pytest -q -> 2 failed / 0 passed"),
+                override=True, actor="walk-bot", session_id="walk-bot",
+            )
             continue
         cond.advance_task(task_id)
 

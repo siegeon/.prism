@@ -261,14 +261,27 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
     if shutil.which("mypy"):
         rc, out, err = _run_tool(["mypy", "--no-error-summary", *py_files], workspace)
         claims.append(_claim(0, "tooling.mypy", ",".join(py_files[:5]), rc, out, err))
-    # pytest only runs if test files actually changed — running the
-    # whole suite on every Stop hook is too slow. Match common test
-    # file patterns and run pytest scoped to those.
-    test_files = [f for f in py_files if "/test_" in f or f.startswith("test_") or f.endswith("_test.py")]
-    if test_files and shutil.which("pytest"):
-        rc, out, err = _run_tool(["pytest", "-q", "--no-header", *test_files], workspace, timeout_s=180.0)
-        claims.append(_claim(0, "tooling.pytest", ",".join(test_files[:5]), rc, out, err))
+    # FULL SUITE AT THE GATES (task 3826dac3): run the WHOLE pytest suite
+    # whenever any .py changed — not just the changed test files. Scoping
+    # pytest to changed test files let a regression in an untouched test
+    # slip past the gate; the gate must observe machine-green/red for the
+    # right reason. We invoke pytest with NO file list (full discovery).
+    # Runs whenever pytest is available as a PATH binary OR an importable
+    # module (so a venv-only `python -m pytest` install still gates).
+    if py_files and _pytest_available():
+        rc, out, err = _run_tool(["pytest", "-q", "--no-header"], workspace, timeout_s=600.0)
+        claims.append(_claim(0, "tooling.pytest", "<full-suite>", rc, out, err))
     return claims
+
+
+def _pytest_available() -> bool:
+    """True when pytest can run at the gate — either as a PATH binary or
+    as an importable module (venv installs expose `python -m pytest` but
+    not always a `pytest` shim on PATH)."""
+    if shutil.which("pytest"):
+        return True
+    import importlib.util
+    return importlib.util.find_spec("pytest") is not None
 
 
 def _run_node_tools(workspace: Path, js_files: list[str]) -> list[Claim]:
@@ -628,6 +641,14 @@ class VerifierService:
         since = self._resolve_since_iso(session_id, since_iso)
         ws = Path(workspace) if workspace else self.workspace
 
+        # SCOPE (task 3826dac3): the changed files this run actually checked.
+        # Surfacing it lets a gate prove it saw a REAL diff rather than
+        # status=error 'nothing to verify' against an empty daemon cwd.
+        try:
+            scope = _git_changed_files(ws, baseline_rev)
+        except Exception:
+            scope = []
+
         claims: list[Claim] = []
         # Tier 0 — project tooling
         try:
@@ -673,6 +694,7 @@ class VerifierService:
             "tier0": tier0_status,
             "tier1": tier1_status,
             "tier2": tier2_status,
+            "scope": scope,
             "elapsed_s": round(elapsed, 3),
             "claim_count": len(claims),
             "fail_count": sum(1 for c in claims if c.status == "fail"),
