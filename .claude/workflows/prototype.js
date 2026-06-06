@@ -66,8 +66,16 @@ const PLAN_SCHEMA = {
   type: 'object',
   required: ['title', 'summary', 'actors', 'views', 'constraints', 'journeys', 'plan_steps', 'open_questions', 'plan_diagram', 'plan_doc'],
   properties: {
-    title: { type: 'string' },
-    summary: { type: 'string' },
+    // TITLE DIRECTIVE: the title is a SHORT, HUMAN-FRIENDLY statement of WHAT
+    // the feature is — what a user would recognize it as. ~4-9 words, plain
+    // language. NO mechanics, NO phase/step enumerations, NO data-hook/file
+    // names, NO arrow-diagrams, NO "(initializing -> ... -> gates)" jargon.
+    // ALL of that belongs in `summary`/description, never the title.
+    // Good: "Animate the conductor task tile through its lifecycle".
+    // Bad:  "Animate conductor task lifecycle (initializing -> live turns ->
+    //        gates) + sub-agent lanes in lock step".
+    title: { type: 'string', description: 'SHORT human-friendly feature title (~4-9 words, plain language): what the feature IS, as a user would name it. No mechanics, phase lists, arrow-diagrams, file/data-hook names, or jargon — those go in summary.' },
+    summary: { type: 'string', description: 'The detailed description: mechanics, phases, data hooks, file:line seams, acceptance. This is where everything the title omits lives.' },
     actors: { type: 'array', items: { type: 'string' } },
     views: { type: 'array', items: { type: 'string' } },
     constraints: { type: 'array', items: { type: 'string' } },
@@ -165,7 +173,7 @@ const linkStep = SID
   : ''
 const advSid = SID ? `, session_id="${SID}"` : ''
 const tracking = await agent(
-  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → verify_plan → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the first three steps.\n\n${PHASE_MERGE_GATE_DOCTRINE}\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with a clear title derived from the plan, the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.${linkStep}\n2. conductor_advance(id${advSid}) to move from review_previous_notes -> draft_story.\n3. The draft_story gate validation is "story_complete" (manual-only). Call conductor_gate(id, action="approve", override=true, reason="PRD synthesized by the prototype workflow: <one line>") to satisfy it.\n4. conductor_advance(id${advSid}) to reach verify_plan. STOP there — verify_plan is the planning/build boundary; do NOT enter write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
+  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → verify_plan → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the first three steps.\n\n${PHASE_MERGE_GATE_DOCTRINE}\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with title=plan.title VERBATIM — a SHORT human-friendly feature title (~4-9 words, plain language: what the feature IS, as a user would name it). Do NOT pack mechanics, phase/step lists, arrow-diagrams, or file/data-hook names into the title — ALL of that goes in the description. Use the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.${linkStep}\n2. conductor_advance(id${advSid}) to move from review_previous_notes -> draft_story.\n3. The draft_story gate validation is "story_complete" (manual-only). Call conductor_gate(id, action="approve", override=true, reason="PRD synthesized by the prototype workflow: <one line>") to satisfy it.\n4. conductor_advance(id${advSid}) to reach verify_plan. STOP there — verify_plan is the planning/build boundary; do NOT enter write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
   { label: 'track:conductor', phase: 'Track', schema: TRACK_SCHEMA })
 
 return { feature, coverage, sourceGapsChased: sourceFindings.length, plan, tracking }
