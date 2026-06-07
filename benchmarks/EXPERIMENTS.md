@@ -22,6 +22,7 @@ port 18081). Smoke = stratified 50-Q sample. Full = all 500 Q.
 | 5 | `context-prefix-smoke` | Anthropic-style contextual prefix on multi-granular stack (`PRISM_CONTEXT_PREFIX=on`) | 0.940 | — | 0.000 vs multi-granular | ↔️ | 50Q stratified. Prepends `File: <path>\nScope: <qualified entity>` before embedding/BM25. Per-type breakdown identical to multi-granular. LongMemEval queries are conversational prose; prefix adds no semantic signal for this corpus. Kept default on as theory says it should help code retrieval — needs swebench to confirm. |
 | 6 | `rerank-bge-v2-smoke` | BAAI/bge-reranker-v2-m3 cross-encoder post-RRF on multi-granular+prefix (`PRISM_RERANK=bge-v2`, top-50 pool) | 0.940 | — | 0.000 vs prior | ↔️ | 50Q stratified. Same per-type breakdown, +421s (+22%) wall time vs prefix smoke for zero gain. Suggests the LongMemEval smoke R@5 ceiling at 0.940 is semantic, not rank-order — the 3 missed Qs don't have the gold answer in top-50 to be reranked. Reranker kept as opt-in via env var. |
 | 7 | `plat0042-on-v2-smoke50` | rules-based query decomposition + temporal name fallback (`PRISM_QUERY_DECOMP=on`) | **0.980** | — | **+0.040** vs fresh off baseline | ✅ | 2026-04-25 50Q stratified A/B. Off baseline: R@5 0.940, pool@50 0.980, median 1756.5ms. On v2: R@5 0.980, pool@50 1.000, median 2576.9ms (1.47x). Gate passed after making the pool delta check ceiling-aware. |
+| 8 | `temporal-boost-unit` | ranking-stage recency boost (`PRISM_TEMPORAL_BOOST=on`), A/B on a dated-doc pair | ON flips newer doc to rank 1; OFF/unset/0 byte-identical | — | reorders on recency vs OFF baseline | ✅ kept (env-gated, default off) | MEASURED on PRISM Brain via `tests/unit/test_brain_search_temporal_boost.py` (off-path determinism + on-path reorder). LoCoMo temporal-split A/B vs the PLAT-0042 decomp fallback is PENDING a bench-service run (port 18081 not up; `benchmarks/data/locomo.json` not yet provisioned) — number deliberately NOT fabricated. |
 
 ## Decision
 **Ship MiniLM as default.** All-MiniLM-L6-v2 gives +0.110 R@5 vs potion baseline for free
@@ -41,6 +42,7 @@ in `services/bench-service/docker-compose.yml`.
 | `PRISM_FEEDBACK_WEIGHT` | `0.002` | float, `off` | Up/down-vote weight applied to RRF score. |
 | `PRISM_CHUNK_AGG` | `on` | `on`, `off` | Collapse same-source-file chunks to best per file. |
 | `PRISM_QUERY_DECOMP` | `off` | `on`, `off`, `0`, `1` | **PLAT-0042.** Rules-based query decomposition for candidate generation. Splits compound questions on " and ", " then ", `;` and decomposes long (>12 token) queries; runs each sub-query through every per-index helper, unions per index, then RRF fuses once. Off-path is byte-identical to pre-change behavior. Disable if latency-sensitive — expect ~1.3-1.6× median latency. |
+| `PRISM_TEMPORAL_BOOST` | `off` | `on`, `off`, `0`, `<float>` | **task e043f449.** Ranking-stage recency boost. When on, nudges `rrf_score` by a normalized document-age factor (newest docs lifted) so a newer doc can overtake an older-but-cleaner match on a dated corpus (LoCoMo temporal split). A float sets the boost strength (default 1.0 = one RRF-pool gap). OFF/unset/`0` leave the fused list untouched — off-path byte-identical, provenance="deterministic" preserved. Distinct from the PLAT-0042 decomp temporal-name fallback (candidate generation); this acts at the ranking stage. |
 
 ## Log entries
 
@@ -241,5 +243,50 @@ in `services/bench-service/docker-compose.yml`.
   ``searches`` table regardless of env vars; opt-out would need a new flag. Table
   size grows ~1 row per query; no retention policy yet. Check size periodically
   if the service runs unattended for weeks.
+
+### 2026-06-07 — mempalace-bench-harnesses + temporal vectors (task e043f449)
+Head-to-head spike vs MemPalace (MIT @ 939a076). Shipped the eval breadth and
+two temporal vectors; all numbers reported here are MEASURED on PRISM Brain (or
+explicitly marked PENDING), never quoted from MemPalace's results jsonl.
+
+- **LoCoMo harness** (`benchmarks/locomo/run.py`) — ports MemPalace's LoCoMo
+  metric code (`recall_any` / `recall_all` + a temporal split that isolates
+  temporal questions) onto our `brain_search` seam at file-per-session
+  granularity. Verified driving the search seam by
+  `benchmarks/locomo/tests/test_locomo_harness.py` (7 passing). Corpus recall
+  number is **PENDING** a bench-service run (port 18081 not up here;
+  `benchmarks/data/locomo.json` not yet provisioned) — deliberately NOT
+  fabricated.
+- **ConvoMem harness** (`benchmarks/convomem/run.py`) — ports MemPalace's
+  ConvoMem metric across the 6 conversational categories onto `brain_search`.
+  Verified by `benchmarks/convomem/tests/test_convomem_harness.py` (5 passing).
+  Corpus recall number is **PENDING** the same bench-service run.
+- **Append-only writer** (`benchmarks/experiments_log.py`) — `format_row` /
+  `append_row`; refuses a row missing delta-vs-baseline or a keep/kill decision
+  and records `measured_on=prism-brain` provenance. Pinned by
+  `benchmarks/tests/test_experiments_append_only.py` (4 passing). This is the
+  seam that enforces the append-only / measured-not-quoted discipline.
+- **Vector — ranking-stage temporal boost** (`PRISM_TEMPORAL_BOOST`): MEASURED
+  via `tests/unit/test_brain_search_temporal_boost.py`. ON flips a newer doc
+  above an older-but-cleaner match (proves the boost wires into ranking);
+  OFF/unset/`0` are byte-identical to the pre-change ranking (determinism
+  invariant intact). **Decision: KEEP, env-gated, default off.** The
+  LoCoMo-temporal-split A/B vs the PLAT-0042 decomp fallback is the PENDING
+  bench-service number above.
+- **Vector — LLM-reader rerank bake-off:** scoped as an opt-in row vs the
+  proven-zero cross-encoder (row 6). **Decision: DEFER** — needs a live LLM
+  reader + the bench-service to produce a delta; not run here. Recorded so the
+  vector isn't silently dropped; no fabricated number.
+- **Stretch — temporal fact-graph** (add / invalidate / timeline / as-of):
+  shipped on the memory domain as a sibling to graphify (does NOT replace it).
+  `MemoryService.recall(as_of=...)` resurfaces a superseded fact for an earlier
+  date; `MemoryService.timeline(domain, name)` returns the validity windows; the
+  `memory_recall` MCP verb forwards `as_of`. MEASURED via
+  `tests/unit/test_memory_temporal_fact_graph.py` (5 passing). Built on
+  `memory.py` valid_at/invalid_at supersession fields.
+- **Guardrails:** the off-path byte-identity determinism invariant is held by
+  the temporal-boost OFF test; the LongMemEval R@5 ≥ 0.96 / pool delta /
+  latency ≤ 1.6× gate (`assert_thresholds.py`) is unaffected because every new
+  feature is env-gated default-off (no change to the default search path).
 
 <!-- Append new entries below; keep human-readable and dated. -->

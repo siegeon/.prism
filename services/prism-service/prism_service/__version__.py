@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.33"
+PRISM_VERSION = "6.3.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.34: Brain-vs-MemPalace bench spike (task e043f449). Eval breadth: "
+    "ported MemPalace's LoCoMo harness (benchmarks/locomo/run.py — recall_any/"
+    "recall_all + temporal split) and ConvoMem harness (benchmarks/convomem/"
+    "run.py — 6 conversational categories), both driving brain_search; plus an "
+    "append-only EXPERIMENTS writer (benchmarks/experiments_log.py) that refuses "
+    "a row missing delta+keep/kill and stamps measured_on=prism-brain. Vector: "
+    "ranking-stage recency boost PRISM_TEMPORAL_BOOST (brain_engine.search) — ON "
+    "lifts newer docs, OFF/unset/0 byte-identical (determinism intact); KEEP, "
+    "default off. Stretch: temporal fact-graph on the memory domain — "
+    "MemoryService.recall(as_of=) resurfaces a superseded fact for an earlier "
+    "date, MemoryService.timeline() returns validity windows, memory_recall MCP "
+    "verb forwards as_of (built on memory.py valid_at/invalid_at; does not "
+    "replace graphify). LoCoMo/ConvoMem corpus recall numbers PENDING a "
+    "bench-service run (not fabricated). Tests: 25 targeted green + 741 unit. "
     "v6.3.33: conductor tile tells the TRUTH about finished tasks (task "
     "77470287) — three measurement bugs found reviewing completed task "
     "7bdb5701's telemetry. (1) phase_progress (conductor_service.py) no longer "

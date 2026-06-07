@@ -796,6 +796,7 @@ TOOLS: list[Tool] = [
                 "query": {"type": "string", "description": "Search query for expertise recall"},
                 "domain": {"type": "string", "description": "Filter by domain"},
                 "limit": {"type": "integer", "description": "Max results", "default": 5},
+                "as_of": {"type": "string", "description": "ISO date — temporal as-of query: return the fact that was VALID at that instant (resurfaces a superseded fact for an earlier date)."},
             },
             "required": ["query"],
         },
@@ -3421,6 +3422,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 query=arguments["query"],
                 domain=arguments.get("domain"),
                 limit=arguments.get("limit", 5),
+                as_of=arguments.get("as_of"),
             )
             return [TextContent(type="text", text=_json(results))]
 

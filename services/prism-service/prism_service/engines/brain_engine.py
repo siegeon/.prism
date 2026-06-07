@@ -2662,6 +2662,60 @@ class Brain:
                     -x.get("rrf_score", 0.0), x.get("doc_id", ""),
                 ))
 
+        # PRISM_TEMPORAL_BOOST (default off): ranking-stage recency boost.
+        # When on, nudge rrf_score by a normalized document-age factor so a
+        # newer doc can overtake an older-but-cleaner match on a dated corpus
+        # (LoCoMo temporal split). OFF / unset / 0 leave ``fused`` untouched
+        # so the off-path stays byte-identical (provenance="deterministic"),
+        # matching the experiment discipline of the feedback/decomp flags.
+        tb_env = _os.environ.get("PRISM_TEMPORAL_BOOST", "off").strip().lower()
+        tb_on = tb_env not in ("", "off", "none", "0", "false", "no")
+        if tb_on and fused:
+            try:
+                # Allow a numeric override of the boost strength; default 1.0
+                # (= one full RRF-pool gap), enough to flip a tie on recency.
+                tb_weight = (
+                    float(tb_env) if tb_env not in ("on", "true", "yes") else 1.0
+                )
+            except ValueError:
+                tb_weight = 1.0
+            tb_ids = [c["doc_id"] for c in fused[:200]]
+            tb_ph = ",".join("?" * len(tb_ids))
+            tb_rows = self._brain.execute(
+                f"SELECT id, indexed_at FROM docs WHERE id IN ({tb_ph})",
+                tb_ids,
+            ).fetchall()
+            ages = {
+                r["id"]: (r["indexed_at"] or "") for r in tb_rows
+            }
+            stamps = sorted(v for v in ages.values() if v)
+            if len(stamps) >= 2 and stamps[0] != stamps[-1]:
+                lo, hi = stamps[0], stamps[-1]
+                # Scale the nudge by the top RRF score so the boost is on the
+                # same magnitude as the ranking gaps it must overcome.
+                base = max((c.get("rrf_score", 0.0) for c in fused), default=0.0)
+                span_lo, span_hi = lo, hi
+
+                def _recency(ts: str) -> float:
+                    if not ts or span_hi == span_lo:
+                        return 0.0
+                    # Lexicographic ISO position as a 0..1 recency proxy
+                    # (newer == 1.0); avoids a date parse on every row.
+                    return (ts > span_lo) and (
+                        1.0 if ts >= span_hi else 0.5
+                    ) or 0.0
+
+                for c in fused:
+                    rec = _recency(ages.get(c["doc_id"], ""))
+                    if rec:
+                        c["rrf_score"] = (
+                            c.get("rrf_score", 0.0) + tb_weight * base * rec
+                        )
+                        c["temporal_adj"] = rec
+                fused = sorted(fused, key=lambda x: (
+                    -x.get("rrf_score", 0.0), x.get("doc_id", ""),
+                ))
+
         # Take a larger candidate pool when aggregating so collapsing doesn't
         # leave us short of ``limit`` results.
         top = fused[: inner if aggregate else limit]

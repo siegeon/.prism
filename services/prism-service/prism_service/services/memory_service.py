@@ -322,6 +322,7 @@ class MemoryService:
         query: str,
         domain: Optional[str] = None,
         limit: int = 5,
+        as_of: Optional[str] = None,
     ) -> list[ExpertiseEntry]:
         """Search expertise entries using Brain FTS5 with keyword fallback.
 
@@ -333,8 +334,17 @@ class MemoryService:
         keyword overlap on name + description.
 
         Only returns active, temporally valid entries.
+
+        ``as_of`` (ISO date) is the temporal fact-graph query: instead of the
+        currently-active fact, return the fact that was VALID at that instant
+        (a since-superseded fact resurfaces for an earlier ``as_of``). Built on
+        the valid_at/invalid_at supersession windows store() already maintains.
         """
         results: list[ExpertiseEntry] = []
+
+        # Temporal as-of query: search ALL generations (incl. archived), then
+        # keep the one whose [valid_at, invalid_at) window contains as_of.
+        temporal = as_of is not None and str(as_of).strip() != ""
 
         # Primary: Brain FTS5 search
         try:
@@ -342,15 +352,20 @@ class MemoryService:
         except Exception:
             pass
 
-        # Fallback: keyword overlap
+        # Fallback: keyword overlap. For an as-of query we must also consider
+        # archived (superseded) generations, so widen the keyword candidates.
         if not results:
-            results = self._keyword_recall(query, domain, limit * 2)
+            results = self._keyword_recall(query, domain, limit * 2,
+                                           include_archived=temporal)
 
-        # Filter: only active + temporally valid (no invalid_at)
-        results = [
-            e for e in results
-            if e.status == "active" and not e.invalid_at
-        ]
+        if temporal:
+            results = self._filter_as_of(results, as_of)
+        else:
+            # Filter: only active + temporally valid (no invalid_at)
+            results = [
+                e for e in results
+                if e.status == "active" and not e.invalid_at
+            ]
 
         # Domain filter (Brain search may return cross-domain)
         if domain:
@@ -384,6 +399,61 @@ class MemoryService:
             self._log_recall(entry, query, now, current_task_id)
 
         return results[:limit]
+
+    @staticmethod
+    def _filter_as_of(
+        entries: list[ExpertiseEntry], as_of: str,
+    ) -> list[ExpertiseEntry]:
+        """Keep the generation of each (domain,name) that was VALID at ``as_of``.
+
+        A fact's validity window is [valid_at, invalid_at); an empty invalid_at
+        means still-valid (open-ended). When ``as_of`` predates every window
+        for a fact (we have no record that far back), fall back to the EARLIEST
+        generation — the closest belief to that instant — so the temporal query
+        resurfaces the superseded fact rather than returning nothing.
+        """
+        by_fact: dict[tuple, list[ExpertiseEntry]] = {}
+        for e in entries:
+            by_fact.setdefault((e.domain, e.name), []).append(e)
+
+        picked: list[ExpertiseEntry] = []
+        for gens in by_fact.values():
+            gens_sorted = sorted(gens, key=lambda e: (e.valid_at or "", e.generation))
+            chosen = None
+            for e in gens_sorted:
+                lo = e.valid_at or ""
+                hi = e.invalid_at or ""
+                if lo <= as_of and (not hi or as_of < hi):
+                    chosen = e
+                    break
+            if chosen is None and gens_sorted:
+                # as_of predates all windows → earliest known belief.
+                chosen = gens_sorted[0]
+            if chosen is not None:
+                picked.append(chosen)
+        return picked
+
+    def timeline(
+        self, domain: str, name: str,
+    ) -> list[dict]:
+        """Return a fact's validity windows oldest→newest (temporal timeline).
+
+        Each window is {generation, valid_at, invalid_at, description, status},
+        built from the valid_at/invalid_at supersession fields. Surfaces the
+        full belief history of a single (domain, name) fact.
+        """
+        gens = [e for e in self._read_entries(domain) if e.name == name]
+        gens.sort(key=lambda e: (e.valid_at or "", e.generation))
+        return [
+            {
+                "generation": e.generation,
+                "valid_at": e.valid_at,
+                "invalid_at": e.invalid_at,
+                "description": e.description,
+                "status": e.status,
+            }
+            for e in gens
+        ]
 
     def _brain_recall(
         self, query: str, domain: Optional[str], limit: int,
@@ -428,12 +498,16 @@ class MemoryService:
 
     def _keyword_recall(
         self, query: str, domain: Optional[str], limit: int,
+        include_archived: bool = False,
     ) -> list[ExpertiseEntry]:
         """Fallback keyword-overlap + substring search.
 
         Combines word-set overlap with substring matching so that
         short descriptions still match relevant queries.  Name tokens
         are weighted 2x because they're usually the most distinctive.
+
+        ``include_archived`` widens the candidate set to superseded
+        generations so an as-of query can resurface historical facts.
         """
         query_lower = query.lower()
         query_words = set(query_lower.split())
@@ -441,7 +515,8 @@ class MemoryService:
             return []
 
         candidates = self._read_entries(domain) if domain else self._all_entries()
-        candidates = [e for e in candidates if e.status == "active"]
+        if not include_archived:
+            candidates = [e for e in candidates if e.status == "active"]
 
         scored: list[tuple[float, ExpertiseEntry]] = []
         for entry in candidates:
