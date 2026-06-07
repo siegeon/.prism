@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.34"
+PRISM_VERSION = "6.3.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.35: CORRECTION (task e043f449) — temporal-boost is a MEASURED KILL "
+    "(LoCoMo recall_any -0.04, temporal_recall -0.05; it keys on docs.indexed_at "
+    "= ingest order, not content date). Fixed 4 harness bugs (tool_profile, "
+    "corpus dedup, k-saturation, categories) so the bench produces REAL numbers; "
+    "EXPERIMENTS.md row 8 superseded by measured row 9. v6.3.34 KEEP was wrong. "
     "v6.3.34: Brain-vs-MemPalace bench spike (task e043f449). Eval breadth: "
     "ported MemPalace's LoCoMo harness (benchmarks/locomo/run.py — recall_any/"
     "recall_all + temporal split) and ConvoMem harness (benchmarks/convomem/"

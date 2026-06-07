@@ -2663,11 +2663,15 @@ class Brain:
                 ))
 
         # PRISM_TEMPORAL_BOOST (default off): ranking-stage recency boost.
-        # When on, nudge rrf_score by a normalized document-age factor so a
-        # newer doc can overtake an older-but-cleaner match on a dated corpus
-        # (LoCoMo temporal split). OFF / unset / 0 leave ``fused`` untouched
-        # so the off-path stays byte-identical (provenance="deterministic"),
-        # matching the experiment discipline of the feedback/decomp flags.
+        # DISPROVEN — keep OFF. It nudges rrf_score by a doc-age factor read
+        # from ``indexed_at`` (INGEST time, not content time), so on any real
+        # corpus where docs are ingested together it just reshuffles by ingest
+        # order. Measured on LoCoMo (task e043f449, EXPERIMENTS.md row 9): -0.04
+        # recall_any, -0.051 temporal_recall vs OFF — it HURTS, including the
+        # temporal split it was meant to help. Left in place only so the
+        # experiment is reproducible; revisiting needs a per-doc CONTENT date.
+        # OFF / unset / 0 leave ``fused`` untouched so the off-path stays
+        # byte-identical (provenance="deterministic").
         tb_env = _os.environ.get("PRISM_TEMPORAL_BOOST", "off").strip().lower()
         tb_on = tb_env not in ("", "off", "none", "0", "false", "no")
         if tb_on and fused:

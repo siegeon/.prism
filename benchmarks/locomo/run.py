@@ -57,7 +57,7 @@ def recall_all(retrieved: list[str], gold: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 def mcp_call(project: str, tool: str, arguments: dict[str, Any]) -> dict:
-    url = f"{MCP_BASE}?project={project}"
+    url = f"{MCP_BASE}?project={project}&tool_profile=all"  # maintenance tools (brain_index_doc) need the admin profile
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                "params": {"name": tool, "arguments": arguments}}
     req = urllib.request.Request(
@@ -102,18 +102,37 @@ def _session_id_of(doc_id: str) -> str:
     return head.rsplit("/", 1)[-1]
 
 
-def run_one(project: str, q_idx: int, entry: dict, k: int = 50) -> dict:
-    """Ingest a question's haystack, query the Brain search seam, and score
-    recall_any/recall_all plus the temporal flag. Drives `brain_search`."""
-    domain = f"locomo_q{q_idx:03d}"
+def _sample_key(entry: dict) -> str:
+    """The sample a question belongs to. All questions in a LoCoMo sample share
+    one conversation (haystack), and Brain dedupes docs by path — so we ingest a
+    sample's sessions ONCE into a per-sample domain, never once per question
+    (which would overwrite the shared paths and break domain isolation)."""
+    ids = entry.get("haystack_session_ids") or []
+    if ids:
+        return ids[0].rsplit("_session_", 1)[0]
+    return str(entry.get("question_id", "s")).rsplit("_q", 1)[0]
 
-    for sid, turns in zip(entry["haystack_session_ids"],
-                          entry["haystack_sessions"]):
+
+def ingest_sample(project: str, entry: dict) -> str:
+    """Index a sample's sessions once into its per-sample domain; return it."""
+    domain = f"locomo_{_sample_key(entry)}"
+    for sid, turns in zip(entry["haystack_session_ids"], entry["haystack_sessions"]):
         mcp_call(project, "brain_index_doc", {
             "path": f"locomo/{sid}",
             "content": format_session(turns),
             "domain": domain,
         })
+    return domain
+
+
+def run_one(project: str, q_idx: int, entry: dict, k: int = 50,
+            domain: str | None = None) -> dict:
+    """Query the Brain search seam for one question against its (pre-ingested)
+    per-sample domain and score recall_any/recall_all plus the temporal flag.
+    Drives `brain_search`. If ``domain`` is None the sample is ingested first
+    (standalone use); main() ingests each sample once and passes it in."""
+    if domain is None:
+        domain = ingest_sample(project, entry)
 
     resp = mcp_call(project, "brain_search",
                     {"query": entry["question"], "domain": domain, "limit": k})
@@ -174,13 +193,18 @@ def main() -> int:
     ap.add_argument("--project", default="bench-locomo")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--k", type=int, default=10,
+                    help="retrieval pool size; keep below the corpus session "
+                         "count or recall saturates to 1.0")
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--reuse-corpus", action="store_true",
+                    help="skip ingestion; reuse a corpus already in the project "
+                         "(for an A/B second pass that only changes search-time env)")
     args = ap.parse_args()
 
     with open(args.dataset, encoding="utf-8") as f:
         data = json.load(f)
-    if args.limit:
-        data = data[: args.limit]
+    questions = data[: args.limit] if args.limit else data
 
     try:
         mcp_call(args.project, "project_list", {})
@@ -189,8 +213,24 @@ def main() -> int:
         return 2
     mcp_call(args.project, "project_create", {"project_id": args.project})
 
+    # Ingest the FULL corpus (every sample's sessions) once into ONE shared
+    # domain so each question must retrieve its gold session out of the whole
+    # ~250-session haystack — not just its own ~20-session conversation, which
+    # a k=50 pool would trivially saturate to recall 1.0. Dedupe by session id.
     t0 = time.perf_counter()
-    per_q = [run_one(args.project, i, entry) for i, entry in enumerate(data)]
+    domain = "locomo_all"
+    if not args.reuse_corpus:
+        seen: set[str] = set()
+        for entry in data:
+            for sid, turns in zip(entry["haystack_session_ids"], entry["haystack_sessions"]):
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                mcp_call(args.project, "brain_index_doc", {
+                    "path": f"locomo/{sid}", "content": format_session(turns), "domain": domain,
+                })
+    per_q = [run_one(args.project, i, entry, k=args.k, domain=domain)
+             for i, entry in enumerate(questions)]
     summary = summarize(per_q)
     summary["tag"] = args.tag
     summary["elapsed_sec"] = round(time.perf_counter() - t0, 1)

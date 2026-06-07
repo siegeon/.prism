@@ -27,14 +27,16 @@ from typing import Any
 
 MCP_BASE = "http://localhost:18081/mcp/"
 
-# The 6 ConvoMem conversational categories (MemPalace convomem_bench.py).
+# The 6 ConvoMem evidence categories — the real dirs under
+# Salesforce/ConvoMem core_benchmark/evidence_questions (verified against the
+# HF tree @ 939a076-era), NOT the earlier guessed single-session-* names.
 CATEGORIES: tuple[str, ...] = (
-    "single-session-preference",
-    "single-session-assistant",
-    "single-session-user",
-    "multi-session",
-    "temporal-reasoning",
-    "knowledge-update",
+    "user_evidence",
+    "assistant_facts_evidence",
+    "changing_evidence",
+    "abstention_evidence",
+    "preference_evidence",
+    "implicit_connection_evidence",
 )
 
 RESULT_KEYS: tuple[str, ...] = (
@@ -52,7 +54,7 @@ def recall_any(retrieved: list[str], gold: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 def mcp_call(project: str, tool: str, arguments: dict[str, Any]) -> dict:
-    url = f"{MCP_BASE}?project={project}"
+    url = f"{MCP_BASE}?project={project}&tool_profile=all"  # maintenance tools (brain_index_doc) need the admin profile
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                "params": {"name": tool, "arguments": arguments}}
     req = urllib.request.Request(
@@ -95,17 +97,24 @@ def _session_id_of(doc_id: str) -> str:
     return head.rsplit("/", 1)[-1]
 
 
-def run_one(project: str, q_idx: int, entry: dict, k: int = 50) -> dict:
-    """Ingest the haystack, query the Brain search seam, score a session hit."""
-    domain = f"convomem_q{q_idx:03d}"
+def ingest_session(project: str, sid: str, turns: list[dict], domain: str) -> None:
+    mcp_call(project, "brain_index_doc", {
+        "path": f"convomem/{sid}", "content": format_session(turns), "domain": domain,
+    })
 
-    for sid, turns in zip(entry["haystack_session_ids"],
-                          entry["haystack_sessions"]):
-        mcp_call(project, "brain_index_doc", {
-            "path": f"convomem/{sid}",
-            "content": format_session(turns),
-            "domain": domain,
-        })
+
+def run_one(project: str, q_idx: int, entry: dict, k: int = 50,
+            domain: str | None = None) -> dict:
+    """Query the Brain search seam for one question against the (pre-ingested)
+    shared corpus domain and score a session hit. Drives `brain_search`. If
+    ``domain`` is None the haystack is ingested first (standalone/unit use);
+    main() ingests the full corpus ONCE and passes the shared domain in — never
+    once per question, which would overwrite shared paths (Brain dedupes by
+    path) and break retrieval."""
+    if domain is None:
+        domain = f"convomem_q{q_idx:03d}"
+        for sid, turns in zip(entry["haystack_session_ids"], entry["haystack_sessions"]):
+            ingest_session(project, sid, turns, domain)
 
     resp = mcp_call(project, "brain_search",
                     {"query": entry["question"], "domain": domain, "limit": k})
@@ -154,13 +163,15 @@ def main() -> int:
     ap.add_argument("--project", default="bench-convomem")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--k", type=int, default=10,
+                    help="retrieval pool size; keep below the corpus session "
+                         "count or recall saturates to 1.0")
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args()
 
     with open(args.dataset, encoding="utf-8") as f:
         data = json.load(f)
-    if args.limit:
-        data = data[: args.limit]
+    questions = data[: args.limit] if args.limit else data
 
     try:
         mcp_call(args.project, "project_list", {})
@@ -169,8 +180,18 @@ def main() -> int:
         return 2
     mcp_call(args.project, "project_create", {"project_id": args.project})
 
+    # Ingest the FULL corpus once into one shared domain (see run_one docstring).
     t0 = time.perf_counter()
-    per_q = [run_one(args.project, i, entry) for i, entry in enumerate(data)]
+    domain = "convomem_all"
+    seen: set[str] = set()
+    for entry in data:
+        for sid, turns in zip(entry["haystack_session_ids"], entry["haystack_sessions"]):
+            if sid in seen:
+                continue
+            seen.add(sid)
+            ingest_session(args.project, sid, turns, domain)
+    per_q = [run_one(args.project, i, entry, k=args.k, domain=domain)
+             for i, entry in enumerate(questions)]
     summary = summarize(per_q)
     summary["tag"] = args.tag
     summary["elapsed_sec"] = round(time.perf_counter() - t0, 1)
