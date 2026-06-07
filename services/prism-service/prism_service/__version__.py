@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.33"
+PRISM_VERSION = "6.3.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.34: conductor distinguishes a green SLICE from a finished OUTCOME "
+    "(goalbuddy GAP-4, task 3619859f). New first-class full_outcome_complete "
+    "bool round-trips model->DB->/api/tasks->MCP->SPA. At the terminal "
+    "green_gate the conductor computes an ADVISORY verdict "
+    "(full_outcome_verdict/green_gate_outcome_note in conductor_service.py, "
+    "reusing is_weak_proof): owner-outcome-complete only when the slice is "
+    "green AND there are no incomplete non-cancelled children AND "
+    "completion_proof is strong — otherwise it appends a CONDITIONAL "
+    "'slice-complete, not owner-outcome-complete: <reason>' note (annotate, "
+    "never block) and leaves the field False. The TaskDetailPage Oracle card "
+    "renders a clear 'Owner outcome: complete / slice-only' state. Tests: "
+    "tests/unit/test_full_outcome_complete.py (12 new, green). "
     "v6.3.33: conductor tile tells the TRUTH about finished tasks (task "
     "77470287) — three measurement bugs found reviewing completed task "
     "7bdb5701's telemetry. (1) phase_progress (conductor_service.py) no longer "

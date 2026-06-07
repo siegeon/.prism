@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     proof_type TEXT DEFAULT '',
     completion_proof TEXT DEFAULT '',
     likely_misfire TEXT DEFAULT '',
+    full_outcome_complete INTEGER DEFAULT 0,
     allowed_files TEXT DEFAULT '[]',
     verify TEXT DEFAULT '[]',
     stop_if TEXT DEFAULT '[]',
@@ -81,6 +82,8 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     ("completion_proof", "TEXT DEFAULT ''"),
     # likely_misfire (goalbuddy GAP-2): audited "pass-but-wrong" risk.
     ("likely_misfire", "TEXT DEFAULT ''"),
+    # full_outcome_complete (goalbuddy GAP-4): owner-outcome vs slice. 0/1.
+    ("full_outcome_complete", "INTEGER DEFAULT 0"),
     # Worker contract (goalbuddy T003): JSON-encoded list columns.
     ("allowed_files", "TEXT DEFAULT '[]'"),
     ("verify", "TEXT DEFAULT '[]'"),
@@ -209,6 +212,10 @@ class TaskService:
             likely_misfire=(row["likely_misfire"]
                             if "likely_misfire" in keys
                             and row["likely_misfire"] is not None else ""),
+            full_outcome_complete=bool(
+                row["full_outcome_complete"]
+                if "full_outcome_complete" in keys
+                and row["full_outcome_complete"] is not None else 0),
             allowed_files=(json.loads(row["allowed_files"])
                            if "allowed_files" in keys
                            and row["allowed_files"] else []),
@@ -261,6 +268,7 @@ class TaskService:
         proof_type: str = "",
         completion_proof: str = "",
         likely_misfire: str = "",
+        full_outcome_complete: bool = False,
         allowed_files: Optional[list[str]] = None,
         verify: Optional[list[str]] = None,
         stop_if: Optional[list[str]] = None,
@@ -281,6 +289,7 @@ class TaskService:
             proof_type=proof_type,
             completion_proof=completion_proof,
             likely_misfire=likely_misfire,
+            full_outcome_complete=full_outcome_complete,
             allowed_files=allowed_files or [],
             verify=verify or [],
             stop_if=stop_if or [],
@@ -293,8 +302,9 @@ class TaskService:
             "assigned_agent, created_at, updated_at, completed_at, "
             "blocked_reason, dependencies, tags, parent_id, "
             "oracle, proof_type, completion_proof, likely_misfire, "
+            "full_outcome_complete, "
             "allowed_files, verify, stop_if, plan_doc, plan_diagram) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -314,6 +324,7 @@ class TaskService:
                 task.proof_type,
                 task.completion_proof,
                 task.likely_misfire,
+                int(bool(task.full_outcome_complete)),
                 json.dumps(task.allowed_files),
                 json.dumps(task.verify),
                 json.dumps(task.stop_if),
@@ -404,6 +415,7 @@ class TaskService:
             "blocked_reason=?, dependencies=?, tags=?, "
             "workflow_step=?, gate_state=?, gate_reason=?, parent_id=?, "
             "oracle=?, proof_type=?, completion_proof=?, likely_misfire=?, "
+            "full_outcome_complete=?, "
             "allowed_files=?, verify=?, stop_if=?, "
             "plan_doc=?, plan_diagram=? "
             "WHERE id=?",
@@ -427,6 +439,7 @@ class TaskService:
                 task.proof_type,
                 task.completion_proof,
                 task.likely_misfire,
+                int(bool(task.full_outcome_complete)),
                 json.dumps(task.allowed_files),
                 json.dumps(task.verify),
                 json.dumps(task.stop_if),

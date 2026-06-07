@@ -57,6 +57,13 @@ class Task:
     # when set but completion_proof doesn't visibly address it). Defaults
     # to '' (additive/non-breaking); round-trips via the same DB path.
     likely_misfire: str = ""
+    # full_outcome_complete (goalbuddy GAP-4) — a green SLICE is not proof the
+    # owner's full outcome is met. The conductor sets this True only when the
+    # slice is green AND there are no incomplete child tasks AND completion_proof
+    # is strong; otherwise it stays False (default) and an advisory
+    # "slice-complete, not owner-outcome-complete" note rides the green_gate.
+    # Additive/non-breaking; round-trips via the same DB path, stored as 0/1.
+    full_outcome_complete: bool = False
     # Worker contract (ported from goalbuddy state.yaml task T003) — bounds an
     # implementation slice so it stays explicit, verified, and reversible:
     #   allowed_files — the file allowlist the dev step may touch

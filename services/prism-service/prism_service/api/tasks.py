@@ -105,6 +105,7 @@ class TaskCreate(BaseModel):
     priority: int = 0
     tags: Optional[list[str]] = None
     likely_misfire: str = ""
+    full_outcome_complete: bool = False
     enter_conductor: bool = False
 
 
@@ -126,6 +127,7 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         priority=body.priority or 0,
         tags=body.tags or [],
         likely_misfire=body.likely_misfire or "",
+        full_outcome_complete=bool(body.full_outcome_complete),
     )
     advanced = None
     if body.enter_conductor:
@@ -267,6 +269,7 @@ class TaskUpdate(BaseModel):
     proof_type: Optional[str] = None
     completion_proof: Optional[str] = None
     likely_misfire: Optional[str] = None
+    full_outcome_complete: Optional[bool] = None
     allowed_files: Optional[list[str]] = None
     verify: Optional[list[str]] = None
     stop_if: Optional[list[str]] = None
