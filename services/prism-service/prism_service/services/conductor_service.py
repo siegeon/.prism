@@ -91,6 +91,45 @@ def green_gate_misfire_note(likely_misfire: object,
             f"(\"{misfire[:80]}\")")
 
 
+def full_outcome_verdict(slice_green: bool, completion_proof: object,
+                         incomplete_children: int) -> tuple[bool, str]:
+    """GoalBuddy GAP-4 — is the OWNER'S full outcome complete, or just a slice?
+
+    A green slice is not proof the owner's outcome is met (GoalBuddy
+    SKILL.md:499-513). Owner-outcome-complete is True ONLY when ALL hold:
+      * the slice is green (the gate passed), AND
+      * there are no incomplete (non-cancelled) child tasks, AND
+      * completion_proof is strong (reuses is_weak_proof).
+    Otherwise returns (False, <concrete reason>). Pure + unit-testable.
+    """
+    if not slice_green:
+        return False, "slice is not green"
+    if is_weak_proof(completion_proof):
+        return False, "completion_proof is weak/absent"
+    if incomplete_children > 0:
+        return False, f"{incomplete_children} incomplete child task(s)"
+    return True, ""
+
+
+def green_gate_outcome_note(slice_green: bool, completion_proof: object,
+                            incomplete_children: int) -> str:
+    """Advisory note (annotate, never block) for the GAP-4 outcome verdict.
+
+    Mirrors green_gate_proof_note/green_gate_misfire_note: SILENT when the
+    owner outcome is satisfied; otherwise a conditional
+    "slice-complete, not owner-outcome-complete: <reason>" note. Only
+    meaningful once the slice is green — a not-yet-green slice has nothing
+    to say here (the gate itself speaks).
+    """
+    if not slice_green:
+        return ""
+    complete, reason = full_outcome_verdict(
+        slice_green, completion_proof, incomplete_children)
+    if complete:
+        return ""
+    return (f"  ⚠ slice-complete, not owner-outcome-complete: {reason}")
+
+
 # Artifact-looking signals that evidence a real, demonstrable UI surface:
 # an agent-browser / verify screenshot vs the dev :8888 surface, or a
 # Playwright assertion. A pytest/unit line alone is NOT a UI artifact.
@@ -1601,11 +1640,30 @@ class ConductorService:
             _misfire = getattr(self._task_svc.get(task_id),
                                "likely_misfire", "")
             passed_gate_reason += green_gate_misfire_note(_misfire, _proof)
+            # goalbuddy GAP-4: distinguish a green SLICE from the owner's full
+            # OUTCOME. Count incomplete (non-cancelled, non-done) child tasks;
+            # owner-outcome-complete needs slice-green + strong proof + no
+            # open children. Append the conditional advisory and set the field
+            # truthfully (True only when the outcome is actually mapped).
+            try:
+                _children = [c for c in self._task_svc.list()
+                             if c.parent_id == task_id]
+                _incomplete = sum(1 for c in _children
+                                  if c.status not in ("done", "cancelled"))
+            except Exception:
+                _incomplete = 0
+            passed_gate_reason += green_gate_outcome_note(
+                True, _proof, _incomplete)
+            _complete, _ = full_outcome_verdict(True, _proof, _incomplete)
+            _outcome_complete = _complete
         self._task_svc.update(
             task_id,
             gate_state="passed",
             gate_reason=passed_gate_reason,
         )
+        if gate_step_id == "green_gate":
+            self._task_svc.update(
+                task_id, full_outcome_complete=_outcome_complete)
         self._task_svc.record_history(
             task_id,
             action="gate_decide",

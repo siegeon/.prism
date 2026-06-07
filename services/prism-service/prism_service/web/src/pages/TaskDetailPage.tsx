@@ -54,6 +54,7 @@ type Task = {
   proof_type?: string;
   completion_proof?: string;
   likely_misfire?: string;
+  full_outcome_complete?: boolean;
   allowed_files?: string[];
   verify?: string[];
   stop_if?: string[];
@@ -761,7 +762,7 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
-      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire) && (
+      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined) && (
         <Card>
           <SectionLabel>Oracle — observable completion signal</SectionLabel>
           <div className="mt-2 space-y-3 text-[13px]">
@@ -802,6 +803,18 @@ export default function TaskDetailPage() {
                 </div>
               </div>
             )}
+            <div>
+              <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">owner outcome — slice vs finished outcome</div>
+              {task.full_outcome_complete
+                ? <div className="flex items-center gap-1.5 text-emerald-300/90 leading-relaxed">
+                    <span className="shrink-0">✓</span>
+                    <span className="opacity-90">Owner outcome: complete — the full owner outcome is mapped (slice green, no open children, strong proof)</span>
+                  </div>
+                : <div className="flex items-center gap-1.5 text-amber-300/90 leading-relaxed">
+                    <span className="shrink-0">◐</span>
+                    <span className="opacity-90">Owner outcome: slice-only — a green slice is not yet proof the full owner outcome is met</span>
+                  </div>}
+            </div>
           </div>
         </Card>
       )}
