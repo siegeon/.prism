@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.35"
+PRISM_VERSION = "6.3.36"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.36: FIX Brain self-dogfood was silently degraded. (1) docs_vec "
+    "self-heals an embedding-dimension change: when the live model dim "
+    "(potion-base-32M=512) differs from the existing vec0 table (MiniLM=384), "
+    "brain_engine drops + recreates docs_vec at the current dim so inserts stop "
+    "raising 'Dimension mismatch' (every index_doc was failing its vector "
+    "insert). Reindex repopulates; FTS was unaffected. (2) reflection_runner "
+    "verdict parser now extracts the outermost {...} so a prose-before-JSON "
+    "reply (common after 15 tool turns) parses instead of being abandoned as "
+    "'verdict not valid JSON'. Together: hybrid vector search + the /learning "
+    "reflection loop work again on the dogfood 'prism' project. "
     "v6.3.35: conductor flags a MICRO-SLICE LOOP and says reorient (goalbuddy "
     "GAP-5, task 77be27a1). New pure module-level board_health(tasks) in "
     "conductor_service: over DONE ROOT tasks (status=='done' AND parent_id=='') "
