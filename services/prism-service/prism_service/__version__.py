@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.39"
+PRISM_VERSION = "6.3.40"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.40: PERF route-level code splitting. Every page was a static import, "
+    "so the graph/Sigma + conductor + settings + task-detail code all parsed "
+    "in one ~1.6MB main chunk before anything rendered (the SPA looked 'stuck "
+    "loading' on slow hardware). Pages are now React.lazy chunks fetched on "
+    "navigation: main bundle 1611KB -> 534KB (gzip 459->176), MemoryPage is a "
+    "10KB chunk, and a react-vendor chunk caches across deploys. "
     "v6.3.39: FIX /memory page showed 'No entries match these filters' despite "
     "a non-zero Entries count. Three causes: (1) it defaulted to status='all' "
     "and fetched every archived generation (596 entries / 1.3MB) instead of "
