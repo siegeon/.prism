@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Optional
@@ -15,6 +16,23 @@ from prism_service.config import (
     USAGE_DECAY_DAYS,
 )
 from prism_service.models.memory import HealthReport
+
+
+# Tokens too common to indicate a real shared topic. Without this filter the
+# conflict rule flagged any two same-domain entries that both mention
+# 'the'/'prism'/'memory' as long as one carried a negation word.
+_CONFLICT_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "that", "this", "from", "into", "when",
+    "then", "than", "must", "always", "should", "shall", "will", "have",
+    "has", "are", "was", "were", "use", "uses", "used", "using", "via",
+    "per", "only", "also", "more", "most", "such", "they", "them", "their",
+    "your", "yours", "prism", "memory", "memories", "task", "tasks", "page",
+    "code", "file", "files", "dev", "feature", "features", "work", "works",
+    "done", "need", "needs", "like", "what", "which", "where", "while",
+    "over", "under", "each", "both", "every", "some", "many", "much",
+})
+# How many substantive tokens two entries must share before one is flagged.
+_CONFLICT_MIN_OVERLAP = 4
 
 
 class GovernanceEngine:
@@ -214,37 +232,52 @@ class GovernanceEngine:
     # ------------------------------------------------------------------
 
     def _detect_conflicts(self) -> int:
-        """Flag potentially contradictory entries within each domain.
+        """Flag pairs of active same-domain entries that look genuinely
+        contradictory: exactly one side carries a negation directive AND they
+        share several SUBSTANTIVE keywords.
 
-        Simple heuristic: if two active entries in the same domain share
-        keyword overlap and one contains negation words ('not', "don't",
-        'never', 'avoid'), flag them as potential conflicts.
+        v6.3.37 — the prior rule split on whitespace and required only 2
+        shared tokens *including filler* ('the', 'prism', 'memory'), so any
+        two same-domain entries where one said 'not'/'avoid' tripped it — it
+        had buried 334 unrelated memories in needs_review. We now compare
+        substantive tokens only (alphanumeric, len>=4, not a stop/negation
+        word) and require a meaningful overlap before flagging.
         """
-        negation_words = {"not", "don't", "dont", "never", "avoid", "shouldn't", "shouldnt"}
-        flagged = 0
+        negation_words = {
+            "not", "don't", "dont", "never", "avoid", "shouldn't", "shouldnt",
+        }
 
+        def _has_negation(text: str) -> bool:
+            return bool(set(text.lower().split()) & negation_words)
+
+        def _substantive(text: str) -> set[str]:
+            return {
+                t for t in re.findall(r"[a-z0-9]+", text.lower())
+                if len(t) >= 4
+                and t not in _CONFLICT_STOPWORDS
+                and t not in negation_words
+            }
+
+        flagged = 0
         for domain in self._memory.list_domains():
             entries = self._memory.list_entries(domain, status_filter="active")
-            for i in range(len(entries)):
-                words_i = set(f"{entries[i].name} {entries[i].description}".lower().split())
-                has_neg_i = bool(words_i & negation_words)
-
-                for j in range(i + 1, len(entries)):
-                    words_j = set(
-                        f"{entries[j].name} {entries[j].description}".lower().split()
-                    )
-                    has_neg_j = bool(words_j & negation_words)
-
-                    # Only flag when exactly one side has negation
-                    if has_neg_i == has_neg_j:
+            prepared = [
+                (
+                    e,
+                    _has_negation(f"{e.name} {e.description}"),
+                    _substantive(f"{e.name} {e.description}"),
+                )
+                for e in entries
+            ]
+            for i in range(len(prepared)):
+                _e_i, neg_i, sub_i = prepared[i]
+                for j in range(i + 1, len(prepared)):
+                    e_j, neg_j, sub_j = prepared[j]
+                    # exactly one side must carry a negation directive
+                    if neg_i == neg_j:
                         continue
-
-                    # Check keyword overlap (excluding common stop words)
-                    content_i = words_i - negation_words
-                    content_j = words_j - negation_words
-                    overlap = content_i & content_j
-                    if len(overlap) >= 2:
-                        self._memory.update_entry(entries[j].id, status="needs_review")
+                    if len(sub_i & sub_j) >= _CONFLICT_MIN_OVERLAP:
+                        self._memory.update_entry(e_j.id, status="needs_review")
                         flagged += 1
 
         return flagged

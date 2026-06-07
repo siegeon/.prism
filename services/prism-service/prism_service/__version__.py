@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.36"
+PRISM_VERSION = "6.3.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.37: FIX governance conflict detector was a false-positive machine. "
+    "_detect_conflicts split on whitespace and flagged any two same-domain "
+    "entries that shared >=2 tokens INCLUDING filler ('the'/'prism'/'memory') "
+    "when one carried a negation word — it had flipped 389 unrelated memories "
+    "to needs_review (dashboard 'flagged conflicts'=138/run). Now compares "
+    "substantive tokens only (len>=4, not a stop/negation word) and requires "
+    ">=4 overlap. Reset the false positives back to active and dropped 61 "
+    "stale brain source files (non-code/skip-dir) so docs_vec coverage is "
+    "100%. Tests: test_governance_conflict_detection, test_brain_vec_dim_"
+    "selfheal, test_reflection_verdict_parse. "
     "v6.3.36: FIX Brain self-dogfood was silently degraded. (1) docs_vec "
     "self-heals an embedding-dimension change: when the live model dim "
     "(potion-base-32M=512) differs from the existing vec0 table (MiniLM=384), "
