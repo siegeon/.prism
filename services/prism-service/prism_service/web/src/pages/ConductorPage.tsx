@@ -27,9 +27,16 @@ type ManagedTask = {
   phase_progress?: PhaseProgress | null;
 };
 
+type BoardHealth = {
+  consecutive_low_value?: number;
+  reorient?: boolean;
+  reason?: string;
+};
+
 type State = {
   managed_tasks?: ManagedTask[];
   step_buckets?: Record<string, number>;
+  board_health?: BoardHealth;
 };
 
 const GATE_TONE: Record<string, PillTone> = {
@@ -60,9 +67,25 @@ export default function ConductorPage() {
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
   const managed = data?.managed_tasks ?? [];
+  const boardHealth = data?.board_health;
+  const reorient = boardHealth?.reorient === true;
+  const lowValueN = boardHealth?.consecutive_low_value ?? 0;
 
   return (
     <Page>
+      {/* GoalBuddy GAP-5: cross-task reorient badge — silent unless the board
+          has shipped >= 2 low-confidence slices in a row (composed from the
+          per-task '⚠' advisory notes). Hermes primitives, no raw JSON. */}
+      {reorient && (
+        <Card>
+          <div className="flex items-center gap-2">
+            <TileBadge tone="amber">reorient</TileBadge>
+            <span className="text-[12px] text-[color:var(--text-secondary)]">
+              ⚠ {lowValueN} low-confidence slices in a row — reorient toward a milestone
+            </span>
+          </div>
+        </Card>
+      )}
       <Card>
         <SectionLabel>Under conductor</SectionLabel>
         <p className="text-[11px] opacity-60 mt-1 mb-3">

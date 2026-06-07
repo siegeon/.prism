@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from prism_service.project_context import get_project
+from prism_service.services.conductor_service import board_health
 
 router = APIRouter()
 
@@ -28,7 +29,22 @@ def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1
         # where they are in the workflow.
         "managed_tasks": s.managed_tasks(),
         "step_buckets": s.step_buckets(),
+        # GoalBuddy GAP-5: cross-task "reorient" signal composed from the
+        # per-task '⚠' advisory notes — fires when >= 2 low-value done-root
+        # completions lead the newest-first run. Additive; SPA renders a badge.
+        "board_health": board_health(_board_tasks(s)),
     }
+
+
+def _board_tasks(s) -> list:
+    """All tasks for the board_health scan (done-root filtering happens there)."""
+    svc = getattr(s, "_task_svc", None)
+    if svc is None:
+        return []
+    try:
+        return svc.list()
+    except Exception:
+        return []
 
 
 @router.post("/gate")
