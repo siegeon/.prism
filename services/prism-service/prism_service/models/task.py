@@ -51,6 +51,12 @@ class Task:
     oracle: str = ""
     proof_type: str = ""
     completion_proof: str = ""
+    # likely_misfire (goalbuddy GAP-2) — "how could this pass but be WRONG?".
+    # The cheapest high-leverage defense against false-greens: recorded
+    # upfront beside the oracle and AUDITED at green_gate (advisory note
+    # when set but completion_proof doesn't visibly address it). Defaults
+    # to '' (additive/non-breaking); round-trips via the same DB path.
+    likely_misfire: str = ""
     # Worker contract (ported from goalbuddy state.yaml task T003) — bounds an
     # implementation slice so it stays explicit, verified, and reversible:
     #   allowed_files — the file allowlist the dev step may touch

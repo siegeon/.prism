@@ -104,6 +104,7 @@ class TaskCreate(BaseModel):
     description: str = ""
     priority: int = 0
     tags: Optional[list[str]] = None
+    likely_misfire: str = ""
     enter_conductor: bool = False
 
 
@@ -124,6 +125,7 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         description=body.description or "",
         priority=body.priority or 0,
         tags=body.tags or [],
+        likely_misfire=body.likely_misfire or "",
     )
     advanced = None
     if body.enter_conductor:
@@ -264,6 +266,7 @@ class TaskUpdate(BaseModel):
     oracle: Optional[str] = None
     proof_type: Optional[str] = None
     completion_proof: Optional[str] = None
+    likely_misfire: Optional[str] = None
     allowed_files: Optional[list[str]] = None
     verify: Optional[list[str]] = None
     stop_if: Optional[list[str]] = None
