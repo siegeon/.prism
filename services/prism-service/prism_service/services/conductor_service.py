@@ -130,6 +130,62 @@ def green_gate_outcome_note(slice_green: bool, completion_proof: object,
     return (f"  ⚠ slice-complete, not owner-outcome-complete: {reason}")
 
 
+def _task_attr(task: object, name: str, default: str = "") -> object:
+    """Read a field off a task whether it's a dict or an object/Namespace."""
+    if isinstance(task, dict):
+        return task.get(name, default)
+    return getattr(task, name, default)
+
+
+def _is_low_value_completion(task: object) -> bool:
+    """A done task is LOW-VALUE on reliable signals only (goalbuddy GAP-5).
+
+    True when the green_gate gate_reason carries the '⚠' advisory marker the
+    note helpers stamp (busywork/oracle/misfire/slice-only) OR the
+    completion_proof is weak (is_weak_proof). Deliberately does NOT use
+    files_modified/diff churn — session file attribution is broken (0/0).
+    """
+    reason = str(_task_attr(task, "gate_reason", "") or "")
+    if "⚠" in reason:
+        return True
+    return is_weak_proof(_task_attr(task, "completion_proof", ""))
+
+
+def board_health(tasks) -> dict:
+    """Cross-task board "reorient" signal (goalbuddy GAP-5).
+
+    Over DONE ROOT tasks (status=='done', parent_id=='') ordered by
+    completed_at DESC, count the LEADING run of low-value completions and set
+    reorient=True when that run >= 2 (mirrors goalbuddy state.yaml
+    max_consecutive_tiny_tasks:2). Pure + module-level so it unit-tests over
+    synthetic task lists; accepts dicts or objects. A strong (clean) done-root
+    task at the newest-first head breaks the run (count resets to 0 there).
+    """
+    done_root = [
+        t for t in (tasks or [])
+        if str(_task_attr(t, "status", "") or "") == "done"
+        and not str(_task_attr(t, "parent_id", "") or "")
+    ]
+    done_root.sort(
+        key=lambda t: str(_task_attr(t, "completed_at", "") or ""),
+        reverse=True)
+    run = 0
+    for t in done_root:
+        if _is_low_value_completion(t):
+            run += 1
+        else:
+            break
+    reorient = run >= 2
+    reason = (
+        f"{run} low-confidence slices in a row — reorient toward a milestone"
+        if reorient else "")
+    return {
+        "consecutive_low_value": run,
+        "reorient": reorient,
+        "reason": reason,
+    }
+
+
 # Artifact-looking signals that evidence a real, demonstrable UI surface:
 # an agent-browser / verify screenshot vs the dev :8888 surface, or a
 # Playwright assertion. A pytest/unit line alone is NOT a UI artifact.

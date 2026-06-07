@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.34"
+PRISM_VERSION = "6.3.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.35: conductor flags a MICRO-SLICE LOOP and says reorient (goalbuddy "
+    "GAP-5, task 77be27a1). New pure module-level board_health(tasks) in "
+    "conductor_service: over DONE ROOT tasks (status=='done' AND parent_id=='') "
+    "ordered by completed_at desc, it counts the LEADING run of 'low-value "
+    "completions' and sets reorient when that run >= 2 (mirrors goalbuddy "
+    "state.yaml max_consecutive_tiny_tasks:2). 'low-value' uses ONLY reliable "
+    "signals — a '⚠' advisory marker in the task's gate_reason (the busywork / "
+    "oracle-weak-proof / misfire / slice-only teeth all stamp it) OR "
+    "is_weak_proof(completion_proof) — NEVER files_modified (session file "
+    "attribution is a known-broken 0/0 telemetry gap; churn-based detection is "
+    "deferred until that's fixed). GET /api/conductor/state carries board_health "
+    "additively; ConductorPage renders a reorient BADGE ('⚠ N low-confidence "
+    "slices in a row — reorient toward a milestone') when reorient, silent "
+    "otherwise. Composes the per-task advisory teeth from GAP-2/GAP-4 into one "
+    "board-level signal; annotate-never-block. Tests: "
+    "tests/unit/test_conductor_board_health.py (12 green w/ test_task_busywork). "
     "v6.3.34: conductor distinguishes a green SLICE from a finished OUTCOME "
     "(goalbuddy GAP-4, task 3619859f). New first-class full_outcome_complete "
     "bool round-trips model->DB->/api/tasks->MCP->SPA. At the terminal "
