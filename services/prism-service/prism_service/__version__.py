@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.38"
+PRISM_VERSION = "6.3.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.39: FIX /memory page showed 'No entries match these filters' despite "
+    "a non-zero Entries count. Three causes: (1) it defaulted to status='all' "
+    "and fetched every archived generation (596 entries / 1.3MB) instead of "
+    "the active set, (2) the empty-state copy rendered DURING the initial "
+    "fetch (entries=[]) so a slow 2s load looked broken, (3) the status filter "
+    "chips were 'stale'/'retired' which no entry ever has. Now defaults to "
+    "status='active' (matches the Entries KPI, ~270KB), shows a Loading state "
+    "until the first fetch resolves, and the status chips are "
+    "active/archived/needs_review. "
     "v6.3.38: governance memory-curation overhaul. (1) DISABLE the keyword "
     "conflict detector — even after the v6.3.37 tightening it flagged 1499 "
     "pairs over 206 active memories (keyword overlap can't model semantic "

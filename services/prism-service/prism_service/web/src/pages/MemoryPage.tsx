@@ -42,7 +42,11 @@ const GROUPS: { id: GroupKey; label: string }[] = [
 ];
 
 const TYPES = ["all", "expertise", "convention", "decision", "anti-pattern"];
-const STATUSES = ["all", "active", "stale", "retired"];
+// Match the statuses MemoryService actually writes. The old list used
+// 'stale'/'retired', which no entry ever has, so clicking them always showed
+// "No entries match" — and the page defaulted to 'all', dumping every archived
+// generation (1.3MB) alongside the active set.
+const STATUSES = ["all", "active", "archived", "needs_review"];
 
 const TYPE_TONE: Record<string, PillTone> = {
   expertise: "teal",
@@ -130,8 +134,11 @@ export default function MemoryPage() {
   const [stats, setStats] = useState<Record<string, { active: number; archived: number; total: number }>>({});
   const [domain, setDomain] = useState<string>("all");
   const [type, setType] = useState<string>("all");
-  const [status, setStatus] = useState<string>("all");
+  // Default to the active set: it matches the "Entries" KPI and is a fraction
+  // of the payload (the full 'all' set includes every archived generation).
+  const [status, setStatus] = useState<string>("active");
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [bump, setBump] = useState(0);
@@ -174,7 +181,8 @@ export default function MemoryPage() {
     if (type !== "all") params.set("type", type);
     if (status !== "all") params.set("status", status);
     const load = () => api.get<{ entries: Entry[] }>(`/api/memory/entries?${params}`)
-      .then((d) => setEntries(d.entries)).catch(() => { /* keep last */ });
+      .then((d) => { setEntries(d.entries); setLoaded(true); })
+      .catch(() => { setLoaded(true); /* keep last entries */ });
     load();
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
@@ -310,7 +318,9 @@ export default function MemoryPage() {
         </div>
       </Card>
 
-      {entries.length === 0 ? (
+      {!loaded ? (
+        <Card><Empty>Loading memories…</Empty></Card>
+      ) : entries.length === 0 ? (
         <Card><Empty>No entries match these filters.</Empty></Card>
       ) : (
         grouped.map((g) => (
