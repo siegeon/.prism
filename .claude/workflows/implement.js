@@ -242,7 +242,8 @@ function advanceInstr(stepId, validationHint) {
   // every non-gate step refreshes the task<->session link. When SID is empty
   // the arg is dropped entirely (byte-identical to today's no-session call).
   const sidArg = SID ? `, session_id="${SID}"` : ''
-  return `After the work, call conductor_advance(id="${locate.task_id}"${sidArg}, validation="${validationHint}") to leave "${stepId}". Report the returned to_step and gate_state. If the call returns ok:false, set ok:false and put its reason in halt_reason.`
+  return `After the work, call conductor_advance(id="${locate.task_id}"${sidArg}, validation="${validationHint}") to leave "${stepId}". Report the returned to_step and gate_state.\n` +
+    `DESYNC TOLERANCE (do NOT false-halt): the conductor auto-advances a passing agent step to the NEXT GATE, so by the time this step's advance fires the task may ALREADY be past "${stepId}" or parked at a pending gate. If conductor_advance returns ok:false with a reason meaning the task is already at/past this step or a gate is PENDING (e.g. "gate '...' is pending; call gate_decide before advancing"), that is NOT a failure — this step's WORK is done and the conductor is merely ahead. In that case set ok:TRUE and report the task's ACTUAL current to_step + gate_state (from the advance result, or re-read via task_list) so the drive proceeds to the gate handler. Set ok:FALSE (reason in halt_reason) ONLY for a GENUINE rejection: the validation was rejected, the task was not found, or this step's own work failed.`
 }
 
 // Commit the step's changes on the feature branch so (a) the eventual PR is
@@ -311,7 +312,27 @@ for (let i = startIdx; i < ORDER.length; i++) {
   // Timing is stamped server-side on ingest (workflow scripts forbid client clocks).
   await postAgentRun(res, { role: ROLE_BY_STEP[stepId], step: stepId })
   if (!res || res.ok !== true) {
-    halted = { at: stepId, reason: (res && res.halt_reason) || 'step reported ok:false', result: res }
+    // DESYNC TOLERANCE (deterministic safety net; mirrors advanceInstr).
+    // The conductor auto-advances a passing AGENT step to the next gate, so an
+    // agent step's own conductor_advance can fail with "gate '...' is pending;
+    // call gate_decide before advancing" even though its WORK succeeded — the
+    // conductor is simply ahead. That previously halted the whole drive at
+    // verify_green_state and left the task stuck at a pending green_gate
+    // (memory mx-f886d9). Detect that EXACT case for a non-gate step and
+    // CONTINUE to the gate handler instead of halting. A real gate-step
+    // rejection, or any other failure (validation rejected / work failed),
+    // still halts as before.
+    const _reason = (res && res.halt_reason) || ''
+    const _isGateStep = stepId.endsWith('_gate')
+    const _pendingDesync = !_isGateStep && res && (
+      String((res && res.gate_state) || '').toLowerCase() === 'pending' ||
+      /\bpending\b|call gate_decide|already (?:past|at)\b/i.test(_reason)
+    )
+    if (_pendingDesync) {
+      log(`Step "${stepId}" advance hit a pending gate (conductor ahead) — work done, continuing to the gate handler instead of halting.`)
+      continue
+    }
+    halted = { at: stepId, reason: _reason || 'step reported ok:false', result: res }
     break
   }
   if (STOP_AFTER && stepId === STOP_AFTER) {
