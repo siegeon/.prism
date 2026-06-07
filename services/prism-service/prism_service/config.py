@@ -42,19 +42,25 @@ QUALITY_INTERVAL_SECONDS = int(
     os.environ.get("PRISM_QUALITY_INTERVAL", "21600"),  # 6h default
 )
 
-# Shelf-life defaults per domain (days)
+# Shelf-life defaults per domain (days). v6.3.38 — these were 14-60 days, which
+# auto-archived durable project knowledge (conventions, architecture decisions)
+# weeks after it was recorded; on the dogfood store that buried hundreds of
+# still-valid memories by age alone. Curation should be content-driven
+# (same-name supersession + verify_staleness + budget caps), not a short age
+# timer, so the windows are long enough that pure-age archiving only catches
+# genuinely ancient entries.
 DOMAIN_SHELF_LIFE: dict[str, int] = {
-    "default": 30,
-    "architecture": 60,
-    "conventions": 60,
-    "failures": 14,
-    "tactical": 14,
+    "default": 730,
+    "architecture": 730,
+    "conventions": 730,
+    "failures": 365,
+    "tactical": 365,
 }
 
-DOMAIN_BUDGET_CAP = 100
+DOMAIN_BUDGET_CAP = 200
 DUPLICATE_THRESHOLD = 0.85
-USAGE_DECAY_DAYS = 30
-USAGE_ARCHIVE_DAYS = 60
+USAGE_DECAY_DAYS = 365
+USAGE_ARCHIVE_DAYS = 730
 TASK_STALE_HOURS = 24
 
 DEFAULT_PROJECT = "default"

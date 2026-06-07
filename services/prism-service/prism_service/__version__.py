@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.37"
+PRISM_VERSION = "6.3.38"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.38: governance memory-curation overhaul. (1) DISABLE the keyword "
+    "conflict detector — even after the v6.3.37 tightening it flagged 1499 "
+    "pairs over 206 active memories (keyword overlap can't model semantic "
+    "contradiction; dense technical memories share terms and 'never/avoid' is "
+    "common in real guidance). It now no-ops; contradiction curation is "
+    "same-name supersession + the verify_staleness memory-op. (2) RELAX the "
+    "age windows: DOMAIN_SHELF_LIFE 14-60d -> 365-730d, USAGE_DECAY 30->365, "
+    "USAGE_ARCHIVE 60->730, BUDGET_CAP 100->200, so durable project knowledge "
+    "isn't auto-archived by a short timer. Curated the dogfood store: reset "
+    "the false needs_review flags and restored age-archived standalone "
+    "memories to active. "
     "v6.3.37: FIX governance conflict detector was a false-positive machine. "
     "_detect_conflicts split on whitespace and flagged any two same-domain "
     "entries that shared >=2 tokens INCLUDING filler ('the'/'prism'/'memory') "
