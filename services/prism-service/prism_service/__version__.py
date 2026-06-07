@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.32"
+PRISM_VERSION = "6.3.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.33: conductor tile tells the TRUTH about finished tasks (task "
+    "77470287) — three measurement bugs found reviewing completed task "
+    "7bdb5701's telemetry. (1) phase_progress (conductor_service.py) no longer "
+    "reads 0% on a DONE task: cancelled children (the implement workflow's "
+    "disposable ephemeral-fixture tasks) are EXCLUDED from children_total — they "
+    "had dragged a green-gated parent to 0/1 — and a task whose own status=='done' "
+    "now reports pct=1.0 basis='done'. (2) _in_step_s now FREEZES for terminal "
+    "tasks: a done/cancelled task ends its dwell at completed_at (fallback: last "
+    "history event) instead of wall-clock now, so a finished task stops reading "
+    "5.5h+ and growing in its final step. (3) TaskService.link_session drops a "
+    "truncated-prefix PHANTOM session: a session id that is a strict shorter "
+    "prefix of an already-linked id for the same task (e.g. the 8-char "
+    "'6d42fcd4' beside the full UUID) is refused, killing the duplicate "
+    "zero-stat session row. Tests: tests/unit/test_conductor_done_tile.py "
+    "(4 green). "
     "v6.3.32: likely_misfire — task cards record & audit how a task could "
     "pass-but-be-WRONG (goalbuddy GAP-2, task 7bdb5701). New Task.likely_misfire "
     "(models/task.py) round-trips the same DB serialize/deserialize path as the "

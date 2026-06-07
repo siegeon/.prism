@@ -2054,15 +2054,35 @@ class ConductorService:
         except Exception:
             return 0.0
         last: Optional[float] = None
+        latest: Optional[float] = None
         for r in rows:
+            ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+            if ts is None:
+                continue
+            if latest is None or ts > latest:
+                latest = ts
             if getattr(r, "action", "") == "advance_task":
-                ts = self._parse_iso(getattr(r, "timestamp", "") or "")
-                if ts is not None:
-                    last = ts
+                last = ts
         if last is None:
             return 0.0
         from datetime import datetime, timezone
-        elapsed = datetime.now(timezone.utc).timestamp() - last
+        # FREEZE for terminal tasks: a done/cancelled task must not keep
+        # accruing dwell against wall-clock forever (task 7bdb5701 read 5.5h+
+        # in green_gate hours after completing). End at completed_at, falling
+        # back to the last recorded history event.
+        end: Optional[float] = None
+        try:
+            _t = self._task_svc.get(task_id)
+            status = (getattr(_t, "status", "") or "") if _t else ""
+            if status in ("done", "cancelled"):
+                end = self._parse_iso(getattr(_t, "completed_at", "") or "") if _t else None
+                if end is None:
+                    end = latest
+        except Exception:
+            end = None
+        if end is None:
+            end = datetime.now(timezone.utc).timestamp()
+        elapsed = end - last
         return elapsed if elapsed > 0 else 0.0
 
     def phase_progress(self, task_id: str) -> dict:
@@ -2082,10 +2102,13 @@ class ConductorService:
         # ETA — forward projection over the remaining steps (learned per-step
         # medians; sharpens over time). Only meaningful while in the workflow.
         cur_step = ""
+        task_status = ""
         if self._task_svc is not None:
             try:
                 _t = self._task_svc.get(task_id)
-                cur_step = (getattr(_t, "workflow_step", "") or "") if _t else ""
+                if _t:
+                    cur_step = (getattr(_t, "workflow_step", "") or "")
+                    task_status = (getattr(_t, "status", "") or "")
             except Exception:
                 cur_step = ""
         eta_s, eta_n, eta_total = self._eta_s(cur_step, in_step_s, typical_s)
@@ -2096,13 +2119,24 @@ class ConductorService:
             try:
                 for t in self._task_svc.list():
                     if (getattr(t, "parent_id", "") or "") == task_id:
+                        st = (getattr(t, "status", "") or "")
+                        # CANCELLED children (e.g. the implement workflow's
+                        # disposable ephemeral-fixture tasks) are abandoned, not
+                        # pending work — counting them in the denominator dragged
+                        # a green-gated parent's tile to 0% (task 7bdb5701).
+                        if st == "cancelled":
+                            continue
                         children_total += 1
-                        if (getattr(t, "status", "") or "") == "done":
+                        if st == "done":
                             children_done += 1
             except Exception:
                 children_total = 0
 
-        if children_total > 0:
+        # A finished task is 100%, period — never a stale children/time ratio.
+        if task_status == "done":
+            pct = 1.0
+            basis = "done"
+        elif children_total > 0:
             pct = children_done / children_total
             basis = "children"
         else:

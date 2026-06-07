@@ -523,6 +523,20 @@ class TaskService:
             "PRIMARY KEY (task_id, session_id))"
         )
 
+    @staticmethod
+    def _is_truncated_prefix(session_id: str, existing) -> bool:
+        """True when ``session_id`` is a strict, SHORTER prefix of an
+        already-linked session id for the same task — a truncated phantom
+        (e.g. the 8-char "6d42fcd4" prefix of the full "6d42fcd4-...-..."
+        UUID) that would otherwise render as a duplicate zero-stat row
+        (task 7bdb5701)."""
+        sid = session_id or ""
+        for other in existing:
+            o = other or ""
+            if o != sid and len(sid) < len(o) and o.startswith(sid):
+                return True
+        return False
+
     def link_session(
         self, task_id: str, session_id: str,
         ended_at: Optional[str] = None,
@@ -538,8 +552,15 @@ class TaskService:
         works in unit contexts.
         """
         now = datetime.now(timezone.utc).isoformat()
+        if not (session_id or "").strip():
+            return False
         if not self._scores_db:
             task_links = self._session_links.setdefault(task_id, {})
+            # Reject a truncated-prefix phantom (e.g. an 8-char "6d42fcd4"
+            # alongside the real "6d42fcd4-...-..." UUID) that would render as
+            # a duplicate zero-stat session row (task 7bdb5701).
+            if self._is_truncated_prefix(session_id, task_links.keys()):
+                return False
             row = task_links.setdefault(
                 session_id, {"session_id": session_id, "started_at": now,
                              "ended_at": None})
@@ -549,6 +570,14 @@ class TaskService:
         conn = sqlite3.connect(self._scores_db, timeout=5.0)
         try:
             self._ensure_task_sessions(conn)
+            existing = [
+                r[0] for r in conn.execute(
+                    "SELECT session_id FROM task_sessions WHERE task_id=?",
+                    (task_id,),
+                ).fetchall()
+            ]
+            if self._is_truncated_prefix(session_id, existing):
+                return False
             conn.execute(
                 "INSERT INTO task_sessions "
                 "(task_id, session_id, started_at, ended_at) "
