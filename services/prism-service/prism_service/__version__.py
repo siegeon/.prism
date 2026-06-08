@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.41"
+PRISM_VERSION = "6.3.42"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.42: FIX the upstream reason the learning loop minted ~0 memories — "
+    "the reflection VERDICT PARSER. The sub-agent sometimes prefixes a "
+    "sentence of reasoning or wraps its JSON in a fence; the v6.3.36 parser "
+    "stripped whole-string fences only, so a prose-before-JSON reply was "
+    "dropped as 'not valid JSON' and the ENTIRE verdict (score, narrative, AND "
+    "proposed memories) was discarded + the candidate abandoned. New "
+    "_extract_verdict() in services/reflection_runner.py recovers the JSON "
+    "object even when embedded in prose (balanced-brace scan, prefers the "
+    "object carrying qualitative_score/new_memories). Verified live: candidate "
+    "2de64bcf minted mx-6cacee; the prose-wrapped d1d9eae1 verdict now parses "
+    "instead of abandoning. Tests: tests/unit/test_reflection_verdict_parse.py "
+    "(5 green). "
     "v6.3.41: learning loop mints REAL memories, not loop noise (task "
     "c80fd9bb). The signal extractor (services/claude_transcripts.py) no longer "
     "conflates autonomous-loop MACHINERY with genuine learning signal. New "

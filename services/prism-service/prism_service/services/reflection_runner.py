@@ -225,6 +225,81 @@ def _strip_fence(raw_text: str) -> str:
     return cleaned
 
 
+def _balanced_object(text: str, start: int) -> str | None:
+    """Return the substring from ``start`` (a ``{``) to its matching close
+    brace, respecting string literals and escapes. ``None`` if unbalanced."""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _extract_verdict(raw_text: str) -> dict:
+    """Parse the reflection sub-agent's JSON verdict, tolerating prose or
+    markdown fences around the object.
+
+    The sub-agent is asked for a bare JSON object as its final message, but
+    it sometimes prefixes a sentence of reasoning (e.g. "The transcript
+    contradicts the present state.\\n\\n{...}") or wraps the object in a
+    ```json fence. v6.3.36 stripped whole-string fences only, so a
+    prose-before-JSON reply was dropped as "not valid JSON" and the ENTIRE
+    verdict — qualitative_score, narrative, AND any proposed new_memories —
+    was discarded and the candidate abandoned (the upstream reason the loop
+    minted ~0). This recovers the JSON object even when embedded in text.
+
+    Raises ``ValueError`` if no JSON object can be recovered.
+    """
+    cleaned = _strip_fence(raw_text)
+    # Fast path: the whole (de-fenced) string is the object.
+    try:
+        obj = _json.loads(cleaned)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+    # Fallback: scan for an embedded balanced {...} object. Prefer one that
+    # looks like a verdict (carries qualitative_score / new_memories); fall
+    # back to the first parseable object otherwise.
+    best: dict | None = None
+    for start, ch in enumerate(cleaned):
+        if ch != "{":
+            continue
+        frag = _balanced_object(cleaned, start)
+        if frag is None:
+            continue
+        try:
+            obj = _json.loads(frag)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if "qualitative_score" in obj or "new_memories" in obj:
+            return obj
+        if best is None:
+            best = obj
+    if best is not None:
+        return best
+    raise ValueError("no JSON object found in verdict text")
+
+
 def run_one(
     project: str,
     candidate_id: str,
@@ -304,7 +379,7 @@ def run_one(
         )
 
     try:
-        verdict = _json.loads(_strip_fence(raw_text))
+        verdict = _extract_verdict(raw_text)
     except Exception as exc:
         from prism_service.services.janitor_service import JanitorService
         JanitorService(scores_db).abandon(
