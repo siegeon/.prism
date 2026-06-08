@@ -64,6 +64,48 @@ _MAX_SIGNAL_ITEMS = 12        # cap per-bucket items to bound brief size
 _EXCERPT_MAX_CHARS = 3500     # cap total transcript_excerpt length
 _RECENT_MSG_WINDOW = 8        # messages kept for memory_store context
 
+# v6.3.41 (task c80fd9bb) — deterministic machinery allow/deny gate. Runs with
+# ZERO inference BEFORE any LLM call so autonomous-loop machinery (Stop-hook
+# re-invocations, "# Autonomous loop tick" ScheduleWakeup, scheduler
+# heartbeats, identical retries) never registers as a pushback/correction.
+# Reflexion (https://ar5iv.labs.arxiv.org/html/2303.11366) treats
+# internally-simulated feedback as distinct from genuine external signal; this
+# is the cheap pre-filter that enforces that distinction at ingest.
+_MACHINERY_RE = re.compile(
+    r"(autonomous loop tick"
+    r"|schedulewakeup"
+    r"|scheduler heartbeat"
+    r"|stop[\s-]*hook"
+    r"|work (our|the) github tasks"
+    r"|continue the autonomous loop"
+    r"|no new input)",
+    re.IGNORECASE,
+)
+
+
+def is_machinery_turn(text: str) -> bool:
+    """True when a turn is autonomous-loop MACHINERY (Stop-hook directive,
+    loop-tick/ScheduleWakeup re-invocation, scheduler heartbeat), not genuine
+    user signal. Deterministic, no LLM. A genuine user correction — even one
+    containing pushback words like "no"/"stop" — must return False so it still
+    reaches the typed extractors."""
+    if not text or not text.strip():
+        return True  # empty turn carries no signal
+    return bool(_MACHINERY_RE.search(text))
+
+
+def _actionable_tip(kind: str, text: str) -> str:
+    """One-line actionable tip for a typed signal (Trajectory-Informed Memory
+    Generation, 2026: strategy/recovery/optimization tips, concrete not vague)."""
+    snippet = " ".join((text or "").split())[:160]
+    if kind == "user_correction":
+        return f"User corrected the approach: {snippet}"
+    if kind == "failure_fix":
+        return f"Recovered from a failure: {snippet}"
+    if kind == "stuck":
+        return f"Degenerate retry loop (no progress): {snippet}"
+    return f"Novel success / optimization: {snippet}"
+
 
 def path_to_slug(path: str) -> str:
     """Convert a filesystem path to Claude Code's project-slug form.
@@ -126,6 +168,10 @@ def parse_session_metrics(path: Path) -> dict | None:
     bg_signals: list[dict] = []
     tool_failures: list[dict] = []
     memory_writes: list[dict] = []
+    typed_signals: list[dict] = []            # v6.3.41 — typed extractors
+    saw_assistant_action = False              # actor-tag: was there a prior asst turn
+    _tool_sig_counts: dict[str, int] = {}     # tool_use signature -> repeat count
+    _stuck_flagged = False                    # degenerate-loop collapse (one 'stuck')
     recent_msgs: list[tuple[str, str]] = []   # rolling (role, text) window
     first_ts: float | None = None
     last_ts: float | None = None
@@ -173,11 +219,27 @@ def parse_session_metrics(path: Path) -> dict | None:
         joined_text = "\n".join(t for t in text_chunks if t)
 
         if role == "user" and joined_text:
-            if (_PUSHBACK_RE.search(joined_text)
-                    and len(pushbacks) < _MAX_SIGNAL_ITEMS):
-                pushbacks.append({"ts": ts_str, "text": joined_text[:400]})
+            # v6.3.41 — actor-tag + machinery gate. A turn that is autonomous-
+            # loop machinery (Stop-hook directive, loop tick, heartbeat) is
+            # internally-simulated feedback, NOT a genuine user correction: it
+            # never counts as a pushback nor a typed user_correction. A real
+            # pushback must (a) survive the machinery gate, (b) contain a
+            # correction marker, and (c) actually correct a PRIOR assistant
+            # action (Reflexion: external feedback against a trajectory).
+            if (not is_machinery_turn(joined_text)
+                    and _PUSHBACK_RE.search(joined_text)):
+                if len(pushbacks) < _MAX_SIGNAL_ITEMS:
+                    pushbacks.append({"ts": ts_str, "text": joined_text[:400]})
+                if saw_assistant_action and len(typed_signals) < _MAX_SIGNAL_ITEMS:
+                    typed_signals.append({
+                        "kind": "user_correction",
+                        "ts": ts_str,
+                        "text": joined_text[:400],
+                        "tip": _actionable_tip("user_correction", joined_text),
+                    })
             recent_msgs.append(("user", joined_text[:500]))
         elif role == "assistant" and joined_text:
+            saw_assistant_action = True
             for m in _BG_PROTOCOL_RE.finditer(joined_text):
                 if len(bg_signals) >= _MAX_SIGNAL_ITEMS:
                     break
@@ -197,6 +259,24 @@ def parse_session_metrics(path: Path) -> dict | None:
             if btype == "tool_use":
                 name = block.get("name") or ""
                 inp = block.get("input") or {}
+                saw_assistant_action = True
+                # v6.3.41 — Reflexion degenerate-loop collapse. N IDENTICAL
+                # tool invocations (same name+input, no progress) are a single
+                # 'stuck' signal, not N pushbacks/failures. Collapse to ONE.
+                try:
+                    sig = name + "|" + json.dumps(inp, sort_keys=True, default=str)
+                except (TypeError, ValueError):
+                    sig = name
+                rep = _tool_sig_counts.get(sig, 0) + 1
+                _tool_sig_counts[sig] = rep
+                if rep >= 3 and not _stuck_flagged:
+                    _stuck_flagged = True
+                    typed_signals.append({
+                        "kind": "stuck",
+                        "ts": ts_str,
+                        "text": sig[:400],
+                        "tip": _actionable_tip("stuck", name),
+                    })
                 if name == "Read":
                     fp = inp.get("file_path") or inp.get("path") or ""
                     if fp:
@@ -235,6 +315,31 @@ def parse_session_metrics(path: Path) -> dict | None:
                     })
     if not session_id:
         return None
+    # v6.3.41 — contrastive failure->fix recovery (ExpeL) + novel-success.
+    # A failure that was NOT a degenerate loop AND was followed by real
+    # progress (files modified / memory written) is a recovery worth a tip.
+    # Unresolved failures and no-op retries are dropped (no progress => no tip).
+    made_progress = bool(files_modified) or bool(memory_writes)
+    if (tool_failures and not _stuck_flagged and made_progress
+            and len(typed_signals) < _MAX_SIGNAL_ITEMS):
+        typed_signals.append({
+            "kind": "failure_fix",
+            "ts": tool_failures[-1].get("ts", ""),
+            "text": tool_failures[0].get("error", "")[:400],
+            "tip": _actionable_tip("failure_fix", tool_failures[0].get("error", "")),
+        })
+    # Novel success / optimization: a clean run that wrote durable memory
+    # without corrections or failures is a strategy worth keeping.
+    if (memory_writes and not pushbacks and not tool_failures
+            and len(typed_signals) < _MAX_SIGNAL_ITEMS):
+        nm = memory_writes[0]
+        label = f"{nm.get('domain','')}/{nm.get('name','')}"
+        typed_signals.append({
+            "kind": "novel_success",
+            "ts": nm.get("ts", ""),
+            "text": label[:400],
+            "tip": _actionable_tip("novel_success", label),
+        })
     duration = 0
     if first_ts is not None and last_ts is not None:
         duration = max(0, int(last_ts - first_ts))
@@ -251,6 +356,7 @@ def parse_session_metrics(path: Path) -> dict | None:
             "bg_signals": bg_signals,
             "tool_failures": tool_failures,
             "memory_writes": memory_writes,
+            "typed_signals": typed_signals,
         },
     }
 
@@ -464,7 +570,8 @@ def _enqueue_with_signals(
             "tokens_used": metrics.get("tokens_used", 0),
             "signal_counts": {
                 k: len(signals.get(k) or [])
-                for k in ("pushbacks", "bg_signals", "tool_failures", "memory_writes")
+                for k in ("pushbacks", "bg_signals", "tool_failures",
+                          "memory_writes", "typed_signals")
             },
             "skill_invocations": skill_invocations,
         }
@@ -474,6 +581,10 @@ def _enqueue_with_signals(
         excerpt = format_transcript_excerpt(signals_for_excerpt)
         if excerpt:
             scope["transcript_excerpt"] = excerpt
+        # v6.3.41 — cheap per-candidate token estimate (~4 chars/token) so the
+        # deterministic select_cycle_candidates() gate can enforce a
+        # tokens/cycle ceiling BEFORE any LLM call. Bounds reflection cost.
+        scope["est_tokens"] = (len(excerpt) // 4) + 256 if excerpt else 256
         # v6.2.18 — noise filter. A session with NO usable signal would
         # produce an empty consolidation_candidate the reflection loop can
         # learn nothing from — these piled up (61 deep) and drained tokens.

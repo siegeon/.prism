@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.35"
+PRISM_VERSION = "6.3.41"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.41: learning loop mints REAL memories, not loop noise (task "
+    "c80fd9bb). The signal extractor (services/claude_transcripts.py) no longer "
+    "conflates autonomous-loop MACHINERY with genuine learning signal. New "
+    "deterministic, zero-LLM is_machinery_turn() gate (Stop-hook directives, "
+    "'# Autonomous loop tick'/ScheduleWakeup re-invocations, scheduler "
+    "heartbeats) runs BEFORE any inference so machinery never registers as a "
+    "pushback/correction. parse_session_metrics now actor-tags turns (only a "
+    "genuine USER turn that corrects a PRIOR assistant action is a "
+    "user_correction) and emits a typed_signals list replacing the raw "
+    "pushback counter — three typed extractors: user_correction, failure_fix "
+    "(ExpeL contrastive, only when a non-degenerate failure was followed by "
+    "real progress), and novel_success (clean run that wrote durable memory); "
+    "each carries an actionable 'tip'. Reflexion degenerate-loop collapse: N "
+    "identical no-progress tool retries collapse to ONE 'stuck' signal, not N. "
+    "_enqueue_with_signals folds typed_signals into signal_counts (machinery-"
+    "only session enqueues 0 candidates, genuine-signal session enqueues 1) "
+    "and stamps a cheap est_tokens on each candidate scope. BOUNDED COST: new "
+    "consolidation_data.MAX_CANDIDATES_PER_CYCLE + TOKENS_PER_CYCLE_CEILING + "
+    "select_cycle_candidates() — a pure-SQL/JSON deterministic gate that caps "
+    "per-cycle candidates AND cumulative est_tokens BEFORE any LLM call. "
+    "Tests: tests/unit/test_signal_extraction.py (10 green). "
     "v6.3.35: conductor flags a MICRO-SLICE LOOP and says reorient (goalbuddy "
     "GAP-5, task 77be27a1). New pure module-level board_health(tasks) in "
     "conductor_service: over DONE ROOT tasks (status=='done' AND parent_id=='') "
