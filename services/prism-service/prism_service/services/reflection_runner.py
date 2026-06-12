@@ -225,6 +225,31 @@ def _strip_fence(raw_text: str) -> str:
     return cleaned
 
 
+def _extract_verdict_json(raw_text: str) -> dict:
+    """Parse the JSON verdict from a model response.
+
+    The reflect sub-agent is told to "Output ONLY the JSON object" but after
+    15 tool-using turns it routinely prepends a sentence or two of prose
+    before the object (observed live: "...source is empty.\\n\\n{...}"). The
+    old whole-string fence-strip then failed and a perfectly good verdict was
+    abandoned as "not valid JSON". Try, in order: the fence-stripped string,
+    then the outermost ``{...}`` span (handles prose before/after the object).
+    """
+    candidates = [_strip_fence(raw_text)]
+    i, j = raw_text.find("{"), raw_text.rfind("}")
+    if i != -1 and j > i:
+        candidates.append(raw_text[i:j + 1])
+    last_err: Exception | None = None
+    for cand in candidates:
+        try:
+            obj = _json.loads(cand)
+            if isinstance(obj, dict):
+                return obj
+        except Exception as exc:  # noqa: BLE001 - try next candidate
+            last_err = exc
+    raise last_err or ValueError("no JSON object found in response")
+
+
 def run_one(
     project: str,
     candidate_id: str,
@@ -304,7 +329,7 @@ def run_one(
         )
 
     try:
-        verdict = _json.loads(_strip_fence(raw_text))
+        verdict = _extract_verdict_json(raw_text)
     except Exception as exc:
         from prism_service.services.janitor_service import JanitorService
         JanitorService(scores_db).abandon(

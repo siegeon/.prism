@@ -22,6 +22,15 @@ export default defineConfig({
   build: {
     outDir: "../web_dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Pull the rarely-changing React runtime into its own chunk so it
+        // caches across deploys and trims the per-build main chunk.
+        manualChunks: {
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+        },
+      },
+    },
   },
   server: {
     proxy: {

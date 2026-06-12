@@ -787,6 +787,29 @@ class Brain:
                 dim = len(probe)
             except Exception:
                 dim = 384
+            # Self-heal a dimension change: if docs_vec already exists at a
+            # different float[N] than the live model, the IF NOT EXISTS below
+            # keeps the stale table and every insert raises "Dimension
+            # mismatch" (e.g. 384-dim MiniLM table vs 512-dim potion model).
+            # Drop it so it is recreated at the current dim; a reindex then
+            # repopulates the vectors. Lets PRISM_EMBEDDER / model upgrades
+            # work without a manual brain wipe.
+            try:
+                row = self._brain.execute(
+                    "SELECT sql FROM sqlite_master WHERE name='docs_vec'"
+                ).fetchone()
+                if row and row[0]:
+                    m = re.search(r"float\[(\d+)\]", row[0])
+                    if m and int(m.group(1)) != dim:
+                        print(
+                            f"Brain: docs_vec dim {m.group(1)} != model dim "
+                            f"{dim}; rebuilding vec table",
+                            file=sys.stderr,
+                        )
+                        self._brain.execute("DROP TABLE IF EXISTS docs_vec")
+                        self._brain.commit()
+            except Exception:
+                pass
             try:
                 self._brain.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS docs_vec "
