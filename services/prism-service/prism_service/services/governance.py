@@ -214,40 +214,21 @@ class GovernanceEngine:
     # ------------------------------------------------------------------
 
     def _detect_conflicts(self) -> int:
-        """Flag potentially contradictory entries within each domain.
+        """Disabled — keyword overlap cannot detect semantic contradiction.
 
-        Simple heuristic: if two active entries in the same domain share
-        keyword overlap and one contains negation words ('not', "don't",
-        'never', 'avoid'), flag them as potential conflicts.
+        v6.3.38 — the keyword heuristic (exactly one entry carries a negation
+        word + shared tokens) produced ONLY false positives at scale. On
+        PRISM's own store it flagged ~138 pairs per run (1499 candidate pairs
+        over 206 active entries): dense technical memories about the same
+        subsystem trivially share >=4 substantive terms, and 'never/avoid/not'
+        is common in legitimate guidance ('never commit to main'). Worse, it
+        auto-mutated status, burying ~390 valid memories in needs_review.
+        Genuine contradiction handling already lives in same-name supersession
+        (MemoryService.store) and the LLM-judged verify_staleness memory-op,
+        so this rule now no-ops. Reintroduce only with an embedding/NLI-based
+        detector that actually models meaning, not token overlap.
         """
-        negation_words = {"not", "don't", "dont", "never", "avoid", "shouldn't", "shouldnt"}
-        flagged = 0
-
-        for domain in self._memory.list_domains():
-            entries = self._memory.list_entries(domain, status_filter="active")
-            for i in range(len(entries)):
-                words_i = set(f"{entries[i].name} {entries[i].description}".lower().split())
-                has_neg_i = bool(words_i & negation_words)
-
-                for j in range(i + 1, len(entries)):
-                    words_j = set(
-                        f"{entries[j].name} {entries[j].description}".lower().split()
-                    )
-                    has_neg_j = bool(words_j & negation_words)
-
-                    # Only flag when exactly one side has negation
-                    if has_neg_i == has_neg_j:
-                        continue
-
-                    # Check keyword overlap (excluding common stop words)
-                    content_i = words_i - negation_words
-                    content_j = words_j - negation_words
-                    overlap = content_i & content_j
-                    if len(overlap) >= 2:
-                        self._memory.update_entry(entries[j].id, status="needs_review")
-                        flagged += 1
-
-        return flagged
+        return 0
 
     # ------------------------------------------------------------------
     # Rule: stuck tasks

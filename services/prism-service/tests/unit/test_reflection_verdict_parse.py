@@ -1,12 +1,19 @@
 """Reflection verdict parsing must tolerate prose/fences around the JSON.
 
-The reflection sub-agent is asked for a bare JSON object, but real replies
-sometimes prefix a sentence of reasoning or wrap the object in a ```json
-fence. Before this fix the whole-string-fence-only parser dropped those as
-"not valid JSON", discarding the verdict (score, narrative, AND any proposed
-memories) and abandoning the candidate — the upstream reason the learning
-loop minted ~0 memories. Pins the recovery path.
+The reflect sub-agent is told to "Output ONLY the JSON object", but after 15
+tool-using turns it routinely prepends a sentence or two of reasoning, wraps
+the object in a ```json fence, or appends a trailing remark. The original
+whole-string-fence-only parser dropped those replies as "not valid JSON",
+discarding the verdict (score, narrative, AND any proposed memories) and
+abandoning the candidate — the upstream reason the learning loop minted ~0
+memories. Two independent fixes raced on branches (v6.3.36
+``_extract_verdict_json`` / v6.3.42 ``_extract_verdict``); this is the merged
+suite — the union of both branches' cases — pinning the surviving
+``_extract_verdict`` (balanced-brace scan, prefers the object carrying
+qualitative_score/new_memories).
 """
+
+from __future__ import annotations
 
 import pytest
 
@@ -40,6 +47,18 @@ def test_prose_before_json_is_recovered():
     assert v["new_memories"] == []
 
 
+def test_prose_before_and_after_json():
+    raw = 'Here is my verdict:\n{"confidence": 0.4}\nLet me know if you need more.'
+    assert _extract_verdict(raw) == {"confidence": 0.4}
+
+
+def test_fenced_json_with_leading_prose():
+    # Fence strip alone can't handle this (string doesn't START with ```);
+    # the embedded-object scan must recover it.
+    raw = 'Reasoning first...\n```json\n{"qualitative_score": 0.2}\n```'
+    assert _extract_verdict(raw)["qualitative_score"] == 0.2
+
+
 def test_prose_with_braces_then_real_verdict_prefers_verdict():
     # Prose that itself contains a brace must not shadow the real object.
     raw = (
@@ -54,3 +73,9 @@ def test_prose_with_braces_then_real_verdict_prefers_verdict():
 def test_unparseable_text_raises():
     with pytest.raises(ValueError):
         _extract_verdict("no json here at all")
+
+
+def test_bare_list_is_not_a_verdict():
+    # A verdict must be an object; a top-level array is rejected.
+    with pytest.raises(Exception):
+        _extract_verdict("[1, 2, 3]")
