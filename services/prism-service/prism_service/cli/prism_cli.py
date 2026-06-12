@@ -157,18 +157,43 @@ def cmd_start(args: argparse.Namespace) -> int:
     # logging) land here; the daemon also installs faulthandler/excepthook
     # against this same stream (main._configure_logging) for crash traces.
     log = _log_file().open("ab")
-    creationflags = 0
+    spawn_kwargs: dict = {}
     if sys.platform.startswith("win"):
-        creationflags = 0x00000008 | 0x00000200  # DETACHED + NEW_PROCESS_GROUP
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "prism_service.main"],
-        env=env,
-        stdout=log,
-        stderr=log,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-        creationflags=creationflags,
-    )
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP alone is NOT enough
+        # when the parent shell runs inside a Windows job object with
+        # kill-on-close (agent harnesses, CI runners, Terminal profiles):
+        # the detached child still belongs to the job and is reaped the
+        # moment the job handle closes — the daemon dies with no traceback
+        # the instant the launching session ends. CREATE_BREAKAWAY_FROM_JOB
+        # escapes the job. It raises if the job forbids breakaway, so fall
+        # back to the old flags rather than failing the launch.
+        _DETACHED = 0x00000008
+        _NEW_GROUP = 0x00000200
+        _BREAKAWAY = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+        spawn_kwargs["creationflags"] = _DETACHED | _NEW_GROUP | _BREAKAWAY
+    else:
+        spawn_kwargs["start_new_session"] = True
+
+    def _spawn() -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-m", "prism_service.main"],
+            env=env,
+            stdout=log,
+            stderr=log,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            **spawn_kwargs,
+        )
+
+    try:
+        proc = _spawn()
+    except OSError:
+        if sys.platform.startswith("win"):
+            # Job forbids breakaway — retry without it (old behavior).
+            spawn_kwargs["creationflags"] = 0x00000008 | 0x00000200
+            proc = _spawn()
+        else:
+            raise
     _write_pid(proc.pid)
     print(f"prism started (pid {proc.pid})")
     print(f"  data dir: {_data_dir()}")

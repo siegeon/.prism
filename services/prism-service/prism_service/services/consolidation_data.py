@@ -17,6 +17,56 @@ from pathlib import Path
 
 _UNREFLECTED_THRESHOLD_HOURS = 24
 
+# v6.3.41 (task c80fd9bb) — BOUNDED COST. A hard per-cycle candidate cap and a
+# tokens/cycle ceiling enforced by a cheap deterministic gate that runs BEFORE
+# any LLM call, so a backlog of candidates can never burn unbounded inference
+# in one cycle (Reflexion bounded buffer; owner cost constraint 2026-06-08).
+MAX_CANDIDATES_PER_CYCLE = 8
+TOKENS_PER_CYCLE_CEILING = 60_000
+
+
+def select_cycle_candidates(
+    scores_db: str,
+    max_candidates: int = MAX_CANDIDATES_PER_CYCLE,
+    token_ceiling: int = TOKENS_PER_CYCLE_CEILING,
+) -> list[dict]:
+    """Cheap deterministic pre-LLM gate: pick at most ``max_candidates``
+    pending candidates whose cumulative ``scope_json.est_tokens`` stays within
+    ``token_ceiling``. Pure SQL + JSON, zero inference. The reflection consumer
+    calls this to bound how much it may spend in one cycle; survivors (and only
+    survivors) reach the LLM salience judge. Oldest-first (FIFO) so backlog
+    drains fairly. Returns the selected candidate rows as dicts."""
+    if not Path(scores_db).exists():
+        return []
+    conn = sqlite3.connect(scores_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT * FROM consolidation_candidates WHERE status='pending' "
+            "ORDER BY queued_at ASC"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+    picked: list[dict] = []
+    spent = 0
+    for r in rows:
+        if len(picked) >= max_candidates:
+            break
+        row = dict(r)
+        try:
+            est = int(json.loads(row.get("scope_json") or "{}").get("est_tokens", 0))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            est = 0
+        if est < 0:
+            est = 0
+        if spent + est > token_ceiling:
+            continue  # this one would breach the ceiling; try smaller ones
+        spent += est
+        picked.append(row)
+    return picked
+
 
 def get_queue_summary(scores_db: str) -> dict:
     """Return counts by status for consolidation_candidates."""

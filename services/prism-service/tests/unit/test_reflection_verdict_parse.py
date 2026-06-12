@@ -1,58 +1,81 @@
-"""Reflection verdict parser tolerates prose-before-JSON.
+"""Reflection verdict parsing must tolerate prose/fences around the JSON.
 
-Regression guard for v6.3.36. A reflect sub-agent told to "Output ONLY the
-JSON object" routinely prepends a sentence or two of reasoning after 15
-tool-using turns. The old whole-string fence-strip then failed and a perfectly
-good verdict was abandoned as "verdict not valid JSON" (observed live:
-``"...source is empty.\\n\\n{...}"``). ``_extract_verdict_json`` must recover
-the object from prose before/after it, from markdown fences, or bare.
+The reflect sub-agent is told to "Output ONLY the JSON object", but after 15
+tool-using turns it routinely prepends a sentence or two of reasoning, wraps
+the object in a ```json fence, or appends a trailing remark. The original
+whole-string-fence-only parser dropped those replies as "not valid JSON",
+discarding the verdict (score, narrative, AND any proposed memories) and
+abandoning the candidate — the upstream reason the learning loop minted ~0
+memories. Two independent fixes raced on branches (v6.3.36
+``_extract_verdict_json`` / v6.3.42 ``_extract_verdict``); this is the merged
+suite — the union of both branches' cases — pinning the surviving
+``_extract_verdict`` (balanced-brace scan, prefers the object carrying
+qualitative_score/new_memories).
 """
 
 from __future__ import annotations
 
 import pytest
 
-from prism_service.services.reflection_runner import _extract_verdict_json
+from prism_service.services.reflection_runner import _extract_verdict
 
 
-def test_plain_json_object():
-    assert _extract_verdict_json('{"qualitative_score": 0.5}') == {
-        "qualitative_score": 0.5
-    }
+def test_bare_json_object_parses():
+    raw = '{"qualitative_score": 0.7, "new_memories": []}'
+    v = _extract_verdict(raw)
+    assert v["qualitative_score"] == 0.7
+    assert v["new_memories"] == []
 
 
-def test_markdown_fenced_json():
-    assert _extract_verdict_json('```json\n{"a": 1}\n```') == {"a": 1}
+def test_fenced_json_object_parses():
+    raw = '```json\n{"qualitative_score": 0.4, "new_memories": []}\n```'
+    v = _extract_verdict(raw)
+    assert v["qualitative_score"] == 0.4
 
 
-def test_prose_before_json_the_live_failure_mode():
+def test_prose_before_json_is_recovered():
+    # The exact failure mode observed live on candidate d1d9eae1: a sentence
+    # of reasoning, a blank line, then the verdict object.
     raw = (
-        "The reflection target checkout is empty. I cannot verify any file "
-        "under it, so no candidate memory can be grounded.\n\n"
-        '{"qualitative_score": 0.35, "new_memories": [], "confidence": 0.4}'
+        "The transcript contradicts the present state, and there is no "
+        "stable, verifiable convention to capture.\n\n"
+        '{"qualitative_score": 0.15, "narrative": "checked E:\\\\.prism", '
+        '"new_memories": []}'
     )
-    out = _extract_verdict_json(raw)
-    assert out["qualitative_score"] == 0.35
-    assert out["new_memories"] == []
+    v = _extract_verdict(raw)
+    assert v["qualitative_score"] == 0.15
+    assert v["new_memories"] == []
 
 
 def test_prose_before_and_after_json():
     raw = 'Here is my verdict:\n{"confidence": 0.4}\nLet me know if you need more.'
-    assert _extract_verdict_json(raw) == {"confidence": 0.4}
+    assert _extract_verdict(raw) == {"confidence": 0.4}
 
 
 def test_fenced_json_with_leading_prose():
-    assert _extract_verdict_json('Reasoning first...\n```json\n{"x": 2}\n```') == {
-        "x": 2
-    }
+    # Fence strip alone can't handle this (string doesn't START with ```);
+    # the embedded-object scan must recover it.
+    raw = 'Reasoning first...\n```json\n{"qualitative_score": 0.2}\n```'
+    assert _extract_verdict(raw)["qualitative_score"] == 0.2
 
 
-def test_no_json_raises():
-    with pytest.raises(Exception):
-        _extract_verdict_json("no json object here at all")
+def test_prose_with_braces_then_real_verdict_prefers_verdict():
+    # Prose that itself contains a brace must not shadow the real object.
+    raw = (
+        "I considered the set {a, b} of files.\n"
+        '{"qualitative_score": 0.9, "new_memories": [{"name": "x"}]}'
+    )
+    v = _extract_verdict(raw)
+    assert v["qualitative_score"] == 0.9
+    assert v["new_memories"][0]["name"] == "x"
+
+
+def test_unparseable_text_raises():
+    with pytest.raises(ValueError):
+        _extract_verdict("no json here at all")
 
 
 def test_bare_list_is_not_a_verdict():
-    # a verdict must be an object; a top-level array is rejected
+    # A verdict must be an object; a top-level array is rejected.
     with pytest.raises(Exception):
-        _extract_verdict_json("[1, 2, 3]")
+        _extract_verdict("[1, 2, 3]")
