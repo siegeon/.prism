@@ -55,7 +55,7 @@ Pop-Location
 # Launch — CRITICAL: cwd must be E:\.prism (main checkout root), NOT a worktree
 $env:PRISM_MCP_PORT  = "8887"
 $env:PRISM_UI_PORT   = "8888"
-$env:PRISM_DATA_DIR  = "E:\.prism\.dev-data"
+$env:PRISM_DATA_DIR  = "E:\.prism\services\prism-service\data"   # CANONICAL store (real data); NOT .dev-data — see feedback_dev_data_dir
 $env:PRISM_DEV_MODE  = "1"        # surfaces the amber DEV pill in the SPA footer
 # Belt-and-suspenders: PRISM_DEV_MODE already gates the auto-updater's
 # pip-install path, but make the dev daemon never even consider self-updating.

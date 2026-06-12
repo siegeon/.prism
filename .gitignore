@@ -109,3 +109,7 @@ services/prism-service/build/
 services/prism-service/dist/
 services/prism-service/*.egg-info/
 .dev-data-verify/
+
+# local dev/bench data stores (never commit)
+.dev-data/
+services/bench-service/data-bench-native/
