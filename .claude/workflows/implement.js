@@ -105,6 +105,20 @@ function preamble(role) {
   return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${CONVENTIONS}\n\n${SELF_HEAL}${dryNote}`
 }
 
+// ── Step-contract telemetry transport (task 0b34b6f7) ───────────────────
+// The Workflow script sandbox has NO fetch / Node net API — an in-sandbox
+// HTTP call throws 'fetch is not defined' on every drive and ZERO rows
+// land. The channel that DOES exist is the STEP AGENT's own Bash: every
+// step's contract instructs a curl POST of its agent_runs row to the
+// ingest API. postAgentRun (below) stays the single row-shape authority
+// and journals the canonical row into the drive log.
+function telemetryInstr(stepId) {
+  if (DRY) return ''
+  const role = ROLE_BY_STEP[stepId] || 'agent'
+  const tid = (typeof locate !== 'undefined' && locate.task_id) || TASK_ID
+  return `\n\nTELEMETRY (step contract — REQUIRED LAST ACTION): POST your agent-run row with Bash curl (use 127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/agent-runs/ingest?project=prism' -H 'Content-Type: application/json' -d '<ROW>'\` where <ROW> is the JSON object {"run_id":"${RUN_ID}","workflow_name":"implement","task_id":"${tid}","session_id":"${SID}","agent_id":"${RUN_ID}:${stepId}","role":"${role}","step":"${stepId}","ok":<your step ok, true|false>,"gate_state":"<final gate_state, or null>","verdict_summary":"<one-line validation/evidence summary>"}. The response must be {"ok":true,...} — quote that receipt in evidence. A failed POST is non-fatal: note it and continue (timing is stamped server-side on ingest).`
+}
+
 // ── Agent-run telemetry emitter (task f4498190) ─────────────────────────
 // ONE shared row builder + POST so the serial loop AND the parallel fanout
 // wrapper emit an IDENTICAL row shape — no telemetry gap between the two
@@ -137,15 +151,13 @@ async function postAgentRun(res, meta) {
     verdict_summary: (res && (res.validation || res.evidence)) || meta.verdict_summary || null,
     evidence_ref: (res && res.evidence) ? String(res.evidence).slice(0, 200) : null,
   }
-  try {
-    await fetch(`${API_BASE}/api/agent-runs/ingest?project=prism`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(row),
-    })
-  } catch (e) {
-    log(`agent-run telemetry POST failed (non-fatal): ${e && e.message}`)
-  }
+  // SANDBOX-REAL TRANSPORT (task 0b34b6f7): the Workflow sandbox cannot do
+  // HTTP itself (no fetch / Node net API), so the POST to
+  // /api/agent-runs/ingest travels via the STEP AGENT's Bash curl — see
+  // telemetryInstr, threaded into every step's contract. Here we journal
+  // the canonical row so serial AND fanout paths share ONE shape and the
+  // drive log carries the telemetry record alongside the agent's receipt.
+  log(`agent-run row (POSTed by the step agent via Bash curl): ${JSON.stringify(row)}`)
   return row
 }
 
@@ -248,7 +260,8 @@ function advanceInstr(stepId, validationHint) {
   // the arg is dropped entirely (byte-identical to today's no-session call).
   const sidArg = SID ? `, session_id="${SID}"` : ''
   return `After the work, call conductor_advance(id="${locate.task_id}"${sidArg}, validation="${validationHint}") to leave "${stepId}". Report the returned to_step and gate_state.\n` +
-    `DESYNC TOLERANCE (do NOT false-halt): the conductor auto-advances a passing agent step to the NEXT GATE, so by the time this step's advance fires the task may ALREADY be past "${stepId}" or parked at a pending gate. If conductor_advance returns ok:false with a reason meaning the task is already at/past this step or a gate is PENDING (e.g. "gate '...' is pending; call gate_decide before advancing"), that is NOT a failure — this step's WORK is done and the conductor is merely ahead. In that case set ok:TRUE and report the task's ACTUAL current to_step + gate_state (from the advance result, or re-read via task_list) so the drive proceeds to the gate handler. Set ok:FALSE (reason in halt_reason) ONLY for a GENUINE rejection: the validation was rejected, the task was not found, or this step's own work failed.`
+    `DESYNC TOLERANCE (do NOT false-halt): the conductor auto-advances a passing agent step to the NEXT GATE, so by the time this step's advance fires the task may ALREADY be past "${stepId}" or parked at a pending gate. If conductor_advance returns ok:false with a reason meaning the task is already at/past this step or a gate is PENDING (e.g. "gate '...' is pending; call gate_decide before advancing"), that is NOT a failure — this step's WORK is done and the conductor is merely ahead. In that case set ok:TRUE and report the task's ACTUAL current to_step + gate_state (from the advance result, or re-read via task_list) so the drive proceeds to the gate handler. Set ok:FALSE (reason in halt_reason) ONLY for a GENUINE rejection: the validation was rejected, the task was not found, or this step's own work failed.` +
+    telemetryInstr(stepId)
 }
 
 // Commit the step's changes on the feature branch so (a) the eventual PR is
@@ -273,7 +286,7 @@ const HANDLERS = {
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
   story_gate: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP story_gate (BLOCKING gate, RUBRIC-VERIFIED — validation story_complete). The server scores the task's plan_doc against the YAML rubric (required sections + every AC carries an id and an oracle). NO override on a compliant drive.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would ensure plan_doc carries ## Summary / ## Requirements / ## Acceptance Criteria with AC-<n> ids + "— oracle:" markers, then conductor_gate(approve) WITHOUT override.' : `re-read the task via task_list and check its plan_doc is a rubric-compliant story: ## Summary, ## Requirements (FR-<n>/NFR-<n> ids), ## Acceptance Criteria (AC-<n> ids, each ending "— oracle: <observable check>"). If plan_doc is missing/non-compliant, WRITE the compliant story from the requirements above and persist it: task_update(id="${locate.task_id}", plan_doc=<story markdown>). Then call conductor_gate(id="${locate.task_id}", action="approve", reason="story rubric evidence: sections + AC ids + oracles present") WITHOUT override. If ok:false, the rubric reason names the exact gap — fix plan_doc and re-approve; NEVER override this gate.`} Report final to_step + gate_state.`,
+    `${preamble(role)}\n\nSTEP story_gate (BLOCKING gate, RUBRIC-VERIFIED — validation story_complete). The server scores the task's plan_doc against the YAML rubric (required sections + every AC carries an id and an oracle). NO override on a compliant drive.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would ensure plan_doc carries ## Summary / ## Requirements / ## Acceptance Criteria with AC-<n> ids + "— oracle:" markers, then conductor_gate(approve) WITHOUT override.' : `re-read the task via task_list and check its plan_doc is a rubric-compliant story: ## Summary, ## Requirements (FR-<n>/NFR-<n> ids), ## Acceptance Criteria (AC-<n> ids, each ending "— oracle: <observable check>"). If plan_doc is missing/non-compliant, WRITE the compliant story from the requirements above and persist it: task_update(id="${locate.task_id}", plan_doc=<story markdown>). Then call conductor_gate(id="${locate.task_id}", action="approve", reason="story rubric evidence: sections + AC ids + oracles present") WITHOUT override. If ok:false, the rubric reason names the exact gap — fix plan_doc and re-approve; NEVER override this gate.`} Report final to_step + gate_state.${telemetryInstr('story_gate')}`,
     { label: 'story_gate', phase: 'Story gate', schema: STEP_SCHEMA }),
 
   verify_plan: (role = 'sm') => agent(
@@ -281,7 +294,7 @@ const HANDLERS = {
     { label: 'verify_plan', phase: 'Verify plan', schema: STEP_SCHEMA }),
 
   plan_gate: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP plan_gate (BLOCKING gate, RUBRIC-VERIFIED — validation plan_coverage). The server scores: (i) every story AC id is covered by the plan_doc, (ii) plan_diagram is present and parses as mermaid (consult the mermaid-syntax skill), (iii) the plan_diagram's layer edges violate NO Brain-stored architecture principle — and an EMPTY principle store never passes (misfire guard). NO override on a compliant drive.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would ensure plan_diagram exists/parses and principles are seeded, then conductor_gate(approve) WITHOUT override.' : `re-read the task via task_list. Ensure plan_diagram is valid mermaid (mermaid-syntax skill; first line a bare diagram keyword) whose layer edges reflect the INTENDED architecture; persist via task_update(id="${locate.task_id}", plan_diagram=...) if missing. If the rubric reports no seeded principles, seed them ONCE via the MCP memory tools per services/arc_governance.py (seed_prism_principles writes them as memory data in domain "architecture-principles"). Then conductor_gate(id="${locate.task_id}", action="approve", reason="plan rubric evidence: AC coverage + parsing diagram + principle conformance") WITHOUT override. If ok:false, the rubric names the missing AC id / parse failure / violated principle — FIX the plan (never the rubric) and re-approve; a principle violation flagged HERE is the point: fix the plan BEFORE code.`} Report final to_step + gate_state.`,
+    `${preamble(role)}\n\nSTEP plan_gate (BLOCKING gate, RUBRIC-VERIFIED — validation plan_coverage). The server scores: (i) every story AC id is covered by the plan_doc, (ii) plan_diagram is present and parses as mermaid (consult the mermaid-syntax skill), (iii) the plan_diagram's layer edges violate NO Brain-stored architecture principle — and an EMPTY principle store never passes (misfire guard). NO override on a compliant drive.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would ensure plan_diagram exists/parses and principles are seeded, then conductor_gate(approve) WITHOUT override.' : `re-read the task via task_list. Ensure plan_diagram is valid mermaid (mermaid-syntax skill; first line a bare diagram keyword) whose layer edges reflect the INTENDED architecture; persist via task_update(id="${locate.task_id}", plan_diagram=...) if missing. If the rubric reports no seeded principles, seed them ONCE via the MCP memory tools per services/arc_governance.py (seed_prism_principles writes them as memory data in domain "architecture-principles"). Then conductor_gate(id="${locate.task_id}", action="approve", reason="plan rubric evidence: AC coverage + parsing diagram + principle conformance") WITHOUT override. If ok:false, the rubric names the missing AC id / parse failure / violated principle — FIX the plan (never the rubric) and re-approve; a principle violation flagged HERE is the point: fix the plan BEFORE code.`} Report final to_step + gate_state.${telemetryInstr('plan_gate')}`,
     { label: 'plan_gate', phase: 'Plan gate', schema: STEP_SCHEMA }),
 
   write_failing_tests: (role = 'qa') => agent(
@@ -289,7 +302,7 @@ const HANDLERS = {
     { label: 'write_failing_tests', phase: 'Red tests', schema: STEP_SCHEMA }),
 
   red_gate: (role = 'qa') => agent(
-    `${preamble(role)}\n\nSTEP red_gate (BLOCKING gate). The verifier expects the suite to be RED (status=fail, tier0=fail) — that proves the tests bite before any implementation. On approve+pass the conductor auto-advances to implement_tasks.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would run the test command (expecting RED), then call conductor_gate(approve) with the red trace, and the expected to_step (implement_tasks). Do not call anything.' : gateDoctrine('RED (failing for the right reason)', 'red')}`,
+    `${preamble(role)}\n\nSTEP red_gate (BLOCKING gate). The verifier expects the suite to be RED (status=fail, tier0=fail) — that proves the tests bite before any implementation. On approve+pass the conductor auto-advances to implement_tasks.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would run the test command (expecting RED), then call conductor_gate(approve) with the red trace, and the expected to_step (implement_tasks). Do not call anything.' : gateDoctrine('RED (failing for the right reason)', 'red')}${telemetryInstr('red_gate')}`,
     { label: 'red_gate', phase: 'Red gate', schema: STEP_SCHEMA }),
 
   implement_tasks: (role = 'dev') => agent(
@@ -301,7 +314,7 @@ const HANDLERS = {
     { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA }),
 
   green_gate: (role = 'lead') => agent(
-    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then RECORD THE COMPLETION PROOF (oracle contract): task_update(id="' + locate.task_id + '", status="done", proof_type="test", completion_proof="<the exact full-suite command + its green result + a one-line acceptance summary; receipt-backed evidence, NOT a placeholder>"). A real completion_proof clears the green_gate oracle / anti-busywork check (effort is not outcome).'}${DRY ? '' : ` Then — MANDATORY WHY-CAPTURE ON SUCCESS (AC5): a clean terminal pass is a DECISION, and the WHY must be written back to the source of truth, not just on failure (SELF_HEAL rung 4 covers only failures). Call memory_store(type="decision", ...) carrying the full WHY contract: the DECISION made, its RATIONALE, the REJECTED ALTERNATIVES (what you did NOT do and why), and concrete file:line refs to the change. memory_recall must surface this decision memory after a clean drive — a terminal success that records completion_proof but no decision memory has NOT written the WHY back.`} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.`,
+    `${preamble(role)}\n\nSTEP green_gate (BLOCKING terminal gate).\n\n${ctx}\n\nWORK: this is the terminal sign-off. ${DRY ? 'Report that you would re-run the full suite (expecting GREEN), then conductor_gate(approve, override=true) with the full-green evidence, then mark the task done. Do not call anything.' : 'First RUN THE FULL SUITE yourself and confirm GREEN (capture the exact command + result). green_gate is terminal with no machine-sensible test, so call conductor_gate(id="' + locate.task_id + '", action="approve", override=true, reason="<full-green evidence: command + result + acceptance summary>"). Then RECORD THE COMPLETION PROOF (oracle contract): task_update(id="' + locate.task_id + '", status="done", proof_type="test", completion_proof="<the exact full-suite command + its green result + a one-line acceptance summary; receipt-backed evidence, NOT a placeholder>"). A real completion_proof clears the green_gate oracle / anti-busywork check (effort is not outcome).'}${DRY ? '' : ` Then — MANDATORY WHY-CAPTURE ON SUCCESS (AC5): a clean terminal pass is a DECISION, and the WHY must be written back to the source of truth, not just on failure (SELF_HEAL rung 4 covers only failures). Call memory_store(type="decision", ...) carrying the full WHY contract: the DECISION made, its RATIONALE, the REJECTED ALTERNATIVES (what you did NOT do and why), and concrete file:line refs to the change. memory_recall must surface this decision memory after a clean drive — a terminal success that records completion_proof but no decision memory has NOT written the WHY back.`} If the gate returns ok:false, set ok:false with the reason in halt_reason. Report to_step and gate_state.${telemetryInstr('green_gate')}`,
     { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
 }
 
