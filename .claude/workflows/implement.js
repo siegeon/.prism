@@ -1,6 +1,6 @@
 export const meta = {
   name: 'implement',
-  description: 'Drive one PRISM task through the conductor-gated SDLC (review → story → verify_plan → red tests → red_gate → implement → verify_green → green_gate). Brain is the primary knowledge source; grepping source on disk is the fallback. The build-half companion to the `prototype` planning workflow.',
+  description: 'Drive one PRISM task through the conductor-gated SDLC (review → story → story_gate → verify_plan → plan_gate → red tests → red_gate → implement → verify_green → green_gate). story_gate/plan_gate are rubric-verified (no override on a compliant drive). Brain is the primary knowledge source; grepping source on disk is the fallback. The build-half companion to the `prototype` planning workflow.',
   whenToUse: 'Run to actually WORK a task through PRISM\'s conductor. Invoke as Workflow({name:"implement", args:{task_id:"<uuid>"}}). Omit task_id to let it pull task_next. Pass {dry_run:true} to trace the whole SDLC read-only (no conductor mutations, no file writes), or {stop_after:"red_gate"} to halt the drive at a named step.',
   phases: [
     { title: 'Locate', detail: 'Read task + conductor state; brain-first context; ensure a feature branch' },
@@ -40,8 +40,12 @@ const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || 'run-adhoc').trim()
 const API_BASE = (_in.api_base || 'http://127.0.0.1:8888').replace(/\/$/, '')
 
 // ── Conductor state machine (mirror of models/workflow.py:WORKFLOW_STEPS) ─
-// Only red_gate and green_gate are blocking gates. The *_complete/_coverage
-// validations on agent steps are advisory notes recorded on conductor_advance.
+// Four blocking gates. story_gate/plan_gate are RUBRIC-VERIFIED (task
+// 8579d49e): pure YAML-rubric functions score the task's plan_doc/
+// plan_diagram server-side (services/arc_governance.py) — a compliant
+// story/plan clears them WITHOUT override; a rubric rejection names the
+// missing section/AC/oracle/principle to fix. red_gate/green_gate stay
+// shell-verifier gates.
 //
 // VERIFIER-BLINDNESS NOTE: the conductor's gate verifier (VerifierService)
 // scopes Tier-0 git to the MCP daemon's cwd, NOT this working checkout
@@ -53,7 +57,8 @@ const API_BASE = (_in.api_base || 'http://127.0.0.1:8888').replace(/\/$/, '')
 // agent's OWN executed test trace as evidence — but never override a gate
 // whose verifier actually saw the diff and reported a genuine failure.
 const ORDER = [
-  'review_previous_notes', 'draft_story', 'verify_plan',
+  'review_previous_notes', 'draft_story', 'story_gate',
+  'verify_plan', 'plan_gate',
   'write_failing_tests', 'red_gate',
   'implement_tasks', 'verify_green_state', 'green_gate',
 ]
@@ -267,9 +272,17 @@ const HANDLERS = {
     `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) — the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). If the task has none, record it: task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="test").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
+  story_gate: (role = 'sm') => agent(
+    `${preamble(role)}\n\nSTEP story_gate (BLOCKING gate, RUBRIC-VERIFIED — validation story_complete). The server scores the task's plan_doc against the YAML rubric (required sections + every AC carries an id and an oracle). NO override on a compliant drive.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would ensure plan_doc carries ## Summary / ## Requirements / ## Acceptance Criteria with AC-<n> ids + "— oracle:" markers, then conductor_gate(approve) WITHOUT override.' : `re-read the task via task_list and check its plan_doc is a rubric-compliant story: ## Summary, ## Requirements (FR-<n>/NFR-<n> ids), ## Acceptance Criteria (AC-<n> ids, each ending "— oracle: <observable check>"). If plan_doc is missing/non-compliant, WRITE the compliant story from the requirements above and persist it: task_update(id="${locate.task_id}", plan_doc=<story markdown>). Then call conductor_gate(id="${locate.task_id}", action="approve", reason="story rubric evidence: sections + AC ids + oracles present") WITHOUT override. If ok:false, the rubric reason names the exact gap — fix plan_doc and re-approve; NEVER override this gate.`} Report final to_step + gate_state.`,
+    { label: 'story_gate', phase: 'Story gate', schema: STEP_SCHEMA }),
+
   verify_plan: (role = 'sm') => agent(
     `${preamble(role)}\n\nSTEP verify_plan (validation kind: plan_coverage — advisory).\n\n${ctx}\n\nWORK: verify the plan covers EVERY requirement and names the concrete files/functions each will touch (brain_call_chain for blast radius first, disk only for gaps). If a requirement has no plan, that is a coverage gap — state it.\n\nPROACTIVE RESEARCH RUNG (size-gated, grounding-gated — AC6): for each non-trivial approach in the plan, classify its grounding. If the approach is UNGROUNDED in Brain AND grep — neither brain_search/memory_recall (the WHY) nor disk Grep/Read of existing source (the HOW) can ground the chosen technique, i.e. it is a NEW practice not yet present in this codebase — then this step BLOCKS: do NOT pass verify_plan until a cited WebSearch / best-practice pass exists for that approach. Set ok:false with the ungrounded approach named in halt_reason UNLESS you have run a WebSearch and can cite the source (url/title) that validates the best-practice. SIZE GATE: a trivial / one-line / pattern-already-in-repo approach is grounded by grep and needs NO web rung — only an ungrounded, non-trivial NEW practice triggers the blocking research requirement. Set source_tier="web" only when this rung actually fired; otherwise brain (why) or grep (how). ${advanceInstr('verify_plan', 'plan covers all requirements; files identified; ungrounded approaches research-cited')}`,
     { label: 'verify_plan', phase: 'Verify plan', schema: STEP_SCHEMA }),
+
+  plan_gate: (role = 'sm') => agent(
+    `${preamble(role)}\n\nSTEP plan_gate (BLOCKING gate, RUBRIC-VERIFIED — validation plan_coverage). The server scores: (i) every story AC id is covered by the plan_doc, (ii) plan_diagram is present and parses as mermaid (consult the mermaid-syntax skill), (iii) the plan_diagram's layer edges violate NO Brain-stored architecture principle — and an EMPTY principle store never passes (misfire guard). NO override on a compliant drive.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would ensure plan_diagram exists/parses and principles are seeded, then conductor_gate(approve) WITHOUT override.' : `re-read the task via task_list. Ensure plan_diagram is valid mermaid (mermaid-syntax skill; first line a bare diagram keyword) whose layer edges reflect the INTENDED architecture; persist via task_update(id="${locate.task_id}", plan_diagram=...) if missing. If the rubric reports no seeded principles, seed them ONCE via the MCP memory tools per services/arc_governance.py (seed_prism_principles writes them as memory data in domain "architecture-principles"). Then conductor_gate(id="${locate.task_id}", action="approve", reason="plan rubric evidence: AC coverage + parsing diagram + principle conformance") WITHOUT override. If ok:false, the rubric names the missing AC id / parse failure / violated principle — FIX the plan (never the rubric) and re-approve; a principle violation flagged HERE is the point: fix the plan BEFORE code.`} Report final to_step + gate_state.`,
+    { label: 'plan_gate', phase: 'Plan gate', schema: STEP_SCHEMA }),
 
   write_failing_tests: (role = 'qa') => agent(
     `${preamble(role)}\n\nSTEP write_failing_tests (validation kind: red_with_trace).\n\n${ctx}\n\nWORK: write the SMALLEST set of tests that pin the acceptance criteria and FAIL today (red). Put them where the suite lives (find it brain-first, then on disk). CRITICAL — pin the USER-FACING INTEGRATION, not just unit contracts: a test that merely imports a service class or calls a method will pass even if that code is DEAD (no MCP verb, no API field, no hook, no UI). That exact gap has shipped false-greens. For any wiring/feature task, assert the real seam end-to-end — the MCP verb is reachable through the tool DISPATCHER (not just defined), the API route returns the new field, a queue/store survives across SEPARATE calls (not one in-memory instance), the hook actually dispenses, the UI actually renders. If your only red tests are unit-level, you have NOT pinned the feature. ${DRY ? 'Report the test files and assertions you would add and the command that would prove red.' : 'Run the exact test command, confirm it FAILS for the right reason, and capture the failing trace.'}${commitInstr('test', 'red scaffold')} Record the command + result in evidence. ${advanceInstr('write_failing_tests', 'failing tests landed + committed; red trace captured')}`,
@@ -280,7 +293,7 @@ const HANDLERS = {
     { label: 'red_gate', phase: 'Red gate', schema: STEP_SCHEMA }),
 
   implement_tasks: (role = 'dev') => agent(
-    `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. WORKER CONTRACT (goalbuddy-ported): re-read this task via task_list — if it defines allowed_files, treat that allowlist as a HARD scope boundary: do NOT edit any file outside it. Honor stop_if — if you need a file outside allowed_files, the behavior is ambiguous, or verification fails twice, STOP: set ok:false and put the triggered stop_if condition in halt_reason rather than pushing through. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
+    `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nARCHITECTURE PRINCIPLES (governance, task 8579d49e): before editing, load the Brain-stored principles into your working context — memory_recall("architecture principles layer rules") (they live as memory data in domain "architecture-principles", seeded by services/arc_governance.py, e.g. domain must-not-depend-on infrastructure, models must-not-import services). Every edit must respect these machine-checkable layer rules; green_gate diffs the observed layer edges against them and annotates violations.\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. WORKER CONTRACT (goalbuddy-ported): re-read this task via task_list — if it defines allowed_files, treat that allowlist as a HARD scope boundary: do NOT edit any file outside it. Honor stop_if — if you need a file outside allowed_files, the behavior is ambiguous, or verification fails twice, STOP: set ok:false and put the triggered stop_if condition in halt_reason rather than pushing through. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
     { label: 'implement_tasks', phase: 'Implement', schema: STEP_SCHEMA }),
 
   verify_green_state: (role = 'qa') => agent(
@@ -295,7 +308,8 @@ const HANDLERS = {
 // Role each step's agent persona carries — mirrors the HANDLERS defaults so
 // the telemetry row's `role` matches the persona that actually ran the step.
 const ROLE_BY_STEP = {
-  review_previous_notes: 'sm', draft_story: 'sm', verify_plan: 'sm',
+  review_previous_notes: 'sm', draft_story: 'sm', story_gate: 'sm',
+  verify_plan: 'sm', plan_gate: 'sm',
   write_failing_tests: 'qa', red_gate: 'qa',
   implement_tasks: 'dev', verify_green_state: 'qa', green_gate: 'lead',
 }

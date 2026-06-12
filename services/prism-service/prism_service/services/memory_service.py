@@ -100,6 +100,8 @@ class MemoryService:
             memory_type=data.get("memory_type", "semantic"),
             generation=data.get("generation", 1),
             effectiveness=data.get("effectiveness", 0.0),
+            adr_status=data.get("adr_status", ""),
+            supersedes=data.get("supersedes", ""),
         )
 
     @staticmethod
@@ -125,6 +127,8 @@ class MemoryService:
             "memory_type": entry.memory_type,
             "generation": entry.generation,
             "effectiveness": entry.effectiveness,
+            "adr_status": entry.adr_status,
+            "supersedes": entry.supersedes,
         }
 
     def _read_entries(self, domain: str) -> list[ExpertiseEntry]:
@@ -171,6 +175,8 @@ class MemoryService:
         evidence: Optional[dict] = None,
         importance: int = 5,
         memory_type: str = "semantic",
+        adr_status: str = "",
+        supersedes: str = "",
     ) -> ExpertiseEntry:
         """Create and persist a new expertise entry.
 
@@ -226,6 +232,8 @@ class MemoryService:
             importance=importance,
             memory_type=memory_type,
             generation=next_generation,
+            adr_status=adr_status,
+            supersedes=supersedes,
         )
         entries.append(entry)
         self._write_entries(domain, entries)

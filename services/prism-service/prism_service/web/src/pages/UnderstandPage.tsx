@@ -8,6 +8,7 @@ import TourView from "@/components/understand/TourView";
 import LayersView from "@/components/understand/LayersView";
 import DomainsView from "@/components/understand/DomainsView";
 import OnboardingView from "@/components/understand/OnboardingView";
+import ViolationsView from "@/components/understand/ViolationsView";
 
 type Status = {
   project: string;
@@ -28,7 +29,7 @@ type Status = {
   };
 };
 
-type ArtifactKind = "tour" | "layers" | "domains" | "onboarding";
+type ArtifactKind = "tour" | "layers" | "domains" | "onboarding" | "violations";
 
 // Each artifact tab gets a distinct accent so the strip reads as a
 // legend at-a-glance, matching the /memory chip pattern. Mapping is
@@ -40,6 +41,8 @@ const ARTIFACT_TONE: Record<ArtifactKind, PillTone> = {
   layers: "amber",
   domains: "violet",
   onboarding: "sage",
+  // governance conformance (intended principles vs observed edges)
+  violations: "rose",
 };
 
 type ArtifactResponse = {
@@ -225,7 +228,7 @@ export default function UnderstandPage() {
         <div className="flex items-center gap-2 mb-4">
           <SectionLabel>Artifact</SectionLabel>
           <div className="flex gap-2 ml-2">
-            {(["tour", "layers", "domains", "onboarding"] as ArtifactKind[]).map((k) => (
+            {(["tour", "layers", "domains", "onboarding", "violations"] as ArtifactKind[]).map((k) => (
               <Pill key={k} active={tab === k} onClick={() => setTab(k)} tone={ARTIFACT_TONE[k]}>
                 {k}
               </Pill>
@@ -280,6 +283,9 @@ function ArtifactView({
   }
   if (tab === "domains") {
     return <DomainsView data={artifact.data as Parameters<typeof DomainsView>[0]["data"]} />;
+  }
+  if (tab === "violations") {
+    return <ViolationsView data={artifact.data as Parameters<typeof ViolationsView>[0]["data"]} />;
   }
   return null;
 }

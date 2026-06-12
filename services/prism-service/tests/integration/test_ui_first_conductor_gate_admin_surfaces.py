@@ -89,11 +89,17 @@ def _client(tmp_path, monkeypatch):
 
 
 def _drive_to_red_gate(task_svc, cond, task_id):
-    """Walk a fresh task up to the red_gate step (gate_state='pending')."""
+    """Walk a fresh task up to the red_gate step (gate_state='pending'),
+    clearing the earlier story/plan gates (task 8579d49e) with a plain
+    approve (no verifier attached -> trust-caller)."""
     for _ in range(20):
         t = task_svc.get(task_id)
         if t.workflow_step == "red_gate":
             return
+        if t.gate_state == "pending":
+            cond.gate_decide(task_id, action="approve",
+                             reason="walk intermediate")
+            continue
         out = cond.advance_task(task_id)
         if not out.get("ok"):
             break

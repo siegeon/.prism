@@ -117,6 +117,9 @@ _ARTIFACT_MAP = {
     "layers": "architecture_analyzer",
     "domains": "domain_analyzer",
     "onboarding": "onboarding_writer",
+    # Architecture governance (task 8579d49e, d1/d2): intended-vs-
+    # observed principle violations, stored beside layers.json per SHA.
+    "violations": "violations_analyzer",
 }
 
 
@@ -157,3 +160,8 @@ def get_domains(project: str = Query("default"), sha: Optional[str] = None) -> d
 @router.get("/onboarding")
 def get_onboarding(project: str = Query("default"), sha: Optional[str] = None) -> dict:
     return _get_artifact("onboarding", project, sha)
+
+
+@router.get("/violations")
+def get_violations(project: str = Query("default"), sha: Optional[str] = None) -> dict:
+    return _get_artifact("violations", project, sha)

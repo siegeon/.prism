@@ -1,0 +1,31 @@
+# Architecture-governance gate rubrics (task 8579d49e, piece b1).
+#
+# RUBRICS ARE DATA, NOT CODE. arc_governance.score_story_complete /
+# score_plan_coverage are pure functions of (evidence, rubric[,
+# principles]); the conductor's story/plan gates consult them via
+# _VERIFIER_RULES — no override=True required on a compliant drive.
+# Ported from arc-kit (MIT) governance rubrics, reshaped for PRISM.
+
+story_complete:
+  # Every required section must appear as a markdown heading (substring
+  # match, case-insensitive) in the story document (task.plan_doc).
+  required_sections:
+    - Summary
+    - Requirements
+    - Acceptance Criteria
+  # The heading whose bullets carry the acceptance criteria.
+  ac_section: Acceptance Criteria
+  # Every AC bullet must carry an AC-<n> id...
+  ac_id_pattern: 'AC-\d+'
+  # ...and an observable oracle ("— oracle: <check>") on the same bullet.
+  require_oracle: true
+  oracle_marker: 'oracle:'
+
+plan_coverage:
+  # (e2) the plan must ship a parsing mermaid plan_diagram.
+  require_plan_diagram: true
+  # (b3-i) every story AC id must be referenced by the plan_doc.
+  ac_id_pattern: 'AC-\d+'
+  # (b3-ii / c1) plan_diagram edges are diffed against Brain-stored
+  # principles BEFORE code; zero seeded principles never pass.
+  require_principles: true

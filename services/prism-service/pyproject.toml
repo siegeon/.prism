@@ -36,6 +36,7 @@ dependencies = [
   "graphifyy>=0.4.29,<0.5",
   "tree-sitter>=0.21,<1",
   "tree-sitter-languages>=1.10",
+  "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,7 @@ version = { attr = "prism_service.__version__.PRISM_VERSION" }
 "prism_service" = [
   "web_dist/**/*",
   "inference/prompts/*.md",
+  "services/*.yaml",
   "py.typed",
 ]
 

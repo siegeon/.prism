@@ -127,6 +127,11 @@ class ProjectContext:
                 verifier_svc=self.verifier_svc,
                 project_root=project_root,
             )
+            # Architecture governance (task 8579d49e): the rubric
+            # plan_coverage gate + green_gate conformance note read
+            # Brain-stored principles via MemoryService.
+            self._conductor_svc.attach_memory_service(
+                self.memory_svc, project_name=self.project_id)
         return self._conductor_svc
 
     @property

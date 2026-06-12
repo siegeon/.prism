@@ -8,7 +8,9 @@ export type WorkflowStep =
   | "intake"
   | "review_previous_notes"
   | "draft_story"
+  | "story_gate"
   | "verify_plan"
+  | "plan_gate"
   | "write_failing_tests"
   | "red_gate"
   | "implement_tasks"
@@ -21,7 +23,9 @@ const STEP_TONE: Record<string, string> = {
   intake: "violet",
   review_previous_notes: "teal",
   draft_story: "teal",
+  story_gate: "slate",
   verify_plan: "teal",
+  plan_gate: "slate",
   write_failing_tests: "violet",
   red_gate: "slate",
   implement_tasks: "amber",
@@ -76,7 +80,9 @@ export const WORKFLOW_STEPS_ORDERED: { id: string; persona: string; type: "agent
   { id: "intake", persona: "", type: "intake" },
   { id: "review_previous_notes", persona: "sm", type: "agent" },
   { id: "draft_story", persona: "sm", type: "agent" },
+  { id: "story_gate", persona: "", type: "gate" },
   { id: "verify_plan", persona: "sm", type: "agent" },
+  { id: "plan_gate", persona: "", type: "gate" },
   { id: "write_failing_tests", persona: "qa", type: "agent" },
   { id: "red_gate", persona: "", type: "gate" },
   { id: "implement_tasks", persona: "dev", type: "agent" },
