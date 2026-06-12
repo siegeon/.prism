@@ -38,6 +38,11 @@ class ExpertiseEntry:
     generation: int = 1  # increments when entry supersedes another
     effectiveness: float = 0.0  # -1.0 (hurts) to +1.0 (helps), from task outcome correlation
 
+    # ADR structure on decision memories (task 8579d49e, a2). Queryable
+    # via the memory tools; both default empty for non-ADR entries.
+    adr_status: str = ""  # proposed | accepted | superseded | "" (non-ADR)
+    supersedes: str = ""  # mx-XXXXXX id of the ADR this one supersedes
+
 
 @dataclass
 class RecallLogEntry:

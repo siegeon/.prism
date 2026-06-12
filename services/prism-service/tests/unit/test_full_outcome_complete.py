@@ -236,12 +236,17 @@ def test_green_gate_outcome_note_fires_on_incomplete_children():
 
 def _drive_to_green_gate(task_svc, cond, t):
     guard = 0
-    while task_svc.get(t.id).workflow_step != "green_gate" and guard < 20:
+    cleared = 0
+    while task_svc.get(t.id).workflow_step != "green_gate" and guard < 30:
         if task_svc.get(t.id).gate_state == "pending":
+            # DISTINCT actor per clear (task 8579d49e): story_gate/plan_gate
+            # precede green_gate; a reused actor self-overrides -> refused.
+            cleared += 1
             cond.gate_decide(
                 t.id, "approve",
                 reason="walk; independent re-run: pytest -> 1 failed",
-                override=True, actor="walk-bot", session_id="walk-bot")
+                override=True, actor=f"walk-bot-{cleared}",
+                session_id=f"walk-bot-{cleared}")
         else:
             cond.advance_task(t.id, validation="step")
         guard += 1

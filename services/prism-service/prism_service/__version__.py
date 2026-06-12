@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.43"
+PRISM_VERSION = "6.4.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.4.0: Architecture governance enforced through conductor gates "
+    "(task 8579d49e; arc-kit MIT port). Principles (machine-checkable "
+    "layer rules) live as MEMORY DATA (arc_governance.seed_prism_"
+    "principles/load_principles); decision memories carry ADR structure "
+    "(adr_status + supersedes). New story_gate/plan_gate in WORKFLOW_STEPS "
+    "are RUBRIC-VERIFIED by pure functions of (evidence, YAML rubric"
+    "[, principles]) — the forced-override path for story_complete/"
+    "plan_coverage is retired; empty principles never score green "
+    "(misfire guard). green_gate emits an advisory conformance note "
+    "(annotate, never block) and persists violations.json (intended-vs-"
+    "observed edge diff) beside the per-SHA understand artifacts; the "
+    "/understand page gains a violations card (count + click-to-expand). "
+    "Trimmed mermaid-syntax skill (MIT) ships at .claude/skills for BYOS "
+    "injection; prototype.js consults it for plan_diagram. "
     "v6.3.43: FIX `prism start --daemon` dying silently when the launching "
     "shell exits. DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP does not escape a "
     "Windows job object with kill-on-close (agent harnesses, CI runners): the "

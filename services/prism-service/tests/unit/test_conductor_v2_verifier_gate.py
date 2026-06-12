@@ -76,6 +76,7 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
     # pending gate along the way with a manual override.
     from prism_service.services.task_service import TaskService  # noqa: F401
     guard = (target_idx + 1) * 3
+    cleared = 0
     while guard > 0:
         guard -= 1
         snap = cond._task_svc.get(task_id)
@@ -85,11 +86,16 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
             # Proof-carrying contract (task 3826dac3): an override clearing
             # the red_gate intermediate must carry a real failing-test trace
             # + a distinct actor, else the artifact tooth rejects it.
+            # DISTINCT actor per clear (task 8579d49e): with story_gate +
+            # plan_gate ahead of red_gate, a reused walk actor would be a
+            # same-actor self-override on the second gate and be rejected.
+            cleared += 1
             cond.gate_decide(
                 task_id, action="approve",
                 reason=("walk_to_gate intermediate; independent re-run: "
                         "pytest -q -> 1 failed"),
-                override=True, actor="walk-bot", session_id="walk-bot")
+                override=True, actor=f"walk-bot-{cleared}",
+                session_id=f"walk-bot-{cleared}")
             continue
         cond.advance_task(task_id)
 

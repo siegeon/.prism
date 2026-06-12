@@ -130,6 +130,27 @@ def green_gate_outcome_note(slice_green: bool, completion_proof: object,
     return (f"  ⚠ slice-complete, not owner-outcome-complete: {reason}")
 
 
+def green_gate_conformance_note(violations: object) -> str:
+    """Advisory note (annotate, never block) — architecture conformance
+    at the terminal green_gate (task 8579d49e, piece c3).
+
+    Takes the intended-vs-observed verdict shaped like violations.json
+    ({"count": N, "violations": [{"from","to","principle"}...]}, see
+    arc_governance.compute_violations). Mirrors green_gate_proof_note /
+    misfire_note / outcome_note: SILENT ('') when conformance is clean,
+    a "⚠ conformance" sibling note when principle violations exist.
+    """
+    v = violations if isinstance(violations, dict) else {}
+    count = int(v.get("count") or 0)
+    if count <= 0:
+        return ""
+    cited = "; ".join(
+        f"{i.get('from')}->{i.get('to')} ({i.get('principle')})"
+        for i in (v.get("violations") or [])[:3])
+    return (f"  ⚠ conformance: {count} architecture principle "
+            f"violation(s) observed vs intended layer rules — {cited}")
+
+
 def _task_attr(task: object, name: str, default: str = "") -> object:
     """Read a field off a task whether it's a dict or an object/Namespace."""
     if isinstance(task, dict):
@@ -373,6 +394,12 @@ class ConductorService:
         # gate_decide to convert a caller's 'approve' into a real
         # pass/fail decision. None = legacy behavior (trust the caller).
         self._verifier_svc = verifier_svc
+        # Architecture governance (task 8579d49e): optional MemoryService
+        # + project name, wired by ProjectContext. Used by the rubric
+        # plan_coverage gate (Brain-stored principles) and the green_gate
+        # conformance note (intended-vs-observed layer-edge diff).
+        self._memory_svc: Optional[Any] = None
+        self._project_name: str = ""
         self._ensure_meta_schema()
         if not enable_engine:
             return
@@ -405,6 +432,16 @@ class ConductorService:
         override is verified against the prior step's validation kind.
         """
         self._verifier_svc = verifier_svc
+
+    def attach_memory_service(self, memory_svc: Any,
+                              project_name: str = "") -> None:
+        """Attach the MemoryService (+ owning project name) consumed by
+        the governance rubric gates and the green_gate conformance note
+        (task 8579d49e). None reverts to principle-less scoring (which
+        the plan gate treats as a failure — misfire guard)."""
+        self._memory_svc = memory_svc
+        if project_name:
+            self._project_name = project_name
 
     def attach_project_root(self, project_root: Optional[str]) -> None:
         """Attach (or replace) the host project root = the agent checkout.
@@ -1257,9 +1294,12 @@ class ConductorService:
         return None
 
     # Mapping: validation kind -> (allowed verifier statuses,
-    # allowed tier0 statuses, human-readable expectation). Manual
-    # kinds (story_complete, plan_coverage) have value None — we can't
-    # verify them mechanically and a human must use override.
+    # allowed tier0 statuses, human-readable expectation). Rubric kinds
+    # (story_complete, plan_coverage) carry a `rubric` key: they are
+    # scored by the PURE YAML-rubric functions in services/arc_governance
+    # against the task's own evidence (plan_doc/plan_diagram) — the old
+    # forced-override path (value None -> "requires manual review") is
+    # RETIRED (task 8579d49e).
     _VERIFIER_RULES: dict[str, Optional[dict]] = {
         "red_with_trace": {
             "expect_status": ("fail",),
@@ -1279,8 +1319,21 @@ class ConductorService:
             "expect_tier0": ("pass", "not-run"),
             "expectation": "green_full expects verifier.status=pass with tier0=pass",
         },
-        "story_complete": None,
-        "plan_coverage": None,
+        "story_complete": {
+            "rubric": "story_complete",
+            "expectation": (
+                "story_complete is rubric-verified: required sections "
+                "present and every AC carries an id + oracle"
+            ),
+        },
+        "plan_coverage": {
+            "rubric": "plan_coverage",
+            "expectation": (
+                "plan_coverage is rubric-verified: every story AC id is "
+                "covered, plan_diagram parses, and no Brain-stored "
+                "principle is violated"
+            ),
+        },
     }
 
     @staticmethod
@@ -1299,6 +1352,68 @@ class ConductorService:
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 continue
         return None
+
+    def _conformance_payload(self) -> dict:
+        """Best-effort intended-vs-observed verdict for the green_gate
+        conformance note: Brain-stored principles diffed against the
+        latest cached architecture_analyzer layers.json. Also persists
+        the verdict beside it as violations.json (d1). NEVER raises —
+        the note is advisory and a missing artifact means silence."""
+        empty = {"count": 0, "violations": []}
+        try:
+            from prism_service.services import arc_governance as gov
+            from prism_service.services import (
+                understand_artifact_store as artifact_store)
+            if self._memory_svc is None or not self._project_name:
+                return empty
+            principles = gov.load_principles(self._memory_svc)
+            if not principles:
+                return empty
+            for sha in reversed(
+                    artifact_store.list_cached_shas(self._project_name)):
+                layers = artifact_store.get(
+                    self._project_name, sha, "architecture_analyzer")
+                if not isinstance(layers, dict):
+                    continue
+                verdict = gov.compute_violations(principles, layers)
+                try:
+                    artifact_store.put(self._project_name, sha,
+                                       "violations_analyzer", verdict)
+                except Exception:
+                    pass
+                return verdict
+            return empty
+        except Exception:
+            return empty
+
+    def _verify_rubric_gate(self, task, validation: str) -> dict:
+        """Score a rubric validation kind (story_complete/plan_coverage)
+        as a PURE function of the task's own evidence + the YAML rubric
+        (services/arc_governance). Principles come from memory data via
+        the attached MemoryService; an empty/unseeded principle store
+        never passes plan conformance (misfire guard)."""
+        from prism_service.services import arc_governance as gov
+        try:
+            rubric = gov.load_rubrics().get(validation) or {}
+            evidence = {
+                "story_md": getattr(task, "plan_doc", "") or "",
+                "plan_doc": getattr(task, "plan_doc", "") or "",
+                "plan_diagram": getattr(task, "plan_diagram", "") or "",
+            }
+            if validation == "story_complete":
+                res = gov.score_story_complete(evidence, rubric)
+            else:
+                principles = (gov.load_principles(self._memory_svc)
+                              if self._memory_svc is not None else [])
+                res = gov.score_plan_coverage(evidence, rubric, principles)
+        except Exception as exc:
+            return {"verified": False,
+                    "reason": (f"rubric scoring raised "
+                               f"{type(exc).__name__}: {exc}"),
+                    "verifier": None, "validation": validation}
+        return {"verified": bool(res.get("ok")),
+                "reason": str(res.get("reason", "")),
+                "verifier": res, "validation": validation}
 
     def _verify_gate(self, task, gate_step_id: str) -> dict:
         """Consult the attached VerifierService for the gate's expected
@@ -1323,6 +1438,10 @@ class ConductorService:
                 "verifier": None,
                 "validation": validation,
             }
+        # Rubric kinds (task 8579d49e): scored as a PURE function of the
+        # task's own evidence + the YAML rubric — never the shell verifier.
+        if rule.get("rubric"):
+            return self._verify_rubric_gate(task, validation)
         # gate_decide short-circuits when self._verifier_svc is None
         # (legacy trust-caller path). _verify_gate is only called when
         # a verifier is attached, so we don't need a None-check here.
@@ -1710,6 +1829,11 @@ class ConductorService:
                 _incomplete = 0
             passed_gate_reason += green_gate_outcome_note(
                 True, _proof, _incomplete)
+            # Architecture governance (task 8579d49e, piece c3): diff the
+            # observed layer edges against the Brain-stored principles and
+            # ANNOTATE (never block) beside the proof/misfire/outcome notes.
+            passed_gate_reason += green_gate_conformance_note(
+                self._conformance_payload())
             _complete, _ = full_outcome_verdict(True, _proof, _incomplete)
             _outcome_complete = _complete
         self._task_svc.update(

@@ -65,10 +65,15 @@ def test_gate_decide_links_session(tmp_path):
     task_svc, cond, scores = _services(tmp_path)
     t = task_svc.create(title="link on gate")
 
-    # Drive to the first blocking gate (red_gate).
+    # Drive to red_gate, clearing the earlier story/plan gates (task
+    # 8579d49e) with a plain approve (bare conductor = trust-caller).
     guard = 0
-    while task_svc.get(t.id).workflow_step != "red_gate" and guard < 10:
-        cond.advance_task(t.id, validation="step", session_id="sess-advance")
+    while task_svc.get(t.id).workflow_step != "red_gate" and guard < 20:
+        if task_svc.get(t.id).gate_state == "pending":
+            cond.gate_decide(t.id, "approve", reason="walk intermediate")
+        else:
+            cond.advance_task(t.id, validation="step",
+                              session_id="sess-advance")
         guard += 1
     assert task_svc.get(t.id).workflow_step == "red_gate"
 

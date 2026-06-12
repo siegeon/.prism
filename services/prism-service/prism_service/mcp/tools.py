@@ -772,6 +772,22 @@ TOOLS: list[Tool] = [
                     "description": "semantic (fact/convention), episodic (specific incident/debug session), procedural (how-to/template). Default: semantic.",
                     "default": "semantic",
                 },
+                "adr_status": {
+                    "type": "string",
+                    "description": (
+                        "ADR lifecycle status for type=decision memories: "
+                        "proposed | accepted | superseded. Leave empty for "
+                        "non-ADR entries."
+                    ),
+                },
+                "supersedes": {
+                    "type": "string",
+                    "description": (
+                        "mx-XXXXXX id of the decision/ADR memory this entry "
+                        "supersedes (ADR structure, queryable via memory "
+                        "tools)."
+                    ),
+                },
                 "session_id": {
                     "type": "string",
                     "description": (
@@ -1208,9 +1224,11 @@ TOOLS: list[Tool] = [
                     "description": (
                         "Bypass VerifierService (force pass) and/or recover "
                         "from gate_state='failed'. Audited as actor="
-                        "'manual-override'. Required for manual-only "
-                        "validation kinds (story_complete, plan_coverage) "
-                        "and for the terminal green_gate (no machine-"
+                        "'manual-override'. story_gate/plan_gate are "
+                        "RUBRIC-VERIFIED (pure YAML-rubric functions over "
+                        "the task's plan_doc/plan_diagram) — a compliant "
+                        "drive needs NO override there; override remains "
+                        "only for the terminal green_gate (no machine-"
                         "sensible test). NO SELF-OVERRIDE: an override by "
                         "the SAME actor that produced the work is rejected "
                         "— an independent verifier (distinct actor) must "
@@ -3255,6 +3273,8 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 evidence=arguments.get("evidence"),
                 importance=arguments.get("importance", 5),
                 memory_type=arguments.get("memory_type", "semantic"),
+                adr_status=arguments.get("adr_status", ""),
+                supersedes=arguments.get("supersedes", ""),
             )
             # LL-08: when the caller provides a session_id, stamp a
             # memory_meta row so the janitor can later correlate this

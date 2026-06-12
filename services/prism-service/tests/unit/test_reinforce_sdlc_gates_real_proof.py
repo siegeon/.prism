@@ -75,6 +75,7 @@ def _gate_id(gid: str) -> str:
 def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
     target_idx = next(i for i, s in enumerate(_workflow()) if s["id"] == gate_id)
     guard = (target_idx + 1) * 3
+    cleared = 0
     while guard > 0:
         guard -= 1
         snap = cond._task_svc.get(task_id)
@@ -82,14 +83,17 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
             return
         if snap.gate_state == "pending":
             # Intermediate gates are cleared with an override that carries a
-            # real proof-trace + a distinct actor, so the walk reaches the
-            # target gate under the new proof-carrying contract. The actor
-            # guard is exercised only on the gate-under-test calls below.
+            # real proof-trace + a DISTINCT actor per clear (task 8579d49e:
+            # story_gate + plan_gate precede red_gate now, and a reused walk
+            # actor would be a same-actor self-override on the second gate).
+            # The actor guard is exercised on the gate-under-test calls below.
+            cleared += 1
             cond.gate_decide(
                 task_id, action="approve",
                 reason=("walk intermediate; independent re-run: "
                         "pytest -q -> 2 failed / 0 passed"),
-                override=True, actor="walk-bot", session_id="walk-bot",
+                override=True, actor=f"walk-bot-{cleared}",
+                session_id=f"walk-bot-{cleared}",
             )
             continue
         cond.advance_task(task_id)

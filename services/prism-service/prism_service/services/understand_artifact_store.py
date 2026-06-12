@@ -48,6 +48,10 @@ _FILENAMES = {
     "architecture_analyzer": "layers.json",
     "domain_analyzer": "domains.json",
     "onboarding_writer": "onboarding.md",
+    # Architecture governance (task 8579d49e, d1): intended principles
+    # (Brain/memory data) diffed against the architecture_analyzer's
+    # observed edges, per SHA (arc_governance.compute_violations).
+    "violations_analyzer": "violations.json",
 }
 
 _MANIFEST = "_manifest.json"
