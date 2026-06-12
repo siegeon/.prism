@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.3.42"
+PRISM_VERSION = "6.3.43"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.3.43: FIX `prism start --daemon` dying silently when the launching "
+    "shell exits. DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP does not escape a "
+    "Windows job object with kill-on-close (agent harnesses, CI runners): the "
+    "detached child is reaped the moment the job handle closes — no traceback, "
+    "just connection-refused. cli/prism_cli.py now adds CREATE_BREAKAWAY_FROM_JOB "
+    "(falls back to the old flags if the job forbids breakaway) and uses "
+    "start_new_session on POSIX. "
     "v6.3.42: FIX the upstream reason the learning loop minted ~0 memories — "
     "the reflection VERDICT PARSER. The sub-agent sometimes prefixes a "
     "sentence of reasoning or wraps its JSON in a fence; the v6.3.36 parser "
