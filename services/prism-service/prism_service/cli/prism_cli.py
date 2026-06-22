@@ -45,6 +45,13 @@ if hasattr(sys.stdout, "reconfigure"):
     except (AttributeError, OSError):
         pass
 
+# GH #155 — pin native-math thread pools to 1 at the VERY TOP of the CLI
+# boot, BEFORE any subcommand body's deferred numpy/model2vec import (the
+# BLAS backends read these vars once at load). Operator-set values are left
+# untouched. This is the PREVENT layer of the silent-all-threads-wedge fix.
+from prism_service.thread_limits import apply_thread_limits
+apply_thread_limits()
+
 
 def _data_dir() -> Path:
     # Deferred import so `prism --help` doesn't load torch et al.

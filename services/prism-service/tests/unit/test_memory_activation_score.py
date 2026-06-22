@@ -35,7 +35,12 @@ from prism_service.services import memory_service as ms
 from prism_service.services.memory_service import MemoryService
 
 
-_NOW = datetime(2026, 5, 31, 12, 0, 0, tzinfo=timezone.utc)
+# Anchor to the REAL current time. The pure compute_activation tests pass
+# now=_NOW explicitly (deterministic regardless), but recall() ranks against
+# the LIVE wall clock with no now= seam — so a frozen past _NOW made the
+# "5 minutes ago" fresh seed read as weeks-stale once real time advanced,
+# flipping the activation order. Relative offsets hold on any run date.
+_NOW = datetime.now(timezone.utc)
 
 
 def _iso(dt: datetime) -> str:

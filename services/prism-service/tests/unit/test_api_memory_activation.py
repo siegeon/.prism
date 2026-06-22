@@ -31,7 +31,13 @@ from prism_service.models.memory import ExpertiseEntry
 from prism_service.services.memory_service import MemoryService
 
 
-_NOW = datetime(2026, 5, 31, 12, 0, 0, tzinfo=timezone.utc)
+# Anchor to the REAL current time, not a frozen past date. The
+# /api/memory/* endpoints compute activation against the live wall clock
+# (datetime.now), so a hardcoded past _NOW turned this into a time bomb:
+# once real time advanced ~30d past it, the "1h ago" hot seed read as
+# weeks-stale and leaked into the fading set. Relative offsets below
+# (1h / 40d / 220d ago) now hold on any run date.
+_NOW = datetime.now(timezone.utc)
 
 
 def _iso(dt: datetime) -> str:
