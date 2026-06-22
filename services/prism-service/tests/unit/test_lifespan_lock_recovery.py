@@ -43,10 +43,10 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
             patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
-    # 9 daemon threads as of v6.3.12 (epic 4fd1e6b4: Phase 3 RETIRED the
-    # Reflection + Memory Summary timers onto the event-pool bus; Phase 4
-    # FOLDED governance + quality + adaptive-policy into ONE maintenance_clock;
-    # 13 -> 11 -> 9):
+    # 10 daemon threads as of v6.5.0 (GH #155 added the deadlock watchdog).
+    # History: epic 4fd1e6b4 Phase 3 RETIRED the Reflection + Memory Summary
+    # timers onto the event-pool bus; Phase 4 FOLDED governance + quality +
+    # adaptive-policy into ONE maintenance_clock; 13 -> 11 -> 9 -> 10:
     #   5 explicit in main.py — mcp + drift + understand_drainer +
     #     trash_sweeper + transcript_importer
     #   1 from start_auto_updater() (always starts)
@@ -56,6 +56,8 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     #   1 from the maintenance_clock (Phase 4 — single heartbeat running
     #     governance TTL/decay/dup, verify-staleness, forget, adaptive retune,
     #     quality-vs-git, each behind its own cadence gate)
+    #   1 from start_watchdog (GH #155 — deadlock watchdog; defaults ON,
+    #     PRISM_WATCHDOG=off to disable)
     # RETIRED (no longer spawned): start_reflection_worker(),
     # start_memory_summary_worker() (Phase 3); start_governance_timer,
     # start_quality_timer, start_adaptive_policy_worker (Phase 4 — folded into
@@ -64,7 +66,7 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # threading module, so threads started inside the indirectly-imported
     # services are also intercepted.
     started = [c for c in mock_t.return_value.start.mock_calls]
-    assert len(started) == 9
+    assert len(started) == 10
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -77,8 +79,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    # Same 9 threads — see test_lifespan_starts_threads_when_no_lock.
-    assert len(started) == 9  # threads started despite the stale lock
+    # Same 10 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 10  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err

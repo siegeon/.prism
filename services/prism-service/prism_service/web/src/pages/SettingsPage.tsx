@@ -221,6 +221,10 @@ export default function SettingsPage() {
       {section === "activity" && (
         <div className="space-y-6">
           <Card>
+            <SectionLabel>Health · deadlock watchdog</SectionLabel>
+            <WatchdogPanel />
+          </Card>
+          <Card>
             <SectionLabel>Workers</SectionLabel>
             <BackgroundWorkersPanel />
           </Card>
@@ -1640,6 +1644,125 @@ type Worker = {
 // timers into ONE consolidated "Memory maintenance clock" (id maintenance_clock),
 // so this panel now surfaces that single Maintenance clock row in place of the
 // old governance_timer + adaptive_policy_worker entries.
+// GH #155 — the deadlock-watchdog health card. One-line summary (armed +
+// last probe latency + consecutive failures) with click-to-expand detail
+// (last dump time, restart count, the raw status dict) — progressive
+// disclosure, Hermes primitives, never a raw stringified dump.
+type WatchdogStatus = {
+  last_probe_ok: boolean | null;
+  last_probe_latency_ms: number | null;
+  consecutive_failures: number;
+  last_dump_at: number | null;
+  dump_count: number;
+  restarts: number;
+  armed: boolean;
+  enabled: boolean;
+  interval_s: number;
+  timeout_s: number;
+  kill_enabled: boolean;
+};
+
+function fmtAgo(ts: number | null, now: number): string {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.round(now / 1000 - ts));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+}
+
+function WatchdogPanel() {
+  const [st, setSt] = useState<WatchdogStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [now, setNow] = useState<number>(Date.now());
+
+  const load = useCallback(async () => {
+    try {
+      setSt(await api.get<WatchdogStatus>("/api/watchdog"));
+      setError(null);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const poll = setInterval(load, 10000);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(poll); clearInterval(tick); };
+  }, [load]);
+
+  if (error && st === null) return <div className="text-sm text-rose-200">{error}</div>;
+  if (st === null) return <div className="text-sm opacity-60">Loading…</div>;
+
+  const probeOk = st.last_probe_ok;
+  const dotClass = !st.enabled
+    ? "bg-slate-400"
+    : probeOk === false || st.consecutive_failures > 0
+      ? "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+      : probeOk === true
+        ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+        : "bg-amber-400 shadow-[0_0_6px_2px_rgba(251,191,36,0.4)]";
+  const latency = st.last_probe_latency_ms != null
+    ? `${st.last_probe_latency_ms.toFixed(0)}ms` : "—";
+  const summary = !st.enabled
+    ? "Watchdog disabled (PRISM_WATCHDOG=off)"
+    : probeOk == null
+      ? `Armed · probing every ${st.interval_s}s (awaiting first probe)`
+      : probeOk
+        ? `Healthy · last probe ${latency} · armed=${st.armed}`
+        : `WEDGE SUSPECTED · ${st.consecutive_failures} consecutive failure(s) · ${st.dump_count} dump(s)`;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left flex items-start gap-3 hover:bg-[color:var(--midground-base)]/[0.03] rounded-md -mx-2 px-2 py-1 cursor-pointer"
+        aria-expanded={open}
+      >
+        <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${dotClass}`} aria-hidden />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">Deadlock watchdog</span>
+            <span className="text-[10px] opacity-50 font-mono">
+              probe {st.interval_s}s · timeout {st.timeout_s}s
+            </span>
+            {st.kill_enabled && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300/90">
+                self-heal armed
+              </span>
+            )}
+          </div>
+          <div className="text-[12px] opacity-70 mt-0.5">{summary}</div>
+        </div>
+        <span className="text-[10px] opacity-40 mt-1">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <dl className="mt-3 ml-5 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12px]">
+          <WdRow k="Last probe" v={probeOk == null ? "—" : probeOk ? "healthy" : "HUNG"} />
+          <WdRow k="Last latency" v={latency} />
+          <WdRow k="Consecutive failures" v={String(st.consecutive_failures)} />
+          <WdRow k="Dump count" v={String(st.dump_count)} />
+          <WdRow k="Last dump" v={fmtAgo(st.last_dump_at, now)} />
+          <WdRow k="Restarts" v={String(st.restarts)} />
+          <WdRow k="Armed" v={st.armed ? "yes" : "no"} />
+          <WdRow k="Self-heal (kill)" v={st.kill_enabled ? "on" : "off"} />
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function WdRow({ k, v }: { k: string; v: string }) {
+  return (
+    <>
+      <dt className="text-[color:var(--text-muted)]">{k}</dt>
+      <dd className="font-mono text-[color:var(--text-primary)]">{v}</dd>
+    </>
+  );
+}
+
 function BackgroundWorkersPanel() {
   const [workers, setWorkers] = useState<Worker[] | null>(null);
   const [error, setError] = useState<string | null>(null);

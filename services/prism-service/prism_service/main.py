@@ -24,6 +24,14 @@ import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# GH #155 — pin native-math thread pools to 1 BEFORE any numpy/model2vec
+# import. The config/brain import block below transitively pulls numpy in,
+# whose BLAS backends read these vars once at load — so this MUST run first
+# (operator-set values are left untouched). This is the PREVENT layer of the
+# silent-all-threads-wedge fix.
+from prism_service.thread_limits import apply_thread_limits
+apply_thread_limits()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -362,6 +370,14 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.maintenance_clock import start_maintenance_clock
         start_maintenance_clock()
 
+        # GH #155 — deadlock watchdog. Arms faulthandler.dump_traceback_later
+        # each cycle then runs a real HTTP self-probe; a wedge lets the
+        # C-level timer fire and dump all thread stacks even though every
+        # Python thread is deadlocked. Default ON (PRISM_WATCHDOG=off to
+        # disable); opt-in os._exit(1) self-heal via PRISM_WATCHDOG_KILL=1.
+        from prism_service.services.watchdog import start_watchdog
+        start_watchdog()
+
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
@@ -381,6 +397,11 @@ async def lifespan(_app: FastAPI):
         # current limp-along behavior; visibility is the fix here.
         _log.critical("lifespan startup failed", exc_info=True)
     yield
+    try:
+        from prism_service.services.watchdog import stop_watchdog
+        stop_watchdog()
+    except Exception:
+        _log.warning("watchdog stop failed", exc_info=True)
     _LOCK_FILE.unlink(missing_ok=True)
 
 
