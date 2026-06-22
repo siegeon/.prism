@@ -98,8 +98,18 @@ def _client(tmp_path, monkeypatch):
 
 
 def test_route_registered_on_api_router():
+    # Collect mounted paths via the OpenAPI schema, NOT raw api_router.routes.
+    # FastAPI >= 0.138 / Starlette >= 1.3 represent include_router() entries as
+    # internal _IncludedRouter objects that have no .path attribute, so the old
+    # `{r.path for r in api_router.routes}` AttributeErrors on newer installs
+    # (green on 0.136, red on 0.138 — the unpinned `fastapi>=0.110` floats).
+    # The OpenAPI schema is the version-agnostic contract for "which paths are
+    # actually mounted/reachable", which is exactly what this guard asserts.
+    from fastapi import FastAPI
     from prism_service.api import api_router
-    paths = {r.path for r in api_router.routes}
+    app = FastAPI()
+    app.include_router(api_router)
+    paths = set(app.openapi()["paths"].keys())
     assert "/api/agent-runs" in paths, (
         f"GET /api/agent-runs not mounted on api_router: {sorted(paths)}"
     )
