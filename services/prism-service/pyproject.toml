@@ -31,8 +31,7 @@ dependencies = [
   "sqlite-vec>=0.1",
   "numpy",
   "tokenizers",
-  "torch>=2.2,<3",
-  "sentence-transformers>=2.7",
+  "threadpoolctl>=3",
   "graphifyy>=0.4.29,<0.5",
   "tree-sitter>=0.21,<1",
   "tree-sitter-languages>=1.10",
@@ -40,6 +39,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# GH #162 — the neural embedders + CrossEncoder reranker pull torch, which
+# ships a 2nd OpenMP runtime (libgomp). Two native-math runtimes in one
+# process is threadpoolctl's documented unrecoverable deadlock case, so the
+# default model2vec/potion path (numpy-only) must NOT import torch. Install
+# this extra only to opt into sentence-transformers embedders / PRISM_RERANK.
+neural = [
+  "torch>=2.2,<3",
+  "sentence-transformers>=2.7",
+]
 dev = [
   "pytest>=7",
   "pytest-asyncio>=0.23",

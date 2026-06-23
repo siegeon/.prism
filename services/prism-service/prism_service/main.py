@@ -109,6 +109,18 @@ def _configure_logging() -> None:
             "uncaught thread exception",
             exc_info=(a.exc_type, a.exc_value, a.exc_traceback),
         )
+    # GH #162 — apply the AUTHORITATIVE runtime pin (overrides a pre-set
+    # OPENBLAS_NUM_THREADS=8) then PROVE the pools are pinned to 1 at startup
+    # (the companion post-model-load proof is logged in brain_engine on load).
+    # A pool reporting num_threads>1 here means the pin was defeated.
+    try:
+        from prism_service.engines.brain_engine import (
+            pin_native_threads_permanently, log_threadpool_info,
+        )
+        pin_native_threads_permanently()
+        log_threadpool_info("startup")
+    except Exception:
+        pass
     _logging_configured = True
 
 
