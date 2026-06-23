@@ -166,17 +166,77 @@ _SQLITE_VEC_LOADED = False
 
 
 def _threadpool_limit_1():
-    """Belt-and-suspenders single-thread native-math context, ONLY when
-    threadpoolctl is importable. Returns a context manager pinning BLAS/OMP
-    pools to 1 thread for the duration of the encode (composes with the
-    process-wide thread_limits.apply_thread_limits()); a no-op nullcontext
-    when threadpoolctl is absent. OPTIONAL import — never a hard dependency."""
+    """Authoritative single-thread native-math context (GH #162).
+
+    Returns threadpoolctl.threadpool_limits(limits=1), which pins BLAS AND
+    OpenMP pools to 1 thread for the duration of the block. UNLIKE the
+    process-wide thread_limits.apply_thread_limits() env pins (which only
+    apply "if unset" and only before BLAS loads), this runtime pin OVERRIDES
+    a pre-set OPENBLAS_NUM_THREADS=8 and is import-order-proof — it is the
+    structural prevention for the GIL<->native-futex wedge. threadpoolctl is
+    now a DECLARED runtime dependency (pyproject.toml), so the import is hard;
+    a nullcontext fallback survives only a genuinely broken install."""
     try:
-        import threadpoolctl  # type: ignore
+        import threadpoolctl  # declared runtime dep (pyproject.toml)
         return threadpoolctl.threadpool_limits(limits=1)
     except Exception:
         import contextlib
         return contextlib.nullcontext()
+
+
+# Holds the persistent (never-restored) threadpool limiter so a pre-set
+# OPENBLAS_NUM_THREADS=8 stays clamped to 1 for the WHOLE process lifetime,
+# not just inside a `with _threadpool_limit_1()` block (GH #162 FR-1c). A
+# scoped limiter restores the pool to 8 on __exit__; this one is kept alive
+# at module scope so the override is permanent.
+_PERSISTENT_PIN = None
+
+
+def pin_native_threads_permanently() -> bool:
+    """Clamp every BLAS/OpenMP pool to 1 thread for the rest of the process
+    (GH #162 FR-1c). threadpoolctl.threadpool_limits used as a LIVE object
+    (not a `with` block) applies immediately and only restores on __exit__/
+    __del__ — so we stash it in a module global so it is NEVER restored. This
+    OVERRIDES a hostile pre-set OPENBLAS_NUM_THREADS and is import-order-proof.
+    Idempotent. Returns True when a pin was applied."""
+    global _PERSISTENT_PIN
+    if _PERSISTENT_PIN is not None:
+        return True
+    try:
+        import threadpoolctl  # declared runtime dep (pyproject.toml)
+        _PERSISTENT_PIN = threadpoolctl.threadpool_limits(limits=1)
+        return True
+    except Exception:
+        return False
+
+
+def threadpool_info() -> list[dict]:
+    """Return threadpoolctl.threadpool_info() (BLAS/OpenMP pools + thread
+    counts), or [] when threadpoolctl is unavailable. Used to PROVE pools
+    are pinned to 1 in startup/post-load logs (GH #162 FR-3)."""
+    try:
+        import threadpoolctl
+        return threadpoolctl.threadpool_info()
+    except Exception:
+        return []
+
+
+def log_threadpool_info(where: str) -> None:
+    """Log threadpool_info() so the log PROVES native pools are pinned (FR-3).
+
+    Emitted at startup and after model load. Each pool's num_threads is
+    surfaced so a uncapped pool (num_threads>1) is visible in prism.log."""
+    info = threadpool_info()
+    if not info:
+        print(f"Brain: threadpool_info [{where}]: threadpoolctl unavailable",
+              file=sys.stderr)
+        return
+    pools = ", ".join(
+        f"{p.get('internal_api', p.get('user_api', '?'))}="
+        f"{p.get('num_threads', '?')}"
+        for p in info
+    )
+    print(f"Brain: threadpool_info [{where}]: {pools}", file=sys.stderr)
 
 # Cross-encoder reranker (lazy-loaded on first use when PRISM_RERANK != off).
 # Separate from the embedder so both can coexist in memory.
@@ -206,6 +266,17 @@ def _load_reranker(preset: str):
         return None
     if _RERANKER is not None and _RERANKER_KEY == preset:
         return _RERANKER
+    # GH #162 — explicit availability gate with graceful degradation. The
+    # CrossEncoder pulls torch (a 2nd OpenMP/libgomp runtime — threadpoolctl's
+    # documented unrecoverable deadlock case). torch + sentence-transformers
+    # are now an OPTIONAL extra ([neural]); when not installed we SKIP neural
+    # rerank with a clear log so default search never loads the 2nd runtime.
+    import importlib.util as _ilu
+    if _ilu.find_spec("sentence_transformers") is None:
+        print(f"Brain: PRISM_RERANK={preset} requested but sentence-transformers "
+              "not installed (pip install 'prism-service[neural]'); skipping "
+              "neural rerank", file=sys.stderr)
+        return None
     try:
         from sentence_transformers import CrossEncoder  # type: ignore
         model_id = _RERANKER_PRESETS[preset]
@@ -485,10 +556,21 @@ def _try_enable_vector(db: sqlite3.Connection) -> bool:
         if _MODEL is not None:
             return True  # already loaded (same process reuse)
         try:
-            if backend == "model2vec":
-                _MODEL = _load_model2vec(model_id)
-            elif backend == "sentence-transformers":
-                _MODEL = _load_sentence_transformer(model_id)
+            # GH #162 — pin BLAS/OpenMP to 1 thread for the LOAD too (not
+            # only the encode sites). Model init touches native math; an
+            # unpinned load under _MODEL_LOCK is the same futex-wedge risk.
+            # The PERSISTENT pin (never restored) OVERRIDES a pre-set
+            # OPENBLAS_NUM_THREADS=8 for the rest of the process, so the
+            # override survives after this block exits (FR-1c), while the
+            # scoped `with` below double-pins the load itself.
+            pin_native_threads_permanently()
+            with _threadpool_limit_1():
+                if backend == "model2vec":
+                    _MODEL = _load_model2vec(model_id)
+                elif backend == "sentence-transformers":
+                    _MODEL = _load_sentence_transformer(model_id)
+                # Log INSIDE the pin so the proof reflects the load context.
+                log_threadpool_info("after-model-load")
             print(f"Brain: embedder = {preset} ({backend}: {model_id})",
                   file=sys.stderr)
             return True
