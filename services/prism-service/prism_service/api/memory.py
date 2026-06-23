@@ -316,3 +316,34 @@ def import_claude_memories(project: str = Query("default")) -> dict:
         "imported": imported, "skipped": skipped, "failed": failed,
         "memory_dir": str(mem_dir), "details": details,
     }
+
+
+@router.post("/backfill-summaries")
+def backfill_summaries(project: str = Query("default")) -> dict:
+    """Enqueue every active, summary-less memory onto the learning
+    pipeline's memory.written bus so the budget-governed consumer pool
+    mints a one-line summary (haiku) for the backlog.
+
+    Why this exists: the standalone memory_summary_worker is retired —
+    summaries are now minted only in REACTION to a memory.written event
+    (event_handlers.handle_memory_written). Memories written before that
+    pipeline have no event to drain, so they stay summary='' forever.
+    This re-emits the event for each. Idempotent: only active +
+    summary-less entries enqueue, so once the pipeline fills a summary
+    that entry drops out; the pipeline's input-hash + near-dup gates
+    make re-running safe.
+    """
+    svc = _svc(project)
+    from prism_service.services import event_pool as ep
+    bus = ep.get_bus()
+    queued = 0
+    for d in svc.list_domains():
+        for e in svc.list_entries(domain=d, status_filter="active"):
+            if e.summary or e.invalid_at:
+                continue
+            bus.emit(ep.Event(
+                type=ep.MEMORY_WRITTEN,
+                payload={"memory_id": e.id, "project": project},
+            ))
+            queued += 1
+    return {"queued": queued, "project": project}

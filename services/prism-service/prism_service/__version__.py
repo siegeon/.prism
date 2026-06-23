@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.5.8"
+PRISM_VERSION = "6.5.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.5.9: Memory view shows real content instead of a permanent "
+    "'Summarizing…' placeholder (task 2567758d). ~100 active memories had "
+    "summary='' because the standalone memory_summary_worker is retired — "
+    "summaries are only minted in REACTION to a memory.written event, so "
+    "pre-pipeline memories sat summary-less forever while the tile face "
+    "showed fake-progress. FIX: (1) MemoryPage tile renders entry.description "
+    "as real content when summary is empty (summary is an optional upgrade, "
+    "not the required face); 'Awaiting summary' KPI reframed to a truthful "
+    "'Summaries N/M' coverage count. (2) New POST /api/memory/backfill-summaries "
+    "enqueues every active summary-less memory onto the memory.written bus so "
+    "the budget-governed consumer pool mints haiku one-liners for the backlog; "
+    "a 'Generate summaries (N)' button in the Memory header triggers it. "
+    "Idempotent (input-hash + near-dup gates; only summary-less active entries "
+    "enqueue). Tests: tests/integration/test_memory_backfill_summaries.py. "
     "v6.5.8: PREVENT the embedding-path deadlock at the SOURCE so the "
     "out-of-process supervisor (v6.5.7) is genuine last-resort (GH #162, task "
     "76cdb309). Root cause: a thread holding the GIL while blocked on a native "
