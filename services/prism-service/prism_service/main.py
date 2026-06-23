@@ -84,6 +84,21 @@ def _configure_logging() -> None:
         faulthandler.enable()  # defaults to sys.stderr -> prism.log on the daemon
     except (OSError, ValueError):
         pass
+    # GH #162 — CONTINUOUSLY-ARMED all-thread dump, independent of the
+    # GIL-bound watchdog probe loop. The watchdog re-arms with repeat=False
+    # inside its _loop (services/watchdog.py), so a fully GIL-starved server
+    # — where the loop itself can't run — has an UNARMED window and emits no
+    # traceback (why the wedge log has always gone silent). Arming once here
+    # with repeat=True makes the C-level timer FREE-RUN: it re-fires every
+    # interval on its own C thread even when every Python thread is parked on
+    # the futex, so a wedge always dumps all-thread stacks to prism.log. The
+    # watchdog's per-cycle cancel/arm on HEALTHY cycles still suppresses the
+    # dump while the server is responsive; this is the always-armed floor.
+    try:
+        _fh_repeat_s = max(5, int(os.environ.get("PRISM_FAULTHANDLER_REPEAT_S", "30")))
+        faulthandler.dump_traceback_later(_fh_repeat_s, repeat=True)
+    except (OSError, ValueError, RuntimeError):
+        pass
 
     def _log_uncaught(exc_type, exc_value, exc_tb):
         _log.critical("uncaught exception", exc_info=(exc_type, exc_value, exc_tb))

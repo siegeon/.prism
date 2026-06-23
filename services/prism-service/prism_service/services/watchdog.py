@@ -108,8 +108,11 @@ def timeout_s() -> int:
 
 
 def _kill_enabled() -> bool:
-    """Opt-in self-heal — os._exit(1) only when PRISM_WATCHDOG_KILL=1. OFF."""
-    return _env_truthy("PRISM_WATCHDOG_KILL", default=False)
+    """In-process self-heal — os._exit(1) defense-in-depth (GH #162). Defaults
+    ON (best-effort: it still needs the GIL the futex holder never yields, so
+    the OUT-OF-PROCESS supervisor in services/supervisor.py remains the actual
+    recovery guarantee). Set PRISM_WATCHDOG_KILL=0/off to opt out."""
+    return _env_truthy("PRISM_WATCHDOG_KILL", default=True)
 
 
 def _probe_port() -> int:

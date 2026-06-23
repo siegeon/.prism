@@ -1,0 +1,48 @@
+# PRISM out-of-process supervisor — systemd unit (GH #162).
+#
+# WHY THIS SHAPE: the supervisor recovers PRISM from the silent all-threads
+# native-futex wedge by SIGKILL-ing the wedged server and respawning it
+# (services/supervisor.py). For that to survive systemd, the SUPERVISOR — not
+# the server — must be the unit's main process. This unit therefore runs the
+# supervisor in LEAD MODE: `python -m prism_service.services.supervisor` with
+# NO server-pid argument. In lead mode the supervisor spawns the server as its
+# OWN child and supervises it in the foreground, so:
+#   * systemd tracks the SUPERVISOR as the Type=simple main pid;
+#   * when the supervisor SIGKILLs a wedged server child, the cgroup main pid
+#     (the supervisor) never exits, so systemd does NOT tear the unit down;
+#   * `Restart=always` only ever respawns the *supervisor* if it itself dies,
+#     never racing the supervisor's own server respawn.
+#
+# MANUAL CUSTOMER STEP (systemd-on-Linux is NOT auto-installed by PRISM):
+#   1. Edit User=, WorkingDirectory=, and the python path in ExecStart to match
+#      your install (e.g. a pipx venv: ~/.local/pipx/venvs/prism-service/bin/python).
+#   2. Set PRISM_UI_PORT / PRISM_MCP_PORT below if you do not use the defaults.
+#   3. For a --user service: `cp prism.service ~/.config/systemd/user/` then
+#      `systemctl --user daemon-reload && systemctl --user enable --now prism`.
+#      For a system service: install to /etc/systemd/system/ and drop the
+#      `--user` from the commands. End-to-end systemd verification on Linux is
+#      a manual step on the customer's host (PRISM dev/CI runs on Windows).
+
+[Unit]
+Description=PRISM out-of-process supervisor (lead mode) — GH #162 wedge recovery
+After=network.target
+
+[Service]
+Type=simple
+# LEAD MODE: no server-pid arg => the supervisor spawns + owns the server child.
+ExecStart=/usr/bin/env python -m prism_service.services.supervisor
+# Recovery + cold-boot grace knobs (see services/supervisor.py for defaults).
+Environment=PRISM_SUPERVISOR=on
+Environment=PRISM_UI_PORT=7778
+Environment=PRISM_MCP_PORT=7777
+# systemd only ever respawns the SUPERVISOR itself (the main pid); the watched
+# server's death/respawn is internal to the supervisor and invisible to systemd.
+Restart=always
+RestartSec=2
+# Back off to systemd if the supervisor ITSELF crash-loops (the supervisor's
+# own PRISM_SUPERVISOR_MAX_RESTARTS guards a crash-looping *server* child).
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Install]
+WantedBy=default.target

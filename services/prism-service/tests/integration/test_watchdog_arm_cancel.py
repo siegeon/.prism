@@ -93,13 +93,15 @@ def test_hanging_probe_arms_and_does_not_cancel(monkeypatch):
 
 
 def test_kill_is_opt_in(monkeypatch):
-    """Self-heal os._exit(1) only fires when PRISM_WATCHDOG_KILL=1 and the
-    failure streak exceeds threshold; default OFF."""
+    """In-process self-heal os._exit(1) as defense-in-depth. As of GH #162
+    (v6.5.6) PRISM_WATCHDOG_KILL defaults ON — the out-of-process supervisor
+    (services/supervisor.py) is the real recovery guarantee, the in-process
+    kill is best-effort backup. =0/off still opts out."""
     wd = __import__("prism_service.services.watchdog", fromlist=["x"])
     monkeypatch.delenv("PRISM_WATCHDOG_KILL", raising=False)
-    assert wd._kill_enabled() is False, "kill must default OFF"
-    monkeypatch.setenv("PRISM_WATCHDOG_KILL", "1")
-    assert wd._kill_enabled() is True, "PRISM_WATCHDOG_KILL=1 must enable kill"
+    assert wd._kill_enabled() is True, "kill now defaults ON (GH #162 defense-in-depth)"
+    monkeypatch.setenv("PRISM_WATCHDOG_KILL", "0")
+    assert wd._kill_enabled() is False, "PRISM_WATCHDOG_KILL=0 must still opt OUT"
 
 
 def test_main_lifespan_wires_watchdog():
