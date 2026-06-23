@@ -498,14 +498,38 @@ if __name__ == "__main__":
     _config = uvicorn.Config(app, host="0.0.0.0", port=UI_PORT)
     _server = uvicorn.Server(_config)
 
+    # How long to let uvicorn drain held-open connections before forcing.
+    # A persistent MCP streamable-HTTP connection never closes on a graceful
+    # drain (should_exit alone), so without a force escalation .run() would
+    # block forever and the served version would strand on the old build
+    # (task 73ec7273, lineage of #66). Operator-tunable; bounded default.
+    try:
+        _drain_timeout_s = float(os.environ.get("PRISM_RESTART_DRAIN_TIMEOUT_S", "10"))
+    except (TypeError, ValueError):
+        _drain_timeout_s = 10.0
+
     def _restart_watcher() -> None:
-        # Poll the daemon-thread-set flag; when set, ask uvicorn to drain
-        # and stop. The actual os.execv happens on the main thread AFTER
-        # _server.run() returns, so live sockets are closed first.
+        # Poll the daemon-thread-set flag; when set, ask uvicorn to drain and
+        # stop (should_exit). If a held-open connection keeps .run() from
+        # returning within _drain_timeout_s, escalate to force_exit so uvicorn
+        # DROPS connections and .run() returns — the existing main-thread
+        # os.execv (below) then fires. Graceful-first, force-after-timeout so
+        # in-flight Brain writes / task mutations get the drain window.
         while not _server.should_exit:
             if _au.restart_requested():
                 _log.info("auto-update restart requested; draining uvicorn")
                 _server.should_exit = True
+                deadline = time.monotonic() + _drain_timeout_s
+                while time.monotonic() < deadline:
+                    if _server.force_exit:
+                        return
+                    time.sleep(0.1)
+                _log.warning(
+                    "drain exceeded %.0fs; forcing uvicorn shutdown so the "
+                    "re-exec is not stranded on a held-open connection",
+                    _drain_timeout_s,
+                )
+                _server.force_exit = True
                 return
             time.sleep(2.0)
 

@@ -141,7 +141,14 @@ def perform_restart(server=None, drain_timeout_s: float = 10.0) -> None:
     if _DEFER_RESTART:
         return
     if server is not None:
-        # Signal a graceful drain so listening sockets close before exec.
+        # BOUNDED graceful-first drain (task 73ec7273, lineage of #66):
+        # 1) should_exit -> uvicorn drains its loop + closes idle sockets;
+        # 2) if a held-open MCP streamable-HTTP connection refuses to close,
+        #    after drain_timeout_s set force_exit so uvicorn DROPS it and
+        #    .run() can return. Graceful-first then force-after-timeout means
+        #    in-flight Brain writes / task mutations get the drain window
+        #    before any force-kill (likely_misfire d). We never gate the exec
+        #    on a clean drain — the timeout is the ceiling.
         try:
             server.should_exit = True
         except Exception:
@@ -152,6 +159,16 @@ def perform_restart(server=None, drain_timeout_s: float = 10.0) -> None:
                 stop()
             except Exception:
                 pass
+        # Honor drain_timeout_s: give the graceful path that long, then force.
+        deadline = time.monotonic() + max(0.0, float(drain_timeout_s))
+        while time.monotonic() < deadline:
+            if getattr(server, "force_exit", False):
+                break
+            time.sleep(0.05)
+        try:
+            server.force_exit = True
+        except Exception:
+            pass
     argv = [sys.executable, "-m", "prism_service.main"]
     os.execv(sys.executable, argv)
 

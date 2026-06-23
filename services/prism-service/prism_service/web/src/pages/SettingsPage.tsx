@@ -425,10 +425,25 @@ function UpdatesPanel() {
       </dl>
 
       {status.restart_required && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-100 px-3 py-2 text-sm">
-          New version installed — daemon restart required to apply.
-          On Linux/Mac the service re-execs itself; on Windows run{" "}
-          <span className="font-mono">prism stop && prism start --daemon</span>.
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/15 text-amber-100 px-3 py-3 text-sm flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="font-serif text-base text-amber-50">
+              Update ready — click to restart
+            </div>
+            <div className="text-xs text-amber-200/90 mt-0.5">
+              A new version is installed and waiting. Restart the daemon now to
+              flip the served version — if a held-open connection slows the
+              drain it is force-closed after a bounded window.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={applyNow}
+            disabled={applying}
+            className="shrink-0 rounded-md border border-amber-400/50 bg-amber-400/20 hover:bg-amber-400/30 disabled:opacity-50 px-3 py-1.5 text-sm font-medium text-amber-50"
+          >
+            {applying ? "Restarting…" : "Click to restart"}
+          </button>
         </div>
       )}
 
