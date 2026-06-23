@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.5.0"
+PRISM_VERSION = "6.5.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.5.2: Single-flight Brain embeddings — concurrent encodes can no longer "
+    "wedge PRISM (GH #157, task 1b28cde8). v6.5.0 pinned native math to 1 "
+    "thread per embed + a deadlock watchdog, but did NOTHING about TWO "
+    "concurrent embeds: _MODEL_LOCK (brain_engine.py:153) serializes only the "
+    "model LOAD. The three _MODEL.encode() native-inference sites "
+    "(encode_task_text ~:90, health probe ~:786, _embed doc-index ~:1161) ran "
+    "UNLOCKED, so two request threads (e.g. a Conductor verifier embed + a "
+    "concurrent task_update embed) entering model2vec->numpy/BLAS native math "
+    "at once inverted the GIL<->native-futex and silently wedged every thread "
+    "(ports return curl->000 while systemd still reports active). FIX: a "
+    "dedicated module-level _ENCODE_LOCK (distinct from _MODEL_LOCK; no "
+    "load-inside-encode nesting) now wraps each encode so only ONE runs at a "
+    "time; the `_MODEL is None` / vector_enabled fast-path guards stay OUTSIDE "
+    "the lock and the numpy asarray/tolist conversions are kept out of the "
+    "critical section to protect throughput. Belt-and-suspenders "
+    "_threadpool_limit_1() pins BLAS/OMP to 1 thread around the encode ONLY "
+    "when threadpoolctl is importable (optional import, never a hard "
+    "dependency). Tests: tests/integration/test_embedding_single_flight.py "
+    "(source-asserts all three sites acquire _ENCODE_LOCK + a runtime in-flight "
+    "overlap counter that must never exceed 1, deterministic across repeated "
+    "runs + correctness). "
     "v6.5.0: Deadlock watchdog + native-math thread guards for the silent "
     "all-threads wedge (GH #155, task 8b231401). #155 = OpenMP/OpenBLAS futex "
     "oversubscription on the embedding path: a request thread enters native "
