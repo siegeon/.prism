@@ -202,6 +202,27 @@ def cmd_start(args: argparse.Namespace) -> int:
         else:
             raise
     _write_pid(proc.pid)
+
+    # GH #162 — launch the OUT-OF-PROCESS supervisor as its OWN child
+    # (python -m prism_service.services.supervisor <server_pid> <ui_port>).
+    # It HTTP-probes the server's UI port off the server's contended GIL
+    # path and, after N consecutive timeouts, SIGKILLs the wedged server and
+    # respawns it — turning the silent all-threads futex wedge into a ~5s
+    # self-restart. A SEPARATE PROCESS, never an in-process thread (a thread
+    # shares the same starved GIL and wedges identically). Best-effort: a
+    # supervisor spawn failure must never fail the daemon launch.
+    ui_port = str(args.ui_port or os.environ.get("PRISM_UI_PORT", "7778"))
+    if os.environ.get("PRISM_SUPERVISOR", "").lower() not in ("0", "off", "false", "no"):
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "prism_service.services.supervisor",
+                 str(proc.pid), ui_port],
+                env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                close_fds=True, **spawn_kwargs,
+            )
+        except OSError as exc:
+            print(f"warning: supervisor not started: {exc}", file=sys.stderr)
+
     print(f"prism started (pid {proc.pid})")
     print(f"  data dir: {_data_dir()}")
     print(f"  ui:       http://localhost:{args.ui_port or os.environ.get('PRISM_UI_PORT', '7778')}/")
