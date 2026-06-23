@@ -87,8 +87,12 @@ def encode_task_text(text: str) -> Optional[bytes]:
         return None
     try:
         import numpy as _np
-        vec = _MODEL.encode([text[:2048]])[0]
-        return _np.asarray(vec, dtype=_np.float32).tobytes()
+        # Single-flight: serialize the native encode (GH #157). Fast-path
+        # `_MODEL is None` check above stays OUTSIDE the lock.
+        with _ENCODE_LOCK, _threadpool_limit_1():
+            vec = _MODEL.encode([text[:2048]])[0]
+            arr = _np.asarray(vec, dtype=_np.float32)
+        return arr.tobytes()
     except Exception:
         return None
 
@@ -151,7 +155,28 @@ def _similar_task_ids(
 # ---------------------------------------------------------------------------
 _MODEL = None
 _MODEL_LOCK = threading.Lock()
+# Single-flight serialization of _MODEL.encode() native inference (GH #157).
+# DISTINCT from _MODEL_LOCK (which guards only the model LOAD at :459): two
+# request threads entering model2vec->numpy/BLAS native math at once invert
+# the GIL<->native-futex and silently wedge every thread. Every encode site
+# acquires this so only ONE encode runs at a time. No load-inside-encode or
+# encode-inside-load nesting (the loader never encodes; encode never loads).
+_ENCODE_LOCK = threading.Lock()
 _SQLITE_VEC_LOADED = False
+
+
+def _threadpool_limit_1():
+    """Belt-and-suspenders single-thread native-math context, ONLY when
+    threadpoolctl is importable. Returns a context manager pinning BLAS/OMP
+    pools to 1 thread for the duration of the encode (composes with the
+    process-wide thread_limits.apply_thread_limits()); a no-op nullcontext
+    when threadpoolctl is absent. OPTIONAL import — never a hard dependency."""
+    try:
+        import threadpoolctl  # type: ignore
+        return threadpoolctl.threadpool_limits(limits=1)
+    except Exception:
+        import contextlib
+        return contextlib.nullcontext()
 
 # Cross-encoder reranker (lazy-loaded on first use when PRISM_RERANK != off).
 # Separate from the embedder so both can coexist in memory.
@@ -783,7 +808,9 @@ class Brain:
             # the vec0 table matches whatever local model is loaded
             # (potion-base-32M is 512-dim; MiniLM-L6 is 384-dim).
             try:
-                probe = _MODEL.encode(["probe"])[0]
+                # Single-flight: serialize the native encode (GH #157).
+                with _ENCODE_LOCK, _threadpool_limit_1():
+                    probe = _MODEL.encode(["probe"])[0]
                 dim = len(probe)
             except Exception:
                 dim = 384
@@ -1158,7 +1185,11 @@ class Brain:
         if not self.vector_enabled or _MODEL is None:
             return None
         try:
-            vecs = _MODEL.encode([text[:2048]])
+            # Single-flight: serialize the native encode (GH #157). Guard
+            # above stays OUTSIDE the lock; only the encode is wrapped so the
+            # .tolist() conversion doesn't hold the lock (throughput).
+            with _ENCODE_LOCK, _threadpool_limit_1():
+                vecs = _MODEL.encode([text[:2048]])
             return vecs[0].tolist()
         except Exception:
             return None
