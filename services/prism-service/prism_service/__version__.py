@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.5.3"
+PRISM_VERSION = "6.5.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.5.4: Auto-update no longer strands the daemon on the old build "
+    "(task 73ec7273, lineage of GH #66). The restart watcher set "
+    "_server.should_exit but NEVER _server.force_exit, so a held-open MCP "
+    "streamable-HTTP connection blocked uvicorn's graceful drain forever — "
+    ".run() never returned, the main-thread os.execv (the version flip) was "
+    "never reached, and the wheel sat on disk while the served version "
+    "stranded on the old build. FIX (main.py _restart_watcher): after "
+    "should_exit, escalate to force_exit once the drain exceeds "
+    "PRISM_RESTART_DRAIN_TIMEOUT_S (default 10s) so uvicorn DROPS the "
+    "connection, .run() returns, and the EXISTING main-thread execv fires — "
+    "graceful-first, force-after-timeout so in-flight Brain writes/task "
+    "mutations get the drain window. auto_updater.perform_restart now honors "
+    "its previously-dead drain_timeout_s param the same way. #66 invariants "
+    "preserved: execv stays on the MAIN thread, pidfile not unlinked before "
+    "the in-place execv. SettingsPage.tsx now shows a loud 'Update ready — "
+    "click to restart' control when restart_required is true, turning a "
+    "slow/blocked drain into a one-click user action. Tests: "
+    "tests/integration/test_auto_update_restart_drain.py. "
     "v6.5.3: Tasks timeline readable with rich markdown (task f01b6619). New "
     "web/src/components/Markdown.tsx is the ONE block-markdown + verdict-token "
     "renderer for the SPA: it fuses OnboardingView's dependency-free block "
