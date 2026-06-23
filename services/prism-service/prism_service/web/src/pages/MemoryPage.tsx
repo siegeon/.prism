@@ -175,6 +175,27 @@ export default function MemoryPage() {
     }
   };
 
+  // Backfill — enqueue every summary-less memory onto the learning pipeline's
+  // memory.written bus so the budget-governed consumer pool mints one-liners
+  // over time. Idempotent; only summary-less active entries enqueue.
+  const generateSummaries = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ queued: number; project: string }>(
+        `/api/memory/backfill-summaries?project=${project}`, {},
+      );
+      setNotice(
+        r.queued > 0
+          ? `Queued ${r.queued} memor${r.queued === 1 ? "y" : "ies"} for summarization — one-liners mint over time as the budget-governed pipeline drains.`
+          : `No summary-less memories to queue — every shown memory already has a summary.`
+      );
+    } catch (e) {
+      setNotice(`Backfill failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     const params = new URLSearchParams({ project });
     if (domain !== "all") params.set("domain", domain);
@@ -191,6 +212,12 @@ export default function MemoryPage() {
   const total = useMemo(
     () => Object.values(stats).reduce((a, b) => a + (b?.active ?? 0), 0),
     [stats],
+  );
+  // Summaries are an OPTIONAL upgrade, not the tile face. Surface a truthful
+  // coverage count (N summarized of M shown) instead of fake "awaiting" work.
+  const summarizedCount = useMemo(
+    () => entries.filter((e) => e.summary).length,
+    [entries],
   );
   const pendingSummaries = useMemo(
     () => entries.filter((e) => !e.summary).length,
@@ -253,13 +280,24 @@ export default function MemoryPage() {
           Tiles lead with <em>proven</em> memories (recalled in real sessions);
           click any tile for the full description, evidence, and supersede chain.
         </p>
-        <button
-          onClick={importClaudeMemories}
-          disabled={busy}
-          className="px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40 shrink-0"
-        >
-          {busy ? "Working…" : "Import Claude memories"}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {pendingSummaries > 0 && (
+            <button
+              onClick={generateSummaries}
+              disabled={busy}
+              className="px-4 py-2 rounded-md border border-[color:var(--midground-base)]/40 text-xs uppercase tracking-wider disabled:opacity-40"
+            >
+              {busy ? "Working…" : `Generate summaries (${pendingSummaries})`}
+            </button>
+          )}
+          <button
+            onClick={importClaudeMemories}
+            disabled={busy}
+            className="px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-xs uppercase tracking-wider disabled:opacity-40"
+          >
+            {busy ? "Working…" : "Import Claude memories"}
+          </button>
+        </div>
       </div>
 
       {notice && (
@@ -279,7 +317,7 @@ export default function MemoryPage() {
         <Kpi label="Domains" value={domains.length} />
         <Kpi label="Showing" value={entries.length} />
         <Kpi label="Proven (recalled)" value={provenCount} />
-        <Kpi label="Awaiting summary" value={pendingSummaries} />
+        <Kpi label="Summaries" value={`${summarizedCount}/${entries.length}`} />
       </section>
 
       <Card>
@@ -413,7 +451,7 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
           ? "text-[color:var(--text-secondary)]"
           : "text-[color:var(--text-muted)] italic")
       }>
-        {entry.summary || "Summarizing…"}
+        {entry.summary || entry.description}
       </div>
       <div className="flex flex-wrap items-center gap-1">
         {type && <TileBadge tone={typeTone}>{type}</TileBadge>}

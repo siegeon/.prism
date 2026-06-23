@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.5.4"
+PRISM_VERSION = "6.5.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.5.5: Memory view shows real content instead of a permanent "
+    "'Summarizing…' placeholder (task 2567758d). Every tile renders "
+    "entry.summary || entry.description so summary-less memories read as "
+    "real cards; the misleading 'Awaiting summary' KPI is reframed to a "
+    "truthful 'Summaries N/M' coverage count; and a 'Generate summaries (N)' "
+    "header button POSTs the new POST /api/memory/backfill-summaries, which "
+    "enqueues every active, summary-less memory onto the learning pipeline's "
+    "memory.written bus ({memory_id, project} payload) so the budget-governed "
+    "consumer pool mints haiku one-liners for the backlog. Idempotent — only "
+    "active + summary-less entries enqueue, so re-runs are safe. "
     "v6.5.4: Auto-update no longer strands the daemon on the old build "
     "(task 73ec7273, lineage of GH #66). The restart watcher set "
     "_server.should_exit but NEVER _server.force_exit, so a held-open MCP "

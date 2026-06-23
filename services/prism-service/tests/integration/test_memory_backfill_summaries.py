@@ -101,8 +101,8 @@ def _store(svc, name, desc, *, summary=None, invalidate=False):
 def test_backfill_enqueues_only_active_summaryless(svc, captured_bus, monkeypatch):
     client = _client(monkeypatch, svc)
 
-    bare1 = _store(svc, "bare-one", "needs a summary one")
-    bare2 = _store(svc, "bare-two", "needs a summary two")
+    bare1 = _store(svc, "bare-one", "the first entry that still needs a one-line summary minted")
+    bare2 = _store(svc, "bare-two", "a totally different memory about token budget governance pacing")
     _store(svc, "already", "has a summary", summary="a crisp haiku line")
     _store(svc, "stale", "invalidated entry", invalidate=True)
 
