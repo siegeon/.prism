@@ -226,9 +226,19 @@ def log_threadpool_info(where: str) -> None:
 
     Emitted at startup and after model load. Each pool's num_threads is
     surfaced so a uncapped pool (num_threads>1) is visible in prism.log."""
+    # Distinguish "threadpoolctl genuinely missing" (pin would no-op — a real
+    # problem) from "no native pools loaded yet" (normal at startup, before
+    # numpy/OpenBLAS import). Conflating them logged a misleading
+    # "unavailable" at startup that made the FR-3 proof look broken (GH #162).
+    try:
+        import threadpoolctl  # noqa: F401
+    except Exception:
+        print(f"Brain: threadpool_info [{where}]: threadpoolctl NOT INSTALLED "
+              f"— native-thread pin is INACTIVE", file=sys.stderr)
+        return
     info = threadpool_info()
     if not info:
-        print(f"Brain: threadpool_info [{where}]: threadpoolctl unavailable",
+        print(f"Brain: threadpool_info [{where}]: no native pools loaded yet",
               file=sys.stderr)
         return
     pools = ", ".join(
