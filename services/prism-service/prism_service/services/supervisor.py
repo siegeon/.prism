@@ -84,9 +84,22 @@ def probe_timeout_s() -> float:
 
 
 def max_restarts() -> int:
-    """Thundering-herd guard: stop respawning after this many restarts if a
-    fresh child keeps wedging immediately (0 = unlimited)."""
-    return max(0, _int_env("PRISM_SUPERVISOR_MAX_RESTARTS", 0))
+    """Crash-loop backoff window: stop respawning after this many restarts if a
+    fresh child keeps wedging immediately, so a genuinely crash-looping child
+    backs off to systemd (Restart=always) instead of thrashing forever. Default
+    is now a FINITE 5 (was 0/unlimited); set 0 to restore unlimited."""
+    return max(0, _int_env("PRISM_SUPERVISOR_MAX_RESTARTS", 5))
+
+
+def startup_grace_s() -> float:
+    """Post-(re)spawn grace window (~30s, env-tunable via
+    PRISM_SUPERVISOR_STARTUP_GRACE_S). A freshly (re)spawned server is still
+    cold-booting (model load ~7-9s); hung probes that arrive WHILE the child is
+    inside this window do NOT count toward a kill, so a slow boot is never
+    killed mid-warmup. Re-applied on EVERY respawn, not just first boot. Must
+    outlast probe_interval_s()*failure_threshold() (the recovery bound), else a
+    slow boot would be killed before it could become healthy."""
+    return max(0.0, _float_env("PRISM_SUPERVISOR_STARTUP_GRACE_S", 30.0))
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +115,25 @@ class SupervisorState:
         self.consecutive_failures = 0
         self.restarts = 0
         self.recovering = False
+        # Monotonic timestamp of the last (re)spawn — the startup-grace anchor.
+        # None means "no fresh boot to protect" (e.g. a state built for a
+        # pid that was already up): grace is OFF until a (re)spawn stamps it.
+        self.spawned_at: float | None = None
+
+    def mark_spawned(self, now: float | None = None) -> None:
+        """Stamp the startup-grace anchor at a (re)spawn. Re-applied on EACH
+        respawn so every fresh child gets its own grace window."""
+        self.spawned_at = time.monotonic() if now is None else now
+
+
+def _in_startup_grace(state: SupervisorState) -> bool:
+    """True iff the freshly (re)spawned child is still inside its startup
+    grace window. False when no spawn anchor is set (nothing to protect) or
+    the grace has elapsed — so a never-healthy child is eventually killed."""
+    anchor = getattr(state, "spawned_at", None)
+    if not anchor:
+        return False
+    return (time.monotonic() - anchor) < startup_grace_s()
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +249,13 @@ def handle_probe_result(state: SupervisorState, alive: bool) -> bool:
         state.consecutive_failures = 0
         return False
 
+    # POST-RESPAWN GRACE: a freshly (re)spawned child is still cold-booting
+    # (model load ~7-9s). Hung probes that arrive WHILE it is inside its
+    # startup grace do NOT count toward a kill — a slow boot is never killed
+    # mid-warmup. Re-applied on every respawn (the anchor is re-stamped below).
+    if _in_startup_grace(state):
+        return False
+
     state.consecutive_failures += 1
     if state.consecutive_failures < failure_threshold():
         return False
@@ -236,20 +275,33 @@ def handle_probe_result(state: SupervisorState, alive: bool) -> bool:
     state.server_pid = respawn_server()
     state.restarts += 1
     state.consecutive_failures = 0
+    # Re-arm the startup grace for the FRESH child (per-respawn, not first-boot
+    # only) so the cold respawn isn't killed mid-warmup on the next probes.
+    state.mark_spawned()
     return True
 
 
 # ---------------------------------------------------------------------------
 # The supervise loop — runs IN-LINE in this process's main (NOT a thread).
 # ---------------------------------------------------------------------------
-def supervise_loop(server_pid: int, port: int | str) -> None:
+def supervise_loop(
+    server_pid: int, port: int | str, *, fresh_boot: bool = False,
+) -> None:
     """Probe the server's UI port on a cadence and recover it on a wedge.
     Loops forever in THIS process — no daemon thread is spawned here, by
-    design: a thread would share the server's starved GIL and wedge too."""
+    design: a thread would share the server's starved GIL and wedge too.
+
+    `fresh_boot=True` (lead mode, where THIS process just spawned the server)
+    stamps the startup-grace anchor so the initial cold boot is protected the
+    same way every respawn is. In sibling mode the server cmd_start started is
+    typically already warm, so no first-boot grace is stamped."""
     state = SupervisorState(server_pid=server_pid)
+    if fresh_boot:
+        state.mark_spawned()
     _log(
         f"watching server pid {server_pid} on :{port} "
         f"(interval={probe_interval_s()}s threshold={failure_threshold()} "
+        f"grace={startup_grace_s()}s "
         f"bound~{probe_interval_s() * failure_threshold()}s)"
     )
     while True:
@@ -259,15 +311,38 @@ def supervise_loop(server_pid: int, port: int | str) -> None:
 
 
 def run_supervisor(argv: list[str] | None = None) -> int:
-    """Entry point for `python -m prism_service.services.supervisor
-    <server_pid> <ui_port>`. Runs the supervise loop in-line."""
+    """Entry point for `python -m prism_service.services.supervisor [args]`.
+
+    Two invocation shapes, both running the supervise loop IN-LINE (no thread):
+
+    * LEAD MODE (no server-pid arg) — used by the systemd unit
+      (deploy/prism.service). THIS process spawns the server as its OWN child
+      and supervises it in the foreground, so the long-lived process systemd
+      tracks as the unit main pid is the SUPERVISOR, not the server. The
+      watched server's death/respawn is then invisible to systemd: a SIGKILL
+      of the wedged child no longer tears down the cgroup, because the cgroup
+      main pid (this supervisor) never exits.
+    * SIBLING MODE (`<server_pid> <ui_port>`) — the proven cmd_start topology:
+      cmd_start already started the server, and this supervises that pid.
+    """
     args = argv if argv is not None else sys.argv[1:]
     if not is_enabled():
         _log("disabled (PRISM_SUPERVISOR=off)")
         return 0
-    server_pid = int(args[0]) if len(args) >= 1 else 0
     port = args[1] if len(args) >= 2 else os.environ.get("PRISM_UI_PORT", "7778")
-    supervise_loop(server_pid, port)
+    if len(args) >= 1 and str(args[0]).strip():
+        # SIBLING MODE — supervise the pid cmd_start already started.
+        server_pid = int(args[0])
+        supervise_loop(server_pid, port)
+        return 0
+    # LEAD MODE — spawn the server as our own child and supervise it.
+    server_pid = _spawn_server()
+    try:
+        _write_pid(server_pid)
+    except OSError as exc:
+        _log(f"could not write pidfile for lead-spawned pid {server_pid}: {exc}")
+    _log(f"lead mode: spawned server child pid {server_pid} on :{port}")
+    supervise_loop(server_pid, port, fresh_boot=True)
     return 0
 
 
