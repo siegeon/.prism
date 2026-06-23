@@ -7,11 +7,13 @@ import { Page, Card, SectionLabel, Empty, Kpi, toneFromLabel, type PillTone } fr
 import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
+import Markdown from "@/components/Markdown";
 import { EASE_OUT, EASE_IN, DUR, SPRING_SNAPPY } from "@/lib/motion";
 
 type Task = {
   id?: string;
   title?: string;
+  description?: string;
   status?: string;
   priority?: number | string;
   tags?: string[];
@@ -176,6 +178,15 @@ export default function TasksPage() {
                             </span>
                           )}
                         </div>
+                        {t.description && (
+                          // Entry-body description preview — structured markdown
+                          // (headings/lists/`code`/**bold**), not a run-on wall
+                          // of text. Clamped on the board; the full doc lives on
+                          // the detail page. Shares the <Markdown> renderer.
+                          <div className="mt-1.5 max-h-28 overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]">
+                            <Markdown text={t.description} className="space-y-1.5 text-left" />
+                          </div>
+                        )}
                         {conductorOn && (
                           <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                             {step && (

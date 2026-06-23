@@ -4,36 +4,13 @@
 // tones the leading Label, and highlights pass/fail/green result tokens. Uses
 // the shared --accent-* / --text-* palette (same as /understand). No <pre>.
 import { type ReactNode } from "react";
+import { highlight } from "@/components/Markdown";
 
 // NUL sentinel for masking code spans — cannot appear in real evidence text.
 const SENT = String.fromCharCode(0);
 
-// Highlight verdict/result tokens so the signal pops out of the prose.
-function highlight(s: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(\d[\d,.]*\s+(?:passed|failed|warning|tests?)|ok:true|ok:false|GREEN|PASSED|FAIL(?:ED)?)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = re.exec(s))) {
-    if (m.index > last) out.push(s.slice(last, m.index));
-    const tok = m[0];
-    const tone = /passed|ok:true|GREEN|PASSED/.test(tok)
-      ? "emerald"
-      : /warning/.test(tok)
-        ? "amber"
-        : "rose";
-    out.push(
-      <span key={`h${k++}`} className="font-medium" style={{ color: `var(--accent-${tone}-fg)` }}>
-        {tok}
-      </span>,
-    );
-    last = m.index + tok.length;
-  }
-  if (last < s.length) out.push(s.slice(last));
-  return out;
-}
-
+// Verdict/result token coloring is the shared highlight() from <Markdown>; this
+// view keeps its own receipt-style row layout (Label: detail clauses) on top.
 function renderInline(s: string): ReactNode[] {
   // odd indices are the contents of `backtick` spans
   return s.split(/`([^`]+)`/g).map((p, i) =>

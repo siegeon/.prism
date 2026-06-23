@@ -8,6 +8,7 @@ import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
+import Markdown from "@/components/Markdown";
 import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
@@ -752,9 +753,9 @@ export default function TaskDetailPage() {
         <Card>
           <SectionLabel>Description</SectionLabel>
           {task.description ? (
-            <pre className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed opacity-90 font-sans">
-              {task.description}
-            </pre>
+            <div className="mt-2">
+              <Markdown text={task.description} />
+            </div>
           ) : (
             <Empty>No description.</Empty>
           )}

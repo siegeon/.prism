@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.5.2"
+PRISM_VERSION = "6.5.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.5.3: Tasks timeline readable with rich markdown (task f01b6619). New "
+    "web/src/components/Markdown.tsx is the ONE block-markdown + verdict-token "
+    "renderer for the SPA: it fuses OnboardingView's dependency-free block "
+    "parser (H1/H2/H3, paragraphs, `-/*` unordered lists, inline `code` + "
+    "**bold**) with EvidenceView's verdict-token highlighter (PASSED/GREEN/"
+    "'N passed'->emerald, warning->amber, FAIL(ED)->rose) — every color from "
+    "the Hermes --accent-*/--text-*/--surface-* CSS vars, no hardcoded hex / "
+    "tailwind palette bypass, no new markdown dependency. OnboardingView and "
+    "EvidenceView now DELEGATE to it (their duplicated parser/highlighter "
+    "bodies removed), so the logic lives in one place. Wired in: "
+    "TaskDetailPage's raw <pre whitespace-pre-wrap> description block -> "
+    "<Markdown>; TaskTextPage's description route -> <Markdown> (validation/"
+    "proof stay EvidenceView); and the /tasks board cards now surface a "
+    "clamped structured description preview via <Markdown> so the list view is "
+    "readable, not just the detail page. Tests: tests/integration/"
+    "test_tasks_timeline_rich_markdown_ui.py (10 green). "
     "v6.5.2: Single-flight Brain embeddings — concurrent encodes can no longer "
     "wedge PRISM (GH #157, task 1b28cde8). v6.5.0 pinned native math to 1 "
     "thread per embed + a deadlock watchdog, but did NOTHING about TWO "

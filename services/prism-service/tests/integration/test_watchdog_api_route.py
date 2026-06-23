@@ -34,9 +34,21 @@ def test_api_watchdog_returns_200_with_required_fields():
 
 def test_watchdog_router_included_in_api_init():
     """The watchdog router must be aggregated into api_router (mirroring
-    consolidation_router), so the SPA's Diagnostics card has a backend."""
-    routes = {getattr(r, "path", "") for r in api_router.routes}
-    assert any(p.startswith("/api/watchdog") for p in routes), (
+    consolidation_router), so the SPA's Diagnostics card has a backend.
+
+    Collect mounted paths via the OpenAPI schema, NOT raw api_router.routes:
+    FastAPI >= 0.138 / Starlette >= 1.3 represent include_router() entries as
+    internal _IncludedRouter objects with no .path attribute, so the old
+    `getattr(r, "path", "")` silently yields "" for every mounted sub-router
+    and the guard reads false-red even though /api/watchdog IS wired and
+    reachable (the sibling 200-status test proves the route mounts). The
+    OpenAPI schema is the version-agnostic contract for "which paths are
+    actually mounted", which is exactly what this guard asserts. Mirrors the
+    agent-runs guard fix (commit 59fcfb7)."""
+    app = FastAPI()
+    app.include_router(api_router)
+    paths = set(app.openapi()["paths"].keys())
+    assert any(p.startswith("/api/watchdog") for p in paths), (
         "no /api/watchdog route registered on api_router — wire "
-        "watchdog_router into prism_service/api/__init__.py"
+        f"watchdog_router into prism_service/api/__init__.py: {sorted(paths)}"
     )

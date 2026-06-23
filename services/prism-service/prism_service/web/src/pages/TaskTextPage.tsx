@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, Empty } from "@/components/ui";
 import EvidenceView from "@/components/EvidenceView";
+import Markdown from "@/components/Markdown";
 
 type Task = {
   id?: string;
@@ -64,7 +65,13 @@ export default function TaskTextPage() {
         ) : !meta ? (
           <Empty>Unknown section.</Empty>
         ) : text ? (
-          <EvidenceView text={text} />
+          // The description is authored markdown → render structured blocks;
+          // gate validation / completion proof are receipt-style → EvidenceView.
+          section === "description" ? (
+            <Markdown text={text} />
+          ) : (
+            <EvidenceView text={text} />
+          )
         ) : (
           <Empty>Nothing recorded.</Empty>
         )}
