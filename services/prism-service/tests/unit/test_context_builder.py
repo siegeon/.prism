@@ -121,18 +121,48 @@ def test_request_context_resets_after_block():
 
 
 def _store_feedback(name, importance, project, *, desc=None):
+    # Descriptions must be DISTINCT enough to stay below the memory store's
+    # 0.85 description-similarity dedup (memory_service.store), otherwise each
+    # store invalidates the prior near-identical entry and only the last
+    # survives. The name is embedded verbatim so each body is unique.
     return _json_text(_call(
         "memory_store",
         {
             "domain": "feedback",
             "name": name,
-            "description": desc or f"convention {name} body text for recall",
+            "description": desc or _distinct_body(name),
             "type": "convention",
             "classification": "tactical",
             "importance": importance,
         },
         project,
     ))
+
+
+# The memory store dedups on >0.85 description similarity (memory_service.store),
+# so fixture bodies must be genuinely distinct prose — a shared template with
+# only the name swapped stays ~0.97 similar and collapses to one entry.
+_DISTINCT_PHRASES = [
+    "Always render structured Hermes primitives, never a raw JSON blob.",
+    "Every feature ships a visible UI surface; headless plumbing is not done.",
+    "Long receipts collapse to a one-line summary with click-to-expand.",
+    "Completed work leaves the active board entirely once a session exists.",
+    "Conductor tiles animate every task phase including the initializing claim.",
+    "Patch-bump PRISM_VERSION on every user-visible commit for the SPA footer.",
+    "Gates are proof-carrying; the conductor task is the proof container.",
+    "Done tasks absorb into Memory; never let finished work pile on the board.",
+    "Borrow the source structure but reskin to the Hermes visual identity.",
+    "One consolidated PR per workstream; do not stack a PR per subtask.",
+    "Progressive disclosure is required for any wall of validation text.",
+    "A red test is always your fault; find the root cause, never wave it off.",
+]
+
+
+def _distinct_body(name):
+    # Deterministic, content-unique body per fixture name so no two collide.
+    h = sum(ord(c) for c in name)
+    phrase = _DISTINCT_PHRASES[h % len(_DISTINCT_PHRASES)]
+    return f"[{name}] {phrase} Marker token {name}-{h} keeps this body unique."
 
 
 def test_bundle_surfaces_feedback_conventions(project):

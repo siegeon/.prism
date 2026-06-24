@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
 
 CONTEXT_PACK_SCHEMA = "prism.context_pack.v1"
+
+# Default top-N cap for push-injected conventions (env PRISM_CONTEXT_CONVENTIONS_N).
+DEFAULT_CONVENTIONS_N = 8
 
 ROLE_ALIASES = {
     "architect": "architect",
@@ -191,6 +195,7 @@ class ContextBuilder:
             persona=persona_key if persona_key != "general" else persona,
         )
         relevant_memory = self._recall_memory(persona_key)
+        conventions = self._recall_conventions(persona_key, relevant_memory)
         active_tasks = {
             "in_progress": self.task_svc.list(status="in_progress"),
             "next": self.task_svc.next_task(),
@@ -212,6 +217,7 @@ class ContextBuilder:
         return {
             "brain_context": brain_context,
             "relevant_memory": relevant_memory,
+            "conventions": conventions,
             "active_tasks": active_tasks,
             "workflow_state": workflow_state,
             "health": health,
@@ -233,6 +239,83 @@ class ContextBuilder:
             )
         except Exception:
             return []
+
+    def _recall_conventions(
+        self, persona_key: str, persona_memory: list[Any]
+    ) -> list[Any]:
+        """Push-inject the living conventions every agent must see.
+
+        arc-kit PUSH model: in addition to the domain=persona recall, pull
+        domain="feedback" conventions (UI-FIRST, render-structured, gate-
+        enforcement, etc.), merge with persona memories, rank by importance
+        descending, dedupe by id/name, and cap at top-N (env
+        PRISM_CONTEXT_CONVENTIONS_N, default 8). The old _recall_memory scoped
+        recall to domain=persona ONLY, so feedback conventions never surfaced.
+        """
+        cap = self._conventions_cap()
+        feedback: list[Any] = []
+        try:
+            # list_entries returns ALL active feedback-domain entries
+            # deterministically (recall() is FTS-relevance-ranked + truncated,
+            # which would drop low-relevance-but-high-importance conventions
+            # and defeat the importance ranking + top-N cap below).
+            feedback = self.memory_svc.list_entries(
+                domain="feedback",
+                status_filter="active",
+            )
+        except Exception:
+            feedback = []
+        # Drop temporally-invalidated (superseded) entries.
+        feedback = [e for e in feedback if not self._entry_invalid(e)]
+
+        merged: list[Any] = list(persona_memory) + list(feedback)
+
+        # Dedupe by id (falling back to name) — same convention reachable via
+        # both recall paths appears once.
+        deduped: list[Any] = []
+        seen: set[str] = set()
+        for entry in merged:
+            key = self._entry_key(entry)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+
+        # Rank by importance descending (highest-priority conventions first).
+        deduped.sort(key=self._entry_importance, reverse=True)
+        return deduped[:cap]
+
+    @staticmethod
+    def _conventions_cap() -> int:
+        raw = os.environ.get("PRISM_CONTEXT_CONVENTIONS_N", "")
+        try:
+            n = int(raw)
+            return n if n > 0 else DEFAULT_CONVENTIONS_N
+        except (TypeError, ValueError):
+            return DEFAULT_CONVENTIONS_N
+
+    @staticmethod
+    def _entry_key(entry: Any) -> str:
+        if isinstance(entry, dict):
+            return entry.get("id") or entry.get("name") or repr(entry)
+        return getattr(entry, "id", None) or getattr(entry, "name", None) or repr(entry)
+
+    @staticmethod
+    def _entry_invalid(entry: Any) -> bool:
+        if isinstance(entry, dict):
+            return bool(entry.get("invalid_at"))
+        return bool(getattr(entry, "invalid_at", ""))
+
+    @staticmethod
+    def _entry_importance(entry: Any) -> int:
+        if isinstance(entry, dict):
+            val = entry.get("importance", 0)
+        else:
+            val = getattr(entry, "importance", 0)
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return 0
 
     def _health_report(self) -> dict[str, Any]:
         try:
