@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.0"
+PRISM_VERSION = "6.6.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.6.1: FIX the deadlock watchdog os._exit-ing a HEALTHY daemon. After "
+    "#162 flipped PRISM_WATCHDOG_KILL default ON, the watchdog's HTTP self-probe "
+    "false-positived whenever the single event loop was busy (model-load, "
+    "indexing, a maintenance pass can block >20s) and killed the process on a "
+    "~90s loop — fatal in dev, which has no out-of-process supervisor to respawn. "
+    "services/watchdog.py now kills ONLY after a CONTINUOUS wedge past a startup "
+    "GRACE (PRISM_WATCHDOG_GRACE_S=180) lasting >= PRISM_WATCHDOG_KILL_AFTER_S "
+    "(=300) — a busy spell recovers between cycles and never accrues, a real "
+    "permanent deadlock still trips. Dev launch (prism-operate skill) now hard-"
+    "sets PRISM_WATCHDOG=off. #162 kill-default-ON + supervisor intact. "
     "v6.6.0: PUSH-INJECT importance-ranked conventions into every conductor "
     "agent (arc-kit model, top-N capped; task 0c811636). Three defects fixed. "
     "(1) ContextBuilder._recall_memory scoped recall to domain=persona "
