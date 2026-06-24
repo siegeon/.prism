@@ -73,8 +73,17 @@ const KNOWLEDGE = [
   '3. Read before you cite. Every claim about code carries a concrete file:line. Never cite an unread source.',
 ].join('\n')
 
-const CONVENTIONS = [
-  'PRISM CONVENTIONS (hard rules):',
+// PROCEDURAL SPINE — the small STATIC set of hard procedural rules that must
+// ALWAYS hold regardless of what lives in memory (task 0c811636). These are the
+// invariants the workflow itself depends on (branch safety, write chunking,
+// hook semantics, board hygiene); they are NOT memories and must never drift
+// out from under the drive. The LIVING feedback conventions (the domain=
+// "feedback" doctrine: render-policy, gate-enforcement, board-hygiene, …) are
+// pushed in on TOP of this spine from context_bundle["conventions"] — see
+// preamble() / setLiveConventions(). They are deliberately NOT spelled out here
+// so the frozen list cannot drift the moment a memory is added.
+const PROCEDURAL_SPINE = [
+  'PRISM PROCEDURAL SPINE (hard rules — always apply):',
   '- Never commit to main/master/staging/develop. Work on the feature branch this workflow created.',
   '- File writes: max ~30 lines per edit operation; chunk larger writes.',
   '- Hooks are advisory (exit 0) — never block tool execution.',
@@ -83,6 +92,33 @@ const CONVENTIONS = [
   '- TASK-BOARD HYGIENE (hard): NEVER call task_create for a ROOT/parent task. You are driving ONE task through its SDLC — its internal breakdown is narration, NOT new board tasks. The board shows only the top-level task; sub-work is tracked by commits and the conductor steps, not by spawning siblings.',
   '- The ONLY task_create you may issue is a DISPOSABLE verification fixture (e.g. a throwaway task to put a conductor gate into a pending state so you can exercise the gate UI). It MUST set parent_id="<the task id this workflow is driving>" so it stays OFF the root board, MUST be tagged "ephemeral-fixture", and MUST be set status="cancelled" the moment the verification screenshot/assertion is captured. Prefer reusing the driven task itself over creating any fixture.',
 ].join('\n')
+
+// LIVE CONVENTIONS — push-injected (arc-kit model) from context_bundle's
+// importance-ranked, top-N-capped domain="feedback" conventions. Empty until
+// the Locate step calls context_bundle and seeds it via setLiveConventions();
+// once seeded, EVERY subsequent step agent's preamble carries the living
+// conventions deterministically (push, not the old unreliable pull). The drive
+// no longer hand-maintains a frozen CONVENTIONS array that silently drifts the
+// moment a memory is added.
+let LIVE_DOCTRINE = ''
+
+// Render the bundle's capped conventions into a compact preamble block. Accepts
+// the array of {name, importance, description|summary, ...} the bundle exposes
+// under bundle["conventions"]; tolerates dicts or already-formatted strings.
+function setLiveConventions(conventions) {
+  if (!Array.isArray(conventions) || conventions.length === 0) return
+  const lines = conventions.map((c) => {
+    if (typeof c === 'string') return `- ${c}`
+    const name = c.name || c.id || 'convention'
+    const imp = (c.importance != null) ? ` [importance ${c.importance}]` : ''
+    const body = (c.summary || c.description || '').toString().replace(/\s+/g, ' ').trim()
+    return `- ${name}${imp}: ${body}`
+  })
+  LIVE_DOCTRINE = [
+    'LIVE PRISM CONVENTIONS (push-injected from context_bundle — importance-ranked, top-N capped; honor these as project doctrine):',
+    ...lines,
+  ].join('\n')
+}
 
 // SELF-HEAL doctrine (implement-workflow reliability). Injected into every step
 // agent's preamble so a failed step / genuine gate-reject / runtime error
@@ -102,7 +138,13 @@ const dryNote = DRY
   : ''
 
 function preamble(role) {
-  return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${CONVENTIONS}\n\n${SELF_HEAL}${dryNote}`
+  // Static procedural spine ALWAYS; the live push-injected conventions ride on
+  // top once the Locate step has seeded them from context_bundle. SELF_HEAL's
+  // memory_recall stays the FALLBACK path, not the primary convention source.
+  const conventionsBlock = LIVE_DOCTRINE
+    ? `${PROCEDURAL_SPINE}\n\n${LIVE_DOCTRINE}`
+    : PROCEDURAL_SPINE
+  return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${conventionsBlock}\n\n${SELF_HEAL}${dryNote}`
 }
 
 // ── Step-contract telemetry transport (task 0b34b6f7) ───────────────────
@@ -186,6 +228,11 @@ const LOCATE_SCHEMA = {
     branch: { type: 'string', description: 'git branch the build will land on (never main)' },
     context_summary: { type: 'string', description: 'brain-first summary of the relevant subsystem with file:line refs' },
     requirements: { type: 'array', items: { type: 'string' }, description: 'discrete acceptance requirements distilled from the task' },
+    conventions: {
+      type: 'array',
+      description: 'the importance-ranked, top-N-capped conventions from context_bundle(persona="dev")["conventions"] — push-injected into every step agent\'s preamble (task 0c811636). Each item: {name, importance, summary|description}. Empty array if context_bundle returned none.',
+      items: { type: 'object' },
+    },
   },
 }
 
@@ -242,7 +289,7 @@ const pick = TASK_ID
   : 'No task id was supplied. Call task_next to choose the highest-priority unblocked task, then read its row via task_list.'
 
 const locate = await agent(
-  `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list — each item independently testable.\n- BRANCH: (DEPENDENCY-AWARE BASE) first read this task's \`depends_on\` (the dependencies/depends_on field on the task row) BEFORE choosing the base, so the substrate the build needs is actually present. Resolve the base like so:\n  (a) NO deps, or every dep's [conductor:<dep8>] commit is already reachable from origin/main => base = origin/main (fresh feature branch off origin/main — unchanged from today).\n  (b) A dep that is DONE but whose [conductor:<dep8>] commit is NOT on origin/main yet EXISTS on some branch: find the containing branch via \`git -C E:/.prism log --all --grep "conductor:<dep8>" -n1 --format=%H\` then \`git -C E:/.prism branch -a --contains <sha>\` => base = that dep's containing branch, so the substrate is present and the run reaches red_gate instead of hard-halting at write_failing_tests (memory mx-a56419). NEVER pick a base that is BEHIND origin/main: verify with \`git -C E:/.prism rev-list --count <base>..origin/main\` (must be 0); if the only containing branch is behind origin/main, do NOT use it.\n  (c) A dep that is NOT done => the task is BLOCKED: do NOT drive — set the branch as the base you could not safely resolve and report it, but the dependency is not done so the workflow must not proceed (treat as blocked).\n  Then: if currently on main/master/staging/develop${DRY ? ', report the branch name (feat/<task-slug>) you WOULD create AND the dependency-derived base it WOULD be cut from (do not create it).' : ', create the feature branch (e.g. feat/<task-slug>) off the dependency-derived base resolved above and switch to it, then report its name and the base.'}\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") — do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id — never the request_id default).` : ''}\n\nReturn the structured locate result.`,
+  `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list — each item independently testable.\n- PUSH-INJECT CONVENTIONS (task 0c811636): call \`context_bundle(persona="dev")\` ONCE and return its \`conventions\` array verbatim as the \`conventions\` field — this is PRISM's importance-ranked, top-N-capped living feedback doctrine (the domain="feedback" conventions — render policy, gate enforcement, board hygiene, etc.) that the drive injects into EVERY subsequent step agent's preamble. If the bundle has no \`conventions\` key or it is empty, return \`[]\` (the drive falls back to the static procedural spine + memory_recall self-heal).\n- BRANCH: (DEPENDENCY-AWARE BASE) first read this task's \`depends_on\` (the dependencies/depends_on field on the task row) BEFORE choosing the base, so the substrate the build needs is actually present. Resolve the base like so:\n  (a) NO deps, or every dep's [conductor:<dep8>] commit is already reachable from origin/main => base = origin/main (fresh feature branch off origin/main — unchanged from today).\n  (b) A dep that is DONE but whose [conductor:<dep8>] commit is NOT on origin/main yet EXISTS on some branch: find the containing branch via \`git -C E:/.prism log --all --grep "conductor:<dep8>" -n1 --format=%H\` then \`git -C E:/.prism branch -a --contains <sha>\` => base = that dep's containing branch, so the substrate is present and the run reaches red_gate instead of hard-halting at write_failing_tests (memory mx-a56419). NEVER pick a base that is BEHIND origin/main: verify with \`git -C E:/.prism rev-list --count <base>..origin/main\` (must be 0); if the only containing branch is behind origin/main, do NOT use it.\n  (c) A dep that is NOT done => the task is BLOCKED: do NOT drive — set the branch as the base you could not safely resolve and report it, but the dependency is not done so the workflow must not proceed (treat as blocked).\n  Then: if currently on main/master/staging/develop${DRY ? ', report the branch name (feat/<task-slug>) you WOULD create AND the dependency-derived base it WOULD be cut from (do not create it).' : ', create the feature branch (e.g. feat/<task-slug>) off the dependency-derived base resolved above and switch to it, then report its name and the base.'}\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") — do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id — never the request_id default).` : ''}\n\nReturn the structured locate result.`,
   { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA })
 
 const startStep = locate.current_step && ORDER.includes(locate.current_step)
@@ -250,6 +297,14 @@ const startStep = locate.current_step && ORDER.includes(locate.current_step)
   : 'review_previous_notes'
 const startIdx = ORDER.indexOf(startStep)
 log(`Task "${locate.title}" is at "${startStep}" (gate=${locate.gate_state}) on branch ${locate.branch}. Driving${DRY ? ' (DRY-RUN)' : ''} from there.`)
+
+// Seed the push-injected live conventions from context_bundle (task 0c811636).
+// From here on EVERY step handler's preamble() carries the importance-ranked,
+// top-N-capped feedback doctrine — replacing the old frozen CONVENTIONS array.
+// memory_recall (SELF_HEAL) stays the fallback, not the primary source.
+setLiveConventions(locate.conventions)
+const _convCount = Array.isArray(locate.conventions) ? locate.conventions.length : 0
+log(`Push-injected ${_convCount} live convention(s) from context_bundle into every step preamble.`)
 
 // ── Per-step handler prompts ────────────────────────────────────────────
 const ctx = `TASK: ${locate.title} (id ${locate.task_id})\nBRANCH: ${locate.branch}\nREQUIREMENTS:\n- ${locate.requirements.join('\n- ')}\n\nCONTEXT (brain-first):\n${locate.context_summary}`
