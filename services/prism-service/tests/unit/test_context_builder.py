@@ -109,3 +109,110 @@ def test_request_context_resets_after_block():
     with use_request_context(PrismRequestContext(project_id="inside")):
         assert get_request_context().project_id == "inside"
     assert get_request_context().project_id == DEFAULT_PROJECT
+
+
+# ── task 0c811636: push-inject importance-ranked conventions ───────────────
+# These pin the USER-FACING seam end-to-end: a feedback-domain memory stored
+# through the real `memory_store` MCP verb must reach the agent via the
+# `context_bundle` MCP verb under a distinct bundle["conventions"] key,
+# importance-ranked, deduped, and top-N capped. Asserting through the
+# dispatcher (handle_tool) — NOT a ContextBuilder mock — so a dead/unwired
+# code path cannot false-green.
+
+
+def _store_feedback(name, importance, project, *, desc=None):
+    return _json_text(_call(
+        "memory_store",
+        {
+            "domain": "feedback",
+            "name": name,
+            "description": desc or f"convention {name} body text for recall",
+            "type": "convention",
+            "classification": "tactical",
+            "importance": importance,
+        },
+        project,
+    ))
+
+
+def test_bundle_surfaces_feedback_conventions(project):
+    """A feedback-domain memory must appear in bundle['conventions'] — proving
+    domain='feedback' is recalled in addition to domain=persona (the old
+    _recall_memory recalled domain=persona ONLY, so feedback never surfaced)."""
+    _store_feedback("ui-first-marker", 9, project)
+
+    payload = _json_text(_call("context_bundle", {"persona": "dev"}, project))
+
+    assert "conventions" in payload, (
+        "context_bundle must expose a distinct 'conventions' key"
+    )
+    names = [_conv_name(c) for c in payload["conventions"]]
+    assert "ui-first-marker" in names, (
+        f"feedback-domain convention missing from bundle['conventions']: {names}"
+    )
+
+
+def _conv_name(c):
+    if isinstance(c, dict):
+        return c.get("name")
+    return getattr(c, "name", None)
+
+
+def _conv_importance(c):
+    if isinstance(c, dict):
+        return c.get("importance")
+    return getattr(c, "importance", None)
+
+
+def test_conventions_ranked_by_importance_desc(project):
+    """Conventions are returned highest-importance first."""
+    _store_feedback("low-conv", 2, project)
+    _store_feedback("high-conv", 10, project)
+    _store_feedback("mid-conv", 6, project)
+
+    payload = _json_text(_call("context_bundle", {"persona": "dev"}, project))
+    imps = [_conv_importance(c) for c in payload["conventions"]]
+
+    assert imps == sorted(imps, reverse=True), (
+        f"conventions not importance-descending: {imps}"
+    )
+    assert _conv_name(payload["conventions"][0]) == "high-conv"
+
+
+def test_conventions_top_n_cap_env_tunable(project, monkeypatch):
+    """PRISM_CONTEXT_CONVENTIONS_N caps the count; the highest-importance N
+    survive. Fails if the cap is removed (all N+1 returned)."""
+    monkeypatch.setenv("PRISM_CONTEXT_CONVENTIONS_N", "3")
+    for i in range(4):  # N+1 = 4 conventions, importances 1..4
+        _store_feedback(f"cap-conv-{i}", i + 1, project)
+
+    payload = _json_text(_call("context_bundle", {"persona": "dev"}, project))
+    names = [_conv_name(c) for c in payload["conventions"]]
+
+    assert len(payload["conventions"]) == 3, (
+        f"top-N cap not applied (expected 3, got {len(payload['conventions'])})"
+    )
+    assert "cap-conv-0" not in names, (
+        "lowest-importance convention should be dropped by the cap"
+    )
+
+
+def test_conventions_default_cap_is_8(project):
+    """Default cap (no env) is 8."""
+    for i in range(10):
+        _store_feedback(f"def-conv-{i}", i + 1, project)
+
+    payload = _json_text(_call("context_bundle", {"persona": "dev"}, project))
+    assert len(payload["conventions"]) <= 8, (
+        f"default cap should be 8, got {len(payload['conventions'])}"
+    )
+
+
+def test_conventions_deduped(project):
+    """No duplicate convention entries across persona + feedback recalls."""
+    _store_feedback("dupe-conv", 7, project)
+
+    payload = _json_text(_call("context_bundle", {"persona": "dev"}, project))
+    names = [_conv_name(c) for c in payload["conventions"]]
+
+    assert len(names) == len(set(names)), f"duplicate conventions: {names}"
