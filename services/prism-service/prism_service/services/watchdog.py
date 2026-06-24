@@ -33,8 +33,18 @@ import time
 WORKER_ID = "watchdog"
 WORKER_LABEL = "Deadlock watchdog"
 
-# Number of consecutive hanging probes before an opt-in kill fires.
+# A busy-but-HEALTHY daemon (model load, indexing, a maintenance pass) can
+# block the single event loop for tens of seconds, making the HTTP self-probe
+# time out. That is NOT a deadlock. So the kill fires only after the wedge has
+# persisted CONTINUOUSLY for KILL_AFTER_S (env PRISM_WATCHDOG_KILL_AFTER_S) AND
+# the process is past its startup GRACE_S (env PRISM_WATCHDOG_GRACE_S) — startup
+# is when model-load + first-index legitimately stall the loop. A real all-
+# threads deadlock is permanent, so it still trips; a transient busy spell never
+# does. (GH #155 watchdog + #162 kill-default-on follow-up: stop os._exit-ing a
+# healthy daemon.) Back-compat constant retained; no longer the kill trigger.
 KILL_THRESHOLD = 3
+DEFAULT_GRACE_S = 180
+DEFAULT_KILL_AFTER_S = 300
 
 
 def _log(msg: str) -> None:
@@ -45,6 +55,15 @@ def _log(msg: str) -> None:
 # Status dict — read by GET /api/watchdog. Module-level + lock-guarded, one
 # shared dict across cycles of the single watchdog thread.
 # ---------------------------------------------------------------------------
+# Wall-clock (epoch) the watchdog _loop started; 0.0 until the loop runs, which
+# keeps direct _run_cycle() unit-test calls "past grace" (the prod behaviour the
+# arm/cancel tests pin). Set once in _loop.
+_started_at = 0.0
+# Epoch of the FIRST failure in the current CONTINUOUS failure streak, or None
+# when the last probe was healthy. The kill clock measures (now - _first_fail_at)
+# so an intermittent busy spell (which recovers between cycles) never accrues.
+_first_fail_at: "float | None" = None
+
 _status_lock = threading.Lock()
 _status: dict = {
     "last_probe_ok": None,
@@ -107,6 +126,20 @@ def timeout_s() -> int:
     return max(1, _int_env("PRISM_WATCHDOG_TIMEOUT_S", 20))
 
 
+def grace_s() -> int:
+    """Startup grace: a slow/failed probe in the first grace_s after the loop
+    starts never counts toward a kill — model-load + first-index legitimately
+    stall the single event loop right after boot."""
+    return max(0, _int_env("PRISM_WATCHDOG_GRACE_S", DEFAULT_GRACE_S))
+
+
+def kill_after_s() -> int:
+    """A wedge must persist CONTINUOUSLY at least this long before an (opt-in)
+    kill fires — long enough to outlast any legitimate busy spell, short enough
+    to recover a truly-deadlocked process."""
+    return max(30, _int_env("PRISM_WATCHDOG_KILL_AFTER_S", DEFAULT_KILL_AFTER_S))
+
+
 def _kill_enabled() -> bool:
     """In-process self-heal — os._exit(1) defense-in-depth (GH #162). Defaults
     ON (best-effort: it still needs the GIL the futex holder never yields, so
@@ -155,7 +188,10 @@ def _dump_path():
 def _run_cycle(timeout_s: int) -> None:
     """Arm faulthandler, run the self-probe, then cancel (healthy) or leave
     the timer armed (hang). On a hang the C-level timer fires and dumps all
-    thread stacks even though every Python thread is deadlocked."""
+    thread stacks even though every Python thread is deadlocked. A kill fires
+    only after a CONTINUOUS wedge past startup grace (see KILL_AFTER_S/GRACE_S)
+    so a busy-but-healthy daemon is never os._exit-ed."""
+    global _first_fail_at
     fh_file = _dump_path()
     try:
         faulthandler.dump_traceback_later(timeout_s, repeat=False, file=fh_file)
@@ -166,21 +202,38 @@ def _run_cycle(timeout_s: int) -> None:
     try:
         latency_ms = _self_probe(timeout_s)
     except Exception:
-        # HANGING / failed probe: do NOT cancel — the C timer is left to fire
-        # and dump every thread's stack into prism.log. This is the whole
-        # point of #155: capture a traceback the deadlocked interpreter
-        # cannot produce itself.
+        now = time.time()
         fails = _bump("consecutive_failures")
-        _set(last_probe_ok=False, last_dump_at=time.time(), armed=False)
+        if _first_fail_at is None:
+            _first_fail_at = now
+        wedge_s = now - _first_fail_at
+        if (now - _started_at) < grace_s():
+            # Startup stall (model-load / first-index), NOT a deadlock: disarm
+            # the dump to avoid boot-time stack-dump noise and never kill.
+            try:
+                faulthandler.cancel_dump_traceback_later()
+            except Exception:
+                pass
+            _set(last_probe_ok=False, armed=False)
+            _log(f"probe slow during startup grace "
+                 f"({int(now - _started_at)}s/{grace_s()}s) — not a wedge")
+            return
+        # Past grace: a genuine hang. Leave the C timer ARMED so it dumps every
+        # thread's stack into prism.log — the #155 diagnostic the deadlocked
+        # interpreter cannot produce itself.
+        _set(last_probe_ok=False, last_dump_at=now, armed=False)
         _bump("dump_count")
-        _log(f"probe HUNG (consecutive_failures={fails}); faulthandler armed to dump")
-        if _kill_enabled() and fails >= KILL_THRESHOLD:
+        _log(f"probe HUNG (streak={fails}, {int(wedge_s)}s continuous); "
+             f"faulthandler armed to dump")
+        if _kill_enabled() and wedge_s >= kill_after_s():
             _bump("restarts")
-            _log(f"PRISM_WATCHDOG_KILL=1 + {fails} failures — os._exit(1) for supervisor restart")
+            _log(f"continuous wedge {int(wedge_s)}s >= {kill_after_s()}s — "
+                 f"os._exit(1) for supervisor restart")
             os._exit(1)
         return
 
-    # HEALTHY probe: cancel the armed timer and record latency.
+    # HEALTHY probe: clear the failure streak, cancel the armed timer, record.
+    _first_fail_at = None
     try:
         faulthandler.cancel_dump_traceback_later()
     except Exception:
@@ -193,9 +246,12 @@ def _run_cycle(timeout_s: int) -> None:
 # Daemon-thread entrypoint — mirrors start_maintenance_clock.
 # ---------------------------------------------------------------------------
 def _loop(initial_delay_s: float) -> None:
+    global _started_at
+    _started_at = time.time()
     if initial_delay_s > 0:
         time.sleep(initial_delay_s)
-    _log(f"started; interval={interval_s()}s timeout={timeout_s()}s kill={_kill_enabled()}")
+    _log(f"started; interval={interval_s()}s timeout={timeout_s()}s "
+         f"grace={grace_s()}s kill={_kill_enabled()} kill_after={kill_after_s()}s")
     while True:
         try:
             _run_cycle(timeout_s())
