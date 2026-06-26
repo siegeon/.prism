@@ -1104,6 +1104,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Task ID to update"},
+                "title": {"type": "string", "description": "Rename the task. Blank/whitespace is ignored (never blanks an existing title)."},
                 "status": {
                     "type": "string",
                     "description": "New status: pending, in_progress, done, blocked",
@@ -3534,7 +3535,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             task = task_svc.update(arguments["id"], **update_kwargs)

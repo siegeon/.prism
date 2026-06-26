@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.4"
+PRISM_VERSION = "6.6.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.6.5: FIX customer bug (task 11040b39) — a task's TITLE is now editable. "
+    "Threaded `title` through the ONE task_update path across all three layers: "
+    "TaskService.update persists it (with a BLANK-TITLE GUARD — None/empty/"
+    "whitespace is ignored, never blanks an existing title), the MCP task_update "
+    "tool advertises + plumbs `title`, and PATCH /api/tasks/{id} accepts it. "
+    "TaskDetailPage gains a click-to-rename affordance on the title (Enter saves, "
+    "Esc cancels, blank ignored). Tests: tests/unit/test_task_title_rename.py "
+    "(service round-trip + blank guard, MCP dispatcher seam, API PATCH seam). "
     "v6.6.4: UNIFY the knowledge surfaces into TWO (task 89a1ddef). The four "
     "knowledge pages (Brain, Understand, Memory, OKF) collapse to Brain (the "
     "unchanged Sigma graphvis) + a UNIFIED Understand wiki modeled on Google's "
