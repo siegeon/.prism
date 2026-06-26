@@ -260,6 +260,7 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
 
 
 class TaskUpdate(BaseModel):
+    title: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[int] = None
     assigned_agent: Optional[str] = None

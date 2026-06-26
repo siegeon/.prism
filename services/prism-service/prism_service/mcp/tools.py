@@ -817,6 +817,45 @@ TOOLS: list[Tool] = [
         },
     ),
     # ------------------------------------------------------------------
+    # OKF — browse PRISM's stores as a live, read-only OKF wiki. Both
+    # tools are pure projections (never write brain.db / graph.db).
+    # ------------------------------------------------------------------
+    Tool(
+        name="okf_index",
+        description=(
+            "Browse the Understand wiki: the OKF manifest of this project's "
+            "knowledge (curated memory as navigable concepts). Returns "
+            "okf_version, the top-level sections, the concept count, and every "
+            "concept path. Read-only projection (never writes brain/graph db)."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="okf_get",
+        description=(
+            "Read one concept from the Understand wiki by path "
+            "(e.g. '/memory/<domain>/<name>.md'): its type, frontmatter, "
+            "markdown body, cross-links, and inbound backlinks. Paths come "
+            "from okf_index / okf_graph."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Concept path from okf_index"},
+            },
+            "required": ["path"],
+        },
+    ),
+    Tool(
+        name="okf_graph",
+        description=(
+            "Return the Understand wiki's concept GRAPH for this project — "
+            "nodes (concepts: id, title, type, domain) + edges (cross-links). "
+            "The agent-facing view of the unified Understand wiki."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    # ------------------------------------------------------------------
     # LL-08 — Janitor / Layer-B queue endpoints. PRISM schedules the
     # work; the caller's Claude does the LLM compute via the prism-
     # reflect sub-agent. See services/janitor_service.py for the
@@ -1075,6 +1114,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Task ID to update"},
+                "title": {"type": "string", "description": "Rename the task. Blank/whitespace is ignored (never blanks an existing title)."},
                 "status": {
                     "type": "string",
                     "description": "New status: pending, in_progress, done, blocked",
@@ -1428,6 +1468,9 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "prism_guide",
     "memory_store",
     "memory_recall",
+    "okf_index",
+    "okf_get",
+    "okf_graph",
     "task_create",
     "task_list",
     "task_next",
@@ -1641,14 +1684,18 @@ _GUIDE_SECTIONS: dict[str, str] = {
     "overview": _version_banner() + "\n\n" + """\
 # PRISM — what it is
 
-An on-prem memory + knowledge layer for coding agents. Four tightly coupled
-pillars, all accessed via this MCP endpoint:
+An on-prem memory + knowledge layer for coding agents. Knowledge lives in TWO
+surfaces (plus Tasks + Workflow), all accessed via this MCP endpoint:
 
-- **Brain** — hybrid search over source files, docs, and architecture notes.
-  Combines BM25 (FTS5), dense vector search (sentence-transformers MiniLM by
-  default), and a code graph (graphify: tree-sitter + Leiden clustering).
-- **Memory** — durable project conventions, decisions, and failures. Survives
-  across sessions. Full-text-searchable with supersession semantics.
+- **Brain** — the code-graph VISUALIZATION (Sigma WebGL) plus retrieval over
+  source files, docs, and architecture notes. Retrieve with `brain_search`
+  (hybrid BM25 + dense vector + graph RRF) and `brain_understand`; the graph
+  itself is graphify (tree-sitter + Leiden clustering).
+- **Understand** — ONE unified wiki over the project's curated MEMORY,
+  projected as navigable OKF concepts: a concept graph, readable concept
+  bodies, cross-links, and backlinks. Browse it with `okf_index` /
+  `okf_get` / `okf_graph`. Memory is what you READ here; you still WRITE it
+  with `memory_store` and search the raw entries with `memory_recall`.
 - **Tasks** — kanban-style tracker with dependencies, priorities, personas.
 - **Workflow** — SDLC state machine (planning → RED → GREEN → review) with
   per-step gates.
@@ -1734,6 +1781,14 @@ change between calls. Cache it.
 - `memory_recall(query, domain?, limit?)` — FTS search. Returns active,
   temporally valid entries sorted by importance.
 
+## Understand (the unified wiki over Memory)
+Curated memory is browsable as ONE Understand wiki — memory entries projected
+as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
+- `okf_index()` — the wiki manifest: sections, concept count, every path.
+- `okf_get(path)` — read one concept (frontmatter + body + cross-links +
+  backlinks).
+- `okf_graph()` — the concept GRAPH: nodes (concepts) + cross-link edges.
+
 ## Tasks
 - `task_create(title, description?, priority?, dependencies?, tags?,
   story_file?, assigned_agent?)` — new task.
@@ -1753,7 +1808,7 @@ change between calls. Cache it.
   adds `context_pack` with role card, rules, template, asset digests, and the
   same relevant context nested for model-agnostic clients.
 - `prism_guide(section?)` — this tool. Sections: overview | tools |
-  workflow | memory | graph | examples.
+  workflow | orchestration | memory | graph | examples.
 """,
     "workflow": """\
 # Daily workflow loop (coding agent)
@@ -1881,11 +1936,53 @@ Requires a maintenance profile such as `?tool_profile=all`.
 3. `context_bundle()` — full picture.
 4. Resume from the last known-good state.
 """,
+    "orchestration": """\
+# Working tasks the PRISM way
+
+PRISM does NOT auto-run your work — YOU (the calling agent) orchestrate the
+conductor through the `task_*` / `conductor_*` MCP tools. The pattern:
+
+## 1. Frame an EPIC as a ROOT task, decompose into demonstrable subtasks
+- `task_create(title=..., parent_id="")` — a ROOT task (empty parent_id) is an
+  EPIC tracked LIVE on /conductor. A task you want to WATCH animate on the
+  conductor MUST be root; child tasks are hidden from the tiles.
+- Break the epic into demonstrable-FEATURE subtasks with
+  `task_create(..., parent_id="<epic_id>")` — the parent_id hierarchy is what
+  the conductor renders. Title = the feature; mechanics go in the description.
+
+## 2. Drive each task through the conductor SDLC state machine
+review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
+-> green_gate, via `conductor_advance` / `conductor_gate`.
+- story_gate / plan_gate are RUBRIC-VERIFIED: the plan_doc needs a Summary,
+  Requirements, Acceptance Criteria (AC-ids WITH oracles), plus a mermaid
+  `plan_diagram` — a thin plan scores red.
+- red_gate / green_gate are PROOF-CARRYING: the artifact (failing-test trace
+  at the red commit; re-run green capture) is machine-validated.
+
+## 3. FAN OUT with subagents — and verify with a DISTINCT actor
+- A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
+  subagents (fan-out) to move the epic faster.
+- An INDEPENDENT subagent (a DISTINCT actor — NO self-override) clears
+  red_gate/green_gate with REAL artifacts: it runs the failing test at the red
+  commit, then re-runs + captures green. A gate override by the SAME actor
+  that produced the work is rejected.
+
+## 4. Write the WHY back to memory at green_gate
+On green, `memory_store(type="decision", ...)` the DECISION + rationale +
+rejected alternatives + the file:line it lives at. It resurfaces in the
+Understand wiki so the next agent inherits the reasoning, not just the diff.
+
+## Prefer the skills
+- `implement` (workflow) DRIVES one task through this whole conductor SDLC.
+- `prototype` (workflow) PLANS one task (research -> PRD-style plan).
+Reach for them instead of hand-stepping every gate.
+""",
 }
 
 
 def _prism_guide(section: str | None) -> str:
-    order = ["overview", "tools", "workflow", "memory", "graph", "examples"]
+    order = ["overview", "tools", "workflow", "orchestration", "memory",
+             "graph", "examples"]
     if section and section in _GUIDE_SECTIONS:
         return _GUIDE_SECTIONS[section]
     return "\n\n".join(_GUIDE_SECTIONS[s] for s in order)
@@ -3447,6 +3544,22 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json(results))]
 
         # ------------------------------------------------------------------
+        # OKF tools — read-only projection of memory + brain as an OKF wiki
+        # ------------------------------------------------------------------
+        if name in ("okf_index", "okf_get", "okf_graph"):
+            from prism_service.services.okf_host import OkfHost
+
+            host = OkfHost(memory_svc, brain_svc)
+            if name == "okf_index":
+                return [TextContent(type="text", text=_json(host.index()))]
+            if name == "okf_graph":
+                return [TextContent(type="text", text=_json(host.graph()))]
+            result = host.get(arguments["path"])
+            if result is None:
+                return [TextContent(type="text", text=_json({"error": f"unknown concept: {arguments['path']}"}))]
+            return [TextContent(type="text", text=_json(result))]
+
+        # ------------------------------------------------------------------
         # Task tools
         # ------------------------------------------------------------------
         if name == "task_create":
@@ -3489,7 +3602,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             task = task_svc.update(arguments["id"], **update_kwargs)

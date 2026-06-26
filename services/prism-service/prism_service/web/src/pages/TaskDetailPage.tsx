@@ -408,6 +408,9 @@ export default function TaskDetailPage() {
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
   const [gateOverride, setGateOverride] = useState(false);
+  // Inline title rename (customer bug 11040b39): click the title to edit.
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   // Reduced-motion guard for the staggered Card stack, toast, and status flash.
   const reduced = useReducedMotion();
   // Status-chip flash: keyed on the task.status VALUE change (NOT the click).
@@ -473,6 +476,28 @@ export default function TaskDetailPage() {
       load();
     } catch (e) {
       setNotice(`Update failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Rename the task. Blank/whitespace drafts are ignored (the server also
+  // guards) so a rename can never blank a title.
+  const renameTitle = async () => {
+    const next = titleDraft.trim();
+    setEditingTitle(false);
+    if (!next || next === (task?.title ?? "")) return;
+    setBusy(true);
+    try {
+      await fetch(`/api/tasks/${id}?project=${project}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: next }),
+      });
+      setNotice("Title updated.");
+      load();
+    } catch (e) {
+      setNotice(`Rename failed: ${(e as Error).message ?? e}`);
     } finally {
       setBusy(false);
     }
@@ -575,7 +600,27 @@ export default function TaskDetailPage() {
 
       <div className="flex items-baseline justify-between gap-4">
         <div>
-          <h1 className="font-serif text-3xl tracking-tight">{task.title ?? "Untitled task"}</h1>
+          {editingTitle ? (
+            <input
+              autoFocus
+              className="font-serif text-3xl tracking-tight bg-transparent border-b border-current outline-none w-full"
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={renameTitle}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") renameTitle();
+                if (e.key === "Escape") setEditingTitle(false);
+              }}
+            />
+          ) : (
+            <h1
+              className="font-serif text-3xl tracking-tight cursor-text hover:opacity-70"
+              title="Click to rename"
+              onClick={() => { setTitleDraft(task.title ?? ""); setEditingTitle(true); }}
+            >
+              {task.title ?? "Untitled task"}
+            </h1>
+          )}
           <div className="flex items-center gap-2 mt-2 flex-wrap">
             <motion.span
               // Flash on the confirmed task.status value change (statusFlash

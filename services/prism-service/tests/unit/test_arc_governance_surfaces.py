@@ -30,12 +30,22 @@ _REPO = _SERVICE_ROOT.parent.parent
 _WEB = _SERVICE_ROOT / "prism_service" / "web" / "src"
 
 
-# ── d2: violations card on the project page ────────────────────────────
+# ── d2: Understand is the consolidated OKF concept wiki (v6.7.0) ────────
+# The v6.7.0 4->2 knowledge consolidation replaced the old Understand
+# architecture-analysis TABS (tour/layers/domains/violations) with one
+# OKF concept wiki (graph + detail panel). The architecture-VIOLATIONS
+# governance card was retired alongside the deprecated understand_*
+# analysis surface; the ViolationsView component is kept (next test) for
+# the tracked follow-up that rehomes governance near /conductor. So the
+# Understand page is now the concept wiki, NOT a violations card host.
 
-def test_understand_page_offers_violations_card():
+def test_understand_page_is_the_okf_concept_wiki():
     src = (_WEB / "pages" / "UnderstandPage.tsx").read_text(encoding="utf-8")
-    assert "violations" in src, (
-        "the project page must surface the violations artifact")
+    assert "/api/okf/graph" in src, (
+        "Understand must be the OKF concept wiki (concept graph)")
+    assert "violations" not in src.lower(), (
+        "the legacy architecture-violations card was retired from the "
+        "consolidated wiki (v6.7.0); governance rehoming is a follow-up")
 
 
 def test_violations_view_renders_count_and_expands():

@@ -394,6 +394,12 @@ class TaskService:
         for key, value in kwargs.items():
             if not hasattr(task, key) or key == "id":
                 continue
+            # Blank-title guard (customer bug 11040b39): a None / empty /
+            # whitespace-only title is ignored so a rename can never blank
+            # out a task's title. NOT NULL on the column would also reject
+            # None — this keeps the existing title instead of erroring.
+            if key == "title" and not (value or "").strip():
+                continue
             old_value = getattr(task, key)
             if old_value == value:
                 continue

@@ -22,6 +22,7 @@ from prism_service.api.graph import router as graph_router
 from prism_service.api.jobs import router as jobs_router
 from prism_service.api.learning import router as learning_router
 from prism_service.api.memory import router as memory_router
+from prism_service.api.okf import router as okf_router
 from prism_service.api.projects import router as projects_router
 from prism_service.api.retrievals import router as retrievals_router
 from prism_service.api.service_info import router as service_info_router
@@ -46,6 +47,7 @@ api_router.include_router(graph_router, prefix="/graph", tags=["graph"])
 api_router.include_router(jobs_router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(learning_router, prefix="/learning", tags=["learning"])
 api_router.include_router(memory_router, prefix="/memory", tags=["memory"])
+api_router.include_router(okf_router, prefix="/okf", tags=["okf"])
 api_router.include_router(projects_router, prefix="/projects", tags=["projects"])
 api_router.include_router(retrievals_router, prefix="/retrievals", tags=["retrievals"])
 api_router.include_router(service_info_router, prefix="/service-info", tags=["service-info"])

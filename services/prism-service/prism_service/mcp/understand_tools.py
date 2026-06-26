@@ -161,6 +161,20 @@ _READ_TOOLS: list[Tool] = [
 ]
 UNDERSTAND_TOOLS.extend(_READ_TOOLS)
 
+# v6.6.x — the four-page knowledge model collapsed to TWO surfaces (Brain =
+# code-graph viz; Understand = ONE unified wiki over curated memory). The
+# understand_* analysis-queue tools predate that wiki; mark every one LEGACY so
+# agents reach for okf_index/okf_get/okf_graph + brain_understand first.
+# Behavior is unchanged — descriptions only.
+_LEGACY_PREFIX = (
+    "LEGACY (v5.1 analysis queue) — prefer okf_index/okf_get/okf_graph + "
+    "brain_understand: "
+)
+UNDERSTAND_TOOLS = [
+    t.model_copy(update={"description": _LEGACY_PREFIX + (t.description or "")})
+    for t in UNDERSTAND_TOOLS
+]
+
 UNDERSTAND_TOOL_NAMES: set[str] = {t.name for t in UNDERSTAND_TOOLS}
 
 
