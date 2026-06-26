@@ -1,7 +1,13 @@
 """Integration tests for the OKF host HTTP surface (api/okf.py).
 
-RED until api/okf.py is written and mounted in main.py. Exercises the real
-FastAPI router via TestClient against the live `prism` project stores.
+Exercises the real FastAPI router via TestClient against the live `prism`
+project stores. Run with PRISM_DATA_DIR=services/prism-service/data (the
+documented dev store) — the sparse AppData default has no projected memory.
+
+The OKF wiki is PRISM's curated MEMORY expressed as a navigable bundle: the
+only section is "memory", every concept carries its real id (for /memory/<id>
+navigation), and internal body links point only at /memory/<id> detail routes
+or the /understand graph — never at /brain or other junk.
 """
 
 import pytest
@@ -16,15 +22,19 @@ def client():
     return TestClient(app)
 
 
-def test_okf_index_returns_manifest_with_version_and_sections(client):
+def test_okf_index_sections_are_memory_only(client):
     r = client.get("/api/okf/index", params={"project": "prism"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body.get("okf_version") == "0.1"
-    # memory is always present for the prism project; sections come from the
-    # projected bundle, not a hardcoded list.
-    assert "memory" in body.get("sections", [])
+    # Memory IS the knowledge: the only projected section is "memory".
+    assert body.get("sections") == ["memory"], body.get("sections")
     assert body.get("concept_count", 0) > 0
+    # Every manifest concept carries its real memory id so a card click opens
+    # the REAL /memory/<id> detail page (not a standalone OKF silo).
+    concepts = body.get("concepts", [])
+    assert concepts
+    assert all(c.get("id") for c in concepts)
 
 
 def test_okf_raw_index_is_conformant_markdown(client):
@@ -33,12 +43,23 @@ def test_okf_raw_index_is_conformant_markdown(client):
     assert 'okf_version: "0.1"' in r.text
 
 
-def test_okf_concept_returns_typed_concept(client):
+def test_okf_concept_links_use_memory_id_and_understand_routes(client):
     idx = client.get("/api/okf/index", params={"project": "prism"}).json()
-    # pick any projected concept path and fetch it
-    path = next(p for p in idx["paths"] if p.startswith("/memory/"))
-    r = client.get("/api/okf/concept", params={"project": "prism", "path": path})
-    assert r.status_code == 200, r.text
-    concept = r.json()
-    assert concept["type"]  # non-empty type (OKF hard rule)
-    assert "frontmatter" in concept and "body" in concept
+    paths = [p for p in idx["paths"] if p.startswith("/memory/")]
+    assert paths
+    found_internal = False
+    # Walk concepts until we find one whose body carries an internal link; assert
+    # every internal link is a /memory/<id> route or /understand (no junk).
+    for path in paths[:60]:
+        r = client.get("/api/okf/concept", params={"project": "prism", "path": path})
+        assert r.status_code == 200, r.text
+        concept = r.json()
+        assert concept["type"]  # OKF hard rule: non-empty type
+        assert concept["frontmatter"].get("id")  # carries the real memory id
+        for href in concept.get("links", []):
+            if href.startswith("/"):
+                found_internal = True
+                assert href.startswith("/memory/") or href.startswith("/understand"), href
+        if found_internal:
+            break
+    assert found_internal, "no concept body produced a navigable /memory or /understand link"

@@ -126,9 +126,12 @@ export function highlight(s: string): ReactNode[] {
 }
 
 
-// Inline renderer — `code` spans (teal mono chips), **bold**, and verdict-token
-// coloring on the remaining plain text. Code first so `**...**` inside backticks
-// stays literal; plain runs flow through highlight() for verdict tones.
+// Inline renderer — `code` spans (teal mono chips), **bold**, `[label](href)`
+// links, and verdict-token coloring on the remaining plain text. Code first so
+// `**...**` / `[..](..)` inside backticks stay literal; plain runs flow through
+// highlight() for verdict tones. Links render as real <a> anchors so callers can
+// intercept internal routes (e.g. OKF [[wikilinks]] -> /memory/<id>); http(s)
+// targets open in a new tab.
 export function renderInline(text: string): ReactNode {
   const parts: ReactNode[] = [];
   let rest = text;
@@ -136,7 +139,8 @@ export function renderInline(text: string): ReactNode {
   while (rest.length > 0) {
     const code = /`([^`]+)`/.exec(rest);
     const bold = /\*\*([^*]+)\*\*/.exec(rest);
-    const next = pickFirst(code, bold);
+    const link = /\[([^\]]+)\]\(([^)\s]+)\)/.exec(rest);
+    const next = pickFirst(code, bold, link);
     if (!next) { parts.push(<span key={key++}>{highlight(rest)}</span>); break; }
     if (next.index > 0) parts.push(<span key={key++}>{highlight(rest.slice(0, next.index))}</span>);
     if (next === code) {
@@ -144,6 +148,19 @@ export function renderInline(text: string): ReactNode {
         <code key={key++} className="text-[12px] font-mono px-1 py-0.5 rounded bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] break-all">
           {next[1]}
         </code>,
+      );
+    } else if (next === link) {
+      const href = next[2];
+      const external = /^https?:\/\//.test(href);
+      parts.push(
+        <a
+          key={key++}
+          href={href}
+          {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+          className="underline decoration-dotted underline-offset-2 text-[color:var(--accent-teal-fg)] hover:opacity-80 break-words"
+        >
+          {renderInline(next[1])}
+        </a>,
       );
     } else {
       parts.push(<strong key={key++} className="font-semibold">{next[1]}</strong>);

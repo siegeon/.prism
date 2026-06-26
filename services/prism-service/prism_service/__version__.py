@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.2"
+PRISM_VERSION = "6.6.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.6.3: REWORK the OKF wiki to match the oracle (task 09d61b68): memory, "
+    "OKF, and understand are the SAME knowledge. The bundle now projects MEMORY "
+    "ENTRIES ONLY — the junk brain-doc dump (_brain_concepts, empty /brain/*.md "
+    "concepts) is removed, so sections() == ['memory']. Every concept carries "
+    "its real ExpertiseEntry `id`; clicking a card opens the REAL /memory/<id> "
+    "detail page; a [[wikilink]] rewrites to the target entry's /memory/<id> "
+    "route (links WORK — every concept is readable); code references (evidence "
+    "file_paths) link into /understand (the visual of the same connections). The "
+    "/okf page is woven into the Memory/Understand UI (no parallel renderer): it "
+    "uses the shared Hermes Markdown component — now with real <a> link support — "
+    "and intercepts /memory + /understand clicks via react-router navigate, plus "
+    "a 'raw .md' affordance. Read-only: still NEVER writes brain.db/graph.db. "
     "v6.6.2: Browse PRISM knowledge as a live OKF wiki (task 09d61b68). The "
     "pure OKF core lib (prism_service/okf) + read-only host projection "
     "(services/okf_host.OkfHost — memory entries + indexed brain docs projected "

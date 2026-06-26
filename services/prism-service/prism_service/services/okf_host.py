@@ -1,12 +1,15 @@
-"""Project PRISM's stores into a live, conformant OKF bundle (READ-ONLY).
+"""Project PRISM's curated MEMORY into a live, conformant OKF bundle (READ-ONLY).
 
-Builds an in-memory Bundle from the existing memory (JSONL ExpertiseEntry) and
-brain (docs) stores so the daemon can serve PRISM's knowledge as an OKF wiki
-over MCP / HTTP / the /okf UI. This is the "host, read path" slice.
+Memory, OKF, and Understand are the SAME knowledge: OKF is the curated memory
+expressed as a navigable wiki, and the brain/understand graph is the visual of
+those same connections. So the bundle projects MEMORY ENTRIES ONLY — every
+concept is a real ExpertiseEntry. Clicking a concept opens its real
+/memory/<id> detail page; a [[wikilink]] rewrites to the target entry's
+/memory/<id> route; and code references (evidence file_paths) link into the
+/understand graph. No brain-file / fixture / empty junk concepts.
 
 AUGMENTATION, NOT REPLACEMENT: this only READS the substrate. brain.db vectors,
-graph.db, and the LSP tools are untouched; okf_search (later slice) routes
-through the existing hybrid retrieval rather than reimplementing it.
+graph.db, and the LSP tools are untouched.
 
 A small content-signature cache avoids rebuilding the bundle on every request
 (SPEC perf budget: never a full re-walk per read).
@@ -21,7 +24,6 @@ from prism_service.okf.concept import Concept
 from prism_service.okf.links import wikilinks_to_md
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
-_BRAIN_CAP = 400  # bound the brain projection for perf on large indexes
 
 
 def _slug(text: str) -> str:
@@ -44,7 +46,9 @@ def _memory_body(entry, evidence: dict) -> str:
         parts.append(entry.description)
     cites: list[str] = []
     for p in (evidence.get("file_paths") or []):
-        cites.append(f"- `{p}`")
+        # Code references navigate into the existing /understand graph (the
+        # visual of the same connections) rather than fabricating /brain md.
+        cites.append(f"- [`{p}`](/understand)")
     if evidence.get("commit"):
         cites.append(f"- commit `{evidence['commit']}`")
     if evidence.get("pr"):
@@ -54,21 +58,41 @@ def _memory_body(entry, evidence: dict) -> str:
     return "\n\n".join(parts) or "(no body)"
 
 
+def _name_resolver(name_to_id: dict[str, str]):
+    """Resolve a [[wikilink]] target name to its real /memory/<id> route.
+
+    Match the raw name first, then a slugged form (authors mix dash/underscore
+    spellings of the same entry name). Unknown names return None so the link
+    stays literal `[[name]]` text — tolerant, never an error.
+    """
+
+    def resolve(name: str) -> str | None:
+        target = name_to_id.get(name) or name_to_id.get(_slug(name))
+        return f"/memory/{target}" if target else None
+
+    return resolve
+
+
 def _memory_concepts(memory_svc) -> tuple[list[Concept], dict[str, str]]:
-    """Project active memory entries -> OKF concepts + a name->path link map."""
+    """Project active memory entries -> OKF concepts + a name->id link map."""
     rows: list[tuple[str, str, object]] = []
-    name_to_path: dict[str, str] = {}
+    name_to_id: dict[str, str] = {}
     for domain in memory_svc.list_domains():
         for e in memory_svc.list_entries(domain):  # active only by default
             path = f"/memory/{_slug(domain)}/{_slug(e.name or e.id)}.md"
             rows.append((path, domain, e))
-            if e.name:
-                name_to_path[e.name] = path
+            if e.name and e.id:
+                # Index both the raw and slugged name so cross-spelling
+                # wikilinks still resolve to the real /memory/<id> page.
+                name_to_id[e.name] = e.id
+                name_to_id.setdefault(_slug(e.name), e.id)
+    resolve = _name_resolver(name_to_id)
     concepts: list[Concept] = []
     for path, domain, e in rows:
         evidence = e.evidence if isinstance(e.evidence, dict) else {}
-        body = wikilinks_to_md(_memory_body(e, evidence), name_to_path.get)
+        body = wikilinks_to_md(_memory_body(e, evidence), resolve)
         fm = {
+            "id": e.id,  # the real ExpertiseEntry id -> /memory/<id> detail route
             "type": e.type or "note",
             "title": e.name or e.id,
             "description": e.summary or _first_sentence(e.description),
@@ -79,50 +103,19 @@ def _memory_concepts(memory_svc) -> tuple[list[Concept], dict[str, str]]:
         if evidence.get("pr"):
             fm["resource"] = str(evidence["pr"])
         concepts.append(Concept(path=path, frontmatter=fm, body=body))
-    return concepts, name_to_path
+    return concepts, name_to_id
 
 
-def _brain_concepts(brain_svc, cap: int = _BRAIN_CAP) -> list[Concept]:
-    """Project indexed brain docs -> one OKF concept per source file (bounded).
+def build_bundle(memory_svc, brain_svc=None) -> Bundle:
+    """Assemble the read-only projected OKF bundle — MEMORY ENTRIES ONLY.
 
-    doc_id is "<source_file>::<entity>"; we group entities under their file so
-    the projection is a navigable file listing, not 1000s of chunk fragments.
+    `brain_svc` is accepted (and ignored) for call-site compatibility: the brain
+    graph is surfaced as code-reference links into /understand, never as its own
+    junk concepts.
     """
-    try:
-        docs = brain_svc.list_docs(limit=cap)
-    except Exception:
-        return []
-    by_file: dict[str, dict] = {}
-    for d in docs:
-        doc_id = str(d.get("doc_id", ""))
-        src = doc_id.split("::", 1)[0] or doc_id
-        ent = by_file.setdefault(src, {"domain": d.get("domain") or "code", "entities": []})
-        tail = doc_id.split("::", 1)[1] if "::" in doc_id else ""
-        if tail and tail != "main":
-            ent["entities"].append(tail)
-    concepts: list[Concept] = []
-    for src, info in by_file.items():
-        ents = info["entities"]
-        schema = "\n".join(f"- `{e}`" for e in ents[:50]) if ents else "(file-level chunk)"
-        body = f"Indexed source file. Entities:\n\n# Schema\n{schema}"
-        fm = {
-            "type": info["domain"],
-            "title": src.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
-            "description": f"{len(ents)} indexed entit{'y' if len(ents) == 1 else 'ies'} from {src}",
-            "resource": src,
-            "tags": ["brain", info["domain"]],
-        }
-        concepts.append(Concept(path=f"/brain/{_slug(src)}.md", frontmatter=fm, body=body))
-    return concepts
-
-
-def build_bundle(memory_svc, brain_svc) -> Bundle:
-    """Assemble the read-only projected OKF bundle from the project's stores."""
     bundle = Bundle()
     mem_concepts, _ = _memory_concepts(memory_svc)
     for c in mem_concepts:
-        bundle.add(c)
-    for c in _brain_concepts(brain_svc):
         bundle.add(c)
     return bundle
 
@@ -130,27 +123,25 @@ def build_bundle(memory_svc, brain_svc) -> Bundle:
 class OkfHost:
     """Per-project read-only OKF projection with a content-signature cache.
 
-    The cache avoids rebuilding on every request; it invalidates when the
-    cheap signature (memory domain count + brain doc count) changes, so writes
+    The cache avoids rebuilding on every request; it invalidates when the cheap
+    memory signature (per-domain active entry counts) changes, so writes
     elsewhere refresh the view without a full re-walk on the hot path.
     """
 
-    def __init__(self, memory_svc, brain_svc):
+    def __init__(self, memory_svc, brain_svc=None):
         self._memory_svc = memory_svc
-        self._brain_svc = brain_svc
+        self._brain_svc = brain_svc  # kept for API compat; not projected
         self._sig: tuple | None = None
         self._bundle: Bundle | None = None
 
     def _signature(self) -> tuple:
         try:
-            domains = tuple(sorted(self._memory_svc.list_domains()))
+            domains = sorted(self._memory_svc.list_domains())
+            return tuple(
+                (d, len(self._memory_svc.list_entries(d))) for d in domains
+            )
         except Exception:
-            domains = ()
-        try:
-            ndocs = len(self._brain_svc.list_docs(limit=_BRAIN_CAP))
-        except Exception:
-            ndocs = 0
-        return (domains, ndocs)
+            return ()
 
     def bundle(self) -> Bundle:
         sig = self._signature()
@@ -169,6 +160,8 @@ class OkfHost:
             c = b.concepts[path]
             concepts.append({
                 "path": path,
+                # The real ExpertiseEntry id -> the UI opens /memory/<id>.
+                "id": str(c.frontmatter.get("id", "") or ""),
                 "section": path.strip("/").split("/")[0],
                 "type": c.type,
                 "title": c.title or path.rsplit("/", 1)[-1],
