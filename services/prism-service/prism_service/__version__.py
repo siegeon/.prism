@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.1"
+PRISM_VERSION = "6.6.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.6.2: Browse PRISM knowledge as a live OKF wiki (task 09d61b68). The "
+    "pure OKF core lib (prism_service/okf) + read-only host projection "
+    "(services/okf_host.OkfHost — memory entries + indexed brain docs projected "
+    "into conformant OKF concept docs; NEVER writes brain.db/graph.db) now have "
+    "an HTTP + MCP + UI surface. HTTP: new api/okf.py router (GET /api/okf/index "
+    "manifest, /api/okf/concept?path= one typed concept, /api/okf/raw/{path} "
+    "conformant markdown as text/markdown), one OkfHost cached per project. MCP: "
+    "okf_index + okf_get read tools (interactive profile, beside memory_recall). "
+    "UI: new /okf page (Sidebar 'OKF' under Knowledge) renders sections + "
+    "type-colored frontmatter cards, each expandable to fetch its body via the "
+    "shared Hermes Markdown renderer (progressive disclosure, no raw <pre>JSON). "
+    "OkfHost.index() additively carries a compact per-concept manifest so the "
+    "UI colors cards without one request per concept. Tests: "
+    "tests/integration/test_okf_api.py (3) + tests/unit/test_okf_{concept,"
+    "validate,host}.py. NOTE: the integration test asserts the live prism store "
+    "(run with PRISM_DATA_DIR=services/prism-service/data, the documented dev "
+    "store; the sparse AppData default has no projected memory). "
     "v6.6.1: FIX the deadlock watchdog os._exit-ing a HEALTHY daemon. After "
     "#162 flipped PRISM_WATCHDOG_KILL default ON, the watchdog's HTTP self-probe "
     "false-positived whenever the single event loop was busy (model-load, "

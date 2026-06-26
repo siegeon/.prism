@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Activity, AppWindow, BookOpen, Brain, Eye, FolderTree, Info,
+  Activity, AppWindow, BookOpen, Brain, Eye, FolderTree, Globe, Info,
   Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
@@ -52,6 +52,9 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/brain", label: "Brain", icon: Brain, staleKey: "brain" },
       { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
       { to: "/memory", label: "Memory", icon: BookOpen },
+      // OKF wiki: the same Memory + Brain knowledge projected as a live,
+      // read-only Open Knowledge Format bundle (concept docs over HTTP/MCP).
+      { to: "/okf", label: "OKF", icon: Globe },
     ],
   },
   {

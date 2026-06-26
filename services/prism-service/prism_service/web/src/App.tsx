@@ -17,6 +17,7 @@ import DashboardPage from "@/pages/DashboardPage";
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
 const MemoryPage = lazy(() => import("@/pages/MemoryPage"));
 const MemoryDetailPage = lazy(() => import("@/pages/MemoryDetailPage"));
+const OkfPage = lazy(() => import("@/pages/OkfPage"));
 const TasksPage = lazy(() => import("@/pages/TasksPage"));
 const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
 const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="/graph" element={<Navigate to="/brain" replace />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/memory/:id" element={<MemoryDetailPage />} />
+            <Route path="/okf" element={<OkfPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/tasks/:id/:section" element={<TaskTextPage />} />

@@ -161,12 +161,26 @@ class OkfHost:
 
     def index(self) -> dict:
         b = self.bundle()
+        # Compact per-concept manifest so the /okf UI can render type-colored
+        # frontmatter cards without one request per concept; body stays lazy
+        # (fetched via .get on expand, progressive disclosure).
+        concepts = []
+        for path in b.paths():
+            c = b.concepts[path]
+            concepts.append({
+                "path": path,
+                "section": path.strip("/").split("/")[0],
+                "type": c.type,
+                "title": c.title or path.rsplit("/", 1)[-1],
+                "description": str(c.frontmatter.get("description", "") or ""),
+            })
         return {
             "okf_version": b.okf_version,
             "sections": b.sections(),
             "concept_count": len(b.concepts),
             "index_md": b.render_index_md(),
             "paths": b.paths(),
+            "concepts": concepts,
         }
 
     def get(self, path: str) -> dict | None:

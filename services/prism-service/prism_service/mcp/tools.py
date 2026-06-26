@@ -817,6 +817,35 @@ TOOLS: list[Tool] = [
         },
     ),
     # ------------------------------------------------------------------
+    # OKF — browse PRISM's stores as a live, read-only OKF wiki. Both
+    # tools are pure projections (never write brain.db / graph.db).
+    # ------------------------------------------------------------------
+    Tool(
+        name="okf_index",
+        description=(
+            "Return the OKF manifest for this project's knowledge: okf_version, "
+            "the top-level sections, the concept count, and every concept path. "
+            "PRISM's memory + brain stores projected as a conformant OKF bundle "
+            "(read-only)."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="okf_get",
+        description=(
+            "Fetch one OKF concept by path (e.g. '/memory/<domain>/<name>.md'). "
+            "Returns its type, frontmatter, body, and links. Paths come from "
+            "okf_index."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Concept path from okf_index"},
+            },
+            "required": ["path"],
+        },
+    ),
+    # ------------------------------------------------------------------
     # LL-08 — Janitor / Layer-B queue endpoints. PRISM schedules the
     # work; the caller's Claude does the LLM compute via the prism-
     # reflect sub-agent. See services/janitor_service.py for the
@@ -1428,6 +1457,8 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "prism_guide",
     "memory_store",
     "memory_recall",
+    "okf_index",
+    "okf_get",
     "task_create",
     "task_list",
     "task_next",
@@ -3445,6 +3476,20 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 limit=arguments.get("limit", 5),
             )
             return [TextContent(type="text", text=_json(results))]
+
+        # ------------------------------------------------------------------
+        # OKF tools — read-only projection of memory + brain as an OKF wiki
+        # ------------------------------------------------------------------
+        if name in ("okf_index", "okf_get"):
+            from prism_service.services.okf_host import OkfHost
+
+            host = OkfHost(memory_svc, brain_svc)
+            if name == "okf_index":
+                return [TextContent(type="text", text=_json(host.index()))]
+            result = host.get(arguments["path"])
+            if result is None:
+                return [TextContent(type="text", text=_json({"error": f"unknown concept: {arguments['path']}"}))]
+            return [TextContent(type="text", text=_json(result))]
 
         # ------------------------------------------------------------------
         # Task tools
