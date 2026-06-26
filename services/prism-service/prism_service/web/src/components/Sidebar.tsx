@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Activity, AppWindow, BookOpen, Brain, Eye, FolderTree, Globe, Info,
+  Activity, AppWindow, Brain, Eye, FolderTree, Info,
   Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
@@ -43,18 +43,14 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Knowledge",
     items: [
-      // Ultimate Graph merge (siegeon/.prism#50): Brain is now the ONE place
-      // to explore the knowledge — code connections (graph) + search over
-      // structured & unstructured knowledge + the context bundle. The old
-      // separate Graph + Brain-search pages folded in here; /graph and
-      // /explore redirect to /brain. Understand stays its own surface (it
-      // derives structure/domain from the repo and feeds the Brain).
+      // Knowledge collapsed to TWO surfaces (task 89a1ddef): Brain is the
+      // Sigma graphvis (code connections + search + context bundle; /graph +
+      // /explore redirect here). Understand is the unified wiki — memory + OKF
+      // + understanding as one OKF-style concept graph + read panel + links.
+      // The old /memory and /okf entries fold into Understand (still
+      // deep-linkable: /memory and /okf redirect, /memory/:id preselects).
       { to: "/brain", label: "Brain", icon: Brain, staleKey: "brain" },
       { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
-      { to: "/memory", label: "Memory", icon: BookOpen },
-      // OKF wiki: the same Memory + Brain knowledge projected as a live,
-      // read-only Open Knowledge Format bundle (concept docs over HTTP/MCP).
-      { to: "/okf", label: "OKF", icon: Globe },
     ],
   },
   {

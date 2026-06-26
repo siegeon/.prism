@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.3"
+PRISM_VERSION = "6.6.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.6.4: UNIFY the knowledge surfaces into TWO (task 89a1ddef). The four "
+    "knowledge pages (Brain, Understand, Memory, OKF) collapse to Brain (the "
+    "unchanged Sigma graphvis) + a UNIFIED Understand wiki modeled on Google's "
+    "OKF visualizer. BACKEND (read-only, still NEVER writes brain.db/graph.db): "
+    "OkfHost.graph() projects a concept GRAPH — nodes are memory concepts "
+    "(carry id+title+type+section, colored by type) and directed edges are the "
+    "authored body cross-links between known concepts (parsed from the already-"
+    "rewritten /memory/<id> links; no dangling edges, no self-loops); "
+    "OkfHost.backlinks()/get() carry inbound 'cited_by' so the panel shows who "
+    "references a concept. New GET /api/okf/graph; /api/okf/concept now includes "
+    "a backlinks list. FRONTEND: UnderstandPage is REPLACED by the wiki — a "
+    "@xyflow/react concept graph (clustered-by-type layout, ~112 nodes legible, "
+    "no new heavy dep) on the left + a detail panel on the right (shared Hermes "
+    "Markdown body, type/tags, edit/retire/supersede via /api/memory/entry/:id/"
+    "action) with internal [[/memory/<id>]] links rewired to SELECT the target "
+    "node IN-PLACE (no route change), a search box, type-filter pills, and a "
+    "'Cited by' backlinks list. NAV: Sidebar KNOWLEDGE = Brain + Understand "
+    "only; /okf and /memory redirect to /understand, /memory/:id deep-links to "
+    "/understand?concept=:id (preselects that node). Old MemoryPage/OkfPage/"
+    "MemoryDetailPage files kept but unrouted. Tests: tests/unit/test_okf_graph"
+    ".py + extended tests/integration/test_okf_api.py (graph + backlinks). "
     "v6.6.3: REWORK the OKF wiki to match the oracle (task 09d61b68): memory, "
     "OKF, and understand are the SAME knowledge. The bundle now projects MEMORY "
     "ENTRIES ONLY — the junk brain-doc dump (_brain_concepts, empty /brain/*.md "

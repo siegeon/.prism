@@ -176,6 +176,75 @@ class OkfHost:
             "concepts": concepts,
         }
 
+    def _id_to_path(self) -> dict[str, str]:
+        """Map each concept's real memory id -> its bundle path (graph nodes)."""
+        out: dict[str, str] = {}
+        for path, c in self.bundle().concepts.items():
+            cid = str(c.frontmatter.get("id", "") or "")
+            if cid:
+                out[cid] = path
+        return out
+
+    def _edges(self) -> list[dict]:
+        """Directed edges = concept body cross-links between known concepts.
+
+        A [[wikilink]] is already rewritten to /memory/<id>; we keep only those
+        targeting a known concept id (no dangling edges, no /understand code
+        refs), deduped, never self-loops. Pure + read-only.
+        """
+        from prism_service.okf.links import extract_links
+
+        known = self._id_to_path()
+        edges: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for c in self.bundle().concepts.values():
+            src = str(c.frontmatter.get("id", "") or "")
+            if not src:
+                continue
+            for href in extract_links(c.body):
+                if not href.startswith("/memory/"):
+                    continue
+                tgt = href[len("/memory/"):].strip("/").split("/")[0]
+                if tgt in known and tgt != src and (src, tgt) not in seen:
+                    seen.add((src, tgt))
+                    edges.append({"source": src, "target": tgt})
+        return edges
+
+    def graph(self) -> dict:
+        """Concept graph for the Understand wiki — nodes (memory concepts,
+        colored by type) + directed cross-link edges. Read-only projection."""
+        b = self.bundle()
+        nodes = []
+        for path in b.paths():
+            c = b.concepts[path]
+            cid = str(c.frontmatter.get("id", "") or "")
+            if not cid:
+                continue
+            nodes.append({
+                "id": cid,
+                "title": c.title or path.rsplit("/", 1)[-1],
+                "type": c.type,
+                "section": path.strip("/").split("/")[0],
+                "path": path,
+                "description": str(c.frontmatter.get("description", "") or ""),
+            })
+        return {"nodes": nodes, "edges": self._edges()}
+
+    def backlinks(self, target_id: str) -> list[dict]:
+        """Inbound 'cited by' = concepts whose body links to this concept."""
+        if not target_id:
+            return []
+        id_to_path = self._id_to_path()
+        b = self.bundle()
+        out: list[dict] = []
+        for e in self._edges():
+            if e["target"] != target_id:
+                continue
+            src_path = id_to_path.get(e["source"])
+            title = b.concepts[src_path].title if src_path else ""
+            out.append({"id": e["source"], "title": title or e["source"]})
+        return out
+
     def get(self, path: str) -> dict | None:
         if not path.startswith("/"):
             path = "/" + path
@@ -190,6 +259,7 @@ class OkfHost:
             "frontmatter": c.frontmatter,
             "body": c.body,
             "links": extract_links(c.body),
+            "backlinks": self.backlinks(str(c.frontmatter.get("id", "") or "")),
         }
 
     def raw(self, path: str) -> str | None:

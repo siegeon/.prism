@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from "react";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { AnimatePresence } from "motion/react";
 import { resolveInitialProject } from "@/lib/project";
 import Sidebar from "@/components/Sidebar";
@@ -15,9 +15,6 @@ import LiveStatusStrip from "@/components/LiveStatusStrip";
 // because it's the default route — lazy-loading it would only add a flash.
 import DashboardPage from "@/pages/DashboardPage";
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
-const MemoryPage = lazy(() => import("@/pages/MemoryPage"));
-const MemoryDetailPage = lazy(() => import("@/pages/MemoryDetailPage"));
-const OkfPage = lazy(() => import("@/pages/OkfPage"));
 const TasksPage = lazy(() => import("@/pages/TasksPage"));
 const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
 const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
@@ -59,9 +56,16 @@ export default function App() {
             <Route path="/brain" element={<ExplorePage />} />
             <Route path="/explore" element={<Navigate to="/brain" replace />} />
             <Route path="/graph" element={<Navigate to="/brain" replace />} />
-            <Route path="/memory" element={<MemoryPage />} />
-            <Route path="/memory/:id" element={<MemoryDetailPage />} />
-            <Route path="/okf" element={<OkfPage />} />
+            {/* Knowledge collapsed to TWO surfaces (task 89a1ddef): Brain
+                (Sigma graphvis) + the unified Understand wiki. /memory and
+                /okf fold into Understand but stay deep-linkable via redirect;
+                /memory/:id preselects that concept node in the wiki. */}
+            <Route path="/memory" element={<Navigate to="/understand" replace />} />
+            <Route
+              path="/memory/:id"
+              element={<MemoryConceptRedirect />}
+            />
+            <Route path="/okf" element={<Navigate to="/understand" replace />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/tasks/:id/:section" element={<TaskTextPage />} />
@@ -80,4 +84,11 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+// /memory/:id deep-links now resolve a concept in the unified Understand wiki:
+// redirect to /understand?concept=:id so the wiki preselects that node.
+function MemoryConceptRedirect() {
+  const { id = "" } = useParams<{ id: string }>();
+  return <Navigate to={`/understand?concept=${encodeURIComponent(id)}`} replace />;
 }

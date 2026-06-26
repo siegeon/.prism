@@ -35,6 +35,12 @@ def index(project: str = Query("default")) -> dict:
     return _host(project).index()
 
 
+@router.get("/graph")
+def graph(project: str = Query("default")) -> dict:
+    """Concept graph (nodes colored by type + directed cross-link edges)."""
+    return _host(project).graph()
+
+
 @router.get("/concept")
 def concept(project: str = Query("default"), path: str = Query(...)) -> dict:
     """One projected OKF concept (frontmatter + body + links) by path."""
