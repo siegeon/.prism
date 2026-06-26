@@ -43,6 +43,37 @@ def test_okf_raw_index_is_conformant_markdown(client):
     assert 'okf_version: "0.1"' in r.text
 
 
+def test_okf_graph_returns_nodes_and_edges(client):
+    r = client.get("/api/okf/graph", params={"project": "prism"})
+    assert r.status_code == 200, r.text
+    g = r.json()
+    nodes = g.get("nodes")
+    edges = g.get("edges")
+    assert isinstance(nodes, list) and nodes, g
+    assert isinstance(edges, list), g
+    # Every node carries its real memory id + a type (the graph colors by type).
+    ids = set()
+    for n in nodes:
+        assert n.get("id"), n
+        assert "type" in n, n
+        ids.add(n["id"])
+    # Every edge references ids that are present as nodes (no dangling edges).
+    for e in edges:
+        assert e.get("source") in ids, e
+        assert e.get("target") in ids, e
+
+
+def test_okf_concept_includes_backlinks_list(client):
+    idx = client.get("/api/okf/index", params={"project": "prism"}).json()
+    path = next(p for p in idx["paths"] if p.startswith("/memory/"))
+    r = client.get("/api/okf/concept", params={"project": "prism", "path": path})
+    assert r.status_code == 200, r.text
+    concept = r.json()
+    # 'Cited by' backlinks are always present (possibly empty) so the panel can
+    # render the section unconditionally.
+    assert isinstance(concept.get("backlinks"), list), concept
+
+
 def test_okf_concept_links_use_memory_id_and_understand_routes(client):
     idx = client.get("/api/okf/index", params={"project": "prism"}).json()
     paths = [p for p in idx["paths"] if p.startswith("/memory/")]
