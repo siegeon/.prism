@@ -48,6 +48,16 @@ def test_graph_nodes_carry_id_title_type():
     assert nodes["mx-2"]["type"] == "decision"
 
 
+def test_graph_nodes_carry_domain_for_grouping():
+    # The unified wiki groups concepts by domain for its top-level drill, so
+    # every node must carry its memory entry's domain (the first tag).
+    g = OkfHost(_mem()).graph()
+    nodes = {n["id"]: n for n in g["nodes"]}
+    assert nodes["mx-1"]["domain"] == "conventions"
+    assert nodes["mx-2"]["domain"] == "conventions"
+    assert all(n.get("domain") for n in g["nodes"])
+
+
 def test_graph_edge_derived_from_body_crosslink():
     g = OkfHost(_mem()).graph()
     # mx-1's body [[render-structured]] -> /memory/mx-2, so an edge mx-1 -> mx-2.

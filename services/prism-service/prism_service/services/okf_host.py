@@ -220,11 +220,21 @@ class OkfHost:
             cid = str(c.frontmatter.get("id", "") or "")
             if not cid:
                 continue
+            # The memory entry's domain groups the wiki's top-level drill: it's
+            # the first frontmatter tag (see _memory_concepts: tags == [domain,
+            # classification, memory_type]); fall back to the path's domain
+            # segment (/memory/<domain>/<name>.md) so a node always has a group.
+            tags = c.frontmatter.get("tags") or []
+            domain = str(tags[0]) if isinstance(tags, list) and tags else ""
+            if not domain:
+                segs = path.strip("/").split("/")
+                domain = segs[1] if len(segs) > 2 else "general"
             nodes.append({
                 "id": cid,
                 "title": c.title or path.rsplit("/", 1)[-1],
                 "type": c.type,
                 "section": path.strip("/").split("/")[0],
+                "domain": domain,
                 "path": path,
                 "description": str(c.frontmatter.get("description", "") or ""),
             })

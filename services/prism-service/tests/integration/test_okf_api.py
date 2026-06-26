@@ -56,6 +56,8 @@ def test_okf_graph_returns_nodes_and_edges(client):
     for n in nodes:
         assert n.get("id"), n
         assert "type" in n, n
+        # Every node carries its domain so the wiki can group the top-level drill.
+        assert n.get("domain"), n
         ids.add(n["id"])
     # Every edge references ids that are present as nodes (no dangling edges).
     for e in edges:
