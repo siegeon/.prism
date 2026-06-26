@@ -1808,7 +1808,7 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
   adds `context_pack` with role card, rules, template, asset digests, and the
   same relevant context nested for model-agnostic clients.
 - `prism_guide(section?)` — this tool. Sections: overview | tools |
-  workflow | memory | graph | examples.
+  workflow | orchestration | memory | graph | examples.
 """,
     "workflow": """\
 # Daily workflow loop (coding agent)
@@ -1936,11 +1936,53 @@ Requires a maintenance profile such as `?tool_profile=all`.
 3. `context_bundle()` — full picture.
 4. Resume from the last known-good state.
 """,
+    "orchestration": """\
+# Working tasks the PRISM way
+
+PRISM does NOT auto-run your work — YOU (the calling agent) orchestrate the
+conductor through the `task_*` / `conductor_*` MCP tools. The pattern:
+
+## 1. Frame an EPIC as a ROOT task, decompose into demonstrable subtasks
+- `task_create(title=..., parent_id="")` — a ROOT task (empty parent_id) is an
+  EPIC tracked LIVE on /conductor. A task you want to WATCH animate on the
+  conductor MUST be root; child tasks are hidden from the tiles.
+- Break the epic into demonstrable-FEATURE subtasks with
+  `task_create(..., parent_id="<epic_id>")` — the parent_id hierarchy is what
+  the conductor renders. Title = the feature; mechanics go in the description.
+
+## 2. Drive each task through the conductor SDLC state machine
+review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
+-> green_gate, via `conductor_advance` / `conductor_gate`.
+- story_gate / plan_gate are RUBRIC-VERIFIED: the plan_doc needs a Summary,
+  Requirements, Acceptance Criteria (AC-ids WITH oracles), plus a mermaid
+  `plan_diagram` — a thin plan scores red.
+- red_gate / green_gate are PROOF-CARRYING: the artifact (failing-test trace
+  at the red commit; re-run green capture) is machine-validated.
+
+## 3. FAN OUT with subagents — and verify with a DISTINCT actor
+- A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
+  subagents (fan-out) to move the epic faster.
+- An INDEPENDENT subagent (a DISTINCT actor — NO self-override) clears
+  red_gate/green_gate with REAL artifacts: it runs the failing test at the red
+  commit, then re-runs + captures green. A gate override by the SAME actor
+  that produced the work is rejected.
+
+## 4. Write the WHY back to memory at green_gate
+On green, `memory_store(type="decision", ...)` the DECISION + rationale +
+rejected alternatives + the file:line it lives at. It resurfaces in the
+Understand wiki so the next agent inherits the reasoning, not just the diff.
+
+## Prefer the skills
+- `implement` (workflow) DRIVES one task through this whole conductor SDLC.
+- `prototype` (workflow) PLANS one task (research -> PRD-style plan).
+Reach for them instead of hand-stepping every gate.
+""",
 }
 
 
 def _prism_guide(section: str | None) -> str:
-    order = ["overview", "tools", "workflow", "memory", "graph", "examples"]
+    order = ["overview", "tools", "workflow", "orchestration", "memory",
+             "graph", "examples"]
     if section and section in _GUIDE_SECTIONS:
         return _GUIDE_SECTIONS[section]
     return "\n\n".join(_GUIDE_SECTIONS[s] for s in order)

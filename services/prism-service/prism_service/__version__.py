@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.6"
+PRISM_VERSION = "6.7.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.0: MINOR bump capping the OKF epic — hosted OKF wiki read-path + "
+    "the 4->2 knowledge consolidation (Brain visualization + ONE Understand "
+    "wiki over curated memory) + the task-title rename fix + agent-facing "
+    "MCP/guide alignment, and now a prism_guide ORCHESTRATION PLAYBOOK (task "
+    "b9ddda5e): a new 'Working tasks the PRISM way' section teaches an "
+    "installed PRISM how the CALLING AGENT should orchestrate the conductor "
+    "(epic-as-root-task -> demonstrable subtasks via parent_id; drive the "
+    "review->story_gate->plan_gate->red->implement->green_gate SDLC; fan out "
+    "with subagents + DISTINCT-actor no-self-override gate verification; write "
+    "the WHY to memory_store(type=decision) at green_gate; prefer the "
+    "implement/prototype workflows) — guide TEXT only, no tool behavior "
+    "change. Tests: tests/unit/test_prism_guide_playbook.py. "
     "v6.6.6: ALIGN the agent-facing MCP surface to the 4->2 knowledge "
     "consolidation (task a4995b7a) — DESCRIPTION/GUIDE text + one read-through "
     "tool, NO brain/memory/conductor behavior change. (1) prism_guide overview "
