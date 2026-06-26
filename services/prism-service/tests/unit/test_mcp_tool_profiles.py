@@ -27,8 +27,10 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # (v6.1.6 Ultimate Graph merge retrieval) + task_link_session
     # (v6.2.9 task<->session association — rides the task_* family)
     # + register_claude_source (v6.3.16 — Claude reports its own
-    # transcript source instead of slug-guessing; task b6650506).
-    assert len(names) == 32
+    # transcript source instead of slug-guessing; task b6650506)
+    # + okf_index / okf_get (v6.6.2 Understand wiki) + okf_graph
+    # (v6.6.6 — the wiki's concept graph; task a4995b7a).
+    assert len(names) == 35
     assert "brain_understand" in names
     assert "task_link_session" in names
     assert "register_claude_source" in names

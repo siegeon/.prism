@@ -823,19 +823,20 @@ TOOLS: list[Tool] = [
     Tool(
         name="okf_index",
         description=(
-            "Return the OKF manifest for this project's knowledge: okf_version, "
-            "the top-level sections, the concept count, and every concept path. "
-            "PRISM's memory + brain stores projected as a conformant OKF bundle "
-            "(read-only)."
+            "Browse the Understand wiki: the OKF manifest of this project's "
+            "knowledge (curated memory as navigable concepts). Returns "
+            "okf_version, the top-level sections, the concept count, and every "
+            "concept path. Read-only projection (never writes brain/graph db)."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="okf_get",
         description=(
-            "Fetch one OKF concept by path (e.g. '/memory/<domain>/<name>.md'). "
-            "Returns its type, frontmatter, body, and links. Paths come from "
-            "okf_index."
+            "Read one concept from the Understand wiki by path "
+            "(e.g. '/memory/<domain>/<name>.md'): its type, frontmatter, "
+            "markdown body, cross-links, and inbound backlinks. Paths come "
+            "from okf_index / okf_graph."
         ),
         inputSchema={
             "type": "object",
@@ -844,6 +845,15 @@ TOOLS: list[Tool] = [
             },
             "required": ["path"],
         },
+    ),
+    Tool(
+        name="okf_graph",
+        description=(
+            "Return the Understand wiki's concept GRAPH for this project — "
+            "nodes (concepts: id, title, type, domain) + edges (cross-links). "
+            "The agent-facing view of the unified Understand wiki."
+        ),
+        inputSchema={"type": "object", "properties": {}},
     ),
     # ------------------------------------------------------------------
     # LL-08 — Janitor / Layer-B queue endpoints. PRISM schedules the
@@ -1460,6 +1470,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "memory_recall",
     "okf_index",
     "okf_get",
+    "okf_graph",
     "task_create",
     "task_list",
     "task_next",
@@ -1673,14 +1684,18 @@ _GUIDE_SECTIONS: dict[str, str] = {
     "overview": _version_banner() + "\n\n" + """\
 # PRISM — what it is
 
-An on-prem memory + knowledge layer for coding agents. Four tightly coupled
-pillars, all accessed via this MCP endpoint:
+An on-prem memory + knowledge layer for coding agents. Knowledge lives in TWO
+surfaces (plus Tasks + Workflow), all accessed via this MCP endpoint:
 
-- **Brain** — hybrid search over source files, docs, and architecture notes.
-  Combines BM25 (FTS5), dense vector search (sentence-transformers MiniLM by
-  default), and a code graph (graphify: tree-sitter + Leiden clustering).
-- **Memory** — durable project conventions, decisions, and failures. Survives
-  across sessions. Full-text-searchable with supersession semantics.
+- **Brain** — the code-graph VISUALIZATION (Sigma WebGL) plus retrieval over
+  source files, docs, and architecture notes. Retrieve with `brain_search`
+  (hybrid BM25 + dense vector + graph RRF) and `brain_understand`; the graph
+  itself is graphify (tree-sitter + Leiden clustering).
+- **Understand** — ONE unified wiki over the project's curated MEMORY,
+  projected as navigable OKF concepts: a concept graph, readable concept
+  bodies, cross-links, and backlinks. Browse it with `okf_index` /
+  `okf_get` / `okf_graph`. Memory is what you READ here; you still WRITE it
+  with `memory_store` and search the raw entries with `memory_recall`.
 - **Tasks** — kanban-style tracker with dependencies, priorities, personas.
 - **Workflow** — SDLC state machine (planning → RED → GREEN → review) with
   per-step gates.
@@ -1765,6 +1780,14 @@ change between calls. Cache it.
     memories are nearly useless.
 - `memory_recall(query, domain?, limit?)` — FTS search. Returns active,
   temporally valid entries sorted by importance.
+
+## Understand (the unified wiki over Memory)
+Curated memory is browsable as ONE Understand wiki — memory entries projected
+as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
+- `okf_index()` — the wiki manifest: sections, concept count, every path.
+- `okf_get(path)` — read one concept (frontmatter + body + cross-links +
+  backlinks).
+- `okf_graph()` — the concept GRAPH: nodes (concepts) + cross-link edges.
 
 ## Tasks
 - `task_create(title, description?, priority?, dependencies?, tags?,
@@ -3481,12 +3504,14 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # ------------------------------------------------------------------
         # OKF tools — read-only projection of memory + brain as an OKF wiki
         # ------------------------------------------------------------------
-        if name in ("okf_index", "okf_get"):
+        if name in ("okf_index", "okf_get", "okf_graph"):
             from prism_service.services.okf_host import OkfHost
 
             host = OkfHost(memory_svc, brain_svc)
             if name == "okf_index":
                 return [TextContent(type="text", text=_json(host.index()))]
+            if name == "okf_graph":
+                return [TextContent(type="text", text=_json(host.graph()))]
             result = host.get(arguments["path"])
             if result is None:
                 return [TextContent(type="text", text=_json({"error": f"unknown concept: {arguments['path']}"}))]

@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.6.5"
+PRISM_VERSION = "6.6.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.6.6: ALIGN the agent-facing MCP surface to the 4->2 knowledge "
+    "consolidation (task a4995b7a) — DESCRIPTION/GUIDE text + one read-through "
+    "tool, NO brain/memory/conductor behavior change. (1) prism_guide overview "
+    "+ tools sections rewritten: drop the 'four (tightly coupled) pillars' "
+    "framing for TWO surfaces — Brain = the code-graph VISUALIZATION (Sigma) + "
+    "brain_search/brain_understand retrieval; Understand = ONE unified wiki "
+    "over curated MEMORY projected as OKF concepts (concept graph + readable "
+    "bodies + cross-links + backlinks), reached via okf_index/okf_get/"
+    "okf_graph; memory is browsable AS that wiki. (2) NEW okf_graph MCP tool "
+    "(interactive profile) returns OkfHost.graph() {nodes, edges} — the agent-"
+    "facing concept graph. (3) okf_index/okf_get descriptions reframed as the "
+    "Understand wiki. (4) every understand_* tool description prefixed LEGACY "
+    "(behavior untouched). Tests: tests/unit/test_mcp_two_surface_model.py. "
     "v6.6.5: FIX customer bug (task 11040b39) — a task's TITLE is now editable. "
     "Threaded `title` through the ONE task_update path across all three layers: "
     "TaskService.update persists it (with a BLANK-TITLE GUARD — None/empty/"
