@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.1"
+PRISM_VERSION = "6.7.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.2: README is now an agent-first onboarding (docs-only, no behavior "
+    "change). The root README LEADS with an 'All you need' value-prop block — "
+    "pipx install prism-service -> prism start --daemon -> add the .mcp.json "
+    "snippet OR call the prism_onboard MCP tool (one call auto-seeds principles "
+    "AND returns the snippet/ports/version/prism_guide pointer) -> call "
+    "prism_guide first — followed by a one-line 'you get: durable memory + OKF/"
+    "Understand wiki + code graph + gated conductor SDLC with epic->subtask "
+    "fan-out'. Adds a 'Benchmarks — what you're dealing with' section with the "
+    "REAL numbers (LongMemEval R@5 0.524 potion -> 0.634 MiniLM full -> 0.940 "
+    "multi-granular -> 0.980 query-decomp smoke; contextpack 1.000; meta-"
+    "conductor decision_accuracy 1.000 / 0 false promotions) and the HONEST "
+    "caveat that public-best bars (SWE-bench Verified/rebench, Terminal-Bench "
+    "2.0, BFCL V4) are not yet scored and a paired SWE-bench Lite proof campaign "
+    "is pending. Sources cited: benchmarks/EXPERIMENTS.md + benchmarks/README.md. "
+    "Tests: tests/unit/test_prism_onboard.py (README value-prop + benchmark "
+    "assertions). "
     "v6.7.1: PRE-RELEASE BATCH — daemon self-heal + #171 seedable gates + #173 "
     "janitor MCP exposure + #172 prism_onboard/fan-out playbook + #168 hook "
     "manifest fix. (D) PRISM_ONBOARD (GH #172, task 18f6014a) — a new "
