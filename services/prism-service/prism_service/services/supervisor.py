@@ -177,11 +177,53 @@ def force_kill(pid: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Process-level liveness — the STRONG respawn trigger (task 3576dd3f).
+# Distinct from probe_alive(): answers "does the PROCESS exist", not "is it
+# responsive". A dead watched pid is an unambiguous crash to recover from
+# immediately (no waiting out N HTTP timeouts); a slow-but-ALIVE process is
+# left to the graced HTTP-probe path so a busy daemon is never killed here.
+# ---------------------------------------------------------------------------
+def server_process_alive(pid: int) -> bool:
+    """True iff PID names a live process. tasklist exact-PID match on Windows /
+    os.kill(0) on POSIX; biases to True on PermissionError so we never respawn
+    OVER a live process we merely cannot query. Mirrors cli._is_alive."""
+    if pid <= 0:
+        return False
+    if sys.platform.startswith("win"):
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        import csv
+        for row in csv.reader((out.stdout or "").splitlines()):
+            if len(row) >= 2 and row[1].strip() == str(pid):
+                return True
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Respawn — start a fresh server child + rewrite the pidfile (AC-4).
 # ---------------------------------------------------------------------------
 def _pidfile_path():
     from prism_service.data_dir import pid_file
     return pid_file()
+
+
+def _read_pidfile_pid() -> int:
+    """The pid the pidfile currently names (0 if absent/garbage). The SERVER
+    rewrites this with its OWN pid on boot (main._own_pidfile_write), so it is
+    the source of truth for which process the supervisor should watch."""
+    try:
+        return int(_pidfile_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
 
 
 def _write_pid(pid: int) -> None:
@@ -211,8 +253,18 @@ def _spawn_server() -> int:
             [sys.executable, "-m", "prism_service.main"],
             stdin=subprocess.DEVNULL, close_fds=True, **spawn_kwargs,
         )
-    except OSError:
+    except OSError as exc:
         if sys.platform.startswith("win"):
+            # Breakaway forbidden by the job — the RESPAWNED server can only be
+            # placed back inside the same job, so it inherits the wedge-recovery
+            # role while remaining vulnerable to a kill-on-close reap. Warn so
+            # the re-trap is visible (it used to be silent) rather than letting a
+            # respawned-but-job-bound server look like a healthy recovery.
+            _log(
+                f"WARNING: CREATE_BREAKAWAY_FROM_JOB unavailable ({exc}); "
+                f"respawned server runs INSIDE the job and may be reaped when "
+                f"the launching session ends"
+            )
             spawn_kwargs["creationflags"] = 0x00000008 | 0x00000200
             proc = subprocess.Popen(
                 [sys.executable, "-m", "prism_service.main"],
@@ -282,6 +334,67 @@ def handle_probe_result(state: SupervisorState, alive: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# STRONG respawn trigger — the watched server PROCESS is GONE (task 3576dd3f).
+# A crashed/killed server (process exited) is recovered IMMEDIATELY, without
+# waiting out N HTTP-probe timeouts. Subject to the same startup grace and the
+# crash-loop cap so a slow cold boot / a thrashing child are still protected.
+# ---------------------------------------------------------------------------
+def handle_liveness(state: SupervisorState, pid_alive: bool) -> bool:
+    """If the watched server process is GONE, respawn a fresh server and rotate
+    the pidfile to the new pid. A LIVE process is left to the HTTP-probe path
+    (so an alive-but-slow daemon is never killed by this trigger). Returns True
+    iff a respawn fired."""
+    if pid_alive:
+        return False
+    if _in_startup_grace(state):
+        return False
+    cap = max_restarts()
+    if cap and state.restarts >= cap:
+        _log(f"max_restarts={cap} reached; not respawning the dead server")
+        return False
+    _log(f"server pid {state.server_pid} is GONE (process exited) — respawn")
+    state.server_pid = respawn_server()
+    state.restarts += 1
+    state.consecutive_failures = 0
+    state.mark_spawned()
+    return True
+
+
+def _sync_to_pidfile(state: SupervisorState) -> None:
+    """Re-sync the watched pid to whatever the pidfile now names. The SERVER
+    writes the pidfile with its OWN (real-listener) pid on boot/respawn, so a
+    launcher pid handed to the supervisor is corrected to the true server pid
+    here (pidfile truth); a deliberate manual restart that rewrote the pidfile
+    is likewise tracked rather than fought."""
+    fp = _read_pidfile_pid()
+    if fp and fp != state.server_pid:
+        _log(f"tracking server pid {fp} from pidfile (was {state.server_pid})")
+        state.server_pid = fp
+        state.consecutive_failures = 0
+
+
+def supervise_once(state: SupervisorState, port: int | str) -> bool:
+    """One supervise cycle. Returns False to ask the loop to EXIT (a deliberate
+    `prism stop`), True to keep supervising.
+
+    Order: (1) re-sync to the pidfile's truth; (2) PROCESS-GONE is the strong
+    trigger — if the watched pid is dead, respawn immediately, UNLESS the
+    pidfile no longer names it (operator stopped us: `prism stop` clears the
+    pidfile before killing) in which case exit; (3) otherwise fall back to the
+    HTTP wedge probe (graced + thresholded)."""
+    _sync_to_pidfile(state)
+    if state.server_pid and not server_process_alive(state.server_pid):
+        if _read_pidfile_pid() != state.server_pid:
+            _log("watched pid gone and pidfile cleared/replaced — treating as "
+                 "an intentional stop; supervisor exiting")
+            return False
+        handle_liveness(state, pid_alive=False)
+        return True
+    handle_probe_result(state, probe_alive(port))
+    return True
+
+
+# ---------------------------------------------------------------------------
 # The supervise loop — runs IN-LINE in this process's main (NOT a thread).
 # ---------------------------------------------------------------------------
 def supervise_loop(
@@ -296,8 +409,13 @@ def supervise_loop(
     same way every respawn is. In sibling mode the server cmd_start started is
     typically already warm, so no first-boot grace is stamped."""
     state = SupervisorState(server_pid=server_pid)
-    if fresh_boot:
-        state.mark_spawned()
+    # Always stamp the startup-grace anchor at loop entry — not just on a
+    # fresh_boot spawn. It protects the boot window where the SERVER has not yet
+    # rewritten the pidfile with its real pid (so the handed launcher pid may
+    # read dead) AND a cold model-load boot (~7-9s), so neither is mistaken for
+    # a crash before the first healthy probe. `fresh_boot` is retained for
+    # callers but the grace is unconditional now (task 3576dd3f).
+    state.mark_spawned()
     _log(
         f"watching server pid {server_pid} on :{port} "
         f"(interval={probe_interval_s()}s threshold={failure_threshold()} "
@@ -305,8 +423,9 @@ def supervise_loop(
         f"bound~{probe_interval_s() * failure_threshold()}s)"
     )
     while True:
-        alive = probe_alive(port)
-        handle_probe_result(state, alive)
+        if supervise_once(state, port) is False:
+            _log("supervisor exiting (server intentionally stopped)")
+            return
         time.sleep(probe_interval_s())
 
 

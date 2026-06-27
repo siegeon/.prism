@@ -13,10 +13,32 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.0"
+PRISM_VERSION = "6.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.1: DAEMON SELF-HEAL so a paying customer's instance recovers from any "
+    "crash (task 3576dd3f). Three measured bugs fixed. (1) PIDFILE TRUTH — the "
+    "SERVER (main.__main__, the process that binds the uvicorn ports) now "
+    "publishes the pidfile with its OWN pid (new main._own_pidfile_write, atomic "
+    "tmp+os.replace, before _server.run()), so prism status/stop and the "
+    "supervisor act on the REAL listener, never an intermediate launcher pid. "
+    "(2) SUPERVISOR RESPAWN ON DEATH — services/supervisor.py gains "
+    "server_process_alive() (process-level liveness, distinct from the HTTP "
+    "probe) + handle_liveness() + supervise_once(): a watched pid that is GONE "
+    "is the STRONG trigger and respawns a fresh server IMMEDIATELY (rewriting "
+    "the pidfile to the new live pid) rather than waiting out N probe timeouts; "
+    "_sync_to_pidfile() re-syncs the watched pid to the server-owned pidfile so "
+    "a handed launcher pid is corrected to the true server pid. (3) NO FALSE "
+    "POSITIVE — the startup grace is now stamped UNCONDITIONALLY at loop entry "
+    "(covers the boot/pidfile-write race + cold model-load) and an alive-but-"
+    "slow server inside grace is never force-killed (only a genuinely dead / "
+    "unreachable-past-threshold server is). cmd_stop clears the pidfile BEFORE "
+    "the kill so the out-of-process supervisor reads a deliberate `prism stop` "
+    "and EXITS instead of respawning. Plus the v6.6.1-class diagnosability: "
+    "faulthandler-floor gating (only armed when its partner watchdog is on) and "
+    "a LOUD WARNING on the CREATE_BREAKAWAY_FROM_JOB fallback (cli + supervisor). "
+    "Tests: tests/unit/test_daemon_self_heal.py + test_faulthandler_floor_gating.py. "
     "v6.7.0: MINOR bump capping the OKF epic — hosted OKF wiki read-path + "
     "the 4->2 knowledge consolidation (Brain visualization + ONE Understand "
     "wiki over curated memory) + the task-title rename fix + agent-facing "
