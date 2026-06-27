@@ -194,9 +194,26 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     try:
         proc = _spawn()
-    except OSError:
+    except OSError as exc:
         if sys.platform.startswith("win"):
-            # Job forbids breakaway — retry without it (old behavior).
+            # The launching shell's job object forbids CREATE_BREAKAWAY_FROM_JOB
+            # (no JOB_OBJECT_LIMIT_BREAKAWAY_OK). The only fallback is to retry
+            # WITHOUT breakaway — which leaves the daemon INSIDE that job, so the
+            # OS reaps it (no traceback, no Python exception) the instant the
+            # launching session's job handle closes. This is the silent "dev
+            # daemon dies every few minutes under an agent/CI harness" failure;
+            # it used to fall back here invisibly. Warn loudly so it is
+            # diagnosable, then re-trap as a last resort. For a DURABLE daemon,
+            # launch from a shell whose job permits breakaway or from outside a
+            # kill-on-close job.
+            print(
+                f"WARNING: CREATE_BREAKAWAY_FROM_JOB unavailable ({exc}); the "
+                f"daemon will run INSIDE the launching job and be KILLED with no "
+                f"traceback when this session ends. Launch from a shell whose "
+                f"job permits breakaway (or outside a kill-on-close job) for a "
+                f"durable daemon.",
+                file=sys.stderr,
+            )
             spawn_kwargs["creationflags"] = 0x00000008 | 0x00000200
             proc = _spawn()
         else:
@@ -252,6 +269,13 @@ def cmd_stop(_args: argparse.Namespace) -> int:
         )
         _pid_file().unlink(missing_ok=True)
         return 0
+    # Clear the pidfile BEFORE the kill. The out-of-process supervisor is a
+    # SEPARATE process the server's /T tree-kill never reaches, so it must be
+    # told this is a DELIBERATE stop — not a crash to respawn. supervise_once
+    # reads "watched pid dead AND pidfile no longer names it" as an intentional
+    # stop and exits; clearing first closes the race where it could respawn in
+    # the window between the kill and the unlink (task 3576dd3f).
+    _pid_file().unlink(missing_ok=True)
     try:
         if sys.platform.startswith("win"):
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
@@ -260,7 +284,6 @@ def cmd_stop(_args: argparse.Namespace) -> int:
     except OSError as e:
         print(f"failed to stop pid {pid}: {e}", file=sys.stderr)
         return 1
-    _pid_file().unlink(missing_ok=True)
     print(f"prism stopped (was pid {pid})")
     return 0
 
