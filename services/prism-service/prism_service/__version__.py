@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.3"
+PRISM_VERSION = "6.7.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.4: README polish round 2 (docs-only, no behavior change). (1) Clean "
+    "quickstart numbering — the 'All you need' block is now a flat numbered "
+    "list 1->2->3->4 (no a/b sub-steps): pipx install prism-service -> prism "
+    "start --daemon -> connect your agent (call prism_onboard OR add the "
+    ".mcp.json snippet) -> call prism_guide first. (2) Real CROSS-SYSTEM "
+    "comparison table on LongMemEval (System | Metric | Score | Source) with "
+    "self-reported numbers for PRISM (0.94-0.98 recall@5), the vanilla RAG "
+    "baseline (0.524), MemPalace (~96.6%), Mastra OM (~94.9%), Hindsight "
+    "(~91.4%), Letta (~83%), Zep (~63.8%), Mem0 (~49%), each linked to its "
+    "source; framed as a landscape NOT a leaderboard (recall@5 != QA "
+    "accuracy). (3) Removed the word 'honest'/'honestly' everywhere (caveats "
+    "kept, stated plainly). (4) Added a centered Understand-wiki hero "
+    "screenshot (docs/understand-wiki.png). Tests: tests/unit/"
+    "test_prism_onboard.py (quickstart numbering, cross-system table, "
+    "no-'honest', LongMemEval figures + caveat). "
     "v6.7.3: README polished for HUMAN readability (docs-only, no behavior "
     "change). The root README now applies PRISM's own progressive-disclosure "
     "principle: a scannable top (centered hero + shields.io badges, the 'All "

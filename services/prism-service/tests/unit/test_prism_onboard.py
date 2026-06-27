@@ -171,3 +171,49 @@ def test_readme_benchmarks_are_comparative_and_honest():
     # Honest metric caveat: recall@5 != end-to-end QA accuracy.
     assert "recall@5" in low
     assert "qa accuracy" in low or "qa-accuracy" in low
+
+
+# ── README v6.7.4 polish: clean quickstart + cross-system table ─────────
+
+
+def test_readme_quickstart_is_cleanly_numbered():
+    """AC-1 — the quickstart reads as a clean numbered list 1->2->3->4 (no
+    a/b sub-steps), and still names the install + bootstrap commands."""
+    readme = _readme()
+    low = readme.lower()
+    for step in ("1.", "2.", "3.", "4."):
+        assert step in readme, f"quickstart missing step {step}"
+    # No a/b sub-step numbering anymore.
+    assert "3a" not in low and "3b" not in low
+    assert "pipx install prism-service" in low
+    assert "prism start" in low
+    assert "prism_onboard" in low
+    assert "prism_guide" in low
+
+
+def test_readme_has_cross_system_comparison_table():
+    """AC-2 — a cross-system comparison table on LongMemEval naming PRISM plus
+    at least three other systems, with a Metric column header."""
+    readme = _readme()
+    low = readme.lower()
+    assert "| metric |" in low or "| system | metric |" in low or "metric |" in low
+    assert "prism" in low
+    others = [s for s in ("mempalace", "mastra", "hindsight", "letta",
+                          "zep", "mem0") if s in low]
+    assert len(others) >= 3, f"expected >=3 other systems, found {others}"
+
+
+def test_readme_has_no_honest_word():
+    """AC-3 — the word 'honest'/'honestly' appears nowhere in the README."""
+    assert "honest" not in _readme().lower()
+
+
+def test_readme_keeps_longmemeval_figures_and_caveat():
+    """AC-4 — the README retains the LongMemEval anchor figures (0.524 and
+    0.94) and the not-yet-public-best caveat."""
+    readme = _readme()
+    low = readme.lower()
+    assert "0.524" in readme
+    assert "0.94" in readme
+    assert "swe-bench" in low
+    assert "not yet" in low or "proof campaign" in low
