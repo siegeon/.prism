@@ -29,11 +29,21 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # + register_claude_source (v6.3.16 — Claude reports its own
     # transcript source instead of slug-guessing; task b6650506)
     # + okf_index / okf_get (v6.6.2 Understand wiki) + okf_graph
-    # (v6.6.6 — the wiki's concept graph; task a4995b7a).
-    assert len(names) == 35
+    # (v6.6.6 — the wiki's concept graph; task a4995b7a)
+    # + janitor_check / janitor_submit / janitor_abandon / memory_invalidate
+    # (GH #173 — prism-reflect sub-agent allow-list served here so
+    # PRISM_REFLECTION_PENDING candidates are actionable).
+    assert len(names) == 39
     assert "brain_understand" in names
     assert "task_link_session" in names
     assert "register_claude_source" in names
+    # GH #173 — reflection janitor tooth is now served interactively.
+    assert {
+        "janitor_check",
+        "janitor_submit",
+        "janitor_abandon",
+        "memory_invalidate",
+    } <= names
     assert {
         "brain_search",
         "brain_call_chain",
@@ -52,7 +62,7 @@ def test_interactive_profile_exposes_core_agent_tools_only():
         "brain_index_doc",
         "record_session_outcome",
         "meta_conductor_auto",
-        "janitor_check",
+        "janitor_enqueue",
         "project_onboard",
         "verifier_run",
     }.isdisjoint(names)
