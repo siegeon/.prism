@@ -41,12 +41,12 @@ def test_status_benchmark_answers_where_prism_stands():
     assert "bfcl_v4_tool_calling" in public_claim["missing_comparable_prism_results"]
     assert public_claim["unknown_public_best_values"] == []
 
-    assert result["tool_surface"]["all_tool_count"] == 47
+    assert result["tool_surface"]["all_tool_count"] == 72
     assert result["tool_surface"]["default_profile"] == "interactive"
-    assert result["tool_surface"]["default_tool_count"] == 17
+    assert result["tool_surface"]["default_tool_count"] == 31
     assert result["tool_surface"]["default_matches_interactive"] is True
     assert result["tool_surface"]["call_gate_blocks_hidden_default"] is True
-    assert result["tool_surface"]["interactive_tool_count"] == 17
+    assert result["tool_surface"]["interactive_tool_count"] == 31
 
     paired = result["paired_swebench_lite"]
     assert paired["sample_size"] == 2

@@ -77,6 +77,28 @@ def test_prism_onboard_seeds_and_returns_bootstrap(project):
     assert out.get("mcp_port") and out.get("web_port"), out
 
 
+def test_prism_onboard_teaches_self_update_for_new_endpoints(project):
+    """The bootstrap payload must tell an agent how to RECONNECT to pick up new
+    MCP endpoints after a PRISM upgrade, and how to reach maintenance/legacy
+    endpoints hidden from the default surface (tool_profile=all)."""
+    out = json.loads(_call("prism_onboard", {}, project))
+
+    # tool_profile=all url for maintenance/legacy endpoints.
+    assert "tool_profile=all" in (out.get("mcp_url_all") or ""), out
+    surface = out.get("tool_surface") or {}
+    assert surface.get("default_tool_count"), out
+    assert surface.get("all_tool_count"), out
+
+    # staying_current: concrete self-update steps (reconnect / re-onboard).
+    steps = " ".join(out.get("staying_current") or []).lower()
+    assert steps, "prism_onboard must return staying_current self-update steps"
+    assert "reconnect" in steps
+    assert "/mcp" in steps or "restart" in steps
+    assert "prism_status" in steps  # how to detect a version change
+    assert "prism_install" in steps  # heal client-side hook drift
+    assert "tool_profile=all" in steps
+
+
 # ── AC-2: prism_guide teaches MAX FAN-OUT over the full toolkit ─────────
 
 def test_prism_guide_covers_max_fan_out_toolkit():

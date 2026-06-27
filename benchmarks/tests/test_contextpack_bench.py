@@ -88,8 +88,11 @@ def test_role_forbidden_tokens_include_other_persona_context():
     forbidden = mod._role_forbidden_tokens(dev)
 
     assert "NOISE_RED_HERRING" in forbidden
-    assert "QA_GATE_MATRIX" in forbidden
-    assert "QA_MEMORY_REGRESSION" in forbidden
+    # QA_GATE_MATRIX lives in an `expertise` doc; expertise is in dev's
+    # ROLE_DOMAIN_MAP, so it is legitimately retrievable for dev — not a leak.
+    assert "QA_GATE_MATRIX" not in forbidden
+    assert "QA_MEMORY_REGRESSION" in forbidden  # memory is always persona-private
+    # SM_SCOPE_AC / ARCH_MCP_BOUNDARY live in `md` docs, out of dev's domains.
     assert "SM_SCOPE_AC" in forbidden
     assert "ARCH_MCP_BOUNDARY" in forbidden
     assert "DEV_REFUND_POLICY" not in forbidden

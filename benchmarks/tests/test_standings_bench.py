@@ -52,10 +52,10 @@ def test_standings_benchmark_reports_prism_not_comparable_without_patch_score():
     assert "bfcl_v4_tool_calling" in result["missing_or_not_comparable"]
 
     tool_surface = by_id["mcp_tool_surface"]
-    assert tool_surface["prism_value"] == 17
-    assert tool_surface["all_tool_count"] == 47
+    assert tool_surface["prism_value"] == 31
+    assert tool_surface["all_tool_count"] == 72
     assert tool_surface["default_profile"] == "interactive"
-    assert tool_surface["default_tool_count"] == 17
+    assert tool_surface["default_tool_count"] == 31
     assert tool_surface["default_matches_interactive"] is True
     assert tool_surface["call_gate_blocks_hidden_default"] is True
 

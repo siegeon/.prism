@@ -14,6 +14,16 @@ if str(SERVICE_ROOT) not in sys.path:
 
 RESULTS = ROOT / "benchmarks" / "results" / "toolprofiles"
 
+# The interactive/default surface must stay a small curated subset of the full
+# tool list — the semantic guard is `interactive_reduction_ratio >= 0.4`. This
+# absolute count cap is a secondary backstop. It was 20 when the default surface
+# was small; the 2-surface model grew it deliberately (OKF wiki okf_*, reflection
+# janitor_*, prism_onboard, conductor SDLC, expanded brain_* nav). The 10 legacy
+# understand_* tools were demoted out of the default surface (reachable via
+# tool_profile=all), bringing it to 31. Cap set with headroom over that; the
+# reduction ratio remains the real quality bar.
+MAX_INTERACTIVE_TOOLS = 35
+
 REQUIRED_INTERACTIVE = {
     "brain_search",
     "brain_call_chain",
@@ -28,16 +38,18 @@ FORBIDDEN_INTERACTIVE = {
     "brain_index_doc",
     "record_session_outcome",
     "meta_conductor_auto",
-    "janitor_check",
+    # NOTE: janitor_check/submit/abandon are now served in the interactive
+    # (default) profile on purpose (GH #173) so the prism-reflect sub-agent
+    # can act on PRISM_REFLECTION_PENDING. No longer forbidden here.
     "project_onboard",
     "verifier_run",
 }
 
 
 def main() -> int:
-    from app.mcp.tools import TOOLS, tools_for_profile
-    from app.mcp.request_context import PrismRequestContext, use_request_context
-    from app.mcp.server import call_tool
+    from prism_service.mcp.tools import TOOLS, tools_for_profile
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.server import call_tool
 
     all_names = {tool.name for tool in TOOLS}
     profile_counts = {
@@ -59,7 +71,10 @@ def main() -> int:
         blocked_result = asyncio.run(
             call_tool("brain_index_doc", {"path": "x", "content": "y"})
         )
-    blocked_text = blocked_result[0].text if blocked_result else ""
+    # call_tool now returns a CallToolResult (isError=True) for a blocked tool
+    # (GH #99); legacy path returned a bare TextContent list. Handle both.
+    blocked_content = getattr(blocked_result, "content", blocked_result)
+    blocked_text = blocked_content[0].text if blocked_content else ""
     call_gate_blocks_hidden_default = (
         "Tool is not available for this MCP tool profile." in blocked_text
         and "brain_index_doc" in blocked_text
@@ -93,6 +108,7 @@ def main() -> int:
         "forbidden_present_interactive": sorted(FORBIDDEN_INTERACTIVE & interactive_names),
         "coverage_ok": True,
         "uncovered_tools": [],
+        "max_interactive_tools": MAX_INTERACTIVE_TOOLS,
         "hidden_from_interactive": sorted(all_names - interactive_names),
     }
     result["passed"] = (
@@ -102,7 +118,7 @@ def main() -> int:
         and result["default_matches_interactive"]
         and result["call_gate_blocks_hidden_default"]
         and not result["automation_profile_required_missing"]
-        and profile_counts["interactive"] <= 20
+        and profile_counts["interactive"] <= MAX_INTERACTIVE_TOOLS
     )
 
     RESULTS.mkdir(parents=True, exist_ok=True)

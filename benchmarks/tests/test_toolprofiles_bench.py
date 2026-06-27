@@ -25,6 +25,6 @@ def test_toolprofiles_benchmark_passes():
     assert result["call_gate_blocks_hidden_default"] is True
     assert result["automation_profile_count"] < result["all_tool_count"]
     assert result["automation_profile_required_missing"] == []
-    assert result["profile_counts"]["interactive"] <= 20
+    assert result["profile_counts"]["interactive"] <= result["max_interactive_tools"]
     assert result["profile_counts"]["all"] == result["all_tool_count"]
     assert result["forbidden_present_interactive"] == []

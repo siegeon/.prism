@@ -104,12 +104,43 @@ CASES = [
 ]
 
 
+# Mirror of brain_engine.ROLE_DOMAIN_MAP: the Brain domains each role's
+# system_context is allowed to surface. `expertise` is shared by every role and
+# `md` by sm/po/architect BY DESIGN, so a token living in an in-domain doc is
+# legitimately retrievable for that role — it is NOT cross-persona leakage.
+# Only genuinely out-of-domain content (or the misc noise doc) counts as a leak.
+ROLE_DOMAINS: dict[str, set[str]] = {
+    "dev": {"py", "ts", "js", "expertise"},
+    "engineer": {"py", "ts", "js", "expertise"},
+    "sm": {"expertise", "md"},
+    "po": {"expertise", "md"},
+    "architect": {"expertise", "md"},
+    "qa": {"expertise"},
+}
+
+
+def _token_domain(token: str) -> str | None:
+    """Return the Brain domain of the doc that carries *token* (or None)."""
+    for doc in DOCS:
+        if token in doc["content"]:
+            return doc["domain"]
+    return None
+
+
 def _role_forbidden_tokens(case: Case) -> tuple[str, ...]:
+    persona_domains = ROLE_DOMAINS.get(case.canonical_persona, set())
+    # The explicit noise token (misc domain) is always forbidden.
     tokens: list[str] = list(case.forbidden_tokens)
     for other in CASES:
         if other.name == case.name:
             continue
-        tokens.extend(other.brain_tokens)
+        for token in other.brain_tokens:
+            # A brain token only leaks if its doc's domain is NOT one this
+            # persona can legitimately retrieve via ROLE_DOMAIN_MAP.
+            if _token_domain(token) not in persona_domains:
+                tokens.append(token)
+        # Memory is recalled per-persona (separate channel); other personas'
+        # memory tokens must never appear regardless of Brain domain.
         tokens.extend(other.memory_tokens)
     return tuple(dict.fromkeys(tokens))
 
@@ -228,8 +259,8 @@ class InProcessClient:
         if str(SERVICE_ROOT) not in sys.path:
             sys.path.insert(0, str(SERVICE_ROOT))
 
-        from app import config as cfg
-        from app import project_context as pc
+        from prism_service import config as cfg
+        from prism_service import project_context as pc
 
         cfg.PROJECTS_DIR = projects_dir
         cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -237,7 +268,7 @@ class InProcessClient:
         self.project_id = project_id
 
     def call(self, tool: str, arguments: dict[str, Any] | None = None) -> Any:
-        from app.mcp.tools import handle_tool
+        from prism_service.mcp.tools import handle_tool
 
         result = asyncio.run(
             handle_tool(tool, arguments or {}, project_id=self.project_id)
