@@ -110,3 +110,37 @@ def test_readme_covers_fanout_and_toolkit():
     assert "fan out" in low or "fan-out" in low
     assert "prism_onboard" in low
     assert "okf_index" in low or "okf_get" in low
+
+
+# ── README value-prop install story + honest benchmark section ──────────
+
+
+def _readme():
+    return (_SERVICE_ROOT.parent.parent / "README.md").read_text(
+        encoding="utf-8")
+
+
+def test_readme_leads_with_all_you_need_install_story():
+    """AC-1 — the README LEADS with the 'all you need' value prop: the
+    install triple (pipx install / prism start / call prism_guide) plus the
+    one-call prism_onboard bootstrap."""
+    low = _readme().lower()
+    assert "all you need" in low
+    assert "pipx install prism-service" in low
+    assert "prism start" in low
+    assert "prism_guide" in low
+    assert "prism_onboard" in low
+
+
+def test_readme_has_honest_benchmark_section():
+    """AC-2 — a Benchmarks section carries the REAL LongMemEval R@5 figures
+    AND the honest caveat that PRISM does not yet claim public-best."""
+    readme = _readme()
+    low = readme.lower()
+    assert "benchmark" in low
+    # LongMemEval R@5 trajectory anchors (potion baseline -> multi-granular).
+    assert "0.524" in readme
+    assert "0.940" in readme
+    # Honest caveat: not yet proven vs the best public coding agents.
+    assert "swe-bench" in low
+    assert "proof campaign" in low or "not yet" in low
