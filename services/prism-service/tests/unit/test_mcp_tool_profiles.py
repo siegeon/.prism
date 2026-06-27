@@ -35,7 +35,10 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # + janitor_check / janitor_submit / janitor_abandon / memory_invalidate
     # (v6.7.1 / GH #173 — prism-reflect sub-agent allow-list served here so
     # PRISM_REFLECTION_PENDING candidates are actionable).
-    assert len(names) == 40
+    # + prism_onboard (v6.7.1 / GH #172 — one-call bootstrap: seed principles
+    # + return the .mcp.json snippet/ports/version/prism_guide pointer).
+    assert len(names) == 41
+    assert "prism_onboard" in names
     assert "brain_understand" in names
     assert "task_link_session" in names
     assert "register_claude_source" in names

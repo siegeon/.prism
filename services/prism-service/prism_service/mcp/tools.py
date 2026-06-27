@@ -871,6 +871,20 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="prism_onboard",
+        description=(
+            "BOOTSTRAP entry for a fresh agent landing on a project. In one "
+            "call it (a) SEEDS the generic default architecture principles "
+            "(same path as principles_seed) so the conductor's plan_gate is "
+            "immediately satisfiable, and (b) returns a bootstrap payload: "
+            "the .mcp.json snippet (streamable-HTTP url /mcp/?project=<slug>), "
+            "the web + MCP ports, the running PRISM version, and a 'call "
+            "prism_guide first' pointer to the max-fan-out playbook. Call this "
+            "ONCE on a new project, then call prism_guide. Idempotent."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
         name="okf_graph",
         description=(
             "Return the Understand wiki's concept GRAPH for this project — "
@@ -1496,6 +1510,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "okf_get",
     "okf_graph",
     "principles_seed",
+    "prism_onboard",
     "task_create",
     "task_list",
     "task_next",
@@ -1973,7 +1988,13 @@ Requires a maintenance profile such as `?tool_profile=all`.
 # Working tasks the PRISM way
 
 PRISM does NOT auto-run your work — YOU (the calling agent) orchestrate the
-conductor through the `task_*` / `conductor_*` MCP tools. The pattern:
+conductor through the `task_*` / `conductor_*` MCP tools. MAXIMIZE FAN-OUT:
+decompose wide, run subtasks IN PARALLEL, verify with a distinct actor.
+
+## 0. Bootstrap once with prism_onboard
+On a fresh project call `prism_onboard` FIRST: it seeds the default
+architecture principles (so plan_gate is satisfiable), and returns the
+.mcp.json snippet + ports + version + a pointer back here. Then `prism_guide`.
 
 ## 1. Frame an EPIC as a ROOT task, decompose into demonstrable subtasks
 - `task_create(title=..., parent_id="")` — a ROOT task (empty parent_id) is an
@@ -1988,22 +2009,35 @@ review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
 -> green_gate, via `conductor_advance` / `conductor_gate`.
 - story_gate / plan_gate are RUBRIC-VERIFIED: the plan_doc needs a Summary,
   Requirements, Acceptance Criteria (AC-ids WITH oracles), plus a mermaid
-  `plan_diagram` — a thin plan scores red.
+  `plan_diagram` — a thin plan scores red. `principles_seed` (or
+  `prism_onboard`) must have run so plan_gate's principle check is satisfiable.
 - red_gate / green_gate are PROOF-CARRYING: the artifact (failing-test trace
   at the red commit; re-run green capture) is machine-validated.
 
 ## 3. FAN OUT with subagents — and verify with a DISTINCT actor
 - A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
-  subagents (fan-out) to move the epic faster.
+  subagents (fan-out) to move the epic faster — spawn them concurrently.
 - An INDEPENDENT subagent (a DISTINCT actor — NO self-override) clears
   red_gate/green_gate with REAL artifacts: it runs the failing test at the red
   commit, then re-runs + captures green. A gate override by the SAME actor
   that produced the work is rejected.
 
-## 4. Write the WHY back to memory at green_gate
+## 4. Roll child proofs up to the EPIC green_gate (child roll-up)
+Don't re-prove the epic itself. When every non-cancelled child is done with a
+STRONG completion_proof, the children ARE the parent's proof — the epic's
+green_gate does a child roll-up and passes WITHOUT override (a weak/incomplete
+child fails with a concrete reason). Approve the parent once subtasks are green.
+
+## 5. Write the WHY back to memory at green_gate
 On green, `memory_store(type="decision", ...)` the DECISION + rationale +
 rejected alternatives + the file:line it lives at. It resurfaces in the
 Understand wiki so the next agent inherits the reasoning, not just the diff.
+
+## 6. Browse what you already know — the OKF / Understand wiki
+Before re-deriving anything, read the unified Understand wiki: `okf_index`
+(manifest) -> `okf_get(path)` (one concept + cross-links/backlinks) ->
+`okf_graph` (the concept graph). `brain_understand` answers a code-level
+question across the graph. Memory you WRITE (`memory_store`) surfaces here.
 
 ## Prefer the skills
 - `implement` (workflow) DRIVES one task through this whole conductor SDLC.
@@ -3605,6 +3639,31 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 "seeded": len(stored),
                 "ids": [getattr(e, "name", "") for e in stored],
                 "domain": "architecture-principles",
+            }))]
+
+        # ------------------------------------------------------------------
+        # prism_onboard — one-call bootstrap: seed principles + return the
+        # .mcp.json snippet / ports / version / prism_guide pointer (#172)
+        # ------------------------------------------------------------------
+        if name == "prism_onboard":
+            from prism_service import config as _cfg
+            from prism_service.services.arc_governance import (
+                seed_default_principles)
+            stored = seed_default_principles(memory_svc)
+            mcp_url = (f"http://localhost:{_cfg.MCP_PORT}/mcp/"
+                       f"?project={project_id}")
+            return [TextContent(type="text", text=_json({
+                "seeded": len(stored),
+                "project_id": project_id,
+                "prism_version": PRISM_VERSION,
+                "mcp_port": _cfg.MCP_PORT,
+                "web_port": _cfg.UI_PORT,
+                "mcp_url": mcp_url,
+                "mcp_json": {"mcpServers": {"prism": {
+                    "type": "http", "url": mcp_url}}},
+                "next": ("Call prism_guide first — it returns the live "
+                         "orientation + the max-fan-out task playbook."),
+                "web_ui": f"http://localhost:{_cfg.UI_PORT}/",
             }))]
 
         # ------------------------------------------------------------------
