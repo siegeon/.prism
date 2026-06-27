@@ -111,6 +111,36 @@ def full_outcome_verdict(slice_green: bool, completion_proof: object,
     return True, ""
 
 
+def epic_rollup_verdict(children: list) -> tuple[bool, str]:
+    """Issue #171 — an EPIC/parent green_gate is satisfiable by ROLLING UP
+    its children. When every non-cancelled child task is status=done AND
+    carries a strong completion_proof, the children ARE the parent's proof,
+    so the epic need not reproduce its own red->green artifact. A weak or
+    incomplete child FAILS with a concrete reason (no false green; NOT a
+    blanket override). Returns (False, reason) when there are no children to
+    roll up — a childless task is not an epic and takes the normal artifact
+    path. Pure + unit-testable; reuses is_weak_proof so the proof bar matches
+    full_outcome_verdict.
+    """
+    active = [c for c in (children or [])
+              if str(_task_attr(c, "status", "")) != "cancelled"]
+    if not active:
+        return False, "no child tasks to roll up (not an epic)"
+    incomplete = [c for c in active
+                  if str(_task_attr(c, "status", "")) != "done"]
+    if incomplete:
+        return False, (f"{len(incomplete)} child task(s) not done — epic "
+                       "roll-up needs every child done")
+    weak = [c for c in active
+            if is_weak_proof(_task_attr(c, "completion_proof", ""))]
+    if weak:
+        ids = ", ".join(str(_task_attr(c, "id", "?"))[:8] for c in weak)
+        return False, (f"{len(weak)} child task(s) with weak/absent "
+                       f"completion_proof ({ids})")
+    return True, (f"epic roll-up: all {len(active)} child task(s) done with "
+                  "strong completion_proof")
+
+
 def green_gate_outcome_note(slice_green: bool, completion_proof: object,
                             incomplete_children: int) -> str:
     """Advisory note (annotate, never block) for the GAP-4 outcome verdict.
@@ -1660,6 +1690,24 @@ class ConductorService:
                     "gate_state": "failed",
                     "reason": ui_reason,
                 }
+        # EPIC GREEN_GATE ROLL-UP (issue #171): a parent whose children all
+        # carry passing completion_proof satisfies its OWN green_gate via the
+        # children — it need not reproduce a separate red->green. This is an
+        # ADDITIVE pass path (not a blanket override): when it holds, the
+        # verifier consult and the artifact tooth are skipped; when it does
+        # not, the normal teeth still decide (so a parent with its own proof
+        # is unaffected). A weak/incomplete child surfaces a concrete reason
+        # in place of the generic artifact text below.
+        rollup_ok = False
+        rollup_reason = ""
+        rollup_has_children = False
+        if gate_step_id == "green_gate":
+            _kids = [c for c in self._task_svc.list()
+                     if _task_attr(c, "parent_id", "") == task_id]
+            rollup_has_children = bool(_kids)
+            if _kids:
+                rollup_ok, rollup_reason = epic_rollup_verdict(_kids)
+
         verifier_payload: Optional[dict] = None
         verifier_validation: Optional[str] = None
         verifier_reason = ""
@@ -1700,6 +1748,15 @@ class ConductorService:
                 "override=True",
                 f"override-actor={override_actor or 'unspecified'}",
             ]
+            if reason:
+                detail_bits.append(f"reason={reason}")
+        elif rollup_ok:
+            # Epic roll-up satisfies the green_gate WITHOUT override and
+            # WITHOUT the epic's own verifier diff — the children's proofs are
+            # the proof (issue #171). The artifact tooth is skipped below.
+            actor = "conductor"
+            detail_bits = [f"gate={gate_step_id}", "action=approve",
+                           "epic-rollup=pass"]
             if reason:
                 detail_bits.append(f"reason={reason}")
         elif self._verifier_svc is None:
@@ -1769,6 +1826,14 @@ class ConductorService:
             getattr(self._task_svc.get(task_id), "completion_proof", ""),
             reason,
         )
+        if rollup_ok:
+            # The children's proofs ARE the epic's artifact (issue #171).
+            artifact_reason = ""
+        elif (artifact_reason and rollup_has_children and rollup_reason):
+            # An epic with children that did NOT cleanly roll up AND no
+            # artifact of its own: surface the actionable roll-up failure
+            # instead of the generic "self-attested string is not proof".
+            artifact_reason = f"epic green_gate: {rollup_reason}"
         if artifact_reason:
             self._task_svc.update(
                 task_id, gate_state="failed", gate_reason=artifact_reason,
@@ -1803,6 +1868,10 @@ class ConductorService:
         # never block — so it surfaces without breaking override-driven closes.
         if gate_step_id == "green_gate":
             _proof = getattr(self._task_svc.get(task_id), "completion_proof", "")
+            if rollup_ok and is_weak_proof(_proof):
+                # The epic's proof is its children's rolled-up proofs (#171);
+                # surface that so the advisory notes stay truthful + silent.
+                _proof = rollup_reason
             try:
                 _churn = sum(int(s.get("files_modified", 0) or 0)
                              for s in self._task_svc.sessions_for_task(task_id))

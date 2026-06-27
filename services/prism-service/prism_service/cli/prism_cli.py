@@ -194,9 +194,26 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     try:
         proc = _spawn()
-    except OSError:
+    except OSError as exc:
         if sys.platform.startswith("win"):
-            # Job forbids breakaway — retry without it (old behavior).
+            # The launching shell's job object forbids CREATE_BREAKAWAY_FROM_JOB
+            # (no JOB_OBJECT_LIMIT_BREAKAWAY_OK). The only fallback is to retry
+            # WITHOUT breakaway — which leaves the daemon INSIDE that job, so the
+            # OS reaps it (no traceback, no Python exception) the instant the
+            # launching session's job handle closes. This is the silent "dev
+            # daemon dies every few minutes under an agent/CI harness" failure;
+            # it used to fall back here invisibly. Warn loudly so it is
+            # diagnosable, then re-trap as a last resort. For a DURABLE daemon,
+            # launch from a shell whose job permits breakaway or from outside a
+            # kill-on-close job.
+            print(
+                f"WARNING: CREATE_BREAKAWAY_FROM_JOB unavailable ({exc}); the "
+                f"daemon will run INSIDE the launching job and be KILLED with no "
+                f"traceback when this session ends. Launch from a shell whose "
+                f"job permits breakaway (or outside a kill-on-close job) for a "
+                f"durable daemon.",
+                file=sys.stderr,
+            )
             spawn_kwargs["creationflags"] = 0x00000008 | 0x00000200
             proc = _spawn()
         else:
@@ -252,6 +269,13 @@ def cmd_stop(_args: argparse.Namespace) -> int:
         )
         _pid_file().unlink(missing_ok=True)
         return 0
+    # Clear the pidfile BEFORE the kill. The out-of-process supervisor is a
+    # SEPARATE process the server's /T tree-kill never reaches, so it must be
+    # told this is a DELIBERATE stop — not a crash to respawn. supervise_once
+    # reads "watched pid dead AND pidfile no longer names it" as an intentional
+    # stop and exits; clearing first closes the race where it could respawn in
+    # the window between the kill and the unlink (task 3576dd3f).
+    _pid_file().unlink(missing_ok=True)
     try:
         if sys.platform.startswith("win"):
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
@@ -260,7 +284,6 @@ def cmd_stop(_args: argparse.Namespace) -> int:
     except OSError as e:
         print(f"failed to stop pid {pid}: {e}", file=sys.stderr)
         return 1
-    _pid_file().unlink(missing_ok=True)
     print(f"prism stopped (was pid {pid})")
     return 0
 
@@ -332,6 +355,23 @@ def cmd_version(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_principles_seed(args: argparse.Namespace) -> int:
+    """Seed the active project's architecture principles so the conductor's
+    plan_gate is satisfiable (issue #171). In-process — resolves the project
+    context directly (no running daemon needed)."""
+    from prism_service.config import DEFAULT_PROJECT
+    from prism_service.project_context import get_project
+    from prism_service.services.arc_governance import seed_default_principles
+
+    pid = getattr(args, "project", None) or DEFAULT_PROJECT
+    ctx = get_project(pid)
+    stored = seed_default_principles(ctx.memory_svc)
+    ids = ", ".join(getattr(e, "name", "") for e in stored)
+    print(f"seeded {len(stored)} architecture principle(s) into project "
+          f"'{pid}': {ids}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="prism", description="PRISM service CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -357,6 +397,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("version", help="Print version + notes")
     s.set_defaults(func=cmd_version)
+
+    s = sub.add_parser(
+        "principles", help="Architecture-principles governance (issue #171)")
+    psub = s.add_subparsers(dest="pcmd", required=True)
+    ps = psub.add_parser(
+        "seed", help="Seed default architecture principles for a project")
+    ps.add_argument("--project", default=None,
+                    help="Project id (default: the implicit 'default' project)")
+    ps.set_defaults(func=cmd_principles_seed)
 
     return p
 

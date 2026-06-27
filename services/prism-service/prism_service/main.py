@@ -52,6 +52,29 @@ _log = logging.getLogger("prism")
 _logging_configured = False
 
 
+def _fault_floor_interval() -> "int | None":
+    """Interval (s) for the always-armed faulthandler all-thread dump floor,
+    or None to NOT arm it.
+
+    The floor is a repeat=True C-timer whose dump is only suppressed by the
+    watchdog's per-cycle cancel-on-healthy. With the watchdog disabled nothing
+    ever cancels it, so on a healthy daemon it dumps every interval forever —
+    pure log spam. Gate it on the watchdog being enabled (its partner). An
+    explicit PRISM_FAULTHANDLER_REPEAT_S<=0 also disables it. Pure function of
+    the environment so the gating is unit-testable without arming a real timer.
+    """
+    try:
+        repeat_s = int(os.environ.get("PRISM_FAULTHANDLER_REPEAT_S", "30"))
+    except (TypeError, ValueError):
+        repeat_s = 30
+    if repeat_s <= 0:
+        return None
+    watchdog = os.environ.get("PRISM_WATCHDOG", "").strip().lower()
+    if watchdog in ("0", "off", "false", "no"):
+        return None
+    return max(5, repeat_s)
+
+
 def _configure_logging() -> None:
     """Capture logs + crashes for every launch path (issue #66).
 
@@ -91,14 +114,23 @@ def _configure_logging() -> None:
     # traceback (why the wedge log has always gone silent). Arming once here
     # with repeat=True makes the C-level timer FREE-RUN: it re-fires every
     # interval on its own C thread even when every Python thread is parked on
-    # the futex, so a wedge always dumps all-thread stacks to prism.log. The
-    # watchdog's per-cycle cancel/arm on HEALTHY cycles still suppresses the
-    # dump while the server is responsive; this is the always-armed floor.
-    try:
-        _fh_repeat_s = max(5, int(os.environ.get("PRISM_FAULTHANDLER_REPEAT_S", "30")))
-        faulthandler.dump_traceback_later(_fh_repeat_s, repeat=True)
-    except (OSError, ValueError, RuntimeError):
-        pass
+    # the futex, so a wedge always dumps all-thread stacks to prism.log.
+    #
+    # CRITICAL: the ONLY thing that suppresses this free-running dump on a
+    # HEALTHY server is the watchdog's per-cycle cancel-on-healthy. So when the
+    # watchdog is DISABLED (PRISM_WATCHDOG=off) nothing ever cancels the
+    # repeat=True timer — it dumps every thread's stack into prism.log every
+    # interval on a perfectly healthy, idle daemon (the "Timeout (0:00:30)!
+    # …all-thread dump every 30s" noise that bloated prism.log to >14MB and
+    # MASQUERADED as a pre-death signal during diagnosis). Arm the floor ONLY
+    # when its partner watchdog is enabled (see _fault_floor_interval); the
+    # watchdog still arms its own per-cycle dump regardless.
+    _floor_s = _fault_floor_interval()
+    if _floor_s is not None:
+        try:
+            faulthandler.dump_traceback_later(_floor_s, repeat=True)
+        except (OSError, ValueError, RuntimeError):
+            pass
 
     def _log_uncaught(exc_type, exc_value, exc_tb):
         _log.critical("uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
@@ -122,6 +154,28 @@ def _configure_logging() -> None:
     except Exception:
         pass
     _logging_configured = True
+
+
+def _own_pidfile_write() -> None:
+    """Publish the pidfile naming THIS process — the one that binds the uvicorn
+    sockets (task 3576dd3f, pidfile-truth fix).
+
+    `prism start --daemon` pre-writes the pid of the child it spawned, but if a
+    launcher->server indirection ever sits between (so the recorded pid is NOT
+    the process that actually binds the ports), `prism status`/`prism stop` and
+    the out-of-process supervisor would act on the wrong pid. The SERVER owning
+    the pidfile makes it authoritative regardless of any launcher shape. Atomic
+    (tmp + os.replace), matching cli/supervisor writers so a torn file is never
+    observed. Idempotent across the auto-update os.execv (same pid)."""
+    from prism_service.data_dir import pid_file
+    p = pid_file()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".pid.tmp")
+        tmp.write_text(str(os.getpid()), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError as exc:
+        _log.warning("could not write own pidfile %s: %s", p, exc)
 
 
 def _own_pidfile_cleanup() -> None:
@@ -495,6 +549,12 @@ else:
 
 if __name__ == "__main__":
     _configure_logging()
+    # PIDFILE TRUTH (task 3576dd3f): the server publishes its OWN pid the
+    # instant it boots, so the pidfile names the real listener (this process,
+    # which binds uvicorn below) rather than any intermediate launcher pid.
+    # prism status/stop and the out-of-process supervisor then act on the live
+    # server. Done BEFORE _server.run() so the truth is on disk before bind.
+    _own_pidfile_write()
     # The daemon is the authority that clears its own pidfile on a
     # graceful exit (issue #66 fix #2) — atexit covers normal exit and
     # SIGTERM/SIGINT cover signalled shutdown. _own_pidfile_cleanup only

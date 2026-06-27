@@ -51,11 +51,13 @@ Add PRISM to your agent's MCP config (e.g. `.mcp.json`) — it's a streamable-HT
 }
 ```
 
-Then, from the agent: **call `prism_guide` first**. It returns what each tool does, the two-surface knowledge model, and the *"Working tasks the PRISM way"* playbook:
+Then, from the agent: **call `prism_onboard` first** — one call seeds the default architecture principles (so the conductor's `plan_gate` is satisfiable) and returns this `.mcp.json` snippet, the web/MCP ports, the running version, and a pointer to `prism_guide`. Then **call `prism_guide`** for the live orientation + the *"Working tasks the PRISM way"* playbook.
 
-> Create an **epic** as a root task (tracked live on the conductor) → break it into demonstrable-feature **subtasks** → drive each through the SDLC gates → **fan out subagents** (build with one, verify gates with a *distinct* actor — no self-override, proof-carrying) → write the **why** back to memory at `green_gate`. Prefer the `implement` (build) and `prototype` (plan) workflows.
+### Working tasks (max fan-out)
 
-Core MCP tools: `prism_guide`, `brain_search` / `brain_understand` / `brain_call_chain`, `okf_index` / `okf_get` / `okf_graph` (the Understand wiki), `memory_store` / `memory_recall`, `task_create` / `task_update` / `task_next`, `conductor_advance` / `conductor_gate`.
+> Create an **epic** as a root task (tracked live on the conductor) → break it into demonstrable-feature **subtasks** → run independent subtasks **IN PARALLEL via subagents** → a **distinct-actor** subagent clears each red/green gate with real artifacts (no self-override, proof-carrying) → `principles_seed` so `plan_gate` passes → **roll the child proofs up** to the epic's `green_gate` → write the **why** back to memory at `green_gate` → browse what you know via the **OKF / Understand wiki** (`okf_index` / `okf_get` / `okf_graph`, `brain_understand`). Prefer the `implement` (build) and `prototype` (plan) workflows.
+
+Core MCP tools: `prism_onboard`, `prism_guide`, `brain_search` / `brain_understand` / `brain_call_chain`, `okf_index` / `okf_get` / `okf_graph` (the Understand wiki), `principles_seed`, `memory_store` / `memory_recall`, `task_create` / `task_update` / `task_next`, `conductor_advance` / `conductor_gate`.
 
 ---
 
