@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.0"
+PRISM_VERSION = "6.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.1: FIX the conductor's gates being UNSATISFIABLE on a fresh project "
+    "(GH #171, task 89e364b7). (1) plan_coverage was fail-closed on "
+    "require_principles but the only seeder (arc_governance.seed_prism_"
+    "principles) seeded PRISM's OWN models/services rules — useless on a "
+    "customer repo. New arc_governance.DEFAULT_PRINCIPLES (generic clean-"
+    "architecture layer rules: domain !-> infrastructure; interface !-> "
+    "domain) + seed_default_principles(memory_svc, rules=None) seed them "
+    "idempotently; surfaced via a new principles_seed MCP tool (interactive "
+    "profile) and a `prism principles seed [--project]` CLI subcommand, so a "
+    "fresh project can seed once and clear plan_gate without override (empty "
+    "principles still fail-closed). (2) An EPIC/parent green_gate now ROLLS "
+    "UP its children (conductor_service.epic_rollup_verdict, reusing "
+    "is_weak_proof): when every non-cancelled child is done with a strong "
+    "completion_proof, the children ARE the parent's proof — the verifier "
+    "consult + artifact tooth are skipped and the gate passes WITHOUT "
+    "override; a weak/incomplete child fails with a concrete reason (no false "
+    "green, not a blanket override). Tests: tests/unit/test_seedable_gates.py. "
     "v6.7.0: MINOR bump capping the OKF epic — hosted OKF wiki read-path + "
     "the 4->2 knowledge consolidation (Brain visualization + ONE Understand "
     "wiki over curated memory) + the task-title rename fix + agent-facing "
