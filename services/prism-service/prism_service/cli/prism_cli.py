@@ -355,6 +355,23 @@ def cmd_version(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_principles_seed(args: argparse.Namespace) -> int:
+    """Seed the active project's architecture principles so the conductor's
+    plan_gate is satisfiable (issue #171). In-process — resolves the project
+    context directly (no running daemon needed)."""
+    from prism_service.config import DEFAULT_PROJECT
+    from prism_service.project_context import get_project
+    from prism_service.services.arc_governance import seed_default_principles
+
+    pid = getattr(args, "project", None) or DEFAULT_PROJECT
+    ctx = get_project(pid)
+    stored = seed_default_principles(ctx.memory_svc)
+    ids = ", ".join(getattr(e, "name", "") for e in stored)
+    print(f"seeded {len(stored)} architecture principle(s) into project "
+          f"'{pid}': {ids}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="prism", description="PRISM service CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -380,6 +397,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("version", help="Print version + notes")
     s.set_defaults(func=cmd_version)
+
+    s = sub.add_parser(
+        "principles", help="Architecture-principles governance (issue #171)")
+    psub = s.add_subparsers(dest="pcmd", required=True)
+    ps = psub.add_parser(
+        "seed", help="Seed default architecture principles for a project")
+    ps.add_argument("--project", default=None,
+                    help="Project id (default: the implicit 'default' project)")
+    ps.set_defaults(func=cmd_principles_seed)
 
     return p
 

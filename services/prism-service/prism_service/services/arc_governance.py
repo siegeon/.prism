@@ -281,6 +281,44 @@ PRISM_PRINCIPLES: list[dict] = [
 ]
 
 
+# Generic, repo-agnostic defaults — a sensible starting set for ANY project
+# so a fresh customer repo's plan_gate is satisfiable without hand-authoring
+# principles first (issue #171). These are the classic clean-architecture
+# layer rules (NOT PRISM's own models/services names): seed them, then the
+# project tailors via principles_seed(rules=...) or a memory_store edit.
+DEFAULT_PRINCIPLES: list[dict] = [
+    {"id": "ARC-DEFAULT-1", "kind": "layer_rule",
+     "from": "domain", "must_not_depend_on": "infrastructure",
+     "why": "the classic clean-architecture rule: domain logic must not "
+            "couple to infrastructure adapters"},
+    {"id": "ARC-DEFAULT-2", "kind": "layer_rule",
+     "from": "interface", "must_not_depend_on": "domain",
+     "why": "the interface/delivery layer (controllers, UI) talks to the "
+            "application layer, never reaches straight into the domain"},
+]
+
+
+def seed_default_principles(memory_svc: Any,
+                            rules: Optional[list[dict]] = None) -> list:
+    """Seed a GENERIC default principle set (or `rules`) as MEMORY DATA so a
+    fresh project's plan_gate is satisfiable (issue #171). Idempotent:
+    MemoryService.store supersedes same-name entries. Mirrors the store
+    pattern of seed_prism_principles; returns the stored entries."""
+    stored = []
+    for p in (rules or DEFAULT_PRINCIPLES):
+        stored.append(memory_svc.store(
+            domain=PRINCIPLES_DOMAIN,
+            name=p["id"],
+            description=(f"{p['kind']}: {p['from']} must not depend on "
+                         f"{p['must_not_depend_on']} — {p.get('why', '')}"),
+            type="decision",
+            classification="foundational",
+            evidence={"principle": p},
+            importance=8,
+        ))
+    return stored
+
+
 def seed_prism_principles(memory_svc: Any) -> list:
     """Seed PRISM's own architecture principles as MEMORY DATA (a1).
     Idempotent: MemoryService.store supersedes same-name entries."""

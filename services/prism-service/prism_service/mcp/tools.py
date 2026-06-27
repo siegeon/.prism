@@ -847,6 +847,30 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="principles_seed",
+        description=(
+            "Seed this project's architecture PRINCIPLES (machine-checkable "
+            "layer rules) as memory data so the conductor's plan_gate is "
+            "satisfiable on a fresh project (issue #171). With no args it "
+            "seeds a generic, repo-agnostic default set (domain !-> "
+            "infrastructure; interface !-> domain); pass `rules` to seed a "
+            "tailored set. Idempotent (same-name supersedes). Returns the "
+            "seeded count + ids."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "description": (
+                        "Optional custom principles. Each: {id, kind: "
+                        "'layer_rule', from, must_not_depend_on, why?}."),
+                    "items": {"type": "object"},
+                },
+            },
+        },
+    ),
+    Tool(
         name="okf_graph",
         description=(
             "Return the Understand wiki's concept GRAPH for this project — "
@@ -1471,6 +1495,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "okf_index",
     "okf_get",
     "okf_graph",
+    "principles_seed",
     "task_create",
     "task_list",
     "task_next",
@@ -3558,6 +3583,21 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             if result is None:
                 return [TextContent(type="text", text=_json({"error": f"unknown concept: {arguments['path']}"}))]
             return [TextContent(type="text", text=_json(result))]
+
+        # ------------------------------------------------------------------
+        # Architecture principles — seed machine-checkable layer rules so the
+        # conductor's plan_gate is satisfiable on a fresh project (issue #171)
+        # ------------------------------------------------------------------
+        if name == "principles_seed":
+            from prism_service.services.arc_governance import (
+                seed_default_principles)
+            stored = seed_default_principles(
+                memory_svc, rules=arguments.get("rules"))
+            return [TextContent(type="text", text=_json({
+                "seeded": len(stored),
+                "ids": [getattr(e, "name", "") for e in stored],
+                "domain": "architecture-principles",
+            }))]
 
         # ------------------------------------------------------------------
         # Task tools
