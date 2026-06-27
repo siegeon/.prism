@@ -2475,9 +2475,14 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
     hooks_map = {
         "SessionStart": [
             {
-                "type": "command",
-                "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-sync.py",
-                "timeout": 30000,
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"{py} ${{CLAUDE_PROJECT_DIR}}/.claude/hooks/prism-sync.py",
+                        "timeout": 30000,
+                    },
+                ],
             },
         ],
         "PostToolUse": [
