@@ -22,8 +22,7 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     names = _names("interactive")
 
     # 17 original core tools + 2 Conductor v2 tools
-    # (conductor_advance / conductor_gate) + 10 v5.1 understand_* tools
-    # (T9 nine + understand_configure follow-up) + brain_understand
+    # (conductor_advance / conductor_gate) + brain_understand
     # (v6.1.6 Ultimate Graph merge retrieval) + task_link_session
     # (v6.2.9 task<->session association — rides the task_* family)
     # + register_claude_source (v6.3.16 — Claude reports its own
@@ -37,7 +36,11 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # PRISM_REFLECTION_PENDING candidates are actionable).
     # + prism_onboard (v6.7.1 / GH #172 — one-call bootstrap: seed principles
     # + return the .mcp.json snippet/ports/version/prism_guide pointer).
-    assert len(names) == 41
+    # The 10 legacy understand_* tools are deliberately EXCLUDED from the
+    # default surface (superseded by okf_*; reachable via tool_profile=all and,
+    # for the stop hook, the automation profile) — keeps the default agent
+    # surface small per the tool-surface-reduction objective.
+    assert len(names) == 31
     assert "prism_onboard" in names
     assert "brain_understand" in names
     assert "task_link_session" in names
@@ -59,10 +62,15 @@ def test_interactive_profile_exposes_core_agent_tools_only():
         "conductor_gate",
         "context_bundle",
         "prism_status",
+    } <= names
+    # Legacy understand_* tools are not part of the curated default surface.
+    assert {
         "understand_refresh",
         "understand_status",
         "understand_drain_queue",
-    } <= names
+        "understand_bootstrap",
+        "understand_get_tour",
+    }.isdisjoint(names)
     assert {
         "brain_index_doc",
         "record_session_outcome",

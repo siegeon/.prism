@@ -62,7 +62,7 @@ def _case_result(case: dict, mode: str) -> dict:
 
 
 def main() -> int:
-    from app.mcp.tools import TOOLS, tools_for_profile
+    from prism_service.mcp.tools import TOOLS, tools_for_profile
 
     per_case = [_case_result(case, mode) for mode in ("prism_on", "prism_off") for case in CASES]
     prism_on = [row["score"] for row in per_case if row["mode"] == "prism_on"]

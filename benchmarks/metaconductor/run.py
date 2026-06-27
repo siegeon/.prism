@@ -119,7 +119,7 @@ CASES = [
 
 
 def run_cases(work_dir: Path) -> list[dict[str, Any]]:
-    from app.services.conductor_service import ConductorService
+    from prism_service.services.conductor_service import ConductorService
 
     if work_dir.exists():
         shutil.rmtree(work_dir)

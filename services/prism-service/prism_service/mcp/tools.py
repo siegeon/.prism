@@ -878,9 +878,13 @@ TOOLS: list[Tool] = [
             "(same path as principles_seed) so the conductor's plan_gate is "
             "immediately satisfiable, and (b) returns a bootstrap payload: "
             "the .mcp.json snippet (streamable-HTTP url /mcp/?project=<slug>), "
-            "the web + MCP ports, the running PRISM version, and a 'call "
-            "prism_guide first' pointer to the max-fan-out playbook. Call this "
-            "ONCE on a new project, then call prism_guide. Idempotent."
+            "the web + MCP ports, the running PRISM version, a 'call "
+            "prism_guide first' pointer to the max-fan-out playbook, the "
+            "tool_profile=all url for maintenance/legacy endpoints, and a "
+            "`staying_current` block telling the agent how to RECONNECT to pick "
+            "up new MCP endpoints after a PRISM upgrade. Call this ONCE on a new "
+            "project, then call prism_guide. Idempotent — re-run after a PRISM "
+            "version change to refresh the snippet + self-update steps."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
@@ -1530,7 +1534,13 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "janitor_submit",
     "janitor_abandon",
     "memory_invalidate",
-} | UNDERSTAND_TOOL_NAMES
+}
+# NOTE: the legacy understand_* tools are intentionally NOT in the default
+# interactive surface — they're superseded by the okf_* Understand wiki and
+# kept reachable only via tool_profile=all (plus understand_refresh/status in
+# the automation profile for the stop hook). This keeps the default agent
+# surface a small curated subset, per the tool-surface-reduction objective
+# (benchmarks/objective_audit). Reachable via tool_profile=all when needed.
 
 # Splice the understand_* tools into the registration list so the
 # MCP server advertises them alongside the original surface.
@@ -1995,6 +2005,13 @@ decompose wide, run subtasks IN PARALLEL, verify with a distinct actor.
 On a fresh project call `prism_onboard` FIRST: it seeds the default
 architecture principles (so plan_gate is satisfiable), and returns the
 .mcp.json snippet + ports + version + a pointer back here. Then `prism_guide`.
+STAY CURRENT: your MCP client caches the tool list at connect time, so after a
+PRISM upgrade NEW endpoints stay invisible until you RECONNECT — run `/mcp`
+(reconnect `prism`) or restart, then re-call `prism_guide`. Compare
+`prism_status.prism_version` to the version you onboarded on to detect drift.
+Maintenance/legacy endpoints (brain_index_doc, graph_rebuild, the legacy
+understand_* family, …) live behind `?tool_profile=all` — reconnect with the
+`mcp_url_all` that `prism_onboard` returns to use them.
 
 ## 1. Frame an EPIC as a ROOT task, decompose into demonstrable subtasks
 - `task_create(title=..., parent_id="")` — a ROOT task (empty parent_id) is an
@@ -2568,6 +2585,22 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
             "settings.json under 'hooks', then delete .claude/hooks.json.",
             "After writing, tell the user: 'Restart Claude so the new "
             "PRISM hooks activate.'",
+            "STAY CURRENT WITH NEW MCP ENDPOINTS: this manifest is served by "
+            "PRISM v" + PRISM_VERSION + ". Your MCP client caches the tool list "
+            "at connect time, so after PRISM upgrades (the daemon auto-updates, "
+            "or `prism update`) NEW endpoints will not appear until you "
+            "reconnect — in Claude Code run `/mcp` and reconnect the `prism` "
+            "server (or restart Claude Code), then call prism_guide again. "
+            "Detect drift by comparing prism_status.prism_version to the version "
+            "you onboarded on. Re-running prism_install (this tool) is the "
+            "client-side half of that update — do it whenever prism_version "
+            "changes so the hooks AND tool list refresh together.",
+            "The default MCP profile is a small curated surface. To use "
+            "maintenance/admin or legacy endpoints (brain_index_doc, "
+            "graph_rebuild, project_create, verifier_run, the legacy "
+            "understand_* family, …) reconnect with the url "
+            "`/mcp/?project=<slug>&tool_profile=all`. prism_onboard returns the "
+            "ready-made mcp_url_all for this.",
             "Hook surface (v5.3.16, slim): SessionStart syncs Brain/Graph "
             "drift before the session starts. PostToolUse covers two "
             "in-session needs — implicit retrieval feedback "
@@ -2729,6 +2762,9 @@ _NO_AUGMENT_TOOLS: frozenset[str] = frozenset({
     "graph_annotate_submit", "graph_annotate_abandon",
     "graph_annotate_status",
     "memory_invalidate", "prism_install", "prism_guide",
+    # prism_onboard returns a structured bootstrap payload (snippet, ports,
+    # staying_current steps) parsed by the onboarding agent — keep it clean.
+    "prism_onboard",
 })
 
 
@@ -3657,6 +3693,9 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             stored = seed_default_principles(memory_svc)
             mcp_url = (f"http://localhost:{_cfg.MCP_PORT}/mcp/"
                        f"?project={project_id}")
+            mcp_url_all = f"{mcp_url}&tool_profile=all"
+            interactive_n = len(tool_names_for_profile("interactive"))
+            all_n = len({tool.name for tool in TOOLS})
             return [TextContent(type="text", text=_json({
                 "seeded": len(stored),
                 "project_id": project_id,
@@ -3664,8 +3703,42 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 "mcp_port": _cfg.MCP_PORT,
                 "web_port": _cfg.UI_PORT,
                 "mcp_url": mcp_url,
+                "mcp_url_all": mcp_url_all,
                 "mcp_json": {"mcpServers": {"prism": {
                     "type": "http", "url": mcp_url}}},
+                "tool_surface": {
+                    "default_profile": "interactive",
+                    "default_tool_count": interactive_n,
+                    "all_tool_count": all_n,
+                    "note": (
+                        "The default profile is a small curated surface. "
+                        "Maintenance/admin + legacy endpoints (brain_index_doc, "
+                        "graph_rebuild, project_create, verifier_run, the legacy "
+                        "understand_* family, …) are hidden by default — connect "
+                        "with mcp_url_all (?tool_profile=all) to use them."
+                    ),
+                },
+                # How an already-connected agent picks up NEW MCP endpoints after
+                # PRISM ships a new version (the daemon auto-updates / `prism
+                # update`). The client caches the tool list at connect time, so a
+                # reconnect is required — this tells the agent exactly how.
+                "staying_current": [
+                    f"You onboarded on PRISM v{PRISM_VERSION}. Your MCP client "
+                    "fetched the tool list ONCE at connect time and cached it — "
+                    "new endpoints from a later PRISM version will NOT appear "
+                    "until you reconnect.",
+                    "To pick up new MCP endpoints: in Claude Code run `/mcp` and "
+                    "reconnect the `prism` server (or restart Claude Code); other "
+                    "MCP clients re-open the session. Then call prism_guide again.",
+                    "Detect drift: call prism_status and compare its "
+                    "`prism_version` to the version you onboarded on. If it moved, "
+                    "reconnect to refresh the tool list.",
+                    "After a PRISM version change also re-run prism_install "
+                    "(idempotent) to heal client-side hook/script drift, then "
+                    "restart Claude so the refreshed hooks AND tool list load.",
+                    "To reach maintenance/admin or legacy endpoints not in the "
+                    f"default surface, reconnect using mcp_url_all: {mcp_url_all}",
+                ],
                 "next": ("Call prism_guide first — it returns the live "
                          "orientation + the max-fan-out task playbook."),
                 "web_ui": f"http://localhost:{_cfg.UI_PORT}/",

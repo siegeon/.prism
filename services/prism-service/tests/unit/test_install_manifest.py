@@ -45,6 +45,18 @@ def test_install_manifest_includes_prism_reflect_command_md():
     assert "---" in content  # slash commands also carry frontmatter
 
 
+def test_install_manifest_teaches_self_update_for_new_endpoints():
+    """The manifest must tell an agent how to reconnect/refresh to pick up new
+    MCP endpoints after a PRISM upgrade, and how to reach tool_profile=all
+    maintenance/legacy endpoints."""
+    instr = " ".join(_manifest()["instructions_for_agent"]).lower()
+    assert "reconnect" in instr
+    assert "/mcp" in instr or "restart claude" in instr
+    assert "prism_status" in instr  # detect a version change
+    assert "tool_profile=all" in instr  # reach maintenance/legacy endpoints
+    assert "cache" in instr  # explain WHY a reconnect is needed
+
+
 def test_install_manifest_keeps_required_client_adapter_files():
     # v5.3.16: prism-stop, prism-subagent, prism-skill-usage, and
     # prism-idle-rebuild were intentionally dropped — the claude_transcripts

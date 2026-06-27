@@ -72,10 +72,17 @@ def test_all_tools_registered():
     assert ut.UNDERSTAND_TOOL_NAMES == expected
 
 
-def test_interactive_profile_includes_understand_tools():
-    """Tools.py splices UNDERSTAND_TOOL_NAMES into INTERACTIVE_TOOL_NAMES."""
+def test_understand_tools_excluded_from_interactive_but_still_registered():
+    """Legacy understand_* tools are demoted out of the default interactive
+    surface (superseded by okf_*; kept for the tool-surface-reduction
+    objective) yet remain registered, so they stay reachable via
+    tool_profile=all and the automation profile's stop-hook entries."""
     from prism_service.mcp import tools as t
-    assert ut.UNDERSTAND_TOOL_NAMES <= t.INTERACTIVE_TOOL_NAMES
+    assert ut.UNDERSTAND_TOOL_NAMES.isdisjoint(t.INTERACTIVE_TOOL_NAMES)
+    registered = {tool.name for tool in t.TOOLS}
+    assert ut.UNDERSTAND_TOOL_NAMES <= registered
+    # automation profile still serves the two the stop hook calls.
+    assert {"understand_refresh", "understand_status"} <= t.AUTOMATION_TOOL_NAMES
 
 
 def test_dispatch_returns_none_for_foreign_tool():
