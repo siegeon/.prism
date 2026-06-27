@@ -144,3 +144,30 @@ def test_readme_has_honest_benchmark_section():
     # Honest caveat: not yet proven vs the best public coding agents.
     assert "swe-bench" in low
     assert "proof campaign" in low or "not yet" in low
+
+
+def test_readme_is_progressively_disclosed():
+    """AC-3 — the README applies PRISM's own progressive-disclosure
+    principle: deep detail is tucked into collapsible <details> blocks so the
+    top of the page stays scannable. Assert at least three of them."""
+    readme = _readme()
+    assert readme.count("<details>") >= 3, "README must use >=3 <details> blocks"
+    assert readme.count("<details>") == readme.count("</details>")
+
+
+def test_readme_benchmarks_are_comparative_and_honest():
+    """AC-2 (extended) — benchmarks are COMPARATIVE (a baseline lift + an
+    industry-context cue) AND honest (the recall@5-vs-QA-accuracy metric
+    caveat that keeps cross-system numbers directional only)."""
+    readme = _readme()
+    low = readme.lower()
+    # Comparative: the lift trajectory off a baseline.
+    assert "baseline" in low
+    assert "0.524" in readme and "0.634" in readme
+    assert "0.94" in readme or "0.98" in readme
+    # Industry context exists but is explicitly DIRECTIONAL, not a leaderboard.
+    assert "longmemeval" in low
+    assert "directional" in low
+    # Honest metric caveat: recall@5 != end-to-end QA accuracy.
+    assert "recall@5" in low
+    assert "qa accuracy" in low or "qa-accuracy" in low
