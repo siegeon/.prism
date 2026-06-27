@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.2"
+PRISM_VERSION = "6.7.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.3: README polished for HUMAN readability (docs-only, no behavior "
+    "change). The root README now applies PRISM's own progressive-disclosure "
+    "principle: a scannable top (centered hero + shields.io badges, the 'All "
+    "you need' quickstart, a 4-bullet 'What you get', and a tight comparative "
+    "benchmark teaser) with the deep detail relocated into collapsible "
+    "<details> blocks (full benchmark table + industry context + caveats; the "
+    "max-fan-out task playbook + MCP toolkit; install/ports/Web UI/from-source; "
+    "status + license). Benchmarks are now COMPARATIVE AND HONEST: framed as a "
+    "vanilla single-vector RAG baseline 0.524 R@5 on LongMemEval -> 0.634 "
+    "(MiniLM, full 500 Q) -> 0.94-0.98 (current multi-granular + query-decomp "
+    "stack, 50-Q smoke; pool@50 1.000), with directional-only industry context "
+    "(published systems ~0.82-0.97) and the EXPLICIT metric caveat that "
+    "recall@5 != end-to-end QA accuracy, so cross-system numbers are "
+    "directional (no 'PRISM beats X' table). Honest scope caveat kept: the "
+    "top stack's full-500-Q run is pending and SWE-bench Verified/rebench, "
+    "Terminal-Bench 2.0, BFCL V4 are not yet officially scored (paired "
+    "SWE-bench Lite proof campaign pending). Sources: benchmarks/EXPERIMENTS.md "
+    "+ benchmarks/README.md. Tests: tests/unit/test_prism_onboard.py "
+    "(progressive-disclosure >=3 <details> + comparative/honest benchmark "
+    "assertions). "
     "v6.7.2: README is now an agent-first onboarding (docs-only, no behavior "
     "change). The root README LEADS with an 'All you need' value-prop block — "
     "pipx install prism-service -> prism start --daemon -> add the .mcp.json "
