@@ -4,9 +4,36 @@
 
 # PRISM
 
-**Slate Blue · v6.7.0** — an on-prem **memory + knowledge layer and conductor for AI coding agents**, exposed over MCP. PRISM gives an agent durable project memory, a navigable knowledge wiki, a code graph, and a gated SDLC task conductor — so the agent (and the humans beside it) build with continuity instead of starting cold every session.
+**Slate Blue · v6.7.2** — an on-prem **memory + knowledge layer and conductor for AI coding agents**, exposed over MCP. PRISM gives an agent durable project memory, a navigable knowledge wiki, a code graph, and a gated SDLC task conductor — so the agent (and the humans beside it) build with continuity instead of starting cold every session.
 
 > New here? If you are an AI agent: install PRISM, register its MCP, then **call `prism_guide` first** — it returns the live orientation and the task-orchestration playbook.
+
+---
+
+## All you need
+
+```bash
+pipx install prism-service     # 1. install (isolated; Python 3.12)
+prism start --daemon           # 2. start the daemon — web :7778 · MCP :7777
+```
+
+Then point your agent at the MCP and bootstrap in one call:
+
+```json
+// 3a. add to your agent's .mcp.json  ·  `project` namespaces a workspace
+{ "mcpServers": { "prism": { "type": "http", "url": "http://localhost:7777/mcp/?project=<name>" } } }
+```
+
+```text
+3b. from the agent, call the prism_onboard MCP tool   → auto-seeds default architecture
+    principles (so plan_gate is satisfiable) AND returns the .mcp.json snippet, ports,
+    version, and a "call prism_guide first" pointer.  prism_onboard does step 3a for you.
+4.  call prism_guide first                             → live orientation + task playbook.
+```
+
+**→ you get:** durable cross-session **memory**, a navigable **OKF / Understand knowledge wiki**, a **code graph** (`brain_search` / `brain_understand` / `brain_call_chain`), and a **gated conductor SDLC** with epic → subtask fan-out.
+
+See [**Benchmarks**](#benchmarks--what-youre-dealing-with) for the real numbers. Everything below is the detail behind these four steps.
 
 ---
 
@@ -32,7 +59,7 @@ prism status                  # confirm it's up
 prism logs --follow           # tail logs
 
 # 3. Verify it's running
-curl http://localhost:7778/api/version      # → {"version": "6.7.0", ...}
+curl http://localhost:7778/api/version      # → {"version": "6.7.2", ...}
 ```
 
 Lifecycle: `prism start [--daemon]` · `prism status` · `prism logs` · `prism stop` · `prism update` · `prism version`.
@@ -61,9 +88,30 @@ Core MCP tools: `prism_onboard`, `prism_guide`, `brain_search` / `brain_understa
 
 ---
 
+## Benchmarks — what you're dealing with
+
+Real, reproducible numbers. No hype beyond the data. Sources: [`benchmarks/EXPERIMENTS.md`](./benchmarks/EXPERIMENTS.md) (the append-only Brain-retrieval log) and [`benchmarks/README.md`](./benchmarks/README.md) (the claim policy).
+
+**Memory retrieval — LongMemEval R@5** (CPU-only default embedder, all-MiniLM-L6-v2, 22M params):
+
+| Stack | R@5 | Scope |
+|---|---|---|
+| potion-base-32M baseline (RRF 3-index) | **0.524** | full 500 Q |
+| swap embedder → all-MiniLM-L6-v2 | **0.634** | full 500 Q |
+| + multi-granular chunking + contextual prefix | **0.940** | 50 Q smoke |
+| + rules-based query decomposition | **0.980** | 50 Q smoke (pool@50 = 1.000) |
+
+**Context assembly** — `contextpack` benchmark scores **1.000** across every dimension (persona frame, Brain/Memory/Task recall, no-noise/leakage, deterministic asset digests).
+
+**Meta-conductor prompt-promotion** — decision_accuracy **1.000** with **0** false promotions (no-LLM candidate generation + holdout-gated promotion).
+
+> **Honest caveat.** PRISM does **not yet** claim to beat the best public coding agents. The tracked competitive bars — **SWE-bench Verified**, **SWE-rebench**, **Terminal-Bench 2.0**, **BFCL V4** — are **not yet officially scored**, so public-best claims are blocked. The decisive next step is a paired **SWE-bench Lite** PRISM-on/off **proof campaign** (current local smoke is 1/2 vs 1/2 — too small to claim an advantage). Reproduce the numbers above via `benchmarks/longmemeval/run.py` and `benchmarks/status/run.py`.
+
+---
+
 ## Web UI
 
-`http://localhost:7778/` — React SPA: **Dashboard · Brain (graph) · Understand (wiki) · Tasks · Conductor · Sessions · Consolidation · Learning**. The footer shows the build + theme (e.g. *Slate Blue · v6.7.0*).
+`http://localhost:7778/` — React SPA: **Dashboard · Brain (graph) · Understand (wiki) · Tasks · Conductor · Sessions · Consolidation · Learning**. The footer shows the build + theme (e.g. *Slate Blue · v6.7.2*).
 
 ---
 
@@ -83,4 +131,4 @@ See [`CLAUDE.md`](./CLAUDE.md) for repo conventions and layout, and the MCP `pri
 
 ## Status
 
-Active development — `prism_service/__version__.py` is the canonical version + changelog (`PRISM_VERSION_NOTES`). Current: **v6.7.0** (hosted OKF knowledge wiki + Brain/Understand consolidation + renameable tasks + agent-orchestration playbook).
+Active development — `prism_service/__version__.py` is the canonical version + changelog (`PRISM_VERSION_NOTES`). Current: **v6.7.2** (README value-prop onboarding + honest benchmark numbers; hosted OKF knowledge wiki + Brain/Understand consolidation + agent-orchestration playbook).
