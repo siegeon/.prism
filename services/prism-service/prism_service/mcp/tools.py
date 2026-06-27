@@ -1507,6 +1507,14 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "conductor_gate",
     "context_bundle",
     "register_claude_source",
+    # GH #173 — the prism-reflect sub-agent connects through this default
+    # profile; SessionStart advertises PRISM_REFLECTION_PENDING and the
+    # agent spec's allow-list calls these. Serve them so candidates are
+    # actionable (fetch brief -> submit/abandon verdict, invalidate stale).
+    "janitor_check",
+    "janitor_submit",
+    "janitor_abandon",
+    "memory_invalidate",
 } | UNDERSTAND_TOOL_NAMES
 
 # Splice the understand_* tools into the registration list so the
