@@ -42,6 +42,10 @@ def test_cmd_start_clears_confirmed_stale_pidfile(data_dir, monkeypatch, capsys)
     # An old, dead pid is sitting in the pidfile.
     cli._write_pid(999999)
     monkeypatch.setattr(cli, "_is_alive", lambda pid: False)
+    # GH #181 port-level guard: neutralize it so this stale-pidfile test still
+    # reaches the spawn path (no daemon answering, no port held).
+    monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: False)
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: None)
 
     launched = {}
 
@@ -73,6 +77,7 @@ def test_cmd_status_reports_stale_when_pid_alive_but_unresponsive(
     cli._write_pid(555)
     monkeypatch.setattr(cli, "_is_alive", lambda pid: True)
     monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: False)
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: None)  # #181: no split-brain
     cli.cmd_status(argparse.Namespace())
     out = capsys.readouterr().out
     assert "stale pidfile" in out
@@ -83,6 +88,7 @@ def test_cmd_status_reports_running_when_responding(data_dir, monkeypatch, capsy
     cli._write_pid(555)
     monkeypatch.setattr(cli, "_is_alive", lambda pid: True)
     monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: True)
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: None)  # #181: no split-brain
     cli.cmd_status(argparse.Namespace())
     out = capsys.readouterr().out
     assert "running (pid 555)" in out
@@ -109,3 +115,68 @@ def test_cmd_stop_refuses_to_kill_recycled_pid(data_dir, monkeypatch, capsys):
 def test_daemon_http_alive_false_on_dead_port(data_dir):
     # Nothing is listening on this port; probe must fail fast, not raise.
     assert cli._daemon_http_alive(59999) is False
+
+
+# ── GH #181: port-level start guard, status self-heal, stop orphan sweep ──────
+def test_cmd_start_refuses_when_ui_already_answering(data_dir, monkeypatch, capsys):
+    # No pidfile at all (mid-rotation/absent), but a daemon IS answering on the
+    # UI port — cmd_start must refuse to stack a second family (AC-2).
+    monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: True)
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: None)
+    spawned = {"called": False}
+    monkeypatch.setattr(cli.subprocess, "Popen",
+                        lambda *a, **k: spawned.__setitem__("called", True))
+    rc = cli.cmd_start(argparse.Namespace(daemon=True, ui_port=None, mcp_port=None))
+    assert rc == 1
+    assert spawned["called"] is False
+    assert "already running" in capsys.readouterr().err
+
+
+def test_cmd_start_refuses_when_mcp_port_held(data_dir, monkeypatch, capsys):
+    # UI not answering, but the MCP port is held by another pid (an in-flight
+    # restart / orphan) — still refuse (AC-2).
+    monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: False)
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: 49019)
+    spawned = {"called": False}
+    monkeypatch.setattr(cli.subprocess, "Popen",
+                        lambda *a, **k: spawned.__setitem__("called", True))
+    rc = cli.cmd_start(argparse.Namespace(daemon=True, ui_port=None, mcp_port=None))
+    assert rc == 1
+    assert spawned["called"] is False
+    assert "already held by pid 49019" in capsys.readouterr().err
+
+
+def test_cmd_status_reports_unhealthy_and_self_heals_split_brain(data_dir, monkeypatch, capsys):
+    # Two pids each own one port -> UNHEALTHY + reap the orphan, exit non-zero (AC-3).
+    cli._write_pid(26138)
+    monkeypatch.setattr(cli, "_is_alive", lambda pid: True)
+    monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: True)
+    owners = {"7778": 26138, "7777": 49019}
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: owners.get(str(port)))
+    killed = []
+    from prism_service.services import split_brain
+    monkeypatch.setattr(split_brain, "kill_pid_escalating",
+                        lambda pid, *a, **k: killed.append(pid))
+    rc = cli.cmd_status(argparse.Namespace())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "UNHEALTHY" in out
+    assert killed == [49019]              # orphan reaped, keeper (UI pid) spared
+
+
+def test_cmd_stop_reaps_split_brain_orphan(data_dir, monkeypatch, capsys):
+    cli._write_pid(26138)
+    monkeypatch.setattr(cli, "_is_alive", lambda pid: True)
+    monkeypatch.setattr(cli, "_daemon_http_alive", lambda port: True)
+    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(cli.os, "kill", lambda *a, **k: None)
+    owners = {"7778": 26138, "7777": 49019}
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda port: owners.get(str(port)))
+    killed = []
+    from prism_service.services import split_brain
+    monkeypatch.setattr(split_brain, "kill_pid_escalating",
+                        lambda pid, *a, **k: killed.append(pid))
+    rc = cli.cmd_stop(argparse.Namespace())
+    assert rc == 0
+    assert killed == [49019]             # the SIGTERM-ignoring orphan is reaped
+    assert "reaped split-brain orphan pid 49019" in capsys.readouterr().err
