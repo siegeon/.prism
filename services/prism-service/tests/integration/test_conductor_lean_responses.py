@@ -131,6 +131,34 @@ def test_task_list_schema_advertises_id():
         "task_list inputSchema must advertise the by-id read filter")
 
 
+# ── PERF/SCOPE: a bare task_list returns ACTIVE work only — done/cancelled/
+# deleted (≈90% of a mature board) are excluded unless explicitly asked. ──
+
+def test_task_list_defaults_to_active_work_only(tmp_path, monkeypatch):
+    pid = _isolated_project(tmp_path, monkeypatch)
+    p = _call("task_create", {"title": "still pending"}, pid)["id"]
+    d = _call("task_create", {"title": "finished"}, pid)["id"]
+    _call("task_update", {"id": d, "status": "done"}, pid)
+    x = _call("task_create", {"title": "soft-deleted"}, pid)["id"]
+    _call("task_update", {"id": x, "status": "deleted"}, pid)
+
+    # bare call: active only — the done + deleted tasks are NOT returned
+    bare = {t["id"] for t in _call("task_list", {}, pid)}
+    assert bare == {p}, f"bare task_list must be active-only; got {bare}"
+
+    # opt into the full archive
+    everything = {t["id"] for t in _call("task_list", {"status": "all"}, pid)}
+    assert {p, d, x} <= everything, "status='all' must include done + deleted"
+
+    # one column on request
+    done_only = {t["id"] for t in _call("task_list", {"status": "done"}, pid)}
+    assert done_only == {d}
+
+    # soft-deleted is hidden even when asking a non-matching status, shown by name
+    assert x not in {t["id"] for t in _call("task_list", {"status": "pending"}, pid)}
+    assert x in {t["id"] for t in _call("task_list", {"status": "deleted"}, pid)}
+
+
 # ── AC-6 / FR-7: a fields projection returns ONLY requested keys ─────────
 
 def test_conductor_advance_fields_projection(tmp_path, monkeypatch):
