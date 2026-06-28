@@ -177,6 +177,11 @@ def test_cmd_start_breakaway_fallback_warns(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PRISM_SUPERVISOR", "off")  # don't spawn the supervisor child
     cli = importlib.import_module("prism_service.cli.prism_cli")
     monkeypatch.setattr(cli, "_read_pid", lambda: 0)
+    # GH #181: isolate the new port-level start guard so it neither reads real
+    # host ports nor runs netstat via subprocess (which, with Popen monkeypatched
+    # below, would otherwise consume the first mocked Popen call).
+    monkeypatch.setattr(cli, "_daemon_http_alive", lambda p: False)
+    monkeypatch.setattr(cli, "_port_owner_pid", lambda p: None)
 
     calls = {"n": 0}
 
