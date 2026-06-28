@@ -140,6 +140,20 @@ def perform_restart(server=None, drain_timeout_s: float = 10.0) -> None:
     """
     if _DEFER_RESTART:
         return
+    # SPLIT-BRAIN GUARD (GH #181): mark a restart in progress BEFORE we drain.
+    # The os.execv below re-execs IN PLACE (same pid) and closes both CLOEXEC
+    # sockets, so the re-exec'd image is the single owner of both ports. The
+    # risk is the out-of-process supervisor: it probes ONLY the UI port, sees it
+    # hang during the drain + cold-boot, and fires a COMPETING kill+respawn that
+    # stacks a second family. While this FRESH sentinel exists the supervisor
+    # defers recovery; the re-exec'd server clears it on a healthy boot
+    # (main._own_pidfile_write path). TTL-bounded so a crash can't wedge
+    # recovery off forever (NFR-2).
+    try:
+        from prism_service.data_dir import write_restart_sentinel
+        write_restart_sentinel(os.getpid())
+    except Exception:
+        pass
     if server is not None:
         # BOUNDED graceful-first drain (task 73ec7273, lineage of #66):
         # 1) should_exit -> uvicorn drains its loop + closes idle sockets;

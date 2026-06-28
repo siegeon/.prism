@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.8"
+PRISM_VERSION = "6.7.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.9: NO MORE SPLIT-BRAIN DAEMON (GH #181) — a live auto-update could "
+    "leave TWO daemon families, each owning ONE port (new UI on :7778, orphaned "
+    "old worker squatting :7777/MCP) while prism status + /api/version reported "
+    "green. Fix: (1) NEW services/split_brain.py maps each port->owning pid "
+    "(netstat/ss/lsof, stdlib-only, best-effort) and flags 'two pids, one port "
+    "each' as split-brain (one pid owning both = healthy). (2) a TTL-bounded "
+    "restart sentinel (data_dir): auto_updater.perform_restart writes it BEFORE "
+    "draining, the re-exec'd server clears it on healthy boot, and the "
+    "out-of-process supervisor DEFERS its competing kill+respawn while it is "
+    "fresh (that competing recovery during the restart drain/cold-boot is what "
+    "stacked the 2nd family) — stale sentinel ignored so a crash can't wedge "
+    "recovery. (3) cmd_start gains a PORT-LEVEL guard (refuse if the UI already "
+    "answers or the MCP port is held, even with a stale/absent pidfile). (4) "
+    "prism status self-checks for split-brain, reports UNHEALTHY (non-zero) "
+    "instead of green, and self-heals by reaping the orphan; cmd_stop sweeps a "
+    "port-squatting orphan too, escalating SIGTERM->SIGKILL (the orphan ignored "
+    "SIGTERM). "
     "v6.7.8: SDLC METHODS for SAFE MAX FAN-OUT — fold the v6.7.6/6.7.7 "
     "primitives into the phase-router skills + orchestration playbook so an "
     "epic can fan out HETEROGENEOUS children safely. (1) prism_guide("

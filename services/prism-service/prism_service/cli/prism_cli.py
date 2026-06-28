@@ -118,6 +118,14 @@ def _daemon_http_alive(port: int | str) -> bool:
         return False
 
 
+def _port_owner_pid(port: int | str):
+    """PID owning the LISTEN socket on `port`, else None (GH #181). Thin,
+    monkeypatchable seam over services.split_brain.port_owner_pid; deferred
+    import keeps `prism --help` light."""
+    from prism_service.services.split_brain import port_owner_pid
+    return port_owner_pid(port)
+
+
 def _read_pid() -> int:
     p = _pid_file()
     if not p.exists():
@@ -151,6 +159,24 @@ def cmd_start(args: argparse.Namespace) -> int:
         # used to only happen on an explicit `prism stop`.
         print(f"removing stale pidfile (pid {existing} not alive)", file=sys.stderr)
         _pid_file().unlink(missing_ok=True)
+
+    # PORT-LEVEL GUARD (GH #181): the pidfile check above MISSES a live daemon
+    # when the pidfile is absent/stale/mid-rotation — exactly the auto-update
+    # window in which a second `prism start` stacked a second family and caused
+    # the split-brain. Refuse to start if a daemon already answers on the UI
+    # port, or if anything holds the MCP port, regardless of pidfile state.
+    ui_guard = str(args.ui_port or os.environ.get("PRISM_UI_PORT", "7778"))
+    mcp_guard = str(args.mcp_port or os.environ.get("PRISM_MCP_PORT", "7777"))
+    if _daemon_http_alive(ui_guard):
+        print(f"prism already running (UI :{ui_guard} is answering) — refusing "
+              f"to start a second daemon", file=sys.stderr)
+        return 1
+    _mcp_owner = _port_owner_pid(mcp_guard)
+    if _mcp_owner:
+        print(f"MCP port :{mcp_guard} already held by pid {_mcp_owner} — "
+              f"refusing to stack a second family (possible in-flight restart)",
+              file=sys.stderr)
+        return 1
 
     # Rotate the prior run's log BEFORE opening the append handle so the
     # file is size-bounded and the last run's tail (incl. any crash
@@ -284,6 +310,22 @@ def cmd_stop(_args: argparse.Namespace) -> int:
     except OSError as e:
         print(f"failed to stop pid {pid}: {e}", file=sys.stderr)
         return 1
+    # ORPHAN SWEEP (GH #181 fix #4): a split-brain orphan is a SEPARATE family
+    # squatting the OTHER port — the pidfile never named it, so the stop above
+    # didn't reach it, and (as observed) it IGNORED SIGTERM. Reap any remaining
+    # port-squatter with an escalating SIGTERM->SIGKILL so a graceful stop never
+    # leaves a zombie holding a port.
+    try:
+        mcp = os.environ.get("PRISM_MCP_PORT", "7777")
+        from prism_service.services import split_brain
+        rep = split_brain.detect_split_brain(
+            ui, mcp, pidfile_pid=pid, owner=_port_owner_pid)
+        if not rep.healthy and rep.orphan_pid and rep.orphan_pid != pid:
+            split_brain.heal_split_brain(rep)
+            print(f"reaped split-brain orphan pid {rep.orphan_pid} "
+                  f"(SIGTERM->SIGKILL)", file=sys.stderr)
+    except Exception:
+        pass
     print(f"prism stopped (was pid {pid})")
     return 0
 
@@ -312,6 +354,22 @@ def cmd_status(_args: argparse.Namespace) -> int:
     if responding:
         print(f"  ui:       http://localhost:{ui}/")
         print(f"  mcp:      http://localhost:{mcp}/mcp/")
+
+    # SPLIT-BRAIN SELF-CHECK (GH #181): two PIDs each owning ONE port is the
+    # silent failure the version/HTTP checks above MISS — UI reports the new
+    # version and looks green while MCP is stranded on the orphaned old daemon.
+    # Detect it (one pid owning both = healthy) and self-heal by reaping the
+    # orphan, surfacing UNHEALTHY (non-zero exit) instead of a false green.
+    from prism_service.services import split_brain
+    report = split_brain.detect_split_brain(
+        ui, mcp, pidfile_pid=pid, owner=_port_owner_pid)
+    if not report.healthy:
+        print(f"  health:   UNHEALTHY — {report.reason}")
+        reaped = split_brain.heal_split_brain(report)
+        if reaped:
+            print(f"  self-heal: reaped orphan pid {reaped} (SIGTERM->SIGKILL); "
+                  f"re-run 'prism status' to confirm a single owner")
+        return 1
     return 0
 
 

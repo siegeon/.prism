@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -93,6 +94,52 @@ def rotate_log_on_start(path: Path | None = None) -> None:
         p.replace(p.with_name(f"{p.name}.1"))
     except OSError:
         pass  # best-effort; never block startup on log rotation
+
+
+# Restart-coordination sentinel (GH #181). The auto-updater writes it BEFORE
+# draining for an os.execv re-exec; the re-exec'd server clears it on a healthy
+# boot. While the sentinel is FRESH the out-of-process supervisor treats the
+# worker as in-grace and skips its competing kill+respawn — that competing
+# recovery (UI hung during the restart drain/cold-boot) is what spawned a
+# second daemon family and the split-brain. The TTL is the NFR-2 staleness
+# bound: a crash mid-restart leaves a sentinel behind, and a STALE one must NOT
+# disable supervisor recovery forever, so freshness is always re-checked.
+RESTART_SENTINEL_TTL_S = 120.0
+
+
+def restart_sentinel() -> Path:
+    """Path of the restart-in-progress sentinel (shared by auto_updater,
+    main, and supervisor so all three agree on the file)."""
+    return resolve_data_dir() / "prism.restarting"
+
+
+def write_restart_sentinel(pid: int | None = None) -> None:
+    """Mark a restart in progress (best-effort). Records the pid for diagnostics."""
+    p = restart_sentinel()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(pid if pid is not None else os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_restart_sentinel() -> None:
+    """Clear the restart sentinel (called by the re-exec'd server on healthy boot)."""
+    try:
+        restart_sentinel().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def restart_in_progress(ttl_s: float = RESTART_SENTINEL_TTL_S) -> bool:
+    """True iff a FRESH restart sentinel exists (younger than ttl_s). A stale
+    sentinel (crash mid-restart) returns False so recovery is never disabled
+    forever (NFR-2). Absent file => False."""
+    try:
+        age = time.time() - restart_sentinel().stat().st_mtime
+    except OSError:
+        return False
+    return 0.0 <= age < max(0.0, ttl_s)
 
 
 def resolve_claude_home() -> Path:
