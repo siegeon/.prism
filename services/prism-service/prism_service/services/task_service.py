@@ -353,8 +353,14 @@ class TaskService:
         assigned_agent: Optional[str] = None,
         tag: Optional[str] = None,
         story_file: Optional[str] = None,
+        parent_id: Optional[str] = None,
     ) -> list[Task]:
-        """List tasks with optional filters."""
+        """List tasks with optional filters.
+
+        ``parent_id`` (FR-6, task 0e071d68) scopes to one epic's children:
+        pass an epic id to return only its direct children, or '' to return
+        only root tasks. None (default) does not filter on parentage.
+        """
         clauses: list[str] = []
         params: list[str] = []
 
@@ -367,6 +373,9 @@ class TaskService:
         if story_file is not None:
             clauses.append("story_file = ?")
             params.append(story_file)
+        if parent_id is not None:
+            clauses.append("parent_id = ?")
+            params.append(parent_id)
 
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = self._db.execute(

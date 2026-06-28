@@ -1138,6 +1138,8 @@ TOOLS: list[Tool] = [
                 "assigned_agent": {"type": "string", "description": "Filter by assigned agent"},
                 "tag": {"type": "string", "description": "Filter by tag"},
                 "story_file": {"type": "string", "description": "Filter by story file"},
+                "parent_id": {"type": "string", "description": "Scope to ONE epic's children — pass an epic id for its direct children, or '' for root tasks only (FR-6)."},
+                "fields": {"type": "array", "items": {"type": "string"}, "description": "Projection: return only these keys per task (lean response, FR-7). Omit for the full task rows."},
             },
         },
     ),
@@ -1256,6 +1258,17 @@ TOOLS: list[Tool] = [
                         "advance (auto-writer into task_sessions)."
                     ),
                 },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Projection (FR-7): return ONLY these keys (e.g. "
+                        "['from_step','to_step','gate_state']) and OMIT the "
+                        "full task object — a lean response. Omit to get the "
+                        "full {ok, task_id, from_step, to_step, gate_state, "
+                        "task} (+ rubric on authoring steps)."
+                    ),
+                },
             },
             "required": ["id"],
         },
@@ -1332,6 +1345,16 @@ TOOLS: list[Tool] = [
                 "session_id": {
                     "type": "string",
                     "description": "Active Claude session id (links task<->session).",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Projection (FR-7): return ONLY these keys (e.g. "
+                        "['gate_step','gate_state','to_step']) and OMIT the "
+                        "full task object — a lean response. Omit to get the "
+                        "full decision payload plus the task row."
+                    ),
                 },
             },
             "required": ["id", "action", "reason"],
@@ -3776,7 +3799,14 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 assigned_agent=arguments.get("assigned_agent"),
                 tag=arguments.get("tag"),
                 story_file=arguments.get("story_file"),
+                parent_id=arguments.get("parent_id"),
             )
+            # FR-7: optional per-task field projection for a lean response.
+            _fields = arguments.get("fields")
+            if _fields:
+                rows = [_serialise(t) for t in tasks]
+                projected = [{k: r.get(k) for k in _fields} for r in rows]
+                return [TextContent(type="text", text=_json(projected))]
             return [TextContent(type="text", text=_json(tasks))]
 
         if name == "task_next":
@@ -3870,8 +3900,28 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 validation=arguments.get("validation"),
                 session_id=_sid,
             )
-            task = task_svc.get(task_id)
-            result["task"] = task
+            # FR-5: surface the active rubric schema on the authoring step so
+            # the author sees the AC-id / oracle / required-section format
+            # BEFORE story_gate/plan_gate scores it (no fail-then-replan loop).
+            try:
+                from prism_service.models.workflow import WORKFLOW_STEPS
+                from prism_service.services.arc_governance import load_rubrics
+                _to = result.get("to_step")
+                _val = next((s.get("validation") for s in WORKFLOW_STEPS
+                             if s["id"] == _to), None)
+                if _val:
+                    _rub = load_rubrics().get(_val)
+                    if _rub:
+                        result["rubric"] = _rub
+            except Exception:
+                pass  # advisory — never break an advance
+            # FR-7: optional field projection — return only requested keys
+            # and OMIT the full task object (lean response).
+            _fields = arguments.get("fields")
+            if _fields:
+                result = {k: result.get(k) for k in _fields}
+            else:
+                result["task"] = task_svc.get(task_id)
             return [TextContent(type="text", text=_json(result))]
 
         if name == "conductor_gate":
@@ -3892,8 +3942,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 session_id=_sid,
                 actor=_actor,
             )
-            task = task_svc.get(task_id)
-            result["task"] = task
+            # FR-7: optional field projection — return only requested keys
+            # and OMIT the full task object (lean response).
+            _fields = arguments.get("fields")
+            if _fields:
+                result = {k: result.get(k) for k in _fields}
+            else:
+                result["task"] = task_svc.get(task_id)
             return [TextContent(type="text", text=_json(result))]
 
         # ------------------------------------------------------------------
