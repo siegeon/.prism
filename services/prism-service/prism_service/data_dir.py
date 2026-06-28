@@ -136,10 +136,14 @@ def restart_in_progress(ttl_s: float = RESTART_SENTINEL_TTL_S) -> bool:
     sentinel (crash mid-restart) returns False so recovery is never disabled
     forever (NFR-2). Absent file => False."""
     try:
-        age = time.time() - restart_sentinel().stat().st_mtime
+        # Clamp to >=0: a just-written file's st_mtime can read marginally
+        # AHEAD of time.time() (filesystem mtime resolution / clock skew),
+        # which would make a FRESH sentinel look negative-aged. Clamping keeps
+        # a fresh file fresh while ttl_s=0 still reads as stale (0 < 0 is False).
+        age = max(0.0, time.time() - restart_sentinel().stat().st_mtime)
     except OSError:
         return False
-    return 0.0 <= age < max(0.0, ttl_s)
+    return age < max(0.0, ttl_s)
 
 
 def resolve_claude_home() -> Path:
