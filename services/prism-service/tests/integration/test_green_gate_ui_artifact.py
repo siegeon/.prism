@@ -106,14 +106,16 @@ def _walk_to_green_gate(cond, task_id: str) -> None:
 # ── C1: ui task — pytest-only proof is REJECTED at green_gate ────────────
 
 def test_ui_task_green_gate_rejected_with_pytest_only_proof(tmp_path):
-    """A `ui`-tagged task whose completion_proof cites ONLY a pytest line
-    (no UI artifact) must FAIL green_gate even though the verifier passes."""
+    """A `ui`-tagged task with proof_type UNSET whose completion_proof cites
+    ONLY a pytest line (no UI artifact) must FAIL green_gate even though the
+    verifier passes. AC-7/FR-4: the demo/screenshot requirement applies when
+    proof_type is unset or 'demo' — a declared non-demo proof_type opts out."""
     verifier = FakeVerifier()
     task_svc, cond = _services(tmp_path, verifier)
     t = task_svc.create(
         title="ui feature — pytest-only proof",
         tags=["ui"],
-        proof_type="test",
+        proof_type="",  # unset -> demo/screenshot requirement applies (FR-4)
         completion_proof="tests/unit/test_thing.py::test_renders PASSED",
     )
     _walk_to_green_gate(cond, t.id)
@@ -171,31 +173,33 @@ def test_ui_task_green_gate_passes_with_demo_artifact(tmp_path):
     assert result["gate_state"] == "passed"
 
 
-def test_ui_task_green_gate_rejected_when_demo_proof_type_missing(tmp_path):
-    """Even with an artifact-looking path, proof_type MUST be 'demo' — a
-    `ui` task that cites a screenshot path but leaves proof_type='test'
-    has not declared a demonstrable-UI proof and must be REJECTED."""
+def test_ui_task_green_gate_metric_judged_on_metric_shape(tmp_path):
+    """AC-7: under proof_type-driven enforcement a `ui` task that DECLARES
+    proof_type='metric' is judged on the metric SHAPE, not the demo/screenshot
+    requirement — a build-count receipt PASSES green_gate without override.
+    (Supersedes the old 'ui must be proof_type=demo' coupling: proof_type now
+    picks WHICH artifact shape is judged, per ADR mx-b0f363 / D3.)"""
     verifier = FakeVerifier()
     task_svc, cond = _services(tmp_path, verifier)
     t = task_svc.create(
-        title="ui feature — artifact path but wrong proof_type",
+        title="ui feature — metric proof",
         tags=["ui"],
-        proof_type="test",
-        completion_proof="docs/conductor_live_tokens.png screenshot vs :8888",
+        proof_type="metric",
+        completion_proof="build-count: default MCP tool surface 41 -> 31",
     )
     _walk_to_green_gate(cond, t.id)
 
     result = cond.gate_decide(
         t.id, action="approve",
-        reason="test: ui artifact path but proof_type=test",
+        reason="metric receipt: default surface 41 -> 31 (build-count)",
     )
 
-    assert result["ok"] is False, (
-        "a `ui` task passed green_gate without proof_type='demo' — the "
-        "demonstrable-UI contract requires the demo proof type, not just a "
-        "path that looks like a screenshot"
+    assert result["ok"] is True, (
+        "a `ui` task with proof_type='metric' was rejected at green_gate — "
+        "proof_type must pick WHICH artifact shape is judged; a declared "
+        f"metric is judged on its count-delta, not demo (reason={result.get('reason')!r})"
     )
-    assert result["gate_state"] == "failed"
+    assert result["gate_state"] == "passed"
 
 
 # ── C3: non-ui tasks UNAFFECTED (regression guard) ───────────────────────

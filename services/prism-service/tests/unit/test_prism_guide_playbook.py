@@ -107,3 +107,69 @@ def test_playbook_references_implement_and_prototype_skills():
     s = _playbook_section()
     assert "implement" in s
     assert "prototype" in s
+
+
+# ----------------------------------------------------------------------
+# AC-6 (v6.7.7) — the playbook TEACHES proof_type-driven gates: declare
+# proof_type so red/green check the right oracle, with the per-type shapes
+# and the ui-tag deferral spelled out (not just the function signature).
+# ----------------------------------------------------------------------
+
+
+def test_playbook_teaches_proof_type_driven_gates():
+    s = _playbook_section()
+    assert "proof_type" in s
+    # the per-type oracle shapes are named
+    assert "metric" in s
+    assert "artifact" in s
+    assert "demo" in s
+    # the TDD default is called out
+    assert "default" in s and "tdd" in s
+    # the ui-tag no longer silently forces a screenshot
+    assert "ui" in s and "screenshot" in s
+
+
+# ----------------------------------------------------------------------
+# AC-7 (v6.7.7) — author to the rubric BEFORE the gate: conductor_advance
+# into draft_story/verify_plan returns result['rubric'].
+# ----------------------------------------------------------------------
+
+
+def test_playbook_teaches_rubric_on_advance():
+    s = _playbook_section()
+    assert "rubric" in s
+    assert "draft_story" in s or "verify_plan" in s
+    assert "oracle:" in s or "ac-<n>" in s
+
+
+# ----------------------------------------------------------------------
+# AC-8 (v6.7.7) — keep conductor responses LEAN: fields projection on
+# conductor_advance/conductor_gate/task_list + parent_id epic scope.
+# ----------------------------------------------------------------------
+
+
+def test_playbook_teaches_lean_responses():
+    s = _playbook_section()
+    assert "lean" in s
+    assert "fields" in s
+    assert "from_step" in s and "to_step" in s and "gate_state" in s
+    assert "parent_id" in s
+
+
+# ----------------------------------------------------------------------
+# AC-9 (v6.7.7) — prism_onboard returns a best_practices block so a fresh
+# agent learns the gate + lean-response patterns up front (not just tools).
+# ----------------------------------------------------------------------
+
+
+def test_onboard_returns_best_practices_block():
+    import json
+
+    result = _call("prism_onboard", {})
+    payload = json.loads(result[0].text)
+    bp = payload.get("best_practices")
+    assert isinstance(bp, list) and bp, "prism_onboard lacks a best_practices list"
+    blob = " ".join(bp).lower()
+    assert "proof_type" in blob
+    assert "rubric" in blob
+    assert "fields" in blob and "parent_id" in blob

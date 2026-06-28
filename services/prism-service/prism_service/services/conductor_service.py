@@ -255,7 +255,13 @@ def ui_artifact_gate_reason(tags: object, proof_type: object,
     otherwise. UI-FIRST mandate: every feature ships a UI surface, so a
     `ui` task cannot green-gate on a pytest/unit line alone.
 
-    A `ui` task PASSES only when BOTH hold:
+    PROOF-TYPE DEFERRAL (FR-4, task 0e071d68): the demo/screenshot
+    requirement applies ONLY when proof_type is unset or 'demo'. A `ui`
+    task that DECLARES a different oracle (metric/build-count/artifact/test)
+    opts out of the demo coupling and is judged on its own proof_type shape
+    by the green_gate artifact tooth — proof_type picks WHICH artifact.
+
+    When proof_type is unset or 'demo', a `ui` task PASSES only when BOTH:
       * proof_type == 'demo' (an explicit demonstrable-UI proof), and
       * completion_proof cites a real UI artifact path (agent-browser /
         verify screenshot vs :8888, or a Playwright assertion).
@@ -265,7 +271,11 @@ def ui_artifact_gate_reason(tags: object, proof_type: object,
     tag_set = {str(t).strip().lower() for t in (tags or [])}
     if "ui" not in tag_set:
         return ""
-    if str(proof_type or "").strip().lower() != "demo":
+    pt = str(proof_type or "").strip().lower()
+    # FR-4: a declared non-demo oracle opts out of the demo/screenshot tooth.
+    if pt and pt != "demo":
+        return ""
+    if pt != "demo":  # proof_type unset -> demo/screenshot requirement applies
         return ("ui task: green_gate requires proof_type='demo' with a real "
                 "UI artifact (agent-browser/verify screenshot vs :8888 or a "
                 "Playwright assertion) — not a pytest/unit line alone")
@@ -304,11 +314,58 @@ def _artifact_text(completion_proof: object, reason: object) -> str:
     return f"{completion_proof or ''}\n{reason or ''}".lower()
 
 
-def red_gate_artifact_reason(completion_proof: object, reason: object) -> str:
+# PROOF-TYPE-DRIVEN SHAPE VALIDATORS (task 0e071d68). proof_type already
+# exists end-to-end; the gate teeth now dispatch on it so a non-test oracle
+# (metric / build-count / artifact) is judged on its OWN shape instead of
+# being forced through the failing-test trace. test/unset keeps the legacy
+# test shape — the working non-overridable tooth is GENERALIZED, not weakened.
+_METRIC_PROOF_TYPES = ("metric", "build-count", "build_count", "buildcount",
+                       "count")
+# A metric/build-count receipt is a numeric count-delta or measured value:
+# a digit AND a metric signal (a delta arrow, a count/ratio/percent word).
+_METRIC_SIGNALS = ("metric", "count", "delta", "ratio", "benchmark",
+                   "->", "→", "percent", "%", "reduced", "trimmed",
+                   "increase", "decrease", "baseline", "measured")
+
+
+def _has_metric_shape(text: str) -> bool:
+    """True iff *text* carries a numeric count-delta / measured-value shape:
+    at least one digit AND a metric signal token."""
+    has_number = any(ch.isdigit() for ch in text)
+    has_signal = any(s in text for s in _METRIC_SIGNALS)
+    return has_number and has_signal
+
+
+def _metric_gate_reason(text: str, gate_label: str) -> str:
+    if _has_metric_shape(text):
+        return ""
+    return (f"{gate_label} requires a metric/build-count receipt — a numeric "
+            "count-delta or measured value (e.g. '41 -> 31') in "
+            "completion_proof or the re-run output, not a self-attested string")
+
+
+def _artifact_path_reason(text: str, gate_label: str) -> str:
+    if any(sig in text for sig in _UI_ARTIFACT_SIGNALS) or (
+            "/" in text or "\\" in text):
+        return ""
+    return (f"{gate_label} requires an artifact-path receipt — a committed "
+            "file/screenshot path in completion_proof or the re-run output, "
+            "not a self-attested string")
+
+
+def red_gate_artifact_reason(completion_proof: object, reason: object,
+                             proof_type: object = None) -> str:
     """Return a REJECTION reason when a red_gate close carries no committed
-    failing-test trace (a test-runner invocation + a failure signal), else
-    "". Machine-validated shape — a self-attested 'red landed' is rejected."""
+    proof artifact for its proof_type, else "". proof_type drives the shape:
+    metric/build-count -> a numeric count-delta; artifact -> a file path;
+    test/demo/unset -> a test-runner invocation + a failure signal. A
+    self-attested 'red landed' is rejected on every path."""
     text = _artifact_text(completion_proof, reason)
+    pt = str(proof_type or "").strip().lower()
+    if pt in _METRIC_PROOF_TYPES:
+        return _metric_gate_reason(text, "red_gate")
+    if pt == "artifact":
+        return _artifact_path_reason(text, "red_gate")
     has_runner = any(s in text for s in _TEST_RUNNER_SIGNALS)
     has_fail = any(s in text for s in _FAIL_SIGNALS)
     if has_runner and has_fail:
@@ -319,14 +376,20 @@ def red_gate_artifact_reason(completion_proof: object, reason: object) -> str:
             "string is not proof")
 
 
-def green_gate_artifact_reason(completion_proof: object, reason: object) -> str:
+def green_gate_artifact_reason(completion_proof: object, reason: object,
+                               proof_type: object = None) -> str:
     """Return a REJECTION reason when a green_gate close carries no captured
-    full-suite-green artifact, else "". The artifact is satisfied by EITHER
-    a test-runner invocation + a pass signal, OR a demonstrable-UI artifact
-    (agent-browser/verify screenshot vs :8888, a Playwright assertion) — a
-    ui feature's green proof is its rendered surface. A self-attested
-    'looks green to me' carries neither and is rejected."""
+    proof artifact for its proof_type, else "". proof_type drives the shape:
+    metric/build-count -> a numeric count-delta; artifact -> a file path;
+    test/demo/unset -> a test-runner invocation + a pass signal OR a
+    demonstrable-UI artifact (a ui feature's green proof is its rendered
+    surface). A self-attested 'looks green to me' is rejected on every path."""
     text = _artifact_text(completion_proof, reason)
+    pt = str(proof_type or "").strip().lower()
+    if pt in _METRIC_PROOF_TYPES:
+        return _metric_gate_reason(text, "green_gate")
+    if pt == "artifact":
+        return _artifact_path_reason(text, "green_gate")
     has_runner = any(s in text for s in _TEST_RUNNER_SIGNALS)
     has_pass = any(s in text for s in _PASS_SIGNALS)
     has_ui_artifact = any(sig in text for sig in _UI_ARTIFACT_SIGNALS)
@@ -340,13 +403,13 @@ def green_gate_artifact_reason(completion_proof: object, reason: object) -> str:
 
 
 def gate_artifact_reason(gate_step_id: str, completion_proof: object,
-                         reason: object) -> str:
-    """Dispatch the proof-carrying artifact check by gate. "" when the gate
-    has no artifact tooth (only red_gate/green_gate do today)."""
+                         reason: object, proof_type: object = None) -> str:
+    """Dispatch the proof-carrying artifact check by gate + proof_type. ""
+    when the gate has no artifact tooth (only red_gate/green_gate do today)."""
     if gate_step_id == "red_gate":
-        return red_gate_artifact_reason(completion_proof, reason)
+        return red_gate_artifact_reason(completion_proof, reason, proof_type)
     if gate_step_id == "green_gate":
-        return green_gate_artifact_reason(completion_proof, reason)
+        return green_gate_artifact_reason(completion_proof, reason, proof_type)
     return ""
 
 
@@ -1445,7 +1508,8 @@ class ConductorService:
                 "reason": str(res.get("reason", "")),
                 "verifier": res, "validation": validation}
 
-    def _verify_gate(self, task, gate_step_id: str) -> dict:
+    def _verify_gate(self, task, gate_step_id: str,
+                     proof_type: object = None) -> dict:
         """Consult the attached VerifierService for the gate's expected
         validation. Returns a dict shaped:
           {'verified': bool|None, 'reason': str,
@@ -1472,6 +1536,21 @@ class ConductorService:
         # task's own evidence + the YAML rubric — never the shell verifier.
         if rule.get("rubric"):
             return self._verify_rubric_gate(task, validation)
+        # PROOF-TYPE-AWARE TIER0 CONSULT (FR-3, task 0e071d68): the
+        # test-shaped run_tier0 expectation (red_with_trace/green_full) only
+        # applies to a test oracle. A non-test proof_type (metric/build-count/
+        # artifact) yields zero claims -> tier0 'error', which used to force
+        # override on every gate. Skip the test-shaped consult for those; the
+        # proof_type artifact tooth (gate_artifact_reason) is the real check.
+        pt = str(proof_type or "").strip().lower()
+        if pt and pt not in ("test", "demo"):
+            return {
+                "verified": True,
+                "reason": (f"proof_type={pt!r}: tier0 test-shaped consult "
+                           "skipped; judged on the proof_type artifact shape"),
+                "verifier": None,
+                "validation": validation,
+            }
         # gate_decide short-circuits when self._verifier_svc is None
         # (legacy trust-caller path). _verify_gate is only called when
         # a verifier is attached, so we don't need a None-check here.
@@ -1774,7 +1853,8 @@ class ConductorService:
             # kind and consult VerifierService. If the verifier rejects
             # or no verifier is attached, fail the gate (do NOT advance)
             # with the verifier's reason recorded on the task.
-            outcome = self._verify_gate(task, gate_step_id)
+            outcome = self._verify_gate(
+                task, gate_step_id, getattr(task, "proof_type", ""))
             verifier_payload = outcome.get("verifier")
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
@@ -1825,6 +1905,7 @@ class ConductorService:
             gate_step_id,
             getattr(self._task_svc.get(task_id), "completion_proof", ""),
             reason,
+            getattr(task, "proof_type", ""),
         )
         if rollup_ok:
             # The children's proofs ARE the epic's artifact (issue #171).
