@@ -2052,6 +2052,13 @@ understand_* family, …) live behind `?tool_profile=all` — reconnect with the
 - Break the epic into demonstrable-FEATURE subtasks with
   `task_create(..., parent_id="<epic_id>")` — the parent_id hierarchy is what
   the conductor renders. Title = the feature; mechanics go in the description.
+  For SAFE parallel fan-out give each child two things: (1) DISJOINT
+  `allowed_files` — the hard collision boundary so concurrent dev agents never
+  touch the same file (if two slices must share a file they are NOT independent:
+  merge them, or sequence them with `dependencies`); (2) its own `proof_type` +
+  `oracle` matched to how THAT slice is proven (test|metric|artifact|demo) so
+  each child clears its OWN gate shape without override. Don't over-decompose —
+  a single demonstrable feature stays ONE task.
 
 ## 2. Drive each task through the conductor SDLC state machine
 review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
@@ -2081,10 +2088,19 @@ review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
 ## 3. FAN OUT with subagents — and verify with a DISTINCT actor
 - A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
   subagents (fan-out) to move the epic faster — spawn them concurrently.
+- SAFE-FAN-OUT INVARIANT: parallelize ONLY children with DISJOINT `allowed_files`
+  (the collision boundary), and gate EACH on its declared `proof_type` — a metric
+  slice on a count-delta, a ui slice on an artifact, a test slice on a red/green
+  trace — so heterogeneous slices clear their own gates instead of override-all.
+- Track the whole cohort LEANLY: `task_list(parent_id="<epic_id>", fields=[...])`
+  and `conductor_advance/​conductor_gate(..., fields=["from_step","to_step",
+  "gate_state"])` return just what you need and DROP the echoed task object —
+  that lean read is what lets you fan out WIDE without the driver's own context
+  blowing (the verbosity tax is the real ceiling on fan-out width).
 - An INDEPENDENT subagent (a DISTINCT actor — NO self-override) clears
-  red_gate/green_gate with REAL artifacts: it runs the failing test at the red
-  commit, then re-runs + captures green. A gate override by the SAME actor
-  that produced the work is rejected.
+  red_gate/green_gate with REAL artifacts: it produces the proof_type's proof
+  (test trace / count-delta / artifact path / screenshot), then a distinct actor
+  verifies. A gate override by the SAME actor that produced the work is rejected.
 
 ## 4. Roll child proofs up to the EPIC green_gate (child roll-up)
 Don't re-prove the epic itself. When every non-cancelled child is done with a

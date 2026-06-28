@@ -165,6 +165,36 @@ const PHASE_MERGE_GATE_DOCTRINE =
   + 'auto-tagged by autotag.yml) BEFORE the next phase is launched. Do NOT '
   + 'kick phase N+1 off bare main while phase N is still un-merged.'
 
+// ── Safe PARALLEL fan-out doctrine (distinct from the sequential phase chain) ──
+// The phase-merge gate above serializes DEPENDENT phases. This one is the
+// opposite axis: when a plan splits into genuinely INDEPENDENT demonstrable
+// features, set them up so the build phase can run them CONCURRENTLY without
+// collisions. The two primitives that make wide fan-out SAFE rather than a
+// merge-conflict pileup are: (1) DISJOINT allowed_files per child — the hard
+// collision boundary; (2) a per-child proof_type/oracle so each slice clears
+// its OWN gate shape (test/metric/artifact/demo) instead of override-everything
+// (the v6.7.6 proof-type-driven gates). Children are reached via the ROOT epic;
+// the epic stays the WATCHED conductor task and rolls children up at green_gate.
+const FANOUT_DECOMPOSITION_DOCTRINE =
+  'SAFE PARALLEL FAN-OUT (independent features — the concurrency axis): a '
+  + 'SINGLE demonstrable feature stays ONE task; do NOT over-decompose into '
+  + 'narrated phases. But when the plan genuinely splits into MULTIPLE '
+  + 'independent demonstrable features, set the build phase up to fan them out '
+  + 'CONCURRENTLY and SAFELY: register the epic as a ROOT task (parent_id="") '
+  + 'and each feature as a CHILD (parent_id=<epic id>) carrying — (a) DISJOINT '
+  + 'allowed_files: the collision boundary that makes parallel dev safe, no two '
+  + 'children may share a file (if two slices must touch the same file they are '
+  + 'NOT independent — keep them one task or sequence them); (b) its OWN '
+  + 'proof_type + oracle matched to how THAT feature is proven '
+  + '(test|metric|artifact|demo) so each child clears its own gate shape WITHOUT '
+  + 'override; (c) stop_if guards. Truly independent children carry NO '
+  + 'dependencies (parallel); only a real substrate dependency gets a depends_on '
+  + '(then the PHASE-MERGE GATE applies). The ROOT epic is what is WATCHED on '
+  + '/conductor and rolls child proofs up at its green_gate — keep it root '
+  + '(parent_id=""). Express this split as a "## Fan-out slices" section in the '
+  + 'epic plan_doc (slice -> files -> proof_type) even when you register the '
+  + 'children, so the decomposition is visible, not implicit.'
+
 // ── Phase 5: Register + track via conductor (planning steps only) ──────
 phase('Track')
 const planJson = JSON.stringify(plan, null, 2)
@@ -173,7 +203,7 @@ const linkStep = SID
   : ''
 const advSid = SID ? `, session_id="${SID}"` : ''
 const tracking = await agent(
-  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → story_gate → verify_plan → plan_gate → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the steps up to (and stopping at) verify_plan.\n\n${PHASE_MERGE_GATE_DOCTRINE}\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with title=plan.title VERBATIM — a SHORT human-friendly feature title (~4-9 words, plain language: what the feature IS, as a user would name it). Do NOT pack mechanics, phase/step lists, arrow-diagrams, or file/data-hook names into the title — ALL of that goes in the description. Use the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.${linkStep}\n2. conductor_advance(id${advSid}) to move from review_previous_notes -> draft_story, then conductor_advance(id${advSid}) again to land on story_gate (gate_state=pending).\n3. story_gate is RUBRIC-VERIFIED (story_complete: the YAML rubric scores the task's plan_doc — sections present, every AC has an id + oracle). Call conductor_gate(id, action="approve", reason="story rubric evidence: sections + AC ids + oracles present") WITHOUT override. If it returns ok:false, the rubric reason names exactly what the plan_doc is missing — FIX plan_doc via task_update and re-approve; do NOT reach for override=true (the forced-override path is retired).\n4. conductor_advance(id${advSid}) to reach verify_plan. STOP there — verify_plan is the planning/build boundary; do NOT enter plan_gate or write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
+  `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes → draft_story → story_gate → verify_plan → plan_gate → write_failing_tests → red_gate → implement_tasks → verify_green_state → green_gate. Planning = the steps up to (and stopping at) verify_plan.\n\n${PHASE_MERGE_GATE_DOCTRINE}\n\n${FANOUT_DECOMPOSITION_DOCTRINE}\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with title=plan.title VERBATIM — a SHORT human-friendly feature title (~4-9 words, plain language: what the feature IS, as a user would name it). Do NOT pack mechanics, phase/step lists, arrow-diagrams, or file/data-hook names into the title — ALL of that goes in the description. Use the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.\n1a. SET THE PROOF SHAPE: pass proof_type + oracle on task_create (or task_update right after) matched to HOW this feature is proven — proof_type="test" is the TDD default; use "metric"/"artifact"/"demo" only when that is the REAL oracle (e.g. an analyzer-count, a generated file, a UI capture). This makes the build phase's red/green gates validate the right shape instead of demanding a failing test. If the plan splits into INDEPENDENT demonstrable features, apply the SAFE PARALLEL FAN-OUT doctrine above: register the epic as the ROOT task and each feature as a CHILD (parent_id=<epic id>) with DISJOINT allowed_files + its own proof_type/oracle, so the build phase can drive them concurrently without collisions.${linkStep}\n2. conductor_advance(id${advSid}, fields=["from_step","to_step","gate_state","rubric"]) to move from review_previous_notes -> draft_story, then conductor_advance(id${advSid}, fields=["from_step","to_step","gate_state","rubric"]) again to land on story_gate (gate_state=pending). The fields projection keeps the response lean (no echoed task object); the advance INTO an authoring step returns result['rubric'] — confirm plan_doc already matches it (sections + AC-<n> ids + "oracle:" markers) so story_gate passes first try.\n3. story_gate is RUBRIC-VERIFIED (story_complete: the YAML rubric scores the task's plan_doc — sections present, every AC has an id + oracle). Call conductor_gate(id, action="approve", reason="story rubric evidence: sections + AC ids + oracles present") WITHOUT override. If it returns ok:false, the rubric reason names exactly what the plan_doc is missing — FIX plan_doc via task_update and re-approve; do NOT reach for override=true (the forced-override path is retired).\n4. conductor_advance(id${advSid}, fields=["from_step","to_step","gate_state","rubric"]) to reach verify_plan (lean response; the rubric on this authoring advance is the plan_coverage schema). STOP there — verify_plan is the planning/build boundary; do NOT enter plan_gate or write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
   { label: 'track:conductor', phase: 'Track', schema: TRACK_SCHEMA })
 
 return { feature, coverage, sourceGapsChased: sourceFindings.length, plan, tracking }

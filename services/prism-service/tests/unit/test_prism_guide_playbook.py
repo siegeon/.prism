@@ -173,3 +173,22 @@ def test_onboard_returns_best_practices_block():
     assert "proof_type" in blob
     assert "rubric" in blob
     assert "fields" in blob and "parent_id" in blob
+
+
+# ----------------------------------------------------------------------
+# AC-10 (v6.7.8) — the playbook teaches SAFE MAX FAN-OUT: the two safety
+# primitives (disjoint allowed_files + per-child proof_type) and lean
+# cohort tracking that lets an epic fan out wide without context blowing.
+# ----------------------------------------------------------------------
+
+
+def test_playbook_teaches_safe_fanout_method():
+    s = _playbook_section()
+    # the collision boundary
+    assert "allowed_files" in s and "disjoint" in s
+    # heterogeneous slices each gated on their own proof_type
+    assert "proof_type" in s
+    # lean cohort tracking is what lifts the fan-out ceiling
+    assert "parent_id" in s and "fields" in s
+    # explicit safe-fan-out framing
+    assert "fan-out" in s or "fan out" in s

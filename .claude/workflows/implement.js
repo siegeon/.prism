@@ -314,7 +314,15 @@ function advanceInstr(stepId, validationHint) {
   // every non-gate step refreshes the task<->session link. When SID is empty
   // the arg is dropped entirely (byte-identical to today's no-session call).
   const sidArg = SID ? `, session_id="${SID}"` : ''
-  return `After the work, call conductor_advance(id="${locate.task_id}"${sidArg}, validation="${validationHint}") to leave "${stepId}". Report the returned to_step and gate_state.\n` +
+  // LEAN + RUBRIC-AWARE advance (v6.7.6/6.7.7). The fields projection returns
+  // just the transition keys (+rubric on authoring steps) and DROPS the echoed
+  // task object — the per-step verbosity tax is what caps how wide an epic can
+  // fan out before the driver's context blows, so keep every advance lean.
+  const intoAuthoring = stepId === 'review_previous_notes' || stepId === 'verify_plan'
+  const rubricNote = intoAuthoring
+    ? ` The to_step is an AUTHORING step, so this advance returns result['rubric'] (required sections, the AC-<n> id pattern, the "oracle:" marker) — shape the plan_doc/story to MATCH it NOW so the next gate passes first try (no re-plan round-trip).`
+    : ''
+  return `After the work, call conductor_advance(id="${locate.task_id}"${sidArg}, validation="${validationHint}", fields=["from_step","to_step","gate_state","rubric"]) to leave "${stepId}" — the fields projection keeps the drive lean by dropping the echoed task object. Report the returned to_step and gate_state.${rubricNote}\n` +
     `DESYNC TOLERANCE (do NOT false-halt): the conductor auto-advances a passing agent step to the NEXT GATE, so by the time this step's advance fires the task may ALREADY be past "${stepId}" or parked at a pending gate. If conductor_advance returns ok:false with a reason meaning the task is already at/past this step or a gate is PENDING (e.g. "gate '...' is pending; call gate_decide before advancing"), that is NOT a failure — this step's WORK is done and the conductor is merely ahead. In that case set ok:TRUE and report the task's ACTUAL current to_step + gate_state (from the advance result, or re-read via task_list) so the drive proceeds to the gate handler. Set ok:FALSE (reason in halt_reason) ONLY for a GENUINE rejection: the validation was rejected, the task was not found, or this step's own work failed.` +
     telemetryInstr(stepId)
 }
@@ -328,8 +336,20 @@ const commitInstr = (kind, scope) => DRY
 // Gate recovery doctrine, shared by both blocking gates. The agent's OWN
 // executed test command is the ground truth; the conductor verifier may be
 // blind to this checkout (see VERIFIER-BLINDNESS NOTE).
+// PROOF-TYPE-AWARE gate doctrine (v6.7.6). The gates validate against the
+// task's DECLARED proof_type, so the agent must produce the proof that MATCHES
+// it — NOT always a failing-test trace. This is what lets an epic fan out
+// HETEROGENEOUS children (a test slice, a metric slice, an artifact slice, a
+// ui slice) and have EACH clear its own gate honestly instead of override-
+// everything. test stays the TDD default; the red/green shape generalizes to
+// before/after for the non-test oracles.
 const gateDoctrine = (expectWord, evidenceWord) =>
-  `GATE DOCTRINE: First run the real test command yourself and capture the trace — it must be ${expectWord}. Then call conductor_gate(id="${locate.task_id}", action="approve", reason="<exact command + ${evidenceWord} summary>") WITHOUT override. Inspect the result: (a) ok:true -> the verifier saw the diff and agreed, done. (b) ok:false with gate_state=failed AND a reason that means the verifier saw NOTHING ("no diff in scope" / status=error / "no claims to verify") -> the verifier is STRUCTURALLY BLIND to this checkout; recover by re-calling conductor_gate(action="approve", override=true, reason="<your real command + ${evidenceWord} trace; verifier blind to working tree>"). (c) ok:false because the verifier SAW the diff and it disagreed with your local result -> do NOT override; set ok:false and put the verifier reason in halt_reason. If the gate was ALREADY gate_state=failed when this step started (a prior blind run), go straight to the override path in (b). Report final to_step + gate_state.`
+  `GATE DOCTRINE (proof_type-aware — the gate scores the task's OWN proof_type, so gather the matching proof, not always a test trace). Read the task's proof_type FIRST (task_list), then:\n` +
+  `- proof_type=test (the TDD default): run the real test command yourself and capture the trace — it must be ${evidenceWord === 'red' ? 'RED (failing for the right reason)' : 'GREEN'}.\n` +
+  `- proof_type=metric (incl. build-count): capture the number for THIS gate — ${evidenceWord === 'red' ? 'the BASELINE "before" count' : 'the improved "after" count'}; the count-delta IS the proof (record it in completion_proof, e.g. "warnings 12 -> 0"). No failing TEST need exist.\n` +
+  `- proof_type=artifact: show the produced file/path (${evidenceWord === 'red' ? 'absent at red' : 'present at green'}).\n` +
+  `- proof_type=demo: at green, capture the UI screenshot / :port evidence (a ui-tagged task still needs SOME artifact even on a non-demo proof_type).\n` +
+  `Then conductor_gate(id="${locate.task_id}", action="approve", reason="<exact command/receipt + ${evidenceWord} summary>", fields=["gate_step","gate_state","to_step","auto_advanced","verifier"]) WITHOUT override — the fields projection keeps the verdict + verifier reason but DROPS the echoed task object (lean response; matters when many child drives run at once). Inspect: (a) ok:true -> verifier agreed, done. (b) ok:false, gate_state=failed AND a reason meaning the verifier saw NOTHING ("no diff in scope" / status=error / "no claims to verify") -> STRUCTURALLY BLIND to this checkout; recover via conductor_gate(action="approve", override=true, reason="<your real ${evidenceWord} proof; verifier blind to working tree>"). (c) ok:false because the verifier SAW the proof and disagreed -> do NOT override; set ok:false with the verifier reason in halt_reason. If the gate was ALREADY failed at step start (a prior blind run), go straight to (b). Report final to_step + gate_state.`
 
 const HANDLERS = {
   review_previous_notes: (role = 'sm') => agent(
@@ -337,7 +357,7 @@ const HANDLERS = {
     { label: 'review_previous_notes', phase: 'Review notes', schema: STEP_SCHEMA }),
 
   draft_story: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) — the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). If the task has none, record it: task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="test").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
+    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list the proof will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) — the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). RESPECT a proof_type the task ALREADY declares — if it is metric/artifact/demo/review, KEEP it (do NOT clobber it to "test"); the gates validate that oracle's own shape. Only DEFAULT proof_type="test" when the task has none (TDD is the default, not a forced choice). Record via task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="<test|metric|artifact|demo — match the oracle>").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
   story_gate: (role = 'sm') => agent(
