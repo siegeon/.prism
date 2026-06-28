@@ -1873,10 +1873,19 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
 ## Tasks
 - `task_create(title, description?, priority?, dependencies?, tags?,
   story_file?, assigned_agent?)` — new task.
-- `task_list(status?, assigned_agent?, tag?, story_file?)` — filtered list.
+- `task_list(status?, assigned_agent?, tag?, story_file?, parent_id?, fields?)`
+  — filtered list. `parent_id="<epic>"` scopes to one epic's children (or `""`
+  for roots) so a big board doesn't blow the token budget; `fields=[...]`
+  projects each row to just those keys.
 - `task_next()` — highest-priority unblocked task.
-- `task_update(id, status?, priority?, assigned_agent?, blocked_reason?)` —
-  mutate.
+- `task_update(id, status?, priority?, assigned_agent?, blocked_reason?,
+  oracle?, proof_type?, completion_proof?)` — mutate. Set `proof_type`
+  (test|metric|artifact|demo|…) to pick the gate's oracle shape; `test` is the
+  TDD default.
+- `conductor_advance(id, validation?, fields?)` /
+  `conductor_gate(id, action, reason, fields?, override?)` — drive the per-task
+  SDLC. Pass `fields=["from_step","to_step","gate_state"]` for a lean response
+  that omits the echoed task object.
 
 ## Workflow
 - `workflow_state()` — current step, progress, session info.
@@ -2051,8 +2060,23 @@ review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
   Requirements, Acceptance Criteria (AC-ids WITH oracles), plus a mermaid
   `plan_diagram` — a thin plan scores red. `principles_seed` (or
   `prism_onboard`) must have run so plan_gate's principle check is satisfiable.
-- red_gate / green_gate are PROOF-CARRYING: the artifact (failing-test trace
-  at the red commit; re-run green capture) is machine-validated.
+  DON'T discover the format by failing the gate: when you `conductor_advance`
+  INTO draft_story / verify_plan, the result carries `rubric` — the exact
+  required sections, the `AC-<n>` id pattern, and the `oracle:` marker the
+  scorer wants. Read it and shape plan_doc to match BEFORE you approve.
+- red_gate / green_gate are PROOF-CARRYING, and the proof SHAPE is driven by the
+  task's `proof_type` — declare it up front (on task_create / task_update) so
+  the gate checks the RIGHT oracle instead of always demanding a failing test:
+  - `test` (DEFAULT / TDD) — a failing-then-passing test trace. Omit proof_type
+    and you get this; it's the correct choice for most code.
+  - `metric` (incl. build-counts) — a numeric/count-delta receipt in
+    completion_proof (e.g. "MUD0002 warnings 12 -> 0"); NO red test need exist
+    in the tree, so an already-green fix is provable without faking a failure.
+  - `artifact` — a produced file/path. `demo` — a UI screenshot / :port capture.
+  A `ui`-tagged task still needs SOME artifact, but with a non-`demo`
+  proof_type it's judged on THAT oracle's shape — the tag no longer silently
+  forces a screenshot. green_gate stays terminal: clear it with a DISTINCT
+  actor (no self-override); the proof_type just picks WHICH artifact counts.
 
 ## 3. FAN OUT with subagents — and verify with a DISTINCT actor
 - A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
@@ -2078,6 +2102,19 @@ Before re-deriving anything, read the unified Understand wiki: `okf_index`
 (manifest) -> `okf_get(path)` (one concept + cross-links/backlinks) ->
 `okf_graph` (the concept graph). `brain_understand` answers a code-level
 question across the graph. Memory you WRITE (`memory_store`) surfaces here.
+
+## 7. Keep conductor responses LEAN — don't drown in echoed task objects
+Driving a task is many small steps, and by default every `conductor_advance` /
+`conductor_gate` echoes the WHOLE task (plan_doc, diagram, all fields) you just
+wrote, while an unscoped `task_list` can blow the token budget on a big board.
+Two projections, used by default, cut that:
+- `fields=["from_step","to_step","gate_state"]` on `conductor_advance` /
+  `conductor_gate` returns ONLY those keys and OMITS the task object — request
+  the full task only when you actually need to re-read it. The same `fields`
+  projects `task_list` rows.
+- `parent_id="<epic_id>"` on `task_list` returns ONLY that epic's children
+  (or `parent_id=""` for root tasks) — scope to the epic you're driving instead
+  of dumping every task.
 
 ## Prefer the skills
 - `implement` (workflow) DRIVES one task through this whole conductor SDLC.
@@ -3761,6 +3798,26 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "restart Claude so the refreshed hooks AND tool list load.",
                     "To reach maintenance/admin or legacy endpoints not in the "
                     f"default surface, reconnect using mcp_url_all: {mcp_url_all}",
+                ],
+                # How-to-use highlights so an onboarding agent doesn't just see
+                # the tool list — it learns the gate + lean-response patterns
+                # up front (full detail in prism_guide('orchestration')).
+                "best_practices": [
+                    "DECLARE proof_type per task so red/green gates check the "
+                    "RIGHT oracle instead of always demanding a failing test: "
+                    "test=TDD (default), metric=a count-delta receipt in "
+                    "completion_proof (no red test needed — proves an already-"
+                    "green fix), artifact=a path, demo=a UI screenshot. A "
+                    "ui-tagged task with a non-demo proof_type is judged on "
+                    "that shape, not force-required to be a screenshot.",
+                    "AUTHOR to the rubric, don't discover it by failing: "
+                    "conductor_advance INTO draft_story/verify_plan returns a "
+                    "`rubric` (required sections, AC-<n> id pattern, 'oracle:' "
+                    "marker) — shape plan_doc to match BEFORE approving.",
+                    "Keep conductor responses LEAN: pass "
+                    "fields=['from_step','to_step','gate_state'] to "
+                    "conductor_advance/conductor_gate (omits the echoed task), "
+                    "and parent_id to task_list to scope to one epic's children.",
                 ],
                 "next": ("Call prism_guide first — it returns the live "
                          "orientation + the max-fan-out task playbook."),

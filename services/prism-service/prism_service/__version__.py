@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.6"
+PRISM_VERSION = "6.7.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.7: TEACH the v6.7.6 capabilities, don't just expose them (follow-up "
+    "to task 0e071d68). The proof-type gates + lean-response args shipped on the "
+    "tool SCHEMAS in v6.7.6 but the agent-facing GUIDE/ONBOARD didn't explain "
+    "HOW or WHEN to use them. Now (mcp/tools.py): (1) prism_guide('orchestration') "
+    "step 2 teaches proof_type-driven gates — DECLARE proof_type so red/green "
+    "check the right oracle (test=TDD default, metric=count-delta receipt with no "
+    "red test needed, artifact=path, demo=screenshot; a ui-tagged task with a "
+    "non-demo proof_type is judged on that shape, not force-required to be a "
+    "screenshot) — plus rubric-on-advance (conductor_advance into draft_story/"
+    "verify_plan returns result['rubric'] so you author to the format BEFORE the "
+    "gate scores it). (2) a new step 7 'Keep conductor responses LEAN' teaches "
+    "the fields=[...] projection on conductor_advance/conductor_gate/task_list and "
+    "the parent_id epic scope on task_list. (3) the prism_guide('tools') task_list/"
+    "task_update/conductor lines carry the new args + the why. (4) prism_onboard "
+    "returns a best_practices[] block so a freshly-onboarding agent learns the "
+    "gate + lean-response patterns up front. Guide/onboard TEXT only — no tool "
+    "behavior change. "
     "v6.7.6: PROOF-TYPE-DRIVEN GATES + lean conductor responses (task "
     "0e071d68). The conductor gate teeth were hard-coded to a TDD shape and "
     "ignored the task's already-existing proof_type, so a non-test oracle "
