@@ -712,13 +712,18 @@ TOOLS: list[Tool] = [
         description=(
             "READ FIRST. Returns a concise orientation for this PRISM instance: "
             "what each tool does, when to use it, the daily workflow loop, and "
-            "common anti-patterns. Call this once at session start if you're a "
-            "coding agent that hasn't used PRISM in this project before."
+            "common anti-patterns. Call `prism_guide(section=\"orchestration\")` "
+            "for the MAX-FAN-OUT playbook — how to decompose an epic into "
+            "disjoint-allowed_files children with per-child proof_type, gate each "
+            "on its own proof shape, and track the cohort with lean "
+            "task_list(parent_id, fields=...) reads. Call this once at session "
+            "start if you're a coding agent that hasn't used PRISM here before."
         ),
         inputSchema={"type": "object", "properties": {
             "section": {"type": "string", "description":
-                "Optional: 'overview' | 'tools' | 'workflow' | 'memory' | "
-                "'graph' | 'examples'. Omit for the full guide."},
+                "Optional: 'overview' | 'tools' | 'workflow' | 'orchestration' "
+                "(the epic fan-out playbook) | 'memory' | 'graph' | 'examples'. "
+                "Omit for the full guide."},
         }},
     ),
     Tool(
