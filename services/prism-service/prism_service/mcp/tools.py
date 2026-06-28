@@ -1139,6 +1139,7 @@ TOOLS: list[Tool] = [
                 "tag": {"type": "string", "description": "Filter by tag"},
                 "story_file": {"type": "string", "description": "Filter by story file"},
                 "parent_id": {"type": "string", "description": "Scope to ONE epic's children — pass an epic id for its direct children, or '' for root tasks only (FR-6)."},
+                "id": {"type": "string", "description": "BY-ID read: scope to the SINGLE task with this id (returns a 1-element list). Use this to re-read the task you are driving instead of pulling the whole board — a full board is ~100x the tokens."},
                 "fields": {"type": "array", "items": {"type": "string"}, "description": "Projection: return only these keys per task (lean response, FR-7). Omit for the full task rows."},
             },
         },
@@ -3873,6 +3874,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 tag=arguments.get("tag"),
                 story_file=arguments.get("story_file"),
                 parent_id=arguments.get("parent_id"),
+                id=arguments.get("id"),
             )
             # FR-7: optional per-task field projection for a lean response.
             _fields = arguments.get("fields")
