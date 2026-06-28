@@ -712,13 +712,18 @@ TOOLS: list[Tool] = [
         description=(
             "READ FIRST. Returns a concise orientation for this PRISM instance: "
             "what each tool does, when to use it, the daily workflow loop, and "
-            "common anti-patterns. Call this once at session start if you're a "
-            "coding agent that hasn't used PRISM in this project before."
+            "common anti-patterns. Call `prism_guide(section=\"orchestration\")` "
+            "for the MAX-FAN-OUT playbook — how to decompose an epic into "
+            "disjoint-allowed_files children with per-child proof_type, gate each "
+            "on its own proof shape, and track the cohort with lean "
+            "task_list(parent_id, fields=...) reads. Call this once at session "
+            "start if you're a coding agent that hasn't used PRISM here before."
         ),
         inputSchema={"type": "object", "properties": {
             "section": {"type": "string", "description":
-                "Optional: 'overview' | 'tools' | 'workflow' | 'memory' | "
-                "'graph' | 'examples'. Omit for the full guide."},
+                "Optional: 'overview' | 'tools' | 'workflow' | 'orchestration' "
+                "(the epic fan-out playbook) | 'memory' | 'graph' | 'examples'. "
+                "Omit for the full guide."},
         }},
     ),
     Tool(
@@ -1133,12 +1138,13 @@ TOOLS: list[Tool] = [
             "properties": {
                 "status": {
                     "type": "string",
-                    "description": "Filter by status: pending, in_progress, done, blocked",
+                    "description": "Filter by status. DEFAULT (omitted, on an unscoped call) = ACTIVE work only (pending|in_progress|blocked) — done/cancelled/deleted are EXCLUDED because on a mature board they are ~90% of the rows and ~90% of the tokens. Pass a specific status (pending|in_progress|blocked|done|cancelled|deleted) for one column, or status=\"all\" for the entire archive incl. soft-deleted.",
                 },
                 "assigned_agent": {"type": "string", "description": "Filter by assigned agent"},
                 "tag": {"type": "string", "description": "Filter by tag"},
                 "story_file": {"type": "string", "description": "Filter by story file"},
-                "parent_id": {"type": "string", "description": "Scope to ONE epic's children — pass an epic id for its direct children, or '' for root tasks only (FR-6)."},
+                "parent_id": {"type": "string", "description": "Scope to ONE epic's children — pass an epic id for its direct children, or '' for root tasks only (FR-6). Returns children of any status (so a roll-up sees done children); soft-deleted are still hidden."},
+                "id": {"type": "string", "description": "BY-ID read: scope to the SINGLE task with this id (returns a 1-element list). Use this to re-read the task you are driving instead of pulling the whole board — a full board is ~100x the tokens."},
                 "fields": {"type": "array", "items": {"type": "string"}, "description": "Projection: return only these keys per task (lean response, FR-7). Omit for the full task rows."},
             },
         },
@@ -2052,6 +2058,13 @@ understand_* family, …) live behind `?tool_profile=all` — reconnect with the
 - Break the epic into demonstrable-FEATURE subtasks with
   `task_create(..., parent_id="<epic_id>")` — the parent_id hierarchy is what
   the conductor renders. Title = the feature; mechanics go in the description.
+  For SAFE parallel fan-out give each child two things: (1) DISJOINT
+  `allowed_files` — the hard collision boundary so concurrent dev agents never
+  touch the same file (if two slices must share a file they are NOT independent:
+  merge them, or sequence them with `dependencies`); (2) its own `proof_type` +
+  `oracle` matched to how THAT slice is proven (test|metric|artifact|demo) so
+  each child clears its OWN gate shape without override. Don't over-decompose —
+  a single demonstrable feature stays ONE task.
 
 ## 2. Drive each task through the conductor SDLC state machine
 review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
@@ -2081,10 +2094,19 @@ review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
 ## 3. FAN OUT with subagents — and verify with a DISTINCT actor
 - A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
   subagents (fan-out) to move the epic faster — spawn them concurrently.
+- SAFE-FAN-OUT INVARIANT: parallelize ONLY children with DISJOINT `allowed_files`
+  (the collision boundary), and gate EACH on its declared `proof_type` — a metric
+  slice on a count-delta, a ui slice on an artifact, a test slice on a red/green
+  trace — so heterogeneous slices clear their own gates instead of override-all.
+- Track the whole cohort LEANLY: `task_list(parent_id="<epic_id>", fields=[...])`
+  and `conductor_advance/​conductor_gate(..., fields=["from_step","to_step",
+  "gate_state"])` return just what you need and DROP the echoed task object —
+  that lean read is what lets you fan out WIDE without the driver's own context
+  blowing (the verbosity tax is the real ceiling on fan-out width).
 - An INDEPENDENT subagent (a DISTINCT actor — NO self-override) clears
-  red_gate/green_gate with REAL artifacts: it runs the failing test at the red
-  commit, then re-runs + captures green. A gate override by the SAME actor
-  that produced the work is rejected.
+  red_gate/green_gate with REAL artifacts: it produces the proof_type's proof
+  (test trace / count-delta / artifact path / screenshot), then a distinct actor
+  verifies. A gate override by the SAME actor that produced the work is rejected.
 
 ## 4. Roll child proofs up to the EPIC green_gate (child roll-up)
 Don't re-prove the epic itself. When every non-cancelled child is done with a
@@ -3851,13 +3873,36 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json(task))]
 
         if name == "task_list":
+            _status = arguments.get("status")
+            _scoped = any(
+                arguments.get(k) is not None
+                for k in ("id", "parent_id", "tag", "assigned_agent", "story_file")
+            )
+            # "all"/"active" are scope keywords, not real statuses — don't pass
+            # them to the SQL exact-match filter.
+            _pass_status = _status if _status not in (None, "all", "active") else None
             tasks = task_svc.list(
-                status=arguments.get("status"),
+                status=_pass_status,
                 assigned_agent=arguments.get("assigned_agent"),
                 tag=arguments.get("tag"),
                 story_file=arguments.get("story_file"),
                 parent_id=arguments.get("parent_id"),
+                id=arguments.get("id"),
             )
+            # DEFAULT SCOPE = ACTIVE WORK. A bare task_list (no status, no id/
+            # parent/tag scope) returns only pending/in_progress/blocked. On a
+            # mature board done+cancelled+deleted are ~90% of the rows AND ~90%
+            # of the tokens, and are almost never what an agent doing work wants
+            # (board hygiene: done leaves the active board). Opt into the full
+            # archive with status="all"; ask for one column with status="done".
+            # Soft-deleted rows are hidden everywhere unless asked for by name.
+            _ACTIVE = ("pending", "in_progress", "blocked")
+            if _status == "all":
+                pass  # explicit: the whole archive, including deleted
+            elif _status in (None, "active") and not _scoped:
+                tasks = [t for t in tasks if t.status in _ACTIVE]
+            elif _status != "deleted":
+                tasks = [t for t in tasks if t.status != "deleted"]
             # FR-7: optional per-task field projection for a lean response.
             _fields = arguments.get("fields")
             if _fields:

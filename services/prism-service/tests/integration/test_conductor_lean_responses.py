@@ -106,6 +106,59 @@ def test_task_list_schema_advertises_parent_id():
         "task_list inputSchema must advertise the parent_id filter (FR-6)")
 
 
+# ── PERF: task_list(id=...) is a by-id read — the drive re-reads ONE task,
+# not the whole board (the dominant token sink; ~100x smaller). ───────────
+
+def test_task_list_id_scopes_to_single_task(tmp_path, monkeypatch):
+    pid = _isolated_project(tmp_path, monkeypatch)
+    a = _call("task_create", {"title": "task a"}, pid)["id"]
+    b = _call("task_create", {"title": "task b"}, pid)["id"]
+    c = _call("task_create", {"title": "task c"}, pid)["id"]
+
+    one = _call("task_list", {"id": b}, pid)
+    assert [t["id"] for t in one] == [b], (
+        "task_list(id=b) must return EXACTLY the one task b — got "
+        f"{[t['id'] for t in one]} (a={a} c={c}); the id filter is ignored")
+    # composes with the fields projection for an even leaner read
+    lean = _call("task_list", {"id": b, "fields": ["id", "workflow_step"]}, pid)
+    assert lean == [{"id": b, "workflow_step": lean[0]["workflow_step"]}]
+
+
+def test_task_list_schema_advertises_id():
+    from prism_service.mcp.tools import TOOLS
+    props = {t.name: t for t in TOOLS}["task_list"].inputSchema["properties"]
+    assert "id" in props, (
+        "task_list inputSchema must advertise the by-id read filter")
+
+
+# ── PERF/SCOPE: a bare task_list returns ACTIVE work only — done/cancelled/
+# deleted (≈90% of a mature board) are excluded unless explicitly asked. ──
+
+def test_task_list_defaults_to_active_work_only(tmp_path, monkeypatch):
+    pid = _isolated_project(tmp_path, monkeypatch)
+    p = _call("task_create", {"title": "still pending"}, pid)["id"]
+    d = _call("task_create", {"title": "finished"}, pid)["id"]
+    _call("task_update", {"id": d, "status": "done"}, pid)
+    x = _call("task_create", {"title": "soft-deleted"}, pid)["id"]
+    _call("task_update", {"id": x, "status": "deleted"}, pid)
+
+    # bare call: active only — the done + deleted tasks are NOT returned
+    bare = {t["id"] for t in _call("task_list", {}, pid)}
+    assert bare == {p}, f"bare task_list must be active-only; got {bare}"
+
+    # opt into the full archive
+    everything = {t["id"] for t in _call("task_list", {"status": "all"}, pid)}
+    assert {p, d, x} <= everything, "status='all' must include done + deleted"
+
+    # one column on request
+    done_only = {t["id"] for t in _call("task_list", {"status": "done"}, pid)}
+    assert done_only == {d}
+
+    # soft-deleted is hidden even when asking a non-matching status, shown by name
+    assert x not in {t["id"] for t in _call("task_list", {"status": "pending"}, pid)}
+    assert x in {t["id"] for t in _call("task_list", {"status": "deleted"}, pid)}
+
+
 # ── AC-6 / FR-7: a fields projection returns ONLY requested keys ─────────
 
 def test_conductor_advance_fields_projection(tmp_path, monkeypatch):

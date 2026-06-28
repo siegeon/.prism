@@ -354,16 +354,24 @@ class TaskService:
         tag: Optional[str] = None,
         story_file: Optional[str] = None,
         parent_id: Optional[str] = None,
+        id: Optional[str] = None,
     ) -> list[Task]:
         """List tasks with optional filters.
 
         ``parent_id`` (FR-6, task 0e071d68) scopes to one epic's children:
         pass an epic id to return only its direct children, or '' to return
         only root tasks. None (default) does not filter on parentage.
+
+        ``id`` scopes to a SINGLE task — a by-id read so a caller (e.g. the
+        implement drive) reads just the one task it is working instead of the
+        whole board (the dominant token sink: a full board is ~100x larger).
         """
         clauses: list[str] = []
         params: list[str] = []
 
+        if id is not None:
+            clauses.append("id = ?")
+            params.append(id)
         if status is not None:
             clauses.append("status = ?")
             params.append(status)
