@@ -126,6 +126,20 @@ class SupervisorState:
         self.spawned_at = time.monotonic() if now is None else now
 
 
+def _restart_in_progress() -> bool:
+    """True iff an auto-update restart is in flight (a FRESH restart sentinel
+    exists). GH #181: during the re-exec drain + cold-boot the UI port hangs;
+    without this the supervisor would fire a COMPETING kill+respawn and stack a
+    second daemon family (the split-brain). We defer recovery while the sentinel
+    is fresh; the re-exec'd server clears it on healthy boot, and the sentinel's
+    TTL means a crashed restart can't disable recovery forever (NFR-2)."""
+    try:
+        from prism_service.data_dir import restart_in_progress
+        return restart_in_progress()
+    except Exception:
+        return False
+
+
 def _in_startup_grace(state: SupervisorState) -> bool:
     """True iff the freshly (re)spawned child is still inside its startup
     grace window. False when no spawn anchor is set (nothing to protect) or
@@ -308,6 +322,12 @@ def handle_probe_result(state: SupervisorState, alive: bool) -> bool:
     if _in_startup_grace(state):
         return False
 
+    # AUTO-UPDATE RESTART GRACE (GH #181): a fresh restart sentinel means the
+    # worker is mid re-exec; its UI hang is expected, NOT a wedge. Defer the
+    # competing kill+respawn that would otherwise stack a second daemon family.
+    if _restart_in_progress():
+        return False
+
     state.consecutive_failures += 1
     if state.consecutive_failures < failure_threshold():
         return False
@@ -347,6 +367,9 @@ def handle_liveness(state: SupervisorState, pid_alive: bool) -> bool:
     if pid_alive:
         return False
     if _in_startup_grace(state):
+        return False
+    # GH #181: don't respawn over a worker that is mid auto-update re-exec.
+    if _restart_in_progress():
         return False
     cap = max_restarts()
     if cap and state.restarts >= cap:

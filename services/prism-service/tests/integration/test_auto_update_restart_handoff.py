@@ -141,10 +141,13 @@ def test_maybe_apply_requests_restart_without_self_exec(monkeypatch):
 # The MAIN-thread restart performer: graceful uvicorn stop, then os.execv.
 # ---------------------------------------------------------------------------
 
-def test_perform_restart_execs_from_main_thread(monkeypatch):
+def test_perform_restart_execs_from_main_thread(monkeypatch, tmp_path):
     """The actual process replacement lives in a main-thread performer that
     (1) gracefully stops the running uvicorn server, then (2) os.execv's into
     the new image. We assert it drains the server first and execs after."""
+    # GH #181: isolate the restart-sentinel write (execv is mocked here, so it
+    # would otherwise leak into the real data dir).
+    monkeypatch.setenv("PRISM_DATA_DIR", str(tmp_path))
     perform = getattr(au, "perform_restart", None)
     assert callable(perform), \
         "auto_updater must expose perform_restart() — the main-thread re-exec"

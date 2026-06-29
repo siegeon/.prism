@@ -89,12 +89,17 @@ class _StuckServer:
 # hung on a clean drain.
 # ---------------------------------------------------------------------------
 
-def test_perform_restart_bounds_drain_then_force_exits(monkeypatch):
+def test_perform_restart_bounds_drain_then_force_exits(monkeypatch, tmp_path):
     """With a held-open (non-draining) connection, perform_restart must NOT
     hang: after drain_timeout_s it sets _server.force_exit so uvicorn drops the
     connection, then os.execv fires. Ordering must be graceful-first:
     should_exit BEFORE force_exit BEFORE execv (no in-flight-write force-kill).
     """
+    # GH #181: perform_restart now writes a restart sentinel into the data dir;
+    # isolate it to a tmp dir so the (execv-mocked) test never leaves a stale
+    # sentinel in the real data dir that would defer other tests' supervisor
+    # recovery.
+    monkeypatch.setenv("PRISM_DATA_DIR", str(tmp_path))
     server = _StuckServer()
 
     def _fake_execv(path, argv):

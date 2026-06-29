@@ -403,6 +403,16 @@ async def lifespan(_app: FastAPI):
     try:
         _LOCK_FILE.write_text(str(threading.get_ident()))
         _install_stackdump_handler()
+        # GH #181: this lifespan boot IS the healthy-boot signal for the
+        # re-exec'd image — clear the auto-update restart sentinel so the
+        # out-of-process supervisor resumes normal recovery now that the new
+        # process is up and about to bind both ports. (No-op when no restart
+        # was in flight.)
+        try:
+            from prism_service.data_dir import clear_restart_sentinel
+            clear_restart_sentinel()
+        except Exception:
+            pass
         threading.Thread(target=start_mcp_server, daemon=True).start()
         threading.Thread(target=start_drift_timer, daemon=True).start()
         from prism_service.services.understand_drainer import start_understand_drainer
