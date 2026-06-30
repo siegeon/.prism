@@ -114,7 +114,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
 <div id="graph-wrap">
   <div id="status">Loading graph...</div>
   <div id="graph"></div>
-  <div id="hint">Scroll to zoom L0→L3 · drag to pan · click a super-node to drill in</div>
+  <div id="hint">Scroll to zoom Context -> Code (C4 depth) · drag to pan · click a super-node to drill in</div>
 <div id="toolbar">
   <button id="tb-zoom-in" title="Zoom in"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg></button>
   <button id="tb-zoom-out" title="Zoom out"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.3-4.3M8 11h6"/></svg></button>
@@ -302,6 +302,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       // Keyed by the same l0/l1/l2 path key buildSupers groups on, so a
       // super-node prefers its real name over the path-derived mash-up.
       const hierLabels = data.hierarchy_labels || {};
+      // Rolled-up summaries for super-nodes (LLM, from graph_annotations),
+      // keyed by the same l0/l1/l2 path key. Surfaced on super-node hover so
+      // a higher C4 altitude shows its summary, not raw code. No generation
+      // here -- purely presents what annotations_for("hierarchy") already has.
+      const hierPurposes = data.hierarchy_purposes || {};
       // Track which abstraction level the camera ratio currently maps to.
       // Declared up here so the Sigma reducer closure (built farther down)
       // captures the live binding.
@@ -862,6 +867,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       // called, so click handlers reading the status get the right text.
       let layoutElapsed = "...";
       const LEVEL_NAMES = ["domains", "services", "modules", "symbols"];
+      // C4 depth labels for the four altitudes the LOD hierarchy already
+      // has: L0=Context, L1=Container, L2=Component, leaf(L3)=Code. This is
+      // a presentational relabel over the existing directory-depth tiers --
+      // LEVEL_NAMES stays as the descriptive noun used for counts.
+      const C4_NAMES = ["Context", "Container", "Component", "Code"];
       // Counts items the LOD reducer would paint right now — i.e., at
       // currentLevel and inside the active focus subtree if any. So
       // status reads what the user actually sees, not raw level totals.
@@ -887,7 +897,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         const hint = focusPath.length > 0
           ? " · click empty to back out"
           : " · scroll to zoom";
-        return `L${currentLevel}${trail} · ${where} · FA2 ${layoutElapsed}s${hint}`;
+        return `${C4_NAMES[currentLevel]} (L${currentLevel})${trail} · ${where} · FA2 ${layoutElapsed}s${hint}`;
       };
 
       // Stroke-outlined label: dark stroke first, light fill on top.
@@ -1247,11 +1257,22 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         hoveredX = g.getNodeAttribute(node, "x");
         hoveredY = g.getNodeAttribute(node, "y");
         document.body.style.cursor = "pointer";
+        // C4 drill semantics: hovering a higher-altitude super-node shows
+        // its rolled-up summary (Context/Container/Component); the Code leaf
+        // keeps its raw-artifact status from the clickNode handler.
+        const a = g.getNodeAttributes(node);
+        if (a.level !== undefined && a.level < 3 && !focusedNode) {
+          const ck = a["l" + a.level];
+          const summary = hierPurposes[ck];
+          statusEl.textContent = `${C4_NAMES[a.level]}: ${a.label || ck || "cluster"}`
+            + (summary ? ` -- ${summary}` : " -- (no rolled-up summary yet)");
+        }
         startPulseLoop();
       });
       renderer.on("leaveNode", () => {
         hoveredNode = null;
         document.body.style.cursor = "";
+        if (!focusedNode) statusEl.textContent = baseStatus();
         renderer.refresh();
       });
       // Shared drill: pushes the node's own key onto the focus stack,
@@ -1350,18 +1371,27 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         const ratio = Math.max(0.08, Math.min(0.7, span / 35));
         camera.animate({ x: t.x, y: t.y, ratio }, { duration: 650 });
       }
-      function applySearch(files) {
+      function applySearch(files, symbol) {
         const want = new Set((files || []).map(_normPath));
-        const ids = [];
+        // Symbol-precise deep-link (/brain?focus=<file>&symbol=<name>): when a
+        // symbol is supplied, light ONLY the leaf whose label matches it; with
+        // no symbol (or no label match) fall back to lighting the whole file.
+        const wantSym = symbol ? String(symbol) : null;
+        const fileIds = [], symIds = [];
         g.forEachNode((id, a) => {
-          if (a.level === 3 && want.has(_normPath(a.source_file))) ids.push(id);
+          if (a.level === 3 && want.has(_normPath(a.source_file))) {
+            fileIds.push(id);
+            if (wantSym && a.label === wantSym) symIds.push(id);
+          }
         });
+        const precise = wantSym && symIds.length > 0;
+        const ids = precise ? symIds : fileIds;
         searchSet = ids.length ? new Set(ids) : null;
         searchActive = true;
         focusedNode = null; neighborSet = new Set(); focusPath = [];
         if (currentLevel !== 3) setLevel(3);
         statusEl.textContent = searchSet
-          ? `search · ${ids.length.toLocaleString()} matching symbols highlighted`
+          ? `search · ${ids.length.toLocaleString()} ${precise ? "'" + wantSym + "'" : "matching"} symbol${ids.length === 1 ? "" : "s"} highlighted`
           : "search · no symbols in this graph matched the query";
         renderer.refresh();
         if (searchSet) fitToNodes(ids);
@@ -1376,7 +1406,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       }
       window.addEventListener("message", (ev) => {
         const m = ev.data || {};
-        if (m && m.type === "prism:search") applySearch(m.files);
+        if (m && m.type === "prism:search") applySearch(m.files, m.symbol);
         else if (m && m.type === "prism:clear") clearSearch();
         else if (m && m.type === "prism:drill") {
           // Quick-filter from a panel chip: bring that cluster to the top
@@ -1526,7 +1556,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
         }
 
         document.getElementById("sidebar-stats").textContent =
-          `L${currentLevel} (${LEVEL_NAMES[currentLevel]}) · `
+          `${C4_NAMES[currentLevel]} (L${currentLevel}) · `
           + `${items.length.toLocaleString()} categories · `
           + `${nodes.length.toLocaleString()} symbols total`;
 
@@ -1538,7 +1568,7 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
             window.parent.postMessage({
               type: "prism:clusters",
               level: currentLevel,
-              levelName: LEVEL_NAMES[currentLevel],
+              levelName: C4_NAMES[currentLevel],
               items: items.map(it => ({
                 label: truncateLabel(it.label),
                 color: it.color,

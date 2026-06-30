@@ -3137,7 +3137,29 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 label=arguments.get("label"),
                 domain=arguments.get("domain") or None,
             )
-            return [TextContent(type="text", text=_json(payload))]
+            # MCP determinism guard: generated / claude-provenance summaries
+            # are exploration-only and must NOT leave via MCP. Strip any
+            # annotation whose provenance starts with "claude" (the LLM
+            # narrative layer) handler-LOCAL -- shallow-copy the payload and
+            # each context entry so build_understanding's shared output (and
+            # thus the HTTP /api/brain/understand + ContextRail path) stays
+            # byte-unchanged.
+            def _is_claude_prov(ann: dict) -> bool:
+                return str(ann.get("provenance", "")).lower().startswith(
+                    "claude"
+                )
+            sanitized = dict(payload)
+            sanitized["context"] = [
+                {
+                    **entry,
+                    "annotations": [
+                        a for a in (entry.get("annotations") or [])
+                        if not _is_claude_prov(a)
+                    ],
+                }
+                for entry in payload.get("context", [])
+            ]
+            return [TextContent(type="text", text=_json(sanitized))]
 
         if name == "register_claude_source":
             from prism_service.data_dir import resolve_claude_home
