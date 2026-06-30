@@ -76,11 +76,17 @@ export default function ExplorePage() {
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
+  // Symbol carried by a /brain?focus=<file>&symbol=<name> deep-link, so the
+  // viewer can light the precise symbol node (not the whole file). Held in a
+  // ref so the viewer-ready re-post re-applies it once the canvas is built.
+  const symbolRef = useRef<string | null>(null);
 
-  const postToViewer = useCallback((files: string[]) => {
+  const postToViewer = useCallback((files: string[], symbol?: string | null) => {
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
-    win.postMessage(files.length ? { type: "prism:search", files } : { type: "prism:clear" }, "*");
+    win.postMessage(
+      files.length ? { type: "prism:search", files, symbol: symbol ?? null } : { type: "prism:clear" },
+      "*");
   }, []);
 
   const run = useCallback((q: string, dom: string = domain) => {
@@ -93,6 +99,7 @@ export default function ExplorePage() {
         setResultsOpen(q.trim().length > 0 && d.ranked.length > 0);
         const files = d.mode === "focus" ? d.nodes.map((n) => n.id) : [];
         filesRef.current = files;
+        symbolRef.current = null;  // a typed search supersedes any deep-link symbol
         postToViewer(files);
       })
       .catch((e) => { setData(null); setError(String(e?.message || e)); })
@@ -123,7 +130,39 @@ export default function ExplorePage() {
       .finally(() => setLoading(false));
   }, [project]);
 
-  useEffect(() => { run(""); }, [run]);
+  // Deep-link entry hop (/brain?focus=<file>&symbol=<name>, symbol optional).
+  // Reuses the page's existing focus machinery: understand on the seed file,
+  // select it so ContextRail opens, and steer the canvas via postMessage --
+  // symbol-precise when a symbol is given. Same path as a canvas click, just
+  // driven from the URL instead of a gesture.
+  const focusSeed = useCallback((file: string, symbol: string | null) => {
+    if (!file) return;
+    setLoading(true); setError(null);
+    setInput(symbol || base(file));
+    api.post<Understanding>("/api/brain/understand", { project, seed_files: [file], label: symbol || base(file), limit: 20, depth: 1 })
+      .then((d) => {
+        setData(d);
+        const seedFile = d.context[0]?.file ?? file;
+        setSelected(seedFile);
+        filesRef.current = [seedFile];
+        symbolRef.current = symbol;
+        postToViewer([seedFile], symbol);
+      })
+      .catch((e) => setError(String(e?.message || e)))
+      .finally(() => setLoading(false));
+  }, [project, postToViewer]);
+
+  // Read the deep-link once on mount. Present -> focus that seed; absent ->
+  // the usual whole-graph overview.
+  const deepLink = useMemo(() => {
+    const p = new URLSearchParams(window.location.search);
+    const file = p.get("focus");
+    return file ? { file, symbol: p.get("symbol") } : null;
+  }, []);
+
+  useEffect(() => { if (!deepLink) run(""); }, [run, deepLink]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (deepLink) focusSeed(deepLink.file, deepLink.symbol); }, []);
   useEffect(() => {
     api.get<{ graph_json_exists: boolean; viewer_url: string }>(`/api/graph/summary?project=${project}`)
       .then((s) => setViewerUrl(s.graph_json_exists ? s.viewer_url : null))
@@ -133,7 +172,7 @@ export default function ExplorePage() {
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       const m = e.data;
-      if (m?.type === "prism:viewer-ready") postToViewer(filesRef.current);
+      if (m?.type === "prism:viewer-ready") postToViewer(filesRef.current, symbolRef.current);
       else if (m?.type === "prism:explore") loadSelection(m.label || "selection", m.files || []);
       else if (m?.type === "prism:clusters") setInView({ level: m.level, levelName: m.levelName, items: m.items || [] });
     };
@@ -157,6 +196,7 @@ export default function ExplorePage() {
     if (!file) return;
     setSelected(file);
     setResultsOpen(false);
+    symbolRef.current = null;  // manual pick supersedes any deep-link symbol
     postToViewer([file]);
   };
 

@@ -24,6 +24,7 @@ const RetrievalsPage = lazy(() => import("@/pages/RetrievalsPage"));
 const LearningPage = lazy(() => import("@/pages/LearningPage"));
 const ConsolidationPage = lazy(() => import("@/pages/ConsolidationPage"));
 const UnderstandPage = lazy(() => import("@/pages/UnderstandPage"));
+const ArtifactPage = lazy(() => import("@/pages/ArtifactPage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
 
 export default function App() {
@@ -75,6 +76,9 @@ export default function App() {
             <Route path="/learning" element={<LearningPage />} />
             <Route path="/consolidation" element={<ConsolidationPage />} />
             <Route path="/understand" element={<UnderstandPage />} />
+            {/* Unified artifact surface (xref S5): the single destination a
+                resolved CODE token routes to. A ROUTE, not a nav entry. */}
+            <Route path="/artifact" element={<ArtifactPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
           </Routes>

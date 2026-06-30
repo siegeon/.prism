@@ -62,6 +62,7 @@ type Task = {
   plan_doc?: string;
   plan_diagram?: string;
   phase_progress?: PhaseProgress | null;
+  has_prototype?: boolean;
 };
 
 // Slim shape for the child-task list — only what the row renders.
@@ -431,12 +432,13 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress rides at the TOP LEVEL of the response (not nested in
-      // task) — merge it onto the task so the SDLC bar reads task.phase_progress.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null } : d.task);
+      // phase_progress + has_prototype ride at the TOP LEVEL of the response
+      // (not nested in task) — merge onto the task so the SDLC bar and the
+      // prototype iframe read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, has_prototype: d.has_prototype ?? false } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
@@ -784,12 +786,13 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
-      {(task.plan_doc || task.plan_diagram) ? (
+      {(task.plan_doc || task.plan_diagram || task.has_prototype) ? (
         <Stagger i={1} reduced={reduced}>
         <Card>
           <SectionLabel>Plan</SectionLabel>
           <div className="mt-2">
-            <PlanView diagram={task.plan_diagram} doc={task.plan_doc} />
+            <PlanView diagram={task.plan_diagram} doc={task.plan_doc}
+              prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined} />
           </div>
         </Card>
         </Stagger>

@@ -7,6 +7,7 @@
 // color-palette bypass, no <pre>. OnboardingView + EvidenceView delegate here
 // so the parser/highlighter logic lives in exactly one place (AC-1).
 import { useMemo, type ReactNode } from "react";
+import XrefLink from "@/components/XrefLink";
 
 export default function Markdown({ text, className }: { text: string; className?: string }) {
   const blocks = useMemo(() => parseMarkdown(text ?? ""), [text]);
@@ -144,11 +145,10 @@ export function renderInline(text: string): ReactNode {
     if (!next) { parts.push(<span key={key++}>{highlight(rest)}</span>); break; }
     if (next.index > 0) parts.push(<span key={key++}>{highlight(rest.slice(0, next.index))}</span>);
     if (next === code) {
-      parts.push(
-        <code key={key++} className="text-[12px] font-mono px-1 py-0.5 rounded bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] break-all">
-          {next[1]}
-        </code>,
-      );
+      // Marked code chips (backtick spans) become resolving xref links, so
+      // every surface that renders markdown inherits clickable tokens. Plain
+      // prose never reaches this branch, so words outside backticks stay inert.
+      parts.push(<XrefLink key={key++} token={next[1]} />);
     } else if (next === link) {
       const href = next[2];
       const external = /^https?:\/\//.test(href);

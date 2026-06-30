@@ -5,8 +5,10 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from prism_service.data_dir import prototype_file
 from prism_service.project_context import get_project
 
 router = APIRouter()
@@ -256,7 +258,29 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
             out["phase_progress"] = cond.phase_progress(task_id)
     except Exception:
         pass
+    # has_prototype: a clickable MOCK prototype HTML the /prototype workflow
+    # generated for this task, served in-app (see get_task_prototype). Top-level
+    # boolean (like phase_progress) so the detail page can show/hide the iframe
+    # without a DB column. Best-effort — never break the detail route.
+    try:
+        out["has_prototype"] = prototype_file(task_id).exists()
+    except Exception:
+        out["has_prototype"] = False
     return out
+
+
+@router.get("/{task_id}/prototype")
+def get_task_prototype(task_id: str):
+    """Serve the task's prototype HTML so the SPA can iframe it on the Plan
+    card (prototypes viewable IN PRISM, not an external port). task_id is a
+    server-generated UUID; reject anything else so a crafted id can't traverse
+    out of the prototypes dir."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    path = prototype_file(task_id)
+    if not path.exists():
+        raise HTTPException(404, "no prototype for this task")
+    return FileResponse(str(path), media_type="text/html")
 
 
 class TaskUpdate(BaseModel):

@@ -206,6 +206,41 @@ class BrainService:
             return []
         return self._brain.outline(source_file=source_file)
 
+    def resolve_indexed_file(self, path: str) -> Optional[str]:
+        """Best indexed ``source_file`` matching ``path``: exact first, else the
+        longest UNIQUE trailing path-suffix (>=2 segments). The suffix match
+        heals a stale prefix — e.g. a pre-rename ``services/prism-service/app/
+        services/x.py`` citation resolves to the real ``.../prism_service/
+        services/x.py`` that exists today. Returns the real indexed path, or
+        None when nothing (or nothing unambiguous) matches. Deterministic,
+        read-only — no LLM, a single local index lookup."""
+        if not self._available or self._brain is None or not path:
+            return None
+        norm = path.replace("\\", "/").strip().lstrip("/")
+        if not norm:
+            return None
+        conn = self._brain._brain
+        row = conn.execute(
+            "SELECT 1 FROM docs WHERE source_file = ? LIMIT 1", (norm,)
+        ).fetchone()
+        if row:
+            return norm
+        parts = [p for p in norm.split("/") if p]
+        # Longest -> shortest trailing suffix; take the first that hits exactly
+        # one indexed file. Stop if a suffix is ambiguous (shorter ones only get
+        # more so), so we never guess between two same-named files.
+        for start in range(1, len(parts) - 1):
+            suffix = "/".join(parts[start:])
+            rows = conn.execute(
+                "SELECT DISTINCT source_file FROM docs WHERE source_file LIKE ? LIMIT 3",
+                ("%/" + suffix,),
+            ).fetchall()
+            if len(rows) == 1:
+                return rows[0][0]
+            if len(rows) > 1:
+                break
+        return None
+
     def find_references(
         self, name: str, limit: int = 20,
         include_rationale: bool = False,

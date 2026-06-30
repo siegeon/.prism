@@ -69,6 +69,23 @@ def pid_file() -> Path:
     return resolve_data_dir() / "prism.pid"
 
 
+def prototype_dir() -> Path:
+    """Directory holding per-task prototype HTML — clickable MOCK-data mock
+    UIs the /prototype workflow generates, served by PRISM and iframed on the
+    task detail Plan card so prototypes are viewable IN-APP, not on an
+    external port."""
+    p = resolve_data_dir() / "prototypes"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def prototype_file(task_id: str) -> Path:
+    """Path to a task's prototype HTML. Callers MUST pass an already-validated
+    task id (the API route restricts it to [A-Za-z0-9_-]) so a crafted id can't
+    traverse out of the prototypes dir."""
+    return prototype_dir() / f"{task_id}.html"
+
+
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 5
 
