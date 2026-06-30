@@ -393,7 +393,7 @@ function ContextSpine({ sel, loading }: { sel?: Ctx; loading: boolean }) {
                 {sel.outline.map((o, i) => (
                   <li key={i} className="flex items-baseline gap-2 text-xs">
                     <span className="font-mono truncate">{o.name}</span>
-                    <span className="opacity-40">{o.kind}{o.line ? ` :${o.line}` : ""}</span>
+                    <span className="opacity-40">{o.kind && o.kind !== "unknown" ? o.kind : ""}{o.line ? ` :${o.line}` : ""}</span>
                   </li>
                 ))}
               </ul>

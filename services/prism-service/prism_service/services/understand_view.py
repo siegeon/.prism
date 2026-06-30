@@ -119,7 +119,7 @@ def build_understanding(
     central_all = graph.top_central_entities(limit=200)
 
     if seed_files:
-        return _focus_files(graph, communities, central_all, seed_files,
+        return _focus_files(brain, graph, communities, central_all, seed_files,
                             label or "selected cluster", limit, depth)
     q = (query or "").strip()
     if not q:
@@ -217,11 +217,11 @@ def _focus(brain, graph, communities, central_all, q: str,
         if f and f not in seen_files:
             seen_files.add(f)
             seed_files.append(f)
-    return _assemble(graph, communities, central_all, seed_files, ranked,
+    return _assemble(brain, graph, communities, central_all, seed_files, ranked,
                      q, depth)
 
 
-def _focus_files(graph, communities, central_all, files: list[str],
+def _focus_files(brain, graph, communities, central_all, files: list[str],
                  label: str, limit: int, depth: int) -> dict:
     """Cluster/selection-seeded view — the canvas posts a set of files (a
     clicked community/super-node, or a single node) and we drive the full
@@ -251,11 +251,30 @@ def _focus_files(graph, communities, central_all, files: list[str],
             ranked.append({"entity_id": f, "name": _basename(f),
                            "kind": "file", "file": f, "score": 0.0,
                            "why": f"in {label}"})
-    return _assemble(graph, communities, central_all, want, ranked,
+    return _assemble(brain, graph, communities, central_all, want, ranked,
                      label, depth)
 
 
-def _assemble(graph, communities, central_all, seed_files: list[str],
+def _file_outline(brain, f: str, fd: dict) -> list[dict]:
+    """Defined-symbol outline with REAL kinds + lines from the Brain
+    ({name, kind, line}); the graph entities table stores kind='unknown'/line=0
+    and includes referenced imports, so it is only the fallback when the Brain
+    has nothing indexed for this file."""
+    try:
+        rows = brain.outline(f) if brain is not None else []
+    except Exception:
+        rows = []
+    if rows:
+        return [
+            {"name": r.get("entity_name") or "",
+             "kind": r.get("entity_kind") or "",
+             "line": r.get("line_start") or 0}
+            for r in rows[:30]
+        ]
+    return fd.get("entities", [])[:30]
+
+
+def _assemble(brain, graph, communities, central_all, seed_files: list[str],
               ranked: list[dict], query: str, depth: int) -> dict:
     """Shared subgraph + context assembly for both focus paths. Given the
     seed files and a ranked list, expands 1-hop neighbors, builds the
@@ -362,7 +381,7 @@ def _assemble(graph, communities, central_all, seed_files: list[str],
             "entity_id": f,
             "file": f,
             "community": file_comm.get(f),
-            "outline": fd.get("entities", [])[:30],
+            "outline": _file_outline(brain, f, fd),
             "references": fd.get("inbound", []),
             "call_chain": fd.get("outbound", []),
             "chunks": chunks,
