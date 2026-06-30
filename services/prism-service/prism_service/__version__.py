@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.21"
+PRISM_VERSION = "6.7.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.22: artifact/understand OUTLINE now shows REAL symbol kinds + lines (class/function, "
+    ":line) from the Brain index instead of the graph entities table, which stored "
+    "kind=unknown/line=0 and listed imported names. build_understanding now sources the "
+    "per-file outline from brain.outline(); graph entities are a fallback only. "
     "v6.7.21: xref resolver strips a trailing :line / :line-range from file citations "
     "(the ubiquitous path:NN form, e.g. models/task.py:60) so they resolve to the file "
     "instead of reading as unresolved. "
