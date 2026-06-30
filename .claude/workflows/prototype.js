@@ -1,12 +1,13 @@
 export const meta = {
   name: 'prototype',
-  description: 'PRISM-first research -> source fallback -> synthesize plan -> register as a conductor-tracked planning task. The engine behind the /prototype phase router.',
-  whenToUse: 'Run when starting a feature/phase router: mines PRISM knowledge first, fills gaps from source code, synthesizes a PRD-style plan, and parks the work in conductor\'s planning steps.',
+  description: 'PRISM-first research -> source fallback -> synthesize plan -> build a clickable MOCK-data prototype (PRISM-skinned, isolated) -> register as a conductor-tracked planning task. The engine behind the /prototype phase router.',
+  whenToUse: 'Run when starting a feature/phase router: mines PRISM knowledge first, fills gaps from source code, synthesizes a PRD-style plan, generates a clickable mock-data prototype you can SEE the feature in (no real data touched), and parks the work in conductor\'s planning steps.',
   phases: [
     { title: 'Recall', detail: 'Mine PRISM brain + memory in parallel' },
     { title: 'Coverage', detail: 'Judge what PRISM answered; list gaps' },
     { title: 'Source dive', detail: 'One agent per gap greps/reads real source' },
     { title: 'Plan', detail: 'Synthesize PRD-style plan from all evidence' },
+    { title: 'Mock', detail: 'Generate a clickable MOCK-data prototype, PRISM-skinned + isolated' },
     { title: 'Track', detail: 'Create task + walk it through conductor planning steps' },
   ],
 }
@@ -90,6 +91,16 @@ const PLAN_SCHEMA = {
   },
 }
 
+const MOCK_SCHEMA = {
+  type: 'object',
+  required: ['path', 'views', 'notes'],
+  properties: {
+    path: { type: 'string', description: 'absolute path to the written self-contained HTML prototype' },
+    views: { type: 'array', items: { type: 'string' }, description: 'the clickable views/journeys implemented' },
+    notes: { type: 'string', description: 'what is mocked + how the journey was verified' },
+  },
+}
+
 const TRACK_SCHEMA = {
   type: 'object',
   required: ['task_id', 'current_step', 'steps_walked', 'notes'],
@@ -142,6 +153,28 @@ const evidence = JSON.stringify({ recall: { brain, mem }, coverage, sourceFindin
 const plan = await agent(
   `Synthesize a PRD-style plan for the feature "${feature}" using ONLY the evidence below - do not invent capabilities the evidence doesn't support. Where evidence is thin, put it in open_questions rather than asserting it.\n\nAlso emit TWO rich-render fields:\n- plan_diagram: a valid Mermaid diagram (sequenceDiagram for actor<->system journeys, or classDiagram/flowchart for structure) capturing the core flow of this change. CONSULT THE mermaid-syntax SKILL (.claude/skills/mermaid-syntax) for valid syntax, the 6 supported diagram types, c4 layout science, and Hermes theming - the conductor's plan_coverage rubric mechanically requires plan_diagram to be present AND parse. Raw Mermaid source only - no code fences.\n- plan_doc: a markdown PROPOSED-CHANGE/STORY doc with the rubric-required sections - ## Summary, ## Requirements (FR-<n>/NFR-<n> bullet ids), ## Acceptance Criteria (AC-<n> bullet ids, each ending "- oracle: <observable check>") - plus plan steps and open questions. No raw JSON, no <pre>. The story_gate rubric scores these sections mechanically.\n\nEVIDENCE:\n${evidence}`,
   { label: 'plan:synthesize', phase: 'Plan', schema: PLAN_SCHEMA })
+
+// -- Phase 4b: Mock prototype (clickable, MOCK data, PRISM-skinned) ------
+// A plan is not demonstrable. The owner wants to SEE and CLICK the feature on
+// MOCK data BEFORE any real code is touched (and without risking real data).
+// Generate ONE self-contained HTML prototype, reskinned to the REAL PRISM
+// tokens so it reads native, and attach its path to the plan.
+phase('Mock')
+const mock = await agent(
+  `Build a SINGLE self-contained, clickable HTML prototype that demonstrates the core user journey of this plan on 100% MOCK data. HARD RULES:\n`
+  + `- ZERO backend / ZERO real data: no fetch to a live endpoint, no DB, nothing touching the :8888/:8887 daemon or real PRISM stores. Bake mock JSON inline. This is so it CANNOT break real data.\n`
+  + `- Reskin to the REAL PRISM look and feel: Read services/prism-service/prism_service/web/src/index.css and copy the EXACT CSS custom properties (e.g. --background-base #0d1726, --surface-1/2/3, --text-primary/secondary, --border-default, --accent-*-bg/ring/fg). It must read as a native PRISM page, not a foreign UI.\n`
+  + `- Visible banner stating it is a MOCK-DATA prototype that touches nothing real.\n`
+  + `- Implement the plan's primary journeys as REAL click-throughs across multiple views with navigation between them. Inline vanilla JS only, no build step.\n`
+  + `- GOTCHA (verified): never name an inline-onclick handler 'click' -- on an <a> the bare identifier 'click' binds to HTMLElement.click() and recurses/freezes. Use a distinct name (e.g. xnav).\n`
+  + `- Write the file to a SCRATCH location (the OS temp dir or a gitignored path), NOT into tracked source, then RETURN its absolute path, the views implemented, and how you verified the journey.\n\nPLAN:\n`
+  + JSON.stringify(plan, null, 2),
+  { label: 'mock:prototype', phase: 'Mock', schema: MOCK_SCHEMA })
+if (mock && mock.path) {
+  plan.plan_doc = String(plan.plan_doc || '')
+    + '\n\n## Mock prototype\n\nClickable MOCK-data prototype (PRISM-skinned, no real data touched): '
+    + mock.path + '\nViews: ' + (mock.views || []).join(', ')
+}
 
 // -- Phase-merge gate doctrine (stacked-epic stranding fix, task 56458db1) --
 // The implement workflow cuts EVERY task branch off origin/main, so a
@@ -206,4 +239,4 @@ const tracking = await agent(
   `You are registering this plan as a conductor-tracked task in PRISM, then walking it through the PLANNING portion of the SDLC state machine ONLY (stop before build).\n\nThe WORKFLOW_STEPS are: review_previous_notes -> draft_story -> story_gate -> verify_plan -> plan_gate -> write_failing_tests -> red_gate -> implement_tasks -> verify_green_state -> green_gate. Planning = the steps up to (and stopping at) verify_plan.\n\n${PHASE_MERGE_GATE_DOCTRINE}\n\n${FANOUT_DECOMPOSITION_DOCTRINE}\n\nLoad tools: ToolSearch("select:mcp__prism__task_create,mcp__prism__task_link_session,mcp__prism__conductor_advance,mcp__prism__conductor_gate").\n\nSteps:\n1. task_create with title=plan.title VERBATIM - a SHORT human-friendly feature title (~4-9 words, plain language: what the feature IS, as a user would name it). Do NOT pack mechanics, phase/step lists, arrow-diagrams, or file/data-hook names into the title - ALL of that goes in the description. Use the plan summary as description, assigned_agent="sm", tags=["phase-router","prototype","planning"], AND persist the rich plan by passing plan_diagram=<the plan.plan_diagram Mermaid source> and plan_doc=<the plan.plan_doc markdown> so PRISM renders the plan as a document (diagram on top, proposed change below). If task_create does not carry them, call task_update(id, plan_diagram=..., plan_doc=...) immediately after. Capture the returned task id.\n1a. SET THE PROOF SHAPE: pass proof_type + oracle on task_create (or task_update right after) matched to HOW this feature is proven - proof_type="test" is the TDD default; use "metric"/"artifact"/"demo" only when that is the REAL oracle (e.g. an analyzer-count, a generated file, a UI capture). This makes the build phase's red/green gates validate the right shape instead of demanding a failing test. If the plan splits into INDEPENDENT demonstrable features, apply the SAFE PARALLEL FAN-OUT doctrine above: register the epic as the ROOT task and each feature as a CHILD (parent_id=<epic id>) with DISJOINT allowed_files + its own proof_type/oracle, so the build phase can drive them concurrently without collisions.${linkStep}\n2. conductor_advance(id${advSid}, fields=["from_step","to_step","gate_state","rubric"]) to move from review_previous_notes -> draft_story, then conductor_advance(id${advSid}, fields=["from_step","to_step","gate_state","rubric"]) again to land on story_gate (gate_state=pending). The fields projection keeps the response lean (no echoed task object); the advance INTO an authoring step returns result['rubric'] - confirm plan_doc already matches it (sections + AC-<n> ids + "oracle:" markers) so story_gate passes first try.\n3. story_gate is RUBRIC-VERIFIED (story_complete: the YAML rubric scores the task's plan_doc - sections present, every AC has an id + oracle). Call conductor_gate(id, action="approve", reason="story rubric evidence: sections + AC ids + oracles present") WITHOUT override. If it returns ok:false, the rubric reason names exactly what the plan_doc is missing - FIX plan_doc via task_update and re-approve; do NOT reach for override=true (the forced-override path is retired).\n4. conductor_advance(id${advSid}, fields=["from_step","to_step","gate_state","rubric"]) to reach verify_plan (lean response; the rubric on this authoring advance is the plan_coverage schema). STOP there - verify_plan is the planning/build boundary; do NOT enter plan_gate or write_failing_tests.\n\nReturn the task id, the current_step you ended on, the ordered list of steps you walked, and notes on anything that errored.\n\nPLAN:\n${planJson}`,
   { label: 'track:conductor', phase: 'Track', schema: TRACK_SCHEMA })
 
-return { feature, coverage, sourceGapsChased: sourceFindings.length, plan, tracking }
+return { feature, coverage, sourceGapsChased: sourceFindings.length, plan, mock, tracking }
