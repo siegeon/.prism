@@ -200,10 +200,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         # the instant the launching session ends. CREATE_BREAKAWAY_FROM_JOB
         # escapes the job. It raises if the job forbids breakaway, so fall
         # back to the old flags rather than failing the launch.
-        _DETACHED = 0x00000008
+        # CREATE_NO_WINDOW (not DETACHED_PROCESS): a DETACHED daemon has NO
+        # console, so every console-subprocess it spawns (claude -p, git,
+        # pytest) allocates a fresh VISIBLE conhost window — worker activity
+        # flashes terminal windows at the user. NO_WINDOW gives the daemon a
+        # hidden console that all children inherit: same detachment from the
+        # launching terminal, zero window spam.
+        _NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
         _NEW_GROUP = 0x00000200
         _BREAKAWAY = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
-        spawn_kwargs["creationflags"] = _DETACHED | _NEW_GROUP | _BREAKAWAY
+        spawn_kwargs["creationflags"] = _NO_WINDOW | _NEW_GROUP | _BREAKAWAY
     else:
         spawn_kwargs["start_new_session"] = True
 
@@ -240,7 +246,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 f"durable daemon.",
                 file=sys.stderr,
             )
-            spawn_kwargs["creationflags"] = 0x00000008 | 0x00000200
+            spawn_kwargs["creationflags"] = 0x08000000 | 0x00000200
             proc = _spawn()
         else:
             raise

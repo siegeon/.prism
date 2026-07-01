@@ -256,10 +256,13 @@ def _spawn_server() -> int:
     cli/prism_cli._spawn."""
     spawn_kwargs: dict = {}
     if sys.platform.startswith("win"):
-        _DETACHED = 0x00000008
+        # CREATE_NO_WINDOW, not DETACHED_PROCESS — a console-less server makes
+        # every console child (claude -p, git) flash a visible conhost window;
+        # a hidden console is inherited silently (mirrors cli/prism_cli._spawn).
+        _NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
         _NEW_GROUP = 0x00000200
         _BREAKAWAY = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
-        spawn_kwargs["creationflags"] = _DETACHED | _NEW_GROUP | _BREAKAWAY
+        spawn_kwargs["creationflags"] = _NO_WINDOW | _NEW_GROUP | _BREAKAWAY
     else:
         spawn_kwargs["start_new_session"] = True
     try:
@@ -279,7 +282,7 @@ def _spawn_server() -> int:
                 f"respawned server runs INSIDE the job and may be reaped when "
                 f"the launching session ends"
             )
-            spawn_kwargs["creationflags"] = 0x00000008 | 0x00000200
+            spawn_kwargs["creationflags"] = 0x08000000 | 0x00000200
             proc = subprocess.Popen(
                 [sys.executable, "-m", "prism_service.main"],
                 stdin=subprocess.DEVNULL, close_fds=True, **spawn_kwargs,

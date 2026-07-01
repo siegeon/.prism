@@ -13,11 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.24"
+PRISM_VERSION = "6.7.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "SELF-IMPROVE-FORK v6.7.24: REST POST /api/tasks now accepts oracle/proof_type/"
+    "SELF-IMPROVE-FORK v6.7.25: daemon + supervisor spawn with CREATE_NO_WINDOW "
+    "instead of DETACHED_PROCESS — a console-less daemon made every worker "
+    "subprocess (claude -p, git) flash a visible conhost window; a hidden "
+    "console is inherited by all children (zero window spam, breakaway kept). "
+    "v6.7.24: REST POST /api/tasks now accepts oracle/proof_type/"
     "parent_id/dependencies so the G0-G5 epic can be seeded into the fork instance "
     "without the MCP path. "
     "v6.7.23: dedicated fork instance on 9999/9998 (branch "
