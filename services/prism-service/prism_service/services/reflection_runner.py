@@ -19,7 +19,9 @@ One call ⇒ one candidate processed:
 from __future__ import annotations
 
 import json as _json
+import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -300,6 +302,60 @@ def _extract_verdict(raw_text: str) -> dict:
     raise ValueError("no JSON object found in verdict text")
 
 
+class _LocalResult:
+    """claude_cli-result-shaped adapter for the local micro-LLM backend."""
+
+    def __init__(self, text: str, ms: float, tokens: int):
+        self._text = text
+        self.exit_code = 0
+        self.run_id = f"local-{int(time.time())}"
+        self.ms = ms
+        self.tokens = tokens
+
+    def final_text(self) -> str:
+        return self._text
+
+
+def _invoke_backend(
+    *,
+    prompt: str,
+    work_dir: str,
+    plugin_dir: str,
+    max_turns: int,
+    allowed_tools: tuple[str, ...],
+    project: str,
+    purpose: str,
+):
+    """Reflection inference seam (task ecb90f7e). Default: the claude CLI,
+    exactly as before. PRISM_REFLECTION_BACKEND=local routes through
+    inference.local_llm — a FREE local micro model (PRISM_LOCAL_LLM_MODEL,
+    bench-ranked in benchmarks/micro_llm_selflearn). The local path is
+    TOOL-LESS: the verdict is grounded solely by the brief baked into the
+    prompt, which is also why the prompt builder inlines the evidence."""
+    if (os.environ.get("PRISM_REFLECTION_BACKEND") or "").strip().lower() == "local":
+        from prism_service.inference import local_llm
+
+        out = local_llm.complete(
+            prompt,
+            model=local_llm.configured_model(),
+            system=(
+                "You are PRISM's reflection engine. Respond with ONLY the "
+                "JSON verdict object the prompt specifies — no prose."
+            ),
+            json_mode=True,
+        )
+        return _LocalResult(out["text"], out["ms"], out["tokens"])
+    return claude_cli.invoke(
+        prompt=prompt,
+        work_dir=work_dir,
+        plugin_dir=plugin_dir,
+        max_turns=max_turns,
+        allowed_tools=allowed_tools,
+        project=project,
+        purpose=purpose,
+    )
+
+
 def run_one(
     project: str,
     candidate_id: str,
@@ -349,7 +405,7 @@ def run_one(
     prompt = _build_prompt(project, str(source_dir), candidate_id, row, scope)
 
     try:
-        result = claude_cli.invoke(
+        result = _invoke_backend(
             prompt=prompt,
             work_dir=str(source_dir),
             plugin_dir=str(source_dir),

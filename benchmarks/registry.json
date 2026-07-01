@@ -11,6 +11,7 @@
   {"id": "toolprofiles", "priority": "p0", "status": "active", "domain": "tool_use"},
   {"id": "metaconductor", "priority": "p0", "status": "active", "domain": "prompt_governance"},
   {"id": "sync", "priority": "p0", "status": "active", "domain": "index_hygiene"},
+  {"id": "micro_llm_selflearn", "priority": "p0", "status": "active", "domain": "local_inference"},
   {"id": "agentbench_setup", "priority": "p0", "status": "active", "domain": "agent_context"},
   {"id": "bfcl", "priority": "p1", "status": "watch", "domain": "tool_use", "source_url": "https://gorilla.cs.berkeley.edu/leaderboard"},
   {"id": "tau_bench", "priority": "p1", "status": "watch", "domain": "tool_use"},

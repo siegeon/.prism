@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.26"
+PRISM_VERSION = "6.7.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.27: micro-LLM internal inference (task ecb90f7e, "
+    "G5 feed). New benchmarks/micro_llm_selflearn ranks the free local ladder "
+    "on the REAL self-learning shapes (reflection JSON verdict, memory distill, "
+    "tool-call emission) - winner qwen3:0.6b (522MB): 100% on all three, T1 p50 "
+    "3244ms, beating the 7-8b baselines on speed AND reliability. New "
+    "inference/local_llm.py (keyless OpenAI-compat client, INV-1 intact) + "
+    "reflection_runner backend seam: PRISM_REFLECTION_BACKEND=local + "
+    "PRISM_LOCAL_LLM_MODEL route the learning loop through the micro model "
+    "(tool-less, brief-grounded). PI panel picker gains the bench-ranked micro "
+    "options. "
     "SELF-IMPROVE-FORK v6.7.26: PI — omnipresent left-rail agent (task 711d5235). "
     "The rail gains NAV|PI tabs (first Tabs primitive in ui.tsx); the PI tab hosts "
     "a persistent chat panel on pi-agent-core + pi-ai (@earendil-works 0.80.3, MIT) "

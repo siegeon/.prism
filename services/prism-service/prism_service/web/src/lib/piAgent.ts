@@ -38,10 +38,10 @@ export type PiModelChoice = {
 // are exactly what G5 (task 9f8e7bf7, "smallest model PRISM can carry")
 // probes with the telemetry this panel records.
 export const PI_MODEL_CHOICES: PiModelChoice[] = [
-  { id: "qwen2.5-coder:7b", label: "qwen2.5-coder:7b", hint: "recommended · smallest reliable" },
-  { id: "llama3.1:8b", label: "llama3.1:8b" },
-  { id: "qwen3:4b", label: "qwen3:4b", hint: "experimental", experimental: true },
-  { id: "gpt-oss:20b", label: "gpt-oss:20b" },
+  { id: "qwen2.5-coder:7b", label: "qwen2.5-coder:7b", hint: "recommended · chat + tools" },
+  { id: "qwen3:0.6b", label: "qwen3:0.6b", hint: "micro · self-learning bench winner", experimental: true },
+  { id: "qwen3:1.7b", label: "qwen3:1.7b", hint: "micro" },
+  { id: "llama3.2:3b", label: "llama3.2:3b" },
 ];
 
 export type PiConfig = { baseUrl: string; modelId: string };
