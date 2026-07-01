@@ -311,6 +311,8 @@ class _LocalResult:
         self.run_id = f"local-{int(time.time())}"
         self.ms = ms
         self.tokens = tokens
+        # claude_cli result surface consumed downstream (run_one :506).
+        self.duration_s = round(ms / 1000.0, 2)
 
     def final_text(self) -> str:
         return self._text
