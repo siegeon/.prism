@@ -107,6 +107,10 @@ class TaskCreate(BaseModel):
     priority: int = 0
     tags: Optional[list[str]] = None
     likely_misfire: str = ""
+    oracle: str = ""
+    proof_type: str = ""
+    parent_id: str = ""
+    dependencies: Optional[list[str]] = None
     full_outcome_complete: bool = False
     enter_conductor: bool = False
 
@@ -129,6 +133,10 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         priority=body.priority or 0,
         tags=body.tags or [],
         likely_misfire=body.likely_misfire or "",
+        oracle=body.oracle or "",
+        proof_type=body.proof_type or "",
+        parent_id=body.parent_id or "",
+        dependencies=body.dependencies or [],
         full_outcome_complete=bool(body.full_outcome_complete),
     )
     advanced = None

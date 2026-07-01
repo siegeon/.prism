@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.22"
+PRISM_VERSION = "6.7.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.24: REST POST /api/tasks now accepts oracle/proof_type/"
+    "parent_id/dependencies so the G0-G5 epic can be seeded into the fork instance "
+    "without the MCP path. "
+    "v6.7.23: dedicated fork instance on 9999/9998 (branch "
+    "feat/self-improvement-engine) hosting the self-improvement-engine epic G0-G5; "
+    "isolated data dir, separate from mainline dev (8888). "
     "v6.7.22: artifact/understand OUTLINE now shows REAL symbol kinds + lines (class/function, "
     ":line) from the Brain index instead of the graph entities table, which stored "
     "kind=unknown/line=0 and listed imported names. build_understanding now sources the "
