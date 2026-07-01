@@ -124,6 +124,60 @@ export function toneFromLabel(label: string): PillTone {
   return HASH_TONES[h % HASH_TONES.length];
 }
 
+/** Segmented tab strip — the SPA's first Tabs primitive (task 711d5235,
+ * born for the left rail's NAV | PI switch). Mirrors Pill's neutral
+ * tone language: active segment lifts to surface-2 + text-primary,
+ * inactive stays muted. Equal-width segments so a two-tab strip reads
+ * as one control, not two buttons.
+ */
+export type TabItem<K extends string = string> = {
+  key: K;
+  label: ReactNode;
+  title?: string;
+};
+
+export function Tabs<K extends string>({
+  items, value, onChange, className, segmentClassName,
+}: {
+  items: TabItem<K>[];
+  value: K;
+  onChange: (key: K) => void;
+  className?: string;
+  /** Extra classes per segment button (e.g. taller full-bleed rail tabs). */
+  segmentClassName?: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      className={cn(
+        "flex rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-0)] p-0.5",
+        className,
+      )}
+    >
+      {items.map(({ key, label, title }) => (
+        <button
+          key={key}
+          role="tab"
+          type="button"
+          aria-selected={value === key}
+          title={title}
+          onClick={() => onChange(key)}
+          className={cn(
+            "flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-[4px]",
+            "text-[11px] uppercase tracking-wider transition-colors",
+            value === key
+              ? "bg-[color:var(--surface-2)] text-[color:var(--text-primary)]"
+              : "text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)]",
+            segmentClassName,
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export const Empty = ({ children }: { children: ReactNode }) => (
   <div className="rounded-md border border-dashed border-[color:var(--border-default)] px-5 py-8 text-center text-sm text-[color:var(--text-muted)]">
     {children}

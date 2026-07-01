@@ -50,7 +50,10 @@ def test_memory_store_then_recall_roundtrip(client):
             "name": "memory_store",
             "args": {
                 "domain": "pi-agent",
-                "content": "PI panel roundtrip probe memory",
+                "name": "roundtrip-probe",
+                "description": "PI panel roundtrip probe memory",
+                "type": "convention",
+                "classification": "tactical",
             },
         },
     )

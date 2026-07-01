@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.25"
+PRISM_VERSION = "6.7.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.26: PI — omnipresent left-rail agent (task 711d5235). "
+    "The rail gains NAV|PI tabs (first Tabs primitive in ui.tsx); the PI tab hosts "
+    "a persistent chat panel on pi-agent-core + pi-ai (@earendil-works 0.80.3, MIT) "
+    "running a LOCAL small model (default ollama/qwen2.5-coder:7b) with self tool "
+    "calling through the new whitelisted POST /api/agent/tool (in-process "
+    "handle_tool dispatch), collapsed->expandable tool receipts, a model picker "
+    "chip (G5 telemetry: per-exchange model+success ring), and an explicit "
+    "'learn this' memory_store affordance. Rail widens 240->360 while PI is "
+    "active; conversation survives navigation (panel mounted outside Routes). "
     "SELF-IMPROVE-FORK v6.7.25: daemon + supervisor spawn with CREATE_NO_WINDOW "
     "instead of DETACHED_PROCESS — a console-less daemon made every worker "
     "subprocess (claude -p, git) flash a visible conhost window; a hidden "

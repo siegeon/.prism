@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Brain, Eye, FolderTree, Info,
@@ -11,6 +11,11 @@ import { useProject } from "@/lib/project";
 import { useScanActivity } from "@/lib/scan-activity";
 import { useVersion } from "@/lib/version";
 import { cn } from "@/lib/utils";
+import { Tabs } from "@/components/ui";
+
+// Code-split: the pi runtime (pi-ai + pi-agent-core) loads only when the PI
+// tab is first opened — the NAV-only user never pays for it.
+const PiAgentPanel = lazy(() => import("@/components/pi/PiAgentPanel"));
 
 type StaleKey = "understand" | "graph" | "brain";
 
@@ -113,6 +118,9 @@ function useStaleness(project: string): Staleness {
 }
 
 
+type RailTab = "nav" | "pi";
+const RAIL_TAB_KEY = "prism.pi.railTab";
+
 export default function Sidebar() {
   const [project] = useProject();
   const stale = useStaleness(project);
@@ -120,6 +128,22 @@ export default function Sidebar() {
   const version = useVersion();
   const { pathname } = useLocation();
   const inSettings = pathname.startsWith("/settings");
+
+  // Rail tab: Agent (the omnipresent assistant, task 711d5235 — the
+  // DEFAULT) | Nav (the classic navigation). The choice survives reloads;
+  // the agent's conversation survives route changes because this component
+  // lives OUTSIDE <Routes> and the panel stays mounted (display-toggled,
+  // never unmounted) once opened.
+  const [railTab, setRailTab] = useState<RailTab>(() => {
+    try { return localStorage.getItem(RAIL_TAB_KEY) === "nav" ? "nav" : "pi"; }
+    catch { return "pi"; }
+  });
+  const [piOpened, setPiOpened] = useState(railTab === "pi");
+  const switchTab = (tab: RailTab) => {
+    setRailTab(tab);
+    if (tab === "pi") setPiOpened(true);
+    try { localStorage.setItem(RAIL_TAB_KEY, tab); } catch { /* best-effort */ }
+  };
 
   // Top item is always Dashboard. Below it: either Knowledge + Activity
   // (default) or the Settings categories (when in /settings/*). The
@@ -130,12 +154,48 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className="w-[240px] shrink-0 flex flex-col border-r border-[color:var(--border-default)] bg-[color:var(--surface-1)]">
+    <aside
+      className={cn(
+        "shrink-0 flex flex-col border-r border-[color:var(--border-default)] bg-[color:var(--surface-1)]",
+        "transition-[width] duration-300",
+        railTab === "pi" ? "w-[360px]" : "w-[240px]",
+      )}
+    >
       <div className="h-[80px] px-5 flex flex-col justify-center border-b border-[color:var(--border-default)]">
         <div className="font-serif text-2xl leading-none tracking-tight text-[color:var(--text-primary)]">PRISM</div>
         <div className="font-serif text-xl leading-none tracking-tight text-[color:var(--text-secondary)] mt-1">SERVICE</div>
       </div>
-      <nav className="flex-1 overflow-y-auto py-3">
+      <div className="border-b border-[color:var(--border-default)]">
+        <Tabs<RailTab>
+          className="rounded-none border-0 bg-transparent p-0 w-full"
+          segmentClassName="py-2.5 rounded-none"
+          value={railTab}
+          onChange={switchTab}
+          items={[
+            {
+              key: "pi",
+              label: (
+                <>
+                  <span>Agent</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent-emerald-fg)]" />
+                </>
+              ),
+              title: "The omnipresent PRISM agent (local small model)",
+            },
+            { key: "nav", label: "Nav" },
+          ]}
+        />
+      </div>
+      {piOpened && (
+        <div className={cn("flex-1 min-h-0 flex-col", railTab === "pi" ? "flex" : "hidden")}>
+          <Suspense
+            fallback={<div className="p-4 text-xs text-[color:var(--text-muted)] animate-pulse">loading PI…</div>}
+          >
+            <PiAgentPanel />
+          </Suspense>
+        </div>
+      )}
+      <nav className={cn("flex-1 overflow-y-auto py-3", railTab === "pi" && "hidden")}>
         {sections.map((section, i) => (
           // Match the divider style used between Settings and the version
           // footer below — same border-default line + same py-3 spacing —

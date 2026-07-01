@@ -74,8 +74,13 @@ def test_markdown_parses_structured_blocks():
     # Unordered lists as real <ul>/<li>, not a run-on paragraph.
     assert "<ul" in md and "<li" in md, "FR-2: lists must render as <ul>/<li>"
     assert "<p" in md, "FR-2: paragraphs must render as <p> blocks"
-    # Inline `code` and **bold**.
-    assert "<code" in md, "FR-2: inline `code` spans must render as <code>"
+    # Inline `code` and **bold**. Backtick spans render through XrefLink
+    # (cb3295a xref cross-linking) — the <code> element itself moved into
+    # XrefLink.tsx, so follow the seam: Markdown must emit XrefLink for
+    # code chips, and XrefLink must still render a real <code>.
+    assert "XrefLink" in md, "FR-2: inline `code` spans must render via XrefLink"
+    xref = _read(_MARKDOWN.parent / "XrefLink.tsx")
+    assert "<code" in xref, "FR-2: XrefLink must render code chips as <code>"
     assert "<strong" in md, "FR-2: **bold** must render as <strong>"
     # The heading/list/bold detection regexes carried over from the block parser.
     assert "^#" in md or r"#\s" in md, "FR-2: heading regex must be present"

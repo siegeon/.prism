@@ -77,6 +77,24 @@ def test_okf_concept_includes_backlinks_list(client):
 
 
 def test_okf_concept_links_use_memory_id_and_understand_routes(client):
+    # Deterministic on ANY store (a young project has no [[wikilink]]-carrying
+    # memories): seed a linked pair through the PI agent tool passthrough —
+    # the same whitelisted memory_store the left-rail agent uses (711d5235).
+    for name, description in (
+        ("okf-link-target", "Link-target probe for OKF navigability."),
+        ("okf-link-source",
+         "Probes that OKF bodies produce navigable links to [[okf-link-target]]."),
+    ):
+        r = client.post(
+            "/api/agent/tool",
+            params={"project": "prism"},
+            json={"name": "memory_store", "args": {
+                "domain": "okf-test", "name": name, "description": description,
+                "type": "convention", "classification": "tactical",
+            }},
+        )
+        assert r.status_code == 200, r.text
+
     idx = client.get("/api/okf/index", params={"project": "prism"}).json()
     paths = [p for p in idx["paths"] if p.startswith("/memory/")]
     assert paths
