@@ -3,15 +3,31 @@
  *
  * Renders the pi-agent-core event stream folded by lib/piAgent.ts: user and
  * assistant bubbles (Markdown bodies), one-line collapsed tool-call rows that
- * click-expand to their receipt (progressive disclosure — never a wall of
- * text), a model status chip + picker, and the explicit "learn this"
- * self-learning affordance. Inference is local-only; the footer says so.
+ * click-expand to per-tool renderers (progressive disclosure — never a wall
+ * of text), a model status chip + picker, per-exchange token stats, and the
+ * explicit "learn this" self-learning affordance. Inference is local-only;
+ * the footer says so.
+ *
+ * Rendering architecture — structure borrowed from @earendil-works/pi-web-ui
+ * (MIT, Mario Zechner), reimplemented for React/Hermes: settled transcript
+ * items live in a memoized list that only re-renders on structural changes
+ * (item count / a settled item), while the in-flight assistant text streams
+ * through an isolated component on the store's dedicated stream channel —
+ * no full-transcript re-render per token.
  *
  * pi toolkit: https://github.com/badlogic/pi-mono (MIT, Mario Zechner).
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ChevronDown, ChevronRight, Hexagon, Send, Sparkles } from "lucide-react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { ChevronDown, ChevronRight, Hexagon, Send, Sparkles, Square } from "lucide-react";
 import Markdown from "@/components/Markdown";
+import { TOOL_RENDERERS, prettyReceipt } from "@/components/pi/toolRenderers";
 import { useProject } from "@/lib/project";
 import { cn } from "@/lib/utils";
 import {
@@ -29,20 +45,23 @@ export default function PiAgentPanel() {
   useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion);
   const items = store.snapshot();
 
-  const [draft, setDraft] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Stable/streaming split: while an assistant message is in flight it is
+  // rendered by <StreamingBubble> off the stream channel; everything before
+  // it is the settled, memoized transcript.
+  const tail = items[items.length - 1];
+  const streaming = store.busy && tail?.kind === "assistant" && !tail.done;
+  const settled = useMemo(
+    () => (streaming ? items.slice(0, -1) : items),
+    [items, streaming],
+  );
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [items.length, store.busy]);
-
-  const send = (text: string) => {
-    if (!text.trim() || store.busy) return;
-    setDraft("");
-    void store.send(text);
-  };
+  }, [items, store.busy]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -60,7 +79,7 @@ export default function PiAgentPanel() {
                 <button
                   key={s}
                   type="button"
-                  onClick={() => send(s)}
+                  onClick={() => { if (!store.busy) void store.send(s); }}
                   className="text-left px-2.5 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--surface-3)] transition-colors text-xs"
                 >
                   {s}
@@ -69,10 +88,9 @@ export default function PiAgentPanel() {
             </div>
           </div>
         )}
-        {items.map((item, i) => (
-          <PiItemRow key={i} item={item} index={i} store={store} />
-        ))}
-        {store.busy && items[items.length - 1]?.kind !== "assistant" && (
+        <SettledList items={settled} store={store} />
+        {streaming && <StreamingBubble store={store} />}
+        {store.busy && !streaming && (
           <div className="px-2 py-1 text-xs text-[color:var(--text-muted)] animate-pulse">thinking…</div>
         )}
         {store.lastError && (
@@ -82,29 +100,126 @@ export default function PiAgentPanel() {
         )}
       </div>
 
-      <div className="border-t border-[color:var(--border-default)] p-2.5 space-y-1.5">
-        <form
-          className="flex items-center gap-1.5"
-          onSubmit={(e) => { e.preventDefault(); send(draft); }}
-        >
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Ask about this project…"
-            className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-sm bg-[color:var(--surface-0)] border border-[color:var(--border-default)] text-[color:var(--text-primary)] placeholder:text-[color:var(--text-disabled)] focus:outline-none focus:border-[color:var(--border-strong)]"
-          />
+      <Composer store={store} busy={store.busy} />
+    </div>
+  );
+}
+
+/**
+ * Settled transcript — memoized so it re-renders ONLY when the settled items
+ * array is replaced (the store recreates it exclusively on structural emits:
+ * item added, tool status change, exchange finished). Token-level streaming
+ * never touches this list.
+ */
+const SettledList = memo(function SettledList({
+  items, store,
+}: {
+  items: PiItem[];
+  store: PiStore;
+}) {
+  return (
+    <>
+      {items.map((item, i) => (
+        <PiItemRow key={i} item={item} index={i} store={store} />
+      ))}
+    </>
+  );
+});
+
+/**
+ * In-flight assistant text, isolated on the store's stream channel: each
+ * message_update fold bumps only the stream version, so this bubble is the
+ * ONLY component that re-renders per token.
+ */
+function StreamingBubble({ store }: { store: PiStore }) {
+  useSyncExternalStore(store.subscribeStream, store.getStreamVersion, store.getStreamVersion);
+  const text = store.streamingText;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { ref.current?.scrollIntoView({ block: "nearest" }); }, [text]);
+  return (
+    <div ref={ref} className="max-w-[96%] px-3 py-2 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-subtle)]">
+      {text
+        ? <Markdown text={text} className="space-y-2" />
+        : <span className="text-xs text-[color:var(--text-muted)] animate-pulse">…</span>}
+    </div>
+  );
+}
+
+/** True when the browser auto-grows the textarea natively. */
+const FIELD_SIZING_SUPPORTED =
+  typeof CSS !== "undefined" && typeof CSS.supports === "function" &&
+  CSS.supports("field-sizing", "content");
+
+/**
+ * Input editor (pi-web-ui behavior): auto-growing textarea — CSS
+ * `field-sizing: content` where supported, scrollHeight JS fallback where
+ * not — Enter sends, Shift+Enter inserts a newline, and the send button
+ * becomes a stop button (agent.abort()) while a run is in flight. Draft
+ * state is local so typing never re-renders the transcript.
+ */
+function Composer({ store, busy }: { store: PiStore; busy: boolean }) {
+  const [draft, setDraft] = useState("");
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (FIELD_SIZING_SUPPORTED) taRef.current?.style.setProperty("field-sizing", "content");
+  }, []);
+
+  const autoGrow = () => {
+    const el = taRef.current;
+    if (!el || FIELD_SIZING_SUPPORTED) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  };
+
+  const send = () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft("");
+    const el = taRef.current;
+    if (el && !FIELD_SIZING_SUPPORTED) el.style.height = "auto";
+    void store.send(text);
+  };
+
+  return (
+    <div className="border-t border-[color:var(--border-default)] p-2.5 space-y-1.5">
+      <form
+        className="flex items-end gap-1.5"
+        onSubmit={(e) => { e.preventDefault(); send(); }}
+      >
+        <textarea
+          ref={taRef}
+          rows={1}
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); autoGrow(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+          }}
+          placeholder="Ask about this project…"
+          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md text-sm resize-none max-h-32 overflow-y-auto bg-[color:var(--surface-0)] border border-[color:var(--border-default)] text-[color:var(--text-primary)] placeholder:text-[color:var(--text-disabled)] focus:outline-none focus:border-[color:var(--border-strong)]"
+        />
+        {busy ? (
+          <button
+            type="button"
+            onClick={() => store.abort()}
+            title="Stop"
+            className="p-2 rounded-md border border-[color:var(--accent-rose-ring)] text-[color:var(--accent-rose-fg)] hover:bg-[color:var(--accent-rose-bg)] transition-colors"
+          >
+            <Square className="w-3.5 h-3.5" />
+          </button>
+        ) : (
           <button
             type="submit"
-            disabled={store.busy || !draft.trim()}
+            disabled={!draft.trim()}
             title="Send"
             className="p-2 rounded-md border border-[color:var(--border-default)] text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--surface-2)] disabled:opacity-40 disabled:pointer-events-none transition-colors"
           >
             <Send className="w-3.5 h-3.5" />
           </button>
-        </form>
-        <div className="px-0.5 text-[10px] uppercase tracking-wider text-[color:var(--text-disabled)]">
-          inference: local · 0 tokens sent to cloud
-        </div>
+        )}
+      </form>
+      <div className="px-0.5 text-[10px] uppercase tracking-wider text-[color:var(--text-disabled)]">
+        inference: local · 0 tokens sent to cloud
       </div>
     </div>
   );
@@ -197,20 +312,31 @@ function PiItemRow({ item, index, store }: { item: PiItem; index: number; store:
             : <span className="text-xs text-[color:var(--text-muted)] animate-pulse">…</span>}
         </div>
         {item.done && item.text && (
-          <button
-            type="button"
-            disabled={item.learned || item.learning}
-            onClick={() => void store.learn(index)}
-            className={cn(
-              "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider transition-colors",
-              item.learned
-                ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]"
-                : "text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-2)]",
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={item.learned || item.learning}
+              onClick={() => void store.learn(index)}
+              className={cn(
+                "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider transition-colors",
+                item.learned
+                  ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] ring-1 ring-inset ring-[color:var(--accent-emerald-ring)]"
+                  : "text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-2)]",
+              )}
+            >
+              <Sparkles className="w-3 h-3" />
+              {item.learned ? "in memory" : item.learning ? "storing…" : "learn this"}
+            </button>
+            {item.stats && (
+              <span
+                className="text-[10px] font-mono text-[color:var(--text-muted)]"
+                title={item.stats.estimated ? "estimated (text length / 4 — no usage in stream)" : "reported by the model stream"}
+              >
+                ↑{item.stats.input} ↓{item.stats.output} tok · {item.stats.seconds.toFixed(1)}s
+                {item.stats.estimated ? " ~" : ""}
+              </span>
             )}
-          >
-            <Sparkles className="w-3 h-3" />
-            {item.learned ? "in memory" : item.learning ? "storing…" : "learn this"}
-          </button>
+          </div>
         )}
       </div>
     );
@@ -221,10 +347,16 @@ function PiItemRow({ item, index, store }: { item: PiItem; index: number; store:
   );
 }
 
-/** One-line collapsed tool receipt; click to expand (progressive disclosure). */
+/** One-line collapsed tool receipt; click to expand (progressive disclosure).
+ * The expanded body goes through the per-tool renderer registry
+ * (toolRenderers.tsx); unknown tools / unexpected shapes fall back to the
+ * raw mono receipt. */
 function ToolRow({ item }: { item: Extract<PiItem, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
   const argSummary = summarize(item.args);
+  const custom = open && item.status === "ok"
+    ? TOOL_RENDERERS.get(item.name)?.(item.result) ?? null
+    : null;
   return (
     <div className="mx-1">
       <button
@@ -248,11 +380,17 @@ function ToolRow({ item }: { item: Extract<PiItem, { kind: "tool" }> }) {
         </span>
       </button>
       {open && item.status !== "running" && (
-        <div className="mt-1 mb-1 mx-1 px-2.5 py-2 rounded-md bg-[color:var(--surface-0)] border border-[color:var(--border-default)] max-h-48 overflow-y-auto">
-          <div className="text-[10px] leading-relaxed font-mono text-[color:var(--text-secondary)] whitespace-pre-wrap break-words">
-            {pretty(item.result)}
+        custom != null ? (
+          <div className="mt-1 mb-1 mx-1 rounded-md bg-[color:var(--surface-1)] border border-[color:var(--border-subtle)] p-1 max-h-64 overflow-y-auto">
+            {custom}
           </div>
-        </div>
+        ) : (
+          <div className="mt-1 mb-1 mx-1 px-2.5 py-2 rounded-md bg-[color:var(--surface-0)] border border-[color:var(--border-default)] max-h-48 overflow-y-auto">
+            <div className="text-[10px] leading-relaxed font-mono text-[color:var(--text-secondary)] whitespace-pre-wrap break-words">
+              {prettyReceipt(item.result)}
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -265,15 +403,4 @@ function summarize(args: unknown): string {
   );
   const s = vals.join(", ");
   return s.length > 40 ? `${s.slice(0, 40)}…` : s;
-}
-
-function pretty(value: unknown): string {
-  if (value == null) return "(no result)";
-  if (typeof value === "string") return value;
-  try {
-    const s = JSON.stringify(value, null, 2);
-    return s.length > 4000 ? `${s.slice(0, 4000)}\n…(truncated)` : s;
-  } catch {
-    return String(value);
-  }
 }

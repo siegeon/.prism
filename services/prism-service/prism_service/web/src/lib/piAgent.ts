@@ -9,6 +9,10 @@
  * Inference is browser -> LOCAL endpoint only (default Ollama :11434); no
  * cloud key exists anywhere in this path (INV-1). The agent's tool calls go
  * through PRISM's whitelisted passthrough POST /api/agent/tool.
+ *
+ * Stable/streaming split, per-exchange usage stats, abort, and session
+ * restore: structure borrowed from @earendil-works/pi-web-ui (MIT, Mario
+ * Zechner), reimplemented for React/Hermes.
  */
 
 import {
@@ -23,6 +27,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { api } from "@/lib/api";
+import { clearSession, loadSession, saveSession } from "@/components/pi/piSession";
 
 // ---------------------------------------------------------------- config
 
@@ -183,9 +188,14 @@ const SYSTEM_PROMPT = [
 
 // ------------------------------------------------------------ the store
 
+/** Per-exchange token stats (↑input ↓output · seconds). `estimated` marks
+ * the text-length/4 fallback used when the stream reported no usage. */
+export type PiExchangeStats = { input: number; output: number; seconds: number; estimated?: boolean };
+
 export type PiItem =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; done: boolean; learned?: boolean; learning?: boolean }
+  | { kind: "assistant"; text: string; done: boolean; learned?: boolean; learning?: boolean;
+      stats?: PiExchangeStats }
   | { kind: "tool"; callId: string; name: string; label: string; args: unknown;
       status: "running" | "ok" | "error"; result?: unknown; ms?: number }
   | { kind: "note"; text: string };
@@ -214,6 +224,20 @@ export class PiStore {
   private interceptBudget = 0;
   /** True while feeding a synthetic tool-result message back to the model. */
   private injecting = false;
+  /** True between abort() and the agent_end it forces. */
+  private stopping = false;
+
+  // Streaming channel (pi-web-ui split): message_update token folds notify
+  // ONLY these listeners; the settled/global channel stays quiet, so the
+  // memoized transcript list never re-renders per token.
+  private streamListeners = new Set<() => void>();
+  private streamVersion = 0;
+
+  // Per-exchange accounting (pi-web-ui stats line): wall-clock from the
+  // run's first agent_start, usage summed over every assistant message_end
+  // in the run (a run can span tool turns + the text-tool-call injection).
+  private runStart = 0;
+  private runUsage = { input: 0, output: 0 };
 
   constructor(project: string) {
     this._project = project;
@@ -233,6 +257,40 @@ export class PiStore {
     });
     this.agent.subscribe((event) => this.onEvent(event));
     void this.probe();
+    void this.rehydrate();
+  }
+
+  /**
+   * Restore the last saved conversation for this project (pi-web-ui-style
+   * session persistence). DISPLAY-LEVEL ONLY by design: the items reappear
+   * but the agent's LLM context restarts fresh — good enough for a left-rail
+   * assistant, and it avoids replaying stale tool receipts into a small
+   * local model. Skipped if an exchange already started while loading.
+   */
+  private async rehydrate() {
+    try {
+      const snap = await loadSession(this._project);
+      if (!snap?.items?.length) return;
+      if (this.items.length > 0 || this.busy) return; // live conversation wins
+      this.items = snap.items.map((it): PiItem => {
+        if (it.kind === "assistant") return { ...it, done: true, learning: false };
+        if (it.kind === "tool" && it.status === "running") {
+          return { ...it, status: "error", result: "(interrupted by reload)" };
+        }
+        return it;
+      });
+      this.emit();
+    } catch { /* a lost session is never an error */ }
+  }
+
+  /** Persist the display items + minimal agent context (model id). Called
+   * on agent_end, when nothing is in flight — items are settled. */
+  private persist() {
+    void saveSession(this._project, {
+      items: this.items,
+      modelId: this.cfg.modelId,
+      savedAt: Date.now(),
+    });
   }
 
   get project(): string { return this._project; }
@@ -249,9 +307,14 @@ export class PiStore {
    * which is correct: that is where the exchange actually began.
    */
   rekey(project: string) {
+    const old = this._project;
     this._project = project;
     this.tools = buildTools(project);
     this.agent.state.tools = this.tools;
+    // Move the persisted session with the store: future saves target the
+    // promoted project; the old key must not rehydrate a stale twin later.
+    this.persist();
+    void clearSession(old);
     this.emit();
   }
 
@@ -264,6 +327,19 @@ export class PiStore {
     this.version++;
     this.items = [...this.items];
     for (const fn of this.listeners) fn();
+  }
+
+  // -- streaming channel (in-flight assistant text only)
+  subscribeStream = (fn: () => void) => { this.streamListeners.add(fn); return () => { this.streamListeners.delete(fn); }; };
+  getStreamVersion = () => this.streamVersion;
+  /** Text of the assistant message currently being streamed ("" when idle). */
+  get streamingText(): string {
+    const last = [...this.items].reverse().find((i) => i.kind === "assistant");
+    return last && last.kind === "assistant" && !last.done ? last.text : "";
+  }
+  private emitStream() {
+    this.streamVersion++;
+    for (const fn of this.streamListeners) fn();
   }
 
   /** Reachability probe for the model chip's status dot. */
@@ -297,6 +373,15 @@ export class PiStore {
       this.busy = false;
       this.emit();
     }
+  }
+
+  /** Stop the in-flight run (the composer's stop button). agent.abort()
+   * forces a stopReason:"aborted" agent_end, which resets busy and folds
+   * whatever streamed so far into the transcript as a settled item. */
+  abort() {
+    if (!this.busy) return;
+    this.stopping = true;
+    try { this.agent.abort(); } catch { this.stopping = false; }
   }
 
   /** If the final assistant text IS a JSON tool call for a known tool,
@@ -381,6 +466,7 @@ export class PiStore {
       Object.assign(item, { learning: false });
       this.items.push({ kind: "note", text: `memory_store failed: ${e instanceof Error ? e.message : e}` });
     }
+    this.persist(); // the "in memory" badge should survive a reload
     this.emit();
   }
 
@@ -390,21 +476,40 @@ export class PiStore {
   private onEvent(event: Parameters<Parameters<Agent["subscribe"]>[0]>[0]) {
     switch (event.type) {
       case "agent_start":
+        // A fresh exchange (busy=false here) resets the stats clock; the
+        // text-tool-call injection re-enters with busy=true and keeps
+        // accumulating into the SAME exchange.
+        if (!this.busy) {
+          this.runStart = performance.now();
+          this.runUsage = { input: 0, output: 0 };
+        }
         this.busy = true;
         break;
       case "agent_end": {
         this.busy = false;
-        const err = this.agent.state.errorMessage;
+        const stopped = this.stopping;
+        this.stopping = false;
+        const err = stopped ? "" : this.agent.state.errorMessage;
         if (err) this.lastError = err;
         // Small-model resilience (senpi-style, the G5 reality): weak local
         // stacks emit the tool call as PLAIN JSON TEXT instead of a native
         // tool_call (seen live: Ollama 0.30.7 + qwen2.5-coder). Intercept
         // it, execute the tool app-side, feed the result back as a new turn.
-        if (!err && this.tryInterceptTextToolCall()) return;
+        if (!err && !stopped && this.tryInterceptTextToolCall()) return;
         this.interceptBudget = 0;
-        const last = this.items[this.items.length - 1];
-        if (last?.kind === "assistant") last.done = true;
+        const last = [...this.items].reverse().find((i) => i.kind === "assistant");
+        if (last && last.kind === "assistant") {
+          last.done = true;
+          if (last.text) last.stats = this.finishStats(last.text);
+        }
+        if (stopped) {
+          // Drop an empty aborted bubble; leave a quiet note instead.
+          const tail = this.items[this.items.length - 1];
+          if (tail?.kind === "assistant" && !tail.text) this.items.pop();
+          this.items.push({ kind: "note", text: "stopped" });
+        }
         this.recordTelemetry(!err);
+        this.persist();
         break;
       }
       case "message_start": {
@@ -423,12 +528,22 @@ export class PiStore {
         if ((event.message as { role?: string }).role !== "assistant") break;
         const last = [...this.items].reverse().find((i) => i.kind === "assistant");
         if (last && last.kind === "assistant") last.text = messageText(event.message);
-        break;
+        // Token folds notify ONLY the streaming channel: the settled list
+        // (keyed off items identity) must not re-render per token.
+        this.emitStream();
+        return;
       }
       case "message_end": {
         if ((event.message as { role?: string }).role !== "assistant") break;
         const last = [...this.items].reverse().find((i) => i.kind === "assistant");
         if (last && last.kind === "assistant") last.text = messageText(event.message);
+        // pi-ai 0.80: the completed AssistantMessage carries Usage
+        // ({ input, output, totalTokens, ... }) — sum it per exchange.
+        const usage = (event.message as { usage?: { input?: number; output?: number } }).usage;
+        if (usage) {
+          this.runUsage.input += usage.input ?? 0;
+          this.runUsage.output += usage.output ?? 0;
+        }
         break;
       }
       case "tool_execution_start":
@@ -453,6 +568,22 @@ export class PiStore {
         return; // turn_start/turn_end etc — no display impact
     }
     this.emit();
+  }
+
+  /** Close the exchange's stats. Local stacks that omit stream usage
+   * (stream_options quirks) get the classic length/4 token estimate. */
+  private finishStats(answerText: string): PiExchangeStats {
+    const seconds = this.runStart ? (performance.now() - this.runStart) / 1000 : 0;
+    if (this.runUsage.input > 0 || this.runUsage.output > 0) {
+      return { input: this.runUsage.input, output: this.runUsage.output, seconds };
+    }
+    const lastUser = [...this.items].reverse().find((i) => i.kind === "user");
+    return {
+      input: Math.ceil((lastUser?.kind === "user" ? lastUser.text.length : 0) / 4),
+      output: Math.ceil(answerText.length / 4),
+      seconds,
+      estimated: true,
+    };
   }
 
   /** G5 feed: per-exchange model id + tool-loop success (localStorage ring). */
