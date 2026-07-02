@@ -71,7 +71,10 @@ def test_parent_id_independent_of_dependencies(tmp_path):
     fields and don't bleed into each other."""
     svc = _mk_service(tmp_path)
     epic = svc.create(title="epic")
-    child = svc.create(title="child", parent_id=epic.id, dependencies=["x"])
+    # Dependencies must name existing tasks (47d0179a) — use a real one.
+    dep = svc.create(title="blocking work")
+    child = svc.create(
+        title="child", parent_id=epic.id, dependencies=[dep.id])
     got = svc.get(child.id)
     assert got.parent_id == epic.id
-    assert got.dependencies == ["x"]
+    assert got.dependencies == [dep.id]

@@ -318,6 +318,59 @@ class TaskService:
             chain.append(ancestor)
             cursor = ancestor
 
+    def _validate_dependencies(self, dependencies: object,
+                               task_id: Optional[str] = None) -> None:
+        """Dependency-link integrity (task 47d0179a). Mirrors
+        :meth:`_validate_parent`: every dependency id must (1) be a
+        non-empty string naming an existing task, (2) not be the task
+        itself, and (3) not close a dependency cycle through the task —
+        each new dep's transitive dependency chain is walked with a
+        visited-guard so pre-existing corrupt cycles in stored rows
+        terminate the walk instead of hanging it. ``task_id`` is None on
+        create (a fresh id can never be in an existing chain, so only
+        existence/emptiness applies). Raises ValueError; both doors ride
+        the existing translators (api/tasks.py -> 422, MCP -> in-band)."""
+        if dependencies is None:
+            return
+        if not isinstance(dependencies, (list, tuple)):
+            raise ValueError("dependencies must be a list of task ids")
+        deps = [str(d or "") for d in dependencies]
+        for dep in deps:
+            if not dep.strip():
+                raise ValueError(
+                    "dependencies must not contain empty ids")
+            if task_id is not None and dep == task_id:
+                raise ValueError(
+                    f"task {task_id} cannot depend on itself")
+            if self.get(dep) is None:
+                raise ValueError(
+                    f"dependency task {dep!r} does not exist")
+        if task_id is None:
+            return
+        # Cycle walk: from each new dep, follow stored dependency lists;
+        # reaching task_id means this update would close a cycle.
+        stack = list(deps)
+        visited: set[str] = set()
+        while stack:
+            cur = stack.pop()
+            if cur == task_id:
+                raise ValueError(
+                    "dependencies would create a cycle: task "
+                    f"{task_id} is (transitively) a dependency of "
+                    "its own dependencies")
+            if cur in visited:
+                continue  # pre-existing corrupt cycle — not ours to close
+            visited.add(cur)
+            row = self._db.execute(
+                "SELECT dependencies FROM tasks WHERE id = ?", (cur,)
+            ).fetchone()
+            raw = (row["dependencies"] or "[]") if row else "[]"
+            try:
+                nxt = json.loads(raw)
+            except (ValueError, TypeError):
+                nxt = []
+            stack.extend(str(x) for x in (nxt or []) if x)
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
@@ -351,6 +404,7 @@ class TaskService:
         """
         self._validate_title(title)
         self._validate_parent(parent_id)
+        self._validate_dependencies(dependencies)
         task = Task(
             title=title,
             description=description,
@@ -492,6 +546,9 @@ class TaskService:
             self._validate_title(kwargs["title"])
         if "parent_id" in kwargs:
             self._validate_parent(kwargs["parent_id"], task_id=task_id)
+        if "dependencies" in kwargs:
+            self._validate_dependencies(
+                kwargs["dependencies"], task_id=task_id)
 
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []
