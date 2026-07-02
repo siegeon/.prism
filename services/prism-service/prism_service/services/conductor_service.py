@@ -2321,6 +2321,46 @@ class ConductorService:
                 pass
         return self._now_epoch() - self._in_step_s(task_id)
 
+    def _task_window_end(self, task_id: str) -> float:
+        """End of the task's work window: completed_at for a done/cancelled task
+        (frozen, mirroring _in_step_s), else now. Bounds the shared-session
+        intersection so a finished task's window doesn't keep growing."""
+        if self._task_svc is not None:
+            try:
+                _t = self._task_svc.get(task_id)
+                status = (getattr(_t, "status", "") or "") if _t else ""
+                if status in ("done", "cancelled"):
+                    end = self._parse_iso(getattr(_t, "completed_at", "") or "") if _t else None
+                    if end is not None:
+                        return end
+            except Exception:
+                pass
+        return self._now_epoch()
+
+    def _session_task_count(self, session_id: str) -> int:
+        """How many distinct tasks link `session_id` (via task_sessions). A count
+        > 1 means the session is SHARED — one Claude session driving several
+        concurrent tasks — so its transcript must be windowed per task instead of
+        summed whole (task 03a8bfe3). Returns 1 (treat as exclusive: full span,
+        no windowing — preserves #137) when it can't be determined, so an error
+        never zeroes a young task's tile."""
+        if not session_id:
+            return 1
+        try:
+            conn = self._scores_conn()
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(DISTINCT task_id) FROM task_sessions "
+                    "WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            n = int(row[0]) if row and row[0] is not None else 0
+            return n if n >= 1 else 1
+        except Exception:
+            return 1
+
     @staticmethod
     def _parse_iso(ts: str) -> Optional[float]:
         """ISO-8601 timestamp -> epoch seconds; None if unparseable."""
@@ -2560,33 +2600,64 @@ class ConductorService:
                 live_enabled = bool(source_path or override_dir)
                 live_fn = None
                 events_fn = None
+                windowed_fn = None
                 turns_from = None
                 if live_enabled:
                     from prism_service.services.claude_transcripts import (
                         live_tokens_for_session as live_fn,
                         live_token_events_for_session as events_fn,
+                        live_token_events_for_session_windowed as windowed_fn,
                         token_turns_from_events as turns_from,
                     )
                 # Build the FULL uncapped per-turn event timeline across the
                 # task's live sessions; total_turns is computed off the UNCAPPED
                 # series so `turns` stays honest even past the 40-turn tail cap.
+                #
+                # SHARED-SESSION WINDOWING (task 03a8bfe3): when a session is
+                # linked by MORE than one task (one Claude session driving
+                # several concurrent tiles), summing its whole transcript makes
+                # every tile render IDENTICAL turns/burn. So a shared session is
+                # intersected with THIS task's work window
+                # [_task_window_start, _task_window_end]; an EXCLUSIVE session
+                # keeps its full span (turns before the task's first history row
+                # still count — #137 young-task semantics preserved). A shared
+                # session also drops the whole-session session_outcomes.tokens_
+                # used (it would re-leak the bug post-import); only its windowed
+                # live turns count.
+                win_start = self._task_window_start(task_id)
+                win_end = self._task_window_end(task_id)
                 live_events: list[tuple[float, int]] = []
                 for s in self._task_svc.sessions_for_task(task_id):
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
                     outcome_tok = int(used or 0)
-                    live_tok = 0
-                    if live_fn and sid:
+                    shared = sid and self._session_task_count(sid) > 1
+                    session_events: list[tuple[float, int]] = []
+                    if shared and windowed_fn and sid:
                         try:
-                            live_tok = int(live_fn(sid, source_path, override_dir=override_dir) or 0)
+                            session_events = list(windowed_fn(
+                                sid, source_path, win_start, win_end,
+                                override_dir=override_dir) or [])
                         except Exception:
-                            live_tok = 0
-                    tokens += max(outcome_tok, live_tok)
-                    if events_fn and sid:
-                        try:
-                            live_events.extend(events_fn(sid, source_path, override_dir=override_dir) or [])
-                        except Exception:
-                            pass
+                            session_events = []
+                        # Windowed sessions count ONLY their in-window live turns
+                        # (never the whole-session outcome total — that leaks).
+                        tokens += sum(tok for _, tok in session_events)
+                    else:
+                        if events_fn and sid:
+                            try:
+                                session_events = list(events_fn(
+                                    sid, source_path, override_dir=override_dir) or [])
+                            except Exception:
+                                session_events = []
+                        live_tok = sum(tok for _, tok in session_events)
+                        if not session_events and live_fn and sid:
+                            try:
+                                live_tok = int(live_fn(sid, source_path, override_dir=override_dir) or 0)
+                            except Exception:
+                                live_tok = 0
+                        tokens += max(outcome_tok, live_tok)
+                    live_events.extend(session_events)
                 live_events.sort(key=lambda e: e[0])
                 # PER-TASK-EXCLUSIVE (owner decision, task 5ecbbfb8): the tile
                 # shows ONLY this task's authoritative linked-session activity.

@@ -928,6 +928,30 @@ def live_token_events_for_session(
     return out
 
 
+def live_token_events_for_session_windowed(
+    session_id: str, project_path: str, since: float, until: float,
+    claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> list[tuple[float, int]]:
+    """Like live_token_events_for_session, but INTERSECTED with the wall-clock
+    window [since, until] (inclusive both bounds), sorted ascending. Empty on an
+    inverted window (until < since) or when no in-window turn is found.
+
+    This is what the conductor windows a SHARED driving session through: N
+    concurrent tasks link the SAME session id, so summing the whole transcript
+    made every tile render IDENTICAL turns/burn (task 03a8bfe3). Each task
+    intersects the shared session with its OWN work window instead. Reads the
+    same flat <sid>.jsonl + nested <sid>/ subagent layout as the full reader and
+    reuses the per-file (mtime,size) `_token_events` cache, so windowing one
+    shared session across N tasks in a poll costs a single parse per file."""
+    if until < since:
+        return []
+    events = live_token_events_for_session(
+        session_id, project_path, claude_home=claude_home, override_dir=override_dir
+    )
+    return [(ep, tok) for ep, tok in events if since <= ep <= until]
+
+
 def project_token_events_in_window(
     project_path: str, since: float, until: float,
     claude_home: Path | None = None,
