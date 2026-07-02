@@ -934,8 +934,51 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       // the hoverNodes canvas — both stay visible, so without this
       // skip the smaller regular label bleeds through under the
       // bigger hover label and reads as jumbled doubled text.
+      // Super-node label collision avoidance. The <=5 L0 (and L1/L2)
+      // super-node labels force-render — labelDensity is bypassed for them
+      // (see nodeReducer, level < 3) — so once FA2 packs the clusters into
+      // the centre their labels overprint ('PRISM Service Core' over
+      // 'Devtools Validation Suite'). We keep a per-frame accumulator of the
+      // label rectangles already painted and nudge each super-node label off
+      // any it would collide with (below the node first, then above, in
+      // half-line steps) — mirroring the /understand concept graph, whose
+      // labels sit clear of the node and each other. Reset every frame via
+      // the renderer's 'beforeRender' hook so rects never leak across frames.
+      const superLabelRects = [];
+      const labelRectsOverlap = (a, b) =>
+        !(a.x2 < b.x1 || b.x2 < a.x1 || a.y2 < b.y1 || b.y2 < a.y1);
+      // Returns a vertical offset (px) that clears prior super-node labels.
+      const deconflictSuperLabelY = (ctx, d, baseSize) => {
+        const w = ctx.measureText(d.label).width;
+        const h = baseSize;
+        const x1 = d.x + d.size + 4;
+        const step = h * 0.95;
+        const tries = [0, step, -step, 2 * step, -2 * step,
+                       3 * step, -3 * step, 4 * step, -4 * step];
+        for (const dy of tries) {
+          const y = d.y + dy;
+          const r = { x1, x2: x1 + w, y1: y - h / 2, y2: y + h / 2 };
+          if (!superLabelRects.some(p => labelRectsOverlap(r, p))) {
+            superLabelRects.push(r);
+            return dy;
+          }
+        }
+        return tries[tries.length - 1];
+      };
       const drawNodeLabel = (ctx, d, s) => {
         if (d.__hovered) return;
+        // Deconflict the force-rendered super-node labels (level < 3).
+        if (d.label && d.level !== undefined && d.level < 3) {
+          const baseSize = d.labelSize || s.labelSize || 13;
+          const weight = d.labelWeight || s.labelWeight || "600";
+          const font = s.labelFont || "system-ui, -apple-system, sans-serif";
+          ctx.font = `${weight} ${baseSize}px ${font}`;
+          const dy = deconflictSuperLabelY(ctx, d, baseSize);
+          if (dy) {
+            drawNodeLabelOutlined(ctx, { ...d, y: d.y + dy }, s, 1);
+            return;
+          }
+        }
         drawNodeLabelOutlined(ctx, d, s, 1);
       };
       const drawNodeHover = (ctx, d, s) => drawNodeLabelOutlined(ctx, d, s, 1.15);
@@ -1113,6 +1156,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       // (x: 0.5, y: 0.5) keeps the camera centered on the graph bbox,
       // which is the right framing because the spread pass above places
       // super-nodes radially around the leaf-graph centroid.
+      // Reset the super-node label collision accumulator once per frame so
+      // the placed-rectangle set reflects only THIS render pass (else rects
+      // leak across frames and every label reads as colliding).
+      renderer.on("beforeRender", () => { superLabelRects.length = 0; });
+
       const camera = renderer.getCamera();
       camera.setState({ ratio: 1.8 });
       currentRatio = 1.8;
