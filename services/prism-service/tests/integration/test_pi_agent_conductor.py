@@ -207,8 +207,14 @@ def test_conductor_tools_allowed_without_internal_flag(client, name):
         json={"name": name, "args": {"id": "no-such-task"}},
     )
     assert r.status_code == 200, r.text
-    result = r.json().get("result")
-    assert result is not None, r.text
+    body = r.json()
+    # Task 4f76beb9 refined the passthrough contract: a dispatch that
+    # produces an in-band error (e.g. conductor_gate KeyError on missing
+    # task_id) now surfaces as {ok: false, error} instead of stack noise
+    # under "result". Either shape proves the tool DISPATCHED (never 403).
+    assert body.get("result") is not None or (
+        body.get("ok") is False and body.get("error")
+    ), r.text
 
 
 @pytest.mark.parametrize("name", sorted(

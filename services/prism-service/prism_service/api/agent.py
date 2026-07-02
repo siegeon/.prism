@@ -81,13 +81,54 @@ async def call_tool(
 
     from prism_service.mcp.tools import handle_tool
 
-    contents = await handle_tool(name, args, project_id=project)
+    # Task 4f76beb9 FR-1: an exception ESCAPING the dispatcher is a server
+    # fault, not a tool result — surface it as a clean 500 detail (type +
+    # message only, never a traceback body).
+    try:
+        contents = await handle_tool(name, args, project_id=project)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            500, f"tool dispatch failed: {type(exc).__name__}: {exc}",
+        )
     # handle_tool returns list[TextContent]; tools emit JSON text. Surface
     # it parsed so the panel renders structure, with the raw text as the
     # fallback for non-JSON payloads.
     texts = [getattr(c, "text", "") for c in contents]
     raw = "\n".join(t for t in texts if t)
-    return {"name": name, "result": _parse_payload(texts[0] if texts else ""), "raw": raw}
+    # Task 4f76beb9 FR-2: the MCP layer reports dispatch errors IN-BAND as
+    # a plain 'Error: ...' text (mcp.tools._dispatch_tool catch-all). The
+    # pi agent loop needs a MACHINE-legible error it can repair from, not
+    # stack noise dressed as a result — surface it as ok:false + error.
+    err = _error_message(texts[0] if texts else "")
+    if err is not None:
+        return {"name": name, "ok": False, "error": err}
+    return {
+        "name": name,
+        "ok": True,
+        "result": _parse_payload(texts[0] if texts else ""),
+        "raw": raw,
+    }
+
+
+def _error_message(text: str) -> str | None:
+    """Extract the in-band dispatch-error message, or None for a real
+    result. mcp.tools._dispatch_tool's catch-all emits `Error: <Type>:
+    <msg>` (also `Error: Unknown tool '...'`); handle_tool may prepend the
+    PRISM_REFLECTION_PENDING nudge header (terminated by a `---` line), so
+    strip that before matching. Only a payload that STARTS with the
+    contract prefix counts — JSON results containing 'Error:' are not
+    errors."""
+    body = text or ""
+    first_line = body.split("\n", 1)[0]
+    if "PRISM_REFLECTION_PENDING" in first_line:
+        marker = "\n---\n"
+        if marker in body:
+            body = body.split(marker, 1)[1]
+    if body.startswith("Error: "):
+        return body[len("Error: "):].strip()
+    return None
 
 
 def _parse_payload(text: str):
