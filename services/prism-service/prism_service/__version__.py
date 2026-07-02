@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.33"
+PRISM_VERSION = "6.7.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.34: gate doctrine now HOLDS mechanically. The "
+    "in-daemon Tier0 verifier deselects daemon_exclusive-marked process-"
+    "lifecycle tests (pidfile split-brain, event-burst, learning-loop) that "
+    "flaked only when run as a child of the live daemon (91ac81e8) — so a "
+    "genuinely green tree clears green_gate with NO override, retiring the "
+    "distinct-actor sweep crutch. Plus 3 dashboard/metric clarity fixes "
+    "(signed delta arrows, shipped-vs-completed scope labels, candidates-"
+    "scanned relabel). Suite 1384 passed. "
     "SELF-IMPROVE-FORK v6.7.33: stress-loop consolidation. CLAUDE-P EXIT EPIC "
     "CLOSED (be898578) — internal inference no longer needs claude -p: memory "
     "summaries, event handlers, graph enrich, brain /ask, memory ops, analyzers "
