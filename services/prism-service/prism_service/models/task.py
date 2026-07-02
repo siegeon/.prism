@@ -95,6 +95,14 @@ class Task:
     # page falls back to the existing description view.
     plan_doc: str = ""
     plan_diagram: str = ""
+    # Claim lease (task 41af13c0) — next_task atomically stamps claimed_by
+    # (the session that pulled the task) + claimed_at (ISO-8601 UTC) so a
+    # second next_task from a DIFFERENT session within the freshness window
+    # is handed a different task, preventing two drivers double-claiming one
+    # task. Empty = unclaimed; a claimed_at older than the lease window is
+    # reclaimable. Additive/non-breaking; round-trips via the same DB path.
+    claimed_by: str = ""
+    claimed_at: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

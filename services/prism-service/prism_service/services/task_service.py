@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     verify TEXT DEFAULT '[]',
     stop_if TEXT DEFAULT '[]',
     plan_doc TEXT DEFAULT '',
-    plan_diagram TEXT DEFAULT ''
+    plan_diagram TEXT DEFAULT '',
+    claimed_by TEXT DEFAULT '',
+    claimed_at TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -98,6 +100,10 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     # SPA keeps the current description view).
     ("plan_doc", "TEXT DEFAULT ''"),
     ("plan_diagram", "TEXT DEFAULT ''"),
+    # Claim lease (task 41af13c0): who pulled the task + when, so next_task
+    # can skip a task freshly claimed by a DIFFERENT session. Backfill ''.
+    ("claimed_by", "TEXT DEFAULT ''"),
+    ("claimed_at", "TEXT DEFAULT ''"),
 ]
 
 
@@ -232,6 +238,10 @@ class TaskService:
                       and row["plan_doc"] is not None else ""),
             plan_diagram=(row["plan_diagram"] if "plan_diagram" in keys
                           and row["plan_diagram"] is not None else ""),
+            claimed_by=(row["claimed_by"] if "claimed_by" in keys
+                        and row["claimed_by"] is not None else ""),
+            claimed_at=(row["claimed_at"] if "claimed_at" in keys
+                        and row["claimed_at"] is not None else ""),
         )
 
     def _record_history(
@@ -628,14 +638,36 @@ class TaskService:
     # Next-task algorithm
     # ------------------------------------------------------------------
 
-    def next_task(self) -> Optional[dict]:
+    # Default claim-lease freshness window: a task claimed by another session
+    # within this many seconds is skipped by next_task (task 41af13c0).
+    _CLAIM_LEASE_WINDOW_S = 900  # 15 minutes
+
+    def next_task(
+        self,
+        session_id: Optional[str] = None,
+        lease_window_s: int = _CLAIM_LEASE_WINDOW_S,
+    ) -> Optional[dict]:
         """Return the highest-priority unblocked pending task.
 
         Algorithm:
         1. Fetch all pending tasks.
         2. Filter out tasks whose dependencies are not all 'done'.
         3. Sort by priority DESC, created_at ASC.
-        4. Return top result with a reason string.
+        4. Skip tasks freshly claimed by a DIFFERENT session (claim lease).
+        5. Atomically stamp the chosen task with claimed_by + claimed_at.
+        6. Return top result with a reason string.
+
+        CLAIM LEASE (task 41af13c0): task_next / conductor claiming used to
+        have no lease, so two concurrent drivers could grab the SAME task
+        (observed live: 9f61d484 was double-driven). When ``session_id`` is
+        supplied, a task claimed within ``lease_window_s`` by a DIFFERENT
+        session is skipped, and the chosen task is stamped
+        ``claimed_by=session_id`` + ``claimed_at=now`` before it is returned —
+        so a second next_task from another session gets a DIFFERENT task. A
+        session re-claiming its own fresh task gets it back (idempotent), and
+        an expired claim (older than the window) is reclaimable. BACKWARD
+        COMPATIBLE: ``session_id=None`` keeps the legacy behavior — no skip,
+        no stamp — so unclaimed and expired-claim tasks are always returned.
         """
         pending = self.list(status="pending")
         if not pending:
@@ -654,16 +686,64 @@ class TaskService:
         if not unblocked:
             return None
 
+        # Claim lease: skip a task freshly claimed by a DIFFERENT session.
+        # session_id=None => legacy path (no skip): pick the top task as-is.
+        if session_id:
+            eligible = [
+                t for t in unblocked
+                if not self._claim_is_fresh_by_other(
+                    t, session_id, lease_window_s)
+            ]
+            if not eligible:
+                return None
+            best = eligible[0]
+            self._stamp_claim(best.id, session_id)
+        else:
+            best = unblocked[0]
+
         # Already sorted by priority DESC, created_at ASC from list()
-        best = unblocked[0]
         reason_parts = [f"priority={best.priority}"]
         if best.assigned_agent:
             reason_parts.append(f"assigned to {best.assigned_agent}")
         if best.story_file:
             reason_parts.append(f"story={best.story_file}")
+        if session_id:
+            reason_parts.append(f"claimed by {session_id}")
         reason = "Highest priority unblocked task: " + ", ".join(reason_parts)
 
         return {"task": best, "reason": reason}
+
+    def _claim_is_fresh_by_other(
+        self, task: Task, session_id: str, lease_window_s: int,
+    ) -> bool:
+        """True when ``task`` is claimed by a session OTHER than
+        ``session_id`` and the claim is younger than ``lease_window_s`` — i.e.
+        it is actively leased elsewhere and must not be handed out again. An
+        unclaimed task, a task this session already owns, or a claim older
+        than the window all return False (available)."""
+        claimed_by = getattr(task, "claimed_by", "") or ""
+        claimed_at = getattr(task, "claimed_at", "") or ""
+        if not claimed_by or claimed_by == session_id:
+            return False
+        try:
+            when = datetime.fromisoformat(claimed_at)
+        except (ValueError, TypeError):
+            return False  # unparseable stamp => treat as reclaimable
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        age_s = (datetime.now(timezone.utc) - when).total_seconds()
+        return age_s < lease_window_s
+
+    def _stamp_claim(self, task_id: str, session_id: str) -> None:
+        """Atomically record ``session_id`` as the claimant of ``task_id``
+        with a fresh ``claimed_at`` timestamp (task 41af13c0). Written via a
+        targeted UPDATE so it never disturbs the other task columns."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._db.execute(
+            "UPDATE tasks SET claimed_by=?, claimed_at=? WHERE id=?",
+            (session_id, now, task_id),
+        )
+        self._db.commit()
 
     # ------------------------------------------------------------------
     # History
