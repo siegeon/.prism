@@ -31,6 +31,51 @@ def _slug(text: str) -> str:
     return s or "untitled"
 
 
+def _path_segments(title: str) -> list[str]:
+    """File-concept title -> its path segments (leading slashes stripped)."""
+    return [s for s in (title or "").strip("/").split("/") if s]
+
+
+def _is_path_suffix(short: list[str], long: list[str]) -> bool:
+    """True when *short* is a segment-aligned tail of *long* (a bare
+    'prism_cli.py' vs the qualified 'prism_service/cli/prism_cli.py'). A
+    shared basename alone ('pkg_a/utils.py' vs 'pkg_b/utils.py') is NOT a
+    suffix, so genuinely distinct files are never merged."""
+    if not short or len(short) > len(long):
+        return False
+    return all(short[-1 - i] == long[-1 - i] for i in range(len(short)))
+
+
+def dedupe_file_concepts(nodes: list[dict]) -> list[dict]:
+    """Collapse file concepts that resolve to the SAME file (task 61aafcc6).
+
+    /understand's Code domain listed one file twice — a bare 'prism_cli.py' and
+    the qualified 'prism_service/cli/prism_cli.py' — because they are two memory
+    concepts for the same file, inflating the domain's count. Dedup file-type
+    concepts by resolved path: when one file title is a segment-aligned
+    path-suffix of another, keep the most-qualified (longest-path) title and
+    drop the less-qualified duplicate. Non-file concepts pass through untouched;
+    distinct files sharing only a basename are preserved. Pure + order-stable.
+    """
+    files = [n for n in nodes if n.get("type") == "file"]
+    # Longest path first so the qualified concept is the one we keep.
+    ranked = sorted(files, key=lambda n: len(_path_segments(n.get("title", ""))),
+                    reverse=True)
+    kept: list[dict] = []
+    dropped: set = set()
+    for n in ranked:
+        segs = _path_segments(n.get("title", ""))
+        if not segs:
+            kept.append(n)
+            continue
+        if any(_is_path_suffix(segs, _path_segments(k.get("title", "")))
+               for k in kept):
+            dropped.add(id(n))
+        else:
+            kept.append(n)
+    return [n for n in nodes if id(n) not in dropped]
+
+
 def _first_sentence(text: str, limit: int = 200) -> str:
     text = (text or "").strip().replace("\n", " ")
     head = text.split(". ", 1)[0]
@@ -238,7 +283,14 @@ class OkfHost:
                 "path": path,
                 "description": str(c.frontmatter.get("description", "") or ""),
             })
-        return {"nodes": nodes, "edges": self._edges()}
+        # Dedup file concepts that resolve to the same file (task 61aafcc6) so
+        # the /understand Code domain doesn't list one file twice and inflate
+        # its count; then drop any edge left dangling by a removed node.
+        nodes = dedupe_file_concepts(nodes)
+        kept_ids = {n["id"] for n in nodes}
+        edges = [e for e in self._edges()
+                 if e["source"] in kept_ids and e["target"] in kept_ids]
+        return {"nodes": nodes, "edges": edges}
 
     def backlinks(self, target_id: str) -> list[dict]:
         """Inbound 'cited by' = concepts whose body links to this concept."""
