@@ -35,7 +35,14 @@ function TrendKpi({ label, series, color, fmt }: { label: string; series: number
   const total = sum(series);
   const today = series[series.length - 1] ?? 0;
   const prev = series[series.length - 2] ?? 0;
-  const up = today >= prev;
+  // Day-over-day delta: the arrow sign AND the number both derive from
+  // (today - prev), so a KPI whose total rose today never shows the bare
+  // absolute count behind a red down-arrow (task 855ef8aa). Previously the
+  // arrow encoded rate direction while the number was today's absolute
+  // count — "▼ 9 today" read as a loss even though 9 were just added.
+  const delta = today - prev;
+  const up = delta >= 0;
+  const signed = `${up ? "+" : "−"}${(fmt ?? nf)(Math.abs(delta))}`;
   return (
     <div className="flex-1 min-w-[170px] rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4">
       <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
@@ -44,7 +51,7 @@ function TrendKpi({ label, series, color, fmt }: { label: string; series: number
         <Sparkline data={series} color={color} />
       </div>
       <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mt-2">
-        <span style={{ color }}>{up ? "▲" : "▼"} {nf(today)}</span> today
+        <span style={{ color }}>{up ? "▲" : "▼"} {signed}</span> vs prev day
       </div>
     </div>
   );
