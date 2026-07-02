@@ -32,6 +32,10 @@ import { clearSession, loadSession, saveSession } from "@/components/pi/piSessio
 // the Node runner (web/pi-runtime.mjs) and this panel. Types come from
 // the sibling pi-expert.d.mts declaration.
 import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "../../pi-expert.mjs";
+// Shared multi-call parser (task c4bb21f8): ONE source with the Node runner
+// (web/pi-runtime.mjs) so an array / concatenated tool-call block parses
+// identically. parseTextToolCalls returns an ORDERED LIST of {name,args}.
+import { parseTextToolCall, parseTextToolCalls } from "../../pi-toolcall.mjs";
 
 // ---------------------------------------------------------------- config
 
@@ -207,7 +211,9 @@ export class PiStore {
   lastError = "";
 
   private tools: AgentTool[];
-  /** Guard against a model that answers every injection with more JSON. */
+  /** TOTAL-call cap across the exchange (task c4bb21f8): decremented per
+   * EXECUTED tool call so a multi-call block can't run away, and a model
+   * that answers every injection with more JSON eventually stops. */
   private interceptBudget = 0;
   /** True while feeding a synthetic tool-result message back to the model. */
   private injecting = false;
@@ -368,7 +374,7 @@ export class PiStore {
     if (!prompt || this.busy) return;
     this.interacted = true; // from here on, a late rehydrate must no-op
     this.lastError = "";
-    this.interceptBudget = 3;
+    this.interceptBudget = 6;
     try {
       await this.agent.prompt(prompt);
     } catch (e) {
@@ -387,49 +393,85 @@ export class PiStore {
     try { this.agent.abort(); } catch { this.stopping = false; }
   }
 
-  /** If the final assistant text IS a JSON tool call for a known tool,
-   * swap the bubble for a tool row, run the tool, and continue the run
-   * with the result. Returns true when an interception was started. */
+  /** If the final assistant text IS a tool-call block — a single object, a
+   * top-level ARRAY, or concatenated objects (task c4bb21f8) — swap the raw
+   * bubble for an ORDERED list of tool rows, run each known tool in
+   * sequence (unknown names skipped with a note), feed the combined
+   * results back, then let the model answer in prose. Returns true when an
+   * interception was started. Budget is a TOTAL-call cap: only known calls
+   * within budget execute; the rest are noted, so a multi-call block can't
+   * run away. */
   private tryInterceptTextToolCall(): boolean {
     if (this.interceptBudget <= 0) return false;
     const idx = this.items.length - 1;
     const last = this.items[idx];
     if (!last || last.kind !== "assistant" || !last.text) return false;
-    const call = parseTextToolCall(last.text);
-    if (!call) return false;
-    const tool = this.tools.find((t) => t.name === call.name);
-    if (!tool) return false;
+    const calls = parseTextToolCalls(last.text);
+    if (!calls.length) return false;
+    // At least one call must map to a real tool AND fit the budget, else
+    // this is not an interceptable block (don't consume a raw bubble for
+    // pure hallucination or once the cap is spent).
+    const runnable = calls.filter((c) => this.tools.some((t) => t.name === c.name));
+    if (!runnable.length) return false;
 
-    this.interceptBudget--;
     this.busy = true;
-    const row: Extract<PiItem, { kind: "tool" }> = {
-      kind: "tool", callId: `text-${Date.now()}`, name: call.name,
-      label: call.name, args: call.args, status: "running",
-    };
-    this.items[idx] = row; // the raw-JSON bubble BECOMES the tool row
+
+    // Build the ordered plan: known+in-budget calls become running tool
+    // rows; unknown names and over-budget calls become quiet notes. The
+    // single raw-JSON bubble is replaced by the WHOLE plan.
+    type Step = { call: { name: string; args: Record<string, unknown> };
+                  row?: Extract<PiItem, { kind: "tool" }> };
+    const plan: Step[] = [];
+    const newItems: PiItem[] = [];
+    for (const call of calls) {
+      const known = this.tools.some((t) => t.name === call.name);
+      if (known && this.interceptBudget > 0) {
+        this.interceptBudget--;
+        const row: Extract<PiItem, { kind: "tool" }> = {
+          kind: "tool", callId: `text-${Date.now()}-${plan.length}`,
+          name: call.name, label: call.name, args: call.args, status: "running",
+        };
+        newItems.push(row);
+        plan.push({ call, row });
+      } else {
+        const why = known ? "intercept budget exhausted" : "not a known PRISM tool";
+        newItems.push({ kind: "note", text: `skipped ${call.name} — ${why}` });
+        plan.push({ call });
+      }
+    }
+    this.items.splice(idx, 1, ...newItems);
     this.emit();
 
     void (async () => {
-      let resultText: string;
-      try {
-        const res = await tool.execute(row.callId, call.args);
-        row.status = "ok";
-        const details = (res as { details?: { result?: unknown; ms?: number } }).details;
-        row.result = details?.result ?? res;
-        row.ms = details?.ms;
-        resultText = res.content
-          .filter((c): c is { type: "text"; text: string } => c.type === "text")
-          .map((c) => c.text).join("\n");
-      } catch (e) {
-        row.status = "error";
-        row.result = e instanceof Error ? e.message : String(e);
-        resultText = `ERROR: ${row.result}`;
+      const resultTexts: string[] = [];
+      for (const step of plan) {
+        const tool = step.row && this.tools.find((t) => t.name === step.call.name);
+        if (!tool || !step.row) {
+          resultTexts.push(`[${step.call.name} skipped]`);
+          continue;
+        }
+        const row = step.row;
+        try {
+          const res = await tool.execute(row.callId, step.call.args);
+          row.status = "ok";
+          const details = (res as { details?: { result?: unknown; ms?: number } }).details;
+          row.result = details?.result ?? res;
+          row.ms = details?.ms;
+          const text = res.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text).join("\n");
+          resultTexts.push(`[${row.name} result]\n${text}`);
+        } catch (e) {
+          row.status = "error";
+          row.result = e instanceof Error ? e.message : String(e);
+          resultTexts.push(`[${row.name} error] ${row.result}`);
+        }
+        this.emit();
       }
-      this.emit();
       try {
         this.injecting = true; // hide the synthetic result message from the log
         await this.agent.prompt(
-          `[${call.name} result]\n${resultText}\n\nAnswer the user's original question from this result, in plain prose. Do NOT output JSON.`,
+          `${resultTexts.join("\n\n")}\n\nAnswer the user's original question from these results, in plain prose. Do NOT output JSON.`,
         );
       } catch (e) {
         this.lastError = e instanceof Error ? e.message : String(e);
@@ -601,24 +643,10 @@ export class PiStore {
   }
 }
 
-/** Recognize an assistant text that IS a tool call — bare or fenced JSON
- * shaped {"name": "...", "arguments"|"args"|"parameters": {...}}. */
-export function parseTextToolCall(text: string): { name: string; args: Record<string, unknown> } | null {
-  let t = text.trim();
-  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(t);
-  if (fence) t = fence[1].trim();
-  if (!t.startsWith("{") || !t.endsWith("}")) return null;
-  try {
-    const obj = JSON.parse(t) as Record<string, unknown>;
-    const name = obj.name;
-    if (typeof name !== "string" || !name) return null;
-    const args = obj.arguments ?? obj.args ?? obj.parameters ?? {};
-    if (typeof args !== "object" || args === null || Array.isArray(args)) return null;
-    return { name, args: args as Record<string, unknown> };
-  } catch {
-    return null;
-  }
-}
+// parseTextToolCall / parseTextToolCalls now live in the shared
+// pi-toolcall.mjs module (imported at the top). Re-exported here so
+// existing importers of this symbol are unaffected.
+export { parseTextToolCall };
 
 function messageText(message: unknown): string {
   const content = (message as { content?: unknown }).content;

@@ -21,6 +21,11 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 // (task e70cdcda). Never re-declare a tool schema here.
 import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "./pi-expert.mjs";
 
+// Shared multi-call parser (task c4bb21f8): ONE source for both PI
+// interception surfaces so an array / concatenated tool-call block parses
+// identically here and in the SPA panel. Returns an ORDERED LIST.
+import { parseTextToolCall, parseTextToolCalls } from "./pi-toolcall.mjs";
+
 // ------------------------------------------------------------- model
 
 function buildModel(modelId, baseUrl) {
@@ -116,22 +121,9 @@ function messageText(message) {
   return "";
 }
 
-function parseTextToolCall(text) {
-  let t = (text || "").trim();
-  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(t);
-  if (fence) t = fence[1].trim();
-  if (!t.startsWith("{") || !t.endsWith("}")) return null;
-  try {
-    const obj = JSON.parse(t);
-    const name = obj?.name;
-    const args = obj?.arguments ?? obj?.args ?? obj?.parameters ?? {};
-    if (typeof name !== "string" || !name) return null;
-    if (typeof args !== "object" || args === null || Array.isArray(args)) return null;
-    return { name, args };
-  } catch {
-    return null;
-  }
-}
+// parseTextToolCall / parseTextToolCalls now live in the shared
+// pi-toolcall.mjs module (imported above) — single object, fenced object,
+// top-level array, and concatenated objects all parse to an ordered list.
 
 // ---------------------------------------------------------------- run
 
@@ -174,23 +166,37 @@ async function runJob(job) {
   }
 
   // Micro-model reality (proven on the panel, Ollama 0.30.7): tool calls
-  // arrive as PLAIN JSON TEXT. Execute them app-side and continue, capped.
-  let budget = Number.isFinite(job.intercept_budget) ? job.intercept_budget : 4;
+  // arrive as PLAIN JSON TEXT. A MULTI-step ask arrives as the WHOLE plan
+  // in ONE block — a top-level array or several concatenated objects (task
+  // c4bb21f8). Parse the block into an ordered list, execute each KNOWN
+  // tool in order (unknown names skipped with a noted receipt), feed the
+  // combined results back, then let the model emit its final answer.
+  // `budget` is a TOTAL-call cap across the whole exchange (runaway guard).
+  let budget = Number.isFinite(job.intercept_budget) ? job.intercept_budget : 6;
   for (;;) {
-    const call = parseTextToolCall(lastAssistantText());
-    if (!call || budget <= 0) break;
-    const tool = tools.find((t) => t.name === call.name);
-    if (!tool) break;
-    budget--;
-    let resultText;
-    try {
-      const res = await tool.execute(`text-${Date.now()}`, call.args);
-      resultText = res.content.map((c) => c.text).join("\n");
-    } catch (err) {
-      resultText = `ERROR: ${err?.message ?? err}`;
+    const calls = parseTextToolCalls(lastAssistantText());
+    if (!calls.length || budget <= 0) break;
+    const results = [];
+    for (const call of calls) {
+      if (budget <= 0) {
+        results.push(`[${call.name} skipped: intercept budget exhausted]`);
+        continue;
+      }
+      const tool = tools.find((t) => t.name === call.name);
+      if (!tool) {
+        results.push(`[${call.name} skipped: not a known PRISM tool]`);
+        continue;
+      }
+      budget--;
+      try {
+        const res = await tool.execute(`text-${Date.now()}-${results.length}`, call.args);
+        results.push(`[${call.name} result]\n${res.content.map((c) => c.text).join("\n")}`);
+      } catch (err) {
+        results.push(`[${call.name} error] ${err?.message ?? err}`);
+      }
     }
     await agent.prompt(
-      `[${call.name} result]\n${resultText}\n\nContinue. If you have enough evidence, emit your FINAL answer now in the exact output format the task specified. Do not call another tool unless strictly necessary.`,
+      `${results.join("\n\n")}\n\nContinue. If you have enough evidence, emit your FINAL answer now in the exact output format the task specified. Do not call another tool unless strictly necessary.`,
     );
     if (agent.state.errorMessage) break;
   }
@@ -220,11 +226,23 @@ async function main() {
     if (!parseTextToolCall('{"name": "brain_search", "arguments": {"query": "x"}}')) {
       throw new Error("interception parser failed");
     }
+    // Multi-call block interception (task c4bb21f8): a top-level ARRAY and
+    // concatenated objects must each parse to an ordered list of 2 calls.
+    const arrCalls = parseTextToolCalls(
+      '[{"name":"brain_search","arguments":{"query":"x"}},{"name":"task_create","arguments":{"title":"t"}}]');
+    const catCalls = parseTextToolCalls(
+      '{"name":"brain_search","arguments":{"query":"x"}}\n{"name":"task_create","arguments":{"title":"t"}}');
+    if (arrCalls.length !== 2 || catCalls.length !== 2) {
+      throw new Error("multi-call interception parser failed");
+    }
     // Surface the bridge body the SAME helper builds for live execute, so
     // tests can prove the internal flag rides every call (task 9f20b605).
     process.stdout.write(JSON.stringify({
       ok: true,
       tools: tools.map((t) => t.name),
+      // Multi-call parse report (task c4bb21f8): array + concatenated each
+      // yield an ordered list of 2 — the shape the single-object parser dropped.
+      multicall: { array: arrCalls.length, concatenated: catCalls.length },
       bridge_body: bridgeBody("conductor_advance", { id: "check" }),
       // The shared expert prompt the run path defaults to when job.system
       // is empty (task e70cdcda) — surfaced so tests prove it's wired.

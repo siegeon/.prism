@@ -1,0 +1,104 @@
+/**
+ * Shared text-tool-call parser for PI's two interception surfaces
+ * (task c4bb21f8 — the "PI panel dumps raw tool-call JSON" bug, dup
+ * 4e5749bc). ONE source so a MULTI-call block parses identically on both
+ * the Node runner (web/pi-runtime.mjs) and the browser panel
+ * (web/src/lib/piAgent.ts) — same shared-module discipline as pi-expert.mjs.
+ *
+ * Small local models, asked to do several things in one turn (e.g. "search
+ * the brain for X THEN create a task"), emit the WHOLE plan as plain JSON
+ * TEXT instead of native tool_calls — as a single {name,arguments} object,
+ * a top-level ARRAY of such objects, or several objects concatenated
+ * (brace-adjacent `{..}{..}` or newline-separated). The single-object
+ * interceptor executed nothing on the array/concatenated shapes, so the
+ * raw JSON was shown and no tool ran.
+ *
+ * parseTextToolCalls returns an ORDERED LIST of {name,args}; the caller
+ * validates each name against the LIVE tool catalog and executes
+ * sequentially (unknown names skipped by the caller). parseTextToolCall
+ * keeps the single-object contract for back-compat.
+ */
+
+/** Coerce one parsed JSON value into a {name,args} call, or null when it
+ * is not a well-formed tool-call object (args must be a plain object). */
+function normalizeCall(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
+  const name = obj.name;
+  if (typeof name !== "string" || !name) return null;
+  const args = obj.arguments ?? obj.args ?? obj.parameters ?? {};
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return null;
+  return { name, args };
+}
+
+/** Scan a string for every TOP-LEVEL JSON container ({...} or [...]),
+ * brace-depth aware and string/escape aware so `{..}{..}`, `{..}\n{..}`,
+ * and nested braces/strings all split correctly. Malformed chunks are
+ * skipped, not thrown. */
+function scanJsonValues(text) {
+  const values = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === "{" || ch === "[") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" || ch === "]") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start !== -1) {
+          try { values.push(JSON.parse(text.slice(start, i + 1))); } catch { /* skip */ }
+          start = -1;
+        }
+      }
+    }
+  }
+  return values;
+}
+
+/** Parse an assistant text that IS a tool-call block into an ORDERED LIST
+ * of {name,args}. Handles: a bare or ```json-fenced single object; a
+ * top-level array of objects; and multiple concatenated objects. Returns
+ * [] when the text is not a JSON tool-call block (plain prose, etc.). */
+export function parseTextToolCalls(text) {
+  let t = (text || "").trim();
+  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(t);
+  if (fence) t = fence[1].trim();
+  if (!t || !(t.startsWith("{") || t.startsWith("["))) return [];
+
+  let candidates = null;
+  try {
+    // Fast path: the whole block is ONE JSON value (object or array).
+    const parsed = JSON.parse(t);
+    candidates = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    // Concatenated objects ({..}{..} / {..}\n{..}): only meaningful when
+    // the block still closes a container — scan top-level JSON values.
+    if (t.endsWith("}") || t.endsWith("]")) {
+      candidates = scanJsonValues(t).flatMap((v) => (Array.isArray(v) ? v : [v]));
+    }
+  }
+  if (!candidates) return [];
+
+  const calls = [];
+  for (const c of candidates) {
+    const call = normalizeCall(c);
+    if (call) calls.push(call);
+  }
+  return calls;
+}
+
+/** Back-compat single-call contract: the FIRST parsed tool call, or null. */
+export function parseTextToolCall(text) {
+  const calls = parseTextToolCalls(text);
+  return calls.length ? calls[0] : null;
+}
