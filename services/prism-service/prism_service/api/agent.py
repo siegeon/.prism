@@ -23,6 +23,25 @@ AGENT_TOOL_WHITELIST = frozenset({
     "task_list",
     "task_create",
     "prism_status",
+    # Conductor surface (task 9f20b605, phase 2 of the pi internal agent):
+    # deliberate additions so a DIRECTED pi job can drive SDLC work —
+    # author/patch plan_doc (task_update), advance the per-task state
+    # machine (conductor_advance), propose gate evidence (conductor_gate).
+    # All three are INTERNAL-ONLY (see INTERNAL_ONLY_TOOLS below).
+    "task_update",
+    "conductor_advance",
+    "conductor_gate",
+})
+
+# INTERNAL AGENT CALLERS ONLY (task 9f20b605 FR-3): these mutate the SDLC
+# state machine, so they require an explicit internal=true body flag. The
+# browser PI panel never sends the flag — its reachable surface stays
+# read/create-only no matter what the model emits. The subprocess runner
+# (web/pi-runtime.mjs) sends internal=true on every bridged call.
+INTERNAL_ONLY_TOOLS = frozenset({
+    "task_update",
+    "conductor_advance",
+    "conductor_gate",
 })
 
 
@@ -36,6 +55,15 @@ async def call_tool(
     if name not in AGENT_TOOL_WHITELIST:
         raise HTTPException(
             403, f"tool {name!r} is not whitelisted for the PI agent",
+        )
+    # Internal-only gate (task 9f20b605 FR-3): conductor mutations require
+    # a LITERAL internal=true — truthy look-alikes ("true", 1) do not open
+    # the gate, so the browser panel surface is provably unchanged.
+    if name in INTERNAL_ONLY_TOOLS and body.get("internal") is not True:
+        raise HTTPException(
+            403,
+            f"tool {name!r} is for internal agent callers only "
+            "(requires internal=true)",
         )
     args = body.get("args") or {}
     if not isinstance(args, dict):

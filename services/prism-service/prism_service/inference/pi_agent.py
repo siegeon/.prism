@@ -29,6 +29,15 @@ _CREATE_NO_WINDOW = 0x08000000  # keep worker spawns invisible (v6.7.25 lesson)
 
 DEFAULT_TOOLS: tuple[str, ...] = ("brain_search", "memory_recall")
 
+# Conductor surface (task 9f20b605, phase 2): OPT-IN toolset for jobs
+# DIRECTED at SDLC work — read the task (task_list by id), author/patch
+# plan_doc (task_update), advance the state machine (conductor_advance),
+# propose gate evidence (conductor_gate). Never part of DEFAULT_TOOLS;
+# the bridge additionally gates the mutating three to internal callers.
+CONDUCTOR_TOOLS: tuple[str, ...] = (
+    "task_list", "task_update", "conductor_advance", "conductor_gate",
+)
+
 
 class PiRuntimeError(RuntimeError):
     """Runner could not be spawned or returned an unparseable result."""
