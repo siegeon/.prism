@@ -70,9 +70,13 @@ export default function SessionsPage() {
   const tokens = outcomes.map((o) => o.tokens ?? o.tokens_used ?? 0).filter(Boolean);
   // API returns duration in SECONDS (column duration_s aliased to "duration").
   const durSec = outcomes.map((o) => o.duration ?? o.duration_s ?? 0).filter(Boolean);
-  const files = outcomes.map((o) => o.files_modified ?? 0).filter(Boolean);
-  const totalFiles = files.reduce((a, b) => a + b, 0) || 1;
   const totalTokens = tokens.reduce((a, b) => a + b, 0);
+  // 'Tokens / file' = tokens across all sessions divided by files READ (the
+  // context each session actually consumed). files_modified is 0 for most
+  // scored sessions, so dividing by it hit the `|| 1` fallback and mislabeled
+  // the raw token SUM as a per-file figure (task 8c596af6).
+  const totalFiles = outcomes.map((o) => o.files_read ?? 0)
+    .reduce((a, b) => a + b, 0) || 1;
   const fmtTs = (s?: string) =>
     s ? s.replace("T", " ").replace(/\.\d+/, "").slice(0, 19) : "";
 
