@@ -37,11 +37,14 @@ const STATUS_TONE: Record<string, PillTone> = {
   done: "emerald",
 };
 
+// The board is a view of ACTIVE work only. Completed tasks never accumulate
+// here — they live on their own /tasks/completed screen (absorbed ones link
+// into Memory, the rest are archived there). This is why there is no "Done"
+// column: done work moving off the board is the whole point.
 const COLUMNS: { key: string; label: string }[] = [
   { key: "pending", label: "Pending" },
   { key: "in_progress", label: "In Progress" },
   { key: "blocked", label: "Blocked" },
-  { key: "done", label: "Done" },
 ];
 
 // Priority bands → tone. Lower number = higher priority by convention,
@@ -82,6 +85,9 @@ export default function TasksPage() {
     if (t.parent_id) childCount.set(t.parent_id, (childCount.get(t.parent_id) ?? 0) + 1);
   }
   const roots = tasks.filter((t) => !t.parent_id);
+  // Completed work never sits on the board; it's counted here and reached via
+  // the clickable "Completed" tile → /tasks/completed.
+  const doneCount = roots.filter((t) => (t.status ?? "") === "done").length;
 
   return (
     <Page>
@@ -89,6 +95,13 @@ export default function TasksPage() {
         {COLUMNS.map((c) => (
           <Kpi key={c.key} label={c.label} value={roots.filter((t) => (t.status ?? "pending") === c.key).length} />
         ))}
+        <button
+          onClick={() => navigate("/tasks/completed")}
+          className="text-left hover:opacity-100 opacity-90 transition-opacity"
+          title="Completed tasks live on their own screen — absorbed ones link into Memory, the rest are archived"
+        >
+          <Kpi label="Completed →" value={doneCount} />
+        </button>
       </section>
 
       <Card>
@@ -106,7 +119,7 @@ export default function TasksPage() {
         )}
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {COLUMNS.map((col) => {
           const items = roots.filter((t) => (t.status ?? "pending") === col.key);
           const colTone = STATUS_TONE[col.key] ?? "slate";
