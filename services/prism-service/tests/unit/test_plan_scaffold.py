@@ -103,9 +103,11 @@ def test_build_plan_zero_violations_against_seeded_store(tmp_path):
 
 def test_hostile_principles_rename_or_surface():
     m, g = _mod(), _gov()
-    # a principle that names a TEMPLATED node id — must trigger rename
-    dia = m.scaffold_plan_diagram("x", steps=["alpha", "beta"])
-    edge = g.mermaid_edges(dia)[0]
+    # a principle that names a TEMPLATED node id — must trigger rename.
+    # Probe build_plan's own deterministic diagram (stub model) so the
+    # hostile rule targets an edge that really exists in the output.
+    probe = m.build_plan(CONTEXT, model=StubModel(), principles=PRINCIPLES)
+    edge = g.mermaid_edges(probe["plan_diagram"])[0]
     hostile = [{"id": "ARC-H-1", "kind": "layer_rule",
                 "from": edge["from"], "must_not_depend_on": edge["to"]}]
     out = m.build_plan(CONTEXT, model=StubModel(), principles=hostile)
