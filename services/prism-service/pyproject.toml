@@ -36,6 +36,10 @@ dependencies = [
   "tree-sitter>=0.21,<1",
   "tree-sitter-languages>=1.10",
   "pyyaml>=6",
+  # Runtime dep, not just dev tooling: the verifier's Tier0 lane shells out
+  # to ruff at daemon runtime (verifier_service._ruff_cmd); without it every
+  # gate reports tooling.ruff status=skipped (task 43a44af6).
+  "ruff>=0.4",
 ]
 
 [project.optional-dependencies]

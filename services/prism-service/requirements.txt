@@ -26,3 +26,6 @@ graphifyy>=0.4.29,<0.5
 # Without these the chunker falls back to regex which loses structural info.
 tree-sitter>=0.21,<1
 tree-sitter-languages>=1.10
+
+# Verifier Tier0 lint lane (runtime, not just dev - task 43a44af6)
+ruff>=0.4

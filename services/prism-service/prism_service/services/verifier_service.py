@@ -23,9 +23,10 @@ without mutating Brain / Memory / Tasks / Workflow.
 
 from __future__ import annotations
 
+import importlib.util
 import json
-import os
 import shutil
+import sys
 import sqlite3
 import subprocess
 import time
@@ -264,8 +265,9 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
     claims: list[Claim] = []
     if not py_files:
         return claims
-    if shutil.which("ruff"):
-        rc, out, err = _run_tool(["ruff", "check", *py_files], workspace)
+    ruff_cmd = _ruff_cmd()
+    if ruff_cmd:
+        rc, out, err = _run_tool([*ruff_cmd, "check", *py_files], workspace)
         claims.append(_claim(0, "tooling.ruff", ",".join(py_files[:5]), rc, out, err))
     else:
         claims.append(Claim(tier=0, kind="tooling.ruff", target="", status="skipped",
@@ -302,6 +304,21 @@ def _pytest_available() -> bool:
         return True
     import importlib.util
     return importlib.util.find_spec("pytest") is not None
+
+
+def _ruff_cmd() -> Optional[list[str]]:
+    """Resolve how to invoke ruff, or None when it isn't installed.
+
+    PATH exe first; else fall back to ``python -m ruff`` when the ruff
+    package is importable in the daemon interpreter (task 43a44af6: user-site
+    installs put ruff.exe in a Scripts dir that is often OFF the daemon's
+    PATH, which made the Tier0 lane report 'skipped: ruff not installed'
+    even with ruff pip-installed)."""
+    if shutil.which("ruff"):
+        return ["ruff"]
+    if importlib.util.find_spec("ruff") is not None:
+        return [sys.executable, "-m", "ruff"]
+    return None
 
 
 def _run_node_tools(workspace: Path, js_files: list[str]) -> list[Claim]:
