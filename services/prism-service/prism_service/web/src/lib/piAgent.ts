@@ -198,7 +198,7 @@ export type PiTelemetry = { model: string; ok: boolean; at: number };
  * via subscribe/getSnapshot (useSyncExternalStore).
  */
 export class PiStore {
-  readonly project: string;
+  private _project: string;
   private agent: Agent;
   private model: Model<"openai-completions">;
   private cfg: PiConfig;
@@ -216,7 +216,7 @@ export class PiStore {
   private injecting = false;
 
   constructor(project: string) {
-    this.project = project;
+    this._project = project;
     this.cfg = loadPiConfig();
     this.model = installProvider(this.cfg);
     this.tools = buildTools(project);
@@ -233,6 +233,26 @@ export class PiStore {
     });
     this.agent.subscribe((event) => this.onEvent(event));
     void this.probe();
+  }
+
+  get project(): string { return this._project; }
+
+  /** True once anything is on screen (or a prompt is in flight) — i.e. there
+   * is a conversation a store swap would orphan. */
+  hasConversation(): boolean { return this.items.length > 0 || this.busy; }
+
+  /**
+   * Re-key this store to another project (first-paint promotion rescue —
+   * see piStore below). The visible conversation is preserved; FUTURE tool
+   * calls and memory writes target the new project. A tool call already in
+   * flight keeps the project it was started under (its closure captured it),
+   * which is correct: that is where the exchange actually began.
+   */
+  rekey(project: string) {
+    this._project = project;
+    this.tools = buildTools(project);
+    this.agent.state.tools = this.tools;
+    this.emit();
   }
 
   // -- external-store plumbing
@@ -479,8 +499,37 @@ function messageText(message: unknown): string {
 
 const stores = new Map<string, PiStore>();
 
+/** One-shot latch: only the FIRST default→real-project flip may rescue the
+ * "default" store. Deliberate header-picker switches later in the session
+ * always get their own per-project store. */
+let defaultRescueSpent = false;
+
+/**
+ * The SPA's project identity settles AFTER first paint: `useProject` starts
+ * from "default" and is promoted automatically (?project= deep-link mirror,
+ * resolveInitialProject cold-start pick — see lib/project.ts). An exchange
+ * started in that window lives in the "default"-keyed store; when the panel
+ * re-renders under the promoted project it must NOT come up against a fresh
+ * empty store with the running conversation orphaned. So the first time a
+ * non-"default" project resolves, if the "default" store already holds a
+ * conversation (and the new project has none), MIGRATE it: same store, same
+ * items, re-keyed so future tool calls hit the promoted project.
+ */
 export function piStore(project: string): PiStore {
   let s = stores.get(project);
-  if (!s) { s = new PiStore(project); stores.set(project, s); }
+  if (!s) {
+    s = rescueDefaultStore(project) ?? new PiStore(project);
+    stores.set(project, s);
+  }
   return s;
+}
+
+function rescueDefaultStore(project: string): PiStore | null {
+  if (defaultRescueSpent || project === "default") return null;
+  defaultRescueSpent = true; // consumed by the first real-project resolution
+  const d = stores.get("default");
+  if (!d || !d.hasConversation()) return null; // nothing to orphan
+  stores.delete("default"); // move, don't alias — "default" gets a fresh store if ever revisited
+  d.rekey(project);
+  return d;
 }
