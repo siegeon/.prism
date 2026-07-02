@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Activity, AppWindow, Brain, Eye, FolderTree, Info,
+  Activity, AppWindow, Bot, Brain, Eye, FolderTree, Info,
   Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
@@ -75,6 +75,9 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/consolidation", label: "Consolidation", icon: Layers },
       { to: "/learning", label: "Learning", icon: Sparkles },
+      // Visual audit of the internal pi/local inference runs that
+      // POWER the loop (reflection backend=pi/local, panel bridge).
+      { to: "/internal-agent", label: "Internal agent", icon: Bot },
     ],
   },
 ];

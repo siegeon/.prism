@@ -23,6 +23,7 @@ const ConductorPage = lazy(() => import("@/pages/ConductorPage"));
 const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
 const RetrievalsPage = lazy(() => import("@/pages/RetrievalsPage"));
 const LearningPage = lazy(() => import("@/pages/LearningPage"));
+const InternalAgentPage = lazy(() => import("@/pages/InternalAgentPage"));
 const ConsolidationPage = lazy(() => import("@/pages/ConsolidationPage"));
 const UnderstandPage = lazy(() => import("@/pages/UnderstandPage"));
 const ArtifactPage = lazy(() => import("@/pages/ArtifactPage"));
@@ -79,6 +80,10 @@ export default function App() {
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/retrievals" element={<RetrievalsPage />} />
             <Route path="/learning" element={<LearningPage />} />
+            {/* Visual audit of internal pi/local inference runs — the
+                ledger behind /api/pi-runs (owner directive: internal
+                tools ship with an audit surface by default). */}
+            <Route path="/internal-agent" element={<InternalAgentPage />} />
             <Route path="/consolidation" element={<ConsolidationPage />} />
             <Route path="/understand" element={<UnderstandPage />} />
             {/* Unified artifact surface (xref S5): the single destination a

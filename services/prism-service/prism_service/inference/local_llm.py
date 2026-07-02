@@ -35,6 +35,17 @@ def configured_model() -> str:
     return os.environ.get("PRISM_LOCAL_LLM_MODEL") or DEFAULT_MODEL
 
 
+def _record_run(**kwargs) -> None:
+    """Audit-ledger seam (services/pi_run_log): ADDITIVE, best-effort —
+    a ledger failure must never raise into the inference caller path."""
+    try:
+        from prism_service.services import pi_run_log
+
+        pi_run_log.record_run(**kwargs)
+    except Exception:
+        pass
+
+
 def complete(
     prompt: str,
     *,
@@ -45,10 +56,18 @@ def complete(
     json_mode: bool = False,
     temperature: float = 0.0,
     timeout: float = 300.0,
+    purpose: str = "",
+    project: str = "",
 ) -> dict:
     """One blocking completion. Returns {text, ms, tokens}. Raises OSError /
     urllib.error.URLError when the endpoint is unreachable — callers treat
-    that like any other inference failure."""
+    that like any other inference failure.
+
+    Every run — success or unreachable endpoint — lands in the pi_run_log
+    audit ledger as a backend=local row (the SPA's /internal-agent view).
+    The new `purpose`/`project` kwargs are ADDITIVE: defaults keep every
+    existing caller untouched; an unset purpose is inferred (reflect for
+    the reflection engine's system marker, else adhoc)."""
     url = (base_url or configured_url()).rstrip("/")
     mdl = model or configured_model()
     sys_text = system
@@ -75,13 +94,37 @@ def complete(
         headers={"content-type": "application/json"},
         method="POST",
     )
+    try:
+        from prism_service.services.pi_run_log import infer_purpose
+
+        _purpose = infer_purpose(purpose, system)
+    except Exception:
+        _purpose = purpose or "adhoc"
+    audit = {
+        "backend": "local",
+        "model": mdl,
+        "project": project,
+        "prompt_chars": len(prompt or ""),
+        "tools_used": [],  # tool-less by design
+        "purpose": _purpose,
+    }
+    ts_start = time.time()
     t0 = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=timeout) as res:
-        payload = json.loads(res.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
+            payload = json.loads(res.read())
+    except Exception as exc:
+        _record_run(
+            duration_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=False, error=f"{type(exc).__name__}: {exc}",
+            ts_start=ts_start, ts_end=time.time(),
+            **audit,
+        )
+        raise
     ms = (time.perf_counter() - t0) * 1000.0
     msg = (payload.get("choices") or [{}])[0].get("message") or {}
     usage = payload.get("usage") or {}
-    return {
+    out = {
         "text": msg.get("content") or "",
         "ms": round(ms, 1),
         "tokens": usage.get("completion_tokens") or 0,
@@ -91,3 +134,9 @@ def complete(
         "input_tokens": usage.get("prompt_tokens") or 0,
         "output_tokens": usage.get("completion_tokens") or 0,
     }
+    _record_run(
+        duration_ms=out["ms"], tokens=int(out["tokens"] or 0),
+        ok=True, error="", ts_start=ts_start, ts_end=time.time(),
+        **audit,
+    )
+    return out

@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from prism_service.inference import local_llm
@@ -75,6 +76,17 @@ def _ui_port() -> int:
     return UI_PORT
 
 
+def _record_run(**kwargs) -> None:
+    """Audit-ledger seam (services/pi_run_log): ADDITIVE, best-effort —
+    a ledger failure must never raise into the inference caller path."""
+    try:
+        from prism_service.services import pi_run_log
+
+        pi_run_log.record_run(**kwargs)
+    except Exception:
+        pass
+
+
 def invoke(
     prompt: str,
     *,
@@ -85,11 +97,17 @@ def invoke(
     project: str = "default",
     max_turns: int = 6,
     timeout: float = 300.0,
+    purpose: str = "",
 ) -> dict:
     """Run one agentic job. Returns the runner's result dict:
     {ok, text, turns, tools_used[{name,ms,ok}], ms, tokens, model, error?}.
     Raises PiRuntimeError on spawn/parse failure (model failures come back
-    as ok=False in the payload instead)."""
+    as ok=False in the payload instead).
+
+    Every run — success, model failure, or spawn/parse failure — lands in
+    the pi_run_log audit ledger (the SPA's /internal-agent view). `purpose`
+    labels the row (reflect|panel-bridge|adhoc); when unset it is inferred
+    from the system prompt (the reflection engine's marker), else adhoc."""
     runner = _runner_path()
     if not runner.exists():
         raise PiRuntimeError(f"pi runner missing: {runner}")
@@ -106,6 +124,25 @@ def invoke(
     kwargs: dict = {}
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = _CREATE_NO_WINDOW
+    audit = {
+        "backend": "pi",
+        "model": job["model"],
+        "project": project,
+        "prompt_chars": len(prompt or ""),
+    }
+    ts_start = time.time()
+
+    def _fail(error: str) -> None:
+        from prism_service.services.pi_run_log import infer_purpose
+
+        _record_run(
+            purpose=infer_purpose(purpose, system),
+            duration_ms=(time.time() - ts_start) * 1000.0,
+            ok=False, error=error,
+            ts_start=ts_start, ts_end=time.time(),
+            **audit,
+        )
+
     try:
         proc = subprocess.run(
             [_node_exe(), str(runner)],
@@ -115,15 +152,43 @@ def invoke(
             **kwargs,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            _fail(f"pi runner spawn failed: {exc}")
+        except Exception:
+            pass
         raise PiRuntimeError(f"pi runner spawn failed: {exc}") from exc
     out = (proc.stdout or "").strip()
     try:
         result = json.loads(out)
     except ValueError as exc:
+        try:
+            _fail(f"pi runner returned non-JSON (exit {proc.returncode})")
+        except Exception:
+            pass
         raise PiRuntimeError(
             f"pi runner returned non-JSON (exit {proc.returncode}): "
             f"{out[:300]!r} stderr={proc.stderr[:300]!r}"
         ) from exc
     if not isinstance(result, dict):
+        try:
+            _fail(f"pi runner returned {type(result).__name__}, expected object")
+        except Exception:
+            pass
         raise PiRuntimeError(f"pi runner returned {type(result).__name__}, expected object")
+    try:
+        from prism_service.services.pi_run_log import infer_purpose
+
+        _record_run(
+            purpose=infer_purpose(purpose, system),
+            tools_used=result.get("tools_used") or [],
+            duration_ms=float(result.get("ms") or 0),
+            tokens=int(result.get("tokens") or 0),
+            turns=int(result.get("turns") or 0),
+            ok=bool(result.get("ok")),
+            error=str(result.get("error") or ""),
+            ts_start=ts_start, ts_end=time.time(),
+            **dict(audit, model=str(result.get("model") or job["model"])),
+        )
+    except Exception:
+        pass
     return result
