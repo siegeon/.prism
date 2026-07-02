@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty } from "@/components/ui";
@@ -315,9 +316,17 @@ export default function LearningPage() {
         </div>
         {agentRuns.length === 0 ? (
           <Empty>
-            No agent runs yet — they populate as the{" "}
-            <span className="font-mono">implement</span> workflow drives steps
-            and POSTs telemetry to <span className="font-mono">/api/agent-runs/ingest</span>.
+            No <span className="font-mono">implement</span>-workflow agent runs
+            yet — they populate as the workflow drives steps and POSTs telemetry
+            to <span className="font-mono">/api/agent-runs/ingest</span>. This is
+            distinct from internal inference: internal pi/local runs are tracked
+            on the{" "}
+            <Link
+              to="/internal-agent"
+              className="underline decoration-dotted underline-offset-2 text-[color:var(--accent-emerald-fg)] hover:text-[color:var(--text-strong)]"
+            >
+              Internal agent page →
+            </Link>
           </Empty>
         ) : (
           <div className="divide-y divide-[color:var(--border-default)]/40">
