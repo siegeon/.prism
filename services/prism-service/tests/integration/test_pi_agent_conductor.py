@@ -6,11 +6,13 @@ conductor_gate — so a local micro-model agent job can be DIRECTED at SDLC
 work: read a task (task_list by id), author/patch plan_doc sections,
 advance the per-task state machine, and propose gate evidence.
 
-SAFETY (FR-3): the three mutating conductor tools are whitelisted for
-INTERNAL AGENT CALLERS ONLY — POST /api/agent/tool refuses them with 403
-unless the body carries internal=true. The browser PI panel never sends
-the flag, so its reachable surface is unchanged. The subprocess runner
-(pi-runtime.mjs) sends internal=true on every bridged call (FR-4).
+SAFETY history: 9f20b605 gated the three mutating conductor tools to
+INTERNAL callers (403 without internal=true). Task e70cdcda DELIBERATELY
+retired that gate per owner directive — PI IS the orchestrator, so the
+panel drives the SDLC too; INTERNAL_ONLY_TOOLS is now an empty seam and
+the runner still sends internal=true harmlessly on every bridged call.
+Task e70cdcda also ships PI pre-loaded as the PRISM expert: ONE shared
+module (web/pi-expert.mjs) sources the system prompt + 18-tool catalog.
 
 Offline by construction: no Ollama, no live daemon — runner via --check,
 HTTP surface via TestClient against an isolated PRISM_DATA_DIR.
@@ -29,6 +31,20 @@ _SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
 _RUNNER = _SERVICE_ROOT / "prism_service" / "web" / "pi-runtime.mjs"
 
 _CONDUCTOR_TOOLS = ("task_update", "conductor_advance", "conductor_gate")
+
+# The full PRISM-expert catalog (task e70cdcda): PI ships pre-loaded as the
+# PRISM expert — one shared module (web/pi-expert.mjs) sources the system
+# prompt and this 18-tool surface for BOTH the runner and the rail panel.
+_EXPERT_CATALOG = (
+    "brain_search", "brain_understand", "brain_find_symbol", "brain_outline",
+    "brain_find_references", "brain_call_chain",
+    "memory_recall", "memory_store", "memory_invalidate",
+    "task_list", "task_next", "task_create", "task_update",
+    "conductor_advance", "conductor_gate",
+    "workflow_state", "context_bundle", "prism_status",
+)
+
+_EXPERT_MODULE = _SERVICE_ROOT / "prism_service" / "web" / "pi-expert.mjs"
 
 node = shutil.which("node")
 
@@ -51,6 +67,64 @@ def test_runner_check_lists_conductor_tools():
     tools = out.get("tools") or []
     for name in _CONDUCTOR_TOOLS:
         assert name in tools, f"{name} missing from runner tool set: {tools}"
+
+
+@pytest.mark.skipif(node is None, reason="node not installed")
+def test_runner_check_lists_full_expert_catalog():
+    """AC-1 (task e70cdcda): the runner ships pre-loaded as the PRISM
+    expert — --check constructs the FULL 18-tool catalog sourced from the
+    shared pi-expert.mjs module."""
+    proc = subprocess.run(
+        [node, str(_RUNNER), "--check"],
+        capture_output=True, text=True, timeout=120,
+        cwd=str(_RUNNER.parent),
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    out = json.loads(proc.stdout)
+    tools = set(out.get("tools") or [])
+    missing = set(_EXPERT_CATALOG) - tools
+    assert not missing, f"expert catalog tools missing from runner: {sorted(missing)}"
+    assert len(tools) == len(_EXPERT_CATALOG), (
+        f"runner tool set drifted from the expert catalog: {sorted(tools)}"
+    )
+
+
+@pytest.mark.skipif(node is None, reason="node not installed")
+def test_runner_check_reports_expert_prompt():
+    """AC-5 (task e70cdcda): the runner defaults an empty job.system to the
+    shared EXPERT_SYSTEM_PROMPT — --check surfaces its length as proof the
+    constant is wired."""
+    proc = subprocess.run(
+        [node, str(_RUNNER), "--check"],
+        capture_output=True, text=True, timeout=120,
+        cwd=str(_RUNNER.parent),
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    out = json.loads(proc.stdout)
+    assert out.get("expert_prompt_chars", 0) > 500, (
+        f"expert prompt missing/too small: {out.get('expert_prompt_chars')}"
+    )
+
+
+@pytest.mark.skipif(node is None, reason="node not installed")
+def test_pi_expert_module_parses():
+    """AC-4 (task e70cdcda): pi-expert.mjs is the ONE shared source — it
+    parses as an ES module and pi-runtime.mjs imports its catalog instead
+    of carrying a local TOOL_DEFS literal."""
+    assert _EXPERT_MODULE.exists(), f"shared expert module missing: {_EXPERT_MODULE}"
+    proc = subprocess.run(
+        [node, "--check", str(_EXPERT_MODULE)],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(_EXPERT_MODULE.parent),
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    runtime_src = _RUNNER.read_text(encoding="utf-8")
+    assert "pi-expert.mjs" in runtime_src, (
+        "pi-runtime.mjs must import the shared pi-expert.mjs module"
+    )
+    assert "const TOOL_DEFS = {" not in runtime_src, (
+        "pi-runtime.mjs must not duplicate the tool catalog locally"
+    )
 
 
 @pytest.mark.skipif(node is None, reason="node not installed")
@@ -91,6 +165,20 @@ def test_pi_agent_exports_conductor_toolset():
     assert not set(_CONDUCTOR_TOOLS) & set(pi_agent.DEFAULT_TOOLS)
 
 
+def test_pi_agent_exports_expert_toolset():
+    """Task e70cdcda: the FULL expert catalog is a named toolset seam —
+    DEFAULT_TOOLS stays lean for reflection, EXPERT_TOOLS is the whole
+    pre-loaded PRISM surface."""
+    from prism_service.inference import pi_agent
+
+    assert hasattr(pi_agent, "EXPERT_TOOLS"), (
+        "pi_agent.EXPERT_TOOLS expert toolset seam missing"
+    )
+    assert set(pi_agent.EXPERT_TOOLS) == set(_EXPERT_CATALOG)
+    # Reflection default stays lean — the expert surface is opt-in.
+    assert set(pi_agent.DEFAULT_TOOLS) == {"brain_search", "memory_recall"}
+
+
 # ----------------------------------------------------------- HTTP surface
 
 
@@ -104,31 +192,45 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
+# Task e70cdcda DELIBERATELY flips the old 403-without-internal contract:
+# per owner directive PI IS the orchestrator, so task_update /
+# conductor_advance / conductor_gate are panel-reachable WITHOUT the
+# internal=true body flag (INTERNAL_ONLY_TOOLS is now an empty seam).
 @pytest.mark.parametrize("name", _CONDUCTOR_TOOLS)
-def test_conductor_tools_require_internal_flag(client, name):
-    """AC-2 (refusal half): the three conductor tools are whitelisted but
-    gated — without internal=true the passthrough must refuse with 403 so
-    the browser panel surface is unchanged."""
+def test_conductor_tools_allowed_without_internal_flag(client, name):
+    """AC-2 (task e70cdcda): the conductor tools dispatch for the panel —
+    no internal flag needed; the call reaches the real handle_tool (an
+    unknown-task refusal is IN-BAND ok=False, not HTTP 403)."""
     r = client.post(
         "/api/agent/tool",
         params={"project": "pisdlc"},
-        json={"name": name, "args": {"id": "whatever"}},
+        json={"name": name, "args": {"id": "no-such-task"}},
     )
-    assert r.status_code == 403, r.text
-    assert "internal" in r.json().get("detail", "").lower(), r.text
+    assert r.status_code == 200, r.text
+    result = r.json().get("result")
+    assert result is not None, r.text
 
 
-@pytest.mark.parametrize("name", _CONDUCTOR_TOOLS)
-def test_conductor_tools_reject_falsy_internal_flag(client, name):
-    """internal must be literally true — a truthy-looking string or false
-    does not open the gate."""
-    for flag in (False, "true", 1):
-        r = client.post(
-            "/api/agent/tool",
-            params={"project": "pisdlc"},
-            json={"name": name, "args": {"id": "whatever"}, "internal": flag},
-        )
-        assert r.status_code == 403, f"internal={flag!r}: {r.text}"
+@pytest.mark.parametrize("name", sorted(
+    {"brain_understand", "brain_find_symbol", "brain_outline",
+     "brain_find_references", "brain_call_chain", "memory_invalidate",
+     "task_next", "workflow_state", "context_bundle"}))
+def test_expert_surface_tools_whitelisted(client, name):
+    """Task e70cdcda: the widened expert surface dispatches through the
+    passthrough (200 + real handle_tool payload, never a 403)."""
+    args = {
+        "brain_find_symbol": {"name": "probe"},
+        "brain_outline": {"source_file": "nope.py"},
+        "brain_find_references": {"name": "probe"},
+        "brain_call_chain": {"entity": "probe"},
+        "memory_invalidate": {"memory_id": "mx-000000"},
+    }.get(name, {})
+    r = client.post(
+        "/api/agent/tool",
+        params={"project": "pisdlc"},
+        json={"name": name, "args": args},
+    )
+    assert r.status_code == 200, f"{name}: {r.text}"
 
 
 def _create_task(client, title):

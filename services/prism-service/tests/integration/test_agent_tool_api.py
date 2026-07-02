@@ -78,6 +78,40 @@ def test_non_whitelisted_tool_rejected_403(client):
     assert r.status_code == 403, r.text
 
 
+@pytest.mark.parametrize("name", [
+    "janitor_check", "janitor_submit", "janitor_abandon",
+    "prism_sync", "okf_index", "okf_get", "okf_graph",
+    "prism_onboard", "register_claude_source",
+])
+def test_excluded_admin_tools_still_403(client, name):
+    """AC-3 (task e70cdcda): the expert-surface widening is EXACT — the
+    admin/destructive tools stay excluded even though the whitelist grew
+    to the full 18-tool expert catalog."""
+    r = client.post(
+        "/api/agent/tool",
+        params={"project": "agenttest"},
+        json={"name": name, "args": {}},
+    )
+    assert r.status_code == 403, f"{name}: {r.text}"
+
+
+def test_whitelist_is_exactly_the_expert_catalog():
+    """Task e70cdcda FR-3: AGENT_TOOL_WHITELIST == the 18-name expert
+    catalog, and the internal-only gate is retired (empty seam)."""
+    from prism_service.api.agent import AGENT_TOOL_WHITELIST, INTERNAL_ONLY_TOOLS
+
+    expected = {
+        "brain_search", "brain_understand", "brain_find_symbol",
+        "brain_outline", "brain_find_references", "brain_call_chain",
+        "memory_recall", "memory_store", "memory_invalidate",
+        "task_list", "task_next", "task_create", "task_update",
+        "conductor_advance", "conductor_gate",
+        "workflow_state", "context_bundle", "prism_status",
+    }
+    assert set(AGENT_TOOL_WHITELIST) == expected
+    assert INTERNAL_ONLY_TOOLS == frozenset()
+
+
 def test_unknown_tool_rejected_403(client):
     """A made-up tool name never reaches the dispatcher."""
     r = client.post(
