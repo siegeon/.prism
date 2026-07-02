@@ -66,10 +66,25 @@ export default function TasksPage() {
   const reduced = useReducedMotion();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [next, setNext] = useState<Task | null>(null);
+  const [nextReason, setNextReason] = useState("");
 
   const load = useCallback(() => {
     api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}`).then((d) => setTasks(d.tasks)).catch(() => setTasks([]));
-    api.get<{ next: Task | null }>(`/api/tasks/next?project=${project}`).then((d) => setNext(d.next)).catch(() => setNext(null));
+    // /api/tasks/next wraps the recommendation in a {task, reason} envelope
+    // (task_next claim/lease); older builds returned the bare task. Accept
+    // both — and only a task carrying an id counts as a recommendation, so
+    // anything else falls through to the explicit Empty state, never a
+    // blank card.
+    type NextEnvelope = { task?: Task | null; reason?: string };
+    api.get<{ next: NextEnvelope | Task | null }>(`/api/tasks/next?project=${project}`)
+      .then((d) => {
+        const raw = d.next;
+        const t = raw && typeof raw === "object" && "task" in raw ? (raw as NextEnvelope).task : (raw as Task | null);
+        setNext(t?.id ? t : null);
+        const reason = raw && typeof raw === "object" && "reason" in raw ? (raw as NextEnvelope).reason : "";
+        setNextReason(reason || "");
+      })
+      .catch(() => { setNext(null); setNextReason(""); });
   }, [project]);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -99,6 +114,7 @@ export default function TasksPage() {
             className="text-sm text-left hover:opacity-100 w-full"
           >
             <div className="font-medium hover:underline decoration-dotted underline-offset-2">{next.title ?? next.id}</div>
+            {nextReason && <div className="text-xs opacity-70 mt-1">{nextReason}</div>}
             <div className="text-xs opacity-60 mt-1 font-mono">{next.id}</div>
           </button>
         ) : (

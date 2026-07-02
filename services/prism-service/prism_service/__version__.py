@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.22"
+PRISM_VERSION = "6.7.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.23: tasks board WHAT'S NEXT card no longer renders as a blank "
+    "bordered box. /api/tasks/next wraps the recommendation in a "
+    "{task, reason} envelope (task_next claim/lease) but TasksPage still "
+    "consumed d.next as the task row itself — truthy envelope, undefined "
+    "title/id, empty card. The SPA now unwraps the envelope (tolerating the "
+    "legacy bare-task shape), treats only a task WITH an id as a "
+    "recommendation (anything else falls through to the explicit 'Queue is "
+    "clear.' empty state), and surfaces the recommendation reason line on "
+    "the card. "
     "v6.7.22: artifact/understand OUTLINE now shows REAL symbol kinds + lines (class/function, "
     ":line) from the Brain index instead of the graph entities table, which stored "
     "kind=unknown/line=0 and listed imported names. build_understanding now sources the "
