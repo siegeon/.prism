@@ -243,7 +243,7 @@ export default function DashboardPage() {
         <TrendKpi label="Queries" series={act?.series.searches ?? []} color={TONE.teal} />
         <TrendKpi label="Docs indexed" series={act?.series.indexing ?? []} color={TONE.sage} />
         <TrendKpi label="Workflow events" series={act?.series.workflow ?? []} color={TONE.violet} />
-        <TrendKpi label="Tasks shipped" series={act?.flow.completed ?? []} color={TONE.emerald} />
+        <TrendKpi label="Tasks shipped (incl. subtasks)" series={act?.flow.completed ?? []} color={TONE.emerald} />
         <TrendKpi label="Tokens (14d)" series={act?.tokens.per_day ?? []} color={TONE.amber} fmt={compact} />
       </section>
 
@@ -278,7 +278,7 @@ export default function DashboardPage() {
           <div className="flex gap-3 mb-3">
             <Stat label="gate pass-rate" value={gatePct != null ? `${gatePct}%` : "—"} tone={gatePct === 100 ? TONE.emerald : gatePct != null ? TONE.amber : undefined} />
             <Stat label="cycle time" value={act?.flow.cycle_days != null ? `${act.flow.cycle_days} d` : "—"} />
-            <Stat label="shipped" value={nf(sum(act?.flow.completed ?? []))} />
+            <Stat label="shipped (incl. subtasks)" value={nf(sum(act?.flow.completed ?? []))} />
             <Stat label="active" value={nf(data?.kpis.tasks_active ?? 0)} />
           </div>
           {flowChart && <PlotFigure options={flowChart} className="w-full mb-3" />}
