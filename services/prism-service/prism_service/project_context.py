@@ -12,6 +12,7 @@ import threading
 from typing import Optional
 
 from prism_service.config import project_data_dir, list_projects, PROJECTS_DIR, DEFAULT_PROJECT
+from prism_service.data_dir import resolve_data_dir
 
 
 class ProjectContext:
@@ -182,7 +183,20 @@ class ProjectContext:
 # ---------------------------------------------------------------------------
 
 _lock = threading.Lock()
-_contexts: dict[str, ProjectContext] = {}
+# Keyed by (resolved_data_dir, project_id) — NOT project_id alone. The data
+# dir is part of the identity of a ProjectContext (it binds every service to
+# a tasks.db/brain.db/mulch under that dir). Keying on the name alone made a
+# PRISM_DATA_DIR change (the per-test isolation lever) hand back a context
+# bound to an EARLIER data dir, leaking writes into a shared store (finding
+# 33a1397b). In production PRISM_DATA_DIR is stable per process, so this
+# resolves to one dir for the process's life and is behavior-neutral.
+_contexts: dict[tuple[str, str], ProjectContext] = {}
+
+
+def _cache_key(project_id: str) -> tuple[str, str]:
+    """Compose the ``_contexts`` key: the LIVE resolved data dir paired with
+    the project id. resolve_data_dir() reads PRISM_DATA_DIR at call time."""
+    return (str(resolve_data_dir()), project_id)
 
 
 class UnknownProjectError(KeyError):
@@ -223,14 +237,15 @@ def get_project(project_id: Optional[str] = None) -> ProjectContext:
     and 'default' itself may still auto-create.
     """
     pid = project_id or DEFAULT_PROJECT
+    key = _cache_key(pid)
     with _lock:
-        ctx = _contexts.get(pid)
+        ctx = _contexts.get(key)
         if ctx is not None:
             return ctx
         if pid != DEFAULT_PROJECT and not project_exists(pid):
             raise UnknownProjectError(pid)
-        _contexts[pid] = ProjectContext(pid)
-        return _contexts[pid]
+        _contexts[key] = ProjectContext(pid)
+        return _contexts[key]
 
 
 def get_all_projects() -> list[str]:
@@ -255,9 +270,15 @@ def release_project(project_id: str) -> None:
     fresh context bound to a freshly-seeded data directory.
     """
     with _lock:
-        ctx = _contexts.pop(project_id, None)
-    if ctx is None:
-        return
+        # The cache is keyed by (data_dir, project_id); drop every entry for
+        # this project id regardless of which data dir it is bound to.
+        stale = [k for k in _contexts if k[1] == project_id]
+        ctxs = [_contexts.pop(k) for k in stale]
+    for ctx in ctxs:
+        _release_context(ctx)
+
+
+def _release_context(ctx: "ProjectContext") -> None:
     # Close any services that hold open SQLite handles. Each service
     # exposes a best-effort .close() if it has connections; missing ones
     # are silently ignored so we can free files on Windows.

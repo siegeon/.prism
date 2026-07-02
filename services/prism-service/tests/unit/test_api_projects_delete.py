@@ -84,11 +84,13 @@ def test_delete_releases_project_context(isolated_projects_root):
     _seed_project("cached-proj")
     # Force a context cache entry.
     project_context.get_project("cached-proj")
-    assert "cached-proj" in project_context._contexts
+    # _contexts is keyed by (resolved_data_dir, project_id) (33a1397b), so
+    # membership is checked on the project-id half of the composite key.
+    assert any(k[1] == "cached-proj" for k in project_context._contexts)
 
     projects_api.delete_project("cached-proj")
 
-    assert "cached-proj" not in project_context._contexts
+    assert not any(k[1] == "cached-proj" for k in project_context._contexts)
 
 
 def test_delete_then_recreate_is_clean_slate(isolated_projects_root):

@@ -29,6 +29,14 @@ import pytest
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PRISM_DATA_DIR", str(tmp_path))
+    # config.py resolves DATA_DIR/PROJECTS_DIR ONCE at import (config.py:14-17),
+    # so setenv alone never re-points them and every write leaked into the
+    # process's first data dir (finding 33a1397b). Re-point the frozen globals
+    # at this test's tmp dir; the source cache-key fix (keyed by resolved data
+    # dir) then guarantees a fresh, isolated ProjectContext per test.
+    import prism_service.config as _cfg
+    monkeypatch.setattr(_cfg, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(_cfg, "PROJECTS_DIR", tmp_path / "projects")
     from fastapi.testclient import TestClient
 
     from prism_service.main import app
