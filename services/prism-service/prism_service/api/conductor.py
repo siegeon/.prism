@@ -1,5 +1,7 @@
 """Conductor API — prompt variants, scores, session outcomes, and SDLC state."""
 
+from typing import Optional
+
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from prism_service.project_context import get_project
@@ -13,6 +15,30 @@ def _svc(project: str):
         return get_project(project).conductor_svc
     except Exception as exc:
         raise HTTPException(404, f"unknown project: {project}: {exc}")
+
+
+def _effective_project(query_project: Optional[str], body: dict) -> str:
+    """Resolve the project for the mutation routes (task 48b965e0).
+
+    Query param wins (the documented REST convention); a string
+    body['project'] is the fallback for MCP-shaped clients that carry
+    project in the JSON body (the tasks-API convention); 'default' last.
+    Previously the body key was silently DROPPED and a real task came
+    back as bare 'unknown task' from the wrong project."""
+    if query_project:
+        return query_project
+    body_project = body.get("project")
+    if isinstance(body_project, str) and body_project.strip():
+        return body_project.strip()
+    return "default"
+
+
+def _name_searched_project(out: dict, task_id: str, project: str) -> dict:
+    """Enrich the service's bare 'unknown task' refusal so the failure
+    names WHICH project was searched (task 48b965e0 FR-4)."""
+    if out.get("ok") is False and out.get("reason") == "unknown task":
+        out["reason"] = f"task {task_id!r} not found in project {project!r}"
+    return out
 
 
 @router.get("/state")
@@ -48,7 +74,7 @@ def _board_tasks(s) -> list:
 
 
 @router.post("/gate")
-def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
+def gate(project: Optional[str] = Query(None), body: dict = Body(...)) -> dict:
     """Resolve a pending conductor gate from the SPA.
 
     Same path as the MCP `conductor_gate` tool: delegates to
@@ -56,12 +82,13 @@ def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
     auto-advances; reject flips->'failed' and stores reason in
     task.gate_reason. The decision PERSISTS on the task row.
     """
-    s = _svc(project)
+    effective = _effective_project(project, body)
+    s = _svc(effective)
     task_id = body.get("task_id")
     action = body.get("action")
     if not task_id or action not in ("approve", "reject"):
         raise HTTPException(422, "task_id and action ('approve'|'reject') required")
-    return s.gate_decide(
+    out = s.gate_decide(
         task_id,
         action,
         reason=body.get("reason", "") or "",
@@ -70,12 +97,14 @@ def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
         # NO-SELF-OVERRIDE actor (task 3826dac3): defaults to the session.
         actor=body.get("actor") or body.get("session_id"),
     )
+    return _name_searched_project(out, task_id, effective)
 
 
 @router.post("/advance")
-def advance(project: str = Query("default"), body: dict = Body(...)) -> dict:
+def advance(project: Optional[str] = Query(None), body: dict = Body(...)) -> dict:
     """Advance a task to the next WORKFLOW_STEP (same as the MCP advance)."""
-    s = _svc(project)
+    effective = _effective_project(project, body)
+    s = _svc(effective)
     task_id = body.get("task_id")
     if not task_id:
         raise HTTPException(422, "task_id required")
@@ -85,4 +114,4 @@ def advance(project: str = Query("default"), body: dict = Body(...)) -> dict:
         session_id=body.get("session_id"),
     )
     # Normalize key for the SPA: advance_task returns 'to_step'.
-    return out
+    return _name_searched_project(out, task_id, effective)
