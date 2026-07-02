@@ -90,7 +90,11 @@ export function formatDriveResult(r) {
   }
   const st = r.stats;
   if (st) {
-    lines.push(`stats: ${st.advances ?? 0} advances · ${st.gates ?? 0} gates · `
+    // Live engine stats: `gates` is a per-gate map, `steps` a label list —
+    // count them; plain numbers (tests/older shapes) pass through.
+    const count = (v) => (Array.isArray(v) ? v.length
+      : (v && typeof v === "object" ? Object.keys(v).length : (v ?? 0)));
+    lines.push(`stats: ${st.advances ?? 0} advances · ${count(st.gates)} gates · `
       + `${st.model_calls ?? 0} model calls · ${st.overrides ?? 0} overrides`);
   }
   return lines.join("\n");
