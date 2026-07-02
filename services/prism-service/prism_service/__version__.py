@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.32"
+PRISM_VERSION = "6.7.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.33: stress-loop consolidation. CLAUDE-P EXIT EPIC "
+    "CLOSED (be898578) — internal inference no longer needs claude -p: memory "
+    "summaries, event handlers, graph enrich, brain /ask, memory ops, analyzers "
+    "all run env-gated on the local/pi micro engine, token telemetry preserved "
+    "via the reconciled pi_runs ledger + /internal-agent audit page. Owner bug "
+    "FIXED: conductor tiles no longer share turns — per-task work-window "
+    "attribution (03a8bfe3). Test-isolation root cause fixed: project context "
+    "cache keyed by (data_dir, project_id) (33a1397b). Phantom-project 404 + "
+    "task status/title/parent/dependency validation. Suite 1376 passed. "
     "SELF-IMPROVE-FORK v6.7.32: stress-loop landing wave. Tier0 verifier runs "
     "in the SERVICE workspace (271dacc9 - repo-root collection explosion from "
     "the data-dir mirror + dangling root testpaths killed EVERY green gate); "
