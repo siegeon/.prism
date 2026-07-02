@@ -78,6 +78,27 @@ def test_mcp_response_not_augmented_when_none(project):
     assert "PRISM_REFLECTION_PENDING" not in out
 
 
+def test_mcp_response_not_augmented_for_garbage_rows(project):
+    """Task 1a7bc848 (AC-6) — runner-owned memory-op candidates and
+    null-context rows must never trigger the reflection nudge: they can
+    only ever dispense as the un-actionable 'task None' brief."""
+    # Runner-owned merge work item (memory-ops runner consumes these).
+    _call("janitor_enqueue", {
+        "trigger": "merge",
+        "scope": {"op": "merge", "member_ids": ["mx-aaaaaa", "mx-bbbbbb"]},
+    }, project_id=project)
+    # Null-context session row (no task, empty scope).
+    _call("janitor_enqueue", {
+        "trigger": "session_completed",
+        "scope": {},
+    }, project_id=project)
+    out = _text(_call("task_list", project_id=project))
+    assert "PRISM_REFLECTION_PENDING" not in out, (
+        "nudge fired for a queue containing only runner-owned/garbage "
+        "rows — no dispensable reflection brief exists"
+    )
+
+
 def test_augmentation_rate_limited_5min_per_session(project):
     _seed_pending(project)
     first = _text(_call("task_list", project_id=project))
