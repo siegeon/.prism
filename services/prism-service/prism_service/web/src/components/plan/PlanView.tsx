@@ -1,31 +1,38 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
 
 /**
  * Renders a task plan as TABS in one place — Prototype (the clickable mock,
- * iframed), Diagram (Mermaid), and Proposed change (markdown) share the same
- * slot, toggled by a tab bar. Full-width (max-w-none) so the task page uses
- * the whole screen like /understand. Default tab is the Prototype when present.
+ * iframed), Diagram (Mermaid), Proposed change (markdown), and Metrics (the
+ * per-phase SDLC breakdown) share the same slot, toggled by a tab bar.
+ * Full-width (max-w-none) so the task page uses the whole screen like
+ * /understand. Default tab is the Prototype when present.
  */
 export default function PlanView({
   diagram,
   doc,
   prototypeSrc,
+  metrics,
 }: {
   diagram?: string;
   doc?: string;
   prototypeSrc?: string;
+  // Per-phase metrics card (task bd1c2289) rendered as a peer tab alongside
+  // Diagram / Proposed change, so effort lives in the same plan surface.
+  metrics?: ReactNode;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
   const hasProto = !!prototypeSrc;
+  const hasMetrics = !!metrics;
 
   const tabs: { key: string; label: string }[] = [];
   if (hasProto) tabs.push({ key: "prototype", label: "Prototype" });
   if (hasDiagram) tabs.push({ key: "diagram", label: "Diagram" });
   if (hasDoc) tabs.push({ key: "doc", label: "Proposed change" });
+  if (hasMetrics) tabs.push({ key: "metrics", label: "Metrics" });
 
   const [active, setActive] = useState(tabs[0]?.key ?? "doc");
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
@@ -78,6 +85,9 @@ export default function PlanView({
       {cur === "doc" && hasDoc && (
         // full-width (max-w-none): whole screen like /understand, not 840px.
         <Markdown text={doc!} className="space-y-4 max-w-none" />
+      )}
+      {cur === "metrics" && hasMetrics && (
+        <div className="pt-1">{metrics}</div>
       )}
     </div>
   );

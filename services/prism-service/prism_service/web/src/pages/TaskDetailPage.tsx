@@ -849,22 +849,18 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
-      {(task.phase_metrics?.steps?.length ?? 0) > 0 && (
-        <Stagger i={1} reduced={reduced}>
-        <Card>
-          <SectionLabel>Phase metrics — per-step effort across the SDLC</SectionLabel>
-          <PhaseMetricsCard metrics={task.phase_metrics as PhaseMetrics} />
-        </Card>
-        </Stagger>
-      )}
-
-      {(task.plan_doc || task.plan_diagram || task.has_prototype) ? (
+      {(task.plan_doc || task.plan_diagram || task.has_prototype || (task.phase_metrics?.steps?.length ?? 0) > 0) ? (
         <Stagger i={1} reduced={reduced}>
         <Card>
           <SectionLabel>Plan</SectionLabel>
           <div className="mt-2">
+            {/* Metrics rides as a peer tab (Diagram / Proposed change / Metrics)
+                so the per-phase SDLC breakdown lives in the same plan surface. */}
             <PlanView diagram={task.plan_diagram} doc={task.plan_doc}
-              prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined} />
+              prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
+              metrics={(task.phase_metrics?.steps?.length ?? 0) > 0
+                ? <PhaseMetricsCard metrics={task.phase_metrics as PhaseMetrics} />
+                : undefined} />
           </div>
         </Card>
         </Stagger>
