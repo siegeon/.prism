@@ -354,7 +354,7 @@ export default function ConsolidationPage() {
         <Card>
           <SectionLabel>What we've extracted</SectionLabel>
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-2">
-            <Kpi label="Sessions scanned" value={rollup.sessions_scanned} />
+            <Kpi label="Candidates scanned" value={rollup.sessions_scanned} />
             <Kpi label="Pushbacks" value={rollup.pushbacks} />
             <Kpi label="Tool failures" value={rollup.tool_failures} />
             <Kpi label="Bg signals" value={rollup.bg_signals} />
