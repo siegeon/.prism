@@ -10,6 +10,7 @@ const TITLES: Record<string, string> = {
   "/sessions": "Sessions", "/retrievals": "Retrievals",
   "/learning": "Learning", "/consolidation": "Consolidation",
   "/understand": "Understand", "/settings": "Settings",
+  "/internal-agent": "Internal agent",
 };
 
 // v6.0.15 — match nested routes (e.g. /tasks/:id -> "Tasks",
