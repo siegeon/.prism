@@ -106,8 +106,12 @@ class DistillProceduralOperation(MemoryOperation):
         "invalidate_memory_ids": "[]",
         "confidence": "float 0-1",
     }
-    # Synthesis op -> Opus (cheap ops use Haiku); "" falls to CLI default.
-    model = "claude-opus-4-20250514"
+    # Model routing lives in runner._CLAUDE_OP_MODEL (task 9f61d484): the
+    # opus pin for this synthesis op is the op map's entry, NOT a hardcoded
+    # id here, so the map is the single home of routing. "" here means the
+    # runner supplies distill's model (opus for claude; qwen3 only on the
+    # PRISM_MEMORY_OPS_DISTILL_LOCAL opt-in — micro-model distill is uncertain).
+    model = ""
     provenance = {"source": "distill_procedural", "tier": 2}
 
     def select(self, project: str) -> list:
