@@ -326,3 +326,67 @@ def test_task_history_records_validation_on_advance(tmp_path):
     advance_rows = [r for r in rows if r.action == "advance_task"]
     assert advance_rows, "advance_task must produce a task_history row"
     assert "validation=plan_coverage" in advance_rows[-1].details
+
+
+# ----------------------------------------------------------------------
+# Failed gates must latch the state machine (task baab6b51)
+# ----------------------------------------------------------------------
+
+
+def test_advance_refused_when_gate_failed(tmp_path):
+    """A FAILED gate must block advance_task just like a pending one.
+
+    Live-probe finding (task 9f20b605): advance_task only checked
+    gate_state == 'pending', so a task sitting on a REJECTED gate could
+    legally be advanced past it with no override and no re-decision.
+    """
+    task_svc, cond = _services(tmp_path)
+    t = task_svc.create(title="Failed gate latches")
+    steps = _workflow()
+    gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    for _ in range(gate_index + 1):
+        cond.advance_task(t.id)
+    cond.gate_decide(t.id, action="reject", reason="verifier said no")
+
+    refused = cond.advance_task(t.id)
+
+    assert refused["ok"] is False
+    assert "failed" in refused["reason"]
+    assert refused["from_step"] == steps[gate_index]["id"]
+    assert refused["to_step"] == steps[gate_index]["id"]
+
+    # Task state untouched: still latched on the failed gate, with the
+    # rejection reason preserved.
+    refreshed = task_svc.get(t.id)
+    assert refreshed.workflow_step == steps[gate_index]["id"]
+    assert refreshed.gate_state == "failed"
+    assert refreshed.gate_reason == "verifier said no"
+
+
+def test_failed_gate_recovers_via_override_then_advances(tmp_path):
+    """The latch releases ONLY through the gate_decide recovery path
+    (approve + override=True, distinct actor); afterwards advance_task
+    proceeds normally."""
+    task_svc, cond = _services(tmp_path)
+    t = task_svc.create(title="Recover failed gate")
+    steps = _workflow()
+    gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    for _ in range(gate_index + 1):
+        cond.advance_task(t.id)
+    cond.gate_decide(t.id, action="reject", reason="nope")
+
+    # Latched: advance must be refused while the gate is failed.
+    assert cond.advance_task(t.id)["ok"] is False
+
+    recovered = cond.gate_decide(
+        t.id, action="approve", override=True,
+        actor="independent-verifier",
+        reason="remediated; pytest -q green",
+    )
+    assert recovered["ok"] is True
+    assert recovered["gate_state"] == "passed"
+
+    refreshed = task_svc.get(t.id)
+    assert refreshed.workflow_step == steps[gate_index + 1]["id"]
+    onward = cond.advance_task(t.id)
+    assert onward["ok"] is True
