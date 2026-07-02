@@ -36,6 +36,13 @@ import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "../../pi-expert.mjs";
 // (web/pi-runtime.mjs) so an array / concatenated tool-call block parses
 // identically. parseTextToolCalls returns an ORDERED LIST of {name,args}.
 import { parseTextToolCall, parseTextToolCalls } from "../../pi-toolcall.mjs";
+// Shared drive-intent module (task 4ada9ea0): a "plan/drive feature X" ask
+// becomes exactly ONE POST /api/agent/drive instead of N text-intercepted
+// tool calls. The module owns detection + POST + summary; this panel only
+// delegates. Same single-source discipline as pi-expert / pi-toolcall.
+// @ts-ignore -- runtime .mjs shipped without a .d.mts (this task's
+// allowed_files bars a sibling); call sites below type the seam.
+import { detectDriveIntent, formatDriveResult, postDrive } from "../../pi-drive.mjs";
 
 // ---------------------------------------------------------------- config
 
@@ -385,6 +392,14 @@ export class PiStore {
     if (!prompt || this.busy) return;
     this.interacted = true; // from here on, a late rehydrate must no-op
     this.lastError = "";
+    // Drive-intent delegation (task 4ada9ea0): the whole SDLC walk runs
+    // server-side behind ONE POST — never the interception loop.
+    const driveIntent = detectDriveIntent(prompt) as
+      { ask?: string; task_id?: string } | null;
+    if (driveIntent) {
+      await this.runDrive(prompt, driveIntent);
+      return;
+    }
     this.interceptBudget = 6;
     try {
       await this.agent.prompt(prompt);
@@ -393,6 +408,41 @@ export class PiStore {
       this.busy = false;
       this.emit();
     }
+  }
+
+  /** One drive exchange (task 4ada9ea0): user bubble, ONE POST
+   * /api/agent/drive via the shared module, formatted receipt as a settled
+   * assistant item. Engine refusals ({ok:false, reason}) surface verbatim —
+   * no retry, no interception. */
+  private async runDrive(prompt: string, intent: { ask?: string; task_id?: string }) {
+    this.busy = true;
+    // Fresh-exchange accounting, mirroring the agent_start reset.
+    this.runStart = performance.now();
+    this.runUsage = { input: 0, output: 0 };
+    this.runTaskId = null;
+    this.items.push({ kind: "user", text: prompt });
+    this.items.push({ kind: "assistant", text: "Driving via /api/agent/drive…", done: false });
+    this.emit();
+    const started = performance.now();
+    const result = await postDrive({
+      project: this._project,
+      ask: intent.ask ?? "",
+      taskId: intent.task_id ?? "",
+    }) as { ok?: boolean; task_id?: string };
+    const ms = Math.round(performance.now() - started);
+    const last = [...this.items].reverse().find((i) => i.kind === "assistant");
+    if (last && last.kind === "assistant") {
+      last.text = String(formatDriveResult(result));
+      last.done = true;
+      last.stats = { input: 0, output: 0, seconds: ms / 1000, estimated: true };
+    }
+    if (typeof result?.task_id === "string" && result.task_id) this.runTaskId = result.task_id;
+    this.runTools = [{ name: "agent_drive", ms, ok: result?.ok === true }];
+    this.busy = false;
+    this.recordTelemetry(result?.ok === true);
+    void this.postTelemetry(result?.ok === true);
+    this.persist();
+    this.emit();
   }
 
   /** Stop the in-flight run (the composer's stop button). agent.abort()

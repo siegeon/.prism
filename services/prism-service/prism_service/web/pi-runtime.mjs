@@ -26,6 +26,11 @@ import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "./pi-expert.mjs";
 // identically here and in the SPA panel. Returns an ORDERED LIST.
 import { parseTextToolCall, parseTextToolCalls } from "./pi-toolcall.mjs";
 
+// Shared drive-intent module (task 4ada9ea0): a "plan/drive feature X" ask
+// becomes exactly ONE POST /api/agent/drive — the module owns detection,
+// the POST, and the summary; this runner only delegates.
+import { maybeRunDrive } from "./pi-drive.mjs";
+
 // ------------------------------------------------------------- model
 
 function buildModel(modelId, baseUrl) {
@@ -128,6 +133,12 @@ function messageText(message) {
 // ---------------------------------------------------------------- run
 
 async function runJob(job) {
+  // Drive-intent short-circuit (task 4ada9ea0): one POST /api/agent/drive,
+  // zero model calls, zero interception budget. Non-drive jobs fall through
+  // to the existing agent + interception path untouched.
+  const driven = await maybeRunDrive(job);
+  if (driven) return driven;
+
   const started = Date.now();
   const baseUrl = (job.base_url || "http://localhost:11434/v1").replace(/\/$/, "");
   const modelId = job.model || "qwen3:0.6b";
