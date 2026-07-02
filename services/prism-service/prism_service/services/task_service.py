@@ -276,6 +276,48 @@ class TaskService:
                 f"title too long ({len(value)} chars); max {TITLE_MAX_LEN}"
             )
 
+    def _validate_parent(self, parent_id: object,
+                         task_id: Optional[str] = None) -> None:
+        """Parent-link integrity (task 24ed8027). A non-empty parent must
+        (1) not be the task itself, (2) exist, and (3) not close an
+        ancestor cycle through the task — the parent's chain is walked up
+        with a visited-guard so pre-existing corrupt cycles in stored
+        rows terminate the walk instead of hanging it. task_id is None on
+        create (a fresh id can never be in an existing chain, so only
+        existence applies)."""
+        pid = str(parent_id or "")
+        if not pid:
+            return  # '' = make/keep root — always valid
+        if task_id is not None and pid == task_id:
+            raise ValueError(
+                f"task {task_id} cannot be its own parent"
+            )
+        if self.get(pid) is None:
+            raise ValueError(f"parent task {pid!r} does not exist")
+        if task_id is None:
+            return
+        chain = [pid]
+        visited = {pid}
+        cursor = pid
+        while True:
+            row = self._db.execute(
+                "SELECT parent_id FROM tasks WHERE id = ?", (cursor,)
+            ).fetchone()
+            ancestor = (row["parent_id"] or "") if row else ""
+            if not ancestor:
+                return
+            if ancestor == task_id:
+                chain.append(task_id)
+                raise ValueError(
+                    "re-parenting would create a cycle: "
+                    + " -> ".join([task_id, *chain])
+                )
+            if ancestor in visited:
+                return  # pre-existing corrupt cycle above — not ours to close
+            visited.add(ancestor)
+            chain.append(ancestor)
+            cursor = ancestor
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
@@ -304,9 +346,11 @@ class TaskService:
         """Create a new task and return it.
 
         Raises ValueError when the title exceeds TITLE_MAX_LEN
-        (task 16234231 — titles are board-rendered everywhere).
+        (task 16234231 — titles are board-rendered everywhere) or when a
+        non-empty parent_id names no existing task (task 24ed8027).
         """
         self._validate_title(title)
+        self._validate_parent(parent_id)
         task = Task(
             title=title,
             description=description,
@@ -446,6 +490,8 @@ class TaskService:
             self._validate_status(kwargs["status"])
         if "title" in kwargs:
             self._validate_title(kwargs["title"])
+        if "parent_id" in kwargs:
+            self._validate_parent(kwargs["parent_id"], task_id=task_id)
 
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []
