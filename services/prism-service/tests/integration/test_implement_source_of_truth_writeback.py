@@ -44,6 +44,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.worktree_guard import worktree_of_canonical
+
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 _WORKFLOWS = _SERVICE_ROOT.parent.parent / ".claude" / "workflows"
@@ -81,7 +83,12 @@ def _step_schema_block(src: str) -> str:
     """The STEP_SCHEMA object — the per-step structured-output contract that
     every non-locate step returns. AC7's source_tier field belongs here."""
     start = src.index("const STEP_SCHEMA = {")
-    end = src.index("// ── Phase: Pre-flight", start)
+    # The schema object ends where the Pre-flight phase begins. Match the
+    # stable comment TEXT, not its decorative dash style: the committed
+    # implement.js is byte-clean ASCII ("// -- Phase: Pre-flight"), while an
+    # earlier draft used U+2500 box-drawing rules ("// ── ...") — indexing on
+    # the dashes made this helper ValueError against the real committed file.
+    end = src.index("Phase: Pre-flight", start)
     return src[start:end]
 
 
@@ -238,14 +245,18 @@ def test_step_rejects_empty_or_mistiered_cite():
 # ── Guard: only the canonical workflow is edited (worktree untouched) ─────
 
 def test_only_canonical_workflow_targeted():
-    """Guard: this suite asserts against the canonical workflow path, never
-    a worktree copy — the worktree under .claude/worktrees syncs separately
-    and is explicitly out of scope."""
+    """Guard: this suite asserts against the canonical workflow lineage,
+    never a stray copy. A linked git worktree of the canonical repo IS a
+    legitimate home (agent lanes run the suite there); a bare copy or a
+    foreign clone parked under a worktrees-like path is still rejected —
+    decided by git identity via tests.worktree_guard (task 7faed505)."""
     assert _WORKFLOWS.name == "workflows"
-    assert "worktrees" not in str(_WORKFLOWS), (
-        "test is pointed at a worktree copy — only the canonical "
-        ".claude/workflows/implement.js is in scope"
-    )
+    if "worktrees" in str(_WORKFLOWS):
+        assert worktree_of_canonical(_WORKFLOWS), (
+            "test is pointed at a stray copy under a worktrees path — only "
+            "the canonical .claude/workflows/implement.js or a linked git "
+            "worktree of the canonical repo is in scope"
+        )
     assert (_WORKFLOWS / "implement.js").exists(), (
         "canonical .claude/workflows/implement.js not found"
     )

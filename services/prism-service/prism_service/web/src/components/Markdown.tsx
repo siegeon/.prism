@@ -145,10 +145,26 @@ export function renderInline(text: string): ReactNode {
     if (!next) { parts.push(<span key={key++}>{highlight(rest)}</span>); break; }
     if (next.index > 0) parts.push(<span key={key++}>{highlight(rest.slice(0, next.index))}</span>);
     if (next === code) {
-      // Marked code chips (backtick spans) become resolving xref links, so
-      // every surface that renders markdown inherits clickable tokens. Plain
-      // prose never reaches this branch, so words outside backticks stay inert.
-      parts.push(<XrefLink key={key++} token={next[1]} />);
+      const token = next[1];
+      if (/\s/.test(token)) {
+        // A whitespace-bearing span (a shell command, a multi-word fragment)
+        // can never resolve as an xref symbol/file — render the plain inline
+        // <code> chip directly (FR-2) and skip the resolver round-trip.
+        parts.push(
+          <code
+            key={key++}
+            className="text-[0.85em] font-mono px-1 py-0.5 rounded break-all align-baseline bg-[color:var(--surface-2)] text-[color:var(--text-secondary)]"
+          >
+            {token}
+          </code>,
+        );
+      } else {
+        // Single-token code chips become resolving xref links, so every
+        // surface that renders markdown inherits clickable tokens; an
+        // unresolved token stays an inert <code> chip inside XrefLink. Plain
+        // prose never reaches this branch, so words outside backticks stay inert.
+        parts.push(<XrefLink key={key++} token={token} />);
+      }
     } else if (next === link) {
       const href = next[2];
       const external = /^https?:\/\//.test(href);
