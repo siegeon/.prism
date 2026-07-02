@@ -158,6 +158,14 @@ _MARKED = [
      "test_session_imported_reinforces_instead_of_duplicating"),
     ("tests.integration.test_learning_loop_self_sustaining",
      "test_completed_reflection_writes_rollup_and_feeds_outcome"),
+    # task 279ef52d: network-server tests — bind a real ephemeral
+    # HTTPServer + serve_forever thread; flake under in-daemon load.
+    ("tests.unit.test_memory_summary_backend",
+     "test_complete_reports_prompt_and_completion_tokens"),
+    ("tests.integration.test_local_llm_inference",
+     "test_complete_roundtrips_against_stub"),
+    ("tests.integration.test_local_llm_inference",
+     "test_json_mode_and_system_prompt"),
 ]
 
 
