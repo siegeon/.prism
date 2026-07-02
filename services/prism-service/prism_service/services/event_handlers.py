@@ -180,19 +180,26 @@ def handle_memory_written(event) -> None:
 
 
 def _summarize_haiku(ctx, mem, entry) -> None:
-    """Summarize a novel memory via claude --model haiku and persist it.
-    Best-effort: an auth/parse failure leaves summary empty for a later
-    retry, never crashes the pool."""
-    from prism_service.inference import claude_cli
-    from prism_service.services.memory_summary_worker import render_prompt
+    """Summarize a novel memory and persist it. Routed through the
+    memory-summary backend seam (task cba42d6b, claude-p-exit epic):
+    the default stays `claude --model haiku` exactly as before;
+    PRISM_MEMORY_SUMMARY_BACKEND=local serves the same distillation
+    prompt from the local micro model and records a claude_runs ledger
+    row (backend='local' + token counts). Best-effort: an auth/parse
+    failure leaves summary empty for a later retry, never crashes the
+    pool."""
+    from prism_service.services.memory_summary_worker import (
+        _invoke_backend, render_prompt)
 
     work_dir = str(ctx._data_dir) if ctx is not None else "."
+    project = str(getattr(ctx, "project_id", "") or "") if ctx else ""
     try:
-        result = claude_cli.invoke(
+        result = _invoke_backend(
             prompt=render_prompt(entry.name, entry.description),
-            work_dir=work_dir, plugin_dir=work_dir,
-            max_turns=1, model="haiku", allowed_tools=(),
+            work_dir=work_dir,
+            project=project,
             purpose="memory_summary",
+            model="haiku",   # criterion 7 pin on the claude default path
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"summarize failed: {exc}")
@@ -288,9 +295,11 @@ def handle_session_imported(event) -> None:
 
 
 def _reflect_once(project: str, ctx, scores_db: str, candidate_id: str) -> dict:
-    """Build the reflect prompt for one candidate and invoke claude ONCE.
+    """Build the reflect prompt for one candidate and run ONE inference
+    through reflection_runner's backend seam (task cba42d6b): the default
+    stays the claude CLI with the exact prior arguments; PRISM_REFLECTION_
+    BACKEND=local|pi routes the same brief at the micro-model backends.
     Returns the parsed verdict ({} on any failure)."""
-    from prism_service.inference import claude_cli
     from prism_service.services import reflection_runner as rr
     from prism_service.services import source_service as ss
 
@@ -316,7 +325,7 @@ def _reflect_once(project: str, ctx, scores_db: str, candidate_id: str) -> dict:
         source_dir = ctx._data_dir
     prompt = rr._build_prompt(project, str(source_dir), candidate_id, row, scope)
     try:
-        result = claude_cli.invoke(
+        result = rr._invoke_backend(
             prompt=prompt, work_dir=str(source_dir), plugin_dir=str(source_dir),
             max_turns=15, allowed_tools=rr.DEFAULT_REFLECT_TOOLS,
             project=project, purpose="prism-reflect",
