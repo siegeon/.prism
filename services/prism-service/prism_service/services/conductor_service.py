@@ -1614,6 +1614,7 @@ class ConductorService:
         override: bool = False,
         session_id: Optional[str] = None,
         actor: Optional[str] = None,
+        re_verify: bool = False,
     ) -> dict:
         """Resolve a pending gate on a task.
 
@@ -1629,6 +1630,19 @@ class ConductorService:
         plan_coverage) require ``override=True``. When ``override`` is
         True, the verifier is bypassed and the audit row carries
         actor='manual-override' plus the supplied reason.
+
+        HONEST RE-VERIFY (task 19e31e88): a gate that latched
+        ``gate_state='failed'`` (often from a transient/env artifact during
+        the verifier run) can be re-armed on merit with ``action='approve'``
+        + ``re_verify=True`` (NOT override). This resets the gate to
+        'pending' internally and RE-RUNS VerifierService fresh, releasing
+        ONLY if the verifier now passes. The release is a normal
+        verifier-passed release — actor='conductor', no override actor
+        stamped, no 'manual-override' audit row. If the fresh verify still
+        fails the gate stays 'failed' with the new reason, so a genuinely
+        red slice cannot re-arm green via re_verify. re_verify requires an
+        attached VerifierService (nothing to re-run otherwise) and is
+        ignored when ``override`` is also True (override wins, unchanged).
 
         Returns a dict shaped:
           {'ok': bool, 'task_id', 'gate_step',
@@ -1671,13 +1685,21 @@ class ConductorService:
                 "gate_state": task.gate_state,
                 "reason": "task is not currently on a gate step",
             }
+        # HONEST RE-VERIFY (task 19e31e88): re_verify re-arms a FAILED gate by
+        # re-running the verifier fresh — it is NOT an override, so override
+        # (when also passed) wins and re_verify is inert on that path.
+        reverify_active = (
+            action == "approve" and re_verify and not override
+            and task.gate_state == "failed"
+        )
         # Conductor v2 follow-up (#79): allow manual recovery on failed
         # gates. An explicit override=True on action='approve' supersedes
         # the verifier's earlier ruling; the audit row tags actor=
         # 'manual-override' so the recovery stays visible in task_history.
+        # re_verify=True instead re-runs the verifier fresh (no override).
         # 'reject' on a failed gate is still pointless (already failed).
         if task.gate_state == "failed":
-            if not (action == "approve" and override):
+            if not (action == "approve" and (override or reverify_active)):
                 return {
                     "ok": False,
                     "task_id": task_id,
@@ -1685,7 +1707,22 @@ class ConductorService:
                     "gate_state": task.gate_state,
                     "reason": (
                         "gate_state is 'failed'; recovery requires "
-                        "action='approve' with override=True"
+                        "action='approve' with override=True, or "
+                        "re_verify=True to re-run the verifier fresh"
+                    ),
+                }
+            if reverify_active and self._verifier_svc is None:
+                # Nothing to re-run: re_verify only makes sense against an
+                # attached verifier. Do NOT silently fall through to the
+                # legacy trust-caller path (that would release without proof).
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": task.workflow_step,
+                    "gate_state": task.gate_state,
+                    "reason": (
+                        "re_verify requires an attached VerifierService to "
+                        "re-run; none is wired for this task"
                     ),
                 }
         elif task.gate_state != "pending":
@@ -1701,6 +1738,25 @@ class ConductorService:
             }
 
         gate_step_id = task.workflow_step
+
+        if reverify_active:
+            # Reset the latched failure to 'pending' and record the fresh
+            # re-verify attempt, then fall through to the verifier-driven
+            # approve branch below (override False, verifier attached -> the
+            # 'else' path re-runs VerifierService). No override actor, no
+            # 'manual-override' row: on pass this is a normal conductor
+            # verifier release; on fail it re-latches with the new reason.
+            self._task_svc.update(
+                task_id, gate_state="pending", gate_reason="",
+            )
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; "
+                         "re_verify=True; reset failed->pending for a "
+                         "fresh verifier run"),
+                actor="conductor",
+            )
+            task = self._task_svc.get(task_id)
 
         if action == "reject":
             self._task_svc.update(
@@ -1829,7 +1885,7 @@ class ConductorService:
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
-        elif rollup_ok:
+        elif rollup_ok and not reverify_active:
             # Epic roll-up satisfies the green_gate WITHOUT override and
             # WITHOUT the epic's own verifier diff — the children's proofs are
             # the proof (issue #171). The artifact tooth is skipped below.
@@ -1869,7 +1925,8 @@ class ConductorService:
                     action="gate_decide",
                     details=(
                         f"gate={gate_step_id}; action=approve; "
-                        f"verifier=fail; validation="
+                        + ("re_verify=True; " if reverify_active else "")
+                        + "verifier=fail; validation="
                         f"{verifier_validation or 'none'}; "
                         f"reason={verifier_reason}"
                     ),
@@ -1892,6 +1949,8 @@ class ConductorService:
                 "action=approve",
                 f"verifier=pass; validation={verifier_validation}",
             ]
+            if reverify_active:
+                detail_bits.append("re_verify=True")
             if reason:
                 detail_bits.append(f"reason={reason}")
 
@@ -2016,6 +2075,8 @@ class ConductorService:
             response["validation"] = verifier_validation
         if override:
             response["override"] = True
+        if reverify_active:
+            response["re_verify"] = True
         return response
 
     # Session-id prefixes used by smoke tests, dogfood probes, and the

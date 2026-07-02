@@ -100,9 +100,13 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
         cond.advance_task(task_id)
 
 
-def _manual_override_rows(task_svc, task_id: str) -> list:
+def _manual_override_rows(task_svc, task_id: str, gate: str = "green_gate") -> list:
+    """manual-override gate_decide rows for a SPECIFIC gate. The _walk_to_gate
+    helper clears earlier gates (story/plan/red) with override, so scope the
+    honesty assertion to the gate under test."""
     return [r for r in task_svc.history(task_id)
-            if r.action == "gate_decide" and r.actor == "manual-override"]
+            if r.action == "gate_decide" and r.actor == "manual-override"
+            and f"gate={gate}" in (r.details or "")]
 
 
 # ----------------------------------------------------------------------

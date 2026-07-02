@@ -96,6 +96,9 @@ def gate(project: Optional[str] = Query(None), body: dict = Body(...)) -> dict:
         session_id=body.get("session_id"),
         # NO-SELF-OVERRIDE actor (task 3826dac3): defaults to the session.
         actor=body.get("actor") or body.get("session_id"),
+        # HONEST RE-VERIFY (task 19e31e88): re-run the verifier fresh on a
+        # latched-failed gate instead of stamping an override.
+        re_verify=bool(body.get("re_verify", False)),
     )
     return _name_searched_project(out, task_id, effective)
 
