@@ -226,6 +226,11 @@ export class PiStore {
   private injecting = false;
   /** True between abort() and the agent_end it forces. */
   private stopping = false;
+  /** True once send() has ever run. Rehydrate keys off this, not busy/items:
+   * between send() and the first agent event, busy is still false and items
+   * still empty, so a slow IndexedDB load resolving in that window would
+   * pass those guards and splice a stale snapshot into a live exchange. */
+  private interacted = false;
 
   // Streaming channel (pi-web-ui split): message_update token folds notify
   // ONLY these listeners; the settled/global channel stays quiet, so the
@@ -271,7 +276,9 @@ export class PiStore {
     try {
       const snap = await loadSession(this._project);
       if (!snap?.items?.length) return;
-      if (this.items.length > 0 || this.busy) return; // live conversation wins
+      // Live conversation wins — including one whose first agent event
+      // hasn't landed yet (interacted covers the send()->agent_start gap).
+      if (this.items.length > 0 || this.busy || this.interacted) return;
       this.items = snap.items.map((it): PiItem => {
         if (it.kind === "assistant") return { ...it, done: true, learning: false };
         if (it.kind === "tool" && it.status === "running") {
@@ -284,8 +291,11 @@ export class PiStore {
   }
 
   /** Persist the display items + minimal agent context (model id). Called
-   * on agent_end, when nothing is in flight — items are settled. */
+   * on agent_end, when nothing is in flight — items are settled. Never
+   * writes an empty transcript: an itemless store (e.g. rekey during the
+   * pre-first-message window) must not clobber a real saved session. */
   private persist() {
+    if (this.items.length === 0) return;
     void saveSession(this._project, {
       items: this.items,
       modelId: this.cfg.modelId,
@@ -313,8 +323,13 @@ export class PiStore {
     this.agent.state.tools = this.tools;
     // Move the persisted session with the store: future saves target the
     // promoted project; the old key must not rehydrate a stale twin later.
-    this.persist();
-    void clearSession(old);
+    // Only when there is something to move — a busy-but-itemless store
+    // (rescued before its first message landed) must neither write [] over
+    // the target's saved session nor delete the old key's.
+    if (this.items.length > 0) {
+      this.persist();
+      void clearSession(old);
+    }
     this.emit();
   }
 
@@ -364,6 +379,7 @@ export class PiStore {
   async send(text: string) {
     const prompt = text.trim();
     if (!prompt || this.busy) return;
+    this.interacted = true; // from here on, a late rehydrate must no-op
     this.lastError = "";
     this.interceptBudget = 3;
     try {
@@ -647,11 +663,22 @@ let defaultRescueSpent = false;
  * items, re-keyed so future tool calls hit the promoted project.
  */
 export function piStore(project: string): PiStore {
-  let s = stores.get(project);
-  if (!s) {
-    s = rescueDefaultStore(project) ?? new PiStore(project);
-    stores.set(project, s);
+  const existing = stores.get(project);
+  if (existing) {
+    // The target store existing is not enough — if it is EMPTY while the
+    // "default" store holds the live conversation, binding the empty store
+    // would orphan that conversation just as surely as a missing one.
+    if (!existing.hasConversation()) {
+      const rescued = rescueDefaultStore(project);
+      if (rescued) {
+        stores.set(project, rescued);
+        return rescued;
+      }
+    }
+    return existing;
   }
+  const s = rescueDefaultStore(project) ?? new PiStore(project);
+  stores.set(project, s);
   return s;
 }
 

@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.29"
+PRISM_VERSION = "6.7.30"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.30: pi panel session-persistence hardening - "
+    "rehydrate can never apply after send() (interacted flag closes the "
+    "send->agent_start gap), persist/rekey never write an empty transcript "
+    "over a real saved session, and the first-paint rescue also adopts the "
+    "conversation when the target store exists but is empty. "
     "SELF-IMPROVE-FORK v6.7.29: five parallel lanes land at once. (1) agent "
     "panel no longer orphans a conversation when the project identity "
     "promotes at first paint (one-shot store migration, deliberate switches "
