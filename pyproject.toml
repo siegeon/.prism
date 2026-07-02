@@ -3,7 +3,12 @@ name = "prism-devtools"
 version = "5.0.0"
 
 [tool.pytest.ini_options]
-testpaths = ["plugins/prism-devtools/tools/prism-cli/tests"]
+testpaths = [
+    "services/prism-service/tests",
+    "benchmarks/tests",
+    "benchmarks/longmemeval/tests",
+    "plugins/prism-devtools/tests",
+]
 
 [tool.pylint.messages_control]
 disable = [
