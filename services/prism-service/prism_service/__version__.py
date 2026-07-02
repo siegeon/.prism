@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.36"
+PRISM_VERSION = "6.7.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.37: the PI panel executes MULTI-STEP asks. The "
+    "text-tool-call interceptor (pi-runtime.mjs + panel piAgent.ts) now parses "
+    "a JSON ARRAY or concatenated {name,args} objects and executes them "
+    "SEQUENTIALLY with per-call receipts (c4bb21f8) — a 'search X then create "
+    "a task' ask runs both tools instead of dumping raw JSON. The owner-"
+    "reported 'panel does not behave like I hoped' multi-tool gap, closed. "
     "SELF-IMPROVE-FORK v6.7.36: stress-loop fixes go live. /api/brain/ask "
     "honors ?project= (8dd3293d); /api/pi-runs honors offset + returns grand "
     "total (2bf0d49b); Learning agent-runs empty-state cross-links to "
