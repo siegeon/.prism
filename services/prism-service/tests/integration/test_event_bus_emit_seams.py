@@ -55,6 +55,9 @@ def _isolated_project(tmp_path, pid="test-emit-seams"):
     original = cfg.PROJECTS_DIR
     cfg.PROJECTS_DIR = tmp_path / "projects"
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    # get_project no longer creates on miss (d37193da):
+    # seed the sandboxed project dir explicitly.
+    cfg.project_data_dir(pid)
     from prism_service import project_context as pc
 
     pc._contexts.clear()

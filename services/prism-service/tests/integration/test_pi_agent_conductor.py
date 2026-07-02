@@ -189,7 +189,11 @@ def client(tmp_path, monkeypatch):
 
     from prism_service.main import app
 
-    return TestClient(app)
+    c = TestClient(app)
+    # get_project no longer creates on miss (d37193da): create the
+    # test project explicitly through the documented affordance.
+    c.post("/api/projects", json={"name": "pisdlc"})
+    return c
 
 
 # Task e70cdcda DELIBERATELY flips the old 403-without-internal contract:

@@ -185,12 +185,51 @@ _lock = threading.Lock()
 _contexts: dict[str, ProjectContext] = {}
 
 
+class UnknownProjectError(KeyError):
+    """A caller referenced a project that has no data directory.
+
+    Raised by :func:`get_project` instead of silently minting a phantom
+    project dir (stress finding d37193da: ANY request naming an unknown
+    ``?project=`` used to create ~1.1MB on disk, including plain GETs).
+    main.py maps this to HTTP 404 for every API route. Creation stays
+    explicit via :func:`create_project` (POST /api/projects, MCP
+    project_create / project_onboard).
+    """
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(project_id)
+        self.project_id = project_id
+
+    def __str__(self) -> str:
+        return f"unknown project '{self.project_id}'"
+
+
+def project_exists(project_id: str) -> bool:
+    """True iff the project has a data dir on disk that is not
+    soft-deleted (`.deleted` marker => the trash sweeper owns it).
+    Reads PROJECTS_DIR off the config module dynamically so tests that
+    monkeypatch config.PROJECTS_DIR observe consistent behavior."""
+    from prism_service import config as _cfg
+    d = _cfg.PROJECTS_DIR / project_id
+    return d.is_dir() and not (d / ".deleted").is_file()
+
+
 def get_project(project_id: Optional[str] = None) -> ProjectContext:
-    """Get or create a ProjectContext for the given project ID."""
+    """Get the ProjectContext for an EXISTING project.
+
+    Reads must not create: an unknown non-default project raises
+    :class:`UnknownProjectError`. The long-standing missing-param
+    fallback is preserved — ``None``/'' resolves to DEFAULT_PROJECT,
+    and 'default' itself may still auto-create.
+    """
     pid = project_id or DEFAULT_PROJECT
     with _lock:
-        if pid not in _contexts:
-            _contexts[pid] = ProjectContext(pid)
+        ctx = _contexts.get(pid)
+        if ctx is not None:
+            return ctx
+        if pid != DEFAULT_PROJECT and not project_exists(pid):
+            raise UnknownProjectError(pid)
+        _contexts[pid] = ProjectContext(pid)
         return _contexts[pid]
 
 
@@ -200,7 +239,10 @@ def get_all_projects() -> list[str]:
 
 
 def create_project(project_id: str) -> ProjectContext:
-    """Create a new project (creates its data directory)."""
+    """Create a new project (creates its data directory). This is the
+    ONLY implicit-creation door besides the 'default' fallback — every
+    explicit affordance (POST /api/projects, MCP project_create,
+    MCP project_onboard) funnels through project_data_dir()."""
     project_data_dir(project_id)  # ensure dirs exist
     return get_project(project_id)
 

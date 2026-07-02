@@ -39,6 +39,9 @@ def project(tmp_path):
     original = cfg.PROJECTS_DIR
     cfg.PROJECTS_DIR = tmp_path / "projects"
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    # get_project no longer creates on miss (d37193da):
+    # seed the sandboxed project dir explicitly.
+    cfg.project_data_dir("test-issue-173")
     pc._contexts.clear()
     yield "test-issue-173"
     cfg.PROJECTS_DIR = original

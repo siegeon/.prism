@@ -182,15 +182,20 @@ def test_conductor_probe_mints_no_project_dir(tmp_path):
     from prism_service.services.conductor_service import ConductorService
     from prism_service.services.task_service import TaskService
 
-    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    # Unique dir name -> the derived "project id" is unique per run, so a
+    # phantom leaked by an EARLIER (pre-fix) run can never mask a pass or
+    # fail this assertion spuriously.
+    probe = tmp_path / _fresh_name("leakprobe")
+    probe.mkdir()
+    task_svc = TaskService(str(probe / "tasks.db"))
     cond = ConductorService(
-        str(tmp_path / "scores.db"),
+        str(probe / "scores.db"),
         enable_engine=False,
         task_svc=task_svc,
     )
     cond._project_source_path()
     cond._project_override_dir()
-    leaked = _projects_dir() / tmp_path.name
+    leaked = _projects_dir() / probe.name
     assert not leaked.exists(), (
         f"read probe minted {leaked} - reads must never create project dirs"
     )

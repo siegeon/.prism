@@ -80,8 +80,19 @@ class RefreshResult:
     budget_limit: int = 0
 
 
-def _state_path(project: str) -> Path:
-    return project_data_dir(project) / "understand_state.json"
+def _state_path(project: str, *, create: bool = False) -> Path:
+    """Path of the project's understand_state.json.
+
+    READS MUST NOT CREATE (stress finding d37193da): the default path is
+    computed without touching disk — routing reads through the creating
+    project_data_dir() is exactly how read probes (and the pytest suite's
+    ConductorService source-path lookups) minted phantom project dirs.
+    Writers pass create=True to seed the project layout first.
+    """
+    if create:
+        return project_data_dir(project) / "understand_state.json"
+    from prism_service.config import PROJECTS_DIR
+    return PROJECTS_DIR / project / "understand_state.json"
 
 
 def _read_state(project: str) -> dict:
@@ -95,7 +106,7 @@ def _read_state(project: str) -> dict:
 
 
 def _write_state(project: str, state: dict) -> None:
-    _state_path(project).write_text(
+    _state_path(project, create=True).write_text(
         json.dumps(state, indent=2), encoding="utf-8",
     )
 

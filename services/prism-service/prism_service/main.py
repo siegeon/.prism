@@ -498,6 +498,20 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="PRISM Service", lifespan=lifespan)
 
+
+# Unknown ?project= -> 404 on EVERY route (stress finding d37193da).
+# get_project() no longer mints a phantom project dir on miss; it raises
+# UnknownProjectError, mapped here once so no per-route boilerplate is
+# needed. Creation stays explicit (POST /api/projects, MCP project_create
+# / project_onboard); the missing-param 'default' fallback is unaffected.
+from prism_service.project_context import UnknownProjectError
+
+
+@app.exception_handler(UnknownProjectError)
+async def _unknown_project_handler(request, exc: UnknownProjectError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
 # The standalone Tauri shell loads its splash from a tauri:// origin and
 # polls /api/version cross-origin. Without these headers the webview sends
 # the request (server logs it, returns 200) but the browser silently drops

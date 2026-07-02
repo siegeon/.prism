@@ -22,6 +22,9 @@ def project(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path / "projects")
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    # get_project no longer creates on miss (d37193da):
+    # seed the sandboxed project dir explicitly.
+    cfg.project_data_dir("context-pack-test")
     pc._contexts.clear()
     yield "context-pack-test"
     pc._contexts.clear()

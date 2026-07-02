@@ -424,11 +424,13 @@ def cmd_principles_seed(args: argparse.Namespace) -> int:
     plan_gate is satisfiable (issue #171). In-process — resolves the project
     context directly (no running daemon needed)."""
     from prism_service.config import DEFAULT_PROJECT
-    from prism_service.project_context import get_project
+    from prism_service.project_context import create_project
     from prism_service.services.arc_governance import seed_default_principles
 
     pid = getattr(args, "project", None) or DEFAULT_PROJECT
-    ctx = get_project(pid)
+    # Seeding is a fresh-project bootstrap affordance — explicit create
+    # (get_project refuses unknown projects; finding d37193da).
+    ctx = create_project(pid)
     stored = seed_default_principles(ctx.memory_svc)
     ids = ", ".join(getattr(e, "name", "") for e in stored)
     print(f"seeded {len(stored)} architecture principle(s) into project "

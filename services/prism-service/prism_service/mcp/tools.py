@@ -2970,7 +2970,10 @@ def _dispatch_tool(name: str, arguments: dict, *, project_id: str = "default") -
             }))]
 
         if name == "project_onboard":
-            ctx = get_project(project_id)
+            # Onboarding a fresh project is a deliberate CREATE — the one
+            # MCP door besides project_create allowed to mint the data dir
+            # (get_project no longer creates on miss; finding d37193da).
+            ctx = create_project(project_id)
             project_name = arguments.get("project_name") or project_id
             sub_projects = arguments.get("sub_projects") or []
             conventions = arguments.get("conventions") or []
@@ -3106,7 +3109,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # ------------------------------------------------------------------
         # Get project-scoped services
         # ------------------------------------------------------------------
-        ctx = get_project(project_id)
+        # Bootstrap tools are the documented fresh-project affordances —
+        # the ONLY dispatch paths allowed to mint the data dir now that
+        # get_project refuses unknown projects (finding d37193da).
+        if name in ("prism_onboard", "principles_seed"):
+            ctx = create_project(project_id)
+        else:
+            ctx = get_project(project_id)
         brain_svc = ctx.brain_svc
         task_svc = ctx.task_svc
         workflow_svc = ctx.workflow_svc
