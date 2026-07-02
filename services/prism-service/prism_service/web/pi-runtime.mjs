@@ -13,8 +13,13 @@
  */
 
 import { Agent } from "@earendil-works/pi-agent-core";
-import { createModels, createProvider, Type } from "@earendil-works/pi-ai";
+import { createModels, createProvider } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+
+// PI's PRISM expertise — ONE shared source for the system prompt + the
+// full tool catalog, consumed by this runner AND the SPA rail panel
+// (task e70cdcda). Never re-declare a tool schema here.
+import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "./pi-expert.mjs";
 
 // ------------------------------------------------------------- model
 
@@ -55,66 +60,14 @@ function buildModels(model, baseUrl) {
 
 // -------------------------------------------------- PRISM tool bridges
 
-const TOOL_DEFS = {
-  brain_search: {
-    label: "Brain search",
-    description: "Search the project's code/knowledge base (hybrid BM25 + vector + graph).",
-    parameters: Type.Object({ query: Type.String({ description: "Search query" }) }),
-  },
-  memory_recall: {
-    label: "Memory recall",
-    description: "Recall the team's long-term memory: conventions, decisions, failures. ALWAYS check here before claiming something is new knowledge.",
-    parameters: Type.Object({ query: Type.String({ description: "Natural-language query" }) }),
-  },
-  task_list: {
-    label: "Task list",
-    description: "List tasks in the PRISM tracker (optional status filter).",
-    parameters: Type.Object({ status: Type.Optional(Type.String()) }),
-  },
-  prism_status: {
-    label: "PRISM status",
-    description: "Brain/Graph index health (doc counts, staleness).",
-    parameters: Type.Object({}),
-  },
-  // Conductor surface (task 9f20b605, phase 2): the SDLC state machine.
-  // Names are the REAL MCP tool names dispatched by mcp.tools.handle_tool;
-  // all three are internal-only on the bridge (bridgeBody sends the flag).
-  task_update: {
-    label: "Task update",
-    description: "Update a task you are driving: author/patch plan_doc (markdown) or plan_diagram (Mermaid), set status or completion_proof.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Task ID to update" }),
-      plan_doc: Type.Optional(Type.String({ description: "Plan markdown (## Summary / ## Requirements / ## Acceptance Criteria, each AC with an inline 'oracle:')" })),
-      plan_diagram: Type.Optional(Type.String({ description: "Mermaid diagram source" })),
-      status: Type.Optional(Type.String({ description: "pending | in_progress | done | blocked" })),
-      completion_proof: Type.Optional(Type.String({ description: "Receipt-backed evidence the oracle is satisfied" })),
-      oracle: Type.Optional(Type.String({ description: "Observable signal that proves the outcome" })),
-    }),
-  },
-  conductor_advance: {
-    label: "Conductor advance",
-    description: "Advance a task to the next SDLC workflow step. Refused while a gate is pending — decide the gate first with conductor_gate.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Task ID to advance" }),
-      validation: Type.Optional(Type.String({ description: "Validation note for the transition" })),
-      session_id: Type.Optional(Type.String({ description: "Session to link on advance" })),
-    }),
-  },
-  conductor_gate: {
-    label: "Conductor gate",
-    description: "Decide a pending gate. action 'approve' REQUIRES reason describing the validation evidence used; 'reject' stores reason as the failure.",
-    parameters: Type.Object({
-      id: Type.String({ description: "Task ID whose gate to decide" }),
-      action: Type.String({ description: "approve | reject" }),
-      reason: Type.String({ description: "Validation evidence (required on approve)" }),
-      session_id: Type.Optional(Type.String({ description: "Session to link on the decision" })),
-    }),
-  },
-};
+// The catalog is the shared expert module's — one source for both
+// surfaces (task e70cdcda). Local alias keeps the call sites readable.
+const TOOL_DEFS = EXPERT_TOOL_DEFS;
 
 // The runner is an INTERNAL caller by construction — every bridged call
-// carries internal=true so the internal-only conductor tools (whitelisted
-// in api/agent.py, browser panel excluded) are reachable (task 9f20b605).
+// carries internal=true (task 9f20b605). Task e70cdcda retired the
+// internal-only gate in api/agent.py (PI IS the orchestrator, panel
+// included); the flag stays as harmless caller provenance.
 function bridgeBody(name, params) {
   return { name, args: params ?? {}, internal: true };
 }
@@ -190,7 +143,9 @@ async function runJob(job) {
   const models = buildModels(model, baseUrl);
   const receipts = [];
   const tools = buildTools(job, receipts);
-  let system = job.system || "";
+  // PI ships pre-loaded as the PRISM expert (task e70cdcda): an empty
+  // job.system runs with the shared expert prompt, never a blank slate.
+  let system = job.system || EXPERT_SYSTEM_PROMPT;
   if (modelId.startsWith("qwen3") && !system.includes("/no_think")) {
     system = `${system} /no_think`.trim();
   }
@@ -271,6 +226,9 @@ async function main() {
       ok: true,
       tools: tools.map((t) => t.name),
       bridge_body: bridgeBody("conductor_advance", { id: "check" }),
+      // The shared expert prompt the run path defaults to when job.system
+      // is empty (task e70cdcda) — surfaced so tests prove it's wired.
+      expert_prompt_chars: EXPERT_SYSTEM_PROMPT.length,
     }));
     return;
   }

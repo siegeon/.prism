@@ -29,6 +29,19 @@ _CREATE_NO_WINDOW = 0x08000000  # keep worker spawns invisible (v6.7.25 lesson)
 
 DEFAULT_TOOLS: tuple[str, ...] = ("brain_search", "memory_recall")
 
+# PI ships pre-loaded as the PRISM expert (task e70cdcda): the FULL
+# catalog mirrored from web/pi-expert.mjs (EXPERT_TOOL_DEFS) and
+# api/agent.py (AGENT_TOOL_WHITELIST) — the three move together. Opt-in
+# per job; reflection keeps the lean DEFAULT_TOOLS above.
+EXPERT_TOOLS: tuple[str, ...] = (
+    "brain_search", "brain_understand", "brain_find_symbol",
+    "brain_outline", "brain_find_references", "brain_call_chain",
+    "memory_recall", "memory_store", "memory_invalidate",
+    "task_list", "task_next", "task_create", "task_update",
+    "conductor_advance", "conductor_gate",
+    "workflow_state", "context_bundle", "prism_status",
+)
+
 # Conductor surface (task 9f20b605, phase 2): OPT-IN toolset for jobs
 # DIRECTED at SDLC work — read the task (task_list by id), author/patch
 # plan_doc (task_update), advance the state machine (conductor_advance),

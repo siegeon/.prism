@@ -14,35 +14,45 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 router = APIRouter()
 
-# The PI panel's reachable surface. Additions are a deliberate decision,
-# not a default — see the task plan (FR-4).
+# The PI agent's reachable surface. Additions are a deliberate decision,
+# not a default — this is EXACTLY the expert catalog exported by
+# web/pi-expert.mjs (task e70cdcda: PI ships pre-loaded as the PRISM
+# expert; the whitelist and the catalog move together). Deliberately
+# EXCLUDED admin/destructive tools: janitor_*, prism_sync, okf_index /
+# okf_get / okf_graph, prism_onboard, register_claude_source.
 AGENT_TOOL_WHITELIST = frozenset({
+    # Brain — retrieval + code-graph navigation.
     "brain_search",
+    "brain_understand",
+    "brain_find_symbol",
+    "brain_outline",
+    "brain_find_references",
+    "brain_call_chain",
+    # Memory — recall-before-store discipline lives in the expert prompt.
     "memory_recall",
     "memory_store",
+    "memory_invalidate",
+    # Tasks — the tracker PI orchestrates.
     "task_list",
+    "task_next",
     "task_create",
-    "prism_status",
-    # Conductor surface (task 9f20b605, phase 2 of the pi internal agent):
-    # deliberate additions so a DIRECTED pi job can drive SDLC work —
-    # author/patch plan_doc (task_update), advance the per-task state
-    # machine (conductor_advance), propose gate evidence (conductor_gate).
-    # All three are INTERNAL-ONLY (see INTERNAL_ONLY_TOOLS below).
     "task_update",
+    # Conductor — the SDLC state machine. Panel-reachable per owner
+    # directive (task e70cdcda): PI IS the orchestrator.
     "conductor_advance",
     "conductor_gate",
+    "workflow_state",
+    # Context + health.
+    "context_bundle",
+    "prism_status",
 })
 
-# INTERNAL AGENT CALLERS ONLY (task 9f20b605 FR-3): these mutate the SDLC
-# state machine, so they require an explicit internal=true body flag. The
-# browser PI panel never sends the flag — its reachable surface stays
-# read/create-only no matter what the model emits. The subprocess runner
-# (web/pi-runtime.mjs) sends internal=true on every bridged call.
-INTERNAL_ONLY_TOOLS = frozenset({
-    "task_update",
-    "conductor_advance",
-    "conductor_gate",
-})
+# Task 9f20b605 gated the conductor mutations to internal callers
+# (internal=true body flag). Task e70cdcda RETIRES that gate per owner
+# directive — PI is the orchestrator, so task_update / conductor_advance /
+# conductor_gate are panel-reachable. The seam stays (an empty frozenset,
+# still enforced below) for future admin-only tools.
+INTERNAL_ONLY_TOOLS: frozenset[str] = frozenset()
 
 
 @router.post("/tool")
