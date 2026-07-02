@@ -23,10 +23,19 @@ router = APIRouter()
 @router.get("")
 def list_runs(
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     project: Optional[str] = Query(None),
 ) -> dict:
-    runs = pi_run_log.list_recent(limit=limit, project=project)
-    return {"runs": runs, "count": len(runs)}
+    runs = pi_run_log.list_recent(limit=limit, project=project, offset=offset)
+    # `count` stays the returned page length (back-compat); `total` is the
+    # full filtered count so a client can page through the ledger.
+    return {
+        "runs": runs,
+        "count": len(runs),
+        "total": pi_run_log.count_recent(project=project),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/{run_id}")

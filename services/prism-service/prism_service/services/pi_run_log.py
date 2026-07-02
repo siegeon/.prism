@@ -177,9 +177,10 @@ def _trim_to_limit() -> None:
     tmp.replace(_MANIFEST)
 
 
-def list_recent(limit: int = 50, project: Optional[str] = None) -> list[dict]:
-    """Return the most recent runs, newest first. Reads the whole
-    manifest (bounded by RUN_LOG_LIMIT) once and slices."""
+def _read_filtered(project: Optional[str] = None) -> list[dict]:
+    """Read the whole manifest (bounded by RUN_LOG_LIMIT) once and return
+    the rows NEWEST FIRST, filtered by project. Shared by list_recent and
+    count_recent so a page and its grand total come from one read."""
     if not _MANIFEST.exists():
         return []
     out: list[dict] = []
@@ -198,7 +199,23 @@ def list_recent(limit: int = 50, project: Optional[str] = None) -> list[dict]:
     except OSError:
         return []
     out.reverse()  # newest first
-    return out[:limit]
+    return out
+
+
+def list_recent(limit: int = 50, project: Optional[str] = None,
+                offset: int = 0) -> list[dict]:
+    """Return one newest-first PAGE of runs. `offset` skips that many
+    rows before taking `limit` (an offset past the end yields []); both
+    default to the full-first-page behavior. Pair with count_recent for
+    the grand total when paginating."""
+    off = max(0, int(offset))
+    return _read_filtered(project)[off:off + limit]
+
+
+def count_recent(project: Optional[str] = None) -> int:
+    """Full count of runs (project-filtered) — the grand total the API
+    reports alongside a page so a client can paginate."""
+    return len(_read_filtered(project))
 
 
 def get_run(run_id: str) -> Optional[dict]:
