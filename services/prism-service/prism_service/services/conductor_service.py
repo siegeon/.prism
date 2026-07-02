@@ -111,34 +111,51 @@ def full_outcome_verdict(slice_green: bool, completion_proof: object,
     return True, ""
 
 
-def epic_rollup_verdict(children: list) -> tuple[bool, str]:
-    """Issue #171 — an EPIC/parent green_gate is satisfiable by ROLLING UP
-    its children. When every non-cancelled child task is status=done AND
-    carries a strong completion_proof, the children ARE the parent's proof,
-    so the epic need not reproduce its own red->green artifact. A weak or
-    incomplete child FAILS with a concrete reason (no false green; NOT a
-    blanket override). Returns (False, reason) when there are no children to
-    roll up — a childless task is not an epic and takes the normal artifact
-    path. Pure + unit-testable; reuses is_weak_proof so the proof bar matches
-    full_outcome_verdict.
+def epic_rollup_verdict(nodes: list) -> tuple[bool, str]:
+    """Issue #171 + task e72aba6d — an EPIC/parent green_gate is satisfiable by
+    ROLLING UP its subtree. ``nodes`` is the parent's WHOLE subtree (every
+    transitive descendant), NOT just its direct children, so the roll-up is
+    correct to ANY depth: an incomplete grandchild blocks the grandparent.
+
+    Verdict:
+      * every non-cancelled descendant must be status=done (an incomplete node
+        anywhere in the subtree fails), AND
+      * every non-cancelled LEAF descendant must carry a strong completion_proof
+        — a leaf is a node no other active node names as its parent. INTERMEDIATE
+        nodes need not carry their own proof: their proof is their children's
+        rolled-up proofs, so requiring one would false-RED a legitimately
+        rolled-up sub-epic.
+
+    A flat list of direct children (the historical caller) degenerates
+    correctly: with no parent links among them every node is a leaf, so all
+    require strong proof — identical to the pre-subtree behavior. Returns
+    (False, reason) when there is nothing to roll up (a childless task is not an
+    epic and takes the normal artifact path). Pure + unit-testable; reuses
+    is_weak_proof so the proof bar matches full_outcome_verdict.
     """
-    active = [c for c in (children or [])
+    active = [c for c in (nodes or [])
               if str(_task_attr(c, "status", "")) != "cancelled"]
     if not active:
         return False, "no child tasks to roll up (not an epic)"
     incomplete = [c for c in active
                   if str(_task_attr(c, "status", "")) != "done"]
     if incomplete:
-        return False, (f"{len(incomplete)} child task(s) not done — epic "
+        return False, (f"{len(incomplete)} descendant task(s) not done — epic "
                        "roll-up needs every child done")
-    weak = [c for c in active
+    # Leaf = an active node that is not the parent of any other active node.
+    active_ids = {str(_task_attr(c, "id", "")) for c in active}
+    parents_in_set = {str(_task_attr(c, "parent_id", ""))
+                      for c in active} & active_ids
+    leaves = [c for c in active
+              if str(_task_attr(c, "id", "")) not in parents_in_set]
+    weak = [c for c in leaves
             if is_weak_proof(_task_attr(c, "completion_proof", ""))]
     if weak:
         ids = ", ".join(str(_task_attr(c, "id", "?"))[:8] for c in weak)
-        return False, (f"{len(weak)} child task(s) with weak/absent "
+        return False, (f"{len(weak)} leaf task(s) with weak/absent "
                        f"completion_proof ({ids})")
-    return True, (f"epic roll-up: all {len(active)} child task(s) done with "
-                  "strong completion_proof")
+    return True, (f"epic roll-up: all {len(active)} descendant task(s) done "
+                  f"with strong leaf proof ({len(leaves)} leaf/leaves)")
 
 
 def green_gate_outcome_note(slice_green: bool, completion_proof: object,
@@ -1837,11 +1854,14 @@ class ConductorService:
         rollup_reason = ""
         rollup_has_children = False
         if gate_step_id == "green_gate":
-            _kids = [c for c in self._task_svc.list()
-                     if _task_attr(c, "parent_id", "") == task_id]
-            rollup_has_children = bool(_kids)
-            if _kids:
-                rollup_ok, rollup_reason = epic_rollup_verdict(_kids)
+            # Subtree-aware (task e72aba6d): roll up the WHOLE subtree, not just
+            # direct children, so a grandparent gates green only when every
+            # descendant is done — an incomplete grandchild can no longer be
+            # invisible behind a done intermediate node.
+            _subtree = self._task_svc.descendants(task_id)
+            rollup_has_children = bool(_subtree)
+            if _subtree:
+                rollup_ok, rollup_reason = epic_rollup_verdict(_subtree)
 
         verifier_payload: Optional[dict] = None
         verifier_validation: Optional[str] = None

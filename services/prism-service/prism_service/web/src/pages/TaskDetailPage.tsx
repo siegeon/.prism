@@ -11,7 +11,8 @@ import PlanView from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
 import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
-import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
+import TaskTree, { type TreeTask } from "@/components/tasks/TaskTree";
+import { EASE_OUT, DUR, staggerDelay } from "@/lib/motion";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -63,15 +64,11 @@ type Task = {
   plan_diagram?: string;
   phase_progress?: PhaseProgress | null;
   has_prototype?: boolean;
-};
-
-// Slim shape for the child-task list — only what the row renders.
-type ChildTask = {
-  id?: string;
-  title?: string;
-  status?: string;
-  priority?: number | string;
-  parent_id?: string;
+  // Whole-subtree roll-up (task e72aba6d): descendant totals ride the detail
+  // payload's top level (like phase_progress) so the tree header shows a
+  // subtree-deep done count, not just direct children.
+  descendant_count?: number;
+  descendant_done?: number;
 };
 
 // Matches the /api/tasks/:id history rows: an append-only audit log where
@@ -114,44 +111,6 @@ function Stagger({ i, reduced, children }: { i: number; reduced: boolean | null;
     >
       {children}
     </motion.div>
-  );
-}
-
-// Animated checkbox for the child-task checklist — empty square when pending,
-// emerald fill + spring-tick check when the child is done (feeds the
-// current-segment sub-step fill server-side via children_done/total).
-function Checkbox({ done, reduced }: { done: boolean; reduced: boolean | null }) {
-  return (
-    <span
-      className="inline-flex items-center justify-center h-4 w-4 rounded shrink-0"
-      style={{
-        background: done ? "var(--accent-emerald-bg)" : "var(--surface-3)",
-        boxShadow: `inset 0 0 0 1px var(--accent-${done ? "emerald" : "slate"}-ring)`,
-      }}
-    >
-      <AnimatePresence>
-        {done && (
-          <motion.svg
-            key="tick"
-            viewBox="0 0 16 16"
-            className="h-3 w-3"
-            initial={reduced ? { opacity: 0 } : { scale: 0, opacity: 0 }}
-            animate={reduced ? { opacity: 1 } : { scale: 1, opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={reduced ? { duration: 0 } : SPRING_SNAPPY}
-          >
-            <path
-              d="M3.5 8.5l3 3 6-6.5"
-              fill="none"
-              stroke="var(--accent-emerald-fg)"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </motion.svg>
-        )}
-      </AnimatePresence>
-    </span>
   );
 }
 
@@ -401,7 +360,9 @@ export default function TaskDetailPage() {
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
-  const [children, setChildren] = useState<ChildTask[]>([]);
+  // Whole flat task list, used to build the recursive subtree tree client-side
+  // (parent_id links) rooted at this task — a single GET the page already made.
+  const [allTasks, setAllTasks] = useState<TreeTask[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -432,24 +393,24 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean; descendant_count?: number; descendant_done?: number }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + has_prototype ride at the TOP LEVEL of the response
-      // (not nested in task) — merge onto the task so the SDLC bar and the
-      // prototype iframe read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, has_prototype: d.has_prototype ?? false } : d.task);
+      // phase_progress + has_prototype + descendant_* ride at the TOP LEVEL of
+      // the response (not nested in task) — merge onto the task so the SDLC bar,
+      // the prototype iframe, and the subtree roll-up header read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, has_prototype: d.has_prototype ?? false, descendant_count: d.descendant_count ?? 0, descendant_done: d.descendant_done ?? 0 } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
       setError(null);
-      // Children aren't on the detail payload — derive them from the task
-      // list (parent_id === this id). Cheap, and keeps the API unchanged.
+      // The recursive subtree tree is built client-side from the flat task list
+      // (parent_id links) rooted at this task — one GET, no per-node re-walk.
       try {
-        const all = await api.get<{ tasks: ChildTask[] }>(`/api/tasks?project=${project}`);
-        setChildren((all.tasks ?? []).filter((t) => t.parent_id === id));
+        const all = await api.get<{ tasks: TreeTask[] }>(`/api/tasks?project=${project}`);
+        setAllTasks(all.tasks ?? []);
       } catch {
-        setChildren([]);
+        setAllTasks([]);
       }
     } catch (e) {
       setError((e as Error).message ?? "task not found");
@@ -907,43 +868,16 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
-      {children.length > 0 && (
+      {(task.descendant_count ?? 0) > 0 && (
         <Card>
           <SectionLabel>
-            Child tasks ({children.filter((c) => (c.status ?? "") === "done").length}/{children.length} done)
+            Subtree ({task.descendant_done ?? 0}/{task.descendant_count ?? 0} done)
           </SectionLabel>
-          <div className="space-y-2 mt-2">
-            {children.map((c) => {
-              const cTone = STATUS_TONE[c.status ?? "pending"] ?? "slate";
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => c.id && navigate(`/tasks/${c.id}`, { state: { from: `/tasks/${id}` } })}
-                  className="w-full text-left rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-3 hover:border-[color:var(--midground-base)]/40 hover:bg-[color:var(--background-base)]/50 transition-colors flex items-center justify-between gap-3"
-                >
-                  <span className="flex items-center gap-3 min-w-0">
-                    <Checkbox done={(c.status ?? "") === "done"} reduced={reduced} />
-                    <span className="text-sm font-medium truncate">{c.title ?? c.id}</span>
-                  </span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    {typeof c.priority !== "undefined" && (
-                      <span className="text-[10px] opacity-50 font-mono">p{c.priority}</span>
-                    )}
-                    <span
-                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
-                      style={{
-                        background: `var(--accent-${cTone}-bg)`,
-                        color: `var(--accent-${cTone}-fg)`,
-                        boxShadow: `inset 0 0 0 1px var(--accent-${cTone}-ring)`,
-                      }}
-                    >
-                      {c.status ?? "pending"}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          {/* Recursive collapsible tree of the WHOLE subtree to ANY depth: each
+              parent node reveals its own children via a chevron. The header
+              roll-up (descendant_done/descendant_count) is subtree-deep, not
+              just direct children. */}
+          <TaskTree tasks={allTasks} rootId={id} reduced={reduced} />
         </Card>
       )}
 

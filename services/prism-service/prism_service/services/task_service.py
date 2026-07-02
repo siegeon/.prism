@@ -538,6 +538,50 @@ class TaskService:
 
         return tasks
 
+    # ------------------------------------------------------------------
+    # Hierarchy — whole-subtree walk (task e72aba6d). Every consumer used
+    # to look ONE level deep (direct children only); these expose the whole
+    # transitive subtree so the detail tree, board badge, and epic green_gate
+    # roll-up render/roll up to ANY depth.
+    # ------------------------------------------------------------------
+
+    def descendants(self, task_id: str) -> list[Task]:
+        """Return every transitive child of ``task_id`` (the whole subtree,
+        the task itself excluded) as a breadth-first list.
+
+        ONE list read: the parent→children index is built in memory and
+        walked, so a deep tree costs a single query, not one-per-node.
+        Cycle-guarded exactly like :meth:`_validate_parent`'s ancestor walk —
+        a corrupt ``parent_id`` cycle in stored rows terminates the walk via a
+        visited-set instead of hanging it (and never re-adds the root)."""
+        kids_by_parent: dict[str, list[Task]] = {}
+        for t in self.list():
+            pid = getattr(t, "parent_id", "") or ""
+            if pid:
+                kids_by_parent.setdefault(pid, []).append(t)
+        out: list[Task] = []
+        visited: set[str] = {task_id}
+        queue: list[Task] = list(kids_by_parent.get(task_id, []))
+        while queue:
+            node = queue.pop(0)
+            if node.id in visited:
+                continue  # pre-existing corrupt cycle — do not re-walk
+            visited.add(node.id)
+            out.append(node)
+            queue.extend(kids_by_parent.get(node.id, []))
+        return out
+
+    def descendant_counts(self, task_id: str) -> tuple[int, int]:
+        """``(total, done)`` over the whole subtree (task itself excluded).
+
+        Cancelled descendants drop out of BOTH totals so a cancelled leaf
+        never blocks a 100%-done roll-up — mirrors the epic roll-up verdict's
+        cancelled handling."""
+        active = [t for t in self.descendants(task_id)
+                  if getattr(t, "status", "") != "cancelled"]
+        done = sum(1 for t in active if getattr(t, "status", "") == "done")
+        return len(active), done
+
     def update(self, task_id: str, **kwargs: object) -> Optional[Task]:
         """Update arbitrary fields on a task. Records change history.
 

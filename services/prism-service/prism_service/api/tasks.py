@@ -240,6 +240,33 @@ def _build_timeline(history: list, sessions: list) -> dict:
             "lanes": lanes, "gates": gates}
 
 
+def _build_child_map(all_tasks: list) -> dict:
+    """parent_id → [child Task] index built from one task-list read."""
+    m: dict = {}
+    for t in all_tasks:
+        pid = getattr(t, "parent_id", "") or ""
+        if pid:
+            m.setdefault(pid, []).append(t)
+    return m
+
+
+def _subtree_nodes(child_map: dict, root_id: str) -> list:
+    """Breadth-first list of every transitive child of ``root_id`` (root
+    excluded), cycle-guarded via a visited-set (mirrors TaskService.descendants
+    — kept here so get_task walks its single in-memory map, no extra reads)."""
+    out: list = []
+    seen = {root_id}
+    queue = list(child_map.get(root_id, []))
+    while queue:
+        n = queue.pop(0)
+        if n.id in seen:
+            continue
+        seen.add(n.id)
+        out.append(n)
+        queue.extend(child_map.get(n.id, []))
+    return out
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, project: str = Query("default")) -> dict:
     svc = _svc(project)
@@ -285,6 +312,26 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
         out["has_prototype"] = prototype_file(task_id).exists()
     except Exception:
         out["has_prototype"] = False
+    # Subtree roll-up (task e72aba6d): whole-subtree descendant_count/done for
+    # the detail page's tree header, plus each DIRECT child annotated with its
+    # OWN child_count so the UI can lazy-render a tree node's chevron without
+    # re-walking. One task-list read backs all three (built into child_map).
+    try:
+        child_map = _build_child_map(svc.list())
+        subtree = _subtree_nodes(child_map, task_id)
+        active = [t for t in subtree if getattr(t, "status", "") != "cancelled"]
+        out["descendant_count"] = len(active)
+        out["descendant_done"] = sum(
+            1 for t in active if getattr(t, "status", "") == "done")
+        out["children"] = [
+            {**dataclasses.asdict(c),
+             "child_count": len(_subtree_nodes(child_map, c.id))}
+            for c in child_map.get(task_id, [])
+        ]
+    except Exception:
+        out.setdefault("descendant_count", 0)
+        out.setdefault("descendant_done", 0)
+        out.setdefault("children", [])
     return out
 
 

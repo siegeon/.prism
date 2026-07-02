@@ -78,11 +78,32 @@ export default function TasksPage() {
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
   // Hierarchy: the board shows only root tasks (no parent_id). A parent's
-  // children are reached by clicking into its detail page. childCount maps
-  // each task id → how many tasks name it as parent, for the corner badge.
-  const childCount = new Map<string, number>();
+  // subtree is reached by clicking into its detail page. The corner badge
+  // counts the WHOLE descendant subtree (task e72aba6d), not just direct
+  // children, so an epic card shows ALL the encapsulated work at a glance.
+  // Built from the flat list: a parent_id→children index walked per root.
+  const childrenByParent = new Map<string, string[]>();
   for (const t of tasks) {
-    if (t.parent_id) childCount.set(t.parent_id, (childCount.get(t.parent_id) ?? 0) + 1);
+    if (t.parent_id && t.id) {
+      const arr = childrenByParent.get(t.parent_id);
+      if (arr) arr.push(t.id);
+      else childrenByParent.set(t.parent_id, [t.id]);
+    }
+  }
+  const descendantCount = new Map<string, number>();
+  for (const t of tasks) {
+    if (!t.id) continue;
+    let n = 0;
+    const seen = new Set<string>([t.id]);
+    const queue = [...(childrenByParent.get(t.id) ?? [])];
+    while (queue.length) {
+      const cid = queue.shift()!;
+      if (seen.has(cid)) continue; // cycle-guard
+      seen.add(cid);
+      n += 1;
+      queue.push(...(childrenByParent.get(cid) ?? []));
+    }
+    descendantCount.set(t.id, n);
   }
   const roots = tasks.filter((t) => !t.parent_id);
   // Completed work never sits on the board; it's counted here and reached via
@@ -177,9 +198,9 @@ export default function TasksPage() {
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="text-sm font-medium">{t.title ?? "—"}</div>
-                          {(childCount.get(t.id ?? "") ?? 0) > 0 && (
+                          {(descendantCount.get(t.id ?? "") ?? 0) > 0 && (
                             <span
-                              title={`${childCount.get(t.id ?? "")} child task(s) — open to view`}
+                              title={`${descendantCount.get(t.id ?? "")} descendant task(s) — open to view the tree`}
                               className="shrink-0 text-[10px] font-mono leading-none px-1.5 py-1 rounded-full ring-1 ring-inset"
                               style={{
                                 background: "var(--accent-violet-bg)",
@@ -187,7 +208,7 @@ export default function TasksPage() {
                                 boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)",
                               }}
                             >
-                              {childCount.get(t.id ?? "")}
+                              {descendantCount.get(t.id ?? "")}
                             </span>
                           )}
                         </div>

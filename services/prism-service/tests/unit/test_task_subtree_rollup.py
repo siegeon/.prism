@@ -94,6 +94,7 @@ def project(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "PROJECTS_DIR", tmp_path / "projects")
     cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     pc._contexts.clear()
+    pc.create_project("test-e72aba6d")  # reads must not auto-create — make it
     yield "test-e72aba6d"
     pc._contexts.clear()
 
@@ -201,16 +202,29 @@ def test_grandparent_green_gate_blocks_on_incomplete_grandchild(tmp_path):
     p = task_svc.create(title="parent epic", parent_id=g.id)
     task_svc.update(p.id, status="done",
                     completion_proof="pytest -q: 9 passed; :8888/p.png")
-    # A grandchild that is NOT done — invisible to a one-level roll-up.
-    gc = task_svc.create(title="grandchild", parent_id=p.id)
+    # A grandchild that is NOT done — invisible to a one-level roll-up (which
+    # sees only the done direct child p and would false-green the grandparent).
+    task_svc.create(title="grandchild", parent_id=p.id)
 
     _drive_to_green_gate(task_svc, cond, g)
     res = cond.gate_decide(g.id, "approve", reason="try to close the epic")
     assert res["ok"] is False, res
     assert task_svc.get(g.id).gate_state != "passed"
+    assert "done" in str(res.get("reason", "")).lower()
 
-    # Complete the grandchild with strong proof; now the whole subtree is done.
+
+def test_grandparent_green_gate_passes_when_whole_subtree_done(tmp_path):
+    task_svc, cond = _services(tmp_path)
+    g = task_svc.create(title="grandparent epic")
+    p = task_svc.create(title="parent epic", parent_id=g.id)
+    # The INTERMEDIATE node is done but carries NO proof of its own — its proof
+    # is the leaf's roll-up (leaf-scoped proof, any depth).
+    task_svc.update(p.id, status="done")
+    gc = task_svc.create(title="grandchild", parent_id=p.id)
     task_svc.update(gc.id, status="done",
                     completion_proof="pytest -q: 9 passed; :8888/gc.png")
-    res2 = cond.gate_decide(g.id, "approve", reason="whole subtree complete")
-    assert res2["ok"] is True, res2
+
+    _drive_to_green_gate(task_svc, cond, g)
+    res = cond.gate_decide(g.id, "approve", reason="whole subtree complete")
+    assert res["ok"] is True, res
+    assert task_svc.get(g.id).gate_state == "passed"

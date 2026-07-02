@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.37"
+PRISM_VERSION = "6.7.38"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.38: tasks render + roll up to ANY depth (e72aba6d). "
+    "TaskService.descendants()/descendant_counts() walk the whole subtree "
+    "(cycle-guarded); GET /api/tasks/:id gains descendant_count/descendant_done "
+    "+ per-direct-child child_count; TaskDetailPage renders a recursive "
+    "collapsible TaskTree with a subtree-deep done roll-up; the board badge "
+    "counts the whole DESCENDANT subtree; and the epic green_gate roll-up is "
+    "subtree-aware — a grandparent gates green only when EVERY descendant is "
+    "done (leaf-scoped proof), closing the one-level false-green. "
     "SELF-IMPROVE-FORK v6.7.37: the PI panel executes MULTI-STEP asks. The "
     "text-tool-call interceptor (pi-runtime.mjs + panel piAgent.ts) now parses "
     "a JSON ARRAY or concatenated {name,args} objects and executes them "
