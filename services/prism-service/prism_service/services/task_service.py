@@ -7,7 +7,12 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from prism_service.models.task import Task, TaskHistory
+from prism_service.models.task import (
+    TITLE_MAX_LEN,
+    VALID_STATUSES,
+    Task,
+    TaskHistory,
+)
 
 
 # Callable signature for LL-03's embedder injection. Returns packed
@@ -251,6 +256,27 @@ class TaskService:
         self._record_history(task_id, action, details=details, actor=actor)
 
     # ------------------------------------------------------------------
+    # Boundary validation (task 16234231) — lives HERE so the REST API
+    # (api/tasks.py -> 422) and the MCP task_update path share one set
+    # of teeth. Raises ValueError with a caller-actionable message.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_status(value: object) -> None:
+        if value not in VALID_STATUSES:
+            raise ValueError(
+                f"invalid status {value!r}; allowed values: "
+                + ", ".join(VALID_STATUSES)
+            )
+
+    @staticmethod
+    def _validate_title(value: object) -> None:
+        if isinstance(value, str) and len(value) > TITLE_MAX_LEN:
+            raise ValueError(
+                f"title too long ({len(value)} chars); max {TITLE_MAX_LEN}"
+            )
+
+    # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
@@ -275,7 +301,12 @@ class TaskService:
         plan_doc: str = "",
         plan_diagram: str = "",
     ) -> Task:
-        """Create a new task and return it."""
+        """Create a new task and return it.
+
+        Raises ValueError when the title exceeds TITLE_MAX_LEN
+        (task 16234231 — titles are board-rendered everywhere).
+        """
+        self._validate_title(title)
         task = Task(
             title=title,
             description=description,
@@ -400,10 +431,21 @@ class TaskService:
         return tasks
 
     def update(self, task_id: str, **kwargs: object) -> Optional[Task]:
-        """Update arbitrary fields on a task. Records change history."""
+        """Update arbitrary fields on a task. Records change history.
+
+        Boundary validation (task 16234231): an off-enum ``status`` or an
+        over-cap ``title`` raises ValueError BEFORE anything persists —
+        a typo'd status used to silently vanish the task from every
+        status-keyed surface (board lanes, task_next, conductor claiming).
+        """
         task = self.get(task_id)
         if task is None:
             return None
+
+        if "status" in kwargs:
+            self._validate_status(kwargs["status"])
+        if "title" in kwargs:
+            self._validate_title(kwargs["title"])
 
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []

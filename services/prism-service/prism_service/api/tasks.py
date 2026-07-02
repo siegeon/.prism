@@ -21,6 +21,16 @@ def _svc(project: str):
         raise HTTPException(404, f"unknown project: {project}: {exc}")
 
 
+def _call_svc(fn, *args, **kwargs):
+    """Invoke a TaskService mutation, translating its boundary-validation
+    ValueError (off-enum status, over-cap title, bad parent — task
+    16234231/24ed8027) into the HTTP 422 contract the SPA/API expects."""
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
     """Best-effort: stamp each history turn with `turn_tokens` = the
     output_tokens spent in the window (previous_turn, this_turn], summed across
@@ -127,7 +137,8 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     if not (body.title or "").strip():
         raise HTTPException(422, "title is required")
     ctx = get_project(project)
-    task = ctx.task_svc.create(
+    task = _call_svc(
+        ctx.task_svc.create,
         title=body.title.strip(),
         description=body.description or "",
         priority=body.priority or 0,
@@ -321,7 +332,7 @@ def update_task(
     kwargs = {k: v for k, v in body.dict().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "no fields to update")
-    t = svc.update(task_id, **kwargs)
+    t = _call_svc(svc.update, task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")
     return {"task": t, "history": svc.history(task_id)}

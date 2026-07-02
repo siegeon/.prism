@@ -6,6 +6,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
+# Canonical task lifecycle (task 16234231). The four working states plus
+# the two terminal soft states the board/conductor already rely on:
+# 'cancelled' (conductor treats as terminal, done-tile rollups) and
+# 'deleted' (soft delete — hidden everywhere unless asked for by name).
+# TaskService.create/update enforce membership so BOTH doors (REST
+# api/tasks.py and MCP task_update) share the same teeth.
+VALID_STATUSES: tuple[str, ...] = (
+    "pending", "in_progress", "done", "blocked", "cancelled", "deleted",
+)
+
+# Titles are board-rendered everywhere; a 10KB title breaks list views.
+TITLE_MAX_LEN = 500
+
 
 @dataclass
 class Task:
