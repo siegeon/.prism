@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 import sys
@@ -1458,6 +1459,48 @@ class ConductorService:
                 continue
         return None
 
+    @staticmethod
+    def _lane_workspace(project_root: str, task_id: str) -> Optional[str]:
+        """Resolve the checkout that carries the task's LANE COMMIT — the
+        git worktree of *project_root* whose branch-local history
+        (merge-base(origin/main, HEAD)..HEAD) contains a commit tagged
+        [conductor:<first-8-of-task-id>]. Parallel-lane doctrine (task
+        24582b8b): gates verify the gate-claiming lane's committed work,
+        never the shared tree. Best-effort — any git failure returns None
+        (caller falls back to project_root). A lane already merged to
+        origin/main is outside the branch-local range, so done lanes
+        never shadow a live one."""
+        if not (project_root and task_id):
+            return None
+        import subprocess
+        marker = f"[conductor:{task_id[:8]}]"
+        try:
+            r = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                cwd=project_root, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return None
+        if r.returncode != 0:
+            return None
+        paths = [ln[len("worktree "):].strip()
+                 for ln in r.stdout.splitlines()
+                 if ln.startswith("worktree ")]
+        for wt in paths:
+            base = ConductorService._merge_base_baseline(wt)
+            rev_range = f"{base}..HEAD" if base else "HEAD"
+            try:
+                log = subprocess.run(
+                    ["git", "log", "--fixed-strings", f"--grep={marker}",
+                     "--format=%H", rev_range],
+                    cwd=wt, capture_output=True, text=True, timeout=10)
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                continue
+            if log.returncode == 0 and log.stdout.strip():
+                # git emits forward-slash paths even on Windows —
+                # normalize to the host convention for consumers.
+                return os.path.normpath(wt)
+        return None
+
     def _conformance_payload(self) -> dict:
         """Best-effort intended-vs-observed verdict for the green_gate
         conformance note: Brain-stored principles diffed against the
@@ -1573,7 +1616,15 @@ class ConductorService:
             # status=error 'nothing to verify'). project_root is the host
             # working tree wired by ProjectContext.attach_project_root.
             if self._project_root:
-                run_kwargs["workspace"] = str(self._project_root)
+                # LANE-COMMIT SCOPING (task 24582b8b): when the task's
+                # [conductor:<id8>] commit lives on a lane worktree branch,
+                # verify THAT checkout — a concurrent lane's red scaffold in
+                # the shared tree must not fail this lane's gate (and this
+                # lane's committed red/green must be visible to Tier0).
+                workspace = (self._lane_workspace(str(self._project_root),
+                                                  task.id)
+                             or str(self._project_root))
+                run_kwargs["workspace"] = workspace
                 # Scope Tier0 to the COMMITTED BRANCH diff, not just the
                 # working tree. In a source-run dev checkout the working tree
                 # is only untracked .dev-data noise, so a branch's COMMITTED
@@ -1582,7 +1633,7 @@ class ConductorService:
                 # gate fell back to override. baseline = merge-base(origin/main,
                 # HEAD); `git diff <baseline>` then includes the branch's
                 # committed test/impl files so the gate verifies on real proof.
-                base = self._merge_base_baseline(str(self._project_root))
+                base = self._merge_base_baseline(workspace)
                 if base:
                     run_kwargs["baseline_rev"] = base
             v = self._verifier_svc.run(**run_kwargs)
