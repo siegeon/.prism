@@ -248,16 +248,15 @@ def active_backend() -> str:
 
 def _enrich_local(scope: dict, project: str) -> tuple[str, str]:
     """Local-backend leg of enrich_one: same render_prompt contract,
-    json_mode completion against inference.local_llm, and a run-ledger
-    row (backend='local' + input/output tokens) so telemetry survives
-    the backend flip. Any failure returns ("", "") — the cycle moves on
-    and retries next sweep, exactly like a claude failure."""
-    import time as _time
-
+    json_mode completion against inference.local_llm. The completion
+    records ITSELF in the pi_runs audit ledger (backend='local',
+    purpose='graph_enrich', project, input/output token split) — pi_runs
+    is THE ledger for pi|local runs (task d1d4fe00); claude_runs stays
+    claude-only. Any failure returns ("", "") — the cycle moves on and
+    retries next sweep, exactly like a claude failure."""
     from prism_service.inference import local_llm
 
     mdl = local_llm.configured_model()
-    ts_start = _time.time()
     try:
         out = local_llm.complete(
             render_prompt(scope),
@@ -270,25 +269,7 @@ def _enrich_local(scope: dict, project: str) -> tuple[str, str]:
     except Exception as exc:
         _log(f"enrich_one local backend raised: {exc}")
         return "", ""
-    ts_end = _time.time()
-    text = out.get("text") or ""
-    try:
-        from prism_service.services import claude_run_log
-
-        claude_run_log.record_local_run(
-            project=project, purpose="graph_enrich",
-            backend="local", model=mdl,
-            final_text=text,
-            usage={
-                "input_tokens": int(out.get("input_tokens") or 0),
-                "output_tokens": int(out.get("output_tokens")
-                                     or out.get("tokens") or 0),
-            },
-            ts_start=ts_start, ts_end=ts_end,
-        )
-    except Exception:
-        pass  # ledger is best-effort — never fail the enrich cycle
-    return _parse(text)
+    return _parse(out.get("text") or "")
 
 
 def enrich_one(scope: dict, project: str) -> tuple[str, str]:

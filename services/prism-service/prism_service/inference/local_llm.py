@@ -35,15 +35,18 @@ def configured_model() -> str:
     return os.environ.get("PRISM_LOCAL_LLM_MODEL") or DEFAULT_MODEL
 
 
-def _record_run(**kwargs) -> None:
+def _record_run(**kwargs) -> str:
     """Audit-ledger seam (services/pi_run_log): ADDITIVE, best-effort —
-    a ledger failure must never raise into the inference caller path."""
+    a ledger failure must never raise into the inference caller path.
+    Returns the pi ledger run_id ('' when the ledger is unavailable) so
+    complete() can hand callers their telemetry receipt (task d1d4fe00:
+    pi_runs is THE ledger for backend pi|local)."""
     try:
         from prism_service.services import pi_run_log
 
-        pi_run_log.record_run(**kwargs)
+        return pi_run_log.record_run(**kwargs) or ""
     except Exception:
-        pass
+        return ""
 
 
 def complete(
@@ -59,15 +62,21 @@ def complete(
     purpose: str = "",
     project: str = "",
 ) -> dict:
-    """One blocking completion. Returns {text, ms, tokens}. Raises OSError /
-    urllib.error.URLError when the endpoint is unreachable — callers treat
-    that like any other inference failure.
+    """One blocking completion. Returns {text, ms, tokens, input_tokens,
+    output_tokens, run_id}. Raises OSError / urllib.error.URLError when
+    the endpoint is unreachable — callers treat that like any other
+    inference failure.
 
     Every run — success or unreachable endpoint — lands in the pi_run_log
     audit ledger as a backend=local row (the SPA's /internal-agent view).
-    The new `purpose`/`project` kwargs are ADDITIVE: defaults keep every
-    existing caller untouched; an unset purpose is inferred (reflect for
-    the reflection engine's system marker, else adhoc)."""
+    This is THE single recording point for local completions (task
+    d1d4fe00): seam callers pass `purpose`/`project` through and read the
+    row's `run_id` back off the returned dict instead of writing their own
+    ledger row (claude_runs stays claude-only). The pi row carries the
+    input/output token split so no telemetry was lost in the move. All
+    new kwargs/keys are ADDITIVE: defaults keep every existing caller
+    untouched; an unset purpose is inferred (reflect for the reflection
+    engine's system marker, else adhoc)."""
     url = (base_url or configured_url()).rstrip("/")
     mdl = model or configured_model()
     sys_text = system
@@ -134,8 +143,12 @@ def complete(
         "input_tokens": usage.get("prompt_tokens") or 0,
         "output_tokens": usage.get("completion_tokens") or 0,
     }
-    _record_run(
+    # ADDITIVE (task d1d4fe00): the pi row is the caller's telemetry
+    # receipt — return its run_id and persist the token split on it.
+    out["run_id"] = _record_run(
         duration_ms=out["ms"], tokens=int(out["tokens"] or 0),
+        input_tokens=int(out["input_tokens"] or 0),
+        output_tokens=int(out["output_tokens"] or 0),
         ok=True, error="", ts_start=ts_start, ts_end=time.time(),
         **audit,
     )

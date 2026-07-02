@@ -40,7 +40,7 @@ class _FakeResponse(io.BytesIO):
 def _fake_urlopen_payload():
     return json.dumps({
         "choices": [{"message": {"content": "verdict text"}}],
-        "usage": {"completion_tokens": 21},
+        "usage": {"prompt_tokens": 13, "completion_tokens": 21},
     }).encode()
 
 
@@ -64,6 +64,11 @@ def test_complete_records_one_local_row(isolated_runs_dir, monkeypatch):
     assert r["model"] == "qwen3:1.7b"
     assert r["project"] == "proj-z"
     assert r["tokens"] == 21
+    # Additive split + run_id receipt (task d1d4fe00): pi_runs is THE
+    # ledger for pi|local; callers read the row id off the output.
+    assert r["input_tokens"] == 13
+    assert r["output_tokens"] == 21
+    assert out["run_id"] == r["run_id"]
     assert r["prompt_chars"] == len("brief text")
     assert r["tools_used"] == []  # tool-less by design
     assert r["ok"] is True
@@ -120,3 +125,4 @@ def test_broken_ledger_never_breaks_complete(isolated_runs_dir, monkeypatch):
 
     out = local_llm.complete("brief")
     assert out["text"] == "verdict text"
+    assert out["run_id"] == ""  # no receipt when the ledger is down

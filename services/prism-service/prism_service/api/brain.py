@@ -234,10 +234,12 @@ def _sources_payload(results: list) -> list[dict]:
 def _ask_local(body: AskBody, q: str, prompt: str, results: list) -> dict:
     """Local-backend leg of /ask (task e1ebdd6e): one keyless
     local_llm.complete completion over the SAME grounded prompt. The
-    response contract matches the claude path — run_id comes from the
-    run-ledger seam (record_local_run) and tokens from local_llm's
-    additive input/output split, so the SPA keeps its telemetry.
-    An unreachable endpoint is a 502, never a fabricated answer."""
+    response contract matches the claude path — run_id is the pi_runs
+    audit-ledger row the completion records for itself (task d1d4fe00:
+    pi_runs is THE ledger for pi|local runs; claude_runs stays
+    claude-only) and tokens come from local_llm's additive input/output
+    split, so the SPA keeps its telemetry. An unreachable endpoint is a
+    502, never a fabricated answer."""
     from prism_service.inference import local_llm
 
     purpose = f"brain_ask@{q[:40]}"
@@ -256,33 +258,17 @@ def _ask_local(body: AskBody, q: str, prompt: str, results: list) -> dict:
             502, f"local ask backend failed: {type(exc).__name__}: {exc}")
     ts_end = time.time()
     text = (out.get("text") or "").strip()
-    usage = {
-        "input_tokens": int(out.get("input_tokens") or 0),
-        "output_tokens": int(out.get("output_tokens")
-                             or out.get("tokens") or 0),
-    }
-    run_id = ""
-    try:
-        from prism_service.services import claude_run_log
-
-        run_id = claude_run_log.record_local_run(
-            project=body.project, purpose=purpose,
-            backend="local", model=mdl,
-            final_text=text, usage=usage,
-            ts_start=ts_start, ts_end=ts_end,
-        )
-    except Exception:
-        pass  # ledger is best-effort — never fail the ask
     return {
         "question": q,
         "project": body.project,
         "answer": text or "(no answer returned)",
         "sources": _sources_payload(results),
-        "run_id": run_id,
+        "run_id": out.get("run_id") or "",
         "exit_code": 0,
         "duration_s": round(ts_end - ts_start, 3),
         "tokens": {
-            "input": usage["input_tokens"],
-            "output": usage["output_tokens"],
+            "input": int(out.get("input_tokens") or 0),
+            "output": int(out.get("output_tokens")
+                          or out.get("tokens") or 0),
         },
     }

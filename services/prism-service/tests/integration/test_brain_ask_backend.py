@@ -6,8 +6,10 @@
 PRISM_BRAIN_ASK_BACKEND=local the SAME grounded prompt must run as one
 local_llm.complete completion, preserving the response contract —
 answer / sources / run_id / exit_code / duration_s / tokens{input,
-output} — with run_id + tokens filled from the run-ledger seam so the
-SPA ask panel keeps its receipts. Default (unset) stays claude_cli.
+output} — with run_id + tokens riding back off the completion's own
+pi_runs audit-ledger row (task d1d4fe00: pi_runs is THE ledger for
+pi|local runs; claude_runs stays claude-only) so the SPA ask panel
+keeps its receipts. Default (unset) stays claude_cli.
 
 Exercises the REAL FastAPI app via TestClient; Brain retrieval and both
 inference backends are stubbed — pytest never needs Ollama or claude.
@@ -33,10 +35,11 @@ _HITS = [
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    """TestClient over the real app with Brain retrieval stubbed and the
-    claude_runs ledger repointed at tmp_path."""
+    """TestClient over the real app with Brain retrieval stubbed and
+    BOTH run ledgers repointed at tmp_path."""
     import prism_service.api.brain as brain_api
     import prism_service.services.claude_run_log as crl
+    import prism_service.services.pi_run_log as prl
 
     class _FakeBrain:
         def search(self, q, domain=None, limit=8):
@@ -49,11 +52,15 @@ def client(monkeypatch, tmp_path):
     runs_dir = tmp_path / "claude_runs"
     monkeypatch.setattr(crl, "_RUNS_DIR", runs_dir)
     monkeypatch.setattr(crl, "_MANIFEST", runs_dir / "manifest.jsonl")
+    pi_dir = tmp_path / "pi_runs"
+    monkeypatch.setattr(prl, "_RUNS_DIR", pi_dir)
+    monkeypatch.setattr(prl, "_MANIFEST", pi_dir / "manifest.jsonl")
 
     from fastapi.testclient import TestClient
     from prism_service.main import app
     tc = TestClient(app, raise_server_exceptions=False)
     tc._runs_dir = runs_dir
+    tc._pi_dir = pi_dir
     return tc
 
 
@@ -135,8 +142,11 @@ def test_local_backend_same_contract(client, monkeypatch, forbid_claude):
 
     def fake_complete(prompt, **kw):
         calls.append({"prompt": prompt, **kw})
+        # Contract-accurate stub: the real complete() records its own
+        # pi_runs row and returns the row's run_id (task d1d4fe00).
         return {"text": "Grounded local answer [2].", "ms": 42.0,
-                "tokens": 17, "input_tokens": 88, "output_tokens": 17}
+                "tokens": 17, "input_tokens": 88, "output_tokens": 17,
+                "run_id": "pi-run-1"}
     monkeypatch.setattr(local_llm, "complete", fake_complete)
 
     r = client.post("/api/brain/ask", json={
@@ -150,7 +160,8 @@ def test_local_backend_same_contract(client, monkeypatch, forbid_claude):
         assert key in body, f"missing contract key {key!r}"
     assert body["answer"] == "Grounded local answer [2]."
     assert body["exit_code"] == 0
-    assert body["run_id"], "local path must fill run_id from the ledger seam"
+    assert body["run_id"] == "pi-run-1", \
+        "local path must surface the completion's pi ledger run_id"
     assert body["tokens"] == {"input": 88, "output": 17}
 
     # Sources keep the retrieval receipts.
@@ -168,32 +179,51 @@ def test_local_backend_same_contract(client, monkeypatch, forbid_claude):
 
 
 # ----------------------------------------------------------------------
-# AC-3 — the local run lands in the ledger; run_id matches the response.
+# AC-3 — the local run lands in the pi_runs audit ledger (task d1d4fe00:
+# pi_runs owns pi|local); run_id matches the response; claude_runs
+# stays claude-only.
 # ----------------------------------------------------------------------
 def test_local_run_lands_in_ledger(client, monkeypatch, forbid_claude):
+    import io
+
     from prism_service.inference import local_llm
+    import prism_service.services.pi_run_log as prl
 
     monkeypatch.setenv("PRISM_BRAIN_ASK_BACKEND", "local")
     monkeypatch.setenv("PRISM_LOCAL_LLM_MODEL", "stub-micro")
-    monkeypatch.setattr(local_llm, "complete", lambda prompt, **kw: {
-        "text": "Ledger answer.", "ms": 7.0, "tokens": 5,
-        "input_tokens": 31, "output_tokens": 5})
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    payload = json.dumps({
+        "choices": [{"message": {"content": "Ledger answer."}}],
+        "usage": {"prompt_tokens": 31, "completion_tokens": 5},
+    }).encode()
+    monkeypatch.setattr(local_llm.urllib.request, "urlopen",
+                        lambda req, timeout=0: _Resp(payload))
 
     r = client.post("/api/brain/ask", json={
         "q": "ledger check?", "project": "proj-x"})
     assert r.status_code == 200, r.text
     body = r.json()
 
-    rows = _manifest_rows(client._runs_dir)
-    assert len(rows) == 1, "local ask must append exactly one manifest row"
+    rows = prl.list_recent(limit=10)
+    assert len(rows) == 1, "local ask must append exactly one pi_runs row"
     row = rows[0]
     assert row["run_id"] == body["run_id"]
     assert row["backend"] == "local"
     assert row["model"] == "stub-micro"
     assert row["purpose"].startswith("brain_ask@")
+    assert row["project"] == "proj-x"
     assert row["input_tokens"] == 31
     assert row["output_tokens"] == 5
-    assert row["final_text"] == "Ledger answer."
+    assert body["tokens"] == {"input": 31, "output": 5}
+    assert _manifest_rows(client._runs_dir) == [], \
+        "claude_runs must stay claude-only — no local seam rows"
 
 
 # ----------------------------------------------------------------------

@@ -26,10 +26,18 @@ Manifest line schema (each row a complete JSON object):
         "prompt_chars": 1234,
         "tools_used":   [{"name": "brain_search", "ms": 40.2, "ok": true}],
         "turns":        3,                   # 0 for tool-less local runs
-        "tokens":       42,
+        "tokens":       42,                  # completion side (KPI strip)
+        "input_tokens":  33,                 # additive split (task d1d4fe00)
+        "output_tokens": 42,                 # — telemetry survives the
+                                             # claude_runs -> pi_runs move
         "ok":           true,
         "error":        ""                   # first 1 KB on failure
     }
+
+    pi_runs is THE ledger for backend pi|local (task d1d4fe00):
+    local_llm.complete and pi_agent.invoke record here themselves, so
+    seam callers must NOT write their own row — they pass purpose/
+    project through and read the run_id back off the completion.
 
 Unlike claude runs there is NO per-run stream file: the tool receipts
 are small structured rows that ride the manifest line directly, which
@@ -101,6 +109,8 @@ def record_run(
     tools_used: Optional[list] = None,
     duration_ms: float = 0.0,
     tokens: int = 0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
     turns: int = 0,
     ok: bool = True,
     error: str = "",
@@ -129,6 +139,10 @@ def record_run(
             "tools_used": _clean_tools(tools_used),
             "turns": int(turns or 0),
             "tokens": int(tokens or 0),
+            # Additive input/output split (task d1d4fe00) — the fields
+            # the claude_runs ledger carried, preserved on the move.
+            "input_tokens": int(input_tokens or 0),
+            "output_tokens": int(output_tokens or 0),
             "ok": bool(ok),
             "error": _truncate(str(error or ""), _ERROR_MAX),
         }

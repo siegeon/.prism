@@ -19,8 +19,9 @@ Env:
   PRISM_MEMORY_SUMMARY_BACKEND=local       # route summaries at the keyless
                                            # local micro model instead of
                                            # `claude -p` (default: claude);
-                                           # runs still land in claude_runs
-                                           # with backend='local' + tokens
+                                           # runs land in the pi_runs audit
+                                           # ledger (backend='local' +
+                                           # input/output tokens)
 """
 
 from __future__ import annotations
@@ -147,9 +148,11 @@ def _invoke_backend(*, prompt: str, work_dir: str, project: str,
     Default: the claude CLI, exactly as before (``model`` passes through so
     call sites like event_handlers' novelty summarizer keep their haiku
     pin). PRISM_MEMORY_SUMMARY_BACKEND=local routes the SAME distillation
-    prompt at the keyless local micro model (inference.local_llm) and
-    records the run in the claude_runs ledger with backend='local' +
-    input/output token counts — telemetry survives the backend flip.
+    prompt at the keyless local micro model (inference.local_llm), which
+    records the run itself in the pi_runs audit ledger (backend='local',
+    purpose/project passthrough, input/output token split) — pi_runs is
+    THE ledger for pi|local runs (task d1d4fe00); claude_runs stays
+    claude-only. run_id rides back on the completion output.
     """
     backend = (os.environ.get("PRISM_MEMORY_SUMMARY_BACKEND") or "").strip().lower()
     if backend == "local":
@@ -162,28 +165,14 @@ def _invoke_backend(*, prompt: str, work_dir: str, project: str,
             model=mdl,
             system=_LOCAL_DISTILL_SYSTEM,
             max_tokens=128,
+            purpose=purpose,
+            project=project,
         )
         ts_end = time.time()
         text = out.get("text") or ""
-        run_id = ""
-        try:
-            from prism_service.services import claude_run_log
-
-            run_id = claude_run_log.record_local_run(
-                project=project, purpose=purpose,
-                backend="local", model=mdl,
-                final_text=text,
-                usage={
-                    "input_tokens": int(out.get("input_tokens") or 0),
-                    "output_tokens": int(out.get("output_tokens")
-                                         or out.get("tokens") or 0),
-                },
-                ts_start=ts_start, ts_end=ts_end,
-            )
-        except Exception:
-            pass  # ledger is best-effort — never fail the summary
         return _LocalBackendResult(
-            text, run_id=run_id, duration_s=round(ts_end - ts_start, 3))
+            text, run_id=out.get("run_id") or "",
+            duration_s=round(ts_end - ts_start, 3))
     from prism_service.inference import claude_cli
 
     return claude_cli.invoke(

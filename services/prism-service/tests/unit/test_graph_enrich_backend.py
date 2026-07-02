@@ -5,11 +5,12 @@ graph_enrich.enrich_one must route through an env-gated backend seam
 mirroring memory_summary_worker._invoke_backend: PRISM_GRAPH_ENRICH_
 BACKEND=local -> inference/local_llm.complete (json_mode) with the
 unchanged render_prompt(scope) contract; default (unset) stays
-claude_cli.invoke byte-for-byte. The local path records an equivalent
-claude_runs manifest row (backend='local' + input/output token counts)
-via claude_run_log.record_local_run, the _parse truncation contract
-(name<=60, purpose<=160, ("","") on failure) is unchanged, and the
-graph_annotations provenance string reflects the active backend.
+claude_cli.invoke byte-for-byte. The local run is recorded by
+local_llm.complete ITSELF into the pi_runs audit ledger (backend='local'
++ input/output token split; task d1d4fe00 — pi_runs is THE ledger for
+pi|local runs, claude_runs stays claude-only), the _parse truncation
+contract (name<=60, purpose<=160, ("","") on failure) is unchanged, and
+the graph_annotations provenance string reflects the active backend.
 
 All stubs — pytest never needs Ollama or the claude CLI.
 """
@@ -136,39 +137,55 @@ def test_local_backend_routes_local_llm(
 
 
 # ----------------------------------------------------------------------
-# AC-3 — the local run lands in the claude_runs ledger with tokens.
+# AC-3 — the local run lands in the pi_runs audit ledger with the token
+# split; claude_runs stays claude-only (task d1d4fe00 reconciliation).
 # ----------------------------------------------------------------------
 def test_local_run_lands_in_ledger(
-        monkeypatch, isolated_runs_dir, forbid_claude):
+        monkeypatch, tmp_path, isolated_runs_dir, forbid_claude):
+    import io
+
     from prism_service.inference import local_llm
+    import prism_service.services.pi_run_log as prl
     from prism_service.services import graph_enrich as ge
+
+    pi_dir = tmp_path / "pi_runs"
+    monkeypatch.setattr(prl, "_RUNS_DIR", pi_dir)
+    monkeypatch.setattr(prl, "_MANIFEST", pi_dir / "manifest.jsonl")
 
     monkeypatch.setenv("PRISM_GRAPH_ENRICH_BACKEND", "local")
     monkeypatch.setenv("PRISM_LOCAL_LLM_MODEL", "stub-micro")
-    payload = '{"name": "Ledger Cluster", "purpose": "Keeps receipts."}'
-    monkeypatch.setattr(local_llm, "complete", lambda prompt, **kw: {
-        "text": payload, "ms": 9.0, "tokens": 6,
-        "input_tokens": 27, "output_tokens": 6,
-    })
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    text = '{"name": "Ledger Cluster", "purpose": "Keeps receipts."}'
+    payload = json.dumps({
+        "choices": [{"message": {"content": text}}],
+        "usage": {"prompt_tokens": 27, "completion_tokens": 6},
+    }).encode()
+    monkeypatch.setattr(local_llm.urllib.request, "urlopen",
+                        lambda req, timeout=0: _Resp(payload))
 
     name, purpose = ge.enrich_one(_scope(), "no-such-project")
     assert (name, purpose) == ("Ledger Cluster", "Keeps receipts.")
 
-    rows = _manifest_rows(isolated_runs_dir)
-    assert len(rows) == 1, "local run must append exactly one manifest row"
+    rows = prl.list_recent(limit=10)
+    assert len(rows) == 1, "local run must append exactly one pi_runs row"
     row = rows[0]
     assert row["backend"] == "local"
     assert row["model"] == "stub-micro"
     assert row["purpose"] == "graph_enrich"
-    assert row["exit_code"] == 0
+    assert row["project"] == "no-such-project"
+    assert row["ok"] is True
     assert row["input_tokens"] == 27
     assert row["output_tokens"] == 6
-    assert row["tokens_used"] == 33
-    # The synthetic stream file must exist so /api/claude-runs/{id}/stream
-    # (and final_text extraction) keep working for local runs.
-    assert row["final_text"] == payload
-    import prism_service.services.claude_run_log as crl
-    assert crl.stream_path_for(row["run_id"]) is not None
+    assert row["tokens"] == 6  # completion side, unchanged meaning
+    assert _manifest_rows(isolated_runs_dir) == [], \
+        "claude_runs must stay claude-only — no local seam rows"
 
 
 # ----------------------------------------------------------------------
