@@ -106,11 +106,12 @@ class DistillProceduralOperation(MemoryOperation):
         "invalidate_memory_ids": "[]",
         "confidence": "float 0-1",
     }
-    # Model routing lives in runner._CLAUDE_OP_MODEL (task 9f61d484): the
+    # Model routing lives in runner.CLAUDE_MODEL_MAP (task 9f61d484): the
     # opus pin for this synthesis op is the op map's entry, NOT a hardcoded
     # id here, so the map is the single home of routing. "" here means the
-    # runner supplies distill's model (opus for claude; qwen3 only on the
-    # PRISM_MEMORY_OPS_DISTILL_LOCAL opt-in — micro-model distill is uncertain).
+    # runner supplies distill's model (opus on the default claude path; a
+    # local micro model only on the PRISM_MEMORY_OPS_BACKEND=local opt-in —
+    # micro-model distill quality is uncertain and measured, not assumed).
     model = ""
     provenance = {"source": "distill_procedural", "tier": 2}
 
