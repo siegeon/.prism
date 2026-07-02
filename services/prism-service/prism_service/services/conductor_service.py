@@ -1282,20 +1282,32 @@ class ConductorService:
         current_id = task.workflow_step or ""
         current_step = self._step_by_id(current_id)
 
-        # Refuse if we're sitting on a gate that hasn't been decided.
+        # Refuse if we're sitting on a gate that hasn't been decided —
+        # or one that FAILED. A failed gate latches the state machine
+        # (task baab6b51, live-probe 9f20b605): recovery goes through
+        # gate_decide(action='approve', override=True, distinct actor),
+        # never through a plain advance.
         if (current_step is not None
                 and current_step["type"] == "gate"
-                and task.gate_state == "pending"):
+                and task.gate_state in ("pending", "failed")):
+            if task.gate_state == "pending":
+                refusal_reason = (
+                    f"gate '{current_id}' is pending; "
+                    "call gate_decide before advancing"
+                )
+            else:
+                refusal_reason = (
+                    f"gate '{current_id}' is failed; advance is latched — "
+                    "remediate and recover via gate_decide "
+                    "action='approve' with override=True (distinct actor)"
+                )
             return {
                 "ok": False,
                 "task_id": task_id,
                 "from_step": current_id,
                 "to_step": current_id,
                 "gate_state": task.gate_state,
-                "reason": (
-                    f"gate '{current_id}' is pending; "
-                    "call gate_decide before advancing"
-                ),
+                "reason": refusal_reason,
             }
 
         current_index = self._step_index(current_id)

@@ -209,8 +209,14 @@ def test_advance_at_final_step_returns_refusal(tmp_path):
         safety -= 1
         snapshot = task_svc.get(t.id)
         if snapshot.gate_state == "pending":
+            # Reason must satisfy the red/green artifact teeth (runner +
+            # fail/pass signal) — a failed gate now LATCHES advance_task
+            # (task baab6b51), so the walk can no longer skate past a
+            # rejected artifact check.
             cond.gate_decide(
-                t.id, action="approve", reason="test: walk to end"
+                t.id, action="approve",
+                reason="test: walk to end; pytest -q -> 1 failed then "
+                       "re-run all passed",
             )
             continue
         if snapshot.workflow_step == steps[-1]["id"]:
