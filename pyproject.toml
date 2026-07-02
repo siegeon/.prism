@@ -3,6 +3,15 @@ name = "prism-devtools"
 version = "5.0.0"
 
 [tool.pytest.ini_options]
+# Never recurse into PRISM data dirs: they hold untracked repo mirrors
+# (e.g. data-*/projects/*/graphify-src) that shadow test modules and blow
+# up collection (Tier0 explosion, tasks c944660b/271dacc9). Extends the
+# pytest defaults (setting norecursedirs replaces them).
+norecursedirs = [
+    "*.egg", ".*", "build", "dist", "node_modules", "venv",
+    "data", "data-*", ".dev-data", "graphify-src", "web_dist",
+    "__pycache__", "site-packages",
+]
 testpaths = [
     "services/prism-service/tests",
     "benchmarks/tests",
