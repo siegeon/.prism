@@ -304,6 +304,16 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
             out["phase_progress"] = cond.phase_progress(task_id)
     except Exception:
         pass
+    # pi_activity (task fc08da8d): the PI-panel agent's task-attributed runs
+    # from the pi_runs ledger (model, tokens, ms, tools_used) — the detail
+    # page renders a "PI agent" activity row so a task the browser PI agent
+    # drove shows its token+tool usage, not just Claude sessions. Best-effort.
+    try:
+        from prism_service.services import pi_run_log
+        out["pi_activity"] = pi_run_log.list_recent(
+            limit=50, project=project, task_id=task_id)
+    except Exception:
+        out["pi_activity"] = []
     # has_prototype: a clickable MOCK prototype HTML the /prototype workflow
     # generated for this task, served in-app (see get_task_prototype). Top-level
     # boolean (like phase_progress) so the detail page can show/hide the iframe

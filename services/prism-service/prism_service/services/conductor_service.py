@@ -2690,6 +2690,14 @@ class ConductorService:
                         live_token_events_for_session_windowed as windowed_fn,
                         token_turns_from_events as turns_from,
                     )
+                # token_turns_from_events is a PURE events->burn helper (no
+                # source dependency), so import it even without a Claude source:
+                # a task the PI agent drove (fc08da8d) may have NO transcript at
+                # all, yet its folded pi_runs events must still derive tok/s.
+                if turns_from is None:
+                    from prism_service.services.claude_transcripts import (
+                        token_turns_from_events as turns_from,
+                    )
                 # Build the FULL uncapped per-turn event timeline across the
                 # task's live sessions; total_turns is computed off the UNCAPPED
                 # series so `turns` stays honest even past the 40-turn tail cap.
@@ -2739,6 +2747,38 @@ class ConductorService:
                                 live_tok = 0
                         tokens += max(outcome_tok, live_tok)
                     live_events.extend(session_events)
+                # PI-AGENT FOLD (task fc08da8d): the browser PI panel runs
+                # inference LOCALLY, so its exchanges never land in a Claude
+                # transcript — the tile would read 0 turns for a task the PI
+                # agent actually drove. Fold in the task-attributed pi_runs
+                # rows (backend panel|pi|local, this task_id, in the work
+                # window) as extra burn events. SUM, not max: the PI tokens
+                # and the Claude-transcript tokens are DISJOINT real work by
+                # two different agents (not two measurements of ONE session,
+                # which is why the per-session read above takes max) — they
+                # add. Best-effort; never break the tile.
+                try:
+                    from pathlib import Path
+                    from prism_service.services import pi_run_log
+                    project_id = Path(self._scores_db).parent.name
+                    for r in pi_run_log.list_recent(
+                        limit=pi_run_log.RUN_LOG_LIMIT,
+                        project=project_id, task_id=task_id):
+                        if str(r.get("backend") or "") not in ("panel", "pi", "local"):
+                            continue
+                        ts = r.get("ts_end") or r.get("ts")
+                        if ts is None:
+                            continue
+                        ts = float(ts)
+                        if not (win_start <= ts <= win_end):
+                            continue
+                        out_tok = int(r.get("output_tokens") or r.get("tokens") or 0)
+                        if out_tok <= 0:
+                            continue
+                        live_events.append((ts, out_tok))
+                        tokens += out_tok
+                except Exception:
+                    pass
                 live_events.sort(key=lambda e: e[0])
                 # PER-TASK-EXCLUSIVE (owner decision, task 5ecbbfb8): the tile
                 # shows ONLY this task's authoritative linked-session activity.

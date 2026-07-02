@@ -112,6 +112,56 @@ async def call_tool(
     }
 
 
+@router.post("/run")
+def record_run(
+    project: str = Query("default"), body: dict = Body(...),
+) -> dict:
+    """Record ONE task-attributed PI-panel exchange into the pi_runs ledger
+    (task fc08da8d).
+
+    Unlike POST /tool (which dispatches an MCP tool), this endpoint takes
+    the exchange's USAGE — the browser PI agent runs inference locally, so
+    its tokens never reach a Claude transcript; the panel POSTs them here on
+    agent_end. Recorded with backend='panel', purpose='panel-drive' and the
+    task_id detected from the exchange's conductor/task tool calls, so the
+    conductor tile burn + the task detail can attribute the PI agent's work
+    to the driven task. Best-effort: a malformed payload is coerced, never
+    500'd, mirroring the ledger's own never-raise discipline."""
+    from prism_service.services import pi_run_log
+
+    def _int(v) -> int:
+        try:
+            return max(0, int(v or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _float(v) -> float:
+        try:
+            return max(0.0, float(v or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    input_tokens = _int(body.get("input_tokens"))
+    output_tokens = _int(body.get("output_tokens"))
+    tools = body.get("tools_used")
+    run_id = pi_run_log.record_run(
+        backend="panel",
+        model=str(body.get("model") or ""),
+        purpose="panel-drive",
+        project=project,
+        task_id=str(body.get("task_id") or ""),
+        tools_used=tools if isinstance(tools, list) else [],
+        duration_ms=_float(body.get("ms")),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        # `tokens` is the completion-side KPI the ledger/strip reads.
+        tokens=output_tokens,
+        turns=1,
+        ok=bool(body.get("ok", True)),
+    )
+    return {"ok": run_id is not None, "run_id": run_id}
+
+
 def _error_message(text: str) -> str | None:
     """Extract the in-band dispatch-error message, or None for a real
     result. mcp.tools._dispatch_tool's catch-all emits `Error: <Type>:

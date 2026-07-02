@@ -236,6 +236,17 @@ export class PiStore {
   // in the run (a run can span tool turns + the text-tool-call injection).
   private runStart = 0;
   private runUsage = { input: 0, output: 0 };
+  // Task-attributed telemetry (task fc08da8d): the task this exchange acted
+  // on — the LAST id/task_id seen on a conductor/task tool call — plus the
+  // tool receipts, POSTed to /api/agent/run on the terminal agent_end so the
+  // PI agent's local-inference burn attributes to the driven task on the
+  // /conductor tile + task detail. null task -> adhoc (still recorded).
+  private runTaskId: string | null = null;
+  private runTools: { name: string; ms: number; ok: boolean }[] = [];
+  /** Conductor/task tools whose id/task_id arg attributes the exchange. */
+  private static readonly TASK_TOOLS = new Set([
+    "conductor_advance", "conductor_gate", "task_update", "task_list",
+  ]);
 
   constructor(project: string) {
     this._project = project;
@@ -451,12 +462,14 @@ export class PiStore {
           continue;
         }
         const row = step.row;
+        this.captureTaskAttribution(step.call.name, step.call.args);
         try {
           const res = await tool.execute(row.callId, step.call.args);
           row.status = "ok";
           const details = (res as { details?: { result?: unknown; ms?: number } }).details;
           row.result = details?.result ?? res;
           row.ms = details?.ms;
+          this.runTools.push({ name: row.name, ms: row.ms ?? 0, ok: true });
           const text = res.content
             .filter((c): c is { type: "text"; text: string } => c.type === "text")
             .map((c) => c.text).join("\n");
@@ -464,6 +477,7 @@ export class PiStore {
         } catch (e) {
           row.status = "error";
           row.result = e instanceof Error ? e.message : String(e);
+          this.runTools.push({ name: row.name, ms: row.ms ?? 0, ok: false });
           resultTexts.push(`[${row.name} error] ${row.result}`);
         }
         this.emit();
@@ -528,6 +542,8 @@ export class PiStore {
         if (!this.busy) {
           this.runStart = performance.now();
           this.runUsage = { input: 0, output: 0 };
+          this.runTaskId = null;
+          this.runTools = [];
         }
         this.busy = true;
         break;
@@ -555,6 +571,11 @@ export class PiStore {
           this.items.push({ kind: "note", text: "stopped" });
         }
         this.recordTelemetry(!err);
+        // Task-attributed backend telemetry: mirror the implement.js
+        // agent_runs idea for the PI panel — the local-inference tokens
+        // never reach a Claude transcript, so POST them (with the detected
+        // task) to the pi_runs ledger for the conductor tile + task detail.
+        void this.postTelemetry(!err);
         this.persist();
         break;
       }
@@ -593,6 +614,7 @@ export class PiStore {
         break;
       }
       case "tool_execution_start":
+        this.captureTaskAttribution(event.toolName, event.args);
         this.items.push({
           kind: "tool", callId: event.toolCallId, name: event.toolName,
           label: event.toolName, args: event.args, status: "running",
@@ -607,6 +629,7 @@ export class PiStore {
           const details = (event.result as { details?: { result?: unknown; ms?: number } })?.details;
           row.result = details?.result ?? event.result;
           row.ms = details?.ms;
+          this.runTools.push({ name: row.name, ms: row.ms ?? 0, ok: !event.isError });
         }
         break;
       }
@@ -630,6 +653,38 @@ export class PiStore {
       seconds,
       estimated: true,
     };
+  }
+
+  /** Record the driven-task attribution for this exchange: the LAST
+   * id/task_id seen on a conductor/task tool call wins (mirrors implement.js
+   * capturing the step's task_id). Non-task tools are ignored. */
+  private captureTaskAttribution(name: string, args: unknown) {
+    if (!PiStore.TASK_TOOLS.has(name)) return;
+    const a = (args ?? {}) as Record<string, unknown>;
+    const id = a.id ?? a.task_id;
+    if (typeof id === "string" && id) this.runTaskId = id;
+  }
+
+  /** POST this exchange's usage + task attribution to the pi_runs ledger
+   * (task fc08da8d). Best-effort: never blocks the UI, swallows all errors —
+   * a telemetry failure must not disturb the chat. Recorded even with no
+   * detected task (adhoc, empty task_id). */
+  private async postTelemetry(ok: boolean) {
+    try {
+      const seconds = this.runStart ? (performance.now() - this.runStart) / 1000 : 0;
+      await api.post(
+        `/api/agent/run?project=${encodeURIComponent(this._project)}`,
+        {
+          task_id: this.runTaskId ?? "",
+          model: this.cfg.modelId,
+          input_tokens: this.runUsage.input,
+          output_tokens: this.runUsage.output,
+          ms: Math.round(seconds * 1000),
+          tools_used: this.runTools,
+          ok,
+        },
+      );
+    } catch { /* telemetry is advisory only — never disturb the UI */ }
   }
 
   /** G5 feed: per-exchange model id + tool-loop success (localStorage ring). */

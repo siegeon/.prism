@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.38"
+PRISM_VERSION = "6.7.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.39: the PI agent drives AND shows its SDLC work "
+    "(fc08da8d). pi-expert.mjs teaches an explicit ordered DRIVE loop; the PI "
+    "panel POSTs each exchange's usage + detected task to a new /api/agent/run "
+    "endpoint; pi_runs rows carry task_id; conductor phase_progress folds those "
+    "task-attributed rows into the tile burn (SUM — disjoint agent work) so the "
+    "PI agent's tok/s + turns show on /conductor; and the task detail surfaces a "
+    "PI-agent activity card (tokens + tool chips). "
     "SELF-IMPROVE-FORK v6.7.38: tasks render + roll up to ANY depth (e72aba6d). "
     "TaskService.descendants()/descendant_counts() walk the whole subtree "
     "(cycle-guarded); GET /api/tasks/:id gains descendant_count/descendant_done "

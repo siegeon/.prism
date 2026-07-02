@@ -99,6 +99,19 @@ type SessionRow = {
   skills_invoked?: number;
 };
 
+// PI-agent activity (task fc08da8d): a task-attributed pi_runs ledger row —
+// the browser PI agent's per-exchange token + tool usage for this task.
+type PiActivityRow = {
+  run_id: string;
+  ts?: number;
+  model?: string;
+  tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  duration_ms?: number;
+  tools_used?: { name: string; ms?: number; ok?: boolean }[];
+};
+
 // Staggered Card-stack wrapper: each card fades + rises into place with a
 // capped per-index delay, so the detail page assembles top-to-bottom on mount
 // instead of snapping in all at once. Collapses to opacity-only when reduced.
@@ -359,6 +372,7 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<Task | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [piActivity, setPiActivity] = useState<PiActivityRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   // Whole flat task list, used to build the recursive subtree tree client-side
   // (parent_id links) rooted at this task — a single GET the page already made.
@@ -393,7 +407,7 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean; descendant_count?: number; descendant_done?: number }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; pi_activity?: PiActivityRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean; descendant_count?: number; descendant_done?: number }>(
         `/api/tasks/${id}?project=${project}`,
       );
       // phase_progress + has_prototype + descendant_* ride at the TOP LEVEL of
@@ -402,6 +416,7 @@ export default function TaskDetailPage() {
       setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, has_prototype: d.has_prototype ?? false, descendant_count: d.descendant_count ?? 0, descendant_done: d.descendant_done ?? 0 } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
+      setPiActivity(d.pi_activity ?? []);
       setTimeline(d.timeline ?? null);
       setError(null);
       // The recursive subtree tree is built client-side from the flat task list
@@ -954,6 +969,51 @@ export default function TaskDetailPage() {
           </ul>
         )}
       </Card>
+
+      {piActivity.length > 0 && (
+        <Card>
+          <SectionLabel>PI agent ({piActivity.length})</SectionLabel>
+          <ul className="divide-y divide-[color:var(--midground-base)]/10 mt-2">
+            {piActivity.map((r) => (
+              <li key={r.run_id} className="py-3">
+                <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                  <span className="font-mono text-[12px]">{r.model || "pi-agent"}</span>
+                  <span className="text-[11px] opacity-50">
+                    {r.ts ? new Date(r.ts * 1000).toISOString().slice(0, 19).replace("T", " ") : "—"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {[
+                    ["↑in", String(r.input_tokens ?? 0)],
+                    ["↓out", String(r.output_tokens ?? r.tokens ?? 0)],
+                    ["ms", String(Math.round(r.duration_ms ?? 0))],
+                  ].map(([label, value]) => (
+                    <span
+                      key={label}
+                      className="text-[11px] px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10"
+                    >
+                      <span className="opacity-50">{label}</span>{" "}
+                      <span className="font-mono">{value}</span>
+                    </span>
+                  ))}
+                </div>
+                {(r.tools_used ?? []).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {(r.tools_used ?? []).map((t, i) => (
+                      <span
+                        key={`${r.run_id}-${t.name}-${i}`}
+                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${t.ok === false ? "bg-[color:var(--danger-base,#c0392b)]/20" : "bg-[color:var(--accent-base)]/15"}`}
+                      >
+                        {t.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <Card>
         <SectionLabel>Timeline ({history.length})</SectionLabel>

@@ -30,6 +30,7 @@ Manifest line schema (each row a complete JSON object):
         "input_tokens":  33,                 # additive split (task d1d4fe00)
         "output_tokens": 42,                 # — telemetry survives the
                                              # claude_runs -> pi_runs move
+        "task_id":      "fc08da8d-...",      # driven task (fc08da8d); "" adhoc
         "ok":           true,
         "error":        ""                   # first 1 KB on failure
     }
@@ -112,6 +113,7 @@ def record_run(
     input_tokens: int = 0,
     output_tokens: int = 0,
     turns: int = 0,
+    task_id: str = "",
     ok: bool = True,
     error: str = "",
     ts_start: Optional[float] = None,
@@ -143,6 +145,10 @@ def record_run(
             # the claude_runs ledger carried, preserved on the move.
             "input_tokens": int(input_tokens or 0),
             "output_tokens": int(output_tokens or 0),
+            # Task-attribution (task fc08da8d): the task this run acted on,
+            # so the conductor tile burn + task detail can attribute the PI
+            # agent's tokens to the driven task. Additive, default "".
+            "task_id": str(task_id or ""),
             "ok": bool(ok),
             "error": _truncate(str(error or ""), _ERROR_MAX),
         }
@@ -177,10 +183,12 @@ def _trim_to_limit() -> None:
     tmp.replace(_MANIFEST)
 
 
-def _read_filtered(project: Optional[str] = None) -> list[dict]:
+def _read_filtered(project: Optional[str] = None,
+                   task_id: Optional[str] = None) -> list[dict]:
     """Read the whole manifest (bounded by RUN_LOG_LIMIT) once and return
-    the rows NEWEST FIRST, filtered by project. Shared by list_recent and
-    count_recent so a page and its grand total come from one read."""
+    the rows NEWEST FIRST, filtered by project (and, when given, task_id).
+    Shared by list_recent and count_recent so a page and its grand total
+    come from one read."""
     if not _MANIFEST.exists():
         return []
     out: list[dict] = []
@@ -195,6 +203,8 @@ def _read_filtered(project: Optional[str] = None) -> list[dict]:
                 continue
             if project and entry.get("project") != project:
                 continue
+            if task_id and entry.get("task_id") != task_id:
+                continue
             out.append(entry)
     except OSError:
         return []
@@ -203,13 +213,14 @@ def _read_filtered(project: Optional[str] = None) -> list[dict]:
 
 
 def list_recent(limit: int = 50, project: Optional[str] = None,
-                offset: int = 0) -> list[dict]:
+                offset: int = 0, task_id: Optional[str] = None) -> list[dict]:
     """Return one newest-first PAGE of runs. `offset` skips that many
     rows before taking `limit` (an offset past the end yields []); both
-    default to the full-first-page behavior. Pair with count_recent for
-    the grand total when paginating."""
+    default to the full-first-page behavior. `task_id` (task fc08da8d)
+    narrows to the runs attributed to one driven task. Pair with
+    count_recent for the grand total when paginating."""
     off = max(0, int(offset))
-    return _read_filtered(project)[off:off + limit]
+    return _read_filtered(project, task_id=task_id)[off:off + limit]
 
 
 def count_recent(project: Optional[str] = None) -> int:

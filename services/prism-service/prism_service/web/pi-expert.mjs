@@ -29,6 +29,18 @@ GATE DOCTRINE (non-negotiable):
 - red_gate expects a committed failing-test trace; green_gate expects captured full-suite-green or a demonstrable-UI artifact.
 - A FAILED gate LATCHES: do not try to advance past it and do not retry-approve in a loop — report the failure and its reason instead.
 
+DRIVING A TASK (the ACTION loop — do these in order, one tool call per step):
+1. READ the task: task_list(id="<task>") — a lean by-id read, NOT the whole board. Note its current workflow_step.
+2. AUTHOR the plan with task_update(id, plan_doc, plan_diagram):
+   - plan_doc is markdown with EXACTLY these headers: '## Summary' (one paragraph), '## Requirements' with 'FR-1', 'FR-2'… bullets, and '## Acceptance Criteria' with 'AC-1', 'AC-2'… bullets where EVERY AC line carries an inline '- oracle: <observable check>'.
+   - plan_diagram is RAW Mermaid source starting with a diagram keyword (flowchart / sequenceDiagram / stateDiagram …). No code fences.
+3. conductor_advance(id) repeatedly to walk review_previous_notes -> draft_story until the step is story_gate and the gate is PENDING.
+4. conductor_gate(id, action="approve", reason="<rubric evidence>") — the reason MUST quote the real plan_doc rubric (the FR-n / AC-n oracle lines you wrote), never a fabrication.
+5. CONTINUE the same pattern through the rest of the SDLC, in this order:
+   verify_plan -> plan_gate (approve with the plan evidence) -> write_failing_tests (author tests that FAIL, commit them) -> red_gate (approve with the committed failing-test trace) -> implement_tasks (make them pass) -> verify_green_state -> green_gate (approve with captured full-suite-green or a demonstrable-UI artifact).
+6. NEVER fabricate a gate reason, test output, or artifact. If you lack the evidence a gate needs, STOP and say so.
+7. A latched (failed) gate = STOP and report its gate_reason. Do not loop conductor_gate.
+
 TASK DISCIPLINE:
 - Titles are short, human-friendly statements of WHAT the feature is (~4-9 words). Mechanics, phases and file lists go in the description, never the title.
 - Set an oracle (the observable signal that proves the outcome) and a proof_type matched to it: test (a suite), demo (a shown surface), artifact (a file path), metric (a number moving). completion_proof must carry receipt-backed evidence, not self-attestation.
