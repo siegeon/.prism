@@ -85,4 +85,9 @@ def complete(
         "text": msg.get("content") or "",
         "ms": round(ms, 1),
         "tokens": usage.get("completion_tokens") or 0,
+        # ADDITIVE (task 5fc1683e): real usage split so callers can feed
+        # the run ledger without losing token telemetry. "tokens" keeps
+        # its historical meaning (completion side) for existing callers.
+        "input_tokens": usage.get("prompt_tokens") or 0,
+        "output_tokens": usage.get("completion_tokens") or 0,
     }

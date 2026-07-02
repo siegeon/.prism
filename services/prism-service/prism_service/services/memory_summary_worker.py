@@ -16,6 +16,11 @@ Env:
   PRISM_MEMORY_SUMMARY_WORKER=off          # default on; off disables it
   PRISM_MEMORY_SUMMARY_WORKER_INTERVAL=300  # seconds between sweeps
   PRISM_MEMORY_SUMMARY_WORKER_MAX_PER_CYCLE=3
+  PRISM_MEMORY_SUMMARY_BACKEND=local       # route summaries at the keyless
+                                           # local micro model instead of
+                                           # `claude -p` (default: claude);
+                                           # runs still land in claude_runs
+                                           # with backend='local' + tokens
 """
 
 from __future__ import annotations
@@ -111,10 +116,94 @@ def _strip(text: str) -> str:
     return " ".join(t.split())
 
 
+class _LocalBackendResult:
+    """claude_cli-result-shaped adapter for the local micro-LLM backend
+    (mirrors reflection_runner._LocalResult) so summarize_one's existing
+    exit_code / final_text handling is untouched."""
+
+    def __init__(self, text: str, run_id: str = "", duration_s: float = 0.0):
+        self._text = text
+        self.exit_code = 0
+        self.run_id = run_id
+        self.duration_s = duration_s
+
+    def final_text(self) -> str:
+        return self._text
+
+
+# System prompt for the local distillation path. The user prompt stays the
+# unchanged render_prompt output — same contract both backends.
+_LOCAL_DISTILL_SYSTEM = (
+    "You distill PRISM project knowledge into skimmable tile text. "
+    "Reply with ONLY the single plain-English sentence the prompt asks "
+    "for — no preamble, no quotation marks."
+)
+
+
+def _invoke_backend(*, prompt: str, work_dir: str, project: str,
+                    purpose: str, model: str = ""):
+    """Memory-summary inference seam (task 5fc1683e, claude-p-exit epic).
+
+    Default: the claude CLI, exactly as before (``model`` passes through so
+    call sites like event_handlers' novelty summarizer keep their haiku
+    pin). PRISM_MEMORY_SUMMARY_BACKEND=local routes the SAME distillation
+    prompt at the keyless local micro model (inference.local_llm) and
+    records the run in the claude_runs ledger with backend='local' +
+    input/output token counts — telemetry survives the backend flip.
+    """
+    backend = (os.environ.get("PRISM_MEMORY_SUMMARY_BACKEND") or "").strip().lower()
+    if backend == "local":
+        from prism_service.inference import local_llm
+
+        mdl = local_llm.configured_model()
+        ts_start = time.time()
+        out = local_llm.complete(
+            prompt,
+            model=mdl,
+            system=_LOCAL_DISTILL_SYSTEM,
+            max_tokens=128,
+        )
+        ts_end = time.time()
+        text = out.get("text") or ""
+        run_id = ""
+        try:
+            from prism_service.services import claude_run_log
+
+            run_id = claude_run_log.record_local_run(
+                project=project, purpose=purpose,
+                backend="local", model=mdl,
+                final_text=text,
+                usage={
+                    "input_tokens": int(out.get("input_tokens") or 0),
+                    "output_tokens": int(out.get("output_tokens")
+                                         or out.get("tokens") or 0),
+                },
+                ts_start=ts_start, ts_end=ts_end,
+            )
+        except Exception:
+            pass  # ledger is best-effort — never fail the summary
+        return _LocalBackendResult(
+            text, run_id=run_id, duration_s=round(ts_end - ts_start, 3))
+    from prism_service.inference import claude_cli
+
+    return claude_cli.invoke(
+        prompt=prompt,
+        work_dir=work_dir,
+        plugin_dir=work_dir,
+        max_turns=1,
+        model=model,
+        project=project,
+        purpose=purpose,
+        allowed_tools=(),
+    )
+
+
 def summarize_one(name: str, description: str, project: str) -> str:
-    """Synchronously generate a summary via `claude -p`. Returns the
-    cleaned single-sentence summary, or "" on any failure (auth missing,
-    parse error, etc.) so the caller can move on and retry next cycle."""
+    """Synchronously generate a summary via the backend seam (`claude -p`
+    by default; PRISM_MEMORY_SUMMARY_BACKEND=local for the micro model).
+    Returns the cleaned single-sentence summary, or "" on any failure
+    (auth missing, endpoint down, parse error, etc.) so the caller can
+    move on and retry next cycle."""
     from prism_service.inference import claude_cli
     from prism_service.project_context import get_project
     prompt = render_prompt(name, description)
@@ -127,14 +216,11 @@ def summarize_one(name: str, description: str, project: str) -> str:
     except Exception:
         work_dir = os.getcwd()
     try:
-        result = claude_cli.invoke(
+        result = _invoke_backend(
             prompt=prompt,
             work_dir=work_dir,
-            plugin_dir=work_dir,
-            max_turns=1,
             project=project,
             purpose="memory_summary",
-            allowed_tools=(),
         )
     except claude_cli.ClaudeNotLoggedInError:
         _log("claude not logged in; pausing this cycle")

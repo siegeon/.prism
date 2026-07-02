@@ -121,13 +121,23 @@ def record_run(
     exit_code: int,
     usage: dict,
     stderr_text: str,
+    backend: str = "claude",
+    model: str = "",
 ) -> None:
-    """Append a manifest line for a finished run; trim older runs."""
+    """Append a manifest line for a finished run; trim older runs.
+
+    ``backend``/``model`` are ADDITIVE (task 5fc1683e, claude-p-exit epic):
+    the same ledger records claude-CLI runs AND local micro-model runs so
+    token telemetry survives a backend flip. Existing callers omit them
+    and keep the historical claude-shaped rows.
+    """
     try:
         _ensure_dir()
         stream_bytes = stream_path.stat().st_size if stream_path.exists() else 0
         entry = {
             "run_id": run_id,
+            "backend": backend or "claude",
+            "model": model or "",
             "ts_start": float(ts_start),
             "ts_end": float(ts_end),
             "duration_s": max(0.0, float(ts_end - ts_start)),
@@ -153,6 +163,60 @@ def record_run(
             f"[claude_run_log] record_run failed: {type(e).__name__}: {e}",
             file=sys.stderr, flush=True,
         )
+
+
+def record_local_run(
+    *,
+    project: str,
+    purpose: str,
+    backend: str,
+    model: str,
+    final_text: str,
+    usage: dict,
+    ts_start: float,
+    ts_end: float,
+    exit_code: int = 0,
+    stderr_text: str = "",
+) -> str:
+    """Record a run made by a NON-claude backend (local micro model / pi)
+    in the same ledger (task 5fc1683e, claude-p-exit epic).
+
+    Allocates a run_id, writes a synthetic single-event stream file (so
+    ``/api/claude-runs/<run_id>/stream`` and final-text extraction keep
+    working), then appends the manifest line with ``backend``/``model``
+    and the input/output token counts. Best-effort like record_run —
+    returns the run_id ("" when the ledger is unavailable) and never
+    raises into the inference caller.
+    """
+    try:
+        run_id, stream_path = new_run()
+        evt = {
+            "message": {
+                "content": [{"type": "text", "text": final_text or ""}],
+                "usage": {
+                    "input_tokens": int(usage.get("input_tokens", 0)),
+                    "output_tokens": int(usage.get("output_tokens", 0)),
+                },
+            }
+        }
+        stream_path.write_text(
+            json.dumps(evt, separators=(",", ":")) + "\n", encoding="utf-8",
+        )
+        record_run(
+            run_id=run_id, stream_path=stream_path,
+            ts_start=ts_start, ts_end=ts_end,
+            project=project, purpose=purpose,
+            exit_code=exit_code, usage=usage,
+            stderr_text=stderr_text,
+            backend=backend, model=model,
+        )
+        return run_id
+    except Exception as e:
+        print(
+            f"[claude_run_log] record_local_run failed: {type(e).__name__}: {e}",
+            file=sys.stderr, flush=True,
+        )
+        return ""
 
 
 def _trim_to_limit() -> None:
