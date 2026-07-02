@@ -264,8 +264,9 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
     claims: list[Claim] = []
     if not py_files:
         return claims
-    if shutil.which("ruff"):
-        rc, out, err = _run_tool(["ruff", "check", *py_files], workspace)
+    ruff = _ruff_cmd()
+    if ruff:
+        rc, out, err = _run_tool([*ruff, "check", *py_files], workspace)
         claims.append(_claim(0, "tooling.ruff", ",".join(py_files[:5]), rc, out, err))
     else:
         claims.append(Claim(tier=0, kind="tooling.ruff", target="", status="skipped",
@@ -286,11 +287,24 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
         # raised [WinError 2] -> exit 127 -> the suite was SKIPPED and the gate
         # saw a FALSE pass (0 tests run). sys.executable is the daemon's
         # interpreter, which has pytest importable, so `-m pytest` always runs.
+        #
+        # RUN IN THE SERVICE WORKSPACE (task 271dacc9): cwd was the repo
+        # root, where pytest's rootdir fallback walked the fork data dir
+        # (a stale full repo mirror under graphify-src/**) and duplicate
+        # tests.* basenames exploded collection ('import file mismatch',
+        # exit 2) -> tier0=fail on EVERY run -> every green_gate needed a
+        # manual override. The suite root is derived (never hardcoded) and
+        # the resolved PRISM data dir is defensively --ignore'd so a
+        # data-dir-inside-repo layout can never poison collection again.
         import sys as _sys
+        suite_root = _pytest_suite_root(workspace)
         rc, out, err = _run_tool(
-            [_sys.executable, "-m", "pytest", "-q", "--no-header"],
-            workspace, timeout_s=600.0)
-        claims.append(_claim(0, "tooling.pytest", "<full-suite>", rc, out, err))
+            [_sys.executable, "-m", "pytest", "-q", "--no-header",
+             *_data_dir_ignores(suite_root)],
+            suite_root, timeout_s=600.0)
+        c = _claim(0, "tooling.pytest", "<full-suite>", rc, out, err)
+        c.evidence["cwd"] = str(suite_root)
+        claims.append(c)
     return claims
 
 
@@ -302,6 +316,80 @@ def _pytest_available() -> bool:
         return True
     import importlib.util
     return importlib.util.find_spec("pytest") is not None
+
+
+def _ruff_cmd() -> Optional[list[str]]:
+    """How to invoke ruff, or None when it truly isn't available.
+    Mirrors the pytest lesson (task 271dacc9): a venv-only install has no
+    `ruff` shim on PATH but the module imports fine, so falling back to
+    `sys.executable -m ruff` kills the standing 'ruff not installed'
+    skip instead of silently accepting unlinted diffs."""
+    if shutil.which("ruff"):
+        return ["ruff"]
+    import importlib.util
+    import sys as _sys
+    if importlib.util.find_spec("ruff") is not None:
+        return [_sys.executable, "-m", "ruff"]
+    return None
+
+
+def _is_within(child: Path, parent: Path) -> bool:
+    """True when ``child`` resolves inside (or equal to) ``parent``."""
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _pytest_suite_root(workspace: Path) -> Path:
+    """Where the Tier0 full-suite pytest run should execute (task 271dacc9).
+
+    Running at a monorepo root is wrong for PRISM self-dev: the root
+    pyproject's testpaths can dangle, making pytest fall back to FULL
+    rootdir collection — which walks the fork data dir's stale repo
+    mirror (graphify-src/**) and explodes on duplicate tests.* module
+    basenames ('import file mismatch'). The service suite root is derived
+    robustly, never hardcoded:
+
+      1. the RUNNING prism_service package's distribution root (the dir
+         holding pyproject.toml), when it lives inside the workspace;
+      2. the conventional ``services/prism-service`` layout under the
+         workspace (agent worktree checkouts of the same repo shape);
+      3. the workspace itself (generic, non-PRISM projects — unchanged).
+    """
+    ws = Path(workspace).resolve()
+    try:
+        import prism_service as _ps
+        pkg_file = getattr(_ps, "__file__", None)
+        if pkg_file:
+            dist_root = Path(pkg_file).resolve().parent.parent
+            if (dist_root / "pyproject.toml").exists() and _is_within(dist_root, ws):
+                return dist_root
+    except Exception:
+        pass
+    cand = ws / "services" / "prism-service"
+    if (cand / "pyproject.toml").exists() and (cand / "prism_service").is_dir():
+        return cand.resolve()
+    return ws
+
+
+def _data_dir_ignores(suite_root: Path) -> list[str]:
+    """Belt-and-braces ``--ignore`` for the resolved PRISM data dir when it
+    lives INSIDE the pytest suite root (task 271dacc9). A data dir inside
+    the repo (e.g. PRISM_DATA_DIR=.dev-data / data-selfimprove) carries
+    mirrored repo copies whose tests.* modules collide with the real suite
+    and poison collection. Never raises; equal-to-root is not ignored
+    (that would ignore the whole suite)."""
+    try:
+        from prism_service.data_dir import resolve_data_dir
+        dd = resolve_data_dir()
+        root = Path(suite_root).resolve()
+        if dd.resolve() != root and _is_within(dd, root):
+            return [f"--ignore={dd.resolve()}"]
+    except Exception:
+        pass
+    return []
 
 
 def _run_node_tools(workspace: Path, js_files: list[str]) -> list[Claim]:
