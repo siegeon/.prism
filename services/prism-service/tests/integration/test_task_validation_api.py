@@ -134,3 +134,107 @@ def test_mcp_task_update_invalid_status_rejected(client):
     assert body.get("ok") is False, body
     assert "status" in str(body.get("error", "")), body
     assert _get(client, tid)["status"] == "pending"
+# ----------------------------------------------------------------------
+# parent_id integrity (task 24ed8027 — self/cycle/phantom parents)
+# ----------------------------------------------------------------------
+
+
+def test_patch_self_parent_422(client):
+    """AC-1: a task cannot be its own parent."""
+    tid = _mk(client)
+    r = client.patch(
+        f"/api/tasks/{tid}", params={"project": "valtest"},
+        json={"parent_id": tid},
+    )
+    assert r.status_code == 422, r.text
+    assert "own parent" in str(r.json().get("detail", "")), r.text
+    assert _get(client, tid)["parent_id"] == ""
+
+
+def test_phantom_parent_422_on_patch_and_create(client):
+    """AC-2: a parent id that does not exist is rejected on PATCH and POST,
+    naming the missing id."""
+    tid = _mk(client)
+    r = client.patch(
+        f"/api/tasks/{tid}", params={"project": "valtest"},
+        json={"parent_id": "not-a-real-task-id"},
+    )
+    assert r.status_code == 422, r.text
+    assert "not-a-real-task-id" in str(r.json().get("detail", "")), r.text
+    assert _get(client, tid)["parent_id"] == ""
+
+    r = client.post(
+        "/api/tasks", params={"project": "valtest"},
+        json={"title": "orphan probe", "parent_id": "also-not-real"},
+    )
+    assert r.status_code == 422, r.text
+    assert "also-not-real" in str(r.json().get("detail", "")), r.text
+
+
+def test_ancestor_cycle_422(client):
+    """AC-3: the filed repro (A<->B) plus a deeper A->B->C chain — any
+    re-parent that closes a cycle through the task is rejected and nothing
+    persists."""
+    a = _mk(client, title="cycle A")
+    b = _mk(client, title="cycle B")
+    c = _mk(client, title="cycle C")
+    # Legit chain: B under A, C under B.
+    assert client.patch(
+        f"/api/tasks/{b}", params={"project": "valtest"},
+        json={"parent_id": a},
+    ).status_code == 200
+    assert client.patch(
+        f"/api/tasks/{c}", params={"project": "valtest"},
+        json={"parent_id": b},
+    ).status_code == 200
+    # Two-node cycle: A under B.
+    r = client.patch(
+        f"/api/tasks/{a}", params={"project": "valtest"},
+        json={"parent_id": b},
+    )
+    assert r.status_code == 422, r.text
+    assert "cycle" in str(r.json().get("detail", "")).lower(), r.text
+    # Deeper cycle: A under C (A -> C -> B -> A).
+    r = client.patch(
+        f"/api/tasks/{a}", params={"project": "valtest"},
+        json={"parent_id": c},
+    )
+    assert r.status_code == 422, r.text
+    assert "cycle" in str(r.json().get("detail", "")).lower(), r.text
+    assert _get(client, a)["parent_id"] == ""
+    assert _get(client, b)["parent_id"] == a
+
+
+def test_valid_reparent_still_works(client):
+    """AC-4: legit re-parenting (under a root, then back to root) is
+    unaffected."""
+    root = _mk(client, title="epic root")
+    child = _mk(client, title="child")
+    r = client.patch(
+        f"/api/tasks/{child}", params={"project": "valtest"},
+        json={"parent_id": root},
+    )
+    assert r.status_code == 200, r.text
+    assert _get(client, child)["parent_id"] == root
+    r = client.patch(
+        f"/api/tasks/{child}", params={"project": "valtest"},
+        json={"parent_id": ""},
+    )
+    assert r.status_code == 200, r.text
+    assert _get(client, child)["parent_id"] == ""
+
+
+def test_mcp_task_update_self_parent_rejected(client):
+    """AC-5: the MCP door shares the teeth — parent_id=self surfaces the
+    in-band machine-legible error (4f76beb9 contract) and persists
+    nothing."""
+    tid = _mk(client)
+    r = client.post(
+        "/api/agent/tool", params={"project": "valtest"},
+        json={"name": "task_update", "args": {"id": tid, "parent_id": tid}},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body.get("ok") is False, body
+    assert "parent" in str(body.get("error", "")), body
+    assert _get(client, tid)["parent_id"] == ""
