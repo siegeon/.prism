@@ -23,6 +23,13 @@ Env:
   PRISM_GRAPH_ENRICH_WORKER=off            # default on
   PRISM_GRAPH_ENRICH_WORKER_INTERVAL=120   # seconds between sweeps
   PRISM_GRAPH_ENRICH_WORKER_MAX_PER_CYCLE=4
+  PRISM_GRAPH_ENRICH_BACKEND=local         # route the {name, purpose}
+                                           # extraction at the keyless local
+                                           # micro model (inference.local_llm,
+                                           # json_mode) instead of `claude -p`
+                                           # (default: claude); runs land in
+                                           # the run ledger with
+                                           # backend='local' + token counts
 """
 
 from __future__ import annotations
@@ -230,9 +237,67 @@ def _parse(text: str) -> tuple[str, str]:
     return name, purpose
 
 
+def active_backend() -> str:
+    """Graph-enrich inference seam selector (task f669c5ce, claude-p-exit
+    epic): PRISM_GRAPH_ENRICH_BACKEND=local routes the {name, purpose}
+    extraction at the keyless local micro model; anything else stays the
+    claude CLI (the historical default)."""
+    raw = (os.environ.get("PRISM_GRAPH_ENRICH_BACKEND") or "").strip().lower()
+    return "local" if raw == "local" else "claude"
+
+
+def _enrich_local(scope: dict, project: str) -> tuple[str, str]:
+    """Local-backend leg of enrich_one: same render_prompt contract,
+    json_mode completion against inference.local_llm, and a run-ledger
+    row (backend='local' + input/output tokens) so telemetry survives
+    the backend flip. Any failure returns ("", "") — the cycle moves on
+    and retries next sweep, exactly like a claude failure."""
+    import time as _time
+
+    from prism_service.inference import local_llm
+
+    mdl = local_llm.configured_model()
+    ts_start = _time.time()
+    try:
+        out = local_llm.complete(
+            render_prompt(scope),
+            model=mdl,
+            json_mode=True,
+            max_tokens=256,
+            purpose="graph_enrich",
+            project=project,
+        )
+    except Exception as exc:
+        _log(f"enrich_one local backend raised: {exc}")
+        return "", ""
+    ts_end = _time.time()
+    text = out.get("text") or ""
+    try:
+        from prism_service.services import claude_run_log
+
+        claude_run_log.record_local_run(
+            project=project, purpose="graph_enrich",
+            backend="local", model=mdl,
+            final_text=text,
+            usage={
+                "input_tokens": int(out.get("input_tokens") or 0),
+                "output_tokens": int(out.get("output_tokens")
+                                     or out.get("tokens") or 0),
+            },
+            ts_start=ts_start, ts_end=ts_end,
+        )
+    except Exception:
+        pass  # ledger is best-effort — never fail the enrich cycle
+    return _parse(text)
+
+
 def enrich_one(scope: dict, project: str) -> tuple[str, str]:
-    """Infer (name, purpose) for one scope via claude -p. Returns ("","")
-    on any failure so the caller moves on and retries next cycle."""
+    """Infer (name, purpose) for one scope via the env-gated backend seam
+    (`claude -p` by default; PRISM_GRAPH_ENRICH_BACKEND=local for the
+    keyless micro model). Returns ("","") on any failure so the caller
+    moves on and retries next cycle."""
+    if active_backend() == "local":
+        return _enrich_local(scope, project)
     from prism_service.inference import claude_cli
     from prism_service.project_context import get_project
     try:
@@ -275,7 +340,7 @@ def _enrich_kind(graph, project, scope_kind, scopes, budget, out):
         if not name:
             out["errors"] += 1
             continue
-        prov = f"claude @ {time.strftime('%Y-%m-%d')}"
+        prov = f"{active_backend()} @ {time.strftime('%Y-%m-%d')}"
         if graph.upsert_annotation(scope_kind, s["scope_id"], "name",
                                    name, purpose, s["input_hash"], prov):
             out["enriched"] += 1
