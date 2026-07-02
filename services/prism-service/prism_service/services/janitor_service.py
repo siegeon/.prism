@@ -15,6 +15,7 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 
@@ -46,6 +47,50 @@ _RESPONSE_SCHEMA: dict[str, str] = {
     "invalidate_memory_ids": "[{id, reason}]",
     "confidence": "float 0-1",
 }
+
+
+# Task 1a7bc848 — candidate classification. consolidation_candidates is a
+# SHARED queue: the memory-ops runner (memory_ops/runner.py) enqueues its
+# own work items (merge / forget / verify_staleness / distill_procedural)
+# with task_id=NULL and op-shaped scopes. Those are NOT reflection briefs;
+# dispensing one via check() renders the empty "task None" brief.
+_RUNNER_OWNED_TRIGGERS: frozenset = frozenset({
+    "merge", "forget", "verify_staleness", "distill_procedural",
+})
+
+
+def is_runner_owned(trigger: Optional[str], scope: dict) -> bool:
+    """True when the candidate is a memory-ops runner work item — owned
+    by memory_ops/runner.py, never dispensable as a reflection brief."""
+    return (trigger in _RUNNER_OWNED_TRIGGERS) or bool(scope.get("op"))
+
+
+def scope_has_reflection_context(scope: dict) -> bool:
+    """True when the scope carries something a reflection sub-agent can
+    actually investigate — the exact fields _build_brief surfaces:
+    file_paths / memory_ids / task_ids / transcript_excerpt, or any
+    nonzero signal_counts bucket."""
+    for key in ("file_paths", "memory_ids", "task_ids"):
+        if scope.get(key):
+            return True
+    if (scope.get("transcript_excerpt") or "").strip():
+        return True
+    # v6.2.18 contract (task ed7292bd, test_consolidation_noise_filter):
+    # a session that MODIFIED files is signal even with empty buckets.
+    try:
+        if int(scope.get("files_modified", 0) or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    counts = scope.get("signal_counts") or {}
+    if isinstance(counts, dict):
+        for v in counts.values():
+            try:
+                if int(v or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
 
 
 def _now_utc() -> datetime:
@@ -105,6 +150,38 @@ class JanitorService:
             return json.loads(row["scope_json"] or "{}")
         except (json.JSONDecodeError, TypeError):
             return {}
+
+    def _task_resolves(self, task_id: Optional[str]) -> bool:
+        """True when ``task_id`` names a real row in the sibling tasks.db.
+
+        Guards the likely_misfire: a non-null-but-garbage task_id must
+        not carry an otherwise-empty brief through the dispense gate.
+        When tasks.db is absent (standalone scores.db fixtures) a
+        non-null id is trusted — we cannot verify, and dropping real
+        work would be worse."""
+        if not task_id:
+            return False
+        tasks_db = Path(self._db_path).parent / "tasks.db"
+        if not tasks_db.exists():
+            return True
+        try:
+            conn = sqlite3.connect(str(tasks_db))
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM tasks WHERE id=? LIMIT 1", (task_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            return True  # tasks table absent/locked — never drop real work
+        return row is not None
+
+    def _has_reflection_grounding(
+        self, task_id: Optional[str], scope: dict,
+    ) -> bool:
+        """A brief is actionable iff it has investigable scope context or
+        a task_id that resolves to a real task."""
+        return scope_has_reflection_context(scope) or self._task_resolves(task_id)
 
     # ------------------------------------------------------------------
     # enqueue
@@ -198,31 +275,88 @@ class JanitorService:
     # ------------------------------------------------------------------
 
     def check(self, session_id: str) -> dict:
-        """Return {ready, brief}. Dispenses max one candidate per call."""
+        """Return {ready, brief}. Dispenses max one candidate per call.
+
+        Task 1a7bc848 — dispense gate. Runner-owned memory-op rows are
+        skipped (left pending for memory_ops/runner.py), and rows with
+        neither a resolvable task_id nor usable scope context are
+        terminally retired (status='abandoned') so the queue DRAINS
+        instead of cycling un-actionable "task None" briefs through
+        abandon-backoff forever."""
         now = self._clock()
         age_cutoff = (now - timedelta(seconds=self.MIN_QUEUE_AGE_S)).isoformat()
         backoff_cutoff = (now - timedelta(seconds=self.ABANDON_BACKOFF_S)).isoformat()
-        row = self._db.execute(
+        rows = self._db.execute(
             "SELECT * FROM consolidation_candidates "
             "WHERE status='pending' "
             "  AND queued_at <= ? "
             "  AND (dispensed_at IS NULL OR dispensed_at <= ?) "
-            "ORDER BY queued_at ASC LIMIT 1",
+            "ORDER BY queued_at ASC",
             (age_cutoff, backoff_cutoff),
-        ).fetchone()
-        if row is None:
+        ).fetchall()
+
+        chosen: Optional[sqlite3.Row] = None
+        retired: list[str] = []
+        for row in rows:
+            scope = self._scope_of(row)
+            if is_runner_owned(row["trigger"], scope):
+                continue  # memory-ops work item — not a reflection brief
+            if not self._has_reflection_grounding(row["task_id"], scope):
+                retired.append(row["id"])
+                continue
+            chosen = row
+            break
+
+        if retired:
+            placeholders = ",".join("?" * len(retired))
+            self._db.execute(
+                f"UPDATE consolidation_candidates SET status='abandoned' "
+                f"WHERE id IN ({placeholders})",
+                retired,
+            )
+            self._db.commit()
+
+        if chosen is None:
             return {"ready": False, "brief": None}
 
         # Claim it
         self._db.execute(
             "UPDATE consolidation_candidates "
             "SET status='dispensed', dispensed_at=? WHERE id=?",
-            (self._iso(now), row["id"]),
+            (self._iso(now), chosen["id"]),
         )
         self._db.commit()
 
-        brief = self._build_brief(row)
+        brief = self._build_brief(chosen)
         return {"ready": True, "brief": brief}
+
+    def next_pending_for_nudge(self, nudge_cutoff_iso: str) -> Optional[tuple]:
+        """Oldest pending, not-recently-nudged, DISPENSABLE reflection
+        candidate — the only kind worth nagging an agent about (task
+        1a7bc848: runner-owned and null-context rows must never emit
+        PRISM_REFLECTION_PENDING). Stamps last_nudged_at on the returned
+        row. Returns (candidate_id, task_id_or_empty) or None."""
+        rows = self._db.execute(
+            "SELECT * FROM consolidation_candidates "
+            "WHERE status='pending' "
+            "  AND (last_nudged_at IS NULL OR last_nudged_at <= ?) "
+            "ORDER BY queued_at ASC",
+            (nudge_cutoff_iso,),
+        ).fetchall()
+        for row in rows:
+            scope = self._scope_of(row)
+            if is_runner_owned(row["trigger"], scope):
+                continue
+            if not self._has_reflection_grounding(row["task_id"], scope):
+                continue
+            self._db.execute(
+                "UPDATE consolidation_candidates SET last_nudged_at=? "
+                "WHERE id=?",
+                (self._iso(), row["id"]),
+            )
+            self._db.commit()
+            return row["id"], row["task_id"] or ""
+        return None
 
     def _build_brief(self, row: sqlite3.Row) -> dict:
         scope = self._scope_of(row)

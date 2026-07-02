@@ -2885,7 +2885,6 @@ def _maybe_augment_with_nudge(
     the candidate. Disabled globally by PRISM_MCP_AUGMENT_NUDGES=false.
     """
     import os as _os
-    import sqlite3 as _sq3
     from datetime import datetime, timedelta, timezone
 
     if _os.environ.get("PRISM_MCP_AUGMENT_NUDGES", "").lower() == "false":
@@ -2906,28 +2905,18 @@ def _maybe_augment_with_nudge(
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(minutes=5)).isoformat()
 
-    conn = _sq3.connect(scores_path, timeout=5.0)
-    conn.row_factory = _sq3.Row
+    # Task 1a7bc848 — only nudge for a DISPENSABLE reflection candidate.
+    # Runner-owned memory-op rows (merge/forget/...) and null-context rows
+    # must never emit PRISM_REFLECTION_PENDING: they can only ever render
+    # as the un-actionable "task None" brief. The janitor classifies and
+    # stamps last_nudged_at on the row it returns.
     try:
-        # Oldest pending candidate not nudged in the last 5 min.
-        row = conn.execute(
-            "SELECT id, task_id FROM consolidation_candidates "
-            "WHERE status='pending' "
-            "  AND (last_nudged_at IS NULL OR last_nudged_at <= ?) "
-            "ORDER BY queued_at ASC LIMIT 1",
-            (cutoff,),
-        ).fetchone()
-        if row is None:
-            return result
-        cid = row["id"]
-        tid = row["task_id"] or ""
-        conn.execute(
-            "UPDATE consolidation_candidates SET last_nudged_at=? WHERE id=?",
-            (now.isoformat(), cid),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+        nudge = ctx.janitor_svc.next_pending_for_nudge(cutoff)
+    except Exception:
+        return result
+    if nudge is None:
+        return result
+    cid, tid = nudge
 
     header = (
         f"\u26a0\ufe0f PRISM_REFLECTION_PENDING candidate={cid} task={tid}\n"

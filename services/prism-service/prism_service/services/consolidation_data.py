@@ -332,6 +332,21 @@ def enqueue_for_session(
         return None
     if task_id is None:
         task_id = resolve_task_id_for_session(scores_db, session_id)
+    # Task 1a7bc848 — enqueue-side guard. A session row with no task link
+    # and no usable scope context can only ever dispense as the empty
+    # "task None" brief; refuse it here (covers the /backfill endpoint and
+    # the brain_engine record bridge). Runner-owned triggers are exempt:
+    # memory-ops (distill_procedural etc.) enqueue op-shaped scopes that
+    # the memory-ops runner — not the reflection loop — consumes.
+    from prism_service.services.janitor_service import (
+        is_runner_owned, scope_has_reflection_context,
+    )
+    if (
+        task_id is None
+        and not is_runner_owned(trigger, scope or {})
+        and not scope_has_reflection_context(scope or {})
+    ):
+        return None
     conn = sqlite3.connect(scores_db)
     conn.row_factory = sqlite3.Row
     try:
@@ -400,17 +415,24 @@ def prune_noise_candidates(scores_db: str) -> int:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT id, task_id, scope_json FROM consolidation_candidates "
-            "WHERE status='pending'"
+            "SELECT id, task_id, trigger, scope_json "
+            "FROM consolidation_candidates WHERE status='pending'"
         ).fetchall()
         doomed: list[str] = []
+        from prism_service.services.janitor_service import is_runner_owned
         for r in rows:
             if r["task_id"] is not None:
                 continue
             try:
-                sc = json.loads(r["scope_json"] or "{}").get("signal_counts") or {}
+                scope = json.loads(r["scope_json"] or "{}")
             except Exception:
-                sc = {}
+                scope = {}
+            # Task 1a7bc848 — never delete memory-ops runner work items;
+            # they carry no task/signals by design (merge member_ids etc.)
+            # but are real pending work for memory_ops/runner.py.
+            if is_runner_owned(r["trigger"], scope):
+                continue
+            sc = scope.get("signal_counts") or {}
             if all(int(sc.get(k) or 0) == 0 for k in (
                 "pushbacks", "bg_signals", "tool_failures", "memory_writes",
             )):
