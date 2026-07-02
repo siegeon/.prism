@@ -415,3 +415,111 @@ def test_late_attach_verifier_service(tmp_path):
     )
     assert result["ok"] is True
     assert late.calls and late.calls[0]["task_id"] == t.id
+
+
+# ----------------------------------------------------------------------
+# Lane-commit workspace resolution (task 24582b8b) — gates must verify
+# the gate-claiming lane's committed work, not the shared tree.
+# ----------------------------------------------------------------------
+
+import subprocess
+
+
+def _git(cwd, *args) -> str:
+    r = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                       text=True, check=True)
+    return r.stdout.strip()
+
+
+def _make_shared_repo_with_lane(tmp_path, marker: str):
+    """A real git topology mirroring parallel-lane dev: a shared checkout
+    on main (with origin/main) plus a lane worktree whose branch carries
+    one commit tagged with the [conductor:<id8>] marker. Returns
+    (shared_root, lane_path, branch_point_sha)."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    _git(shared, "init", "-b", "main")
+    _git(shared, "config", "user.email", "t@t")
+    _git(shared, "config", "user.name", "t")
+    (shared / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(shared, "add", "base.txt")
+    _git(shared, "commit", "-m", "base")
+    # origin/main = the branch point (self-remote keeps the fixture cheap).
+    _git(shared, "remote", "add", "origin", str(shared))
+    _git(shared, "fetch", "origin")
+    branch_point = _git(shared, "rev-parse", "HEAD")
+    lane = tmp_path / "lane"
+    _git(shared, "worktree", "add", "-b", "lane-branch", str(lane))
+    _git(lane, "config", "user.email", "t@t")
+    _git(lane, "config", "user.name", "t")
+    (lane / "lane.txt").write_text("lane work\n", encoding="utf-8")
+    _git(lane, "add", "lane.txt")
+    _git(lane, "commit", "-m", f"feat: lane work {marker}")
+    return shared, lane, branch_point
+
+
+def _services_with_root(tmp_path, verifier, project_root: str):
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.conductor_service import ConductorService
+
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    cond = ConductorService(
+        str(tmp_path / "scores.db"),
+        enable_engine=False,
+        task_svc=task_svc,
+        verifier_svc=verifier,
+        project_root=project_root,
+    )
+    return task_svc, cond
+
+
+def test_green_gate_verifies_lane_worktree_commit(tmp_path):
+    """AC-1/AC-2: when the task's [conductor:<id8>] commit lives on a lane
+    worktree branch, verifier.run() must be scoped to THAT worktree (and
+    its branch point), not the shared project_root tree."""
+    verifier = FakeVerifier({"status": "pass", "tier0": "pass",
+                             "tier1": "pass", "tier2": "skipped",
+                             "summary": "lane green"})
+    task_svc, cond = _services_with_root(tmp_path, verifier, "")
+    t = task_svc.create(title="lane-scoped green gate")
+    marker = f"[conductor:{t.id[:8]}]"
+    shared, lane, branch_point = _make_shared_repo_with_lane(tmp_path, marker)
+    cond.attach_project_root(str(shared))
+    _walk_to_gate(cond, t.id, _green_gate_id())
+
+    result = cond.gate_decide(
+        t.id, action="approve",
+        reason="test: lane-scoped gate; pytest -q -> 12 passed, 0 failed",
+    )
+
+    assert result["ok"] is True
+    assert verifier.calls, "verifier must be consulted"
+    call = verifier.calls[0]
+    assert call["workspace"] == str(lane), (
+        "green_gate must verify the lane worktree carrying the "
+        f"{marker} commit, not the shared tree")
+    assert call["baseline_rev"] == branch_point
+
+
+def test_gate_workspace_falls_back_to_project_root_without_lane_commit(
+        tmp_path):
+    """AC-3: no [conductor:<id8>] commit anywhere -> legacy scoping to
+    project_root is preserved."""
+    verifier = FakeVerifier({"status": "pass", "tier0": "pass",
+                             "tier1": "pass", "tier2": "skipped",
+                             "summary": "green"})
+    task_svc, cond = _services_with_root(tmp_path, verifier, "")
+    t = task_svc.create(title="no lane commit")
+    shared, _lane, _bp = _make_shared_repo_with_lane(
+        tmp_path, "[conductor:someother]")
+    cond.attach_project_root(str(shared))
+    _walk_to_gate(cond, t.id, _green_gate_id())
+
+    result = cond.gate_decide(
+        t.id, action="approve",
+        reason="test: fallback scoping; pytest -q -> 12 passed, 0 failed",
+    )
+
+    assert result["ok"] is True
+    assert verifier.calls
+    assert verifier.calls[0]["workspace"] == str(shared)
