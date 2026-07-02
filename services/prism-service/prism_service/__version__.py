@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.35"
+PRISM_VERSION = "6.7.36"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.36: stress-loop fixes go live. /api/brain/ask "
+    "honors ?project= (8dd3293d); /api/pi-runs honors offset + returns grand "
+    "total (2bf0d49b); Learning agent-runs empty-state cross-links to "
+    "/internal-agent (262bc81a); task_next gains a claim/lease so two drivers "
+    "can't grab one task (41af13c0, service-level — live callers thread "
+    "session_id as a follow-up). All landed mechanically (no override). "
     "SELF-IMPROVE-FORK v6.7.35: gate self-healing + MCP ergonomics. Honest "
     "re-verify path (19e31e88): a gate latched by a transient/env artifact "
     "recovers by RE-RUNNING the verifier fresh (conductor_gate re_verify=true, "
