@@ -116,7 +116,7 @@ class AskBody(BaseModel):
 
 
 @router.post("/ask")
-def ask(body: AskBody) -> dict:
+def ask(body: AskBody, project: str | None = Query(None)) -> dict:
     """Ask claude a question grounded in the project's Brain index.
 
     1. Run Brain hybrid search (BM25 + vector + graph) for top-K hits.
@@ -125,7 +125,19 @@ def ask(body: AskBody) -> dict:
     4. Return the answer + the sources we cited.
 
     Costs the user's Claude subscription one CLI invocation per call.
+
+    The effective project is resolved query-wins / body-fallback /
+    'default', mirroring the sibling brain/search route and
+    api/conductor._effective_project (task 48b965e0): a non-empty
+    ?project= grounds the answer, but a body `project` still works for
+    MCP-shaped clients. The resolved value is written back onto `body`
+    so every downstream read (Brain retrieval, source-dir lookup, the
+    local backend leg, and the echoed response field) uses it.
     """
+    resolved = ((project or "").strip()
+                or (body.project or "").strip()
+                or "default")
+    body.project = resolved
     q = (body.q or "").strip()
     if not q:
         raise HTTPException(400, "q is required")
