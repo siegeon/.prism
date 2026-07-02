@@ -282,8 +282,10 @@ TOOLS: list[Tool] = [
     Tool(
         name="brain_call_chain",
         description=(
-            "Bounded BFS over the call graph starting at ``entity``. "
-            "Returns a flat edge list [{from, to, kind, relation, hop, "
+            "Bounded BFS over the call graph starting at a named symbol. "
+            "Pass ``name`` (canonical — same param as brain_find_symbol / "
+            "brain_find_references); ``entity`` is accepted as a back-compat "
+            "alias. Returns a flat edge list [{from, to, kind, relation, hop, "
             "direction}] so you can reconstruct call flow OR blast "
             "radius. By default follows only ``calls`` edges and walks "
             "forward (callees). Set direction='callers' to answer "
@@ -293,7 +295,12 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "entity": {"type": "string"},
+                "name": {"type": "string",
+                         "description": "symbol identifier (canonical; "
+                                        "matches the sibling brain graph "
+                                        "tools)"},
+                "entity": {"type": "string",
+                           "description": "alias for `name` (back-compat)"},
                 "depth": {"type": "integer", "default": 2,
                           "description": "max hops (default 2)"},
                 "limit": {"type": "integer", "default": 50},
@@ -319,7 +326,10 @@ TOOLS: list[Tool] = [
                     ),
                 },
             },
-            "required": ["entity"],
+            # Neither is hard-required alone: `name` (canonical) OR `entity`
+            # (alias) satisfies the call; the dispatch enforces "at least one"
+            # and returns a clear error otherwise (task 0d2d5aeb).
+            "anyOf": [{"required": ["name"]}, {"required": ["entity"]}],
         },
     ),
     Tool(
@@ -3267,8 +3277,18 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json(results))]
 
         if name == "brain_call_chain":
+            # `name` is the canonical symbol-identifier param (matches
+            # brain_find_symbol / brain_find_references); `entity` is kept as
+            # a back-compat alias. `entity` wins when both are supplied
+            # (task 0d2d5aeb).
+            ident = arguments.get("entity") or arguments.get("name")
+            if not ident:
+                return [TextContent(type="text", text=_json({
+                    "error": ("brain_call_chain requires a symbol identifier: "
+                              "pass `name` (canonical) or `entity` (alias)"),
+                }))]
             results = brain_svc.call_chain(
-                entity=arguments["entity"],
+                entity=ident,
                 depth=arguments.get("depth", 2),
                 limit=arguments.get("limit", 50),
                 relation=arguments.get("relation", "calls"),
