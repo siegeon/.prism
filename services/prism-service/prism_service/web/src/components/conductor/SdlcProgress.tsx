@@ -100,6 +100,14 @@ export default function SdlcProgress({
   // "live" = the task is genuinely being worked (status in_progress) — the
   // honest basis for the shimmer + pulse, instead of a laggy token delta.
   const live = (status ?? "").toLowerCase() === "in_progress";
+  // A finished task's ticker must FREEZE: the server already froze in_step_s at
+  // completed_at (basis="done", pct=1). Without this the animation frame kept
+  // adding real wall-time to the frozen clock, so a done task's step counter
+  // ticked up forever and its terminal segment rendered as still-filling.
+  const taskDone =
+    (status ?? "").toLowerCase() === "done" ||
+    (phase?.pct ?? 0) >= 1 ||
+    (phase?.basis === "done");
 
   // Overall task progress toward DONE: completed steps + current phase fraction.
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
@@ -125,8 +133,10 @@ export default function SdlcProgress({
   const lastClockAt = useRef(0);
   useAnimationFrame((t) => {
     if (!phase || curIdx < 0) return;
-    const elapsedS = (performance.now() - anchor.current.t0) / 1000;
-    const wf = liveFraction(phase, elapsedS);
+    // Only a genuinely in-progress task accrues elapsed wall-time; a done or
+    // paused task stays pinned to the server's frozen in_step_s.
+    const elapsedS = live ? (performance.now() - anchor.current.t0) / 1000 : 0;
+    const wf = taskDone ? 1 : liveFraction(phase, elapsedS);
     segFill.set(wf);
     if (t - lastPctAt.current > 120) {
       lastPctAt.current = t;
@@ -143,8 +153,10 @@ export default function SdlcProgress({
       <div className="flex items-stretch gap-[3px] h-2.5">
         {steps.map((s, i) => {
           const isGate = s.type === "gate";
-          const done = curIdx >= 0 && i < curIdx;
-          const current = i === curIdx;
+          // A done task shows its terminal segment as complete (emerald), not
+          // as a live-filling current step.
+          const done = curIdx >= 0 && (i < curIdx || (i === curIdx && taskDone));
+          const current = i === curIdx && !taskDone;
           const base = "relative flex-1 rounded-full overflow-hidden";
           if (done) {
             return (
