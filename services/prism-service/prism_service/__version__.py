@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.28"
+PRISM_VERSION = "6.7.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.29: five parallel lanes land at once. (1) agent "
+    "panel no longer orphans a conversation when the project identity "
+    "promotes at first paint (one-shot store migration, deliberate switches "
+    "unaffected). (2) off-the-board doctrine RE-LANDED: /tasks drops the Done "
+    "column for a Completed->N tile + dedicated /tasks/completed screen "
+    "(stranded 2caae5d+bdb8bad re-applied over the Markdown rework). (3) pi "
+    "runtime gains the conductor surface: task_update/conductor_advance/"
+    "conductor_gate bridged behind a literal internal=true flag (browser "
+    "panel provably unchanged) - phase 2 of pi-as-internal-agent. (4) "
+    "writeback scaffold anchor fixed (10/10 green, --ignore workaround "
+    "retired). (5) pi-web-ui evaluated: stale 0.75.3 + render-behind bug -> "
+    "port-and-reskin verdict; panel upgrades follow. "
     "SELF-IMPROVE-FORK v6.7.28: pi IS the internal inference agent (task "
     "ac69ee28). Node runner web/pi-runtime.mjs executes a pi-agent-core loop "
     "on the local micro model with PRISM tools bridged via /api/agent/tool "
