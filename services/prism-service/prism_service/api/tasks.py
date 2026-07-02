@@ -314,6 +314,27 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
             limit=50, project=project, task_id=task_id)
     except Exception:
         out["pi_activity"] = []
+    # phase_metrics (task bd1c2289): the REPRESENTATION layer on top of the
+    # fc08da8d telemetry — a per-visited-SDLC-step rollup (duration + tokens +
+    # turns + actor + gate outcome) plus a task total, computed PURELY from the
+    # history timestamps + the task-attributed pi_runs / per-turn tokens already
+    # assembled above. Rides the top level like phase_progress; the detail page
+    # merges it onto the task and renders the Phase-metrics card. Best-effort —
+    # sparse history yields empty steps, never a 500.
+    try:
+        from prism_service.services.conductor_service import (
+            compute_phase_metrics,
+        )
+        out["phase_metrics"] = compute_phase_metrics(
+            out["history"], out.get("pi_activity") or [],
+            task_status=getattr(t, "status", "") or "",
+            completed_at=getattr(t, "completed_at", "") or "",
+        )
+    except Exception:
+        out["phase_metrics"] = {
+            "steps": [],
+            "total": {"wall_duration_s": 0.0, "total_tokens": 0, "tok_s": 0.0},
+        }
     # has_prototype: a clickable MOCK prototype HTML the /prototype workflow
     # generated for this task, served in-app (see get_task_prototype). Top-level
     # boolean (like phase_progress) so the detail page can show/hide the iframe

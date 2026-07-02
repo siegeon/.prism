@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
 import {
-  stepChipClass, gateChipClass, gateLabel, stepLabel,
+  stepChipClass, gateChipClass, gateLabel, stepLabel, type GateState,
 } from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
@@ -63,6 +63,9 @@ type Task = {
   plan_doc?: string;
   plan_diagram?: string;
   phase_progress?: PhaseProgress | null;
+  // Per-phase metrics (task bd1c2289): the representation layer over the
+  // fc08da8d telemetry — one entry per visited SDLC step + a task total.
+  phase_metrics?: PhaseMetrics | null;
   has_prototype?: boolean;
   // Whole-subtree roll-up (task e72aba6d): descendant totals ride the detail
   // payload's top level (like phase_progress) so the tree header shows a
@@ -97,6 +100,24 @@ type SessionRow = {
   files_read?: number;
   files_modified?: number;
   skills_invoked?: number;
+};
+
+// Per-phase metrics (task bd1c2289): one entry per VISITED SDLC step —
+// duration + tokens + turns + actor + gate outcome — plus a task total.
+type PhaseStep = {
+  step: string;
+  entered_at?: string | null;
+  duration_s: number;
+  tokens_in: number;
+  tokens_out: number;
+  turns: number;
+  actor?: string;
+  model?: string;
+  gate_outcome?: string | null;
+};
+type PhaseMetrics = {
+  steps: PhaseStep[];
+  total: { wall_duration_s: number; total_tokens: number; tok_s: number };
 };
 
 // PI-agent activity (task fc08da8d): a task-attributed pi_runs ledger row —
@@ -347,6 +368,71 @@ function Timeline({ rows, tokens }: { rows: HistoryRow[]; tokens?: number }) {
   );
 }
 
+// ── Phase metrics (task bd1c2289) ──────────────────────────────────────
+// A per-phase breakdown of the SDLC: one row per VISITED step showing its
+// duration (as a bar relative to the longest step), tokens (↑in ↓out), a
+// per-step tok/s rate, the actor, and a gate-outcome pill for gate steps.
+// The header carries the task total (wall duration · tokens · tok/s). Reads
+// task.phase_metrics; Hermes accent tokens only, reusing the shared step +
+// gate chip helpers (no invented palette).
+function fmtDur(s: number): string {
+  return fmtGap((Number.isFinite(s) ? s : 0) * 1000) || "0s";
+}
+
+function GateOutcomePill({ outcome }: { outcome?: string | null }) {
+  if (!outcome || outcome === "none") return null;
+  const state = (outcome === "passed" || outcome === "failed" ? outcome : "pending") as GateState;
+  return <span className={gateChipClass(state)}>{outcome}</span>;
+}
+
+function PhaseMetricsCard({ metrics }: { metrics: PhaseMetrics }) {
+  const steps = metrics.steps ?? [];
+  const total = metrics.total ?? { wall_duration_s: 0, total_tokens: 0, tok_s: 0 };
+  const maxDur = Math.max(1, ...steps.map((s) => s.duration_s || 0));
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] opacity-60 mb-3">
+        <span>{steps.length} phase{steps.length === 1 ? "" : "s"}</span>
+        <span>· {fmtDur(total.wall_duration_s)} wall</span>
+        <span>· {fmtTokens(total.total_tokens)} tokens</span>
+        <span>· {total.tok_s.toFixed(total.tok_s >= 10 ? 0 : 1)} tok/s</span>
+      </div>
+      <ul className="space-y-2">
+        {steps.map((s) => {
+          const tps = s.duration_s > 0 ? (s.tokens_in + s.tokens_out) / s.duration_s : 0;
+          const barPct = Math.max(2, Math.round((s.duration_s / maxDur) * 100));
+          const who = s.model || s.actor || "";
+          return (
+            <li key={s.step} className="grid grid-cols-1 md:grid-cols-[10rem_1fr_auto] gap-x-3 gap-y-1 items-center">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className={stepChipClass(s.step)}>{stepLabel(s.step)}</span>
+              </div>
+              {/* duration bar (relative to the longest step) */}
+              <div className="relative h-5 rounded bg-[color:var(--midground-base)]/10 overflow-hidden">
+                <div
+                  className="absolute inset-y-0 left-0 rounded"
+                  style={{ width: `${barPct}%`, background: "var(--accent-teal-bg)" }}
+                />
+                <span className="absolute inset-0 flex items-center px-2 gap-2 text-[10px] font-mono">
+                  <span className="opacity-80">{fmtDur(s.duration_s)}</span>
+                  {(s.tokens_in + s.tokens_out) > 0 && (
+                    <span className="opacity-60">↑{fmtTokens(s.tokens_in)} ↓{fmtTokens(s.tokens_out)}</span>
+                  )}
+                  {tps > 0 && <span className="opacity-50">{tps.toFixed(tps >= 10 ? 0 : 1)} tok/s</span>}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 justify-end shrink-0">
+                {who && <span className="text-[10px] font-mono opacity-60 px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/10">{who}</span>}
+                <GateOutcomePill outcome={s.gate_outcome} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 const STATUS_CYCLE: Record<string, string[]> = {
   pending: ["in_progress", "blocked", "done"],
   in_progress: ["done", "blocked", "pending"],
@@ -407,13 +493,14 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; pi_activity?: PiActivityRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean; descendant_count?: number; descendant_done?: number }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; pi_activity?: PiActivityRow[]; phase_progress?: PhaseProgress | null; phase_metrics?: PhaseMetrics | null; timeline?: Timeline | null; has_prototype?: boolean; descendant_count?: number; descendant_done?: number }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + has_prototype + descendant_* ride at the TOP LEVEL of
-      // the response (not nested in task) — merge onto the task so the SDLC bar,
-      // the prototype iframe, and the subtree roll-up header read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, has_prototype: d.has_prototype ?? false, descendant_count: d.descendant_count ?? 0, descendant_done: d.descendant_done ?? 0 } : d.task);
+      // phase_progress + phase_metrics + has_prototype + descendant_* ride at
+      // the TOP LEVEL of the response (not nested in task) — merge onto the task
+      // so the SDLC bar, the Phase-metrics card, the prototype iframe, and the
+      // subtree roll-up header read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, phase_metrics: d.phase_metrics ?? d.task.phase_metrics ?? null, has_prototype: d.has_prototype ?? false, descendant_count: d.descendant_count ?? 0, descendant_done: d.descendant_done ?? 0 } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setPiActivity(d.pi_activity ?? []);
@@ -758,6 +845,15 @@ export default function TaskDetailPage() {
               </div>
             </div>
           )}
+        </Card>
+        </Stagger>
+      )}
+
+      {(task.phase_metrics?.steps?.length ?? 0) > 0 && (
+        <Stagger i={1} reduced={reduced}>
+        <Card>
+          <SectionLabel>Phase metrics — per-step effort across the SDLC</SectionLabel>
+          <PhaseMetricsCard metrics={task.phase_metrics as PhaseMetrics} />
         </Card>
         </Stagger>
       )}

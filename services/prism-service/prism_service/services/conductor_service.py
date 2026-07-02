@@ -158,6 +158,169 @@ def epic_rollup_verdict(nodes: list) -> tuple[bool, str]:
                   f"with strong leaf proof ({len(leaves)} leaf/leaves)")
 
 
+def compute_phase_metrics(history: list, pi_rows: Optional[list] = None, *,
+                          now: Optional[float] = None,
+                          task_status: str = "",
+                          completed_at: str = "") -> dict:
+    """Per-visited-step rollup of the SDLC — the REPRESENTATION layer on top of
+    the fc08da8d telemetry (task bd1c2289). PURE + unit-testable: reads only the
+    task's history rows (each advance_task/gate_decide carries a timestamp) plus
+    the task-attributed pi_runs rows, and returns
+
+        {"steps": [ {step, entered_at, duration_s, tokens_in, tokens_out,
+                     turns, actor, model, gate_outcome} ... ],
+         "total": {wall_duration_s, total_tokens, tok_s}}
+
+    one entry per VISITED workflow step (revisits aggregate), ordered by
+    WORKFLOW_STEPS. DURATION of a step = the next advance ts minus this step's
+    entry ts; the current/last step is measured to `now` (or completed_at for a
+    terminal task). TOKENS bucket into the step the task was on at each row's
+    timestamp — or the row's explicit `step` when the telemetry recorded one;
+    pi_runs input/output tokens and Claude per-turn `turn_tokens` (from
+    api.tasks._attach_turn_tokens) both fold in (SUM — disjoint agent work).
+    Additive: does NOT touch ConductorService.phase_progress / the tile burn.
+    Robust to sparse history — never raises (returns empty steps + a best-effort
+    total)."""
+    import re as _re
+    from datetime import datetime, timezone
+
+    def _epoch(ts: object) -> Optional[float]:
+        if ts is None:
+            return None
+        if isinstance(ts, (int, float)):
+            return float(ts)
+        try:
+            return datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    try:
+        from prism_service.models.workflow import WORKFLOW_STEPS
+        order = {s["id"]: i for i, s in enumerate(WORKFLOW_STEPS)}
+        step_type = {s["id"]: s.get("type") for s in WORKFLOW_STEPS}
+        step_agent = {s["id"]: s.get("agent") for s in WORKFLOW_STEPS}
+    except Exception:
+        order, step_type, step_agent = {}, {}, {}
+
+    hist = [h for h in (history or []) if isinstance(h, dict)]
+    if now is None:
+        now = datetime.now(timezone.utc).timestamp()
+    end = float(now)
+    if str(task_status) in ("done", "cancelled"):
+        ce = _epoch(completed_at)
+        if ce is not None:
+            end = ce
+
+    # Ordered advance rows -> (ts, to_step, entered_iso).
+    advances: list[tuple] = []
+    for h in hist:
+        if h.get("action") != "advance_task":
+            continue
+        ts = _epoch(h.get("timestamp"))
+        m = _re.search(r"to=([^\s;]+)", str(h.get("details") or ""))
+        if ts is not None and m:
+            advances.append((ts, m.group(1), h.get("timestamp")))
+    advances.sort(key=lambda a: a[0])
+
+    # Contiguous [start, end) segment per advance (the last runs to `end`).
+    segments: list[dict] = []
+    for i, (ts, step, iso) in enumerate(advances):
+        seg_end = advances[i + 1][0] if i + 1 < len(advances) else end
+        segments.append({"step": step, "start": ts,
+                         "end": max(seg_end, ts), "iso": iso})
+
+    # Latest gate_decide per gate wins: approve -> passed, reject -> failed.
+    gate_outcome: dict = {}
+    for h in hist:
+        if h.get("action") != "gate_decide":
+            continue
+        d = str(h.get("details") or "")
+        gm = _re.search(r"gate=([A-Za-z_]+_gate)", d)
+        am = _re.search(r"action=(\w+)", d)
+        if not (gm and am):
+            continue
+        if am.group(1) == "approve":
+            gate_outcome[gm.group(1)] = "passed"
+        elif am.group(1) == "reject":
+            gate_outcome[gm.group(1)] = "failed"
+
+    agg: dict = {}
+
+    def _bucket(step: str) -> dict:
+        e = agg.get(step)
+        if e is None:
+            e = {"step": step, "entered_at": None, "duration_s": 0.0,
+                 "tokens_in": 0, "tokens_out": 0, "turns": 0,
+                 "actor": step_agent.get(step) or "", "model": "",
+                 "gate_outcome": None}
+            agg[step] = e
+        return e
+
+    for seg in segments:
+        e = _bucket(seg["step"])
+        e["duration_s"] += max(0.0, seg["end"] - seg["start"])
+        if e["entered_at"] is None:
+            e["entered_at"] = seg["iso"]
+
+    def _step_for_ts(ts: float) -> Optional[str]:
+        chosen = None
+        for seg in segments:
+            if seg["start"] <= ts < seg["end"]:
+                return seg["step"]
+            if ts >= seg["start"]:
+                chosen = seg["step"]
+        return chosen
+
+    # pi_runs token attribution (explicit step wins, else bucket by ts window).
+    for r in (pi_rows or []):
+        if not isinstance(r, dict):
+            continue
+        step = r.get("step")
+        if not (step and step in order):
+            ts = _epoch(r.get("ts_end") or r.get("ts"))
+            step = _step_for_ts(ts) if ts is not None else None
+        if not step:
+            continue
+        e = _bucket(step)
+        e["tokens_in"] += int(r.get("input_tokens") or 0)
+        e["tokens_out"] += int(r.get("output_tokens") or r.get("tokens") or 0)
+        e["turns"] += int(r.get("turns") or 0) or 1
+        if r.get("model"):
+            e["model"] = str(r.get("model"))
+
+    # Claude per-turn output tokens (api.tasks stamps turn_tokens on history).
+    for h in hist:
+        tok = h.get("turn_tokens")
+        if not isinstance(tok, (int, float)) or tok <= 0:
+            continue
+        ts = _epoch(h.get("timestamp"))
+        step = _step_for_ts(ts) if ts is not None else None
+        if not step:
+            continue
+        e = _bucket(step)
+        e["tokens_out"] += int(tok)
+        e["turns"] += 1
+
+    for step, e in agg.items():
+        if step_type.get(step) == "gate" or step.endswith("_gate"):
+            e["gate_outcome"] = gate_outcome.get(step, "none")
+        e["duration_s"] = round(e["duration_s"], 3)
+
+    steps = sorted(agg.values(),
+                   key=lambda e: (order.get(e["step"], 999),
+                                  e["entered_at"] or ""))
+
+    all_ts = [t for t in (_epoch(h.get("timestamp")) for h in hist)
+              if t is not None]
+    wall = max(0.0, end - min(all_ts)) if all_ts else 0.0
+    total_tokens = sum(e["tokens_in"] + e["tokens_out"] for e in steps)
+    tok_s = round(total_tokens / wall, 3) if wall > 0 else 0.0
+    return {"steps": steps,
+            "total": {"wall_duration_s": round(wall, 3),
+                      "total_tokens": total_tokens, "tok_s": tok_s}}
+
+
 def green_gate_outcome_note(slice_green: bool, completion_proof: object,
                             incomplete_children: int) -> str:
     """Advisory note (annotate, never block) for the GAP-4 outcome verdict.
