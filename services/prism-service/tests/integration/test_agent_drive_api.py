@@ -31,6 +31,14 @@ def client(tmp_path, monkeypatch):
 
     c = TestClient(app)
     c.post("/api/projects", json={"name": "drivetest"})
+    # plan_gate scores conformance against seeded principles; an empty
+    # principle set NEVER passes (issue #171) — seed the defaults the
+    # way prism_onboard does.
+    from prism_service.project_context import get_project
+    from prism_service.services.arc_governance import (
+        seed_default_principles,
+    )
+    seed_default_principles(get_project("drivetest").memory_svc)
     return c
 
 

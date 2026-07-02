@@ -11,6 +11,7 @@ app; the import-time side effects stay in the per-module routers.
 from fastapi import APIRouter
 
 from prism_service.api.agent import router as agent_router
+from prism_service.api.agent_drive import router as agent_drive_router
 from prism_service.api.agent_runs import router as agent_runs_router
 from prism_service.api.brain import router as brain_router
 from prism_service.api.claude_auth import router as claude_auth_router
@@ -39,6 +40,9 @@ from prism_service.api.xref import router as xref_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(agent_router, prefix="/agent", tags=["agent"])
+# Drive endpoint (task 4e28dcab): POST /api/agent/drive — one call
+# through the planning gates via services/drive_engine.DriveEngine.
+api_router.include_router(agent_drive_router, prefix="/agent", tags=["agent-drive"])
 api_router.include_router(agent_runs_router, prefix="/agent-runs", tags=["agent-runs"])
 api_router.include_router(brain_router, prefix="/brain", tags=["brain"])
 api_router.include_router(claude_auth_router, prefix="/claude-auth", tags=["claude-auth"])
