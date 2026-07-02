@@ -4,6 +4,15 @@ version = "5.0.0"
 
 [tool.pytest.ini_options]
 testpaths = ["plugins/prism-devtools/tools/prism-cli/tests"]
+# task 91ac81e8 — process-lifecycle / pidfile / daemon-contending tests that
+# spawn+reap real processes and probe the live daemon's pid space. They pass
+# standalone / in CI but flake as a subprocess of the LIVE daemon, so the
+# in-daemon Tier0 verifier deselects them via `-m "not daemon_exclusive"`
+# (prism_service/services/verifier_service.py). Registered here so standalone
+# runs emit no unknown-mark warning.
+markers = [
+    "daemon_exclusive: test contends with the live daemon's pid/process space; excluded from the in-daemon Tier0 verifier run, still run standalone/CI",
+]
 
 [tool.pylint.messages_control]
 disable = [

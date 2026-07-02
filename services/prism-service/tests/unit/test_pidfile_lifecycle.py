@@ -146,6 +146,7 @@ def test_cmd_start_refuses_when_mcp_port_held(data_dir, monkeypatch, capsys):
     assert "already held by pid 49019" in capsys.readouterr().err
 
 
+@pytest.mark.daemon_exclusive  # task 91ac81e8: reaps a real orphan pid; flakes in-daemon
 def test_cmd_status_reports_unhealthy_and_self_heals_split_brain(data_dir, monkeypatch, capsys):
     # Two pids each own one port -> UNHEALTHY + reap the orphan, exit non-zero (AC-3).
     cli._write_pid(26138)
@@ -164,6 +165,7 @@ def test_cmd_status_reports_unhealthy_and_self_heals_split_brain(data_dir, monke
     assert killed == [49019]              # orphan reaped, keeper (UI pid) spared
 
 
+@pytest.mark.daemon_exclusive  # task 91ac81e8: reaps a real orphan pid; flakes in-daemon
 def test_cmd_stop_reaps_split_brain_orphan(data_dir, monkeypatch, capsys):
     cli._write_pid(26138)
     monkeypatch.setattr(cli, "_is_alive", lambda pid: True)

@@ -65,8 +65,18 @@ def _write_tree(root: Path, *, daemon_exclusive_failing: bool = False,
     optionally a FAILING daemon_exclusive test and/or a FAILING plain
     test. The passing test guarantees the suite is non-empty so a fully
     deselected run never collapses to pytest's exit-5 (no tests ran)."""
+    # Register the marker exactly as the real suite does (root pyproject),
+    # so the isolated run emits no unknown-mark warning — otherwise the
+    # warnings summary would print the deselected test's path and defeat the
+    # "was it deselected?" assertion below.
     (root / "pyproject.toml").write_text(
-        "[project]\nname = 'svc'\nversion = '0'\n", encoding="utf-8")
+        "[project]\nname = 'svc'\nversion = '0'\n\n"
+        "[tool.pytest.ini_options]\n"
+        "markers = [\n"
+        "    \"daemon_exclusive: contends with the live daemon; excluded "
+        "in-daemon\",\n"
+        "]\n",
+        encoding="utf-8")
     tests = root / "tests"
     tests.mkdir(exist_ok=True)
     (tests / "test_normal_pass.py").write_text(

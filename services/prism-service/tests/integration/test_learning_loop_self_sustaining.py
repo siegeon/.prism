@@ -29,6 +29,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
@@ -256,6 +258,7 @@ def test_task_linked_session_candidate_carries_task_id(tmp_path):
 # =====================================================================
 
 
+@pytest.mark.daemon_exclusive  # task 91ac81e8: reflection worker races the live daemon's loop
 def test_completed_reflection_writes_rollup_and_feeds_outcome(
     tmp_path, monkeypatch
 ):

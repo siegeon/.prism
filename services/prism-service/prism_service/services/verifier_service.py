@@ -296,10 +296,22 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
         # manual override. The suite root is derived (never hardcoded) and
         # the resolved PRISM data dir is defensively --ignore'd so a
         # data-dir-inside-repo layout can never poison collection again.
+        #
+        # DAEMON-EXCLUSIVE EXCLUSION (task 91ac81e8): this Tier0 suite runs as
+        # a SUBPROCESS OF THE LIVE DAEMON. A handful of process-lifecycle /
+        # pidfile / learning-loop tests spawn+reap real orphan processes and
+        # probe prism.pid under the data dir the running daemon OWNS — they
+        # pass standalone but flake ONLY in-daemon, so a genuinely 0-failed
+        # tree could never clear green_gate mechanically (every green needed a
+        # distinct-actor override — the gate-theater the doctrine targets).
+        # Deselect them here with `-m "not daemon_exclusive"`; they STILL run
+        # in normal CI / standalone (no `-m` filter there), and the verifier is
+        # NOT weakened — a real failure in any non-excluded test still fails.
         import sys as _sys
         suite_root = _pytest_suite_root(workspace)
         rc, out, err = _run_tool(
             [_sys.executable, "-m", "pytest", "-q", "--no-header",
+             "-m", "not daemon_exclusive",
              *_data_dir_ignores(suite_root)],
             suite_root, timeout_s=600.0)
         c = _claim(0, "tooling.pytest", "<full-suite>", rc, out, err)

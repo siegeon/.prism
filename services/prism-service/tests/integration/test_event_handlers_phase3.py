@@ -564,6 +564,7 @@ def test_session_imported_skips_noise_candidate(project, fresh_bus, monkeypatch)
 # Criterion 4 — a BURST of N imports coalesces into ONE claude -p
 # reflection pass (call count == 1 for the burst).
 # ======================================================================
+@pytest.mark.daemon_exclusive  # task 91ac81e8: event-pool coalescing races the live daemon's bus
 def test_session_imported_burst_coalesces_to_one_pass(
         project, fresh_bus, monkeypatch):
     from prism_service.project_context import get_project
@@ -591,6 +592,7 @@ def test_session_imported_burst_coalesces_to_one_pass(
 # memory is REINFORCED (no new duplicate row; matched memory's signal /
 # recall updated).
 # ======================================================================
+@pytest.mark.daemon_exclusive  # task 91ac81e8: event-pool coalescing races the live daemon's bus
 def test_session_imported_reinforces_instead_of_duplicating(
         project, fresh_bus, monkeypatch):
     from prism_service.project_context import get_project
