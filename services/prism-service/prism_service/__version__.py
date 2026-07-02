@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.31"
+PRISM_VERSION = "6.7.32"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.32: stress-loop landing wave. Tier0 verifier runs "
+    "in the SERVICE workspace (271dacc9 - repo-root collection explosion from "
+    "the data-dir mirror + dangling root testpaths killed EVERY green gate); "
+    "/api/agent/tool speaks a machine-legible error contract (ok:false, clean "
+    "500s - no more 200-wrapped tracebacks); task status/title/parent "
+    "validated at the service layer (cycles, phantoms, soft-states honored); "
+    "conductor routes honor body.project and name the searched project; "
+    "claude-p exit wave 1+2: memory summaries, event handlers, graph enrich, "
+    "brain /ask all run env-gated on the local micro engine, run telemetry "
+    "reconciled into the pi_runs ledger (single recording point, token split "
+    "kept) feeding the new /internal-agent audit page. Suite 1340 passed. "
     "SELF-IMPROVE-FORK v6.7.31: panel = full expert surface (task e70cdcda "
     "demo half). The rail panel imports EXPERT_SYSTEM_PROMPT + "
     "EXPERT_TOOL_DEFS from web/pi-expert.mjs — the same 18-tool catalog the "
