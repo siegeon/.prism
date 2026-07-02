@@ -328,13 +328,41 @@ def _invoke_backend(
     project: str,
     purpose: str,
 ):
-    """Reflection inference seam (task ecb90f7e). Default: the claude CLI,
-    exactly as before. PRISM_REFLECTION_BACKEND=local routes through
-    inference.local_llm — a FREE local micro model (PRISM_LOCAL_LLM_MODEL,
-    bench-ranked in benchmarks/micro_llm_selflearn). The local path is
-    TOOL-LESS: the verdict is grounded solely by the brief baked into the
-    prompt, which is also why the prompt builder inlines the evidence."""
-    if (os.environ.get("PRISM_REFLECTION_BACKEND") or "").strip().lower() == "local":
+    """Reflection inference seam (tasks ecb90f7e + ac69ee28). Default: the
+    claude CLI, exactly as before. Two local micro-model backends:
+
+    PRISM_REFLECTION_BACKEND=pi — the pi-agent-core runtime (Node sidecar,
+    web/pi-runtime.mjs): AGENTIC reflection. The model can brain_search and
+    memory_recall mid-loop to ground its verdict and decline duplicates —
+    the memory/brain-expert behavior.
+
+    PRISM_REFLECTION_BACKEND=local — plain completion via inference.local_llm,
+    TOOL-LESS: the verdict is grounded solely by the brief in the prompt."""
+    backend = (os.environ.get("PRISM_REFLECTION_BACKEND") or "").strip().lower()
+    if backend == "pi":
+        from prism_service.inference import pi_agent
+
+        out = pi_agent.invoke(
+            prompt,
+            system=(
+                "You are PRISM's reflection engine and its memory/brain "
+                "expert. Use memory_recall FIRST to check whether the "
+                "knowledge already exists — if it does, do NOT propose it "
+                "again in new_memories. Use brain_search to verify file "
+                "claims. Your FINAL message must be ONLY the JSON verdict "
+                "object the task specifies — no prose."
+            ),
+            allowed_tools=("brain_search", "memory_recall"),
+            project=project,
+            max_turns=max_turns,
+        )
+        text = out.get("text") or ""
+        if not out.get("ok") and not text:
+            raise RuntimeError(f"pi runtime failed: {out.get('error') or 'no output'}")
+        result = _LocalResult(text, float(out.get("ms") or 0), int(out.get("tokens") or 0))
+        result.tools_used = out.get("tools_used") or []
+        return result
+    if backend == "local":
         from prism_service.inference import local_llm
 
         out = local_llm.complete(

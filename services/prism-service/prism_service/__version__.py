@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.27"
+PRISM_VERSION = "6.7.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.28: pi IS the internal inference agent (task "
+    "ac69ee28). Node runner web/pi-runtime.mjs executes a pi-agent-core loop "
+    "on the local micro model with PRISM tools bridged via /api/agent/tool "
+    "(text-tool-call interception included); inference/pi_agent.py wraps it "
+    "claude_cli-style (CREATE_NO_WINDOW, JSON stdin/stdout). "
+    "PRISM_REFLECTION_BACKEND=pi makes reflection AGENTIC: the model "
+    "memory_recalls/brain_searches before its verdict - stores fresh "
+    "knowledge (mx-c8d4ec), declines already-learned briefs. Measured "
+    "floors: qwen3:0.6b holds the tool loop; qwen3:1.7b (1.4GB) is the "
+    "reflection-rubric floor (0.6b returns empty verdicts under it). "
     "SELF-IMPROVE-FORK v6.7.27: micro-LLM internal inference (task ecb90f7e, "
     "G5 feed). New benchmarks/micro_llm_selflearn ranks the free local ladder "
     "on the REAL self-learning shapes (reflection JSON verdict, memory distill, "
