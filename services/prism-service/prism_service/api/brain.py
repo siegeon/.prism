@@ -8,8 +8,17 @@ retrieval step uses Brain's normal search() to pull the top-N hits; the
 question + those hits are then formatted into a prompt and run through
 claude_cli.invoke(). Allowed-tools is empty so claude doesn't run a
 subagent loop — single-shot Q&A.
+
+PRISM_BRAIN_ASK_BACKEND=local (task e1ebdd6e, claude-p-exit epic) routes
+the SAME grounded prompt at the keyless local micro model
+(inference.local_llm) as one completion — the prompt already forbids
+tool calls, so single-shot semantics are preserved. The response
+contract is unchanged; run_id + tokens come from the run-ledger seam so
+the SPA ask panel keeps its receipts. Default stays the claude CLI.
 """
 
+import os
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -164,6 +173,12 @@ def ask(body: AskBody) -> dict:
         f"## Answer\n"
     )
 
+    # Env-gated backend seam (task e1ebdd6e): the local micro model
+    # serves the same grounded prompt as a single completion.
+    backend = (os.environ.get("PRISM_BRAIN_ASK_BACKEND") or "").strip().lower()
+    if backend == "local":
+        return _ask_local(body, q, prompt, results)
+
     # cwd = the project's source dir, so if claude's allowed_tools
     # ever gets extended to include Read/Glob/Grep it can navigate
     # the tree. For v1 we leave allowed_tools empty (no tool calls,
@@ -190,21 +205,84 @@ def ask(body: AskBody) -> dict:
         "question": q,
         "project": body.project,
         "answer": answer,
-        "sources": [
-            {
-                "index": i + 1,
-                "file": (r.get("source_file") or r.get("file") or r.get("source") or ""),
-                "entity_name": r.get("entity_name") or r.get("doc_id") or "",
-                "entity_kind": r.get("entity_kind") or "",
-                "score": r.get("rrf_score") or r.get("score") or 0.0,
-            }
-            for i, r in enumerate(results)
-        ],
+        "sources": _sources_payload(results),
         "run_id": res.run_id,
         "exit_code": res.exit_code,
         "duration_s": res.duration_s,
         "tokens": {
             "input": res.usage.get("input_tokens", 0),
             "output": res.usage.get("output_tokens", 0),
+        },
+    }
+
+
+def _sources_payload(results: list) -> list[dict]:
+    """The retrieval receipts rendered by the SPA ask panel — identical
+    for every backend (the sources come from Brain, not the model)."""
+    return [
+        {
+            "index": i + 1,
+            "file": (r.get("source_file") or r.get("file") or r.get("source") or ""),
+            "entity_name": r.get("entity_name") or r.get("doc_id") or "",
+            "entity_kind": r.get("entity_kind") or "",
+            "score": r.get("rrf_score") or r.get("score") or 0.0,
+        }
+        for i, r in enumerate(results)
+    ]
+
+
+def _ask_local(body: AskBody, q: str, prompt: str, results: list) -> dict:
+    """Local-backend leg of /ask (task e1ebdd6e): one keyless
+    local_llm.complete completion over the SAME grounded prompt. The
+    response contract matches the claude path — run_id comes from the
+    run-ledger seam (record_local_run) and tokens from local_llm's
+    additive input/output split, so the SPA keeps its telemetry.
+    An unreachable endpoint is a 502, never a fabricated answer."""
+    from prism_service.inference import local_llm
+
+    purpose = f"brain_ask@{q[:40]}"
+    mdl = local_llm.configured_model()
+    ts_start = time.time()
+    try:
+        out = local_llm.complete(
+            prompt,
+            model=mdl,
+            max_tokens=1024,
+            purpose=purpose,
+            project=body.project,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            502, f"local ask backend failed: {type(exc).__name__}: {exc}")
+    ts_end = time.time()
+    text = (out.get("text") or "").strip()
+    usage = {
+        "input_tokens": int(out.get("input_tokens") or 0),
+        "output_tokens": int(out.get("output_tokens")
+                             or out.get("tokens") or 0),
+    }
+    run_id = ""
+    try:
+        from prism_service.services import claude_run_log
+
+        run_id = claude_run_log.record_local_run(
+            project=body.project, purpose=purpose,
+            backend="local", model=mdl,
+            final_text=text, usage=usage,
+            ts_start=ts_start, ts_end=ts_end,
+        )
+    except Exception:
+        pass  # ledger is best-effort — never fail the ask
+    return {
+        "question": q,
+        "project": body.project,
+        "answer": text or "(no answer returned)",
+        "sources": _sources_payload(results),
+        "run_id": run_id,
+        "exit_code": 0,
+        "duration_s": round(ts_end - ts_start, 3),
+        "tokens": {
+            "input": usage["input_tokens"],
+            "output": usage["output_tokens"],
         },
     }
