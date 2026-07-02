@@ -732,8 +732,9 @@ TOOLS: list[Tool] = [
         inputSchema={"type": "object", "properties": {
             "section": {"type": "string", "description":
                 "Optional: 'overview' | 'tools' | 'workflow' | 'orchestration' "
-                "(the epic fan-out playbook) | 'memory' | 'graph' | 'examples'. "
-                "Omit for the full guide."},
+                "(the epic fan-out playbook) | 'memory' | 'graph' | 'examples' "
+                "| 'changelog' (the full release history). Omit for the compact "
+                "default orientation."},
         }},
     ),
     Tool(
@@ -1769,12 +1770,28 @@ def _resolve_link_session_id() -> str:
 # Self-documenting guide (returned by prism_guide tool)
 # ---------------------------------------------------------------------------
 
-def _version_banner() -> str:
+def _version_banner(full: bool = False) -> str:
+    """Version line for the guide.
+
+    ``full=False`` (the overview default) returns a COMPACT banner: the
+    version plus a one-line headline only, then a pointer to the full
+    history. The complete PRISM_VERSION_NOTES changelog can be ~180K chars —
+    embedding it inline made a "READ FIRST" prism_guide call cost ~50K tokens
+    (task 5f93f67a). ``full=True`` returns the exhaustive banner and is used
+    only by the explicit ``changelog`` section."""
     try:
-        from prism_service.__version__ import PRISM_VERSION as _v, PRISM_VERSION_NOTES as _n
-        return f"PRISM version: **{_v}** — {_n}"
+        from prism_service.__version__ import (
+            PRISM_VERSION as _v, PRISM_VERSION_NOTES as _n)
     except Exception:
         return "PRISM version: unknown"
+    if full:
+        return f"PRISM version: **{_v}** — {_n}"
+    headline = (_n or "").strip().splitlines()[0] if (_n or "").strip() else ""
+    if len(headline) > 280:
+        headline = headline[:277].rstrip() + "…"
+    tail = f" — {headline}" if headline else ""
+    return (f"PRISM version: **{_v}**{tail}\n\n"
+            "_(full release history: `prism_guide(section=\"changelog\")`)_")
 
 
 _GUIDE_SECTIONS: dict[str, str] = {
@@ -1830,6 +1847,9 @@ in SQLite inside the container's /data volume — no network, no API keys.
 Only call `prism_guide` (this tool) once per session — the guide doesn't
 change between calls. Cache it.
 """,
+    # The exhaustive release history lives HERE, behind an explicit section,
+    # so it never bloats the READ-FIRST overview/default (task 5f93f67a).
+    "changelog": _version_banner(full=True),
     "tools": """\
 # All tools — what they do and when to call them
 
@@ -1914,7 +1934,8 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
   adds `context_pack` with role card, rules, template, asset digests, and the
   same relevant context nested for model-agnostic clients.
 - `prism_guide(section?)` — this tool. Sections: overview | tools |
-  workflow | orchestration | memory | graph | examples.
+  workflow | orchestration | memory | graph | examples | changelog (the
+  full release history — kept out of the compact default).
 """,
     "workflow": """\
 # Daily workflow loop (coding agent)
