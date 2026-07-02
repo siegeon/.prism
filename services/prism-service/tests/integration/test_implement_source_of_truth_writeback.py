@@ -81,7 +81,10 @@ def _step_schema_block(src: str) -> str:
     """The STEP_SCHEMA object — the per-step structured-output contract that
     every non-locate step returns. AC7's source_tier field belongs here."""
     start = src.index("const STEP_SCHEMA = {")
-    end = src.index("// ── Phase: Pre-flight", start)
+    # 306c01f made implement.js ASCII-only: the box-drawing "── Phase" marker
+    # became plain hyphens, stranding this anchor (the AC7 source_tier
+    # feature itself landed in afd1e1c — these tests assert real substance).
+    end = src.index("// -- Phase: Pre-flight", start)
     return src[start:end]
 
 
