@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.34"
+PRISM_VERSION = "6.7.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.35: gate self-healing + MCP ergonomics. Honest "
+    "re-verify path (19e31e88): a gate latched by a transient/env artifact "
+    "recovers by RE-RUNNING the verifier fresh (conductor_gate re_verify=true, "
+    "no override, actor=conductor) — override now means only distinct-actor "
+    "human judgment. brain_call_chain accepts `name` as an alias for `entity` "
+    "(0d2d5aeb, matches the brain_find_* convention). prism_guide overview "
+    "trimmed ~50K->~5K tokens; full history moved to section='changelog' "
+    "(5f93f67a). Plus dashboard/session/okf clarity fixes. Suite 1400 passed. "
     "SELF-IMPROVE-FORK v6.7.34: gate doctrine now HOLDS mechanically. The "
     "in-daemon Tier0 verifier deselects daemon_exclusive-marked process-"
     "lifecycle tests (pidfile split-brain, event-burst, learning-loop) that "
