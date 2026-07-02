@@ -190,6 +190,7 @@ class _StubHandler(BaseHTTPRequestHandler):
         pass
 
 
+@pytest.mark.daemon_exclusive  # task 279ef52d: binds a real HTTP server + thread; flakes in-daemon
 def test_complete_reports_prompt_and_completion_tokens():
     from prism_service.inference import local_llm
 

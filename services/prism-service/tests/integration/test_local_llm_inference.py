@@ -59,6 +59,7 @@ def stub_server():
         srv.shutdown()
 
 
+@pytest.mark.daemon_exclusive  # task 279ef52d: binds a real HTTP server + thread; flakes in-daemon
 def test_complete_roundtrips_against_stub(stub_server):
     """AC-3: local_llm.complete hits <base_url>/chat/completions and returns
     {text, ms, tokens} — keyless, stdlib-only."""
@@ -76,6 +77,7 @@ def test_complete_roundtrips_against_stub(stub_server):
     assert req["body"]["messages"][-1]["content"] == "say hi"
 
 
+@pytest.mark.daemon_exclusive  # task 279ef52d: binds a real HTTP server + thread; flakes in-daemon
 def test_json_mode_and_system_prompt(stub_server):
     from prism_service.inference import local_llm
 
