@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.30"
+PRISM_VERSION = "6.7.31"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "SELF-IMPROVE-FORK v6.7.31: panel = full expert surface (task e70cdcda "
+    "demo half). The rail panel imports EXPERT_SYSTEM_PROMPT + "
+    "EXPERT_TOOL_DEFS from web/pi-expert.mjs — the same 18-tool catalog the "
+    "Node runner carries (conductor_advance/conductor_gate/task_update "
+    "included) — replacing the local 6-tool set; conductor receipts get a "
+    "step->step / gate->state one-line renderer. "
     "SELF-IMPROVE-FORK v6.7.30: pi panel session-persistence hardening - "
     "rehydrate can never apply after send() (interacted flag closes the "
     "send->agent_start gap), persist/rekey never write an empty transcript "

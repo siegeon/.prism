@@ -22,12 +22,16 @@ import {
 import {
   createModels,
   createProvider,
-  Type,
   type Model,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { api } from "@/lib/api";
 import { clearSession, loadSession, saveSession } from "@/components/pi/piSession";
+// The shared expert module (task e70cdcda): ONE source for the system
+// prompt + the full 18-tool PRISM catalog, imported by BOTH surfaces —
+// the Node runner (web/pi-runtime.mjs) and this panel. Types come from
+// the sibling pi-expert.d.mts declaration.
+import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "../../pi-expert.mjs";
 
 // ---------------------------------------------------------------- config
 
@@ -137,7 +141,10 @@ function prismTool(
       const started = performance.now();
       const res = await api.post<PassthroughResponse>(
         `/api/agent/tool?project=${encodeURIComponent(project)}`,
-        { name, args: params ?? {} },
+        // internal:true matches the Node runner's call shape. Harmless:
+        // task e70cdcda retired the internal-only gate (INTERNAL_ONLY_TOOLS
+        // is empty), the flag is kept for call-shape parity.
+        { name, args: params ?? {}, internal: true },
       );
       return {
         content: [{ type: "text", text: toolText(res.result) }],
@@ -147,44 +154,24 @@ function prismTool(
   };
 }
 
+/** The panel carries the FULL expert catalog — the exact 18 tools the Node
+ * runner executes with, from the shared pi-expert module. Never re-declare
+ * a tool here; additions/removals happen in web/pi-expert.mjs (mirrored by
+ * api/agent.py's AGENT_TOOL_WHITELIST). */
 function buildTools(project: string): AgentTool[] {
-  return [
-    prismTool(project, "brain_search", "Brain search",
-      "Search the project's code/knowledge base (hybrid BM25 + vector + graph). Use for any question about the codebase.",
-      Type.Object({ query: Type.String({ description: "Search query" }) })),
-    prismTool(project, "memory_recall", "Memory recall",
-      "Recall the team's long-term memory: conventions, decisions, failures, expertise.",
-      Type.Object({ query: Type.String({ description: "Natural-language query" }) })),
-    prismTool(project, "memory_store", "Memory store",
-      "Store a durable memory entry the team should keep (conventions, decisions, learnings).",
-      Type.Object({
-        domain: Type.String({ description: "Expertise domain, e.g. conventions, architecture" }),
-        name: Type.String({ description: "Short kebab-case name" }),
-        description: Type.String({ description: "Detailed description with concrete evidence" }),
-        type: Type.String({ description: "pattern | convention | failure | decision" }),
-        classification: Type.String({ description: "tactical | foundational | strategic" }),
-      })),
-    prismTool(project, "task_list", "Task list",
-      "List tasks in the PRISM tracker. Optionally filter by status: pending, in_progress, done, blocked.",
-      Type.Object({ status: Type.Optional(Type.String({ description: "Status filter" })) })),
-    prismTool(project, "task_create", "Task create",
-      "Create a new task in the PRISM tracker.",
-      Type.Object({
-        title: Type.String({ description: "Short human-friendly title" }),
-        description: Type.Optional(Type.String({ description: "Details" })),
-      })),
-    prismTool(project, "prism_status", "PRISM status",
-      "Check the project's Brain/Graph index health (doc counts, staleness).",
-      Type.Object({})),
-  ];
+  return Object.entries(EXPERT_TOOL_DEFS).map(([name, def]) =>
+    prismTool(project, name, def.label, def.description, def.parameters),
+  );
 }
 
-const SYSTEM_PROMPT = [
-  "You are PI, PRISM's omnipresent assistant living in the app's left rail.",
-  "PRISM is a software-engineering knowledge service (brain index, long-term memory, task tracker, conductor SDLC).",
-  "Use your tools to answer from the project's REAL data — brain_search for code questions, memory_recall for conventions/decisions, task_list for work state. Never invent project facts a tool could check.",
-  "Be concise: short paragraphs, no filler. You run on a small local model — prefer one good tool call over many.",
+/** Panel persona on top of the shared expertise: this surface is a chat
+ * rail on a small local model — concision + one-good-tool-call economy. */
+const PANEL_PREAMBLE = [
+  "You are answering in PRISM's left-rail chat panel.",
+  "Be concise: short paragraphs, no filler. You run on a small local model — prefer one well-aimed tool call over many exploratory ones, then answer in plain prose.",
 ].join(" ");
+
+const SYSTEM_PROMPT = `${EXPERT_SYSTEM_PROMPT}\n\n${PANEL_PREAMBLE}`;
 
 // ------------------------------------------------------------ the store
 
@@ -467,6 +454,7 @@ export class PiStore {
         `/api/agent/tool?project=${encodeURIComponent(this.project)}`,
         {
           name: "memory_store",
+          internal: true,
           args: {
             domain: "pi-agent",
             name,

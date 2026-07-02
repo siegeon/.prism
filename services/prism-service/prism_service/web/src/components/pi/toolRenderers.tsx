@@ -169,10 +169,64 @@ function renderTaskList(result: unknown): ReactNode | null {
   );
 }
 
+// -------------------------------------- conductor / task-mutation receipts
+
+/** One-line transition summary for conductor_advance / conductor_gate /
+ * task_update receipts — "from → to" for advances, "gate → state" for gate
+ * decisions, "step · status" for task updates — with the raw receipt kept
+ * underneath. Any shape it doesn't recognize returns null (→ default raw
+ * receipt fallback), so it is safe as a catch-all for mutation tools. */
+function renderConductorReceipt(result: unknown): ReactNode | null {
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return null;
+  const r = result as Record<string, unknown>;
+  const parts: string[] = [];
+  const fromStep = str(r.from_step);
+  const toStep = str(r.to_step);
+  if (fromStep || toStep) {
+    // conductor_advance: {ok, task_id, from_step, to_step, gate_state}
+    parts.push(`${fromStep || "<start>"} → ${toStep || "?"}`);
+    if (str(r.gate_state) && r.gate_state !== "none") parts.push(`gate ${str(r.gate_state)}`);
+  } else if (str(r.gate_step) || (str(r.gate_state) && r.ok !== undefined)) {
+    // conductor_gate: {ok, task_id, gate_step, gate_state, reason?}
+    parts.push(`${str(r.gate_step) || "gate"} → ${str(r.gate_state) || "?"}`);
+  } else if (str(r.workflow_step) || str(r.status)) {
+    // task_update: the updated task row (workflow_step / status / title).
+    if (str(r.workflow_step)) parts.push(`step ${str(r.workflow_step)}`);
+    if (str(r.status)) parts.push(str(r.status));
+  }
+  if (parts.length === 0) return null;
+  const refused = r.ok === false;
+  const reason = str(r.reason);
+  return (
+    <div className="space-y-0.5">
+      <div
+        className={cn(
+          "px-1.5 py-1 text-[11px] font-mono break-words",
+          refused
+            ? "text-[color:var(--accent-rose-fg)]"
+            : "text-[color:var(--text-secondary)]",
+        )}
+      >
+        {refused && <span className="uppercase tracking-wider text-[9px] mr-1.5">refused</span>}
+        {parts.join(" · ")}
+        {reason && (
+          <span className="text-[color:var(--text-muted)]">
+            {" — "}{reason.length > 160 ? `${reason.slice(0, 160)}…` : reason}
+          </span>
+        )}
+      </div>
+      <Receipt value={result} />
+    </div>
+  );
+}
+
 // ------------------------------------------------------------ registry
 
 export const TOOL_RENDERERS: Map<string, ToolRenderer> = new Map([
   ["brain_search", renderBrainSearch],
   ["memory_recall", renderMemoryRecall],
   ["task_list", renderTaskList],
+  ["conductor_advance", renderConductorReceipt],
+  ["conductor_gate", renderConductorReceipt],
+  ["task_update", renderConductorReceipt],
 ]);
