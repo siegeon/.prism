@@ -112,3 +112,26 @@ def test_record_facts_writes_durable_memory(tmp_path):
     from pathlib import Path
     body = Path(path).read_text(encoding="utf-8")
     assert "Business knowledge" in body and "clinic" in body.lower()
+
+
+def test_finalize_build_writes_code_facts_and_endpoints(tmp_path, monkeypatch):
+    from prism_service.services import magic_app_builder as ab
+    import prism_service.engines.brain_engine as be
+    monkeypatch.setattr(ab, "deploy_app", lambda spec, **k: None)  # no network
+
+    class _FakeBrain:
+        def __init__(self, **k):
+            pass
+        def ingest(self, paths):
+            return 3
+    monkeypatch.setattr(be, "Brain", _FakeBrain)
+
+    spec = {"db": "shop", "module": "shop", "entities": [
+        {"name": "customers", "fields": [{"name": "name", "type": "TEXT"}]}]}
+    r = mi.finalize_build("acme", spec, data_dir=tmp_path,
+                          facts=[{"name": "x", "text": "a shop"}])
+    src = tmp_path / "projects" / "acme" / "magic_app"
+    assert (src / "customers.get.hl").exists()       # their CODE artifact
+    assert (src / "business-facts.md").exists()       # their memory artifact
+    assert r["brain_docs"] == 3                        # ingested into their BRAIN
+    assert any("customers" in e for e in r["endpoints"])

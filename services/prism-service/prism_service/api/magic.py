@@ -75,13 +75,19 @@ def interview(body: InterviewBody) -> dict:
     else:
         iv = mi.SpecInterview(body.spec)
     resumed = bool(sess) and not body.session
+    artifacts = None
     if proj:
         mi.save_session(proj, iv.to_dict())          # survives restarts/visits
         if iv.state == mi.READY:
-            mi.record_facts(proj, mi.business_facts(iv))  # PRISM = their expert
+            facts = mi.business_facts(iv)
+            mi.record_facts(proj, facts)             # PRISM = their expert
+            try:                                      # auto-build the customer app
+                artifacts = mi.finalize_build(proj, iv.spec, facts=facts)
+            except Exception as e:                    # surface, don't crash the turn
+                artifacts = {"error": str(e)[:160]}
     return {"state": iv.state, "domain": iv.domain(),
             "questions": iv.questions(), "spec": iv.spec, "round": iv.round,
-            "resumed": resumed, "session": iv.to_dict()}
+            "resumed": resumed, "artifacts": artifacts, "session": iv.to_dict()}
 
 
 class ConfigureBody(BaseModel):
