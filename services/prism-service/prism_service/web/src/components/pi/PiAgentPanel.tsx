@@ -27,6 +27,7 @@ import {
 } from "react";
 import { ChevronDown, ChevronRight, Hexagon, Send, Sparkles, Square } from "lucide-react";
 import Markdown from "@/components/Markdown";
+import { sanitizeAssistantText } from "../../../pi-toolcall.mjs";
 import { TOOL_RENDERERS, prettyReceipt } from "@/components/pi/toolRenderers";
 import { useProject } from "@/lib/project";
 import { cn } from "@/lib/utils";
@@ -134,12 +135,13 @@ const SettledList = memo(function SettledList({
 function StreamingBubble({ store }: { store: PiStore }) {
   useSyncExternalStore(store.subscribeStream, store.getStreamVersion, store.getStreamVersion);
   const text = store.streamingText;
+  const clean = sanitizeAssistantText(text);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollIntoView({ block: "nearest" }); }, [text]);
   return (
     <div ref={ref} className="max-w-[96%] px-3 py-2 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-subtle)]">
-      {text
-        ? <Markdown text={text} className="space-y-2" />
+      {clean
+        ? <Markdown text={clean} className="space-y-2" />
         : <span className="text-xs text-[color:var(--text-muted)] animate-pulse">…</span>}
     </div>
   );
@@ -307,9 +309,11 @@ function PiItemRow({ item, index, store }: { item: PiItem; index: number; store:
     return (
       <div className="space-y-1">
         <div className="max-w-[96%] px-3 py-2 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-subtle)]">
-          {item.text
-            ? <Markdown text={item.text} className="space-y-2" />
-            : <span className="text-xs text-[color:var(--text-muted)] animate-pulse">…</span>}
+          {sanitizeAssistantText(item.text)
+            ? <Markdown text={sanitizeAssistantText(item.text)} className="space-y-2" />
+            : item.done
+              ? <span className="text-xs text-[color:var(--text-muted)] italic">I didn't catch a clear answer there — could you rephrase?</span>
+              : <span className="text-xs text-[color:var(--text-muted)] animate-pulse">…</span>}
         </div>
         {item.done && item.text && (
           <div className="flex items-center gap-2">

@@ -14,3 +14,8 @@ export declare function parseTextToolCalls(text: string): ParsedToolCall[];
 
 /** Back-compat single-call contract: the FIRST parsed call, or null. */
 export declare function parseTextToolCall(text: string): ParsedToolCall | null;
+
+/** Strip small-model reasoning/tool markup (<think>, <workflow_state>, raw
+ * tool-call JSON) from assistant text before rendering. "" when nothing
+ * human-facing remains, so the UI can show a graceful fallback. */
+export declare function sanitizeAssistantText(text: string): string;

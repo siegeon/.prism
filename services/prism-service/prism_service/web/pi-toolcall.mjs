@@ -102,3 +102,28 @@ export function parseTextToolCall(text) {
   const calls = parseTextToolCalls(text);
   return calls.length ? calls[0] : null;
 }
+
+
+/** Small local models often wrap their reply in pseudo-markup the UI must
+ * not show raw: <think>…</think> reasoning, <workflow_state>{…}</workflow_state>
+ * / <tool_call>…</tool_call> fake tags, or a whole-message tool-call JSON blob
+ * the interceptor already executed. Strip those so the customer sees a clean
+ * answer. Returns "" when nothing readable remains (caller shows a fallback). */
+export function sanitizeAssistantText(text) {
+  if (!text) return "";
+  let t = String(text);
+  // paired pseudo-XML blocks (thinking / fake state / tool tags)
+  t = t.replace(
+    /<(think|thinking|reasoning|scratchpad|plan|workflow_state|tool_call|tool_calls|function_call|tool_result)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    "");
+  // any other <xxx_state>…</xxx_state> pseudo tag
+  t = t.replace(/<([a-z][a-z0-9_]*_state)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+  // an unterminated leading think block ("<think> …" with no close)
+  t = t.replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*$/i, "");
+  // a whole-message JSON tool-call blob that survived interception
+  const trimmed = t.trim();
+  if (/^[[{][\s\S]*[}\]]$/.test(trimmed) && parseTextToolCalls(trimmed).length) {
+    return "";
+  }
+  return t.trim();
+}

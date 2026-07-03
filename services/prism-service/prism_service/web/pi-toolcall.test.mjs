@@ -7,7 +7,7 @@
  * Driven by tests/integration/test_pi_multicall_interception.py.
  */
 
-import { parseTextToolCall, parseTextToolCalls } from "./pi-toolcall.mjs";
+import { parseTextToolCall, parseTextToolCalls, sanitizeAssistantText } from "./pi-toolcall.mjs";
 
 let failures = 0;
 function check(label, cond) {
@@ -66,6 +66,18 @@ check("parseTextToolCall single", parseTextToolCall('{"name":"brain_search","arg
 check("parseTextToolCall array-first", parseTextToolCall(
   '[{"name":"first","arguments":{}},{"name":"second","arguments":{}}]')?.name === "first");
 check("parseTextToolCall prose null", parseTextToolCall("hello") === null);
+
+// sanitizeAssistantText — the small-model markup the UI must not show raw.
+check("sanitize strips workflow_state",
+  sanitizeAssistantText('<workflow_state>{"tasks":[]}</workflow_state>') === "");
+check("sanitize strips think keeps answer",
+  sanitizeAssistantText("<think>hmm</think>You have 2 tasks.") === "You have 2 tasks.");
+check("sanitize keeps clean text",
+  sanitizeAssistantText("You have 2 tasks: a and b.") === "You have 2 tasks: a and b.");
+check("sanitize drops whole tool-call blob",
+  sanitizeAssistantText('{"name":"task_list","arguments":{}}') === "");
+check("sanitize strips unterminated think",
+  sanitizeAssistantText("<think>still thinking about the answer here") === "");
 
 if (failures) {
   process.stderr.write(`pi-toolcall.test.mjs: ${failures} assertion(s) failed\n`);
