@@ -368,8 +368,29 @@ def converse(project: str, description: str | None = None,
             except Exception as e:                  # surface, don't crash the turn
                 artifacts = {"error": str(e)[:160]}
 
+    if proj and iv.state == READY and artifacts is None:
+        # Resumed while ready: if the prior build never landed (no ui/app.json
+        # on disk), self-heal by rebuilding NOW instead of advertising a
+        # broken app. A healthy prior build skips this (file exists).
+        from pathlib import Path as _Path
+        from prism_service import config as _config
+        base = _Path(data_dir) if data_dir is not None else _Path(_config.DATA_DIR)
+        built = base / "projects" / proj / "magic_app" / "ui" / "app.json"
+        if not built.is_file():
+            facts = business_facts(iv)
+            record_facts(proj, facts, data_dir)
+            try:
+                artifacts = finalize_build(proj, iv.spec, data_dir=data_dir,
+                                           facts=facts)
+            except Exception as e:
+                artifacts = {"error": str(e)[:160]}
+
+    # HONEST ready: never hand out a preview_url for a failed build — the
+    # panel's "app is ready" banner keys off it (bit on corefit: 502 + no
+    # theme behind a green banner).
     preview_url = None
-    if iv.state == READY:
+    build_failed = isinstance(artifacts, dict) and artifacts.get("error")
+    if iv.state == READY and not build_failed:
         if isinstance(artifacts, dict) and artifacts.get("preview_url"):
             preview_url = artifacts["preview_url"]
         elif proj:

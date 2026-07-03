@@ -254,7 +254,14 @@ def ui(project: str) -> dict:
     sess = mi.load_session(project)
     if sess and sess.get("spec"):
         from prism_service.services import magic_ui as mui
-        return mui.render_ui(sess["spec"])
+        spec = sess["spec"]
+        tokens = None
+        try:  # fallback previews get the SAME per-industry design pass
+            from prism_service.services import design_intel as di
+            tokens = di.design_tokens(spec.get("db") or spec.get("module") or "")
+        except Exception:
+            pass
+        return mui.render_ui(spec, tokens=tokens)
     raise HTTPException(404, f"no built UI for project '{project}'")
 
 

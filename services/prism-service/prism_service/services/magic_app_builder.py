@@ -181,6 +181,13 @@ def normalize_spec(spec: dict) -> dict:
     field (we add the PK), strip a trailing '.<col>' from an fk ref, and DROP
     malformed rules (empty field, or an fk ref that's a placeholder like
     'table'/'..'). Entities with a placeholder/empty name are dropped too."""
+    # A micro-model draft may omit db or module entirely (root cause of the
+    # corefit silent-build failure: db=None made deploy + UI-write throw).
+    # Default them from each other so the renderer ALWAYS has both.
+    if not spec.get("db"):
+        spec["db"] = spec.get("module") or "app"
+    if not spec.get("module"):
+        spec["module"] = spec["db"]
     for ent in spec.get("entities", []):
         ent["name"] = (ent.get("name") or "").strip().lower()
         fields = []
