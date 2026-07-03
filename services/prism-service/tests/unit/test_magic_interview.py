@@ -134,6 +134,9 @@ def test_finalize_build_writes_code_facts_and_endpoints(tmp_path, monkeypatch):
     assert (src / "customers.get.hl").exists()       # their CODE artifact
     assert (src / "business-facts.md").exists()       # their memory artifact
     assert r["brain_docs"] == 3                        # ingested into their BRAIN
+    assert r["memories"] == 1                          # facts -> MEMORY system
+    exp = tmp_path / "projects" / "acme" / "mulch" / "expertise"
+    assert any(exp.glob("*.jsonl"))                    # memory_recall-able
     assert any("customers" in e for e in r["endpoints"])
 
 

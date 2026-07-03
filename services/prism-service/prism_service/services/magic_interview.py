@@ -254,13 +254,35 @@ def finalize_build(project: str, spec: dict, data_dir=None,
         docs = brain.ingest([str(src)])
     except Exception:
         pass
+    # 5. durable MEMORIES — the confirmed business facts land in PRISM's
+    # memory system so memory_recall knows THIS customer's business, and the
+    # completed spec teaches the gap detector (persisted archetype learning).
+    memories = 0
+    try:
+        from prism_service.services.memory_service import MemoryService
+        mem = MemoryService(str(dd / "projects" / project / "mulch"))
+        for i, f in enumerate(facts or []):
+            mem.store(domain="business",
+                      name=f"{f.get('name', 'fact')}-{i}",
+                      description=f.get("text", ""),
+                      type="fact", classification="business-knowledge",
+                      evidence={"source": "magic interview"},
+                      memory_type="semantic")
+            memories += 1
+    except Exception:
+        pass
+    try:
+        from prism_service.services import magic_spec_gaps as _gaps
+        _gaps.learn_from_spec(spec)
+    except Exception:
+        pass
     mod = spec.get("module", project)
     endpoints = []
     for e in spec.get("entities", []) or []:
         endpoints += [f"GET magic/modules/{mod}/{e['name']}",
                       f"POST magic/modules/{mod}/{e['name']}"]
     return {"project": project, "module": mod, "endpoints": endpoints,
-            "source": str(src), "brain_docs": docs,
+            "source": str(src), "brain_docs": docs, "memories": memories,
             "preview_url": f"/magic/preview?project={project}"}
 
 

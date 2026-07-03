@@ -118,7 +118,7 @@ def check_spec(spec: dict, archetypes=None) -> dict:
     """Full completeness check: structural gaps (deterministic) + learned
     gaps (domain-aware). `complete` is False while a blocking gap remains;
     clarifying gaps sharpen the build but don't block."""
-    arch = archetypes if archetypes is not None else ARCHETYPES
+    arch = archetypes if archetypes is not None else current_archetypes()
     gaps = find_gaps(spec) + learned_gaps(spec, arch)
     return {"complete": not any(g["blocking"] for g in gaps),
             "domain": match_domain(spec, arch),
@@ -207,14 +207,66 @@ def learned_gaps(spec: dict, archetypes=ARCHETYPES) -> list[dict]:
     return out[:6]
 
 
-def learn_from_spec(spec: dict, archetypes=ARCHETYPES, domain=None) -> str | None:
+def _learned_path():
+    from pathlib import Path
+    from prism_service import config
+    return Path(config.DATA_DIR) / "magic_learned_archetypes.json"
+
+
+def current_archetypes() -> dict:
+    """Seed ARCHETYPES + everything learned from completed builds, merged.
+    The learned overlay persists in the data dir, so the gap detector's
+    expertise SURVIVES restarts and grows with every customer app."""
+    import copy
+    import json as _json
+    arch = copy.deepcopy(ARCHETYPES)
+    try:
+        raw = _json.loads(_learned_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return arch
+    for dom, d in raw.items():
+        base = arch.setdefault(dom, {"signals": set(), "entities": {}})
+        base["signals"] = set(base.get("signals", set())) | set(d.get("signals", []))
+        for ent, fields in (d.get("entities") or {}).items():
+            cur = base["entities"].setdefault(ent, [])
+            for f in fields:
+                if f not in cur:
+                    cur.append(f)
+    return arch
+
+
+def _save_learned(arch: dict) -> None:
+    import json as _json
+    import os
+    p = _learned_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    out = {d: {"signals": sorted(v.get("signals", [])),
+               "entities": v.get("entities", {})} for d, v in arch.items()}
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(_json.dumps(out, indent=1), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def learn_from_spec(spec: dict, archetypes=None, domain=None) -> str | None:
     """Self-learning hook: fold a COMPLETED build's entities/fields into the
     matched archetype so future asks of this business type get sharper
-    questions. Returns the domain it enriched (or None)."""
-    dom = domain or match_domain(spec, archetypes)
-    if not dom or dom not in archetypes:
+    questions. With no explicit `archetypes`, learning PERSISTS to the data
+    dir; an unmatched vertical becomes a NEW archetype named by the app's
+    db/module (a completed build is ground truth — the dog-grooming salon
+    teaches PRISM what dog-grooming salons need). Returns the domain."""
+    explicit = archetypes is not None
+    arch = archetypes if explicit else current_archetypes()
+    dom = domain or match_domain(spec, arch)
+    if not dom:
+        slug = str(spec.get("db") or spec.get("module") or "").strip()             .lower().replace("_", " ")
+        if not slug:
+            return None
+        dom = slug
+        arch.setdefault(dom, {"signals": {w for w in slug.split() if len(w) > 2},
+                              "entities": {}})
+    if dom not in arch:
         return None
-    ents = archetypes[dom]["entities"]
+    ents = arch[dom]["entities"]
     for e in spec.get("entities", []) or []:
         name = (e.get("name") or "").lower()
         if not name:
@@ -226,4 +278,6 @@ def learn_from_spec(spec: dict, archetypes=ARCHETYPES, domain=None) -> str | Non
                     ents[name].append(fn)
         else:
             ents[name] = [f for f in fields if f]
+    if not explicit:
+        _save_learned(arch)
     return dom
