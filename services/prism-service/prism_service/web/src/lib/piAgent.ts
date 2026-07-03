@@ -122,9 +122,29 @@ function installProvider(cfg: PiConfig): Model<"openai-completions"> {
 // ------------------------------------------------------- PRISM tools
 
 function toolText(payload: unknown): string {
-  const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 1);
+  // JSON.stringify(undefined) is undefined, not a string — the .length read
+  // below then throws "Cannot read properties of undefined" (bit live when a
+  // 0.6b model's junk args produced a result-less response). Coerce always.
+  const text = typeof payload === "string"
+    ? payload
+    : (JSON.stringify(payload, null, 1) ?? String(payload));
   // Small models drown in giant receipts — cap what goes back to the LLM.
   return text.length > 6000 ? `${text.slice(0, 6000)}\n…(truncated)` : text;
+}
+
+/** Deterministic build-intent detector: a first-person business description
+ * ("I run a dog grooming salon… I need to track clients") or an explicit
+ * build ask routes to the interview WITHOUT relying on the chip or on the
+ * micro model's tool choice (both proven unreliable live). Ordinary
+ * questions ("what tasks are pending?") don't match. */
+export function looksLikeBusinessDescription(text: string): boolean {
+  const t = text.toLowerCase();
+  const owner = /\b(i|we)\s+(run|own|manage|operate)\s+an?\s+/.test(t)
+    || /\bmy\s+(business|company|shop|store|clinic|salon|gym|restaurant)\b/.test(t);
+  const need = /\b(i|we)\s+need\s+(an?\s+app|to\s+(track|manage))\b/.test(t)
+    || /\btrack\b/.test(t);
+  const explicit = /\bbuild\s+(me\s+)?(an?\s+)?app\b/.test(t);
+  return explicit || (owner && need);
 }
 
 type PassthroughResponse = { name: string; result: unknown; raw: string };
@@ -392,7 +412,11 @@ export class PiStore {
     // answers into tool args). The model initiates interviews; it does not
     // ferry them. Tradeoff: mid-interview chit-chat is treated as an answer;
     // the interview re-asks anything left unresolved.
-    if (this.buildMode) {
+    if (this.buildMode || looksLikeBusinessDescription(prompt)) {
+      // The chip arms build mode explicitly, but users just TYPE what they
+      // want ("I run a dog grooming salon…") — observed live. A business
+      // description routes to the interview deterministically either way;
+      // the 0.6b model must never pick the tool (it misfires task_create).
       this.buildMode = false;
       await this.callInterview(prompt, { description: prompt });
       return;
