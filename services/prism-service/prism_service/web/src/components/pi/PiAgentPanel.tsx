@@ -139,15 +139,18 @@ export default function PiAgentPanel() {
           </div>
         )}
         {pendingQuestions && (
+          /* ONE question at a time — a conversation, not a form (owner
+             feedback: "these questions can be a queue"). The reply pairs to
+             this question server-side; the card refreshes to the next. */
           <div className="mx-1 px-3 py-2.5 rounded-md border border-[color:var(--border)] bg-[color:var(--surface-raised,rgba(99,102,241,0.08))] text-sm space-y-1.5">
             <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-label)]">
-              PRISM needs a few details
+              Quick question
             </div>
-            <ul className="list-disc pl-4 space-y-1">
-              {pendingQuestions.map((q, i) => <li key={i}>{q}</li>)}
-            </ul>
+            <div>{pendingQuestions[0]}</div>
             <div className="text-xs text-[color:var(--text-muted)]">
-              Answer below — one message per question is fine.
+              {pendingQuestions.length > 1
+                ? `Answer below — ${pendingQuestions.length - 1} more after this.`
+                : "Answer below and we'll get building."}
             </div>
           </div>
         )}

@@ -188,6 +188,29 @@ def normalize_spec(spec: dict) -> dict:
         spec["db"] = spec.get("module") or "app"
     if not spec.get("module"):
         spec["module"] = spec["db"]
+    # Auto-link obvious references so the interview never asks a customer
+    # about ids (owner feedback: "users don't know about ids and such").
+    #   bookings.member_id + a members entity -> fk added silently.
+    #   members.member_id -> the record's own identifier, not a reference.
+    names = {(e.get("name") or "").strip().lower()
+             for e in spec.get("entities", []) or []}
+    for ent in spec.get("entities", []) or []:
+        en = (ent.get("name") or "").strip().lower()
+        own = en[:-1] if en.endswith("s") and len(en) > 3 else en
+        fks = {r.get("field") for r in ent.get("rules", []) or []
+               if r.get("type") == "fk"}
+        for f in ent.get("fields", []) or []:
+            fn = (f.get("name") or "").strip()
+            if not fn.endswith("_id") or fn in fks:
+                continue
+            base = fn[:-3].lower()
+            if base == own or base == en:
+                continue                       # own identifier — no rule, no question
+            target = next((n for n in names
+                           if n in (base, base + "s", base + "es")), None)
+            if target and target != en:
+                ent.setdefault("rules", []).append(
+                    {"type": "fk", "field": fn, "ref": target})
     for ent in spec.get("entities", []):
         ent["name"] = (ent.get("name") or "").strip().lower()
         fields = []

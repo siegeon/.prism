@@ -32,6 +32,12 @@ def _singular(name: str) -> str:
     return name[:-1] if name.endswith("s") and len(name) > 3 else name
 
 
+def _an(word: str) -> str:
+    """'a client' / 'an appointment' — questions read like a person wrote them."""
+    w = str(word).strip()
+    return f"an {w}" if w[:1].lower() in "aeiou" else f"a {w}"
+
+
 def find_gaps(spec: dict) -> list[dict]:
     """Return the ordered list of gaps in a PI-produced spec — structural
     first (blocking), then confidence/clarifying. Each gap carries a
@@ -62,33 +68,42 @@ def find_gaps(spec: dict) -> list[dict]:
         for r in rules:
             if r.get("type") == "fk" and r.get("ref") not in names:
                 ref = r.get("ref")
+                ref_h = str(ref).replace("_", " ")
                 gaps.append(_gap("orphan_fk", en, r.get("field"),
                                  f"'{en}.{r.get('field')}' references '{ref}', "
                                  "which isn't defined.",
-                                 f"You linked {en} to {ref}, but there's no {ref} "
-                                 f"yet — should I create a {ref} table, or did you "
-                                 "mean something else?"))
+                                 f"Each {_singular(en)} is connected to a {ref_h} — "
+                                 f"should your app keep track of {ref_h}s too?"))
         for f in fields:
             fn = f.get("name", "")
             ft = (f.get("type") or "").upper()
             low = fn.lower()
             if fn.endswith("_id") and fn not in fk_fields:
-                target = fn[:-3]
+                # normalize_spec auto-links references whose target entity
+                # exists and silences own-id fields; anything left means the
+                # target is genuinely absent — ask in BUSINESS language
+                # (owner feedback: no ids/tables at the customer).
+                target = fn[:-3].replace("_", " ")
+                own = _singular(en)
+                if fn[:-3].lower() in (en, _singular(en)):
+                    continue                    # own identifier, nothing to ask
                 gaps.append(_gap("unlinked_fk", en, fn,
                                  f"'{en}.{fn}' looks like a reference with no target.",
-                                 f"Should {en}.{fn} always point to an existing "
-                                 f"{target}?"))
+                                 f"Each {own} mentions a {target} — should your "
+                                 f"app also keep a list of {target}s?"))
             if low in _ENUM_HINTS and ft == "TEXT" and fn not in enum_fields:
+                fn_h = fn.replace("_", " ")
                 gaps.append(_gap("missing_enum", en, fn,
                                  f"'{en}.{fn}' has no allowed values.",
-                                 f"What values can a {_singular(en)}'s {fn} be? "
-                                 "(for example: new, paid, shipped)"))
+                                 f"What {fn_h} options should {_an(_singular(en))} "
+                                 "have? (for example: new, paid, shipped)"))
             if any(h == low or h in low for h in _MIN_HINTS) and \
                     ft in ("REAL", "INTEGER") and fn not in min_fields:
+                fn_h = fn.replace("_", " ")
                 gaps.append(_gap("maybe_min", en, fn,
                                  f"'{en}.{fn}' has no bound.",
-                                 f"Can {en}.{fn} be negative, or should it be at "
-                                 "least 0?"))
+                                 f"Should {_an(_singular(en))}'s {fn_h} always be "
+                                 "zero or more?"))
     # blocking gaps first
     gaps.sort(key=lambda g: (not g["blocking"],))
     return gaps
@@ -177,8 +192,8 @@ def learned_gaps(spec: dict, archetypes=ARCHETYPES) -> list[dict]:
         if key not in present:
             out.append(_gap("learned_entity", ent, None,
                             f"{dom} apps usually track '{ent}', which is missing.",
-                            f"{dom.capitalize()} businesses usually also track "
-                            f"{ent} — do you need that?"))
+                            f"Businesses like yours usually also keep track "
+                            f"of {ent} — would that be useful?"))
         else:
             e = next((x for x in spec["entities"]
                       if (x.get("name") or "").lower().rstrip("s") == key), None)
@@ -187,7 +202,7 @@ def learned_gaps(spec: dict, archetypes=ARCHETYPES) -> list[dict]:
                 if tf.lower() not in have and not tf.endswith("_id"):
                     out.append(_gap("learned_field", ent, tf,
                                     f"{ent} usually records '{tf}'.",
-                                    f"Should a {_singular(ent)} also record its "
+                                    f"Should {_an(_singular(ent))} also record its "
                                     f"{tf}?"))
     return out[:6]
 

@@ -49,13 +49,18 @@ class SpecInterview:
 
     def _evaluate(self):
         chk = gaps.check_spec(self.spec)
-        fp = _fingerprint(self.spec)
-        converged = self._prev_fp is not None and self._prev_fp == fp
         if chk["blocking"]:
             state = EXHAUSTED if self.round >= self.max_rounds else CLARIFYING
             return state, chk["blocking"]
-        if chk["clarifying"] and not converged and self.round < self.max_rounds:
-            return CLARIFYING, chk["clarifying"]
+        # Queue semantics (owner feedback: one question at a time): each
+        # clarifying question is asked AT MOST ONCE — a "no" dismisses it
+        # (the spec doesn't change, and find_gaps would otherwise regenerate
+        # it forever), while refine-added entities can surface new ones.
+        # Blocking gaps above are exempt: those must be RESOLVED, not waved off.
+        asked = {a.get("question") for a in self.answered}
+        fresh = [g for g in chk["clarifying"] if g["question"] not in asked]
+        if fresh and self.round < self.max_rounds:
+            return CLARIFYING, fresh
         return READY, []
 
     # --- interview surface -------------------------------------------------
@@ -345,7 +350,7 @@ def converse(project: str, description: str | None = None,
     was_ready = bool(sess) and sess.get("state") == READY
     if not sess:
         seed = desc or " ".join(replies)
-        iv = SpecInterview(draft(seed) if seed else {})
+        iv = SpecInterview(draft(seed) if seed else {}, max_rounds=10)
     else:
         iv = SpecInterview.from_dict(sess)
         if iv.state == CLARIFYING:

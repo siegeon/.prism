@@ -111,7 +111,9 @@ def test_check_spec_reports_domain_and_learned_questions():
             {"name": "patient_id", "type": "INTEGER"}]}]}
     r = g.check_spec(spec)
     assert r["domain"] == "clinic"
-    assert any("usually also track" in q for q in r["questions"])
+    # business-language phrasing (owner feedback 2026-07-03): never label
+    # the customer's domain; suggest, don't jargon.
+    assert any("usually also keep track of" in q for q in r["questions"])
 
 
 def test_learn_from_spec_enriches_archetype():
