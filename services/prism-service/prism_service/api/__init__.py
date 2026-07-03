@@ -22,6 +22,7 @@ from prism_service.api.github_auth import router as github_auth_router
 from prism_service.api.graph import router as graph_router
 from prism_service.api.jobs import router as jobs_router
 from prism_service.api.learning import router as learning_router
+from prism_service.api.magic import router as magic_router
 from prism_service.api.memory import router as memory_router
 from prism_service.api.okf import router as okf_router
 from prism_service.api.pi_runs import router as pi_runs_router
@@ -50,6 +51,7 @@ api_router.include_router(github_auth_router, prefix="/github-auth", tags=["gith
 api_router.include_router(graph_router, prefix="/graph", tags=["graph"])
 api_router.include_router(jobs_router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(learning_router, prefix="/learning", tags=["learning"])
+api_router.include_router(magic_router, prefix="/magic", tags=["magic"])
 api_router.include_router(memory_router, prefix="/memory", tags=["memory"])
 api_router.include_router(okf_router, prefix="/okf", tags=["okf"])
 api_router.include_router(pi_runs_router, prefix="/pi-runs", tags=["pi-runs"])

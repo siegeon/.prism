@@ -675,6 +675,7 @@ class Brain:
     _INDEXABLE_SUFFIXES = {
         ".py", ".ts", ".tsx", ".js", ".jsx",
         ".md", ".yaml", ".yml", ".json", ".txt", ".sh",
+        ".hl",  # Hyperlambda — so PRISM's Brain learns Magic-generated code
     }
 
     _EXCLUDED_PATH_SEGMENTS = {

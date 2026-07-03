@@ -215,6 +215,10 @@ export default function SettingsPage() {
             <SectionLabel>Claude source</SectionLabel>
             <ClaudeSourceCard project={active} />
           </Card>
+          <Card>
+            <SectionLabel>Magic backend</SectionLabel>
+            <MagicConnectionCard />
+          </Card>
         </div>
       )}
 
@@ -3119,5 +3123,129 @@ function ProjectEditor({
         />
       )}
     </form>
+  );
+}
+
+type MagicStatus = {
+  configured: boolean;
+  url: string;
+  user: string;
+  fingerprint: string;
+};
+
+function MagicConnectionCard() {
+  const [status, setStatus] = useState<MagicStatus | null>(null);
+  const [url, setUrl] = useState("");
+  const [user, setUser] = useState("root");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(() => {
+    api.get<MagicStatus>("/api/magic/status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (!status) {
+    return <div className="text-sm opacity-60">Loading…</div>;
+  }
+
+  const clear = async () => {
+    setBusy(true);
+    try {
+      await api.post<MagicStatus>("/api/magic/clear", {});
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (status.configured) {
+    return (
+      <div className="space-y-2">
+        <div className="inline-flex items-center gap-2 text-sm">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200 text-[9px] uppercase tracking-wider">
+            connected
+          </span>
+          <span className="opacity-70 font-mono text-xs">{status.url}</span>
+        </div>
+        <div className="text-[11px] opacity-50 font-mono">
+          credential → {status.fingerprint}
+        </div>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-md border border-[color:var(--midground-base)]/30 text-[10px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
+        >
+          Disconnect
+        </button>
+      </div>
+    );
+  }
+
+  const connect = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.post<MagicStatus>("/api/magic/configure", { url, user, password });
+      setPassword("");
+      load();
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputCls =
+    "w-full px-3 py-2 rounded-md bg-[color:var(--midground-base)]/[0.04] " +
+    "border border-[color:var(--midground-base)]/15 text-xs font-mono " +
+    "focus:outline-none focus:border-[color:var(--midground-base)]/40";
+
+  return (
+    <div className="space-y-3">
+      <div className="inline-flex items-center gap-2 text-sm">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200 text-[9px] uppercase tracking-wider">
+          not connected
+        </span>
+        <span className="opacity-70">
+          Point PRISM at a headless Magic backend. Credentials stay on the
+          server — only a fingerprint is shown here.
+        </span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <input
+          className={inputCls}
+          placeholder="http://localhost:4444"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <input
+          className={inputCls}
+          placeholder="root"
+          value={user}
+          onChange={(e) => setUser(e.target.value)}
+        />
+        <input
+          className={inputCls}
+          type="password"
+          placeholder="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      </div>
+      {error && <div className="text-[11px] text-red-300">{error}</div>}
+      <button
+        type="button"
+        onClick={connect}
+        disabled={busy || !url.trim() || !password.trim()}
+        className="px-3 py-1.5 rounded-md border border-[color:var(--midground-base)]/30 text-[10px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
+      >
+        {busy ? "Connecting…" : "Connect"}
+      </button>
+    </div>
   );
 }
