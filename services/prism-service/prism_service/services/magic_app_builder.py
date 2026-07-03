@@ -170,17 +170,39 @@ def render_add_endpoint(entity: dict, db: str) -> str:
 # --- assembly + deploy ------------------------------------------------------
 
 
+# placeholder tokens a small model emits when it doesn't know a real value
+_PLACEHOLDERS = {"", "table", "..", "...", "x", "entity", "field", "name",
+                 "string", "text", "value", "foo", "bar"}
+
+
 def normalize_spec(spec: dict) -> dict:
-    """Tolerate reasonable variation from a small model: drop any explicit
-    'id' field (we always add the PK), strip a trailing '.<col>' from an fk
-    ref down to the table name, and default a missing rules list."""
+    """Canonicalize a small-model spec so the pipeline is stable regardless of
+    SLM wobble: lowercase/strip entity + field names, drop the explicit 'id'
+    field (we add the PK), strip a trailing '.<col>' from an fk ref, and DROP
+    malformed rules (empty field, or an fk ref that's a placeholder like
+    'table'/'..'). Entities with a placeholder/empty name are dropped too."""
     for ent in spec.get("entities", []):
-        ent["fields"] = [f for f in ent.get("fields", [])
-                         if f.get("name", "").lower() != "id"]
-        ent.setdefault("rules", [])
-        for r in ent["rules"]:
-            if r.get("type") == "fk" and "." in r.get("ref", ""):
-                r["ref"] = r["ref"].split(".")[0]
+        ent["name"] = (ent.get("name") or "").strip().lower()
+        fields = []
+        for f in ent.get("fields", []) or []:
+            fn = (f.get("name") or "").strip()
+            if fn and fn.lower() != "id":
+                f["name"] = fn
+                fields.append(f)
+        ent["fields"] = fields
+        clean = []
+        for r in ent.get("rules", []) or []:
+            if not (r.get("field") or "").strip():
+                continue
+            if r.get("type") == "fk":
+                ref = (r.get("ref") or "").split(".")[0].strip().lower()
+                if ref in _PLACEHOLDERS:
+                    continue  # drop garbage fk (no real target)
+                r["ref"] = ref
+            clean.append(r)
+        ent["rules"] = clean
+    spec["entities"] = [e for e in spec.get("entities", [])
+                        if e.get("name") and e["name"] not in _PLACEHOLDERS]
     return spec
 
 
