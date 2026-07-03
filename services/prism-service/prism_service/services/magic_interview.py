@@ -88,7 +88,8 @@ class SpecInterview:
         return {"spec": self.spec, "max_rounds": self.max_rounds,
                 "round": self.round, "answered": self.answered,
                 "prev_fp": self._prev_fp, "state": self.state,
-                "pending": self.pending}
+                "pending": self.pending,
+                "description": getattr(self, "description", "")}
 
     @classmethod
     def from_dict(cls, d: dict) -> "SpecInterview":
@@ -97,6 +98,7 @@ class SpecInterview:
         obj.round = d.get("round", 0); obj.answered = d.get("answered", [])
         obj._prev_fp = d.get("prev_fp")
         obj.state = d.get("state"); obj.pending = d.get("pending", [])
+        obj.description = d.get("description", "")
         return obj
 
 
@@ -154,6 +156,10 @@ def business_facts(iv: "SpecInterview") -> list[dict]:
     the interview is READY: the domain, the entities/rules they confirmed, and
     every Q&A. Recorded as memories so PRISM's brain becomes their expert."""
     facts: list[dict] = []
+    desc = getattr(iv, "description", "")
+    if desc:
+        facts.append({"name": "in-their-words",
+                      "text": f"The owner describes the business: {desc}"})
     dom = iv.domain()
     if dom:
         facts.append({"name": f"domain-{dom}",
@@ -216,11 +222,13 @@ def finalize_build(project: str, spec: dict, data_dir=None,
         # from the confirmed domain fact or the app's db/module name,
         # then let design_intel pick a tasteful per-vertical palette. A
         # design failure falls back to neutral tokens, never blocks.
+        # the customer's own words are the strongest design signal ("I run
+        # a dog grooming salon" -> salon palette); db/module is the fallback.
         industry = spec.get("db") or spec.get("module") or ""
-        for _f in (facts or []):
-            if str(_f.get("name", "")).startswith("domain-"):
-                industry = _f["name"][len("domain-"):] or industry
-                break
+        words = " ".join(f.get("text", "") for f in (facts or [])
+                         if f.get("name") == "in-their-words")
+        if words:
+            industry = words
         try:
             tokens = di.design_tokens(industry)
         except Exception:
@@ -246,7 +254,10 @@ def finalize_build(project: str, spec: dict, data_dir=None,
         tokens2 = None
         try:
             from prism_service.services import design_intel as di2
-            tokens2 = di2.design_tokens(spec.get("db") or spec.get("module") or "")
+            seed2 = " ".join(f.get("text", "") for f in (facts or [])
+                             if f.get("name") == "in-their-words") \
+                or spec.get("db") or spec.get("module") or ""
+            tokens2 = di2.design_tokens(seed2)
         except Exception:
             pass
         html = mui2.render_frontend(spec, tokens=tokens2)
@@ -393,6 +404,7 @@ def converse(project: str, description: str | None = None,
     if not sess:
         seed = desc or " ".join(replies)
         iv = SpecInterview(draft(seed) if seed else {}, max_rounds=10)
+        iv.description = seed          # their words drive the design pass
     else:
         iv = SpecInterview.from_dict(sess)
         if iv.state == CLARIFYING:

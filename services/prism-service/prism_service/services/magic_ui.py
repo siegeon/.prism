@@ -107,45 +107,90 @@ _FRONTEND_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__APP__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=__FONT__:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root { __TOKENS__ }
 * { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
 body { background: var(--app-bg); color: var(--app-fg);
-  font-family: var(--app-font); min-height: 100vh; padding: 24px; }
-h1 { font-size: 26px; margin-bottom: 4px; }
-.sub { color: var(--app-muted); font-size: 13px; margin-bottom: 18px; }
-.tabs { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
-.tab { padding: 7px 16px; border-radius: 999px; border: 1px solid var(--app-border);
-  background: transparent; color: var(--app-muted); font-weight: 600;
-  cursor: pointer; font-size: 14px; }
-.tab.on { background: var(--app-brand); color: #fff; border-color: var(--app-brand); }
+  font-family: var(--app-font); min-height: 100vh;
+  padding: clamp(16px, 4vw, 48px); line-height: 1.5; }
+.shell { max-width: 980px; margin: 0 auto; }
+header { margin-bottom: 28px; }
+h1 { font-size: clamp(26px, 4vw, 38px); font-weight: 800;
+  letter-spacing: -0.02em; }
+h1::after { content: ""; display: block; width: 56px; height: 4px;
+  margin-top: 10px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--app-brand), var(--app-accent)); }
+.sub { color: var(--app-muted); font-size: 13px; margin-top: 10px;
+  text-transform: uppercase; letter-spacing: 0.14em; }
+.tabs { display: flex; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
+.tab { padding: 8px 18px; border-radius: 999px;
+  border: 1px solid var(--app-border); background: var(--app-surface);
+  color: var(--app-muted); font-weight: 600; cursor: pointer;
+  font-size: 14px; font-family: inherit;
+  transition: transform .12s ease, box-shadow .12s ease, color .12s ease; }
+.tab:hover { transform: translateY(-1px); color: var(--app-fg);
+  box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+.tab.on { background: var(--app-brand); color: #fff;
+  border-color: var(--app-brand);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--app-brand) 45%, transparent); }
 .card { background: var(--app-surface); border: 1px solid var(--app-border);
-  border-radius: var(--app-radius); padding: 18px; margin-bottom: 16px;
-  max-width: 960px; }
-.card h2 { font-size: 16px; margin-bottom: 12px; text-transform: capitalize; }
-form { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
-  color: var(--app-muted); text-transform: capitalize; }
+  border-radius: var(--app-radius); padding: 22px 24px; margin-bottom: 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06); }
+.card h2 { font-size: 15px; margin-bottom: 16px; text-transform: capitalize;
+  letter-spacing: 0.01em; display: flex; align-items: center; gap: 8px; }
+.card h2::before { content: ""; width: 8px; height: 8px; border-radius: 3px;
+  background: var(--app-accent); display: inline-block; }
+form { display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+label { display: flex; flex-direction: column; gap: 6px; font-size: 12px;
+  font-weight: 600; color: var(--app-muted); text-transform: capitalize;
+  letter-spacing: 0.03em; }
 input, select { background: var(--app-bg); color: var(--app-fg);
-  border: 1px solid var(--app-border); border-radius: 8px; padding: 9px 10px;
-  font-size: 14px; font-family: inherit; }
-.actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+  border: 1px solid var(--app-border); border-radius: 10px;
+  padding: 10px 12px; font-size: 14px; font-family: inherit;
+  transition: border-color .12s ease, box-shadow .12s ease; }
+input:focus, select:focus { outline: none; border-color: var(--app-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-brand) 25%, transparent); }
+.actions { grid-column: 1 / -1; display: flex; align-items: center;
+  gap: 14px; margin-top: 2px; }
 button.add { background: var(--app-brand); color: #fff; border: 0;
-  border-radius: 8px; padding: 10px 22px; font-weight: 700; cursor: pointer;
-  font-size: 14px; }
-.msg { font-size: 13px; color: var(--app-accent); }
+  border-radius: 10px; padding: 11px 26px; font-weight: 700;
+  cursor: pointer; font-size: 14px; font-family: inherit;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--app-brand) 40%, transparent);
+  transition: transform .12s ease, filter .12s ease; }
+button.add:hover { transform: translateY(-1px); filter: brightness(1.08); }
+button.add:active { transform: translateY(0); }
+.msg { font-size: 13px; font-weight: 600; color: var(--app-accent); }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; padding: 8px 10px; color: var(--app-muted);
-  border-bottom: 1px solid var(--app-border); text-transform: capitalize; }
-td { padding: 8px 10px; border-bottom: 1px solid var(--app-border); }
-.empty { color: var(--app-muted); font-style: italic; text-align: center; padding: 16px; }
+th { text-align: left; padding: 10px 12px; color: var(--app-muted);
+  border-bottom: 2px solid var(--app-border); text-transform: capitalize;
+  font-size: 12px; letter-spacing: 0.06em; }
+td { padding: 11px 12px; border-bottom: 1px solid var(--app-border); }
+tbody tr { transition: background .12s ease; }
+tbody tr:hover { background: color-mix(in srgb, var(--app-brand) 7%, transparent); }
+.pill { display: inline-block; padding: 3px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 600;
+  background: color-mix(in srgb, var(--app-accent) 18%, transparent);
+  color: var(--app-accent); text-transform: capitalize; }
+.empty { color: var(--app-muted); font-style: italic; text-align: center;
+  padding: 22px; }
+footer { color: var(--app-muted); font-size: 12px; text-align: center;
+  margin-top: 26px; opacity: .8; }
 </style>
 </head>
 <body>
+<div class="shell">
+<header>
 <h1>__APP__</h1>
 <div class="sub">built with PRISM &middot; running on Magic</div>
+</header>
 <div class="tabs" id="tabs"></div>
 <div id="view"></div>
+<footer>Generated for you &middot; every rule you confirmed is enforced by the backend</footer>
+</div>
 <script>
 var APP = __SPEC__;
 var cur = APP.entities[0].name;
@@ -228,7 +273,11 @@ function load() {
       }
       rows.forEach(function (r) {
         tb.appendChild(h("tr", {}, e.fields.map(function (f) {
-          return h("td", { text: r[f.name] == null ? "" : String(r[f.name]) });
+          var val = r[f.name] == null ? "" : String(r[f.name]);
+          if (val && enumOf(e, f.name)) {
+            return h("td", {}, [h("span", { class: "pill", text: val })]);
+          }
+          return h("td", { text: val });
         })));
       });
     });
@@ -255,7 +304,10 @@ def render_frontend(spec: dict, tokens: dict | None = None) -> str:
                              "rules": _rules_payload(e)}
                             for e in spec["entities"]]}
     css = " ".join(f"{k}: {v};" for k, v in tokens.items())
+    font = (tokens.get("--app-font", "").split(",")[0]
+            .strip().strip("'\"")) or "Inter"
     html = _FRONTEND_TEMPLATE
+    html = html.replace("__FONT__", font.replace(" ", "+"))
     html = html.replace("__APP__", _title(spec.get("db") or spec["module"]))
     html = html.replace("__TOKENS__", css)
     html = html.replace("__SPEC__", json.dumps(payload))
