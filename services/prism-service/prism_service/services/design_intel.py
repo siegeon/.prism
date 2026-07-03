@@ -262,6 +262,13 @@ def design_tokens(industry_or_text: str) -> dict:
         return dict(_GENERIC)
     if text in _BY_KEY:
         return dict(_BY_KEY[text]["tokens"])
+    # Token-exact beats BM25: db/module names like "gym_management" carry the
+    # industry as one token plus noise words ("management") that drag the
+    # ranked match toward generic. Any single token that IS an industry key
+    # resolves deterministically.
+    for tok in re.split(r"[^a-z0-9]+", text):
+        if tok in _BY_KEY:
+            return dict(_BY_KEY[tok]["tokens"])
     idx, score = _INDEX.best(text)
     if idx < 0 or score <= 0:
         return dict(_GENERIC)
