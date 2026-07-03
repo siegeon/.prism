@@ -66,11 +66,10 @@ class InstrumentedEngine:
         self.fail_ids = set(fail_ids)
         self.raise_ids = set(raise_ids)
         self._lock = threading.Lock()
-        # TaskService rides ONE sqlite connection — not thread-safe. A
-        # real concurrent deployment gives each drive its own handle;
-        # this stub serializes just the db touch (the sleep — the
-        # overlap window — stays OUTSIDE it, so peak>=2 is still real).
-        self._db_lock = threading.Lock()
+        # TaskService is thread-safe (task 0584addb: per-thread sqlite
+        # connections), so the db touch below runs RAW on the drive
+        # thread — no serialization shim; this test now proves genuine
+        # db-layer concurrency, not just engine-level overlap.
         self._running = 0
         self.peak = 0
         self.calls: list[tuple[str, dict]] = []
@@ -90,11 +89,10 @@ class InstrumentedEngine:
                         "final_step": "story_gate", "gate_state": "failed",
                         "reason": "story_gate latched failed: rubric said no",
                         "stats": {"overrides": 0}}
-            with self._db_lock:
-                child = self.task_svc.get(task_id)
-                self.gated_proof_types[task_id] = child.proof_type
-                self.task_svc.update(task_id, status="done",
-                                     completion_proof=STRONG_PROOF)
+            child = self.task_svc.get(task_id)
+            self.gated_proof_types[task_id] = child.proof_type
+            self.task_svc.update(task_id, status="done",
+                                 completion_proof=STRONG_PROOF)
             return {"ok": True, "task_id": task_id,
                     "final_step": "plan_gate", "gate_state": "passed",
                     "stats": {"overrides": 0}}

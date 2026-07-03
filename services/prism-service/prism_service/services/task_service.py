@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -114,10 +115,19 @@ class TaskService:
         self, db_path: str, embed_fn: Optional[EmbedFn] = None,
         scores_db: Optional[str] = None,
     ) -> None:
-        self._db = sqlite3.connect(db_path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA busy_timeout=5000")
+        # THREAD-SAFE STORAGE (task 0584addb, PR #196 follow-up): one
+        # sqlite connection PER THREAD via a thread-local factory — the
+        # old single shared handle (check_same_thread=False) let
+        # concurrent DriveEngine drives interleave statements/commits
+        # (None reads, "cannot commit - no transaction is active").
+        # Explicitly NOT a global serialize-everything lock (would kill
+        # the fan-out concurrency) and NOT WAL-only (WAL + busy_timeout
+        # are complements below; the per-thread handle is the fix).
+        self._db_path = db_path
+        self._tlocal = threading.local()
+        # Schema create + column migration run ONCE here, on the
+        # constructing thread's connection; other threads' lazy
+        # connections open the same, already-migrated db file.
         self._db.executescript(_CREATE_TASKS_SQL)
         self._migrate_task_columns()
         # LL task-session association lives in scores.db (alongside
@@ -139,6 +149,28 @@ class TaskService:
         # (e.g. hook smoke tests); create/update still succeeds, the
         # row just lacks an embedding until re-indexed.
         self._embed_fn: Optional[EmbedFn] = embed_fn
+
+    # ------------------------------------------------------------------
+    # Per-thread connection factory (task 0584addb)
+    # ------------------------------------------------------------------
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The CALLING thread's connection to tasks.db, opened lazily and
+        cached in a thread-local — every method body (and the tests that
+        poke ``svc._db`` directly) keeps reading ``self._db`` unchanged,
+        but no two threads ever share a handle. WAL lets readers overlap
+        the single writer; busy_timeout queues cross-connection writes
+        instead of erroring. Connections belonging to finished threads
+        are reclaimed with their thread-local slot at GC."""
+        conn = getattr(self._tlocal, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._tlocal.conn = conn
+        return conn
 
     # ------------------------------------------------------------------
     # LL-03 helper: write an embedding for the given task if we can
