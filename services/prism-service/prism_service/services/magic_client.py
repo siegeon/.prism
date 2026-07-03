@@ -61,8 +61,11 @@ def _request(url: str, method: str = "GET", token: str | None = None,
         return {}
     try:
         return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise MagicError(f"magic returned non-json: {raw[:200]}") from e
+    except json.JSONDecodeError:
+        # The evaluator (and other Hyperlambda endpoints) legitimately
+        # return raw Hyperlambda text — caught against the real v22
+        # backend, invisible to mocks. Non-JSON is a result, not an error.
+        return {"result": raw}
 
 
 # --- auth ------------------------------------------------------------------
