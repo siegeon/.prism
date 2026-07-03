@@ -31,6 +31,49 @@ def check_spec(body: CheckSpecBody) -> dict:
     return magic_spec_gaps.check_spec(body.spec)
 
 
+class InterviewBody(BaseModel):
+    spec: dict = {}          # start a new interview from this draft spec
+    session: dict = {}       # OR resume a serialized interview
+    answers: list = []       # [{question, answer}] to apply this turn
+
+
+@router.post("/interview")
+def interview(body: InterviewBody) -> dict:
+    """Reverse-engineering interview, one turn. Start with `spec`, or resume
+    with `session` + `answers`. Returns the state machine's state + the next
+    questions + the running spec + the serialized session (persist it in
+    memory / re-post it next turn). Consistency is the state machine's job."""
+    from prism_service.services import magic_interview as mi
+    import json as _json
+    import re as _re
+
+    def refine(spec: dict, answered: list) -> dict:
+        qa = "\n".join(f"Q: {a['question']}\nA: {a['answer']}" for a in answered)
+        prompt = (f"Current app spec (JSON):\n{_json.dumps(spec)}\n\n"
+                  f"Clarifications from the customer:\n{qa}\n\nOutput the "
+                  "UPDATED app spec incorporating the clarifications, same JSON "
+                  "shape. Output ONLY JSON.")
+        try:
+            text, _ = magic_ai.local_complete(
+                [{"role": "system", "content": "You update a JSON app spec."},
+                 {"role": "user", "content": prompt}])
+            m = _re.search(r"\{.*\}", _re.sub(r"<think>.*?</think>", "", text,
+                                              flags=_re.DOTALL), _re.DOTALL)
+            return _json.loads(m.group(0)) if m else spec
+        except Exception:
+            return spec  # SLM hiccup: leave spec unchanged, state machine copes
+
+    if body.session:
+        iv = mi.SpecInterview.from_dict(body.session)
+        if body.answers:
+            iv.answer(body.answers, refine)
+    else:
+        iv = mi.SpecInterview(body.spec)
+    return {"state": iv.state, "domain": iv.domain(),
+            "questions": iv.questions(), "spec": iv.spec,
+            "round": iv.round, "session": iv.to_dict()}
+
+
 class ConfigureBody(BaseModel):
     url: str
     user: str = "root"
