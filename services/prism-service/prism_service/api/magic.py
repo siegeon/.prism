@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from prism_service.services import magic_client as mc
 from prism_service.services import magic_app_builder as ab
+from prism_service.services import magic_ai
 
 router = APIRouter()
 
@@ -87,6 +88,29 @@ def endpoints():
         return mc.endpoints()
     except mc.MagicError as e:
         raise HTTPException(502, f"magic endpoints failed: {e}")
+
+
+class AiBody(BaseModel):
+    query: str
+    project: str = ""
+
+
+@router.post("/ai")
+def ai(body: AiBody) -> dict:
+    """OpenAI-free AI generate: PRISM's Brain is the memory substrate and a
+    local model (ollama) is the generator. Zero OpenAI/Anthropic tokens."""
+    def retrieve(query: str, k: int = 5) -> list[str]:
+        try:
+            from prism_service.api._context import get_project  # type: ignore
+            ctx = get_project(body.project) if body.project else None
+            hits = ctx.brain_svc.search(query, limit=k) if ctx else []
+            return magic_ai.make_brain_retriever(lambda q, lim: hits)(query, k)
+        except Exception:
+            return []
+    try:
+        return magic_ai.ai_generate(body.query, retrieve)
+    except magic_ai.LocalLLMError as e:
+        raise HTTPException(502, f"local model failed: {e}")
 
 
 class BuildAppBody(BaseModel):

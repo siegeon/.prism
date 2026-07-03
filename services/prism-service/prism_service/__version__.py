@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.24"
+PRISM_VERSION = "8.0.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v8.0.0: self-improvement-engine fork rebased to the 8.x line. Kills the "
+    "OpenAI dependency for Magic AI: PRISM is the MEMORY SUBSTRATE (retrieval "
+    "over vectorized content via the Brain) and the local 7B (ollama, "
+    "OpenAI-wire-compatible) is the generator — services/magic_ai.py + POST "
+    "/api/magic/ai. Zero Anthropic/OpenAI tokens; a one-time migration ingests "
+    "training content into the Brain. Builds on v6.7.24's deterministic Magic "
+    "app renderer. "
     "v6.7.24: PRISM as the expert USER of Magic — services/magic_app_builder "
     "deterministically renders a structured app spec (entities + fk/min/enum "
     "rules) into WHITESPACE-PERFECT Hyperlambda and deploys it (POST "
