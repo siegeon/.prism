@@ -39,7 +39,8 @@ import {
   type PiStore,
 } from "@/lib/piAgent";
 
-const SUGGESTED = ["What tasks are pending?", "What is in this project's brain?", "Build me an app for my business…"];
+const BUILD_CHIP = "Build me an app for my business…";
+const SUGGESTED = ["What tasks are pending?", "What is in this project's brain?", BUILD_CHIP];
 
 export default function PiAgentPanel() {
   const [project] = useProject();
@@ -103,7 +104,14 @@ export default function PiAgentPanel() {
                 <button
                   key={s}
                   type="button"
-                  onClick={() => { if (!store.busy) void store.send(s); }}
+                  // The build chip ARMS build mode (next message = business
+                  // description, routed deterministically to the interview);
+                  // the others are ordinary model prompts.
+                  onClick={() => {
+                    if (store.busy) return;
+                    if (s === BUILD_CHIP) store.startBuildMode();
+                    else void store.send(s);
+                  }}
                   className="text-left px-2.5 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--surface-3)] transition-colors text-xs"
                 >
                   {s}
@@ -118,6 +126,18 @@ export default function PiAgentPanel() {
             micro model is never trusted to voice them (task 651cea3b). The
             customer answers in the chat below; store.send routes the reply
             straight to the state machine. */}
+        {store.buildMode && (
+          <div className="mx-1 px-3 py-2.5 rounded-md border border-[color:var(--border)] bg-[color:var(--surface-raised,rgba(99,102,241,0.08))] text-sm">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-label)] mb-1">
+              Let&apos;s build your app
+            </div>
+            <div className="text-[color:var(--text-muted)] text-xs">
+              Describe your business and what you need to track — e.g.
+              &ldquo;I run a small gym. I need to track members and class
+              bookings.&rdquo;
+            </div>
+          </div>
+        )}
         {pendingQuestions && (
           <div className="mx-1 px-3 py-2.5 rounded-md border border-[color:var(--border)] bg-[color:var(--surface-raised,rgba(99,102,241,0.08))] text-sm space-y-1.5">
             <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-label)]">

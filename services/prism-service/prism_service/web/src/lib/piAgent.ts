@@ -392,8 +392,13 @@ export class PiStore {
     // answers into tool args). The model initiates interviews; it does not
     // ferry them. Tradeoff: mid-interview chit-chat is treated as an answer;
     // the interview re-asks anything left unresolved.
+    if (this.buildMode) {
+      this.buildMode = false;
+      await this.callInterview(prompt, { description: prompt });
+      return;
+    }
     if (this.pendingInterviewQuestions()) {
-      await this.answerInterview(prompt);
+      await this.callInterview(prompt, { answers: [prompt] });
       return;
     }
     try {
@@ -403,6 +408,20 @@ export class PiStore {
       this.busy = false;
       this.emit();
     }
+  }
+
+  /** Build mode: armed by the "Build me an app" chip. The NEXT message is
+   * the business description and routes straight to magic_interview — the
+   * micro model's tool CHOICE is as unreliable as its relaying (observed:
+   * 0.6b answered the same description with task_create one run and
+   * magic_interview the next), so initiation is deterministic too. */
+  buildMode = false;
+
+  startBuildMode() {
+    if (this.busy) return;
+    this.buildMode = true;
+    this.interacted = true;
+    this.emit();
   }
 
   /** Questions from the most recent magic_interview turn, while the
@@ -423,24 +442,24 @@ export class PiStore {
     return null;
   }
 
-  /** Feed the customer's chat reply to the interview state machine directly
-   * (no model in the loop). Pushes the user bubble + a live tool row, executes
-   * magic_interview {answers:[reply]}, and lets the deterministic card render
-   * the next questions or the READY banner. */
-  private async answerInterview(reply: string) {
+  /** Drive the interview state machine directly (no model in the loop).
+   * Pushes the customer's bubble + a live tool row, executes magic_interview
+   * with the given args ({description} to start, {answers} to advance), and
+   * lets the deterministic card render the next questions or READY banner. */
+  private async callInterview(userText: string, args: Record<string, unknown>) {
     const tool = this.tools.find((t) => t.name === "magic_interview");
-    if (!tool) { void this.agent.prompt(reply); return; } // catalog missing: fall back
+    if (!tool) { void this.agent.prompt(userText); return; } // catalog missing: fall back
     this.busy = true;
-    this.items.push({ kind: "user", text: reply });
+    this.items.push({ kind: "user", text: userText });
     const row: Extract<PiItem, { kind: "tool" }> = {
       kind: "tool", callId: `iv-${Date.now()}`, name: "magic_interview",
-      label: "magic_interview", args: { answers: [reply] }, status: "running",
+      label: "magic_interview", args, status: "running",
     };
     this.items.push(row);
     this.emit();
     const t0 = performance.now();
     try {
-      const res = await tool.execute(row.callId, { answers: [reply] });
+      const res = await tool.execute(row.callId, args);
       const details = (res as { details?: { result?: unknown; ms?: number } }).details;
       row.status = "ok";
       row.result = details?.result ?? res;
