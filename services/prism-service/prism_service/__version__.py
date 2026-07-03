@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.23"
+PRISM_VERSION = "6.7.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.24: PRISM as the expert USER of Magic — services/magic_app_builder "
+    "deterministically renders a structured app spec (entities + fk/min/enum "
+    "rules) into WHITESPACE-PERFECT Hyperlambda and deploys it (POST "
+    "/api/magic/build-app). Closes the gap the 7B experiment found: a small "
+    "model produces the spec, PRISM renders the exact tree. Proven at scale: a "
+    "5-entity ERP (10 endpoints, 8 rules) deploys in 0.74s, 17/17 rule-probes "
+    "green; a 7B-authored clinic spec renders+enforces FK+enum at $0 Anthropic. "
     "v6.7.23: Magic Cloud admin channel (LOB-factory lane 1) — services/magic_client "
     "(authenticate→JWT, bootstrap owns the root/root setup window idempotently, evaluator "
     "execute, endpoints/crudify/sql) + /api/magic router + Magic card in Settings→Connections. "

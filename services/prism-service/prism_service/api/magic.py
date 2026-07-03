@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from prism_service.services import magic_client as mc
+from prism_service.services import magic_app_builder as ab
 
 router = APIRouter()
 
@@ -86,3 +87,21 @@ def endpoints():
         return mc.endpoints()
     except mc.MagicError as e:
         raise HTTPException(502, f"magic endpoints failed: {e}")
+
+
+class BuildAppBody(BaseModel):
+    spec: dict
+
+
+@router.post("/build-app")
+def build_app(body: BuildAppBody) -> dict:
+    """PRISM as expert user of Magic: render a structured app spec into
+    whitespace-perfect Hyperlambda and deploy it to the connected tenant.
+    The spec is what a small model can reliably produce; the render is
+    deterministic so the built app always parses."""
+    try:
+        return ab.deploy_app(body.spec)
+    except mc.MagicError as e:
+        raise HTTPException(502, f"magic build-app failed: {e}")
+    except (KeyError, TypeError) as e:
+        raise HTTPException(400, f"invalid app spec: {e}")
