@@ -1350,6 +1350,20 @@ TOOLS: list[Tool] = [
                         "green_gate a captured full-suite-green)."
                     ),
                 },
+                "re_verify": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "HONEST re-verify of a FAILED gate (NOT an "
+                        "override): resets the latched failure and re-runs "
+                        "the verifier/rubric fresh, releasing ONLY on "
+                        "merit — no manual-override audit row. Use after "
+                        "fixing the named gap on a failed rubric gate "
+                        "(story_gate/plan_gate) instead of override=true. "
+                        "Inert when override is also passed (override "
+                        "wins); a still-failing slice stays failed."
+                    ),
+                },
                 "actor": {
                     "type": "string",
                     "description": (
@@ -4113,6 +4127,11 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 arguments["action"],
                 reason=arguments.get("reason", ""),
                 override=bool(arguments.get("override", False)),
+                # HONEST RE-VERIFY (task 755724ea): thread re_verify through
+                # to gate_decide — mirrors REST api/conductor.py. Without it
+                # a failed rubric gate was only recoverable over MCP via
+                # override=true (the exact wrong incentive).
+                re_verify=bool(arguments.get("re_verify", False)),
                 session_id=_sid,
                 actor=_actor,
             )

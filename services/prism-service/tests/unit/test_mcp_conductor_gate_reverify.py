@@ -150,7 +150,11 @@ def test_mcp_re_verify_recovers_failed_rubric_gate(tmp_path, monkeypatch):
     assert res["gate_state"] == "passed"
     assert res.get("override") is not True, "honest release, not an override"
     assert res.get("re_verify") is True
-    assert _task_svc(pid).get(tid).gate_state == "passed"
+    # The release auto-advances PAST the gate (gate_state resets on the
+    # next non-gate step) — the task is now on verify_plan.
+    snap = _task_svc(pid).get(tid)
+    assert snap.workflow_step == "verify_plan"
+    assert snap.gate_state != "failed"
     # No manual-override audit row anywhere on this task.
     assert _manual_override_rows(pid, tid) == []
 
