@@ -79,6 +79,25 @@ check("sanitize drops whole tool-call blob",
 check("sanitize strips unterminated think",
   sanitizeAssistantText("<think>still thinking about the answer here") === "");
 
+// XML-form tool calls — the shape the SMALLEST models emit (screenshot repro).
+const xml = parseTextToolCalls(
+  '<task_list><assigned_agent>PRISM</assigned_agent><status>pending</status> </task_list>');
+check("xml -> 1 call", xml.length === 1);
+check("xml name", xml[0]?.name === "task_list");
+check("xml child args", xml[0]?.args?.status === "pending" && xml[0]?.args?.assigned_agent === "PRISM");
+check("xml attrs -> args",
+  parseTextToolCalls('<task_list status="pending"></task_list>')[0]?.args?.status === "pending");
+check("xml two elements -> 2 calls",
+  parseTextToolCalls('<brain_search><query>x</query></brain_search><task_list></task_list>').length === 2);
+check("xml prose not a call", parseTextToolCalls("I think we should ship.").length === 0);
+
+// sanitize hides an XML tool blob that never ran, so the customer never sees raw markup.
+check("sanitize strips raw xml tool call",
+  sanitizeAssistantText(
+    '<task_list><assigned_agent>PRISM</assigned_agent><status>pending</status></task_list>') === "");
+check("sanitize keeps prose around nothing-xml",
+  sanitizeAssistantText("You have 3 pending tasks.") === "You have 3 pending tasks.");
+
 if (failures) {
   process.stderr.write(`pi-toolcall.test.mjs: ${failures} assertion(s) failed\n`);
   process.exit(1);

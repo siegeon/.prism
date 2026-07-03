@@ -19,3 +19,7 @@ export declare function parseTextToolCall(text: string): ParsedToolCall | null;
  * tool-call JSON) from assistant text before rendering. "" when nothing
  * human-facing remains, so the UI can show a graceful fallback. */
 export declare function sanitizeAssistantText(text: string): string;
+
+/** Parse XML-form tool calls (`<tool_name><field>v</field></tool_name>`) the
+ * smallest models emit instead of JSON. Ordered list; [] when not XML. */
+export declare function parseXmlToolCalls(text: string): ParsedToolCall[];

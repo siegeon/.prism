@@ -65,14 +65,44 @@ function scanJsonValues(text) {
   return values;
 }
 
+/** Parse XML-form tool calls the way the SMALLEST models emit them, e.g.
+ * `<task_list><status>pending</status></task_list>` instead of JSON. Each
+ * top-level `<tool_name …>…</tool_name>` element becomes one {name,args}:
+ * the tag is the tool name, root attributes and `<field>value</field>`
+ * children become args. Returns an ORDERED LIST; [] when the text isn't an
+ * XML element block. The caller still validates each name against the live
+ * tool catalog, so non-tool XML simply never runs. */
+export function parseXmlToolCalls(text) {
+  const t = (text || "").trim();
+  if (!t.startsWith("<")) return [];
+  const calls = [];
+  // top-level element: <tag attrs?> inner </tag>, tag = identifier.
+  const elRe = /<([a-zA-Z_][\w-]*)((?:\s+[\w:-]+\s*=\s*"[^"]*")*)\s*>([\s\S]*?)<\/\1\s*>/g;
+  let m;
+  while ((m = elRe.exec(t)) !== null) {
+    const name = m[1];
+    const args = {};
+    const attrRe = /([\w:-]+)\s*=\s*"([^"]*)"/g;
+    let a;
+    while ((a = attrRe.exec(m[2] || "")) !== null) args[a[1]] = a[2];
+    const childRe = /<([a-zA-Z_][\w-]*)\s*>([\s\S]*?)<\/\1\s*>/g;
+    let c;
+    while ((c = childRe.exec(m[3] || "")) !== null) args[c[1]] = c[2].trim();
+    calls.push({ name, args });
+  }
+  return calls;
+}
+
 /** Parse an assistant text that IS a tool-call block into an ORDERED LIST
  * of {name,args}. Handles: a bare or ```json-fenced single object; a
- * top-level array of objects; and multiple concatenated objects. Returns
- * [] when the text is not a JSON tool-call block (plain prose, etc.). */
+ * top-level array of objects; multiple concatenated objects; and XML-form
+ * `<tool_name>…</tool_name>` blocks (the shape the smallest models emit).
+ * Returns [] when the text is not a tool-call block (plain prose, etc.). */
 export function parseTextToolCalls(text) {
   let t = (text || "").trim();
-  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(t);
+  const fence = /^```(?:json|xml)?\s*([\s\S]*?)\s*```$/.exec(t);
   if (fence) t = fence[1].trim();
+  if (t.startsWith("<")) return parseXmlToolCalls(t);
   if (!t || !(t.startsWith("{") || t.startsWith("["))) return [];
 
   let candidates = null;
@@ -118,6 +148,11 @@ export function sanitizeAssistantText(text) {
     "");
   // any other <xxx_state>…</xxx_state> pseudo tag
   t = t.replace(/<([a-z][a-z0-9_]*_state)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+  // XML-form tool calls the interceptor couldn't run (unknown tool / budget
+  // spent): <task_list>…</task_list> etc. The snake_case-WITH-underscore tag
+  // is always model scaffolding here (real HTML tags have no underscore), so
+  // strip the whole block rather than render raw markup at the customer.
+  t = t.replace(/<([a-z][a-z0-9]*_[a-z0-9_]*)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "");
   // an unterminated leading think block ("<think> …" with no close)
   t = t.replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*$/i, "");
   // a whole-message JSON tool-call blob that survived interception
