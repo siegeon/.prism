@@ -63,6 +63,15 @@ export default function PiAgentPanel() {
     return null;
   }, [items]);
 
+  // Open interview gaps, rendered deterministically (micro-model-proof:
+  // the SLM is never trusted to voice them). Kept in lockstep with
+  // store.pendingInterviewQuestions() — same scan, same freshness.
+  const pendingQuestions = useMemo<string[] | null>(
+    () => store.pendingInterviewQuestions(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items],
+  );
+
   // Stable/streaming split: while an assistant message is in flight it is
   // rendered by <StreamingBubble> off the stream channel; everything before
   // it is the settled, memoized transcript.
@@ -105,6 +114,23 @@ export default function PiAgentPanel() {
         )}
         <SettledList items={settled} store={store} />
         {streaming && <StreamingBubble store={store} />}
+        {/* Interview gaps render DETERMINISTICALLY off the tool result — the
+            micro model is never trusted to voice them (task 651cea3b). The
+            customer answers in the chat below; store.send routes the reply
+            straight to the state machine. */}
+        {pendingQuestions && (
+          <div className="mx-1 px-3 py-2.5 rounded-md border border-[color:var(--border)] bg-[color:var(--surface-raised,rgba(99,102,241,0.08))] text-sm space-y-1.5">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-label)]">
+              PRISM needs a few details
+            </div>
+            <ul className="list-disc pl-4 space-y-1">
+              {pendingQuestions.map((q, i) => <li key={i}>{q}</li>)}
+            </ul>
+            <div className="text-xs text-[color:var(--text-muted)]">
+              Answer below — one message per question is fine.
+            </div>
+          </div>
+        )}
         {readyPreview && (
           <Link
             to={readyPreview}

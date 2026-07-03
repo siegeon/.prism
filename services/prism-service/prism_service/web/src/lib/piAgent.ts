@@ -386,6 +386,16 @@ export class PiStore {
     this.interacted = true; // from here on, a late rehydrate must no-op
     this.lastError = "";
     this.interceptBudget = 6;
+    // While a build interview is pending, the STATE MACHINE owns the loop:
+    // the customer's reply routes straight to the magic_interview tool —
+    // deterministic, micro-model-proof (a 0.6b can't be trusted to relay
+    // answers into tool args). The model initiates interviews; it does not
+    // ferry them. Tradeoff: mid-interview chit-chat is treated as an answer;
+    // the interview re-asks anything left unresolved.
+    if (this.pendingInterviewQuestions()) {
+      await this.answerInterview(prompt);
+      return;
+    }
     try {
       await this.agent.prompt(prompt);
     } catch (e) {
@@ -393,6 +403,56 @@ export class PiStore {
       this.busy = false;
       this.emit();
     }
+  }
+
+  /** Questions from the most recent magic_interview turn, while the
+   * interview is still open (state=clarifying). Null once READY/EXHAUSTED
+   * or when no interview has started. The panel renders these as a
+   * deterministic card — never trust the SLM to voice them. */
+  pendingInterviewQuestions(): string[] | null {
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const it = this.items[i];
+      if (it.kind === "tool" && it.name === "magic_interview" && it.status === "ok") {
+        const r = it.result as { state?: string; questions?: string[] } | undefined;
+        if (r?.state === "clarifying" && Array.isArray(r.questions) && r.questions.length) {
+          return r.questions;
+        }
+        return null; // newest interview turn is ready/exhausted/unshaped
+      }
+    }
+    return null;
+  }
+
+  /** Feed the customer's chat reply to the interview state machine directly
+   * (no model in the loop). Pushes the user bubble + a live tool row, executes
+   * magic_interview {answers:[reply]}, and lets the deterministic card render
+   * the next questions or the READY banner. */
+  private async answerInterview(reply: string) {
+    const tool = this.tools.find((t) => t.name === "magic_interview");
+    if (!tool) { void this.agent.prompt(reply); return; } // catalog missing: fall back
+    this.busy = true;
+    this.items.push({ kind: "user", text: reply });
+    const row: Extract<PiItem, { kind: "tool" }> = {
+      kind: "tool", callId: `iv-${Date.now()}`, name: "magic_interview",
+      label: "magic_interview", args: { answers: [reply] }, status: "running",
+    };
+    this.items.push(row);
+    this.emit();
+    const t0 = performance.now();
+    try {
+      const res = await tool.execute(row.callId, { answers: [reply] });
+      const details = (res as { details?: { result?: unknown; ms?: number } }).details;
+      row.status = "ok";
+      row.result = details?.result ?? res;
+      row.ms = details?.ms ?? Math.round(performance.now() - t0);
+      this.runTools.push({ name: row.name, ms: row.ms, ok: true });
+    } catch (e) {
+      row.status = "error";
+      row.result = e instanceof Error ? e.message : String(e);
+      this.runTools.push({ name: row.name, ms: Math.round(performance.now() - t0), ok: false });
+    }
+    this.busy = false;
+    this.emit();
   }
 
   /** Stop the in-flight run (the composer's stop button). agent.abort()
