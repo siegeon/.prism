@@ -14,8 +14,21 @@ from pydantic import BaseModel
 from prism_service.services import magic_client as mc
 from prism_service.services import magic_app_builder as ab
 from prism_service.services import magic_ai
+from prism_service.services import magic_spec_gaps
 
 router = APIRouter()
+
+
+class CheckSpecBody(BaseModel):
+    spec: dict
+
+
+@router.post("/check-spec")
+def check_spec(body: CheckSpecBody) -> dict:
+    """The gap detector: PRISM inspects a PI-produced spec for missing or
+    ambiguous rules and returns follow-up questions for the SLM to voice on
+    the PI screen. `complete` is False while a blocking gap remains."""
+    return magic_spec_gaps.check_spec(body.spec)
 
 
 class ConfigureBody(BaseModel):
