@@ -177,3 +177,53 @@ def record_facts(project: str, facts: list[dict], data_dir=None) -> str:
         lines.append(f"- {f['text']}")
     p.write_text("\n".join(lines), encoding="utf-8")
     return str(p)
+
+
+def finalize_build(project: str, spec: dict, data_dir=None,
+                   facts: list | None = None) -> dict:
+    """READY -> a real customer app. Renders + deploys the Magic backend,
+    writes the generated Hyperlambda + business facts as the project SOURCE,
+    registers the project's source_path, and ingests the code into the project
+    BRAIN — so the customer sees their code, brain and understand as one system.
+    """
+    from pathlib import Path
+    from prism_service import config
+    from prism_service.services import magic_app_builder as ab
+    dd = Path(data_dir) if data_dir is not None else Path(config.DATA_DIR)
+    src = dd / "projects" / project / "magic_app"
+    src.mkdir(parents=True, exist_ok=True)
+    if facts:  # business knowledge lands with the code so the brain learns it
+        (src / "business-facts.md").write_text(
+            "# Business knowledge\n\n"
+            + "\n".join(f"- {f['text']}" for f in facts), encoding="utf-8")
+    # 1. the generated code (their CODE artifact)
+    app = ab.render_app(spec)
+    for path, content in app["files"].items():
+        (src / Path(path).name).write_text(content, encoding="utf-8")
+    (src / "_schema.hl").write_text(app["schema"], encoding="utf-8")
+    # 2. deploy to the live Magic tenant
+    ab.deploy_app(spec)
+    # 3. register the project source (so /understand shows it)
+    try:
+        from prism_service.services import source_service as ss
+        ss.set_source_path(project, str(src))
+    except Exception:
+        pass
+    # 4. ingest into the project brain (their BRAIN + understand artifact)
+    docs = 0
+    try:
+        from prism_service.engines.brain_engine import Brain
+        base = dd / "projects" / project
+        brain = Brain(brain_db=str(base / "brain.db"),
+                      graph_db=str(base / "graph.db"),
+                      scores_db=str(base / "scores.db"))
+        docs = brain.ingest([str(src)])
+    except Exception:
+        pass
+    mod = spec.get("module", project)
+    endpoints = []
+    for e in spec.get("entities", []) or []:
+        endpoints += [f"GET magic/modules/{mod}/{e['name']}",
+                      f"POST magic/modules/{mod}/{e['name']}"]
+    return {"project": project, "module": mod, "endpoints": endpoints,
+            "source": str(src), "brain_docs": docs}
