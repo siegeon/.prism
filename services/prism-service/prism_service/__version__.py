@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.22"
+PRISM_VERSION = "6.7.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.23: Magic Cloud admin channel (LOB-factory lane 1) — services/magic_client "
+    "(authenticate→JWT, bootstrap owns the root/root setup window idempotently, evaluator "
+    "execute, endpoints/crudify/sql) + /api/magic router + Magic card in Settings→Connections. "
+    "Credentials live in a DATA_DIR dotfile; only a •••last4 fingerprint leaves the server. "
+    "Verified against a live servergardens/magic-backend:v22.10.10 container. "
     "v6.7.22: artifact/understand OUTLINE now shows REAL symbol kinds + lines (class/function, "
     ":line) from the Brain index instead of the graph entities table, which stored "
     "kind=unknown/line=0 and listed imported names. build_understanding now sources the "
