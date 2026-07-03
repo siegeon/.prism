@@ -217,21 +217,59 @@ function enumOf(e, f) {
     return x.type === "enum" && x.field === f; })[0];
   return r ? r.values : null;
 }
+function fkOf(e, f) {
+  var r = (e.rules || []).filter(function (x) {
+    return x.type === "fk" && x.field === f; })[0];
+  return r ? r.ref : null;
+}
+// ids are for computers: "dog_id" renders as "dog", never as a number.
+function human(name) { return name.replace(/_id$/, "").replace(/_/g, " "); }
+function visible(e) {
+  return e.fields.filter(function (f) { return f.name !== "id"; });
+}
+var refCache = {};
+function refRows(ref) {
+  if (refCache[ref]) return Promise.resolve(refCache[ref]);
+  return fetch("/magic/modules/" + APP.module + "/" + ref)
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      refCache[ref] = Array.isArray(data) ? data : [];
+      return refCache[ref];
+    });
+}
+function refLabel(ref, row) {
+  var ent = APP.entities.filter(function (x) { return x.name === ref; })[0];
+  var f = ent && ent.fields.filter(function (x) {
+    return x.name !== "id" && !/_id$/.test(x.name) &&
+      !/INT|REAL|NUM/.test(x.type || ""); })[0];
+  var label = f ? row[f.name] : null;
+  return label == null || label === "" ? ("#" + row.id) : String(label);
+}
 function draw() {
   drawTabs();
   var e = ent(), v = document.getElementById("view"); v.innerHTML = "";
   var form = h("form", {});
-  e.fields.forEach(function (f) {
-    var opts = enumOf(e, f.name), input;
+  visible(e).forEach(function (f) {
+    var opts = enumOf(e, f.name), ref = fkOf(e, f.name), input;
     if (opts) {
       input = h("select", { name: f.name },
         [h("option", { value: "", text: "choose…", disabled: "", selected: "" })]
           .concat(opts.map(function (o) { return h("option", { value: o, text: o }); })));
+    } else if (ref) {
+      // the customer picks a NAME; the id stays under the hood
+      input = h("select", { name: f.name },
+        [h("option", { value: "", text: "choose…", disabled: "", selected: "" })]);
+      refRows(ref).then(function (rows) {
+        rows.forEach(function (row) {
+          input.appendChild(h("option", { value: String(row.id),
+            text: refLabel(ref, row) }));
+        });
+      });
     } else {
       input = h("input", { name: f.name,
         type: /INT|REAL|NUM/.test(f.type || "") ? "number" : "text" });
     }
-    form.appendChild(h("label", { text: f.name.replace(/_/g, " ") }, [input]));
+    form.appendChild(h("label", { text: human(f.name) }, [input]));
   });
   var msg = h("span", { class: "msg" });
   form.appendChild(h("div", { class: "actions" },
@@ -239,7 +277,7 @@ function draw() {
   form.onsubmit = function (ev) {
     ev.preventDefault();
     var rec = {};
-    e.fields.forEach(function (f) {
+    visible(e).forEach(function (f) {
       var el = form.querySelector('[name="' + f.name + '"]');
       if (el && el.value !== "") rec[f.name] = el.value;
     });
@@ -253,27 +291,43 @@ function draw() {
   v.appendChild(h("div", { class: "card" },
     [h("h2", { text: "Add " + cur.replace(/s$/, "") }), form]));
   var tbl = h("table", {}, [h("thead", {}, [h("tr", {},
-    e.fields.map(function (f) { return h("th", { text: f.name.replace(/_/g, " ") }); }))]),
+    visible(e).map(function (f) { return h("th", { text: human(f.name) }); }))]),
     h("tbody", { id: "rows" })]);
   v.appendChild(h("div", { class: "card" }, [h("h2", { text: cur }), tbl]));
   load();
 }
 function load() {
   var e = ent();
-  fetch("/magic/modules/" + APP.module + "/" + e.name)
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
+  var refs = {};
+  var lookups = visible(e).map(function (f) {
+    var ref = fkOf(e, f.name);
+    if (!ref) return Promise.resolve();
+    return refRows(ref).then(function (rows) {
+      var m = {};
+      rows.forEach(function (row) { m[String(row.id)] = refLabel(ref, row); });
+      refs[f.name] = m;
+    });
+  });
+  Promise.all(lookups.concat([
+    fetch("/magic/modules/" + APP.module + "/" + e.name)
+      .then(function (r) { return r.json(); })]))
+    .then(function (results) {
+      var data = results[results.length - 1];
       var rows = Array.isArray(data) ? data : [];
       var tb = document.getElementById("rows"); tb.innerHTML = "";
+      var cols = visible(e);
       if (!rows.length) {
         var td = h("td", { class: "empty", text: "No rows yet — add one above." });
-        td.setAttribute("colspan", String(e.fields.length));
+        td.setAttribute("colspan", String(cols.length));
         tb.appendChild(h("tr", {}, [td]));
         return;
       }
       rows.forEach(function (r) {
-        tb.appendChild(h("tr", {}, e.fields.map(function (f) {
+        tb.appendChild(h("tr", {}, cols.map(function (f) {
           var val = r[f.name] == null ? "" : String(r[f.name]);
+          if (val && refs[f.name]) {
+            return h("td", { text: refs[f.name][val] || ("#" + val) });
+          }
           if (val && enumOf(e, f.name)) {
             return h("td", {}, [h("span", { class: "pill", text: val })]);
           }

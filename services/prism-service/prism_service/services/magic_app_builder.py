@@ -205,7 +205,11 @@ def normalize_spec(spec: dict) -> dict:
                 continue
             base = fn[:-3].lower()
             if base == own or base == en:
-                continue                       # own identifier — no rule, no question
+                # own identifier: redundant with the auto PK — drop the field
+                # entirely (ids are for computers, not customer UIs).
+                ent["fields"] = [x for x in ent["fields"]
+                                 if (x.get("name") or "").strip() != fn]
+                continue
             target = next((n for n in names
                            if n in (base, base + "s", base + "es")), None)
             if target and target != en:
