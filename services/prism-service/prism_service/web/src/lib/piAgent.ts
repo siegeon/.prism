@@ -28,7 +28,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { api } from "@/lib/api";
 import { clearSession, loadSession, saveSession } from "@/components/pi/piSession";
 // The shared expert module (task e70cdcda): ONE source for the system
-// prompt + the full 18-tool PRISM catalog, imported by BOTH surfaces —
+// prompt + the full PRISM tool catalog, imported by BOTH surfaces —
 // the Node runner (web/pi-runtime.mjs) and this panel. Types come from
 // the sibling pi-expert.d.mts declaration.
 import { EXPERT_SYSTEM_PROMPT, EXPERT_TOOL_DEFS } from "../../pi-expert.mjs";
@@ -158,7 +158,7 @@ function prismTool(
   };
 }
 
-/** The panel carries the FULL expert catalog — the exact 18 tools the Node
+/** The panel carries the FULL expert catalog — the exact tools the Node
  * runner executes with, from the shared pi-expert module. Never re-declare
  * a tool here; additions/removals happen in web/pi-expert.mjs (mirrored by
  * api/agent.py's AGENT_TOOL_WHITELIST). */

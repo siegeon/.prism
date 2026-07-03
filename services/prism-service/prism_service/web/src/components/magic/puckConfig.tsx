@@ -7,12 +7,24 @@
  * off-brand. EntityTable / EntityForm are DATA-AWARE: they fetch live from the
  * deployed Magic tenant through PRISM's proxy (/api/magic/data/<mod>/<entity>),
  * so the preview shows REAL rows and a real create round-trips through the same
- * rule guards the interview captured. Themed entirely by the generated
- * --app-* CSS vars, never Hermes chrome — this is the customer's brand.
+ * rule guards the interview captured.
+ *
+ * Rendered with Astryx / XDS (github.com/facebook/astryx, @astryxdesign/core,
+ * MIT) — accessible, themeable React components. The customer's generated
+ * --app-* brand tokens are mapped onto Astryx's --color-* and --radius-* theme vars
+ * in MagicPreviewPage, so every generated app inherits a professionally
+ * designed component substrate while still reading as the customer's brand.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Render, type Config } from "@measured/puck";
 import "@measured/puck/puck.css";
+import { Table, type TableColumn } from "@astryxdesign/core/Table";
+import { Card } from "@astryxdesign/core/Card";
+import { Button } from "@astryxdesign/core/Button";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { NumberInput } from "@astryxdesign/core/NumberInput";
+import { Selector } from "@astryxdesign/core/Selector";
+import "@astryxdesign/core/astryx.css";
 import { api } from "@/lib/api";
 
 type Field = { name: string; type: string };
@@ -20,21 +32,23 @@ type Rule =
   | { type: "enum"; field: string; values: string[] }
   | { type: "fk"; field: string; ref: string }
   | { type: "min"; field: string; value: number };
+type Row = Record<string, unknown>;
 
 const DATA_CHANGED = "magic-data-changed";
+const isNumeric = (t: string) => /INT|REAL|NUM/.test(t);
 const dataPath = (m: string, e: string) =>
   `/api/magic/data/${encodeURIComponent(m)}/${encodeURIComponent(e)}`;
 
 /** Live rows from the deployed entity endpoint; refetches on create. */
 function EntityTable({ module, entity, fields }:
   { module: string; entity: string; fields: Field[] }) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [rows, setRows] = useState<Row[]>([]);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const load = useCallback(() => {
     setLoading(true);
     api.get<{ rows: unknown }>(dataPath(module, entity))
-      .then((d) => setRows(Array.isArray(d.rows) ? d.rows as Record<string, unknown>[] : []))
+      .then((d) => setRows(Array.isArray(d.rows) ? d.rows as Row[] : []))
       .catch((e) => setErr(String(e)))
       .finally(() => setLoading(false));
   }, [module, entity]);
@@ -48,32 +62,32 @@ function EntityTable({ module, entity, fields }:
     return () => window.removeEventListener(DATA_CHANGED, h);
   }, [load, module, entity]);
   const cols = fields.length ? fields : [{ name: "id", type: "INTEGER" }];
+  const columns: TableColumn<Row>[] = cols.map((f) => ({
+    key: f.name,
+    header: f.name,
+    renderCell: (item: Row) => String(item[f.name] ?? ""),
+  }));
   return (
-    <div className="app-card">
+    <Card className="app-card">
       <div className="app-card-title">{entity}</div>
       {err && <div className="app-error">{err}</div>}
-      <table className="app-table">
-        <thead><tr>{cols.map((f) => <th key={f.name}>{f.name}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>{cols.map((f) => <td key={f.name}>{String(r[f.name] ?? "")}</td>)}</tr>
-          ))}
-          {!rows.length && !loading && (
-            <tr><td colSpan={cols.length} className="app-empty">No rows yet — add one above.</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+      <Table data={rows} columns={columns} hasHover dividers="rows" />
+      {!rows.length && !loading && (
+        <div className="app-empty">No rows yet — add one above.</div>
+      )}
+    </Card>
   );
 }
 
-/** Add-a-row form. enum -> <select>, min -> min attr; POST round-trips the
- * SAME rule guards the backend enforces, then signals the table to refetch. */
+/** Add-a-row form. enum -> Selector, numeric+min -> NumberInput (min guard),
+ * else TextInput; POST round-trips the SAME rule guards the backend enforces,
+ * then signals the table to refetch. */
 function EntityForm({ module, entity, fields, rules }:
   { module: string; entity: string; fields: Field[]; rules: Rule[] }) {
   const [val, setVal] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const set = (f: string, v: string) => setVal((s) => ({ ...s, [f]: v }));
   const enumOf = (f: string) =>
     (rules.find((r) => r.type === "enum" && r.field === f) as
       { values: string[] } | undefined)?.values;
@@ -91,38 +105,41 @@ function EntityForm({ module, entity, fields, rules }:
     } finally { setBusy(false); }
   };
   return (
-    <div className="app-card">
+    <Card className="app-card">
       <div className="app-card-title">Add {entity.replace(/s$/, "")}</div>
       <div className="app-form">
         {fields.map((f) => {
           const opts = enumOf(f.name);
+          const min = minOf(f.name);
+          if (opts) {
+            return (
+              <Selector key={f.name} label={f.name} placeholder="choose…"
+                value={val[f.name] ?? ""}
+                options={opts.map((o) => ({ value: o, label: o }))}
+                onChange={(v) => set(f.name, v)} />
+            );
+          }
+          if (isNumeric(f.type) || min !== undefined) {
+            const raw = val[f.name];
+            return (
+              <NumberInput key={f.name} label={f.name} min={min}
+                value={raw === undefined || raw === "" ? null : Number(raw)}
+                onChange={(v) => set(f.name, v === null ? "" : String(v))} />
+            );
+          }
           return (
-            <label key={f.name} className="app-field">
-              <span>{f.name}</span>
-              {opts ? (
-                <select value={val[f.name] ?? ""}
-                  onChange={(e) => setVal({ ...val, [f.name]: e.target.value })}>
-                  <option value="" disabled>choose…</option>
-                  {opts.map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              ) : (
-                <input
-                  type={/INT|REAL|NUM/.test(f.type) ? "number" : "text"}
-                  min={minOf(f.name)}
-                  value={val[f.name] ?? ""}
-                  onChange={(e) => setVal({ ...val, [f.name]: e.target.value })} />
-              )}
-            </label>
+            <TextInput key={f.name} label={f.name}
+              value={val[f.name] ?? ""}
+              onChange={(v) => set(f.name, v)} />
           );
         })}
       </div>
       <div className="app-form-actions">
-        <button className="app-btn" disabled={busy} onClick={submit}>
-          {busy ? "Saving…" : "Add"}
-        </button>
+        <Button label={busy ? "Saving…" : "Add"} variant="primary"
+          type="button" isDisabled={busy} onClick={submit} />
         {msg && <span className="app-msg">{msg}</span>}
       </div>
-    </div>
+    </Card>
   );
 }
 

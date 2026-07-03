@@ -45,6 +45,10 @@ AGENT_TOOL_WHITELIST = frozenset({
     # Context + health.
     "context_bundle",
     "prism_status",
+    # Magic — conversational app onboarding (task 651cea3b). Routed to the
+    # /api/magic/interview/converse logic below, NOT handle_tool: the tiny
+    # model only relays text; converse() does the drafting/pairing/building.
+    "magic_interview",
 })
 
 # Task 9f20b605 gated the conductor mutations to internal callers
@@ -78,6 +82,24 @@ async def call_tool(
     args = body.get("args") or {}
     if not isinstance(args, dict):
         raise HTTPException(422, "'args' must be an object")
+
+    # magic_interview is a customer-onboarding tool, not an MCP tool: it drives
+    # the reverse-engineering interview + auto-build (task 651cea3b). The panel
+    # proxies it here as a dumb passthrough; the server does the heavy lifting.
+    if name == "magic_interview":
+        from prism_service.services import magic_interview as mi
+        try:
+            result = mi.converse(
+                project,
+                description=args.get("description"),
+                answers=args.get("answers"),
+            )
+        except Exception as exc:
+            raise HTTPException(
+                500, f"tool dispatch failed: {type(exc).__name__}: {exc}",
+            )
+        return {"name": name, "ok": True, "result": result,
+                "raw": json.dumps(result)}
 
     from prism_service.mcp.tools import handle_tool
 

@@ -90,6 +90,24 @@ def interview(body: InterviewBody) -> dict:
             "resumed": resumed, "artifacts": artifacts, "session": iv.to_dict()}
 
 
+class ConverseBody(BaseModel):
+    text: str = ""            # the customer's raw utterance (proxy convenience)
+    description: str = ""     # their business in their words (first turn)
+    answers: list = []        # their replies to the pending questions, in order
+    project: str = ""         # customer project — resume/persist across visits
+
+
+@router.post("/interview/converse")
+def interview_converse(body: ConverseBody) -> dict:
+    """Conversational onboarding, one turn: the thin wrapper the PI panel's
+    magic_interview tool proxies to. draft-spec-if-new -> advance interview ->
+    auto-build on ready. The SLM only relays text; converse() does the rest
+    deterministically. Returns {state, questions, preview_url?, ...}."""
+    from prism_service.services import magic_interview as mi
+    desc = body.description or body.text
+    return mi.converse(body.project, description=desc, answers=body.answers)
+
+
 class ConfigureBody(BaseModel):
     url: str
     user: str = "root"
@@ -201,6 +219,17 @@ def build_app(body: BuildAppBody) -> dict:
         raise HTTPException(502, f"magic build-app failed: {e}")
     except (KeyError, TypeError) as e:
         raise HTTPException(400, f"invalid app spec: {e}")
+
+
+@router.get("/design-system")
+def design_system(industry: str = "") -> dict:
+    """Inspect the per-industry design pass: resolve an industry name OR
+    freeform business text (e.g. 'a boutique fitness studio') to the full
+    --app-* token set via design_intel's keyless BM25 match. Returns the
+    resolved tokens plus the curated industry list."""
+    from prism_service.services import design_intel as di
+    return {"industry": industry, "tokens": di.design_tokens(industry),
+            "industries": di.industries()}
 
 
 # --- the customer's app gets a face: UI JSON + live-data proxy --------------

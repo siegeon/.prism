@@ -49,6 +49,11 @@ MEMORY DISCIPLINE:
 - ALWAYS memory_recall before memory_store — never store a duplicate of existing knowledge.
 - A memory without evidence is nearly useless: include concrete file paths / code references in the description.
 
+BUILD-AN-APP (a customer onboarding by TALKING):
+- When a customer describes a business they want an app for ("I run a gym and need to track members and class bookings"), call magic_interview {description:"<their exact words>"}. It returns state + gap questions.
+- Voice each returned question in plain language, then WAIT. When they answer, call magic_interview {answers:["<their reply>"]} — one entry per question, in order.
+- Repeat until state="ready"; then tell them their app is built and point them at the preview. Never invent the spec — the tool drafts and builds it.
+
 TOOL ECONOMY:
 - You run on a small model: make ONE well-aimed tool call instead of many exploratory ones. Prefer brain_understand for orientation, brain_find_symbol/brain_outline for targeted reads.
 - NEVER fabricate a tool result, test output, or gate evidence. If you do not have the evidence, say so.`;
@@ -260,6 +265,16 @@ export const EXPERT_TOOL_DEFS = {
     description: "Brain/Graph index health (doc counts, staleness). Use to check whether the index is trustworthy before leaning on Brain results.",
     parameters: Type.Object({
       file_hashes: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Optional {path: sha256} map for precise drift detection" })),
+    }),
+  },
+  // ------------------------------------------------ build-an-app (magic)
+  magic_interview: {
+    label: "Build an app",
+    description:
+      "Build the customer a working app by interviewing them. FIRST turn (they described a business): magic_interview {description:'I run a gym, track members and class bookings'} -> returns gap questions; voice them. Their REPLY: magic_interview {answers:['Members have name, email, join date']} -> one array entry per pending question, in order. Repeat until state='ready', then share preview_url. PRISM drafts the spec and builds the app — never fill the spec yourself.",
+    parameters: Type.Object({
+      description: Type.Optional(Type.String({ description: "The customer's business in their own words (first turn only)" })),
+      answers: Type.Optional(Type.Array(Type.String(), { description: "The customer's replies to the pending questions, in order" })),
     }),
   },
 };

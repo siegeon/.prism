@@ -135,3 +135,69 @@ def test_finalize_build_writes_code_facts_and_endpoints(tmp_path, monkeypatch):
     assert (src / "business-facts.md").exists()       # their memory artifact
     assert r["brain_docs"] == 3                        # ingested into their BRAIN
     assert any("customers" in e for e in r["endpoints"])
+
+
+# --- conversational onboarding: converse() drives the panel's magic_interview -
+
+
+def test_converse_new_session_opens_interview(tmp_path):
+    # First turn: a plain-language description drafts a spec and opens the
+    # interview with gap questions to voice. (draft injected — no ollama.)
+    r = mi.converse("gymco", description="I run a gym, track members + bookings",
+                    data_dir=tmp_path, draft=lambda seed: copy.deepcopy(THIN))
+    assert r["state"] == mi.CLARIFYING
+    assert r["questions"]                       # questions the SLM will voice
+    assert r["preview_url"] is None             # nothing built yet
+    assert mi.load_session("gymco", data_dir=tmp_path) is not None  # resumable
+
+
+def test_converse_answers_drive_to_ready_and_build(tmp_path, monkeypatch):
+    from prism_service.services import magic_app_builder as ab
+    import prism_service.engines.brain_engine as be
+    monkeypatch.setattr(ab, "deploy_app", lambda spec, **k: None)   # no network
+
+    class _FakeBrain:
+        def __init__(self, **k):
+            pass
+
+        def ingest(self, paths):
+            return 1
+
+    monkeypatch.setattr(be, "Brain", _FakeBrain)
+
+    mi.converse("gymco", description="a gym", data_dir=tmp_path,
+                draft=lambda seed: copy.deepcopy(THIN))     # open the interview
+    r = None
+    for _ in range(6):                                       # feed answers per turn
+        iv = mi.SpecInterview.from_dict(mi.load_session("gymco", data_dir=tmp_path))
+        if iv.state != mi.CLARIFYING:
+            break
+        replies = [a["answer"] for a in _answers(iv.questions())]
+        r = mi.converse("gymco", answers=replies, data_dir=tmp_path,
+                        refine=_refine_good)
+        if r["state"] == mi.READY:
+            break
+    assert r is not None and r["state"] == mi.READY
+    assert r["preview_url"] == "/magic/preview?project=gymco"   # built app link
+    assert r["artifacts"] and r["artifacts"].get("brain_docs") == 1
+
+
+def test_converse_pairs_answers_in_order_and_truncates(tmp_path):
+    mi.converse("acme", description="x", data_dir=tmp_path,
+                draft=lambda s: copy.deepcopy(THIN))
+    npending = len(mi.SpecInterview.from_dict(
+        mi.load_session("acme", data_dir=tmp_path)).questions())
+    # MORE replies than pending -> extras dropped, exactly npending folded, in order
+    replies = [f"answer {i}" for i in range(npending + 3)]
+    mi.converse("acme", answers=replies, data_dir=tmp_path,
+                refine=lambda spec, answered: spec)          # unchanged -> re-ask
+    iv2 = mi.SpecInterview.from_dict(mi.load_session("acme", data_dir=tmp_path))
+    assert len(iv2.answered) == npending
+    assert [a["answer"] for a in iv2.answered] == replies[:npending]
+
+
+def test_converse_without_project_is_stateless(tmp_path):
+    r = mi.converse("", description="a gym",
+                    draft=lambda s: copy.deepcopy(THIN))
+    assert r["state"] == mi.CLARIFYING
+    assert r["preview_url"] is None            # no project -> no build/preview

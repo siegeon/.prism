@@ -206,7 +206,21 @@ def finalize_build(project: str, spec: dict, data_dir=None,
     # page renders app.json; per-entity files are the drag-drop editor seeds.
     try:
         from prism_service.services import magic_ui as mui
-        ui_out = mui.render_ui(spec)
+        from prism_service.services import design_intel as di
+        # per-industry design pass (keyless BM25): derive the industry
+        # from the confirmed domain fact or the app's db/module name,
+        # then let design_intel pick a tasteful per-vertical palette. A
+        # design failure falls back to neutral tokens, never blocks.
+        industry = spec.get("db") or spec.get("module") or ""
+        for _f in (facts or []):
+            if str(_f.get("name", "")).startswith("domain-"):
+                industry = _f["name"][len("domain-"):] or industry
+                break
+        try:
+            tokens = di.design_tokens(industry)
+        except Exception:
+            tokens = None
+        ui_out = mui.render_ui(spec, tokens=tokens)
         ui_dir = src / "ui"
         ui_dir.mkdir(parents=True, exist_ok=True)
         (ui_dir / "app.json").write_text(
@@ -243,3 +257,123 @@ def finalize_build(project: str, spec: dict, data_dir=None,
     return {"project": project, "module": mod, "endpoints": endpoints,
             "source": str(src), "brain_docs": docs,
             "preview_url": f"/magic/preview?project={project}"}
+
+
+# --- conversational onboarding (the PI panel drives this over one tiny tool) --
+#
+# converse() is the single server-side entrypoint the PI panel's magic_interview
+# tool proxies to. The 0.6b model only relays TEXT: a business description on the
+# first turn, the customer's replies on later turns. ALL the heavy lifting —
+# drafting the draft spec, pairing answers to pending questions, advancing the
+# state machine, auto-building on ready — happens HERE, deterministically.
+
+
+def _slm_refine(spec: dict, answered: list) -> dict:
+    """SLM-backed spec refinement (mirror of api/magic.py's interview refine):
+    fold the customer's clarifications into the running spec. On any SLM hiccup
+    the spec is returned unchanged — the state machine copes and re-asks."""
+    import json as _json
+    import re as _re
+    from prism_service.services import magic_ai
+    qa = "\n".join(f"Q: {a['question']}\nA: {a['answer']}" for a in answered)
+    prompt = (f"Current app spec (JSON):\n{_json.dumps(spec)}\n\n"
+              f"Clarifications from the customer:\n{qa}\n\nOutput the UPDATED "
+              "app spec incorporating the clarifications, same JSON shape. "
+              "Output ONLY JSON.")
+    try:
+        text, _ = magic_ai.local_complete(
+            [{"role": "system", "content": "You update a JSON app spec."},
+             {"role": "user", "content": prompt}])
+        m = _re.search(r"\{.*\}", _re.sub(r"<think>.*?</think>", "", text,
+                                          flags=_re.DOTALL), _re.DOTALL)
+        return _json.loads(m.group(0)) if m else spec
+    except Exception:
+        return spec
+
+
+def draft_spec(description: str) -> dict:
+    """Derive a first-cut app spec from the customer's plain-language business
+    description via ONE local model call. An empty/failed draft returns {} —
+    the interview then opens with the gap detector's own questions, so the
+    conversation still starts (graceful degradation, never a crash)."""
+    import json as _json
+    import re as _re
+    from prism_service.services import magic_ai
+    desc = (description or "").strip()
+    if not desc:
+        return {}
+    prompt = (f'A customer describes their business:\n"{desc}"\n\n'
+              "Design the smallest useful app spec as JSON of EXACTLY this "
+              "shape:\n"
+              '{"module": "<short_snake_name>", "entities": [{"name": '
+              '"<snake_plural>", "fields": [{"name": "<snake>", "type": '
+              '"TEXT|INTEGER|DECIMAL|DATE|BOOLEAN"}], "rules": []}]}\n'
+              "Choose the 1-3 core things this business must track. "
+              "Output ONLY JSON.")
+    try:
+        text, _ = magic_ai.local_complete(
+            [{"role": "system", "content": "You design a JSON app spec from a "
+              "business description."},
+             {"role": "user", "content": prompt}])
+        m = _re.search(r"\{.*\}", _re.sub(r"<think>.*?</think>", "", text,
+                                          flags=_re.DOTALL), _re.DOTALL)
+        return _json.loads(m.group(0)) if m else {}
+    except Exception:
+        return {}
+
+
+def converse(project: str, description: str | None = None,
+             answers: list | None = None, data_dir=None,
+             refine=None, draft=None) -> dict:
+    """One conversational turn for a customer building an app by TALKING.
+
+    First visit (no saved session): `description` is drafted into a spec and the
+    interview opens. Later visits: `answers` are paired to the pending questions
+    IN ORDER (pad/truncate) and folded in. Persists/resumes the session per
+    project automatically; on `ready` it auto-builds the app ONCE and surfaces
+    `preview_url`. `refine`/`draft` are injectable for tests (default = SLM)."""
+    refine = refine or _slm_refine
+    draft = draft or draft_spec
+    proj = (project or "").strip()
+    if isinstance(answers, str):
+        answers = [answers]
+    replies = [a.strip() for a in (answers or [])
+               if isinstance(a, str) and a.strip()]
+    desc = (description or "").strip()
+
+    sess = load_session(proj, data_dir) if proj else None
+    was_ready = bool(sess) and sess.get("state") == READY
+    if not sess:
+        seed = desc or " ".join(replies)
+        iv = SpecInterview(draft(seed) if seed else {})
+    else:
+        iv = SpecInterview.from_dict(sess)
+        if iv.state == CLARIFYING:
+            pending = iv.questions()
+            src = replies or ([desc] if desc else [])
+            qa = [{"question": pending[i], "answer": src[i]}
+                  for i in range(min(len(pending), len(src)))]
+            if qa:
+                iv.answer(qa, refine)
+
+    artifacts = None
+    if proj:
+        save_session(proj, iv.to_dict(), data_dir)
+        if iv.state == READY and not was_ready:   # build ONCE, on transition
+            facts = business_facts(iv)
+            record_facts(proj, facts, data_dir)
+            try:                                    # auto-build the customer app
+                artifacts = finalize_build(proj, iv.spec, data_dir=data_dir,
+                                           facts=facts)
+            except Exception as e:                  # surface, don't crash the turn
+                artifacts = {"error": str(e)[:160]}
+
+    preview_url = None
+    if iv.state == READY:
+        if isinstance(artifacts, dict) and artifacts.get("preview_url"):
+            preview_url = artifacts["preview_url"]
+        elif proj:
+            preview_url = f"/magic/preview?project={proj}"
+    return {"state": iv.state, "domain": iv.domain(),
+            "questions": iv.questions(), "round": iv.round,
+            "preview_url": preview_url, "artifacts": artifacts}

@@ -25,7 +25,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { ChevronDown, ChevronRight, Hexagon, Send, Sparkles, Square } from "lucide-react";
+import { AppWindow, ChevronDown, ChevronRight, Hexagon, Send, Sparkles, Square } from "lucide-react";
+import { Link } from "react-router-dom";
 import Markdown from "@/components/Markdown";
 import { sanitizeAssistantText } from "../../../pi-toolcall.mjs";
 import { TOOL_RENDERERS, prettyReceipt } from "@/components/pi/toolRenderers";
@@ -38,7 +39,7 @@ import {
   type PiStore,
 } from "@/lib/piAgent";
 
-const SUGGESTED = ["What tasks are pending?", "What is in this project's brain?"];
+const SUGGESTED = ["What tasks are pending?", "What is in this project's brain?", "Build me an app for my business…"];
 
 export default function PiAgentPanel() {
   const [project] = useProject();
@@ -48,6 +49,19 @@ export default function PiAgentPanel() {
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // When a magic_interview turn reaches state=ready it carries the built app's
+  // preview_url — surface it as a prominent, always-visible link (task 651cea3b).
+  const readyPreview = useMemo<string | null>(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === "tool" && it.name === "magic_interview" && it.status === "ok") {
+        const r = it.result as { state?: string; preview_url?: string } | undefined;
+        if (r?.state === "ready" && r.preview_url) return r.preview_url;
+      }
+    }
+    return null;
+  }, [items]);
 
   // Stable/streaming split: while an assistant message is in flight it is
   // rendered by <StreamingBubble> off the stream channel; everything before
@@ -91,6 +105,15 @@ export default function PiAgentPanel() {
         )}
         <SettledList items={settled} store={store} />
         {streaming && <StreamingBubble store={store} />}
+        {readyPreview && (
+          <Link
+            to={readyPreview}
+            className="mx-1 flex items-center gap-2 px-3 py-2.5 rounded-md border border-[color:var(--accent-emerald-ring)] bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-sm font-medium hover:brightness-110 transition-[filter]"
+          >
+            <AppWindow className="w-4 h-4 shrink-0" />
+            <span>Your app is ready &mdash; open App preview</span>
+          </Link>
+        )}
         {store.busy && !streaming && (
           <div className="px-2 py-1 text-xs text-[color:var(--text-muted)] animate-pulse">thinking…</div>
         )}
