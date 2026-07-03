@@ -64,6 +64,8 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/tasks", label: "Tasks", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       { to: "/retrievals", label: "Retrievals", icon: Search },
+      // The customer's Magic-built app, rendered live (task 10e00424).
+      { to: "/magic/preview", label: "App preview", icon: AppWindow },
     ],
   },
   // Learning loop = the pipeline that PRODUCES new Memory entries.

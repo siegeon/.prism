@@ -28,6 +28,8 @@ const ConsolidationPage = lazy(() => import("@/pages/ConsolidationPage"));
 const UnderstandPage = lazy(() => import("@/pages/UnderstandPage"));
 const ArtifactPage = lazy(() => import("@/pages/ArtifactPage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
+// The customer's Magic-built app, rendered with live tenant data (task 10e00424).
+const MagicPreviewPage = lazy(() => import("@/pages/MagicPreviewPage"));
 
 export default function App() {
   // Route-swap transition: AnimatePresence mode="wait" keyed on the pathname
@@ -89,6 +91,7 @@ export default function App() {
             {/* Unified artifact surface (xref S5): the single destination a
                 resolved CODE token routes to. A ROUTE, not a nav entry. */}
             <Route path="/artifact" element={<ArtifactPage />} />
+            <Route path="/magic/preview" element={<MagicPreviewPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
           </Routes>

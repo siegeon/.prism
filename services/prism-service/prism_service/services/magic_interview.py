@@ -201,6 +201,21 @@ def finalize_build(project: str, spec: dict, data_dir=None,
     for path, content in app["files"].items():
         (src / Path(path).name).write_text(content, encoding="utf-8")
     (src / "_schema.hl").write_text(app["schema"], encoding="utf-8")
+    # 1b. the generated UI (their FACE) — deterministic Puck JSON + design
+    # tokens from the SAME spec, so backend and UI never drift. The preview
+    # page renders app.json; per-entity files are the drag-drop editor seeds.
+    try:
+        from prism_service.services import magic_ui as mui
+        ui_out = mui.render_ui(spec)
+        ui_dir = src / "ui"
+        ui_dir.mkdir(parents=True, exist_ok=True)
+        (ui_dir / "app.json").write_text(
+            json.dumps(ui_out, indent=2), encoding="utf-8")
+        for ent, page in ui_out["pages"].items():
+            (ui_dir / f"{ent}.puck.json").write_text(
+                json.dumps(page, indent=2), encoding="utf-8")
+    except Exception:
+        pass
     # 2. deploy to the live Magic tenant
     ab.deploy_app(spec)
     # 3. register the project source (so /understand shows it)
@@ -226,4 +241,5 @@ def finalize_build(project: str, spec: dict, data_dir=None,
         endpoints += [f"GET magic/modules/{mod}/{e['name']}",
                       f"POST magic/modules/{mod}/{e['name']}"]
     return {"project": project, "module": mod, "endpoints": endpoints,
-            "source": str(src), "brain_docs": docs}
+            "source": str(src), "brain_docs": docs,
+            "preview_url": f"/magic/preview?project={project}"}

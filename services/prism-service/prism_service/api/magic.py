@@ -201,3 +201,56 @@ def build_app(body: BuildAppBody) -> dict:
         raise HTTPException(502, f"magic build-app failed: {e}")
     except (KeyError, TypeError) as e:
         raise HTTPException(400, f"invalid app spec: {e}")
+
+
+# --- the customer's app gets a face: UI JSON + live-data proxy --------------
+
+
+@router.get("/ui/{project}")
+def ui(project: str) -> dict:
+    """The generated Puck-JSON UI + design tokens for a customer's built app,
+    read from their project source (written by finalize_build). The preview
+    page renders this deterministically; if they haven't built yet, render on
+    the fly from any saved interview spec so a preview is always available."""
+    import json as _json
+    from pathlib import Path
+    from prism_service import config
+    src = Path(config.DATA_DIR) / "projects" / project / "magic_app" / "ui" / "app.json"
+    if src.is_file():
+        try:
+            return _json.loads(src.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    from prism_service.services import magic_interview as mi
+    sess = mi.load_session(project)
+    if sess and sess.get("spec"):
+        from prism_service.services import magic_ui as mui
+        return mui.render_ui(sess["spec"])
+    raise HTTPException(404, f"no built UI for project '{project}'")
+
+
+@router.get("/data/{module}/{entity}")
+def data_list(module: str, entity: str) -> dict:
+    """Proxy the deployed entity's live rows through PRISM's auth (no browser
+    CORS, no client credential). What the customer sees IS their real data."""
+    try:
+        rows = mc.data_get(module, entity)
+    except mc.MagicError as e:
+        raise HTTPException(502, f"magic data fetch failed: {e}")
+    return {"rows": rows if isinstance(rows, list) else rows}
+
+
+class DataRow(BaseModel):
+    record: dict
+
+
+@router.post("/data/{module}/{entity}")
+def data_create(module: str, entity: str, body: DataRow) -> dict:
+    """Add a row through the deployed create endpoint. Magic's rule guards
+    (fk/min/enum) run server-side, so the same rules the interview captured
+    reject an invalid record — the UI and backend can't drift."""
+    try:
+        return {"created": mc.data_post(module, entity, body.record)}
+    except mc.MagicError as e:
+        code = 400 if e.status in (400, 401, 403) else 502
+        raise HTTPException(code, f"magic data create failed: {e}")

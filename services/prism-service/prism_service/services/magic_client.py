@@ -208,3 +208,30 @@ def bootstrap(url: str, password: str, name: str = "", email: str = "") -> dict:
                       "name": name, "email": email, "subscribe": False})
     save_connection(base, "root", password)
     return {"configured": True, "already_configured": False}
+
+
+# --- deployed module data (the customer app's live CRUD endpoints) ----------
+# These hit the tenant endpoints render_app deploys — magic/modules/<mod>/<ent>
+# — with PRISM's root JWT, so the SPA preview fetches live data through OUR
+# auth layer (no browser CORS, no credential in the client).
+
+def data_get(module: str, entity: str, params: dict | None = None):
+    """GET the live rows for a deployed entity (the crudified list endpoint)."""
+    conn = _conn_or_raise()
+    token = authenticate(conn["url"], conn.get("user", "root"),
+                         conn.get("password", ""))
+    url = f"{_base(conn['url'])}/magic/modules/{module}/{entity}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    return _request(url, method="GET", token=token)
+
+
+def data_post(module: str, entity: str, record: dict):
+    """POST a new row to a deployed entity (the crudified create endpoint).
+    Magic's rule guards (fk/min/enum) run server-side, so an invalid record
+    is rejected by the SAME rules the interview captured."""
+    conn = _conn_or_raise()
+    token = authenticate(conn["url"], conn.get("user", "root"),
+                         conn.get("password", ""))
+    url = f"{_base(conn['url'])}/magic/modules/{module}/{entity}"
+    return _request(url, method="POST", token=token, payload=record)

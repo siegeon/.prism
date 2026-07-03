@@ -12,6 +12,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.3",
+    "@measured/puck": "^0.20.2",
     "@nous-research/ui": "^0.16.0",
     "@observablehq/plot": "^0.6.17",
     "@react-three/fiber": "^9.6.0",
