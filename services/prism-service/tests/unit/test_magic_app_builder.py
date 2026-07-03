@@ -100,3 +100,16 @@ def test_deploy_calls_execute_for_schema_and_each_file():
     assert len(calls) == 5
     assert any("CREATE TABLE" in c for c in calls)
     assert sum("io.file.save" in c for c in calls) == 4
+
+
+def test_capacity_rule_emits_combined_count_guard():
+    ent = {"name": "registrations", "fields": [
+        {"name": "event_id", "type": "INTEGER"}, {"name": "who", "type": "TEXT"}],
+        "rules": [{"type": "capacity", "field": "event_id", "ref": "events",
+                   "capacity_field": "capacity"}]}
+    hl = ab.render_add_endpoint(ent, "d")
+    # one combined SELECT rejects both missing-parent and full-parent
+    assert "capacity > (SELECT COUNT(*) FROM registrations WHERE event_id = @cap)" in hl
+    assert "not" in hl and "exists:x:@sqlite.select/*" in hl
+    assert all((len(l) - len(l.lstrip())) % 3 == 0
+               for l in hl.splitlines() if l.strip())

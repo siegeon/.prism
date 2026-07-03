@@ -115,6 +115,28 @@ def _enum_checks_inside(rule: dict) -> list[str]:
     return out
 
 
+def _capacity_guard(rule: dict, child_table: str) -> list[str]:
+    """Count/capacity rule: reject if the referenced parent is missing OR
+    already has >= capacity children. One combined SELECT (verified idiom):
+    it returns a row only when the parent exists AND has room, so a single
+    if/not/exists rejects both cases (R1 missing + R2 full)."""
+    f, ref = rule["field"], rule["ref"]
+    cap = rule.get("capacity_field", "capacity")
+    sql = (f"SELECT id FROM {ref} WHERE id = @cap AND {cap} > "
+           f"(SELECT COUNT(*) FROM {child_table} WHERE {f} = @cap)")
+    return [
+        f"{I}sqlite.select:{sql}",
+        f"{I*2}@cap:x:@.arguments/*/{f}",
+        f"{I}if",
+        f"{I*2}not",
+        f"{I*3}exists:x:@sqlite.select/*",
+        f"{I*2}.lambda",
+        f"{I*3}response.status.set:400",
+        f"{I*3}return",
+        f"{I*4}error:{ref} not found or at capacity",
+    ]
+
+
 def render_add_endpoint(entity: dict, db: str) -> str:
     t = entity["name"]
     rules = entity.get("rules", [])
@@ -133,6 +155,8 @@ def render_add_endpoint(entity: dict, db: str) -> str:
             lines += _min_guard(r)
         elif r["type"] == "enum":
             lines += _enum_checks_inside(r)
+        elif r["type"] == "capacity":
+            lines += _capacity_guard(r, t)
     cols = [f["name"] for f in _fields_of(entity)]
     params = ",".join("@" + c for c in cols)
     lines.append(f"{I}sqlite.execute:INSERT INTO {t} "
