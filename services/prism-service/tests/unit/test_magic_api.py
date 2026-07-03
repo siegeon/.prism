@@ -34,8 +34,15 @@ def client(tmp_path: Path, monkeypatch):
 
 
 def test_registered_on_shared_api_router():
+    # Probe via the OpenAPI schema — FastAPI >= 0.138 defers
+    # include_router() into _IncludedRouter objects with no .path, so
+    # the schema is the version-agnostic "actually mounted" contract
+    # (same idiom as test_api_agent_runs).
+    from fastapi import FastAPI
     from prism_service.api import api_router
-    paths = {getattr(r, "path", "") for r in api_router.routes}
+    app = FastAPI()
+    app.include_router(api_router)
+    paths = set(app.openapi()["paths"].keys())
     assert "/api/magic/status" in paths
 
 
