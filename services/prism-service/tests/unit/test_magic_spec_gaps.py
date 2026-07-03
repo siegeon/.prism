@@ -119,8 +119,11 @@ def test_check_spec_reports_domain_and_learned_questions():
 def test_learn_from_spec_enriches_archetype():
     arch = {"clinic": {"signals": {"appointment", "patient"},
                        "entities": {"appointments": ["patient_id", "date"]}}}
+    # two real domain signals (appointment + patient) — one shared word is
+    # coincidence, not identity (match threshold >= 2)
     spec = {"entities": [{"name": "appointments", "fields": [
-        {"name": "duration", "type": "INTEGER"}]}]}
+        {"name": "duration", "type": "INTEGER"},
+        {"name": "patient_id", "type": "INTEGER"}]}]}
     dom = g.learn_from_spec(spec, arch)
     assert dom == "clinic"
     assert "duration" in arch["clinic"]["entities"]["appointments"]

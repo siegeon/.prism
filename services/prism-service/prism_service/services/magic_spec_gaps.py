@@ -160,7 +160,13 @@ def _tokens(spec: dict) -> set:
     for e in spec.get("entities", []) or []:
         toks.add((e.get("name") or "").lower().rstrip("s"))
         for f in e.get("fields", []) or []:
-            toks.add((f.get("name") or "").lower())
+            fn = (f.get("name") or "").lower()
+            toks.add(fn)
+            # patient_id carries the 'patient' signal — split compounds so
+            # the >=2 match threshold sees real domain evidence.
+            for part in fn.split("_"):
+                if part and part != "id":
+                    toks.add(part)
     return toks
 
 
@@ -172,7 +178,9 @@ def match_domain(spec: dict, archetypes=ARCHETYPES):
         s = sum(1 for sig in a["signals"] if sig in toks or sig + "s" in toks)
         if s > score:
             best, score = dom, s
-    return best if score >= 1 else None
+    # one shared signal (e.g. 'appointments') is coincidence, not identity —
+    # a dog-grooming salon must not be labeled a clinic (owner: 75733882).
+    return best if score >= 2 else None
 
 
 def learned_gaps(spec: dict, archetypes=ARCHETYPES) -> list[dict]:
@@ -198,12 +206,16 @@ def learned_gaps(spec: dict, archetypes=ARCHETYPES) -> list[dict]:
             e = next((x for x in spec["entities"]
                       if (x.get("name") or "").lower().rstrip("s") == key), None)
             have = {(f.get("name") or "").lower() for f in (e.get("fields", []) if e else [])}
-            for tf in typ_fields:
-                if tf.lower() not in have and not tf.endswith("_id"):
-                    out.append(_gap("learned_field", ent, tf,
-                                    f"{ent} usually records '{tf}'.",
-                                    f"Should {_an(_singular(ent))} also record its "
-                                    f"{tf}?"))
+            missing = [tf for tf in typ_fields
+                       if tf.lower() not in have and not tf.endswith("_id")]
+            if missing:
+                # ONE question per entity, in plain words — never a
+                # field-by-field interrogation (owner: 9f32db02).
+                nice = ", ".join(m.replace("_", " ") for m in missing)
+                out.append(_gap("learned_fields", ent, missing[0],
+                                f"{ent} usually also records: {nice}.",
+                                f"For each {_singular(ent)}, should we also "
+                                f"note things like {nice}?"))
     return out[:6]
 
 

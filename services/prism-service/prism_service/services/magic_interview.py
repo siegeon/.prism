@@ -15,6 +15,7 @@ States:
 from __future__ import annotations
 
 import json
+import re
 
 from prism_service.services import magic_app_builder as ab
 from prism_service.services import magic_spec_gaps as gaps
@@ -76,6 +77,15 @@ class SpecInterview:
         new state."""
         if self.state in (READY, EXHAUSTED):
             return self.state
+        # Deterministic first: answers that carry structure fold straight
+        # into the spec BEFORE the stochastic refine, so the interview can
+        # never re-ask what the customer already said (owner: b3aca498 —
+        # "yeah - booked, done, or no-show" must become the enum on the spot).
+        for qa in qa_pairs:
+            gap = next((g for g in self.pending
+                        if g.get("question") == qa.get("question")), None)
+            if gap:
+                _fold_answer(self.spec, gap, qa.get("answer") or "")
         self.answered.extend(qa_pairs)
         self._prev_fp = _fingerprint(self.spec)
         self.spec = ab.normalize_spec(refine(self.spec, self.answered))
@@ -100,6 +110,41 @@ class SpecInterview:
         obj.state = d.get("state"); obj.pending = d.get("pending", [])
         obj.description = d.get("description", "")
         return obj
+
+
+_DECLINE = re.compile(
+    r"^\s*(ha\s+)?(no|nope|nah|skip|not (needed|really)|don.?t)", re.IGNORECASE)
+
+
+def _fold_answer(spec: dict, gap: dict, answer: str) -> None:
+    """Deterministically fold a structured answer into the spec. Enum values
+    ('booked, done, or no-show') become the enum rule; a yes to a min bound
+    becomes the rule. Declines fold nothing (the ask-once queue dismisses)."""
+    ent_name, field = gap.get("entity"), gap.get("field")
+    if not ent_name or not field or _DECLINE.match(answer or ""):
+        return
+    ent = next((e for e in spec.get("entities", []) or []
+                if (e.get("name") or "").lower() == str(ent_name).lower()), None)
+    if ent is None:
+        return
+    kind = gap.get("kind")
+    if kind == "missing_enum":
+        # strip filler, split on commas/or/slashes; keep short value tokens
+        text = re.sub(r"^(like i said|i said|yes|yeah|yep|sure|ok(ay)?)[,:\-\s]*",
+                      "", (answer or "").strip(), flags=re.IGNORECASE)
+        vals = [v.strip().strip(".").lower()
+                for v in re.split(r",|/| or | and ", text)]
+        vals = [v for v in vals if v and len(v) <= 24][:8]
+        if len(vals) >= 2 and not any(
+                r.get("type") == "enum" and r.get("field") == field
+                for r in ent.get("rules", []) or []):
+            ent.setdefault("rules", []).append(
+                {"type": "enum", "field": field, "values": vals})
+    elif kind == "maybe_min":
+        if not any(r.get("type") == "min" and r.get("field") == field
+                   for r in ent.get("rules", []) or []):
+            ent.setdefault("rules", []).append(
+                {"type": "min", "field": field, "value": 0})
 
 
 def run(spec: dict, refine, answer_provider, max_rounds: int = 6) -> SpecInterview:
