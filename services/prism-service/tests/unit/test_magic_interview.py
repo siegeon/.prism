@@ -84,3 +84,31 @@ def test_serialize_roundtrip_persists_session():
     assert iv2.state == iv.state
     assert iv2.questions() == iv.questions()
     assert iv2.spec == iv.spec
+
+
+def test_save_load_session_roundtrip(tmp_path):
+    iv = mi.SpecInterview(copy.deepcopy(THIN))
+    mi.save_session("acme", iv.to_dict(), data_dir=tmp_path)
+    loaded = mi.load_session("acme", data_dir=tmp_path)
+    assert loaded is not None
+    iv2 = mi.SpecInterview.from_dict(loaded)
+    assert iv2.state == iv.state and iv2.questions() == iv.questions()
+    # a customer who never started has no session
+    assert mi.load_session("nobody", data_dir=tmp_path) is None
+
+
+def test_business_facts_capture_domain_entities_and_qa():
+    iv = mi.run(copy.deepcopy(THIN), _refine_good, _answers, max_rounds=6)
+    facts = mi.business_facts(iv)
+    texts = " ".join(f["text"] for f in facts)
+    assert "clinic" in texts.lower()
+    assert "appointments" in texts and "patients" in texts
+    assert any(f["name"] == "clarification" for f in facts)
+
+
+def test_record_facts_writes_durable_memory(tmp_path):
+    iv = mi.run(copy.deepcopy(THIN), _refine_good, _answers, max_rounds=6)
+    path = mi.record_facts("acme", mi.business_facts(iv), data_dir=tmp_path)
+    from pathlib import Path
+    body = Path(path).read_text(encoding="utf-8")
+    assert "Business knowledge" in body and "clinic" in body.lower()
