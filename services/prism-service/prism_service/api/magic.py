@@ -33,8 +33,9 @@ def check_spec(body: CheckSpecBody) -> dict:
 
 class InterviewBody(BaseModel):
     spec: dict = {}          # start a new interview from this draft spec
-    session: dict = {}       # OR resume a serialized interview
+    session: dict = {}       # OR resume a serialized interview (explicit)
     answers: list = []       # [{question, answer}] to apply this turn
+    project: str = ""        # customer project — resume/persist across visits
 
 
 @router.post("/interview")
@@ -63,15 +64,24 @@ def interview(body: InterviewBody) -> dict:
         except Exception:
             return spec  # SLM hiccup: leave spec unchanged, state machine copes
 
-    if body.session:
-        iv = mi.SpecInterview.from_dict(body.session)
+    # resume: explicit session, else the customer's saved session for the
+    # project (PRISM remembers where they left off), else a fresh interview.
+    proj = (body.project or "").strip()
+    sess = body.session or (mi.load_session(proj) if proj else None)
+    if sess:
+        iv = mi.SpecInterview.from_dict(sess)
         if body.answers:
             iv.answer(body.answers, refine)
     else:
         iv = mi.SpecInterview(body.spec)
+    resumed = bool(sess) and not body.session
+    if proj:
+        mi.save_session(proj, iv.to_dict())          # survives restarts/visits
+        if iv.state == mi.READY:
+            mi.record_facts(proj, mi.business_facts(iv))  # PRISM = their expert
     return {"state": iv.state, "domain": iv.domain(),
-            "questions": iv.questions(), "spec": iv.spec,
-            "round": iv.round, "session": iv.to_dict()}
+            "questions": iv.questions(), "spec": iv.spec, "round": iv.round,
+            "resumed": resumed, "session": iv.to_dict()}
 
 
 class ConfigureBody(BaseModel):

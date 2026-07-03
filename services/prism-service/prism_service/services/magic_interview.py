@@ -103,3 +103,77 @@ def run(spec: dict, refine, answer_provider, max_rounds: int = 6) -> SpecIntervi
         qa = answer_provider(iv.questions())
         iv.answer(qa, refine)
     return iv
+
+
+# --- persistence: the interview lives in PRISM's per-project memory ----------
+
+def session_path(project: str, data_dir=None):
+    """Where a customer project's interview session is stored."""
+    from prism_service import config
+    base = data_dir if data_dir is not None else config.DATA_DIR
+    from pathlib import Path
+    return Path(base) / "projects" / project / ".interview.json"
+
+
+def save_session(project: str, session: dict, data_dir=None) -> None:
+    """Persist a serialized interview so it survives restarts + visits."""
+    p = session_path(project, data_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(session), encoding="utf-8")
+    import os
+    os.replace(tmp, p)
+
+
+def load_session(project: str, data_dir=None) -> dict | None:
+    """Load a customer's saved interview, or None if they haven't started."""
+    p = session_path(project, data_dir)
+    if not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def clear_session(project: str, data_dir=None) -> bool:
+    try:
+        session_path(project, data_dir).unlink()
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def business_facts(iv: "SpecInterview") -> list[dict]:
+    """The durable knowledge PRISM keeps about THIS customer's business, once
+    the interview is READY: the domain, the entities/rules they confirmed, and
+    every Q&A. Recorded as memories so PRISM's brain becomes their expert."""
+    facts: list[dict] = []
+    dom = iv.domain()
+    if dom:
+        facts.append({"name": f"domain-{dom}",
+                      "text": f"This customer's business is a {dom}."})
+    for e in iv.spec.get("entities", []) or []:
+        fields = ", ".join(f.get("name", "") for f in e.get("fields", []) or [])
+        rules = "; ".join(f"{r.get('type')}({r.get('field')})"
+                          for r in e.get("rules", []) or [])
+        facts.append({"name": f"entity-{e.get('name')}",
+                      "text": f"Tracks {e.get('name')} with fields: {fields}."
+                              + (f" Rules: {rules}." if rules else "")})
+    for qa in iv.answered:
+        facts.append({"name": "clarification",
+                      "text": f"Q: {qa.get('question')} A: {qa.get('answer')}"})
+    return facts
+
+
+def record_facts(project: str, facts: list[dict], data_dir=None) -> str:
+    """Write the customer's confirmed business facts as a durable markdown
+    memory under the project, so PRISM's brain ingests it and stays their
+    expert. Returns the path written."""
+    p = session_path(project, data_dir).with_name("business-facts.md")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"# Business knowledge — {project}", ""]
+    for f in facts:
+        lines.append(f"- {f['text']}")
+    p.write_text("\n".join(lines), encoding="utf-8")
+    return str(p)
