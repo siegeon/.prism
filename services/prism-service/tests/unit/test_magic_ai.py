@@ -92,3 +92,47 @@ def test_local_complete_maps_http_error(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", boom)
     with pytest.raises(ai.LocalLLMError):
         ai.local_complete([{"role": "user", "content": "hi"}])
+
+
+def test_generate_verified_repairs_until_ok():
+    from prism_service.services import magic_ai as ai
+    attempts = {"n": 0}
+
+    def complete(messages):
+        attempts["n"] += 1
+        # first try bad, second try good (4-space indent -> normalized)
+        if attempts["n"] == 1:
+            return "```hl\nsqlite.connect:db\n  bad\n```", {"total_tokens": 10}
+        return "```hl\nsqlite.connect:db\n    sqlite.select:SELECT 1\n```", {"total_tokens": 12}
+
+    def verify(hl):
+        # accept once the select is present
+        return ("sqlite.select" in hl, "needs a select")
+
+    out = ai.generate_verified("build it", lambda q, k=5: ["ctx"],
+                               verify=verify, complete=complete, max_rounds=3)
+    assert out["ok"] is True
+    assert out["rounds"] == 2
+    assert out["openai_tokens"] == 0 and out["anthropic_tokens"] == 0
+    # normalized to 3-space multiples
+    assert all((len(l) - len(l.lstrip())) % 3 == 0
+               for l in out["hyperlambda"].splitlines() if l.strip())
+
+
+def test_liberate_training_corpus_writes_and_ingests(tmp_path):
+    from prism_service.services import magic_ai as ai
+    snippets = [{"prompt": "P1", "completion": "C1"},
+                {"prompt": "P2", "completion": "C2", "type": "hl"}]
+    ingested = {}
+
+    def ingest(paths):
+        ingested["paths"] = paths
+        return 2
+
+    out = ai.liberate_training_corpus(lambda: snippets,
+                                      str(tmp_path / "corpus"), ingest)
+    assert out["snippets"] == 2 and out["docs_indexed"] == 2
+    assert out["openai_tokens"] == 0
+    files = list((tmp_path / "corpus").glob("*.md"))
+    assert len(files) == 2
+    assert "P1" in files[0].read_text() or "P1" in files[1].read_text()

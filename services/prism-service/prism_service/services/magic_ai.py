@@ -93,3 +93,67 @@ def make_brain_retriever(brain_search):
                 out.append(str(r))
         return out
     return _retrieve
+
+
+def _extract_hl(text: str) -> str:
+    import re
+    blocks = re.findall(r"```(?:hl|hyperlambda)?\s*\n(.*?)```", text, re.DOTALL)
+    return (blocks[0] if blocks else text).strip()
+
+
+def generate_verified(query: str, retrieve, verify, complete=local_complete,
+                      system: str = DEFAULT_SYSTEM, max_rounds: int = 4) -> dict:
+    """Substrate-grounded generate + deterministic normalize + verify/repair.
+
+    The gap-closer: a small model grounded in the retrieved Hyperlambda
+    context emits an endpoint; PRISM normalizes its whitespace, deploys it,
+    and if it fails feeds the REAL error + freshly-retrieved context back for
+    a repair round. Loops until it deploys + passes checks, or max_rounds.
+
+    verify(hyperlambda) -> (ok: bool, detail: str). Zero OpenAI/Anthropic.
+    """
+    from prism_service.services.magic_app_builder import normalize_indent
+    context = list(retrieve(query, 6) or [])
+    messages = _build_messages(query, context, system)
+    total = 0
+    last = ""
+    for rnd in range(max_rounds):
+        text, usage = complete(messages)
+        total += usage.get("total_tokens", 0)
+        hl = normalize_indent(_extract_hl(text))
+        ok, detail = verify(hl)
+        if ok:
+            return {"ok": True, "hyperlambda": hl, "rounds": rnd + 1,
+                    "context_used": len(context), "local_tokens": total,
+                    "openai_tokens": 0, "anthropic_tokens": 0}
+        last = detail
+        more = retrieve(detail, 3) or []
+        messages.append({"role": "assistant", "content": text[:1200]})
+        messages.append({"role": "user", "content":
+                         f"That failed: {detail}\nUse these verified patterns "
+                         f"and output ONLY the corrected Hyperlambda:\n"
+                         + "\n\n".join(more)})
+    return {"ok": False, "rounds": max_rounds, "detail": last,
+            "local_tokens": total, "openai_tokens": 0, "anthropic_tokens": 0}
+
+
+def liberate_training_corpus(fetch_snippets, corpus_dir, ingest) -> dict:
+    """Liberate a Magic tenant's ml_training_snippets from OpenAI: pull the
+    prompt/completion TEXT (dropping the OpenAI embeddings blob) and re-embed
+    it into PRISM's Brain with the local embedder.
+
+    fetch_snippets() -> list[{prompt, completion, type?, uri?}].
+    ingest(paths) -> doc count (e.g. Brain.ingest). Injectable for tests.
+    Note: corpus_dir must be a CLEAN path (Brain skips .claude/.venvs/etc).
+    """
+    import os
+    os.makedirs(corpus_dir, exist_ok=True)
+    snippets = list(fetch_snippets() or [])
+    for i, s in enumerate(snippets):
+        body = (f"# {s.get('prompt', '')}\n\n{s.get('completion', '')}\n\n"
+                f"(type: {s.get('type', 'hl')}, uri: {s.get('uri') or 'n/a'})")
+        with open(os.path.join(corpus_dir, f"{i:04d}.md"), "w",
+                  encoding="utf-8") as f:
+            f.write(body)
+    return {"snippets": len(snippets), "docs_indexed": ingest([corpus_dir]),
+            "openai_tokens": 0, "anthropic_tokens": 0}

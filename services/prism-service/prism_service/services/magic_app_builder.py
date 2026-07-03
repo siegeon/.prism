@@ -194,3 +194,39 @@ def deploy_app(spec: dict, execute=mc.execute) -> dict:
         endpoints.append(f"POST magic/modules/{mod}/{ent['name']}")
     return {"module": mod, "db": spec["db"], "endpoints": endpoints,
             "file_count": len(app["files"])}
+
+
+# --- deterministic whitespace repair (closes the small-model gap) ------------
+
+
+def normalize_indent(hl: str) -> str:
+    """Rescale a model's indentation to exact 3-space multiples.
+
+    A small model gets Hyperlambda's structure right but often emits a
+    non-3 indent unit (2 or 4 spaces) or drifts — which trips Magic's
+    whitespace-strict parser. If the emitted indentation is internally
+    CONSISTENT (a single unit), its GCD is that unit, and we can map each
+    line to depth = width/unit and re-emit at depth*3. Strips code fences.
+    """
+    lines = [l for l in hl.replace("\t", "   ").splitlines()]
+    lines = [l for l in lines if not l.strip().startswith("```")]
+    widths = {len(l) - len(l.lstrip(" ")) for l in lines if l.strip()}
+    widths.discard(0)
+    unit = 0
+    for w in sorted(widths):
+        unit = w if unit == 0 else _gcd(unit, w)
+    out = []
+    for l in lines:
+        if not l.strip():
+            out.append("")
+            continue
+        w = len(l) - len(l.lstrip(" "))
+        depth = (w // unit) if unit else 0
+        out.append(("   " * depth) + l.lstrip(" "))
+    return "\n".join(out).strip("\n")
+
+
+def _gcd(a: int, b: int) -> int:
+    while b:
+        a, b = b, a % b
+    return a
