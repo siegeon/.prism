@@ -272,6 +272,16 @@ def deploy_app(spec: dict, execute=mc.execute) -> dict:
             "file_count": len(app["files"])}
 
 
+def deploy_frontend(module: str, html: str, execute=mc.execute) -> str:
+    """Host the generated app IN the customer's Magic backend: save the
+    standalone index.html under /etc/www/<module>/ — Magic serves it at
+    /<module>/ on the tenant's own URL. Returns the site-relative path."""
+    body = html.replace('"', '""')
+    execute(f"io.folder.create:/etc/www/{module}/\n"
+            f'io.file.save:/etc/www/{module}/index.html\n{I}.:@"{body}"')
+    return f"/{module}/"
+
+
 # --- deterministic whitespace repair (closes the small-model gap) ------------
 
 

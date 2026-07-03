@@ -237,6 +237,25 @@ def finalize_build(project: str, spec: dict, data_dir=None,
         pass
     # 2. deploy to the live Magic tenant
     ab.deploy_app(spec)
+    # 2b. the customer's REAL app: a standalone frontend hosted BY Magic —
+    # they walk away with a URL, not a preview inside PRISM.
+    app_url = None
+    try:
+        from prism_service.services import magic_ui as mui2
+        from prism_service.services import magic_client as mc2
+        tokens2 = None
+        try:
+            from prism_service.services import design_intel as di2
+            tokens2 = di2.design_tokens(spec.get("db") or spec.get("module") or "")
+        except Exception:
+            pass
+        html = mui2.render_frontend(spec, tokens=tokens2)
+        (src / "index.html").write_text(html, encoding="utf-8")
+        path = ab.deploy_frontend(spec.get("module") or project, html)
+        base = (mc2.status() or {}).get("url", "").rstrip("/")
+        app_url = f"{base}{path}" if base else path
+    except Exception:
+        pass
     # 3. register the project source (so /understand shows it)
     try:
         from prism_service.services import source_service as ss
@@ -283,6 +302,7 @@ def finalize_build(project: str, spec: dict, data_dir=None,
                       f"POST magic/modules/{mod}/{e['name']}"]
     return {"project": project, "module": mod, "endpoints": endpoints,
             "source": str(src), "brain_docs": docs, "memories": memories,
+            "app_url": app_url,
             "preview_url": f"/magic/preview?project={project}"}
 
 
