@@ -78,23 +78,23 @@ def checkpoint_db(path: str | Path) -> bool:
 def run_sqlite_maintenance() -> int:
     """One maintenance pass over every known store of every project.
 
-    Returns the number of stores successfully checkpointed. Fully
-    best-effort: a failing project or store is logged and skipped."""
+    Enumerates project data dirs on the FILESYSTEM (config.list_projects
+    + PROJECTS_DIR) — deliberately NOT via project_context.get_project,
+    which would construct a full ProjectContext (Brain init, embedder
+    load) per project under the shared registry lock just to checkpoint
+    a file. Returns the number of stores successfully checkpointed.
+    Fully best-effort: a failing project or store is logged and skipped."""
     done = 0
     try:
-        from prism_service.project_context import get_all_projects, get_project
-        projects = get_all_projects() or []
+        from prism_service.config import PROJECTS_DIR, list_projects
+        projects = list_projects() or []
     except Exception as exc:  # noqa: BLE001
         logger.warning("sqlite maintenance: project enumeration failed: %s", exc)
         return 0
     for pid in projects:
-        try:
-            data_dir = get_project(pid)._data_dir
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("sqlite maintenance: skipping %s: %s", pid, exc)
-            continue
+        data_dir = Path(PROJECTS_DIR) / pid
         for rel in _STORE_RELPATHS:
-            if checkpoint_db(Path(data_dir) / rel):
+            if checkpoint_db(data_dir / rel):
                 done += 1
     logger.info("sqlite maintenance pass: %d store(s) checkpointed", done)
     return done
