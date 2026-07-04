@@ -12,6 +12,7 @@ MCP runs on a separate uvicorn started in a background thread on MCP_PORT.
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import faulthandler
 import logging
@@ -400,6 +401,7 @@ async def lifespan(_app: FastAPI):
             f"reclaiming for tid={threading.get_ident()}",
             file=_sys.stderr, flush=True,
         )
+    _sqlite_maint_task = None
     try:
         _LOCK_FILE.write_text(str(threading.get_ident()))
         _install_stackdump_handler()
@@ -481,6 +483,15 @@ async def lifespan(_app: FastAPI):
         # in Phases 2-3. Disable via PRISM_EVENT_POOL_INTERVAL=0.
         from prism_service.services.event_pool import start_event_pool
         start_event_pool()
+        # sqlite-hardening — periodic WAL checkpoint + PRAGMA optimize
+        # over every known per-project store (tasks/scores/brain/graph/
+        # recall_log). Long-lived readers keep WAL files from self-
+        # checkpointing (tasks.db main file observed a week stale, -wal
+        # files 3-8x the db). Every ~15 min + once on graceful shutdown;
+        # PRISM_SQLITE_MAINT_INTERVAL_S=0 disables. No VACUUM (operator-
+        # run job).
+        from prism_service.services.sqlite_maint import start_sqlite_maintenance
+        _sqlite_maint_task = start_sqlite_maintenance()
     except Exception:
         # Issue #66: this used to `print(e)` and swallow the stack, so a
         # half-broken boot left no traceback. Log the full stack to the
@@ -493,6 +504,16 @@ async def lifespan(_app: FastAPI):
         stop_watchdog()
     except Exception:
         _log.warning("watchdog stop failed", exc_info=True)
+    # sqlite-hardening — stop the periodic loop and run one final
+    # checkpoint pass so -wal files fold back into the main db files on
+    # graceful shutdown (instead of stranding a week of writes).
+    if _sqlite_maint_task is not None:
+        _sqlite_maint_task.cancel()
+    try:
+        from prism_service.services.sqlite_maint import run_sqlite_maintenance
+        await asyncio.to_thread(run_sqlite_maintenance)
+    except Exception:
+        _log.warning("shutdown sqlite maintenance failed", exc_info=True)
     _LOCK_FILE.unlink(missing_ok=True)
 
 
