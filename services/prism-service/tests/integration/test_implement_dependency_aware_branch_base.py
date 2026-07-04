@@ -238,9 +238,13 @@ def test_only_canonical_workflow_targeted():
     a worktree copy — the worktree under .claude/worktrees syncs separately
     and is explicitly out of scope (plan_doc)."""
     assert _WORKFLOWS.name == "workflows"
-    assert "worktrees" not in str(_WORKFLOWS), (
+    # Guard on the REPO-RELATIVE path, not the absolute string: a git
+    # worktree checkout can itself live under a .../worktrees/... dir, which
+    # must not trip the "pointed at a worktree copy" check (env artifact).
+    rel = _WORKFLOWS.relative_to(_SERVICE_ROOT.parent.parent)
+    assert rel.parts == (".claude", "workflows"), (
         "test is pointed at a worktree copy — only the canonical "
-        ".claude/workflows/implement.js is in scope"
+        f"<repo>/.claude/workflows/implement.js is in scope (got {rel})"
     )
     assert (_WORKFLOWS / "implement.js").exists(), (
         "canonical .claude/workflows/implement.js not found"

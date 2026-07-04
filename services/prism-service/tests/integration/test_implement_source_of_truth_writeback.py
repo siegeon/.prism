@@ -81,7 +81,12 @@ def _step_schema_block(src: str) -> str:
     """The STEP_SCHEMA object — the per-step structured-output contract that
     every non-locate step returns. AC7's source_tier field belongs here."""
     start = src.index("const STEP_SCHEMA = {")
-    end = src.index("// ── Phase: Pre-flight", start)
+    # implement.js banner comments are ASCII-clean ("-- Phase: ..."); older
+    # revisions used box-drawing dashes ("── Phase: ...") — accept both so
+    # this helper doesn't false-fail on a byte-clean workflow file.
+    end = src.find("// -- Phase: Pre-flight", start)
+    if end == -1:
+        end = src.index("// ── Phase: Pre-flight", start)
     return src[start:end]
 
 
@@ -242,9 +247,13 @@ def test_only_canonical_workflow_targeted():
     a worktree copy — the worktree under .claude/worktrees syncs separately
     and is explicitly out of scope."""
     assert _WORKFLOWS.name == "workflows"
-    assert "worktrees" not in str(_WORKFLOWS), (
+    # Guard on the REPO-RELATIVE path, not the absolute string: a git
+    # worktree checkout can itself live under a .../worktrees/... dir, which
+    # must not trip the "pointed at a worktree copy" check (env artifact).
+    rel = _WORKFLOWS.relative_to(_SERVICE_ROOT.parent.parent)
+    assert rel.parts == (".claude", "workflows"), (
         "test is pointed at a worktree copy — only the canonical "
-        ".claude/workflows/implement.js is in scope"
+        f"<repo>/.claude/workflows/implement.js is in scope (got {rel})"
     )
     assert (_WORKFLOWS / "implement.js").exists(), (
         "canonical .claude/workflows/implement.js not found"
