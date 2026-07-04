@@ -246,6 +246,12 @@ def finalize_build(project: str, spec: dict, data_dir=None,
     from prism_service import config
     from prism_service.services import magic_app_builder as ab
     dd = Path(data_dir) if data_dir is not None else Path(config.DATA_DIR)
+    # Each customer project is its OWN app: module + db are namespaced by
+    # PROJECT, never by the drafted name — two salons must never share
+    # tables or overwrite each other's hosted app (owner: multiplicity).
+    spec = dict(spec)
+    spec["module"] = project
+    spec["db"] = project
     src = dd / "projects" / project / "magic_app"
     src.mkdir(parents=True, exist_ok=True)
     if facts:  # business knowledge lands with the code so the brain learns it
