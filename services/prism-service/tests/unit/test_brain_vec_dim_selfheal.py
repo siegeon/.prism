@@ -37,6 +37,7 @@ class _FakeModel:
 @pytest.fixture(autouse=True)
 def _reset_module_state(monkeypatch):
     monkeypatch.setattr(be, "_MODEL", None)
+    monkeypatch.setattr(be, "_MODEL_ID", None)
     monkeypatch.setattr(be, "_SQLITE_VEC_LOADED", False)
 
 
@@ -110,4 +111,76 @@ def test_docs_vec_preserved_on_same_dim(tmp_path, monkeypatch):
     b2 = _new_brain(tmp_path)
     assert _docs_vec_dim(b2) == 384
     assert _vec_count(b2) == 1, "same-dim reboot must preserve existing vectors"
+    _close(b2)
+
+
+def _recorded_model(brain) -> str | None:
+    row = brain._brain.execute(
+        "SELECT value FROM index_meta WHERE key = 'embedder_model'"
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def test_docs_vec_rebuilds_on_model_swap_same_dim(tmp_path, monkeypatch):
+    # potion-base-32M -> potion-retrieval-32M are BOTH 512-dim, so the dim
+    # heal never fires — but their vector spaces are unrelated. The store
+    # must detect the swap via the persisted model id and rebuild docs_vec.
+    monkeypatch.setattr(be, "_MODEL", _FakeModel(512))
+    monkeypatch.setattr(be, "_MODEL_ID", "minishlab/potion-base-32M")
+    b1 = _new_brain(tmp_path)
+    if not b1.vector_enabled:
+        pytest.skip("sqlite-vec not available in this environment")
+    assert _recorded_model(b1) == "minishlab/potion-base-32M", (
+        "fresh store must record the live embedder model id"
+    )
+    b1._ingest_single("d1", "def foo():\n    return 1\n", source_file="d1.py")
+    assert _vec_count(b1) == 1
+    b1._update_last_index_timestamp()
+    _close(b1)
+
+    # Reopen the SAME store configured for model B (identical dim).
+    monkeypatch.setattr(be, "_MODEL", _FakeModel(512))
+    monkeypatch.setattr(be, "_MODEL_ID", "minishlab/potion-retrieval-32M")
+    b2 = _new_brain(tmp_path)
+    assert b2.vector_enabled
+    assert _docs_vec_dim(b2) == 512
+    assert _vec_count(b2) == 0, (
+        "model swap must rebuild docs_vec — old-model vectors share no "
+        "space with the new model"
+    )
+    assert _recorded_model(b2) == "minishlab/potion-retrieval-32M", (
+        "recorded model id must be updated to the live model"
+    )
+    row = b2._brain.execute(
+        "SELECT value FROM index_meta WHERE key = 'last_indexed'"
+    ).fetchone()
+    assert row is None, "model swap must reset last_indexed (mark for reindex)"
+    ok = b2._ingest_single("d2", "def bar():\n    return 2\n", source_file="d2.py")
+    assert ok is True
+    assert _vec_count(b2) == 1
+    _close(b2)
+
+
+def test_docs_vec_preserved_on_same_model_reopen(tmp_path, monkeypatch):
+    # The model heal must be CONDITIONAL: reopening with the SAME model id
+    # must not drop the table nor touch last_indexed.
+    monkeypatch.setattr(be, "_MODEL", _FakeModel(512))
+    monkeypatch.setattr(be, "_MODEL_ID", "minishlab/potion-retrieval-32M")
+    b1 = _new_brain(tmp_path)
+    if not b1.vector_enabled:
+        pytest.skip("sqlite-vec not available in this environment")
+    b1._ingest_single("d1", "content one", source_file="d1.py")
+    assert _vec_count(b1) == 1
+    b1._update_last_index_timestamp()
+    _close(b1)
+
+    monkeypatch.setattr(be, "_MODEL", _FakeModel(512))
+    monkeypatch.setattr(be, "_MODEL_ID", "minishlab/potion-retrieval-32M")
+    b2 = _new_brain(tmp_path)
+    assert _vec_count(b2) == 1, "same-model reopen must preserve vectors"
+    assert _recorded_model(b2) == "minishlab/potion-retrieval-32M"
+    row = b2._brain.execute(
+        "SELECT value FROM index_meta WHERE key = 'last_indexed'"
+    ).fetchone()
+    assert row is not None, "same-model reopen must not reset last_indexed"
     _close(b2)

@@ -152,6 +152,10 @@ def _similar_task_ids(
 # Optional dependency detection
 # ---------------------------------------------------------------------------
 _MODEL = None
+# HF id of the loaded embedder (e.g. "minishlab/potion-retrieval-32M").
+# Persisted into brain.db index_meta('embedder_model') so a model swap at
+# the SAME dim is detected at startup (see _init_brain_schema self-heal).
+_MODEL_ID: Optional[str] = None
 _MODEL_LOCK = threading.Lock()
 # Single-flight serialization of _MODEL.encode() native inference (GH #157).
 # DISTINCT from _MODEL_LOCK (which guards only the model LOAD at :459): two
@@ -521,7 +525,7 @@ def _try_enable_vector(db: sqlite3.Connection) -> bool:
     in _EMBEDDER_PRESETS); defaults to 'potion'. Returns True on success.
     """
     import os
-    global _MODEL, _SQLITE_VEC_LOADED
+    global _MODEL, _MODEL_ID, _SQLITE_VEC_LOADED
     try:
         import sqlite_vec  # type: ignore
         db.enable_load_extension(True)
@@ -562,6 +566,7 @@ def _try_enable_vector(db: sqlite3.Connection) -> bool:
                     _MODEL = _load_sentence_transformer(model_id)
                 # Log INSIDE the pin so the proof reflects the load context.
                 log_threadpool_info("after-model-load")
+            _MODEL_ID = model_id
             print(f"Brain: embedder = {preset} ({backend}: {model_id})",
                   file=sys.stderr)
             return True
@@ -967,6 +972,42 @@ class Brain:
                         )
                         self._brain.execute("DROP TABLE IF EXISTS docs_vec")
                         self._brain.commit()
+            except Exception:
+                pass
+            # Self-heal an embedder MODEL swap at the SAME dim (e.g.
+            # potion-base-32M -> potion-retrieval-32M, both 512): two models
+            # share no vector space, so mixing their vectors in one vec0
+            # table silently degrades cosine ranking. The live model id is
+            # persisted in index_meta('embedder_model'); on drift do exactly
+            # what the dim heal does — drop docs_vec (recreated below) and
+            # reset last_indexed so the next index pass re-embeds. A fresh
+            # (or pre-tracking) store just records the current model id.
+            try:
+                live_model = _MODEL_ID
+                if live_model:
+                    row = self._brain.execute(
+                        "SELECT value FROM index_meta "
+                        "WHERE key = 'embedder_model'"
+                    ).fetchone()
+                    recorded = row["value"] if row else None
+                    if recorded and recorded != live_model:
+                        print(
+                            f"Brain: embedder model changed {recorded!r} -> "
+                            f"{live_model!r}; rebuilding vec table "
+                            f"(reindex will re-embed)",
+                            file=sys.stderr,
+                        )
+                        self._brain.execute("DROP TABLE IF EXISTS docs_vec")
+                        self._brain.execute(
+                            "DELETE FROM index_meta WHERE key = 'last_indexed'"
+                        )
+                    if recorded != live_model:
+                        self._brain.execute(
+                            "INSERT OR REPLACE INTO index_meta (key, value) "
+                            "VALUES ('embedder_model', ?)",
+                            (live_model,),
+                        )
+                    self._brain.commit()
             except Exception:
                 pass
             try:

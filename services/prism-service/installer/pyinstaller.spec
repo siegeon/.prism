@@ -21,6 +21,8 @@ import os
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 # When PyInstaller invokes a spec, __file__ is not defined — anchor on
 # the spec's own dir via SPECPATH (PyInstaller injects this).
 HERE = Path(SPECPATH).resolve()
@@ -76,17 +78,26 @@ hiddenimports = [
     "sentence_transformers",
     "graphifyy",
     "tree_sitter",
-    "tree_sitter_language_pack",
     # MCP transport surface — pulled by name in server.py
     "mcp.server.lowlevel",
     "mcp.server.streamable_http",
 ]
 
+# tree-sitter-language-pack resolves grammars via per-language compiled
+# extension modules (`tree_sitter_language_pack.bindings.*` .pyd/.so) that
+# static analysis can't see. A bare hiddenimport ships the package's Python
+# shim but NONE of the grammar binaries — the frozen build would silently
+# fall back to regex chunking. collect_all pulls the submodules, the
+# dynamic libs AND the package data in one sweep.
+_tslp_datas, _tslp_binaries, _tslp_hidden = collect_all("tree_sitter_language_pack")
+datas += _tslp_datas
+hiddenimports += _tslp_hidden
+
 
 a = Analysis(
     [str(HERE / "service_entry.py")],
     pathex=[str(SERVICE_ROOT)],
-    binaries=[],
+    binaries=_tslp_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
