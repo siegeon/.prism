@@ -26,6 +26,12 @@ const feature = (_input && typeof _input === 'object' ? _input.feature : _input)
 // behavior (never emit task_link_session / session_id with an empty value).
 const SID = (_input && typeof _input === 'object' ? (_input.session_id || '') : '').trim()
 
+// The conductor daemon the pre-flight probes. Defaults to the CANONICAL
+// release web port (7778, what `prism start` binds and every customer runs);
+// a dev instance on another port passes api_base (e.g. http://127.0.0.1:8888).
+// Never hardcode a dev port — this script ships.
+const API_BASE = ((_input && typeof _input === 'object' ? _input.api_base : '') || 'http://127.0.0.1:7778').replace(/\/$/, '')
+
 // Fail fast: never spawn the fleet or create a tracked task for a placeholder.
 if (!feature || /^unspecified feature/i.test(feature)) {
   throw new Error('prototype workflow: no feature supplied. Invoke as Workflow({name:"prototype", args:{feature:"<what to plan>"}}). Refusing to plan a placeholder.')
@@ -127,13 +133,12 @@ const PREFLIGHT_SCHEMA = {
 
 // -- Phase 0: Pre-flight — MCP-vs-conductor daemon identity guard --------
 // A duplicate ~/.claude.json key can bind mcp__prism__* to a DIFFERENT
-// daemon (e.g. a fork on :9998) than the conductor HTTP endpoint on :8888.
-// This prototype registers a planning task via MCP at the end (Track) — a
-// misroute would park it on the WRONG store (the fork-misroute that burned
-// an entire session on 2026-07-04). Fail fast before any mutation.
+// daemon (a fork, or another port) than the conductor HTTP endpoint. This
+// prototype registers a planning task via MCP at the end (Track) — a
+// misroute would park it on the WRONG store. Fail fast before any mutation.
 phase('Pre-flight')
 const _pf = await agent(
-  `${PRISM_HINT}\n\nPRE-FLIGHT daemon-identity guard (READ-ONLY; use 127.0.0.1, NEVER localhost). Call \`prism_status\` (MCP) and read its \`prism_version\` (mcp_ver); \`curl -s -m5 http://127.0.0.1:8888/api/version\` and read that \`version\` (http_ver). Set identity_ok = (mcp_ver === http_ver). If they differ, your MCP tools are bound to a DIFFERENT daemon than the conductor and this prototype would register its planning task on the WRONG store — set identity_ok=false and halt_reason='MCP daemon <mcp_ver> != conductor daemon <http_ver> — /mcp reconnect prism to 127.0.0.1:8887 or restart the session'. Also read \`prism_status.data_dir\` for the store identity. Return {identity_ok, mcp_ver, http_ver, halt_reason}.`,
+  `${PRISM_HINT}\n\nPRE-FLIGHT daemon-identity guard (READ-ONLY; use 127.0.0.1, NEVER localhost). Call \`prism_status\` (MCP) and read its \`prism_version\` (mcp_ver); \`curl -s -m5 ${API_BASE}/api/version\` and read that \`version\` (http_ver). Set identity_ok = (mcp_ver === http_ver). If they differ, your MCP tools are bound to a DIFFERENT daemon than the conductor and this prototype would register its planning task on the WRONG store — set identity_ok=false and halt_reason='MCP daemon <mcp_ver> != conductor daemon <http_ver> — /mcp reconnect prism to the daemon serving ${API_BASE} or restart the session'. Also read \`prism_status.data_dir\` for the store identity. Return {identity_ok, mcp_ver, http_ver, halt_reason}.`,
   { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA })
 if (!_pf.identity_ok) {
   throw new Error(`PRE-FLIGHT HALT - ${_pf.halt_reason || 'MCP daemon != conductor daemon (identity mismatch)'} [mcp_ver=${_pf.mcp_ver} http_ver=${_pf.http_ver}]`)
@@ -188,7 +193,7 @@ const plan = await agent(
 phase('Mock')
 const mock = await agent(
   `Build a SINGLE self-contained, clickable HTML prototype that demonstrates the core user journey of this plan on 100% MOCK data. HARD RULES:\n`
-  + `- ZERO backend / ZERO real data: no fetch to a live endpoint, no DB, nothing touching the :8888/:8887 daemon or real PRISM stores. Bake mock JSON inline. This is so it CANNOT break real data.\n`
+  + `- ZERO backend / ZERO real data: no fetch to a live endpoint, no DB, nothing touching the PRISM daemon or real PRISM stores. Bake mock JSON inline. This is so it CANNOT break real data.\n`
   + `- Reskin to the REAL PRISM look and feel: Read services/prism-service/prism_service/web/src/index.css and copy the EXACT CSS custom properties (e.g. --background-base #0d1726, --surface-1/2/3, --text-primary/secondary, --border-default, --accent-*-bg/ring/fg). It must read as a native PRISM page, not a foreign UI.\n`
   + `- Visible banner stating it is a MOCK-DATA prototype that touches nothing real.\n`
   + `- Implement the plan's primary journeys as REAL click-throughs across multiple views with navigation between them. Inline vanilla JS only, no build step.\n`

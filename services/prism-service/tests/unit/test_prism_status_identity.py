@@ -87,3 +87,25 @@ def test_prototype_has_identity_guard():
     assert "identity" in src.lower(), (
         "prototype must perform an MCP-vs-conductor identity/version match"
     )
+
+
+# --- port-safety: the shipped workflows must not bake in DEV ports -----------
+# These scripts ship to every customer, whose canonical daemon is 7778 (web) /
+# 7777 (MCP). The dev instance runs 8888/8887; those must never be a shipped
+# default or appear in agent-executed instructions — only, at most, in a
+# maintainer comment documenting the api_base override.
+
+@pytest.mark.parametrize("script", ["implement.js", "prototype.js"])
+def test_workflows_do_not_ship_dev_ports(script):
+    lines = (_WORKFLOWS / script).read_text(encoding="utf-8").splitlines()
+    code = [ln for ln in lines if not ln.lstrip().startswith("//")]
+    offenders = [ln.strip() for ln in code
+                 if ":8888" in ln or ":8887" in ln or ":9998" in ln or ":9999" in ln]
+    assert not offenders, (
+        f"{script} ships DEV ports in executable/agent-facing code (customers "
+        f"run 7778/7777): {offenders}"
+    )
+    # The canonical default must be the release web port.
+    assert "127.0.0.1:7778" in "\n".join(code), (
+        f"{script} must default the conductor probe to the canonical 7778"
+    )
