@@ -9,6 +9,7 @@ specify a project falls back to it, so the endpoint refuses to delete.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from threading import Thread
@@ -23,6 +24,8 @@ from prism_service.project_context import get_all_projects, release_project
 from prism_service.services import source_service as ss
 from prism_service.services import trash as trash_svc
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -35,11 +38,14 @@ def _count_tasks(name: str) -> int:
     if not db.exists():
         return 0
     try:
-        c = sqlite3.connect(str(db))
+        c = sqlite3.connect(str(db), timeout=5.0)
         v = c.execute("SELECT COUNT(*) FROM tasks").fetchone()
         c.close()
         return int(v[0]) if v else 0
-    except Exception:
+    except Exception as exc:
+        # Graceful fallback stays (picker must render), but never
+        # swallow silently — a locked/corrupt db is an operator signal.
+        logger.warning("projects _count_tasks fallback for %s: %s", db, exc)
         return 0
 
 

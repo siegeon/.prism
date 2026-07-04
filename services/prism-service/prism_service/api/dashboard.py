@@ -8,6 +8,7 @@ rather than re-listing the static inventory counts that already live on
 project SQLite DBs used elsewhere.
 """
 
+import logging
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -16,6 +17,8 @@ from fastapi import APIRouter, Query
 
 from prism_service.project_context import get_project
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -23,9 +26,12 @@ def _count(db: Path, sql: str) -> int:
     if not db.exists():
         return 0
     try:
-        c = sqlite3.connect(str(db)); v = c.execute(sql).fetchone(); c.close()
+        c = sqlite3.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
         return int(v[0]) if v else 0
-    except Exception:
+    except Exception as exc:
+        # Graceful fallback stays (dashboard must render), but never
+        # swallow silently — a locked/corrupt db is an operator signal.
+        logger.warning("dashboard _count fallback for %s: %s", db, exc)
         return 0
 
 
@@ -33,9 +39,10 @@ def _rows(db: Path, sql: str) -> list:
     if not db.exists():
         return []
     try:
-        c = sqlite3.connect(str(db)); v = c.execute(sql).fetchall(); c.close()
+        c = sqlite3.connect(str(db), timeout=5.0); v = c.execute(sql).fetchall(); c.close()
         return v
-    except Exception:
+    except Exception as exc:
+        logger.warning("dashboard _rows fallback for %s: %s", db, exc)
         return []
 
 

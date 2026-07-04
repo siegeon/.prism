@@ -128,7 +128,7 @@ class MergeOperation(MemoryOperation):
         """Read the cluster member ids out of the candidate's scope_json."""
         import sqlite3
 
-        conn = sqlite3.connect(self._scores_db(ctx))
+        conn = sqlite3.connect(self._scores_db(ctx), timeout=5.0)
         try:
             row = conn.execute(
                 "SELECT scope_json FROM consolidation_candidates WHERE id=?",

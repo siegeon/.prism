@@ -6,6 +6,7 @@ summary stats and graph.json existence so the SPA can decide whether
 to embed the viewer or show a 'rebuild' prompt.
 """
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from pydantic import BaseModel
 from prism_service.config import project_data_dir
 from prism_service.project_context import get_project
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -22,9 +25,12 @@ def _count(db: Path, sql: str) -> int:
     if not db.exists():
         return 0
     try:
-        c = sqlite3.connect(str(db)); v = c.execute(sql).fetchone(); c.close()
+        c = sqlite3.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
         return int(v[0]) if v else 0
-    except Exception:
+    except Exception as exc:
+        # Graceful fallback stays (summary must render), but never
+        # swallow silently — a locked/corrupt db is an operator signal.
+        logger.warning("graph _count fallback for %s: %s", db, exc)
         return 0
 
 

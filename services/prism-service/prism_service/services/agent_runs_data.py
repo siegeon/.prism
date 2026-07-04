@@ -27,7 +27,7 @@ _FILTERS = ("task_id", "session_id", "workflow_name", "role", "step")
 
 
 def _connect(scores_db: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     return conn
 

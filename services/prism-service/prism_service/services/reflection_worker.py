@@ -36,7 +36,7 @@ def _is_noise_candidate(scores_db: str, candidate_id: str) -> bool:
     noise filter so the self-draining loop reflects real signal only and
     never burns claude tokens on an empty brief."""
     try:
-        conn = sqlite3.connect(scores_db)
+        conn = sqlite3.connect(scores_db, timeout=5.0)
         try:
             row = conn.execute(
                 "SELECT task_id, scope_json FROM consolidation_candidates "
