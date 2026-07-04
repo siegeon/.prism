@@ -11,6 +11,7 @@ import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/
 // `reduced` so prefers-reduced-motion collapses the tween (see segSpring below).
 import { useSpring } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
+import { fmtTokens } from "@/lib/format";
 
 export type TokenTurn = { out: number; dt_s: number; tok_s: number };
 
@@ -36,11 +37,6 @@ export type PhaseProgress = {
   // Full-SDLC time budget — the countdown bar drains eta_s against this.
   eta_total_s?: number | null;
 };
-
-function fmtTokens(t: number): string {
-  if (t >= 1000) return `${(t / 1000).toFixed(t >= 10000 ? 0 : 1)}k`;
-  return `${t}`;
-}
 
 function fmtClock(s: number): string {
   const m = Math.floor(s / 60);

@@ -83,6 +83,51 @@ _MACHINERY_RE = re.compile(
 )
 
 
+# v6.7.23 — the ONE token summer. Every surface used to sum
+# usage.output_tokens ONLY, undercounting real spend ~187x (audit across 36
+# transcripts: displayed 15.9M vs real 2.97B = output 15.9M + input 1.6M +
+# cache_read 2.88B + cache_creation 77.2M). All four usage fields count.
+# assets/stop_record_hook.py duplicates this field list (it cannot import
+# the service package) — keep the two in sync.
+USAGE_TOKEN_FIELDS: tuple[str, ...] = (
+    "output_tokens",
+    "input_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def usage_components(usage: dict | None) -> dict[str, int]:
+    """Per-field token counts off one `usage` dict, all defaulting 0.
+
+    `cache_creation_input_tokens` handles both shapes seen in real Claude
+    Code JSONL: the flat field (authoritative when present) and the nested
+    `cache_creation: {ephemeral_1h_input_tokens, ephemeral_5m_input_tokens}`
+    breakdown (summed only as a fallback — real transcripts carry BOTH and
+    the flat value equals the nested sum, so never double-count)."""
+    u = usage if isinstance(usage, dict) else {}
+    out = {f: int(u.get(f) or 0) for f in USAGE_TOKEN_FIELDS}
+    # Nested-shape fallback for cache_creation only: when the flat field is
+    # absent entirely, sum the nested breakdown (never both — real JSONL
+    # carries both shapes with equal values).
+    if u.get("cache_creation_input_tokens") is None:
+        nested = u.get("cache_creation")
+        if isinstance(nested, dict):
+            out["cache_creation_input_tokens"] = int(sum(
+                int(v or 0) for v in nested.values()
+                if isinstance(v, (int, float))
+            ))
+    return out
+
+
+def sum_usage(usage: dict | None) -> int:
+    """Total tokens for one `usage` dict: output + input + cache_read +
+    cache_creation. The single source of truth for token attribution —
+    every summation path (session_outcomes import, live conductor read,
+    per-turn timeline) routes through here."""
+    return sum(usage_components(usage).values())
+
+
 def is_machinery_turn(text: str) -> bool:
     """True when a turn is autonomous-loop MACHINERY (Stop-hook directive,
     loop-tick/ScheduleWakeup re-invocation, scheduler heartbeat), not genuine
@@ -200,7 +245,7 @@ def parse_session_metrics(path: Path) -> dict | None:
         role = (msg.get("role") or evt.get("type") or "").lower()
         usage = msg.get("usage") or {}
         if usage:
-            tokens_out += int(usage.get("output_tokens") or 0)
+            tokens_out += sum_usage(usage)
 
         # Collect plain-text spans for the role-level signals.
         raw_content = msg.get("content")
@@ -449,7 +494,7 @@ def import_unseen(
         return 0
     n = 0
     try:
-        conn = sqlite3.connect(scores_db)
+        conn = sqlite3.connect(scores_db, timeout=5.0)
     except sqlite3.Error:
         return 0
     try:
@@ -613,6 +658,76 @@ def _enqueue_with_signals(
         pass  # never break the metrics insert path
 
 
+# v6.7.23 — one-time token-total backfill. sum_usage widened the count from
+# output-only to all four usage fields, so HISTORICAL session_outcomes rows
+# (written before the fix) sit ~187x below rows imported after it — every
+# blended surface (SessionsPage median/p95, dashboard totals, the conductor's
+# max(outcome, live) read) would mix the two scales. Recompute tokens_used
+# off the transcripts still on disk; rows whose transcript is gone cannot be
+# recomputed and are left as-is (logged as skipped).
+# scores_db paths already backfilled this process (idempotent per boot; a
+# re-run is cheap anyway — recomputed==0 once totals match).
+_BACKFILLED_DBS: set[str] = set()
+
+
+def backfill_token_totals(
+    scores_db: str,
+    project_source_path: str,
+    claude_home: Path | None = None,
+    override_dir: str | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Recompute session_outcomes.tokens_used via sum_usage for every row
+    whose transcript JSONL still exists on disk; UPDATE in place.
+
+    Idempotent + cheap: only rows where the stored value differs are
+    written, and per-file sums reuse the (mtime,size) _TOKEN_CACHE. With
+    `dry_run` nothing is written (counts only). Returns
+    {"recomputed", "skipped_no_transcript", "unchanged"}."""
+    stats = {"recomputed": 0, "skipped_no_transcript": 0, "unchanged": 0}
+    try:
+        conn = sqlite3.connect(scores_db, timeout=5.0)
+    except sqlite3.Error:
+        return stats
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT session_id, tokens_used FROM session_outcomes"
+            ).fetchall()
+        except sqlite3.Error:
+            return stats
+        for sid, stored in rows:
+            if not sid:
+                continue
+            total = live_tokens_for_session(
+                str(sid), project_source_path, claude_home=claude_home,
+                override_dir=override_dir,
+            )
+            if total <= 0:
+                # Transcript aged off disk (or never matched) — can't
+                # recompute; leave the stored value alone.
+                stats["skipped_no_transcript"] += 1
+                continue
+            if int(stored or 0) == total:
+                stats["unchanged"] += 1
+                continue
+            if not dry_run:
+                try:
+                    conn.execute(
+                        "UPDATE session_outcomes SET tokens_used = ? "
+                        "WHERE session_id = ?",
+                        (total, str(sid)),
+                    )
+                except sqlite3.Error:
+                    continue
+            stats["recomputed"] += 1
+        if not dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+    return stats
+
+
 def start_transcript_importer() -> None:
     """Daemon-loop driver — runs forever, polls every interval seconds.
 
@@ -656,6 +771,35 @@ def start_transcript_importer() -> None:
                             f"[transcripts] {pid}: imported {n} session(s)",
                             file=sys.stderr, flush=True,
                         )
+                    # v6.7.23 — one-time (per process) token-total backfill:
+                    # heal pre-fix output-only rows so no surface blends the
+                    # two scales. Env-gated; idempotent; skips rows whose
+                    # transcript is gone.
+                    if (scores_db not in _BACKFILLED_DBS
+                            and os.environ.get(
+                                "PRISM_TOKEN_BACKFILL", "1",
+                            ).strip().lower() not in ("0", "off", "false")):
+                        _BACKFILLED_DBS.add(scores_db)
+                        try:
+                            b = backfill_token_totals(
+                                scores_db, sp or "", claude_home,
+                                override_dir=cpd or None,
+                            )
+                            if b["recomputed"] or b["skipped_no_transcript"]:
+                                print(
+                                    f"[transcripts] {pid}: token backfill "
+                                    f"recomputed={b['recomputed']} "
+                                    f"skipped_no_transcript="
+                                    f"{b['skipped_no_transcript']} "
+                                    f"unchanged={b['unchanged']}",
+                                    file=sys.stderr, flush=True,
+                                )
+                        except Exception as be:
+                            print(
+                                f"[transcripts] {pid}: token backfill error "
+                                f"{type(be).__name__}: {be}",
+                                file=sys.stderr, flush=True,
+                            )
                     # v6.2.16 — same cadence, bridge Claude Code auto-memory
                     # (~/.claude/projects/<slug>/memory/*.md or a per-project
                     # configured override) into PRISM Memory. Best-effort:
@@ -702,19 +846,21 @@ def _project_source_path(project_id: str) -> str:
 # ---------------------------------------------------------------------------
 # LIVE token read (conductor SDLC bar). The post-hoc `session_outcomes` table
 # is only written when the importer sees a session — so an IN-PROGRESS task
-# always reads 0 tok there. These helpers sum `output_tokens` straight off the
+# always reads 0 tok there. These helpers sum ALL usage token fields (see
+# sum_usage) straight off the
 # transcript JSONL on disk, in real time, including the workflow-subagent
 # transcripts filed under <slug>/<session-uuid>/ (they carry the parent
 # sessionId, so their spend belongs to the same session). Keyed by (mtime,size)
 # so the 5s conductor poll never re-reads an unchanged multi-MB transcript.
 # ---------------------------------------------------------------------------
 
-# path -> (mtime, size, output_tokens)
+# path -> (mtime, size, total_tokens)
 _TOKEN_CACHE: dict[str, tuple[float, int, int]] = {}
 
 
-def _sum_output_tokens(path: Path) -> int:
-    """Sum assistant `output_tokens` across one transcript JSONL. Cached on
+def _sum_billable_tokens(path: Path) -> int:
+    """Sum ALL usage token fields (sum_usage: output + input + cache_read +
+    cache_creation) across one transcript JSONL. Cached on
     (mtime, size) so unchanged files cost nothing on repeat polls."""
     try:
         st = path.stat()
@@ -736,7 +882,7 @@ def _sum_output_tokens(path: Path) -> int:
                 continue
             usage = (evt.get("message") or {}).get("usage") or {}
             if usage:
-                total += int(usage.get("output_tokens") or 0)
+                total += sum_usage(usage)
     except OSError:
         return cached[2] if cached else 0
     _TOKEN_CACHE[key] = (st.st_mtime, st.st_size, total)
@@ -802,7 +948,7 @@ def live_tokens_for_session(
     if not session_id:
         return 0
     if override_dir and override_dir.strip():
-        return sum(_sum_output_tokens(p)
+        return sum(_sum_billable_tokens(p)
                    for p in _override_session_paths(override_dir, session_id))
     if not project_path:
         return 0
@@ -817,7 +963,7 @@ def live_tokens_for_session(
             continue
         main = sub / f"{session_id}.jsonl"
         if main.is_file() and main not in seen:
-            total += _sum_output_tokens(main)
+            total += _sum_billable_tokens(main)
             seen.add(main)
         # Subagent transcripts (workflow agents) live under the session dir
         # and carry the parent sessionId — their spend is part of this session.
@@ -825,13 +971,14 @@ def live_tokens_for_session(
         if sess_dir.is_dir():
             for f in sess_dir.rglob("*.jsonl"):
                 if f not in seen:
-                    total += _sum_output_tokens(f)
+                    total += _sum_billable_tokens(f)
                     seen.add(f)
     return total
 
 
-# path -> (mtime, size, [(epoch_s, output_tokens), ...]) — same (mtime,size)
-# caching discipline as _sum_output_tokens, but a KEYED timeline of assistant
+# path -> (mtime, size, [(epoch_s, tokens), ...]) — tokens per sum_usage (all
+# four usage fields). Same (mtime,size)
+# caching discipline as _sum_billable_tokens, but a KEYED timeline of assistant
 # turns so token spend can be attributed to a wall-clock window (e.g. the
 # turn-to-turn interval on the task-detail timeline).
 _TOKEN_EVENTS_CACHE: dict[str, tuple[float, int, list[tuple[float, int]]]] = {}
@@ -870,7 +1017,7 @@ def _token_events(path: Path) -> list[tuple[float, int]]:
             except json.JSONDecodeError:
                 continue
             usage = (evt.get("message") or {}).get("usage") or {}
-            tok = int(usage.get("output_tokens") or 0)
+            tok = sum_usage(usage)
             if tok <= 0:
                 continue
             ep = _parse_iso_epoch(evt.get("timestamp") or "")

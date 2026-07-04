@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+import { fmtTokens } from "@/lib/format";
 
 type Row = {
   task_id?: string;
@@ -307,7 +308,7 @@ export default function LearningPage() {
               (agentAgg.per_role ?? []).map((r) => (
                 <div key={r.role} className="flex justify-between text-xs py-0.5">
                   <span className="font-mono opacity-80">{r.role ?? "—"}</span>
-                  <span className="font-mono opacity-60">{r.total_tokens ?? 0} tok</span>
+                  <span className="font-mono opacity-60">{fmtTokens(r.total_tokens ?? 0)} tok</span>
                 </div>
               ))
             )}
@@ -331,7 +332,7 @@ export default function LearningPage() {
                 </span>
                 <span className="text-xs opacity-50 w-40 truncate font-mono">{a.model ?? "—"}</span>
                 <span className="font-mono text-xs opacity-60 w-16 text-right">{fmtMs(a.duration_ms)}</span>
-                <span className="font-mono text-xs opacity-60 w-20 text-right">{a.tokens ?? "—"} tok</span>
+                <span className="font-mono text-xs opacity-60 w-20 text-right">{a.tokens != null ? fmtTokens(a.tokens) : "—"} tok</span>
                 {a.gate_state && a.gate_state !== "none" && (
                   <span className="text-[10px] uppercase tracking-wider text-amber-300/80 w-14">
                     {a.gate_state}

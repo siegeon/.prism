@@ -1,5 +1,6 @@
 import { CheckCircle2, Lock, Circle, CircleDot } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fmtTokens } from "@/lib/format";
 
 export type Step = {
   id: string;
@@ -77,7 +78,7 @@ export default function WorkflowLanes({ steps, workflow }: { steps: Step[]; work
             )}
             {workflow.model && <span className="text-xs opacity-60 font-mono">{workflow.model}</span>}
             {workflow.total_tokens > 0 && (
-              <span className="text-xs opacity-60 font-mono">{workflow.total_tokens.toLocaleString()} tok</span>
+              <span className="text-xs opacity-60 font-mono">{fmtTokens(workflow.total_tokens)} tok</span>
             )}
           </div>
           <div className="mt-2.5 h-1 rounded-full bg-[color:var(--midground-base)]/10 overflow-hidden">

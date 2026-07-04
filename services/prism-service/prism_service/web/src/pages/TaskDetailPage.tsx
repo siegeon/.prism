@@ -12,6 +12,8 @@ import Markdown from "@/components/Markdown";
 import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
+// "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
+import { fmtTokens } from "@/lib/format";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -188,13 +190,6 @@ function fmtGap(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
 }
-// "476.9k" / "512" — compact token count.
-function fmtTokens(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "0";
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k`;
-  return String(n);
-}
-
 const ACTION_TONE: Record<string, PillTone> = {
   created: "violet",
   updated: "slate",
@@ -1001,7 +996,7 @@ export default function TaskDetailPage() {
                 <div className="flex flex-wrap gap-2 mt-2">
                   {[
                     ["duration", `${s.duration_s ?? 0}s`],
-                    ["tokens", String(s.tokens_used ?? 0)],
+                    ["tokens", fmtTokens(s.tokens_used ?? 0)],
                     ["read", String(s.files_read ?? 0)],
                     ["modified", String(s.files_modified ?? 0)],
                     ["skills", String(s.skills_invoked ?? 0)],
