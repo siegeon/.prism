@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.28"
+PRISM_VERSION = "6.7.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.29: workflow daemon-IDENTITY preflight. The implement.js pre-flight "
+    "proved the conductor daemon on :8888 was reachable but NOT that the "
+    "drive's MCP tools pointed at that SAME daemon — a duplicate ~/.claude.json "
+    "key can bind mcp__prism__* to a fork on :9998 while the conductor is main "
+    "on :8888, silently driving the WRONG store (burned a whole session "
+    "2026-07-04). Now: prism_status/sync_status returns `data_dir` (which store "
+    "answered); implement.js pre-flight step 5 + prototype.js Phase-0 compare "
+    "prism_status.prism_version (MCP) vs curl :8888/api/version (conductor) and "
+    "HALT on mismatch with a /mcp-reconnect remediation line; identity_ok is "
+    "folded into the implement.js ok= gate. "
     "v6.7.28: conductor live-token reads are now INCREMENTAL. The ~5s poll "
     "called _sum_billable_tokens / _token_events, which re-read + json.loads "
     "the ENTIRE transcript on every (mtime,size) cache miss — and an "

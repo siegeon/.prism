@@ -114,6 +114,32 @@ const TRACK_SCHEMA = {
 
 const PRISM_HINT = 'You have PRISM MCP tools available via ToolSearch. Load them first: ToolSearch("select:mcp__prism__brain_search,mcp__prism__memory_recall,mcp__prism__brain_understand"). Project is "prism".'
 
+const PREFLIGHT_SCHEMA = {
+  type: 'object',
+  required: ['identity_ok', 'halt_reason'],
+  properties: {
+    identity_ok: { type: 'boolean', description: 'prism_status.prism_version (MCP) === /api/version (conductor HTTP) — false = MCP bound to a different/fork daemon than the conductor' },
+    mcp_ver: { type: 'string' },
+    http_ver: { type: 'string' },
+    halt_reason: { type: 'string' },
+  },
+}
+
+// -- Phase 0: Pre-flight — MCP-vs-conductor daemon identity guard --------
+// A duplicate ~/.claude.json key can bind mcp__prism__* to a DIFFERENT
+// daemon (e.g. a fork on :9998) than the conductor HTTP endpoint on :8888.
+// This prototype registers a planning task via MCP at the end (Track) — a
+// misroute would park it on the WRONG store (the fork-misroute that burned
+// an entire session on 2026-07-04). Fail fast before any mutation.
+phase('Pre-flight')
+const _pf = await agent(
+  `${PRISM_HINT}\n\nPRE-FLIGHT daemon-identity guard (READ-ONLY; use 127.0.0.1, NEVER localhost). Call \`prism_status\` (MCP) and read its \`prism_version\` (mcp_ver); \`curl -s -m5 http://127.0.0.1:8888/api/version\` and read that \`version\` (http_ver). Set identity_ok = (mcp_ver === http_ver). If they differ, your MCP tools are bound to a DIFFERENT daemon than the conductor and this prototype would register its planning task on the WRONG store — set identity_ok=false and halt_reason='MCP daemon <mcp_ver> != conductor daemon <http_ver> — /mcp reconnect prism to 127.0.0.1:8887 or restart the session'. Also read \`prism_status.data_dir\` for the store identity. Return {identity_ok, mcp_ver, http_ver, halt_reason}.`,
+  { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA })
+if (!_pf.identity_ok) {
+  throw new Error(`PRE-FLIGHT HALT - ${_pf.halt_reason || 'MCP daemon != conductor daemon (identity mismatch)'} [mcp_ver=${_pf.mcp_ver} http_ver=${_pf.http_ver}]`)
+}
+log(`Pre-flight OK - MCP and conductor agree on daemon identity (${_pf.http_ver}).`)
+
 // -- Phase 1: Recall (parallel mine of brain + memory) ------------------
 phase('Recall')
 const [brain, mem] = await parallel([
