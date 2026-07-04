@@ -633,6 +633,11 @@ class GraphService:
         except Exception:
             _ver = "unknown"
         out: dict = {"prism_version": _ver,
+                     # data_dir identifies WHICH store answered — the check a
+                     # workflow preflight uses to catch an MCP bound to a
+                     # different daemon than the conductor (the fork-misroute
+                     # trap: task 1e67253c).
+                     "data_dir": str(self._project_dir),
                      "docs": 0, "code_docs": 0, "staged_files": 0,
                      "entities": 0, "entities_with_graphify_id": 0,
                      "relationships": 0, "communities": 0,
