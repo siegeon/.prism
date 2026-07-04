@@ -211,6 +211,10 @@ def test_record_session_outcome_links_in_progress_task(project):
     t = json.loads(_text(_call("task_create", {"title": "active task"})))
     tid = t["id"]
     # Put the task in_progress — the precondition for the auto-writer.
+    # The conductor session gate (ef81fc15) refuses a sessionless
+    # in_progress flip, so link the driving session first — mirroring the
+    # real drive ordering (implement.js links in Locate before any flip).
+    _call("task_link_session", {"task_id": tid, "session_id": "S-pre"})
     _call("task_update", {"id": tid, "status": "in_progress"})
 
     # Session ends: the Stop hook's record_session_outcome lands here.

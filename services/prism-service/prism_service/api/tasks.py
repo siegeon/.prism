@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from prism_service.data_dir import prototype_file
 from prism_service.project_context import get_project
+from prism_service.services.task_service import SESSION_GATE_FIX
 
 router = APIRouter()
 
@@ -109,6 +110,10 @@ class TaskCreate(BaseModel):
     likely_misfire: str = ""
     full_outcome_complete: bool = False
     enter_conductor: bool = False
+    # Conductor session gate (ef81fc15): optional driving session to link
+    # atomically at create time — REQUIRED when enter_conductor is true so
+    # a task can never be handed to the conductor without a session.
+    session_id: Optional[str] = None
 
 
 @router.post("")
@@ -118,10 +123,16 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     Backs the /conductor 'create task -> enter conductor' onboarding
     affordance. When enter_conductor is true the new task is immediately
     advanced into the workflow (same path as the MCP conductor_advance tool)
-    so it appears on the SDLC swimlanes right away.
+    so it appears on the SDLC swimlanes right away — which is exactly why a
+    session must ride along: sessionless conductor tiles are frozen (no
+    transcript, no tokens, no live signals). The gate is validated BEFORE
+    the row is inserted so a refusal never orphans a task.
     """
     if not (body.title or "").strip():
         raise HTTPException(422, "title is required")
+    sid = (body.session_id or "").strip()
+    if body.enter_conductor and not sid:
+        raise HTTPException(422, SESSION_GATE_FIX)
     ctx = get_project(project)
     task = ctx.task_svc.create(
         title=body.title.strip(),
@@ -131,12 +142,48 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         likely_misfire=body.likely_misfire or "",
         full_outcome_complete=bool(body.full_outcome_complete),
     )
-    advanced = None
+    out: dict = {"task": task, "advanced": None}
+    if sid:
+        ctx.task_svc.link_session(task.id, sid)
+        out["sessions"] = ctx.task_svc.sessions_for_task(task.id)
     if body.enter_conductor:
         cond = getattr(ctx, "conductor_svc", None)
         if cond is not None:
-            advanced = cond.advance_task(task.id, validation="entered via SPA onboarding")
-    return {"task": task, "advanced": advanced}
+            out["advanced"] = cond.advance_task(
+                task.id, validation="entered via SPA onboarding",
+                session_id=sid or None,
+            )
+    return out
+
+
+class SessionLinkBody(BaseModel):
+    session_id: str
+
+
+@router.post("/{task_id}/sessions")
+def link_task_session(
+    task_id: str, body: SessionLinkBody, project: str = Query("default"),
+) -> dict:
+    """REST twin of the MCP `task_link_session` verb (ef81fc15).
+
+    Upserts the same task_sessions(task_id, session_id) row through the
+    single TaskService writer — idempotent on re-link (started_at keeps its
+    first-observed stamp) — and returns the full linked list so the caller
+    can immediately verify the association that unblocks the conductor
+    session gate on PATCH -> in_progress.
+    """
+    svc = _svc(project)
+    if svc.get(task_id) is None:
+        raise HTTPException(404, "task not found")
+    sid = (body.session_id or "").strip()
+    if not sid:
+        raise HTTPException(422, "session_id is required")
+    linked = svc.link_session(task_id, sid)
+    return {
+        "task_id": task_id,
+        "linked": bool(linked),
+        "sessions": svc.sessions_for_task(task_id),
+    }
 
 
 @router.get("/next")
@@ -313,6 +360,18 @@ def update_task(
     kwargs = {k: v for k, v in body.dict().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "no fields to update")
+    # Conductor session gate (ef81fc15): flipping a task to in_progress
+    # hands it to the conductor (intake lane on /conductor). Refuse the
+    # TRANSITION when no session is linked — this exact sessionless PATCH
+    # produced 5 frozen conductor tiles on the live board. Grandfathered
+    # rows already in_progress are untouched (same-status PATCHes and
+    # non-status fields pass through).
+    if kwargs.get("status") == "in_progress":
+        current = svc.get(task_id)
+        if current is None:
+            raise HTTPException(404, "task not found")
+        if current.status != "in_progress" and not svc.sessions_for_task(task_id):
+            raise HTTPException(422, SESSION_GATE_FIX)
     t = svc.update(task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")

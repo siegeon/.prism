@@ -1183,6 +1183,7 @@ TOOLS: list[Tool] = [
                 "stop_if": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: set the stop conditions."},
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
+                "session_id": {"type": "string", "description": "Driving session to auto-link when flipping status to in_progress. The conductor session gate (ef81fc15) refuses a sessionless in_progress transition; when omitted the active request session is resolved and linked automatically."},
             },
             "required": ["id"],
         },
@@ -3944,6 +3945,34 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
+            # Conductor session gate (ef81fc15): flipping to in_progress
+            # hands the task to the conductor — a sessionless tile is
+            # frozen (no transcript, no tokens). AUTO-LINK the caller's
+            # session when one is resolvable (explicit session_id arg >
+            # real transcript session > MCP request handle) so legitimate
+            # drives keep working; refuse with a structured error only
+            # when nothing is resolvable. Transitions only — a task
+            # already in_progress (incl. grandfathered sessionless rows)
+            # passes through.
+            if arguments.get("status") == "in_progress":
+                _cur = task_svc.get(arguments["id"])
+                if (_cur is not None and _cur.status != "in_progress"
+                        and not task_svc.sessions_for_task(_cur.id)):
+                    _sid = (str(arguments.get("session_id") or "").strip()
+                            or _resolve_link_session_id())
+                    if _sid:
+                        task_svc.link_session(_cur.id, _sid)
+                    else:
+                        from prism_service.services.task_service import (
+                            SESSION_GATE_FIX,
+                        )
+                        return [TextContent(type="text", text=_json({
+                            "error": SESSION_GATE_FIX,
+                            "task_id": arguments["id"],
+                            "fix": ("call task_link_session(task_id, "
+                                    "session_id) or pass session_id on this "
+                                    "task_update, then retry"),
+                        }))]
             task = task_svc.update(arguments["id"], **update_kwargs)
             if task is None:
                 return [TextContent(type="text", text=_json({"error": f"Task {arguments['id']} not found"}))]
