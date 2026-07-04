@@ -19,10 +19,8 @@ _HERE = Path(__file__).resolve()
 _PKG = _HERE.parent.parent.parent / "prism_service"
 
 # Files allowed to keep bare connects, with the reason on record.
-_ALLOWLIST = {
-    # Owned by a parallel PR — remove once it lands with its own sweep.
-    "services/claude_transcripts.py",
-}
+# (Empty since the token-attribution PR swept claude_transcripts.py.)
+_ALLOWLIST: set[str] = set()
 
 # sqlite3.connect( ...args... ) — args may span lines but never contain
 # an unbalanced ')' in this codebase (one nested call like str(db) is

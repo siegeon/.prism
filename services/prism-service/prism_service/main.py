@@ -12,6 +12,7 @@ MCP runs on a separate uvicorn started in a background thread on MCP_PORT.
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import faulthandler
 import logging
@@ -512,11 +513,20 @@ async def lifespan(_app: FastAPI):
     # the lifespan (the mocked worker never runs -> await never resolves).
     if _sqlite_maint_task is not None:
         _sqlite_maint_task.cancel()
-    try:
-        from prism_service.services.sqlite_maint import run_sqlite_maintenance
-        run_sqlite_maintenance()
-    except Exception:
-        _log.warning("shutdown sqlite maintenance failed", exc_info=True)
+        # Await the cancellation so an in-flight to_thread checkpoint pass
+        # finishes before the synchronous pass below runs against the same
+        # files, and so loop close doesn't warn about a pending task.
+        try:
+            await _sqlite_maint_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        # The final pass mirrors the loop: only when maintenance is enabled
+        # (interval 0 opted out of the loop, so it opts out here too).
+        try:
+            from prism_service.services.sqlite_maint import run_sqlite_maintenance
+            run_sqlite_maintenance()
+        except Exception:
+            _log.warning("shutdown sqlite maintenance failed", exc_info=True)
     _LOCK_FILE.unlink(missing_ok=True)
 
 
