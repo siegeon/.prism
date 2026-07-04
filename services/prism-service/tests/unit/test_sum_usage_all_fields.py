@@ -111,3 +111,74 @@ def test_token_events_carry_full_turn_tokens(tmp_path):
     _write_transcript(d / f"{sid}.jsonl", sid, [_FULL_USAGE])
     events = ct.live_token_events_for_session(sid, "", override_dir=str(d))
     assert [tok for _, tok in events] == [_FULL_TOTAL]
+
+
+# ---------------------------------------------------------------------------
+# Backfill — heal pre-fix output-only session_outcomes rows so no surface
+# blends the two scales (old output-only vs new all-four-fields).
+# ---------------------------------------------------------------------------
+
+def _make_scores_db(path: Path, rows: list[tuple[str, int]]) -> str:
+    import sqlite3
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE session_outcomes ("
+            "session_id TEXT PRIMARY KEY, duration_s REAL, "
+            "tokens_used INTEGER, files_read INTEGER, "
+            "files_modified INTEGER, skills_invoked INTEGER)"
+        )
+        for sid, tok in rows:
+            conn.execute(
+                "INSERT INTO session_outcomes (session_id, tokens_used) "
+                "VALUES (?, ?)", (sid, tok),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return str(path)
+
+
+def _tokens_used(db: str) -> dict:
+    import sqlite3
+    conn = sqlite3.connect(db)
+    try:
+        return dict(conn.execute(
+            "SELECT session_id, tokens_used FROM session_outcomes"
+        ).fetchall())
+    finally:
+        conn.close()
+
+
+def test_backfill_recomputes_stale_output_only_rows(tmp_path):
+    """Historical rows written before the fix hold output-only totals;
+    backfill_token_totals recomputes them via sum_usage off the transcript
+    still on disk, leaves transcript-less rows alone, and is idempotent."""
+    d = tmp_path / "transcripts"
+    sid = "sess-backfill"
+    _write_transcript(d / f"{sid}.jsonl", sid, [_FULL_USAGE, _FULL_USAGE])
+    db = _make_scores_db(
+        tmp_path / "scores.db",
+        [(sid, 14), ("sess-gone", 999)],  # 14 = old output-only sum
+    )
+    stats = ct.backfill_token_totals(db, "", override_dir=str(d))
+    assert stats == {"recomputed": 1, "skipped_no_transcript": 1,
+                     "unchanged": 0}
+    vals = _tokens_used(db)
+    assert vals[sid] == 2 * _FULL_TOTAL
+    assert vals["sess-gone"] == 999  # residual: transcript gone, left as-is
+    # Idempotent: a second pass writes nothing.
+    stats2 = ct.backfill_token_totals(db, "", override_dir=str(d))
+    assert stats2 == {"recomputed": 0, "skipped_no_transcript": 1,
+                      "unchanged": 1}
+
+
+def test_backfill_dry_run_writes_nothing(tmp_path):
+    d = tmp_path / "transcripts"
+    sid = "sess-dryrun"
+    _write_transcript(d / f"{sid}.jsonl", sid, [_FULL_USAGE])
+    db = _make_scores_db(tmp_path / "scores.db", [(sid, 7)])
+    stats = ct.backfill_token_totals(db, "", override_dir=str(d),
+                                     dry_run=True)
+    assert stats["recomputed"] == 1
+    assert _tokens_used(db)[sid] == 7  # untouched

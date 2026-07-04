@@ -95,9 +95,11 @@ def _parse_transcript(transcript_path: str) -> dict:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                usage = entry.get("usage")
-                if not usage and isinstance(entry.get("message"), dict):
-                    usage = entry["message"].get("usage")
+                # message.usage ONLY — parity with the service's
+                # claude_transcripts readers (real JSONL never carries a
+                # top-level usage key; verified 0/29,503 lines).
+                _msg = entry.get("message")
+                usage = _msg.get("usage") if isinstance(_msg, dict) else None
                 if isinstance(usage, dict):
                     # Field list mirrors prism_service.services
                     # .claude_transcripts.sum_usage (the source of truth —

@@ -10,8 +10,10 @@ import type { TokenTurn } from "./SdlcProgress";
 import { fmtTokens } from "@/lib/format";
 
 // tok/s rate label. v6.7.23: per-turn tokens now include cache reads, so a
-// single cache-heavy turn can burn millions/s — needs the M tier too.
+// single cache-heavy turn can burn millions (even billions) per second —
+// needs the M and B tiers too (mirrors lib/format.ts fmtTokens tiers).
 function fmtRate(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return `${Math.round(n)}`;
@@ -72,7 +74,12 @@ export default function TokenTurns({
         ) : (
           series.map((t, i) => {
             const isLast = i === series.length - 1;
-            const h = Math.max(0.06, t.tok_s / peak);
+            // Log-scale height: with all four usage fields counted, a
+            // cache-heavy turn can run ~1000x a plain generation turn — a
+            // linear tok_s/peak normalization pins peak and flattens every
+            // other bar to the floor. log1p keeps both cache spikes AND
+            // ordinary turns readable; exact values stay in the tooltip.
+            const h = Math.max(0.06, Math.log1p(t.tok_s) / Math.log1p(peak));
             return (
               <motion.div
                 key={i}

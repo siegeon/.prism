@@ -106,20 +106,17 @@ def usage_components(usage: dict | None) -> dict[str, int]:
     breakdown (summed only as a fallback — real transcripts carry BOTH and
     the flat value equals the nested sum, so never double-count)."""
     u = usage if isinstance(usage, dict) else {}
-    out = {
-        "output_tokens": int(u.get("output_tokens") or 0),
-        "input_tokens": int(u.get("input_tokens") or 0),
-        "cache_read_input_tokens": int(u.get("cache_read_input_tokens") or 0),
-    }
-    cc = u.get("cache_creation_input_tokens")
-    if cc is None:
+    out = {f: int(u.get(f) or 0) for f in USAGE_TOKEN_FIELDS}
+    # Nested-shape fallback for cache_creation only: when the flat field is
+    # absent entirely, sum the nested breakdown (never both — real JSONL
+    # carries both shapes with equal values).
+    if u.get("cache_creation_input_tokens") is None:
         nested = u.get("cache_creation")
         if isinstance(nested, dict):
-            cc = sum(
+            out["cache_creation_input_tokens"] = int(sum(
                 int(v or 0) for v in nested.values()
                 if isinstance(v, (int, float))
-            )
-    out["cache_creation_input_tokens"] = int(cc or 0)
+            ))
     return out
 
 
@@ -661,6 +658,76 @@ def _enqueue_with_signals(
         pass  # never break the metrics insert path
 
 
+# v6.7.23 — one-time token-total backfill. sum_usage widened the count from
+# output-only to all four usage fields, so HISTORICAL session_outcomes rows
+# (written before the fix) sit ~187x below rows imported after it — every
+# blended surface (SessionsPage median/p95, dashboard totals, the conductor's
+# max(outcome, live) read) would mix the two scales. Recompute tokens_used
+# off the transcripts still on disk; rows whose transcript is gone cannot be
+# recomputed and are left as-is (logged as skipped).
+# scores_db paths already backfilled this process (idempotent per boot; a
+# re-run is cheap anyway — recomputed==0 once totals match).
+_BACKFILLED_DBS: set[str] = set()
+
+
+def backfill_token_totals(
+    scores_db: str,
+    project_source_path: str,
+    claude_home: Path | None = None,
+    override_dir: str | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Recompute session_outcomes.tokens_used via sum_usage for every row
+    whose transcript JSONL still exists on disk; UPDATE in place.
+
+    Idempotent + cheap: only rows where the stored value differs are
+    written, and per-file sums reuse the (mtime,size) _TOKEN_CACHE. With
+    `dry_run` nothing is written (counts only). Returns
+    {"recomputed", "skipped_no_transcript", "unchanged"}."""
+    stats = {"recomputed": 0, "skipped_no_transcript": 0, "unchanged": 0}
+    try:
+        conn = sqlite3.connect(scores_db, timeout=5.0)
+    except sqlite3.Error:
+        return stats
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT session_id, tokens_used FROM session_outcomes"
+            ).fetchall()
+        except sqlite3.Error:
+            return stats
+        for sid, stored in rows:
+            if not sid:
+                continue
+            total = live_tokens_for_session(
+                str(sid), project_source_path, claude_home=claude_home,
+                override_dir=override_dir,
+            )
+            if total <= 0:
+                # Transcript aged off disk (or never matched) — can't
+                # recompute; leave the stored value alone.
+                stats["skipped_no_transcript"] += 1
+                continue
+            if int(stored or 0) == total:
+                stats["unchanged"] += 1
+                continue
+            if not dry_run:
+                try:
+                    conn.execute(
+                        "UPDATE session_outcomes SET tokens_used = ? "
+                        "WHERE session_id = ?",
+                        (total, str(sid)),
+                    )
+                except sqlite3.Error:
+                    continue
+            stats["recomputed"] += 1
+        if not dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+    return stats
+
+
 def start_transcript_importer() -> None:
     """Daemon-loop driver — runs forever, polls every interval seconds.
 
@@ -704,6 +771,35 @@ def start_transcript_importer() -> None:
                             f"[transcripts] {pid}: imported {n} session(s)",
                             file=sys.stderr, flush=True,
                         )
+                    # v6.7.23 — one-time (per process) token-total backfill:
+                    # heal pre-fix output-only rows so no surface blends the
+                    # two scales. Env-gated; idempotent; skips rows whose
+                    # transcript is gone.
+                    if (scores_db not in _BACKFILLED_DBS
+                            and os.environ.get(
+                                "PRISM_TOKEN_BACKFILL", "1",
+                            ).strip().lower() not in ("0", "off", "false")):
+                        _BACKFILLED_DBS.add(scores_db)
+                        try:
+                            b = backfill_token_totals(
+                                scores_db, sp or "", claude_home,
+                                override_dir=cpd or None,
+                            )
+                            if b["recomputed"] or b["skipped_no_transcript"]:
+                                print(
+                                    f"[transcripts] {pid}: token backfill "
+                                    f"recomputed={b['recomputed']} "
+                                    f"skipped_no_transcript="
+                                    f"{b['skipped_no_transcript']} "
+                                    f"unchanged={b['unchanged']}",
+                                    file=sys.stderr, flush=True,
+                                )
+                        except Exception as be:
+                            print(
+                                f"[transcripts] {pid}: token backfill error "
+                                f"{type(be).__name__}: {be}",
+                                file=sys.stderr, flush=True,
+                            )
                     # v6.2.16 — same cadence, bridge Claude Code auto-memory
                     # (~/.claude/projects/<slug>/memory/*.md or a per-project
                     # configured override) into PRISM Memory. Best-effort:
@@ -791,11 +887,6 @@ def _sum_billable_tokens(path: Path) -> int:
         return cached[2] if cached else 0
     _TOKEN_CACHE[key] = (st.st_mtime, st.st_size, total)
     return total
-
-
-# Back-compat alias — renamed to _sum_billable_tokens in v6.7.23 when the
-# summation widened from output-only to all four usage fields.
-_sum_output_tokens = _sum_billable_tokens
 
 
 def _session_id_of(path: Path) -> str:
