@@ -265,6 +265,35 @@ def ui(project: str) -> dict:
     raise HTTPException(404, f"no built UI for project '{project}'")
 
 
+@router.get("/knowledge/{project}")
+def knowledge(project: str) -> dict:
+    """What PRISM has LEARNED about this customer's business — the memory
+    entries the build recorded plus the interview state. Feeds the 'What
+    PRISM knows' card on the preview (UI-first: learning must be visible)."""
+    import json as _json
+    from pathlib import Path
+    from prism_service import config
+    base = Path(config.DATA_DIR) / "projects" / project
+    facts = []
+    f = base / "mulch" / "expertise" / "business.jsonl"
+    if f.is_file():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                e = _json.loads(line)
+            except ValueError:
+                continue
+            if not e.get("invalid_at"):
+                facts.append({"name": e.get("name", ""),
+                              "text": e.get("description", "")})
+    from prism_service.services import magic_interview as mi
+    sess = mi.load_session(project) or {}
+    return {"project": project, "facts": facts,
+            "description": sess.get("description", ""),
+            "state": sess.get("state", ""),
+            "entities": [e.get("name") for e in
+                         (sess.get("spec") or {}).get("entities", [])]}
+
+
 @router.get("/data/{module}/{entity}")
 def data_list(module: str, entity: str) -> dict:
     """Proxy the deployed entity's live rows through PRISM's auth (no browser

@@ -72,6 +72,8 @@ function mapTokens(tokens: Record<string, string>): React.CSSProperties {
 export default function MagicPreviewPage() {
   const [project] = useProject();
   const [ui, setUi] = useState<UiApp | null>(null);
+  const [knowledge, setKnowledge] = useState<{ facts: { name: string; text: string }[];
+    description?: string } | null>(null);
   const [tab, setTab] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
@@ -83,6 +85,10 @@ export default function MagicPreviewPage() {
       .then((d) => { setUi(d); setTab(d.entities[0] ?? ""); })
       .catch((e) => setErr(String(e)))
       .finally(() => setLoading(false));
+    // what PRISM has LEARNED about this business — visible, per UI-first
+    api.get<{ facts: { name: string; text: string }[]; description?: string }>(
+      `/api/magic/knowledge/${encodeURIComponent(project)}`)
+      .then(setKnowledge).catch(() => setKnowledge(null));
   }, [project]);
 
   const canvasStyle = useMemo(() => mapTokens(ui?.tokens ?? {}), [ui]);
@@ -121,7 +127,26 @@ export default function MagicPreviewPage() {
         ))}
       </div>
       <Theme theme={neutralTheme}>
-        <div className="mp-canvas" style={canvasStyle}>
+        {knowledge && knowledge.facts.length > 0 && (
+        /* progressive disclosure: one line closed, the full learning open */
+        <details style={{ marginBottom: 14, border: "1px solid var(--border)",
+          borderRadius: 10, padding: "10px 14px" }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+            What PRISM knows about this business — {knowledge.facts.length} facts ✓
+          </summary>
+          {knowledge.description && (
+            <div style={{ margin: "10px 0 4px", fontSize: 13, fontStyle: "italic",
+              color: "var(--text-muted)" }}>
+              &ldquo;{knowledge.description}&rdquo;
+            </div>
+          )}
+          <ul style={{ margin: "8px 0 2px", paddingLeft: 18, fontSize: 13,
+            lineHeight: 1.7, color: "var(--text-secondary)" }}>
+            {knowledge.facts.map((f, i) => <li key={i}>{f.text}</li>)}
+          </ul>
+        </details>
+      )}
+      <div className="mp-canvas" style={canvasStyle}>
           {data
             ? <Render config={puckConfig} data={data as unknown as Data} />
             : <Empty>Entity has no page.</Empty>}
