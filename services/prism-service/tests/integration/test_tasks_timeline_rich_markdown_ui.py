@@ -77,7 +77,7 @@ def test_markdown_parses_structured_blocks():
     # Inline `code` and **bold**. Since v6.7.13 backtick spans render via the
     # shared <XrefLink> code chip (clickable, resolve-aware) instead of a
     # literal <code> element — both satisfy FR-2's "distinct code affordance".
-    assert "<code" in md or "XrefLink" in md, \
+    assert "<code" in md or "<XrefLink" in md, \
         "FR-2: inline `code` spans must render as <code> or <XrefLink> chips"
     assert "<strong" in md, "FR-2: **bold** must render as <strong>"
     # The heading/list/bold detection regexes carried over from the block parser.

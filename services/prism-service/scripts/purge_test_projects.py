@@ -9,10 +9,14 @@ SAFETY MODEL (repo destructive-ops doctrine):
   * DRY-RUN by default — nothing is deleted without an explicit --yes.
   * --data-dir must exist and contain a projects/ subdir, else exit 2.
   * Only immediate children of <data-dir>/projects are ever considered.
-  * A candidate must LOOK like a project dir (mulch/ / workflow/ /
-    tasks.db / scores.db / understand_state.json) or be empty-ish;
-    anything else is refused, never force-deleted.
-  * 'default' and 'prism' are hard-protected regardless of patterns.
+  * Junk shapes are PRECISE (exact names + anchored regexes) — no broad
+    wildcards that could swallow a real project slug.
+  * A name match alone never deletes: a junk-CONFIRMING heuristic must
+    also hold (no content-rich brain.db, no mulch/expertise/*.jsonl
+    memories, no populated source/ checkout). Content-rich projects are
+    refused LOUDLY even when junk-named.
+  * default / prism / bh-demo / test-onboard / talentsync / think-shift
+    are hard-protected regardless of shape.
   * Symlinks are refused (never followed into a real store).
   * Errors during deletion are REPORTED, never swallowed.
 
@@ -24,58 +28,71 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import fnmatch
+import re
 import shutil
 import sys
 from pathlib import Path
 
-# Junk slugs observed in the live store audit (2026-07-03) + the shapes
-# the un-isolated suite generates (pytest tmp_path basenames, probes).
-JUNK_PATTERNS: tuple[str, ...] = (
-    "test_*",        # pytest tmp_path basenames: test_conductor_state_api_carri0 ...
-    "test-*",        # test-onboard, ...
-    "*_pid",         # done_tile_pid, per_step_eta_pid, ...
-    "probe",
-    "perf_probe",
-    "proj",
-    "project-a",
-    "project-b",
-    "search-test",
-    "bh-demo*",
-    # Additional machine-generated shapes observed in the default
-    # %LOCALAPPDATA%\prism store (also suite leakage, older vintages):
-    "explicit-create-*",
-    "onboard-probe-*",
-    "phantom-probe-*",
-    "proj-*",          # proj-x, proj-z (tests/unit/test_claude_run_log.py)
-    "test-ll-*",       # test-ll-09 (tests/unit/test_mcp_augmentation.py)
+# PRECISE junk shapes only. Broad wildcards ("test-*", "bh-demo*") are
+# BANNED: the 2026-07-03 review found they matched REAL live projects
+# (bh-demo: 20MB brain.db + source, updated Jul 2; test-onboard: 21MB
+# brain.db + real mulch/expertise memories).
+#
+# The pytest tmp_path leak names are test_<test fn truncated to 30 chars>
+# plus a trailing digit, always snake_case — target exactly that shape.
+JUNK_NAME_REGEXES: tuple[re.Pattern, ...] = (
+    re.compile(r"^test_[a-z0-9_]{1,29}\d$"),        # pytest tmp_path slugs
+    re.compile(r"^explicit-create-[0-9a-f]{12}$"),  # legacy suite probes
+    re.compile(r"^onboard-probe-[0-9a-f]{12}$"),
+    re.compile(r"^phantom-probe-[0-9a-f]{12}$"),
 )
 
-# Never delete these, even if a pattern somehow matches.
-PROTECTED: frozenset[str] = frozenset({"default", "prism"})
+# Explicit audit list (live-store audit 2026-07-03) — exact names only.
+JUNK_EXACT: frozenset[str] = frozenset({
+    "done_tile_pid", "per_step_eta_pid", "perf_probe", "probe", "proj",
+    "project-a", "project-b", "search-test",
+    "proj-x", "proj-z",  # tests/unit/test_claude_run_log.py
+    "test-ll-09",        # tests/unit/test_mcp_augmentation.py
+})
 
-# Files/dirs whose presence marks a directory as a PRISM project dir.
-_PROJECT_MARKERS: tuple[str, ...] = (
-    "mulch", "workflow", "graph", "source",
-    "understand_state.json", "tasks.db", "scores.db",
-)
+# Never delete these, even if a shape somehow matches. bh-demo and
+# test-onboard LOOK junk-named but are real, content-rich projects.
+PROTECTED: frozenset[str] = frozenset({
+    "default", "prism", "bh-demo", "test-onboard", "talentsync", "think-shift",
+})
+
+# Content-richness veto threshold: a leaked test project's brain.db (if it
+# even has one) stays tiny; a real project's runs to megabytes.
+_LEAK_BRAIN_MAX_BYTES = 256 * 1024
 
 
 def _matches_junk(name: str) -> bool:
-    return any(fnmatch.fnmatch(name, pat) for pat in JUNK_PATTERNS)
+    return name in JUNK_EXACT or any(
+        rx.match(name) for rx in JUNK_NAME_REGEXES
+    )
 
 
-def _looks_like_project_dir(p: Path) -> bool:
-    """True if p carries any PRISM project marker, or is entirely empty
-    (a bare leaked mkdir). Anything else is NOT ours to delete."""
+def _plausible_test_leak(p: Path) -> tuple[bool, str]:
+    """(True, "") only when p is plausibly a LEAKED TEST project.
+
+    Junk-CONFIRMING heuristic — the earlier marker-existence check was
+    inverted as a safety gate (every real project carries the markers
+    too). A name match alone is not enough: anything content-rich VETOES
+    deletion, with the reason returned for a loud refusal message."""
     try:
-        entries = list(p.iterdir())
+        brain = p / "brain.db"
+        if brain.is_file() and brain.stat().st_size >= _LEAK_BRAIN_MAX_BYTES:
+            return False, (
+                f"brain.db is {brain.stat().st_size:,} bytes (content-rich)")
+        expertise = p / "mulch" / "expertise"
+        if expertise.is_dir() and any(expertise.glob("*.jsonl")):
+            return False, "has mulch/expertise/*.jsonl (real memories)"
+        source = p / "source"
+        if source.is_dir() and any(source.iterdir()):
+            return False, "source/ is non-empty (real checkout)"
     except OSError as e:
-        print(f"  ! cannot inspect {p}: {e}", file=sys.stderr)
-        return False
-    if not entries:
-        return True
-    return any((p / m).exists() for m in _PROJECT_MARKERS)
+        return False, f"cannot inspect: {e}"
+    return True, ""
 
 
 def _fail(msg: str) -> None:
@@ -118,8 +135,10 @@ def collect_candidates(projects: Path) -> tuple[list[Path], list[Path]]:
                   file=sys.stderr)
             refused.append(child)
             continue
-        if not _looks_like_project_dir(child):
-            print(f"  ! refusing (no project markers, not empty): {child}",
+        leak, reason = _plausible_test_leak(child)
+        if not leak:
+            print(f"  ! REFUSING {name}: junk-shaped name but looks REAL "
+                  f"({reason}) — remove manually only if truly junk",
                   file=sys.stderr)
             refused.append(child)
             continue
@@ -155,9 +174,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  - {p.name}")
 
     if refused:
-        print(f"refused {len(refused)} junk-named entr(y/ies) that do not "
-              "look like project dirs (see stderr) — remove manually if "
-              "truly junk.")
+        print(f"refused {len(refused)} junk-named entr(y/ies) that look "
+              "REAL or could not be safely confirmed (see stderr).")
 
     if not args.yes:
         return 0
