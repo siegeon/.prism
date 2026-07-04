@@ -60,10 +60,15 @@ CREATE TABLE IF NOT EXISTS task_history (
     timestamp TEXT NOT NULL,
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
+"""
 
--- Hot-query indexes (sqlite-hardening workstream). Declared with
--- IF NOT EXISTS in the startup script so EXISTING tasks.db files pick
--- them up on the next boot, not only fresh installs.
+
+# Hot-query indexes (sqlite-hardening workstream). IF NOT EXISTS and
+# executed on EVERY startup so existing tasks.db files pick them up —
+# but only AFTER _migrate_task_columns(), because a legacy pre-
+# Conductor-v2 store has no parent_id column yet and index-before-
+# migration raised "no such column: parent_id".
+_CREATE_INDEXES_SQL = """
 -- history(): SELECT ... WHERE task_id=? ORDER BY timestamp ASC — the
 -- per-task audit trail is read on every task detail view.
 CREATE INDEX IF NOT EXISTS idx_task_history_task_ts
@@ -131,6 +136,9 @@ class TaskService:
         # connections open the same, already-migrated db file.
         self._db.executescript(_CREATE_TASKS_SQL)
         self._migrate_task_columns()
+        # Indexes AFTER the column migration — idx_tasks_parent covers
+        # parent_id, which a legacy db only gains via the ALTERs above.
+        self._db.executescript(_CREATE_INDEXES_SQL)
         # LL task-session association lives in scores.db (alongside
         # session_outcomes), not tasks.db — the JOIN the reader needs is
         # over that one file. None in unit contexts that never touch the
