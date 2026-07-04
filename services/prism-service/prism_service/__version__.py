@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.27"
+PRISM_VERSION = "6.7.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.28: conductor live-token reads are now INCREMENTAL. The ~5s poll "
+    "called _sum_billable_tokens / _token_events, which re-read + json.loads "
+    "the ENTIRE transcript on every (mtime,size) cache miss — and an "
+    "in-progress session's file grows every turn, so it missed every tick "
+    "(~10MB/s re-parse per active session, worse since v6.7.23's 4-field "
+    "sums). Now a shared _read_new_lines seeks to the last consumed byte "
+    "offset and folds ONLY appended complete lines into the cached total/"
+    "timeline; truncation/rotation (shrink) forces a full re-parse and a "
+    "partial trailing line is never counted until completed. Totals stay "
+    "byte-identical to a cold parse; benchmark on a 3.8MB/20k-turn transcript: "
+    "per-tick bytes read drop ~19,000x (tail only) and wall-clock ~8x. Nested "
+    "subagent transcripts benefit for free (same summers). "
     "v6.7.27: conductor session gate — a task can no longer be handed to the "
     "conductor without a linked session (sessionless tiles rendered FROZEN: no "
     "transcript, no tokens, no live signals). Sessionless enter_conductor at "

@@ -854,38 +854,81 @@ def _project_source_path(project_id: str) -> str:
 # so the 5s conductor poll never re-reads an unchanged multi-MB transcript.
 # ---------------------------------------------------------------------------
 
-# path -> (mtime, size, total_tokens)
-_TOKEN_CACHE: dict[str, tuple[float, int, int]] = {}
+# path -> (mtime, size, offset, total_tokens). `offset` is the byte position
+# up to the last COMPLETE line already folded into `total`; a growing file is
+# read only from `offset` to EOF each poll (see _read_new_lines).
+_TOKEN_CACHE: dict[str, tuple[float, int, int, int]] = {}
+
+
+def _read_new_lines(
+    path: Path, st: os.stat_result,
+    cached: tuple[float, int, int, object] | None,
+) -> tuple[list[str], int, str]:
+    """Return (complete_lines, new_offset, mode) for an append-mostly JSONL.
+
+    mode is one of:
+      'hit'   file unchanged since the cache — no read, [] lines.
+      'grew'  file strictly larger and clock not rewound — read ONLY the
+              bytes from cached offset to EOF (the appended tail).
+      'reset' shrank / rewritten / no cache — read the whole file from 0.
+
+    Only bytes up to the LAST newline are consumed; a trailing fragment
+    (a partial last line the writer is still appending) is left unconsumed
+    so it is re-read once completed. `new_offset` is the byte position after
+    the last complete line. Raises OSError to the caller on read failure."""
+    size = st.st_size
+    if cached is not None:
+        c_mtime, c_size, c_offset, _ = cached
+        if c_mtime == st.st_mtime and c_size == size:
+            return [], c_offset, "hit"
+        if size > c_size and st.st_mtime >= c_mtime and c_offset <= size:
+            start, mode = c_offset, "grew"
+        else:
+            start, mode = 0, "reset"
+    else:
+        start, mode = 0, "reset"
+    with open(path, "rb") as fh:
+        fh.seek(start)
+        chunk = fh.read()
+    nl = chunk.rfind(b"\n")
+    if nl == -1:
+        # No complete line in the new bytes — consume nothing this poll.
+        return [], start, mode
+    consumed = chunk[: nl + 1]
+    text = consumed.decode("utf-8", errors="replace")
+    return text.splitlines(), start + len(consumed), mode
 
 
 def _sum_billable_tokens(path: Path) -> int:
     """Sum ALL usage token fields (sum_usage: output + input + cache_read +
-    cache_creation) across one transcript JSONL. Cached on
-    (mtime, size) so unchanged files cost nothing on repeat polls."""
+    cache_creation) across one transcript JSONL. Incremental: a growing file
+    is re-read only from the last consumed byte offset, so the ~5s conductor
+    poll never re-parses the whole multi-MB transcript on every tick."""
     try:
         st = path.stat()
     except OSError:
         return 0
     key = str(path)
     cached = _TOKEN_CACHE.get(key)
-    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-        return cached[2]
-    total = 0
     try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                evt = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            usage = (evt.get("message") or {}).get("usage") or {}
-            if usage:
-                total += sum_usage(usage)
+        lines, new_offset, mode = _read_new_lines(path, st, cached)
     except OSError:
-        return cached[2] if cached else 0
-    _TOKEN_CACHE[key] = (st.st_mtime, st.st_size, total)
+        return cached[3] if cached else 0
+    if mode == "hit":
+        return cached[3]  # type: ignore[index]
+    total = cached[3] if (mode == "grew" and cached) else 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        usage = (evt.get("message") or {}).get("usage") or {}
+        if usage:
+            total += sum_usage(usage)
+    _TOKEN_CACHE[key] = (st.st_mtime, st.st_size, new_offset, total)
     return total
 
 
@@ -976,12 +1019,13 @@ def live_tokens_for_session(
     return total
 
 
-# path -> (mtime, size, [(epoch_s, tokens), ...]) — tokens per sum_usage (all
-# four usage fields). Same (mtime,size)
-# caching discipline as _sum_billable_tokens, but a KEYED timeline of assistant
-# turns so token spend can be attributed to a wall-clock window (e.g. the
-# turn-to-turn interval on the task-detail timeline).
-_TOKEN_EVENTS_CACHE: dict[str, tuple[float, int, list[tuple[float, int]]]] = {}
+# path -> (mtime, size, offset, [(epoch_s, tokens), ...]) — tokens per
+# sum_usage (all four usage fields). Same incremental discipline as
+# _sum_billable_tokens (offset = last consumed complete-line byte), but a
+# KEYED timeline of assistant turns so token spend can be attributed to a
+# wall-clock window (e.g. the turn-to-turn interval on the task-detail
+# timeline).
+_TOKEN_EVENTS_CACHE: dict[str, tuple[float, int, int, list[tuple[float, int]]]] = {}
 
 
 def _parse_iso_epoch(ts: str) -> float | None:
@@ -996,38 +1040,41 @@ def _parse_iso_epoch(ts: str) -> float | None:
 
 
 def _token_events(path: Path) -> list[tuple[float, int]]:
-    """Per-assistant-turn (timestamp_epoch, output_tokens) for one transcript,
-    sorted ascending. Cached on (mtime, size) so a steady file costs nothing."""
+    """Per-assistant-turn (timestamp_epoch, billable_tokens) for one
+    transcript, sorted ascending. Incremental: a growing file folds only its
+    appended turns into the cached timeline (same offset discipline as
+    _sum_billable_tokens), so a steady file costs nothing on repeat polls."""
     try:
         st = path.stat()
     except OSError:
         return []
     key = str(path)
     cached = _TOKEN_EVENTS_CACHE.get(key)
-    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-        return cached[2]
-    out: list[tuple[float, int]] = []
     try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                evt = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            usage = (evt.get("message") or {}).get("usage") or {}
-            tok = sum_usage(usage)
-            if tok <= 0:
-                continue
-            ep = _parse_iso_epoch(evt.get("timestamp") or "")
-            if ep is None:
-                continue
-            out.append((ep, tok))
+        lines, new_offset, mode = _read_new_lines(path, st, cached)
     except OSError:
-        return cached[2] if cached else []
+        return cached[3] if cached else []
+    if mode == "hit":
+        return cached[3]  # type: ignore[index]
+    out: list[tuple[float, int]] = list(cached[3]) if (mode == "grew" and cached) else []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        usage = (evt.get("message") or {}).get("usage") or {}
+        tok = sum_usage(usage)
+        if tok <= 0:
+            continue
+        ep = _parse_iso_epoch(evt.get("timestamp") or "")
+        if ep is None:
+            continue
+        out.append((ep, tok))
     out.sort(key=lambda e: e[0])
-    _TOKEN_EVENTS_CACHE[key] = (st.st_mtime, st.st_size, out)
+    _TOKEN_EVENTS_CACHE[key] = (st.st_mtime, st.st_size, new_offset, out)
     return out
 
 
