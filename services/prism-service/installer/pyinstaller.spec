@@ -76,7 +76,7 @@ hiddenimports = [
     "sentence_transformers",
     "graphifyy",
     "tree_sitter",
-    "tree_sitter_languages",
+    "tree_sitter_language_pack",
     # MCP transport surface — pulled by name in server.py
     "mcp.server.lowlevel",
     "mcp.server.streamable_http",

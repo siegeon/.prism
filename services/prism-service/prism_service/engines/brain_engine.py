@@ -13,7 +13,6 @@ deps are unavailable.
 
 from __future__ import annotations
 
-import ctypes
 import json
 import os
 import re
@@ -21,7 +20,6 @@ import sqlite3
 import subprocess
 import sys
 import threading
-import warnings
 
 # Embedder downloads pull HuggingFace files behind a tqdm progress bar.
 # Under concurrent Brain init (drift timer + MCP tools + lifespan) tqdm's
@@ -303,33 +301,12 @@ def _load_reranker(preset: str):
 # Tree-sitter language loader
 # ---------------------------------------------------------------------------
 _TS_PARSER_CACHE: dict[str, object] = {}
-_TS_LANGS_LIB: Optional[ctypes.CDLL] = None
-_TS_AVAILABLE = False
 
-
-def _init_treesitter_lib() -> None:
-    """Load the bundled tree-sitter-languages shared library.
-
-    The package ships the binary under different names per OS:
-    ``languages.so`` on Linux, ``languages.dylib`` on macOS,
-    ``languages.dll`` on Windows. We try each in turn so the C# /
-    Python / TS extractors actually run on developer machines, not
-    only inside the Linux service container (siegeon#45).
-    """
-    global _TS_LANGS_LIB, _TS_AVAILABLE
-    if _TS_AVAILABLE:
-        return
-    try:
-        import tree_sitter_languages as _tsl
-        pkg_dir = Path(_tsl.__path__[0])
-        for name in ("languages.so", "languages.dylib", "languages.dll"):
-            candidate = pkg_dir / name
-            if candidate.exists():
-                _TS_LANGS_LIB = ctypes.cdll.LoadLibrary(str(candidate))
-                _TS_AVAILABLE = True
-                return
-    except Exception:
-        pass
+# tree-sitter-language-pack (maintained successor of the unmaintained
+# tree-sitter-languages) uses "csharp" where our _TS_LANG_MAP historically
+# used the grammar's symbol name "c_sharp". Keep the internal name stable
+# (chunk configs / extractors key off it) and alias at the pack boundary.
+_TS_PACK_ALIASES: dict[str, str] = {"c_sharp": "csharp"}
 
 
 def _ts_find_name(node, name_types):
@@ -344,22 +321,21 @@ def _ts_find_name(node, name_types):
 
 
 def _get_treesitter_parser(lang_name: str) -> Optional[object]:
-    """Return a cached tree_sitter.Parser for the given language, or None."""
+    """Return a cached tree_sitter.Parser for the given language, or None.
+
+    Built from ``tree_sitter_language_pack.get_language`` (a genuine
+    ``tree_sitter.Language``) + py-tree-sitter's own Parser. The pack's
+    ``get_parser`` is deliberately NOT used: as of pack 1.12 it returns a
+    Rust-binding parser whose Tree/Node surface (``root_node`` as a method,
+    str-only ``parse``) is incompatible with the ``node.children`` /
+    ``node.text`` / ``start_point`` API our extractors walk.
+    """
     if lang_name in _TS_PARSER_CACHE:
         return _TS_PARSER_CACHE[lang_name]
-    _init_treesitter_lib()
-    if not _TS_AVAILABLE or _TS_LANGS_LIB is None:
-        return None
     try:
         import tree_sitter
-        fn_name = f"tree_sitter_{lang_name}"
-        fn = getattr(_TS_LANGS_LIB, fn_name, None)
-        if fn is None:
-            return None
-        fn.restype = ctypes.c_void_p
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            lang = tree_sitter.Language(fn())
+        from tree_sitter_language_pack import get_language
+        lang = get_language(_TS_PACK_ALIASES.get(lang_name, lang_name))
         parser = tree_sitter.Parser(lang)
         _TS_PARSER_CACHE[lang_name] = parser
         return parser
@@ -514,7 +490,12 @@ _CS_FRAMEWORK_CALLS: frozenset[str] = frozenset({
 _EMBEDDER_PRESETS = {
     # key -> (backend, model_id)
     # backend in {"model2vec", "sentence-transformers"}
-    "potion": ("model2vec", "minishlab/potion-base-32M"),
+    # Default swapped to potion-retrieval-32M (same 512-dim family, tuned for
+    # retrieval). Existing stores need a reindex to re-embed with it; the
+    # docs_vec dim self-heal keeps mixed-dim startup from erroring either way.
+    # "potion-base" stays selectable via PRISM_EMBEDDER for rollback.
+    "potion": ("model2vec", "minishlab/potion-retrieval-32M"),
+    "potion-base": ("model2vec", "minishlab/potion-base-32M"),
     "minilm": ("sentence-transformers", "sentence-transformers/all-MiniLM-L6-v2"),
     "nomic-code": ("sentence-transformers", "nomic-ai/nomic-embed-code"),
     "bge-small": ("sentence-transformers", "BAAI/bge-small-en-v1.5"),
@@ -957,7 +938,7 @@ class Brain:
         if self.vector_enabled:
             # Discover the model's native embedding dimension at startup so
             # the vec0 table matches whatever local model is loaded
-            # (potion-base-32M is 512-dim; MiniLM-L6 is 384-dim).
+            # (potion-retrieval-32M is 512-dim; MiniLM-L6 is 384-dim).
             try:
                 # Single-flight: serialize the native encode (GH #157).
                 with _ENCODE_LOCK, _threadpool_limit_1():
