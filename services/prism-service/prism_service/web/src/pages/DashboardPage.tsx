@@ -5,6 +5,7 @@ import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { PlotFigure, Sparkline, TONE, plotBase } from "@/components/Chart";
+import { fmtTokens } from "@/lib/format";
 
 type State = {
   health: {
@@ -25,9 +26,8 @@ type Activity = {
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 const nf = (n: number) => n.toLocaleString();
-/** Compact token counts: 1234 -> 1.2k, 12588741 -> 12.6M. */
-const compact = (n: number) =>
-  n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+/** Compact token counts: 1234 -> 1.2k, 12588741 -> 12.6M (shared k/M/B). */
+const compact = (n: number) => fmtTokens(n);
 
 /** KPI card whose number is contextualized by a trend sparkline + today's
  *  delta — the dashboard shows movement, not just a static count. */

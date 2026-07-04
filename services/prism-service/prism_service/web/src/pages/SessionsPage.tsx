@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
+import { fmtTokens } from "@/lib/format";
 
 // Mirrors what conductor_service.get_session_outcomes() returns. The
 // keys are DB columns (snake_case_with_units) — the page renders the
@@ -80,9 +81,9 @@ export default function SessionsPage() {
     <Page>
       <section className="flex flex-wrap gap-3">
         <Kpi label="Sessions" value={outcomes.length} />
-        <Kpi label="Median tokens" value={Math.round(median(tokens)).toLocaleString()} />
-        <Kpi label="p95 tokens" value={Math.round(p95(tokens)).toLocaleString()} />
-        <Kpi label="Tokens / file" value={Math.round(totalTokens / totalFiles).toLocaleString()} />
+        <Kpi label="Median tokens" value={fmtTokens(Math.round(median(tokens)))} />
+        <Kpi label="p95 tokens" value={fmtTokens(Math.round(p95(tokens)))} />
+        <Kpi label="Tokens / file" value={fmtTokens(Math.round(totalTokens / totalFiles))} />
         <Kpi label="Median duration" value={`${Math.round(median(durSec))}s`} />
       </section>
 
@@ -122,7 +123,7 @@ export default function SessionsPage() {
                     {o.session_id ?? "—"}
                   </span>
                   <span className="text-xs opacity-60 w-20 text-right" title="tokens used">
-                    {tk.toLocaleString()}
+                    {fmtTokens(tk)}
                   </span>
                   <span className="text-xs opacity-60 w-16 text-right" title="duration (s)">
                     {Math.round(d)}s
@@ -131,7 +132,7 @@ export default function SessionsPage() {
                     {fr}r · {fm}w
                   </span>
                   <span className="text-xs opacity-60 w-20 text-right" title="tokens / file modified">
-                    {o.tokens_per_file ? `${o.tokens_per_file.toLocaleString()}/file` : "—"}
+                    {o.tokens_per_file ? `${fmtTokens(o.tokens_per_file)}/file` : "—"}
                   </span>
                 </div>
               );

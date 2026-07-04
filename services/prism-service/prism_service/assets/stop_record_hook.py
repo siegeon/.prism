@@ -99,8 +99,21 @@ def _parse_transcript(transcript_path: str) -> dict:
                 if not usage and isinstance(entry.get("message"), dict):
                     usage = entry["message"].get("usage")
                 if isinstance(usage, dict):
-                    total_tokens += int(usage.get("input_tokens") or 0)
-                    total_tokens += int(usage.get("output_tokens") or 0)
+                    # Field list mirrors prism_service.services
+                    # .claude_transcripts.sum_usage (the source of truth —
+                    # this hook can't import the service package): output +
+                    # input + cache_read + cache_creation all count, with
+                    # the nested cache_creation breakdown as fallback only.
+                    for fld in ("output_tokens", "input_tokens",
+                                "cache_read_input_tokens"):
+                        total_tokens += int(usage.get(fld) or 0)
+                    cc = usage.get("cache_creation_input_tokens")
+                    if cc is None:
+                        nested = usage.get("cache_creation")
+                        if isinstance(nested, dict):
+                            cc = sum(int(v or 0) for v in nested.values()
+                                     if isinstance(v, (int, float)))
+                    total_tokens += int(cc or 0)
                 ts_str = entry.get("timestamp") or entry.get("ts")
                 if isinstance(ts_str, str):
                     try:
