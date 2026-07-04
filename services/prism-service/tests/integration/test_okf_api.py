@@ -1,8 +1,13 @@
 """Integration tests for the OKF host HTTP surface (api/okf.py).
 
-Exercises the real FastAPI router via TestClient against the live `prism`
-project stores. Run with PRISM_DATA_DIR=services/prism-service/data (the
-documented dev store) — the sparse AppData default has no projected memory.
+Exercises the real FastAPI router via TestClient. Historically these ran
+against the LIVE `prism` project stores (and silently depended on whatever
+memory the developer's data dir happened to hold — and polluted it). Since
+the suite-wide PRISM_DATA_DIR isolation (tests/conftest.py), the fixture
+SEEDS a hermetic `prism` project in the throwaway store with real
+MemoryService entries: one carrying a [[wikilink]] to the other (drives the
+graph edge / backlink / /memory link assertions) and evidence file_paths
+(drives the /understand link assertions).
 
 The OKF wiki is PRISM's curated MEMORY expressed as a navigable bundle: the
 only section is "memory", every concept carries its real id (for /memory/<id>
@@ -18,7 +23,31 @@ def client():
     from fastapi.testclient import TestClient
 
     from prism_service.main import app
+    from prism_service.project_context import get_project
 
+    mem = get_project("prism").memory_svc
+    # Idempotent per store: MemoryService.store supersedes-by-name, and the
+    # OkfHost cache invalidates on the per-domain entry-count signature.
+    mem.store(
+        domain="conventions",
+        name="Render structured never raw",
+        description="Borrow the source structure; render with Hermes "
+                    "primitives instead of dumping raw JSON in a pre block.",
+        type="pattern",
+        classification="convention",
+        evidence={"file_paths": ["prism_service/web/src/components/Markdown.tsx"]},
+    )
+    mem.store(
+        domain="architecture",
+        name="OKF projects curated memory",
+        description="Memory IS the knowledge: the OKF wiki projects "
+                    "ExpertiseEntry rows read-only; see "
+                    "[[Render structured never raw]] for the rendering rule.",
+        type="decision",
+        classification="architecture",
+        evidence={"file_paths": ["prism_service/services/okf_host.py"],
+                  "pr": "#100"},
+    )
     return TestClient(app)
 
 

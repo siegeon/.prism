@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.24"
+PRISM_VERSION = "6.7.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.25: test suite data-dir isolation — tests/conftest.py pins "
+    "PRISM_DATA_DIR to a throwaway temp dir at conftest-import time (config.py "
+    "freezes DATA_DIR at import, so a fixture-scoped setenv loses), ending the "
+    "leak of junk projects (test_*, *_pid, probe...) into the live store; "
+    "@pytest.mark.live_data opts a test out; scripts/purge_test_projects.py "
+    "(dry-run default, --yes to delete) cleans stores already polluted. "
     "v6.7.24: SQLITE HARDENING. Stress-verified fixes for concurrent-writer "
     "lock errors (bare connects: 97.6% lock-error rate at 8 writers; with "
     "timeout=5.0/busy_timeout: 0.0%) and shared-connection corruption (one "
