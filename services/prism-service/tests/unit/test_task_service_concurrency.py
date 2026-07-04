@@ -94,62 +94,11 @@ def test_concurrent_reads_writes_race_free(tmp_path):
             f"found {len(rows)} — lost writes")
 
 
-# ── AC-2: 3-child fan_out with NO serialization shim ───────────────────
-
-class UnshimmedEngine:
-    """Engine stub that touches the SHARED TaskService concurrently with
-    NO db lock — unlike test_drive_fanout's InstrumentedEngine shim, the
-    db work here happens raw on the drive thread (production shape)."""
-
-    def __init__(self, task_svc, ops: int = 15):
-        self.task_svc = task_svc
-        self.ops = ops
-        self.errors: list[str] = []
-
-    def plan(self, task_id: str, session_id: str = "", **kwargs) -> dict:
-        try:
-            for i in range(self.ops):
-                got = self.task_svc.get(task_id)
-                if got is None:
-                    self.errors.append(f"{task_id}: None mid-drive read")
-                self.task_svc.update(task_id, priority=i)
-            self.task_svc.update(
-                task_id, status="done",
-                completion_proof="unshimmed drive walked the row "
-                                 f"{self.ops}x and finished it")
-        except Exception as exc:  # noqa: BLE001 — the race IS the finding
-            self.errors.append(f"{task_id}: {type(exc).__name__}: {exc}")
-            return {"ok": False, "task_id": task_id,
-                    "reason": f"db race: {exc}", "stats": {"overrides": 0}}
-        return {"ok": True, "task_id": task_id, "final_step": "plan_gate",
-                "gate_state": "passed", "stats": {"overrides": 0}}
-
-
-def test_fanout_with_unserialized_task_service(tmp_path):
-    from prism_service.services import drive_fanout as df
-    for rnd in range(ROUNDS):
-        svc = _task_svc(tmp_path, name=f"fanout-{rnd}.db")
-        epic = svc.create(title="unshimmed fan-out epic")
-        kids = [
-            svc.create(title=f"unshimmed child {i}", parent_id=epic.id,
-                       allowed_files=[f"file_{i}.py"], proof_type="test",
-                       oracle=f"child {i} oracle")
-            for i in range(3)
-        ]
-        eng = UnshimmedEngine(svc)
-        res = df.fan_out(epic.id, engine=eng, task_svc=svc,
-                         session_id="unshimmed-test", max_parallel=3)
-        assert eng.errors == [], (
-            f"round {rnd}: db races inside concurrent drives; "
-            f"first 5: {eng.errors[:5]}")
-        assert res["ok"] is True, f"round {rnd}: {res}"
-        assert res["stats"]["max_concurrent"] >= 2, (
-            f"round {rnd}: no genuine overlap — the concurrency this "
-            f"test exists to prove did not happen: {res['stats']}")
-        for k in kids:
-            row = svc.get(k.id)
-            assert row is not None and row.status == "done", (
-                f"round {rnd}: child {k.id} not done after fan_out")
+# NOTE: the original RED scaffold also carried an AC-2 fan-out test that
+# exercised prism_service.services.drive_fanout — that module lives on the
+# unmerged drive-engine branch (feat/task-store-concurrency stack), so the
+# test was dropped when cherry-picking onto main. AC-1 (hammer) and AC-3
+# (per-thread connections) fully pin the fix.
 
 
 # ── AC-3: connections are per-thread ───────────────────────────────────
