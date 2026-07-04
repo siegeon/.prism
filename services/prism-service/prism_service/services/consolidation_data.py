@@ -38,7 +38,7 @@ def select_cycle_candidates(
     drains fairly. Returns the selected candidate rows as dicts."""
     if not Path(scores_db).exists():
         return []
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -73,7 +73,7 @@ def get_queue_summary(scores_db: str) -> dict:
     keys = ("pending", "dispensed", "completed", "abandoned", "stale")
     if not Path(scores_db).exists():
         return {k: 0 for k in keys}
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -102,7 +102,7 @@ def get_unreflected_briefs(
     if now is None:
         now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=age_hours)).isoformat()
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -159,7 +159,7 @@ def get_signal_rollup(scores_db: str) -> dict:
     }
     if not Path(scores_db).exists():
         return empty
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -203,7 +203,7 @@ def get_trends(scores_db: str, days: int = 14) -> dict:
     }
     if not Path(scores_db).exists():
         return {"days": sorted(buckets.keys()), "series": buckets}
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         # Sessions by day
@@ -252,7 +252,7 @@ def get_recent_runs(scores_db: str, limit: int = 20) -> list[dict]:
     """Recent consolidation_runs with a short narrative excerpt."""
     if not Path(scores_db).exists():
         return []
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -301,7 +301,7 @@ def resolve_task_id_for_session(scores_db: str, session_id: str) -> str | None:
     so /learning's Layer-B rollup can fill (FIX 2a)."""
     if not session_id or not Path(scores_db).exists():
         return None
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     try:
         try:
             row = conn.execute(
@@ -332,7 +332,7 @@ def enqueue_for_session(
         return None
     if task_id is None:
         task_id = resolve_task_id_for_session(scores_db, session_id)
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         existing = conn.execute(
@@ -363,7 +363,7 @@ def backfill_from_sessions(scores_db: str, limit: int = 500) -> dict:
     that doesn't already have one. Returns {created, skipped, scanned}."""
     if not Path(scores_db).exists():
         return {"created": 0, "skipped": 0, "scanned": 0}
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -396,7 +396,7 @@ def prune_noise_candidates(scores_db: str) -> int:
     """
     if not Path(scores_db).exists():
         return 0
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -457,7 +457,7 @@ def retention_sweep(
     if now is None:
         now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=candidate_retention_days)).isoformat()
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     try:
         cur = conn.execute(
             "DELETE FROM consolidation_candidates "

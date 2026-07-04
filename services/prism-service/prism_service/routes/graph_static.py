@@ -9,6 +9,7 @@ files. None of these routes depend on NiceGUI.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 
@@ -17,6 +18,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from prism_service.project_context import get_project
 from prism_service.services.graph_service import compute_node_hierarchy
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -1829,16 +1832,22 @@ def _graphify_hierarchy(project_id: str):
     comm_labels: dict[int, str] = {}
     if db_path.exists():
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
             try:
                 for r in conn.execute("SELECT id, label FROM communities"):
                     comm_labels[int(r[0])] = r[1] or ""
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as exc:
+                # Graceful fallback stays (viewer renders comm:<id>), but
+                # never swallow silently — locked/missing-table is a signal.
+                logger.warning(
+                    "graph_static community labels fallback for %s: %s",
+                    db_path, exc)
             finally:
                 conn.close()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            logger.warning(
+                "graph_static community labels unavailable for %s: %s",
+                db_path, exc)
 
     # Ultimate Graph narrative layer: enriched per-hierarchy-node names
     # ({l-path key: "Human Name"}) written by the background enrich worker.
@@ -1893,7 +1902,7 @@ def _graphify_communities(project_id: str):
     db_path = ctx._data_dir / "graph.db"
     if not db_path.exists():
         return JSONResponse({"communities": []})
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         try:
@@ -1907,7 +1916,13 @@ def _graphify_communities(project_id: str):
                 "GROUP BY e.community "
                 "ORDER BY n DESC"
             ).fetchall()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            # Pre-label schema (no `communities` table) — fall back to
+            # unlabeled counts, but surface the reason instead of
+            # swallowing it silently.
+            logger.warning(
+                "graph_static communities.json label join fallback for "
+                "%s: %s", db_path, exc)
             rows = conn.execute(
                 "SELECT community AS id, COUNT(*) AS n, NULL AS label "
                 "FROM entities WHERE community IS NOT NULL "

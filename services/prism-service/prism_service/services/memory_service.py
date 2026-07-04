@@ -7,6 +7,7 @@ import math
 import os
 import secrets
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -56,12 +57,28 @@ class MemoryService:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._task_svc = task_svc
 
-        # Recall log DB — operational data, separate from expertise JSONL
-        recall_db_path = Path(mulch_dir) / "recall_log.db"
-        self._recall_db = sqlite3.connect(str(recall_db_path), check_same_thread=False)
-        self._recall_db.execute("PRAGMA journal_mode=WAL")
-        self._recall_db.execute("PRAGMA busy_timeout=5000")
+        # Recall log DB — operational data, separate from expertise JSONL.
+        # One sqlite connection PER THREAD via the lazy `_recall_db`
+        # property (sqlite-hardening workstream); the old shared
+        # check_same_thread=False handle raced under concurrent callers.
+        self._recall_db_path = str(Path(mulch_dir) / "recall_log.db")
+        self._tlocal = threading.local()
+        # Schema init runs ONCE here, on the constructing thread's
+        # connection; other threads open the already-migrated db file.
         self._recall_db.executescript(_CREATE_RECALL_LOG_SQL)
+
+    @property
+    def _recall_db(self) -> sqlite3.Connection:
+        """The CALLING thread's connection to recall_log.db, opened
+        lazily and cached in a thread-local. WAL + busy_timeout
+        complement the per-thread handle (which is the race fix)."""
+        conn = getattr(self._tlocal, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._recall_db_path, timeout=5.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._tlocal.conn = conn
+        return conn
 
     # ------------------------------------------------------------------
     # Helpers

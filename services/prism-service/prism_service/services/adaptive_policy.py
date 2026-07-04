@@ -100,7 +100,7 @@ def get_active_knobs(scores_db: str) -> dict[str, float]:
     knobs = dict(DEFAULT_KNOBS)
     if not Path(scores_db).exists():
         return knobs
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     try:
         row = conn.execute(
             "SELECT forget_cutoff, decay_weight, merge_similarity_threshold "
@@ -153,7 +153,7 @@ class AdaptivePolicyService:
         """
         if not Path(self._scores_db).exists():
             return []
-        conn = sqlite3.connect(self._scores_db)
+        conn = sqlite3.connect(self._scores_db, timeout=5.0)
         try:
             rows = conn.execute(
                 "SELECT COALESCE(op_type, 'reflection') AS op_type, "
@@ -251,7 +251,7 @@ class AdaptivePolicyService:
         """Append one timestamped policy_knobs row."""
         if not Path(self._scores_db).exists():
             return
-        conn = sqlite3.connect(self._scores_db)
+        conn = sqlite3.connect(self._scores_db, timeout=5.0)
         try:
             conn.execute(
                 "INSERT INTO policy_knobs "
@@ -272,7 +272,7 @@ class AdaptivePolicyService:
         """Newest-first policy_knobs rows for the /learning chart."""
         if not Path(self._scores_db).exists():
             return []
-        conn = sqlite3.connect(self._scores_db)
+        conn = sqlite3.connect(self._scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(

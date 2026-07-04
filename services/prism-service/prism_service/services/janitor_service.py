@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -79,11 +80,26 @@ class JanitorService:
         clock: Optional[Callable[[], datetime]] = None,
     ) -> None:
         self._db_path = scores_db
-        self._db = sqlite3.connect(scores_db, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA busy_timeout=5000")
+        # One sqlite connection PER THREAD via the lazy `_db` property
+        # (sqlite-hardening workstream): the old single shared handle
+        # (check_same_thread=False) let concurrent callers interleave
+        # statements/commits on one connection.
+        self._tlocal = threading.local()
         self._clock: Callable[[], datetime] = clock or _now_utc
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The CALLING thread's connection to scores.db, opened lazily
+        and cached in a thread-local. WAL + busy_timeout complement the
+        per-thread handle (which is the actual race fix)."""
+        conn = getattr(self._tlocal, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._tlocal.conn = conn
+        return conn
 
     # ------------------------------------------------------------------
     # Helpers

@@ -76,7 +76,7 @@ class ForgetOperation(MemoryOperation):
 
     def _entry_id_for(self, item: Any, project: str) -> str:
         """Resolve the ExpertiseEntry id a candidate row points at."""
-        conn = sqlite3.connect(self._scores_db(project))
+        conn = sqlite3.connect(self._scores_db(project), timeout=5.0)
         try:
             row = conn.execute(
                 "SELECT scope_json FROM consolidation_candidates WHERE id=?",
@@ -117,7 +117,7 @@ class ForgetOperation(MemoryOperation):
             return []
         now = datetime.now(timezone.utc).isoformat()
         ids: list = []
-        conn = sqlite3.connect(db)
+        conn = sqlite3.connect(db, timeout=5.0)
         try:
             for e in entries:
                 scope = _json.dumps({

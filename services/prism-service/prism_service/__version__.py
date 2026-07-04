@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.23"
+PRISM_VERSION = "6.7.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.24: SQLITE HARDENING. Stress-verified fixes for concurrent-writer "
+    "lock errors (bare connects: 97.6% lock-error rate at 8 writers; with "
+    "timeout=5.0/busy_timeout: 0.0%) and shared-connection corruption (one "
+    "Connection across 12 threads: 16.4% InterfaceError/SystemError). (1) "
+    "every per-call sqlite3.connect now passes timeout=5.0 (~41 sites swept). "
+    "(2) the 4 shared-Connection services (TaskService, Brain engine, "
+    "JanitorService, MemoryService recall_log) open ONE connection PER THREAD "
+    "via lazy thread-local properties — public API unchanged. (3) API "
+    "fallbacks (dashboard/graph/projects/graph_static) keep degrading "
+    "gracefully but now logger.warning the swallowed exception. (4) tasks.db "
+    "gains hot-query indexes (task_history(task_id,timestamp), tasks(status), "
+    "tasks(parent_id)) applied on startup. (5) NEW services/sqlite_maint.py: "
+    "periodic PRAGMA wal_checkpoint(TRUNCATE)+optimize over every project "
+    "store every ~15 min + on graceful shutdown (PRISM_SQLITE_MAINT_INTERVAL_S, "
+    "0=off) — live -wal files were 3-8x their db (tasks.db main file a week "
+    "stale). No VACUUM (operator-run). "
     "v6.7.23: TOKEN ATTRIBUTION COUNTS ALL FOUR USAGE FIELDS (P0). Every "
     "token surface summed usage.output_tokens ONLY — across 36 real "
     "transcripts that displayed 15.9M vs the real 2.97B spend (output 15.9M "

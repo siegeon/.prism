@@ -711,22 +711,24 @@ class Brain:
         # embedding BLOB and compute cosine similarity across tasks.
         # Falls back to global score_aggregates when not configured.
         self._tasks_db_path: Optional[str] = tasks_db
-        self._tasks: Optional[sqlite3.Connection] = None
         self._current_step_id: Optional[str] = None
         self.last_result_count: int = 0
+
+        # One sqlite connection PER THREAD PER database via the lazy
+        # `_brain`/`_graph`/`_scores`/`_tasks` properties below
+        # (sqlite-hardening workstream): the old shared handles
+        # (check_same_thread=False) let concurrent callers interleave
+        # statements/commits on a single connection.
+        self._tlocal = threading.local()
+        self.vector_enabled = False
 
         for path in (brain_db, graph_db, scores_db):
             Path(path).parent.mkdir(parents=True, exist_ok=True)
 
-        self._brain = self._connect(brain_db)
-        self._graph = self._connect(graph_db)
-        self._scores = self._connect(scores_db)
-        if tasks_db is not None:
-            try:
-                self._tasks = self._connect(tasks_db)
-            except sqlite3.DatabaseError:
-                self._tasks = None
-
+        # Materialize the constructing thread's connections up front so
+        # corruption surfaces here (as it always has), then run schema
+        # init ONCE on this thread — other threads' lazy connections
+        # open the same, already-migrated db files.
         for label, db in (
             (brain_db, self._brain),
             (graph_db, self._graph),
@@ -736,6 +738,8 @@ class Brain:
                 db.execute("PRAGMA journal_mode=WAL")
             except sqlite3.DatabaseError as exc:
                 raise BrainCorruptError(f"{label} is corrupt: {exc}") from exc
+        if tasks_db is not None:
+            self._tasks  # noqa: B018 — probe once; disables itself on error
 
         self._check_db_integrity()
         self.vector_enabled = _try_enable_vector(self._brain)
@@ -744,9 +748,64 @@ class Brain:
         self._init_graph_schema()
         self._init_scores_schema()
 
+    # ------------------------------------------------------------------
+    # Per-thread connection factory (sqlite-hardening workstream)
+    # ------------------------------------------------------------------
+
+    def _thread_conn(self, key: str, path: str) -> sqlite3.Connection:
+        """Return the CALLING thread's connection to ``path``, opening
+        and caching it in a thread-local slot on first use. Existing
+        call sites (and tests) keep reading ``self._brain`` etc.
+        unchanged, but no two threads ever share a handle."""
+        cache = getattr(self._tlocal, "conns", None)
+        if cache is None:
+            cache = self._tlocal.conns = {}
+        conn = cache.get(key)
+        if conn is None:
+            conn = self._connect(path)
+            if key == "brain" and self.vector_enabled:
+                # sqlite-vec is loaded per-connection: the constructing
+                # thread enabled it via _try_enable_vector; every other
+                # thread's brain connection must load the extension too
+                # or its vec_* queries would fail.
+                try:
+                    import sqlite_vec  # type: ignore
+                    conn.enable_load_extension(True)
+                    sqlite_vec.load(conn)
+                    conn.enable_load_extension(False)
+                except Exception:  # pragma: no cover — degrade to BM25
+                    pass
+            cache[key] = conn
+        return conn
+
+    @property
+    def _brain(self) -> sqlite3.Connection:
+        return self._thread_conn("brain", self._brain_db_path)
+
+    @property
+    def _graph(self) -> sqlite3.Connection:
+        return self._thread_conn("graph", self._graph_db_path)
+
+    @property
+    def _scores(self) -> sqlite3.Connection:
+        return self._thread_conn("scores", self._scores_db_path)
+
+    @property
+    def _tasks(self) -> Optional[sqlite3.Connection]:
+        """Optional read-only handle to the project's tasks.db (LL-06).
+        Returns None when unconfigured or the file is unreadable —
+        preserving the old constructor's fall-back-to-None semantics."""
+        if self._tasks_db_path is None:
+            return None
+        try:
+            return self._thread_conn("tasks", self._tasks_db_path)
+        except sqlite3.DatabaseError:
+            self._tasks_db_path = None
+            return None
+
     @staticmethod
     def _connect(path: str) -> sqlite3.Connection:
-        conn = sqlite3.connect(path, check_same_thread=False)
+        conn = sqlite3.connect(path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         # Cap waiters on the per-connection mutex / writer lock so a stuck

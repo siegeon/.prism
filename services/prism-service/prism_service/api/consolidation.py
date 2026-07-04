@@ -243,7 +243,7 @@ def next_brief(project: str = Query("default")) -> dict:
     # Non-mutating preview: read the oldest pending candidate directly
     # rather than calling JanitorService.check() (which would flip its
     # status to dispensed).
-    conn = sqlite3.connect(scores_db)
+    conn = sqlite3.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(
