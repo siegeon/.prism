@@ -1728,13 +1728,13 @@ def _json(obj: Any) -> str:
     return json.dumps(_serialise(obj), indent=2, default=str)
 
 
-def _resolve_link_session_id() -> str:
-    """Fallback session id to stamp into task_sessions when a conductor
-    advance/gate omits one. Prefers the REAL active transcript session for
-    the request's project (so the link maps to actual token data); falls
-    back to the MCP request handle only when no transcript can be found —
-    that preserves the "always stamp something" guarantee without making a
-    phantom id the default (which left conductor tiles stuck at 0 tok)."""
+def _resolve_real_session_id() -> str:
+    """STRICT resolver for the conductor session gate (ef81fc15): the REAL
+    active transcript session for the request's project, or '' when none
+    exists on disk. Never falls back to the MCP request handle — that is a
+    per-request uuid4 minted by the HTTP transport which maps to NO
+    transcript, so auto-linking it would SATISFY the gate while leaving the
+    tile exactly as frozen as no link at all (the phantom-session hole)."""
     from prism_service.mcp.request_context import get_request_context
     ctx = get_request_context()
     try:
@@ -1748,12 +1748,25 @@ def _resolve_link_session_id() -> str:
         # phantom MCP request handle (which maps to no transcript).
         override_dir = claude_memory.configured_project_dir(ctx.project_id) or ""
         if src or override_dir:
-            real = current_session_id(src, override_dir=override_dir)
-            if real:
-                return real
+            return current_session_id(src, override_dir=override_dir) or ""
     except Exception:
         pass
-    return ctx.request_id
+    return ""
+
+
+def _resolve_link_session_id() -> str:
+    """LENIENT fallback session id to stamp into task_sessions when a
+    conductor advance/gate omits one (telemetry stamping, NOT the gate).
+    Prefers the REAL active transcript session (so the link maps to actual
+    token data); falls back to the MCP request handle only when no
+    transcript can be found — that preserves the "always stamp something"
+    guarantee. The conductor session GATE must never use this: only the
+    strict _resolve_real_session_id counts toward clearing the gate."""
+    from prism_service.mcp.request_context import get_request_context
+    real = _resolve_real_session_id()
+    if real:
+        return real
+    return get_request_context().request_id
 
 
 # ---------------------------------------------------------------------------
@@ -3948,18 +3961,20 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # Conductor session gate (ef81fc15): flipping to in_progress
             # hands the task to the conductor — a sessionless tile is
             # frozen (no transcript, no tokens). AUTO-LINK the caller's
-            # session when one is resolvable (explicit session_id arg >
-            # real transcript session > MCP request handle) so legitimate
-            # drives keep working; refuse with a structured error only
-            # when nothing is resolvable. Transitions only — a task
-            # already in_progress (incl. grandfathered sessionless rows)
-            # passes through.
+            # session when one is REALLY resolvable: an explicit
+            # session_id arg, or a session that maps to an actual
+            # transcript on disk (strict resolver). The bare MCP request
+            # handle NEVER counts — it is a per-request uuid with no
+            # transcript, and a phantom link would satisfy the gate while
+            # leaving the tile exactly as frozen. Transitions only — a
+            # task already in_progress (incl. grandfathered sessionless
+            # rows) passes through.
             if arguments.get("status") == "in_progress":
                 _cur = task_svc.get(arguments["id"])
                 if (_cur is not None and _cur.status != "in_progress"
                         and not task_svc.sessions_for_task(_cur.id)):
                     _sid = (str(arguments.get("session_id") or "").strip()
-                            or _resolve_link_session_id())
+                            or _resolve_real_session_id())
                     if _sid:
                         task_svc.link_session(_cur.id, _sid)
                     else:
@@ -4047,7 +4062,31 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # active transcript session so the linked id maps to actual token
             # data. The MCP request handle is the last-resort stamp only — on
             # its own it links a phantom (no transcript, no tokens → 0 tok).
-            _sid = arguments.get("session_id") or _resolve_link_session_id()
+            _explicit_sid = str(arguments.get("session_id") or "").strip()
+            _sid = _explicit_sid or _resolve_link_session_id()
+            # Conductor session gate (ef81fc15): ENTERING the workflow
+            # ('' -> step 0) hands the task to the conductor. The gate is
+            # satisfied only by an explicit session_id, an already-linked
+            # session, or a REAL transcript session (strict resolver) —
+            # never by the phantom request handle, which would auto-link
+            # and clear the gate while the tile stays frozen. Mid-workflow
+            # advances are not entry transitions and pass through.
+            _t = task_svc.get(task_id)
+            if (_t is not None
+                    and not (getattr(_t, "workflow_step", "") or "")
+                    and not _explicit_sid
+                    and not task_svc.sessions_for_task(task_id)
+                    and not _resolve_real_session_id()):
+                from prism_service.services.task_service import (
+                    SESSION_GATE_FIX,
+                )
+                return [TextContent(type="text", text=_json({
+                    "error": SESSION_GATE_FIX,
+                    "task_id": task_id,
+                    "fix": ("call task_link_session(task_id, session_id) "
+                            "or pass session_id on this conductor_advance, "
+                            "then retry"),
+                }))]
             result = conductor_svc.advance_task(
                 task_id,
                 validation=arguments.get("validation"),

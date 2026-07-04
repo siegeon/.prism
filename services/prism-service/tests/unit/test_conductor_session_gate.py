@@ -12,9 +12,9 @@ conductor, plus the REST linking surface that makes compliance possible:
   * REST LINK — POST /api/tasks/{id}/sessions upserts the same
     task_sessions row as the MCP task_link_session verb (idempotent,
     returns the linked list).
-  * REST CREATE — TaskCreate accepts session_id (atomic create+link);
-    enter_conductor without a session is refused BEFORE the row exists
-    (no orphan task).
+  * REST CREATE — TaskCreate accepts session_id (create+link in one
+    call); enter_conductor without a session is refused BEFORE the row
+    exists (no orphan task).
   * REST PATCH — status->in_progress on a sessionless task is 422 and
     the task stays OUT of the conductor (managed_tasks/intake lane).
   * REST ADVANCE — POST /api/conductor/advance cannot ENTER a
@@ -146,7 +146,7 @@ def test_rest_link_then_patch_enters_conductor(project):
 
 
 # ----------------------------------------------------------------------
-# (c) TaskCreate with session_id + enter_conductor is atomic
+# (c) TaskCreate with session_id + enter_conductor links in one call
 # ----------------------------------------------------------------------
 
 
@@ -277,23 +277,95 @@ def test_mcp_task_update_in_progress_with_explicit_session_autolinks(project):
     )
 
 
-def test_mcp_task_update_autolinks_request_context_session(project):
-    """A real MCP request carries a request session handle — the gate
-    auto-links it instead of erroring, so live drives never stall."""
+def test_mcp_task_update_refuses_phantom_request_handle(project):
+    """Over HTTP every MCP request carries a NON-EMPTY request_id — a
+    per-request uuid4 minted by the transport that maps to NO transcript.
+    The gate must NOT count it as a session: with no explicit arg and no
+    real transcript resolvable, the structured refusal fires instead of a
+    phantom auto-link (which would clear the gate while the tile stays
+    exactly as frozen)."""
     from prism_service.mcp.request_context import (
         PrismRequestContext, use_request_context,
     )
 
     t = json.loads(_text(_call("task_create", {"title": "mcp ctx"})))
     with use_request_context(PrismRequestContext(
-            project_id=_PID, request_id="REQ-SESSION-1")):
+            project_id=_PID, request_id="REQ-PHANTOM-1")):
         out = json.loads(_text(_call(
             "task_update", {"id": t["id"], "status": "in_progress"})))
+    assert "error" in out, (
+        "a bare request handle satisfied the gate — the refusal branch "
+        "must fire when nothing REAL resolves"
+    )
+    assert "task_link_session" in json.dumps(out)
+
+    from prism_service.project_context import get_project
+    assert get_project(project).task_svc.get(t["id"]).status == "pending"
+    assert get_project(project).task_svc.sessions_for_task(t["id"]) == [], (
+        "the phantom request handle must never be auto-linked"
+    )
+
+
+def test_mcp_task_update_autolinks_real_transcript_session(project, monkeypatch):
+    """When the STRICT resolver finds a real transcript session on disk,
+    the sessionless in_progress flip auto-links IT (not the request
+    handle) and proceeds — live drives with a real transcript never
+    stall."""
+    from prism_service.mcp import tools as mcp_tools
+
+    monkeypatch.setattr(
+        mcp_tools, "_resolve_real_session_id", lambda: "S-real-transcript")
+
+    t = json.loads(_text(_call("task_create", {"title": "mcp real"})))
+    out = json.loads(_text(_call(
+        "task_update", {"id": t["id"], "status": "in_progress"})))
     assert out.get("status") == "in_progress"
 
     from prism_service.project_context import get_project
     linked = get_project(project).task_svc.sessions_for_task(t["id"])
-    assert any(s["session_id"] == "REQ-SESSION-1" for s in linked)
+    assert any(s["session_id"] == "S-real-transcript" for s in linked)
+
+
+def test_mcp_conductor_advance_entry_refuses_phantom(project):
+    """MCP conductor_advance ENTERING the workflow ('' -> step 0) must not
+    be satisfied by the phantom request handle either — same strict rule
+    as task_update. With an explicit session_id the entry proceeds."""
+    from prism_service.mcp.request_context import (
+        PrismRequestContext, use_request_context,
+    )
+    from prism_service.project_context import get_project
+
+    t = json.loads(_text(_call("task_create", {"title": "mcp advance"})))
+    with use_request_context(PrismRequestContext(
+            project_id=_PID, request_id="REQ-PHANTOM-2")):
+        refused = json.loads(_text(_call(
+            "conductor_advance", {"id": t["id"]})))
+    assert "error" in refused, (
+        "sessionless MCP conductor_advance entered the workflow on a "
+        "phantom request handle"
+    )
+    svc = get_project(project).task_svc
+    assert (svc.get(t["id"]).workflow_step or "") == ""
+    assert svc.sessions_for_task(t["id"]) == []
+
+    ok = json.loads(_text(_call(
+        "conductor_advance", {"id": t["id"], "session_id": "S-entry"})))
+    assert ok.get("ok") is True
+    assert (svc.get(t["id"]).workflow_step or "") != ""
+
+
+def test_mcp_conductor_advance_mid_workflow_not_entry_gated(project):
+    """Mid-workflow advances are not entry transitions — a task already
+    inside the workflow keeps advancing without an explicit session_id
+    (the lenient telemetry stamp still applies)."""
+    t = json.loads(_text(_call("task_create", {"title": "mcp mid"})))
+    entered = json.loads(_text(_call(
+        "conductor_advance", {"id": t["id"], "session_id": "S-mid"})))
+    assert entered.get("ok") is True
+
+    again = json.loads(_text(_call("conductor_advance", {"id": t["id"]})))
+    assert "error" not in again
+    assert again.get("ok") is True
 
 
 # ----------------------------------------------------------------------

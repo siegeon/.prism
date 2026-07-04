@@ -110,9 +110,11 @@ class TaskCreate(BaseModel):
     likely_misfire: str = ""
     full_outcome_complete: bool = False
     enter_conductor: bool = False
-    # Conductor session gate (ef81fc15): optional driving session to link
-    # atomically at create time — REQUIRED when enter_conductor is true so
-    # a task can never be handed to the conductor without a session.
+    # Conductor session gate (ef81fc15): optional driving session linked in
+    # the same request right after create (two writes, not one transaction —
+    # benign, because the gate re-checks on every transition) — REQUIRED when
+    # enter_conductor is true so a task can never be handed to the conductor
+    # without a session.
     session_id: Optional[str] = None
 
 
