@@ -60,6 +60,18 @@ CREATE TABLE IF NOT EXISTS task_history (
     timestamp TEXT NOT NULL,
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
+
+-- Hot-query indexes (sqlite-hardening workstream). Declared with
+-- IF NOT EXISTS in the startup script so EXISTING tasks.db files pick
+-- them up on the next boot, not only fresh installs.
+-- history(): SELECT ... WHERE task_id=? ORDER BY timestamp ASC — the
+-- per-task audit trail is read on every task detail view.
+CREATE INDEX IF NOT EXISTS idx_task_history_task_ts
+    ON task_history(task_id, timestamp);
+-- list(status=...): the board's dominant filter.
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+-- list(parent_id=...): root-vs-children scoping on every board load.
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 """
 
 
