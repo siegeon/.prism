@@ -1,13 +1,14 @@
 # Install torch from the CPU-only wheels index to avoid CUDA bloat
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-fastapi>=0.110
+fastapi>=0.115
 mcp>=1.0
-uvicorn[standard]
+uvicorn[standard]>=0.30
 
 # Vector search (fully local, no API / tokens required)
 model2vec>=0.3
-sqlite-vec>=0.1
+# Pre-1.0 storage-format risk: stay on the 0.1.x series the live stores use.
+sqlite-vec>=0.1.9,<0.2
 numpy
 tokenizers
 
@@ -24,5 +25,6 @@ graphifyy>=0.4.29,<0.5
 
 # AST chunking for Python / TypeScript / JavaScript / C# / Go etc.
 # Without these the chunker falls back to regex which loses structural info.
+# tree-sitter-language-pack replaces the unmaintained tree-sitter-languages.
 tree-sitter>=0.21,<1
-tree-sitter-languages>=1.10
+tree-sitter-language-pack>=1.12

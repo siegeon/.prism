@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.25"
+PRISM_VERSION = "6.7.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.26: safe dependency refresh. tree-sitter-languages (unmaintained) replaced by "
+    "tree-sitter-language-pack; sqlite-vec pinned to the 0.1.x series the live stores use; "
+    "default embedder swapped potion-base-32M -> potion-retrieval-32M (same 512-dim; reindex "
+    "required to re-embed existing stores; PRISM_EMBEDDER=potion-base rolls back); "
+    "fastapi/uvicorn floors raised; SPA minor/patch bumps (xyflow, mermaid, tailwind, motion, "
+    "react 19.2.7, r3f, react-router). "
     "v6.7.25: test suite data-dir isolation — tests/conftest.py pins "
     "PRISM_DATA_DIR to a throwaway temp dir at conftest-import time (config.py "
     "freezes DATA_DIR at import, so a fixture-scoped setenv loses), ending the "
