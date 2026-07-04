@@ -79,6 +79,19 @@ def advance(project: str = Query("default"), body: dict = Body(...)) -> dict:
     task_id = body.get("task_id")
     if not task_id:
         raise HTTPException(422, "task_id required")
+    # Conductor session gate (ef81fc15): ENTERING the workflow (step '' ->
+    # step 0) hands the task to the conductor. Refuse a sessionless entry —
+    # either the call carries a session_id (stamped by advance_task) or the
+    # task already has a linked session. Mid-workflow advances are not
+    # entry transitions and pass through (grandfathered drives keep moving).
+    task_svc = getattr(s, "_task_svc", None)
+    if task_svc is not None:
+        t = task_svc.get(task_id)
+        if (t is not None and not (getattr(t, "workflow_step", "") or "")
+                and not str(body.get("session_id") or "").strip()
+                and not task_svc.sessions_for_task(task_id)):
+            from prism_service.services.task_service import SESSION_GATE_FIX
+            raise HTTPException(422, SESSION_GATE_FIX)
     out = s.advance_task(
         task_id,
         validation=body.get("validation"),

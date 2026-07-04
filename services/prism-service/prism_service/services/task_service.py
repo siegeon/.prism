@@ -17,6 +17,19 @@ from prism_service.models.task import Task, TaskHistory
 EmbedFn = Callable[[str], Optional[bytes]]
 
 
+# Conductor session gate (task ef81fc15): the ONE message every public
+# surface (REST create/patch/advance + MCP task_update) raises when a
+# sessionless task would be handed to the conductor. A conductor tile
+# without a linked session is FROZEN — no transcript, no tokens, no live
+# signals — so the gate refuses the transition and names the fix.
+SESSION_GATE_FIX = (
+    "a task cannot enter the conductor without a linked session — "
+    "link a session first: POST /api/tasks/{task_id}/sessions "
+    "(body: {\"session_id\": ...}) or the MCP task_link_session verb, "
+    "then retry"
+)
+
+
 _CREATE_TASKS_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -698,6 +711,27 @@ class TaskService:
         conn.row_factory = sqlite3.Row
         try:
             self._ensure_task_sessions(conn)
+            # session_outcomes is Brain-owned schema — on a scores.db where
+            # no session outcome was ever recorded the table is absent and
+            # the LEFT JOIN raises OperationalError, which used to be
+            # swallowed into a LYING empty list (a real task_sessions link
+            # read as "no sessions" — the conductor session gate would then
+            # refuse a correctly-linked task). Degrade to the bare
+            # task_sessions rows with zeroed metrics instead (ef81fc15).
+            has_outcomes = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='session_outcomes'"
+            ).fetchone() is not None
+            if not has_outcomes:
+                rows = conn.execute(
+                    "SELECT session_id, started_at, ended_at, "
+                    "0 AS duration_s, 0 AS tokens_used, 0 AS files_read, "
+                    "0 AS files_modified, 0 AS skills_invoked "
+                    "FROM task_sessions WHERE task_id = ? "
+                    "ORDER BY started_at ASC",
+                    (task_id,),
+                ).fetchall()
+                return [dict(r) for r in rows]
             rows = conn.execute(
                 "SELECT ts.session_id, ts.started_at, ts.ended_at, "
                 "COALESCE(so.duration_s, 0) AS duration_s, "

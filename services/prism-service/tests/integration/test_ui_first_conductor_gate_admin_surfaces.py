@@ -171,7 +171,10 @@ def test_post_conductor_advance_moves_task(tmp_path, monkeypatch):
     resp = client.post(
         "/api/conductor/advance",
         params={"project": "prism"},
-        json={"task_id": t.id, "validation": "ok"},
+        # session_id: the conductor session gate (ef81fc15) refuses a
+        # sessionless ENTRY into the workflow — an advance that hands the
+        # task to the conductor must carry the driving session.
+        json={"task_id": t.id, "validation": "ok", "session_id": "S-adm"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()

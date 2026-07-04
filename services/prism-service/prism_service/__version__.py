@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.26"
+PRISM_VERSION = "6.7.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.27: conductor session gate — a task can no longer be handed to the "
+    "conductor without a linked session (sessionless tiles rendered FROZEN: no "
+    "transcript, no tokens, no live signals). Sessionless enter_conductor at "
+    "create, REST PATCH ->in_progress, REST /conductor/advance entry, and MCP "
+    "task_update ->in_progress are all refused with the fix named; MCP drives "
+    "auto-link the caller's REAL session (explicit arg or on-disk transcript "
+    "— never the phantom MCP request handle). New REST POST "
+    "/api/tasks/{id}/sessions (twin of task_link_session, idempotent) + "
+    "TaskCreate.session_id for create+link in one call. Grandfathered sessionless "
+    "in_progress rows stay readable; the gate applies to transitions only. "
     "v6.7.26: safe dependency refresh. tree-sitter-languages (unmaintained) replaced by "
     "tree-sitter-language-pack; sqlite-vec pinned to the 0.1.x series the live stores use; "
     "default embedder swapped potion-base-32M -> potion-retrieval-32M (same 512-dim; reindex "
