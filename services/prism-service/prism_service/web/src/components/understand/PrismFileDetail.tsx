@@ -89,7 +89,7 @@ export default function PrismFileDetail({
       </div>
 
       {error && (
-        <div className="text-[11px] text-rose-300 opacity-80">{error}</div>
+        <div className="text-[11px] text-[color:var(--accent-rose-fg)] opacity-80">{error}</div>
       )}
 
       <div className="grid grid-cols-3 gap-2">

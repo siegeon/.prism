@@ -193,7 +193,7 @@ export default function Sidebar() {
                     />
                   ) : isStale ? (
                     <span
-                      className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_6px_2px_rgba(251,191,36,0.5)]"
+                      className="w-2 h-2 rounded-full bg-[color:var(--accent-amber-fg)] shadow-[0_0_6px_2px_rgba(251,191,36,0.5)]"
                       aria-label="stale"
                     />
                   ) : null}
@@ -244,7 +244,7 @@ export default function Sidebar() {
           <span>Slate Blue · v{version?.version ?? "…"}</span>
           {version?.dev_mode && (
             <span
-              className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[9px] font-bold tracking-widest bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[9px] font-bold tracking-widest bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] border border-[color:var(--accent-amber-ring)]"
               title="Source-run instance (PRISM_DEV_MODE=1)"
             >
               DEV

@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.30"
+PRISM_VERSION = "6.7.31"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.31: UNIFY domain color-coding on ONE palette resolver (task 3df51df3). "
+    "The seven Hermes tones (--accent-{teal,sage,amber,rose,violet,emerald,slate}-"
+    "{bg,ring,fg} in web/src/index.css) were the intended single source, but two "
+    "leaks broke consistency: (1) STATUS_TONE/TYPE_TONE/CLASSIFICATION_TONE/"
+    "priorityTone/importanceTone/GATE_TONE/STEP_TONE were COPY-PASTED across "
+    "TasksPage/TaskDetailPage/ConductorPage/MemoryPage/MemoryDetailPage/OkfPage/"
+    "UnderstandPage/workflowChips, and (2) ~100 raw Tailwind color utilities "
+    "(bg-amber-500/15, text-rose-200, cyan-* for 'active' — a hue not even in the "
+    "palette) bypassed the tokens. NOW: one resolver web/src/lib/domainTone.ts "
+    "(domainTone(kind,value)->Tone + toneVar/toneClass/typeToneHashed) is the sole "
+    "domain tone map — every per-page duplicate is DELETED and routed through it "
+    "(colors preserved exactly; cyan->teal for 'active'; OkfPage's unlisted 'user' "
+    "concept now maps violet like every other surface instead of an incidental "
+    "hash). The ~100 hardcoded utilities are swept to the --accent-* vars. GUARD: a "
+    "custom ESLint rule (eslint.config.js prism/no-raw-tailwind-color) FORBIDS raw "
+    "(text|bg|border|ring|from|to)-<tone>-<n> utilities + any cyan-* in web/src/** "
+    "except index.css/lib/palette.ts/components/Chart.tsx (the intentional canvas/SVG "
+    "hex mirrors) — red on 108 bypasses before the sweep, green after. `npm run lint` "
+    "+ `npm run build` clean. "
     "v6.7.30: task-detail Conductor + Activity folded into ONE panel. The "
     "separate Conductor stepper card and the empty-space Activity Gantt "
     "(one thin bar + ~3px gate diamonds on a single-session task) are gone; "

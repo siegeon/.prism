@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
+import { domainTone } from "@/lib/domainTone";
 import {
   stepLabel, gateLabel, stepChipClass, WORKFLOW_STEPS_ORDERED,
 } from "@/lib/workflowChips";
@@ -37,21 +38,6 @@ type State = {
   managed_tasks?: ManagedTask[];
   step_buckets?: Record<string, number>;
   board_health?: BoardHealth;
-};
-
-const GATE_TONE: Record<string, PillTone> = {
-  pending: "amber",
-  passed: "emerald",
-  failed: "rose",
-};
-
-// Mirrors TasksPage / TaskDetailPage status coloring so tiles read with
-// the same status language used everywhere else in the SPA.
-const STATUS_TONE: Record<string, PillTone> = {
-  pending: "amber",
-  in_progress: "teal",
-  blocked: "rose",
-  done: "emerald",
 };
 
 export default function ConductorPage() {
@@ -124,10 +110,10 @@ export default function ConductorPage() {
 // ---------------------------------------------------------------------------
 function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: boolean | null; onClick: () => void }) {
   const status = (task.status ?? "").toLowerCase();
-  const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
+  const statusTone: PillTone = domainTone("taskStatus", status) ?? "slate";
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
-  const gateTone: PillTone = GATE_TONE[gate] ?? "slate";
+  const gateTone: PillTone = domainTone("gate", gate) ?? "slate";
   const stepId = task.workflow_step ?? "";
   const phaseLabel = stepId ? stepLabel(stepId) : (status === "done" ? "done" : "queued");
   const priority = task.priority ?? 0;

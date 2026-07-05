@@ -11,6 +11,12 @@
  */
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import type { Tone } from "@/lib/domainTone";
+import { toneFromLabel } from "@/lib/domainTone";
+
+// Re-exported so existing `import { toneFromLabel } from "@/components/ui"`
+// call sites keep working; the implementation lives in lib/domainTone.
+export { toneFromLabel };
 
 export const Card = ({
   children, className, nested, raised,
@@ -56,8 +62,9 @@ export const Kpi = ({ label, value, hint }: { label: string; value: ReactNode; h
  * regardless of tone so the filter strip doesn't shout when nothing
  * is selected.
  */
-export type PillTone =
-  | "teal" | "sage" | "amber" | "rose" | "violet" | "emerald" | "slate";
+// Alias of the single Tone source in lib/domainTone — kept as a named
+// export so the many `type PillTone` importers stay unchanged.
+export type PillTone = Tone;
 
 const PILL_TONE_ACTIVE: Record<PillTone, string> = {
   teal:    "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]",
@@ -109,21 +116,6 @@ export const Pill = ({
   >{children}</button>
 );
 
-/** Stable hash → PillTone. Used for filter axes where labels are
- * user-defined strings (e.g. memory domains) so coloring is still
- * deterministic across renders without an explicit per-label map.
- * "all" intentionally maps to slate so the universal-filter pill
- * doesn't accidentally borrow a meaningful tone.
- */
-const HASH_TONES: PillTone[] = ["teal", "sage", "amber", "rose", "violet", "emerald"];
-
-export function toneFromLabel(label: string): PillTone {
-  if (label === "all") return "slate";
-  let h = 0;
-  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
-  return HASH_TONES[h % HASH_TONES.length];
-}
-
 export const Empty = ({ children }: { children: ReactNode }) => (
   <div className="rounded-md border border-dashed border-[color:var(--border-default)] px-5 py-8 text-center text-sm text-[color:var(--text-muted)]">
     {children}
@@ -138,7 +130,7 @@ export const Page = ({ children }: { children: ReactNode }) => (
 );
 
 export const ErrorBanner = ({ children }: { children: ReactNode }) => (
-  <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-4 py-3 text-sm">
+  <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-4 py-3 text-sm">
     {children}
   </div>
 );

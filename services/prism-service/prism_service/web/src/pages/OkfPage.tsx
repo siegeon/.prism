@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import {
-  Page, Card, Kpi, SectionLabel, Pill, Empty, type PillTone,
+  Page, Card, Kpi, SectionLabel, Pill, Empty,
 } from "@/components/ui";
+import { typeToneHashed } from "@/lib/domainTone";
 import Markdown from "@/components/Markdown";
 
 // OKF (Open Knowledge Format) wiki — PRISM's curated MEMORY expressed as a
@@ -42,28 +43,6 @@ type Concept = {
 // OKF concept `type` is a memory type. Map the known ones to Hermes accent
 // tones; everything else hashes to a stable tone so the card field still reads
 // as a color-coded legend.
-const TYPE_TONE: Record<string, PillTone> = {
-  convention: "sage",
-  decision: "amber",
-  expertise: "teal",
-  "anti-pattern": "rose",
-  failure: "rose",
-  note: "slate",
-  pattern: "teal",
-  feedback: "violet",
-  project: "amber",
-  reference: "teal",
-};
-
-const HASH_TONES: PillTone[] = ["teal", "sage", "amber", "rose", "violet", "emerald"];
-function typeTone(type: string): PillTone {
-  const t = (type || "").toLowerCase();
-  if (TYPE_TONE[t]) return TYPE_TONE[t];
-  let h = 0;
-  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
-  return HASH_TONES[h % HASH_TONES.length];
-}
-
 export default function OkfPage() {
   const [project] = useProject();
   const navigate = useNavigate();
@@ -166,7 +145,7 @@ function ConceptCard({
   const [open, setOpen] = useState(false);
   const [concept, setConcept] = useState<Concept | null>(null);
   const [busy, setBusy] = useState(false);
-  const tone = typeTone(meta.type);
+  const tone = typeToneHashed(meta.type);
 
   const openDetail = () => {
     if (meta.id) navigate(`/memory/${meta.id}`);

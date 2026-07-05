@@ -4,6 +4,10 @@ import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
+import { domainTone, priorityTone } from "@/lib/domainTone";
+import {
+  stepChipClass, gateChipClass, gateLabel, stepLabel,
+} from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
@@ -14,24 +18,6 @@ import { fmtTokens } from "@/lib/format";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
-const STATUS_TONE: Record<string, PillTone> = {
-  pending: "amber",
-  in_progress: "teal",
-  blocked: "rose",
-  done: "emerald",
-};
-
-function priorityTone(p: number | string | undefined): PillTone {
-  if (p === undefined || p === null) return "slate";
-  const n = typeof p === "number" ? p : Number(p);
-  if (!Number.isFinite(n)) return toneFromLabel(String(p));
-  if (n <= 1) return "rose";
-  if (n === 2) return "amber";
-  if (n === 3) return "sage";
-  if (n === 4) return "violet";
-  return "slate";
-}
-
 type Task = {
   id?: string;
   title?: string;
@@ -187,13 +173,6 @@ function fmtGap(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
 }
-const ACTION_TONE: Record<string, PillTone> = {
-  created: "violet",
-  updated: "slate",
-  advance_task: "teal",
-  gate_decide: "amber",
-};
-
 // Flow fields whose `from -> to` is short enough to show as transition
 // pills (everything else is a content edit summarized as "edited <field>").
 const FLOW_FIELDS = ["workflow_step", "status", "gate_state", "priority", "assigned_agent"];
@@ -274,7 +253,7 @@ function StateChip({ children, tone }: { children: React.ReactNode; tone?: PillT
 
 function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRow; isFirst: boolean }) {
   const [open, setOpen] = useState(false);
-  const tone = ACTION_TONE[row.action ?? ""] ?? "slate";
+  const tone = domainTone("action", row.action ?? "") ?? "slate";
   const trans = parseTransition(row.action, row.details);
   const summary = turnSummary(row.action, row.details);
   const full = (row.details ?? "").trim();
@@ -559,7 +538,7 @@ export default function TaskDetailPage() {
 
   const transitions = STATUS_CYCLE[task.status ?? "pending"] ?? [];
   const taskStatus = task.status ?? "pending";
-  const statusTone = STATUS_TONE[taskStatus] ?? "slate";
+  const statusTone = domainTone("taskStatus", taskStatus) ?? "slate";
   const pTone = priorityTone(task.priority);
   const conductorOn = (task.workflow_step ?? "") !== "" || (task.gate_state ?? "none") !== "none";
   // Only transcript-backed (UUID) sessions are real work sessions. Synthetic
@@ -689,7 +668,7 @@ export default function TaskDetailPage() {
       {task.blocked_reason && (
         <Card>
           <SectionLabel>Blocked because</SectionLabel>
-          <div className="text-sm text-rose-300/90 mt-1">{task.blocked_reason}</div>
+          <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1">{task.blocked_reason}</div>
         </Card>
       )}
 
@@ -768,12 +747,12 @@ export default function TaskDetailPage() {
                     <span className="leading-relaxed opacity-80 group-hover:opacity-100 truncate">{oneLine(task.completion_proof)}</span>
                     <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
                   </button>
-                : <div className="text-amber-300/90 text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
+                : <div className="text-[color:var(--accent-amber-fg)] text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
             </div>
             {task.likely_misfire && (
               <div>
                 <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">likely misfire — how this could pass-but-be-wrong</div>
-                <div className="flex items-start gap-1.5 text-amber-300/90 leading-relaxed">
+                <div className="flex items-start gap-1.5 text-[color:var(--accent-amber-fg)] leading-relaxed">
                   <span className="shrink-0">⚠</span>
                   <span className="opacity-90">{task.likely_misfire}</span>
                 </div>
@@ -782,11 +761,11 @@ export default function TaskDetailPage() {
             <div>
               <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">owner outcome — slice vs finished outcome</div>
               {task.full_outcome_complete
-                ? <div className="flex items-center gap-1.5 text-emerald-300/90 leading-relaxed">
+                ? <div className="flex items-center gap-1.5 text-[color:var(--accent-emerald-fg)] leading-relaxed">
                     <span className="shrink-0">✓</span>
                     <span className="opacity-90">Owner outcome: complete — the full owner outcome is mapped (slice green, no open children, strong proof)</span>
                   </div>
-                : <div className="flex items-center gap-1.5 text-amber-300/90 leading-relaxed">
+                : <div className="flex items-center gap-1.5 text-[color:var(--accent-amber-fg)] leading-relaxed">
                     <span className="shrink-0">◐</span>
                     <span className="opacity-90">Owner outcome: slice-only — a green slice is not yet proof the full owner outcome is met</span>
                   </div>}
@@ -841,7 +820,7 @@ export default function TaskDetailPage() {
           </SectionLabel>
           <div className="space-y-2 mt-2">
             {children.map((c) => {
-              const cTone = STATUS_TONE[c.status ?? "pending"] ?? "slate";
+              const cTone = domainTone("taskStatus", c.status ?? "pending") ?? "slate";
               return (
                 <button
                   key={c.id}

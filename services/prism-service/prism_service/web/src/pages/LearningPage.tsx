@@ -95,10 +95,10 @@ function ScorePill({ value }: { value: number | null | undefined }) {
   // green ≥ 0.7 · amber 0.4-0.7 · rose < 0.4
   const tone =
     value >= 0.7
-      ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
+      ? "text-[color:var(--accent-emerald-fg)] bg-[color:var(--accent-emerald-bg)] border-[color:var(--accent-emerald-ring)]"
       : value >= 0.4
-        ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
-        : "text-rose-300 bg-rose-500/10 border-rose-500/30";
+        ? "text-[color:var(--accent-amber-fg)] bg-[color:var(--accent-amber-bg)] border-[color:var(--accent-amber-ring)]"
+        : "text-[color:var(--accent-rose-fg)] bg-[color:var(--accent-rose-bg)] border-[color:var(--accent-rose-ring)]";
   return (
     <span className={`font-mono text-xs px-2 py-0.5 rounded border ${tone}`}>
       {value.toFixed(2)}
@@ -293,7 +293,7 @@ export default function LearningPage() {
             <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
               Override rate
             </div>
-            <div className="text-2xl font-mono text-amber-300">{overridePct}%</div>
+            <div className="text-2xl font-mono text-[color:var(--accent-amber-fg)]">{overridePct}%</div>
             <div className="text-[11px] opacity-50">
               {agentAgg.total_runs ?? 0} runs · blind-verifier override signal
             </div>
@@ -334,7 +334,7 @@ export default function LearningPage() {
                 <span className="font-mono text-xs opacity-60 w-16 text-right">{fmtMs(a.duration_ms)}</span>
                 <span className="font-mono text-xs opacity-60 w-20 text-right">{a.tokens != null ? fmtTokens(a.tokens) : "—"} tok</span>
                 {a.gate_state && a.gate_state !== "none" && (
-                  <span className="text-[10px] uppercase tracking-wider text-amber-300/80 w-14">
+                  <span className="text-[10px] uppercase tracking-wider text-[color:var(--accent-amber-fg)] w-14">
                     {a.gate_state}
                   </span>
                 )}
@@ -379,7 +379,7 @@ export default function LearningPage() {
                       {subjectId.length > 24 ? `${subjectId.slice(0, 24)}…` : subjectId}
                     </span>
                     {(r.memories_minted ?? 0) > 0 && (
-                      <span className="text-[10px] uppercase tracking-wider text-emerald-300/80">
+                      <span className="text-[10px] uppercase tracking-wider text-[color:var(--accent-emerald-fg)]">
                         +{r.memories_minted} mem
                       </span>
                     )}
@@ -406,7 +406,7 @@ export default function LearningPage() {
         ) : (
           <>
             {lowN && (
-              <div className="mb-3 text-[11px] uppercase tracking-wider text-amber-300/80">
+              <div className="mb-3 text-[11px] uppercase tracking-wider text-[color:var(--accent-amber-fg)]">
                 Correlational only — every variant has n &lt; 20.
               </div>
             )}
