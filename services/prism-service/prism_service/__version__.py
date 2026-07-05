@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.29"
+PRISM_VERSION = "6.7.30"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.30: task-detail Conductor + Activity folded into ONE panel. The "
+    "separate Conductor stepper card and the empty-space Activity Gantt "
+    "(one thin bar + ~3px gate diamonds on a single-session task) are gone; "
+    "the PlanView tab panel gains an Implementation tab (tabs: Prototype · "
+    "Diagram · Proposed change · Implementation). New StepRail.tsx is a "
+    "compact collapsible rail: finished agent steps fold into a "
+    "'✓ N completed steps · show' pill, and each GATE is a one-liner that "
+    "expands in place to its real timeline.gates[] receipt (verified✓ vs "
+    "override! + actor · proof_type · timestamp · reason). The sub-agent "
+    "lock-step Gantt survives behind a Rail/Timeline sub-toggle. No backend "
+    "change; palette stays OKF-single-source. Also ships .gitattributes "
+    "*.js eol=lf so autocrlf can't re-add the CRs that tripped the Workflow "
+    "tool's control-character check on Windows checkouts. "
     "v6.7.29: workflow daemon-IDENTITY preflight. The implement.js pre-flight "
     "proved the conductor daemon on :8888 was reachable but NOT that the "
     "drive's MCP tools pointed at that SAME daemon — a duplicate ~/.claude.json "
