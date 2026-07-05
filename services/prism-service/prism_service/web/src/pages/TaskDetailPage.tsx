@@ -5,9 +5,6 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
 import { domainTone, priorityTone } from "@/lib/domainTone";
-import {
-  stepChipClass, gateChipClass, gateLabel, stepLabel,
-} from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
