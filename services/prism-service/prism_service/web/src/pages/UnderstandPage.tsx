@@ -11,7 +11,8 @@ import {
 } from "d3-force";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Card, Empty, type PillTone } from "@/components/ui";
+import { Card, Empty } from "@/components/ui";
+import { typeToneHashed, toneVar } from "@/lib/domainTone";
 import { prismDomainColor } from "@/components/understand/PrismDomainNode";
 import Markdown from "@/components/Markdown";
 
@@ -45,23 +46,6 @@ type Concept = {
   backlinks: { id: string; title: string }[];
 };
 
-const TYPE_TONE: Record<string, PillTone> = {
-  convention: "sage", decision: "amber", expertise: "teal",
-  "anti-pattern": "rose", failure: "rose", note: "slate",
-  pattern: "teal", feedback: "violet", project: "amber",
-  reference: "teal", user: "violet",
-};
-const HASH_TONES: PillTone[] = ["teal", "sage", "amber", "rose", "violet", "emerald"];
-function typeTone(type: string): PillTone {
-  const t = (type || "").toLowerCase();
-  if (TYPE_TONE[t]) return TYPE_TONE[t];
-  let h = 0;
-  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
-  return HASH_TONES[h % HASH_TONES.length];
-}
-function toneVar(tone: PillTone, slot: "bg" | "fg" | "ring"): string {
-  return `var(--accent-${tone}-${slot})`;
-}
 
 // Concept node — a memory concept rendered as a compact dot colored by type and
 // sized by connectivity (hubs read bigger). Clicking selects it; the selected
@@ -77,7 +61,7 @@ const HANDLE_STYLE: CSSProperties = {
   opacity: 0, border: "none", background: "transparent", pointerEvents: "none",
 };
 function ConceptNode({ data }: { data: ConceptNodeData }) {
-  const tone = typeTone(data.type);
+  const tone = typeToneHashed(data.type);
   const s = data.size;
   return (
     <div
@@ -490,7 +474,7 @@ function GraphView({
         <Controls showInteractive={false} position="bottom-left"
           style={{ background: "rgba(0,0,0,0.65)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 6 }} />
         <MiniMap pannable zoomable
-          nodeColor={(n) => `var(--accent-${typeTone((n.data as ConceptNodeData)?.type || "note")}-fg)`}
+          nodeColor={(n) => `var(--accent-${typeToneHashed((n.data as ConceptNodeData)?.type || "note")}-fg)`}
           style={{ background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6 }} />
       </ReactFlow>
     </div>
@@ -531,7 +515,7 @@ function DetailPanel({
   const fm = concept.frontmatter;
   const id = String(fm.id ?? "");
   const title = String(fm.title ?? path);
-  const tone = typeTone(concept.type);
+  const tone = typeToneHashed(concept.type);
   const tags = Array.isArray(fm.tags) ? (fm.tags as unknown[]).map(String) : [];
 
   const doAction = async (action: "edit" | "retire" | "supersede", payload: Record<string, unknown> = {}) => {

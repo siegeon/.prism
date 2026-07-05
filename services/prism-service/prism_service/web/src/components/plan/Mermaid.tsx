@@ -52,7 +52,7 @@ export default function Mermaid({ chart }: { chart: string }) {
   if (!chart.trim()) return <Empty>No diagram.</Empty>;
   if (error) {
     return (
-      <div className="text-[12px] text-rose-300/90 leading-relaxed">
+      <div className="text-[12px] text-[color:var(--accent-rose-fg)] leading-relaxed">
         Diagram failed to render: {error}
       </div>
     );

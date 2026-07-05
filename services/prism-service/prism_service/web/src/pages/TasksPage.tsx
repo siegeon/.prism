@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty, Kpi, toneFromLabel, type PillTone } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, Kpi, toneFromLabel } from "@/components/ui";
+import { domainTone, priorityTone } from "@/lib/domainTone";
 import {
   stepChipClass, gateChipClass, gateLabel, stepLabel,
 } from "@/lib/workflowChips";
@@ -30,33 +31,12 @@ type Task = {
 //   in_progress  → teal   (actively being worked)
 //   blocked      → rose   (problem, stop)
 //   done         → emerald (complete)
-const STATUS_TONE: Record<string, PillTone> = {
-  pending: "amber",
-  in_progress: "teal",
-  blocked: "rose",
-  done: "emerald",
-};
-
 const COLUMNS: { key: string; label: string }[] = [
   { key: "pending", label: "Pending" },
   { key: "in_progress", label: "In Progress" },
   { key: "blocked", label: "Blocked" },
   { key: "done", label: "Done" },
 ];
-
-// Priority bands → tone. Lower number = higher priority by convention,
-// so p1 reads as urgent rose, p2/3 as warning amber/sage, p4+ neutral
-// slate. Strings (e.g. "high"/"medium"/"low") fall through to a hash.
-function priorityTone(p: number | string | undefined): PillTone {
-  if (p === undefined || p === null) return "slate";
-  const n = typeof p === "number" ? p : Number(p);
-  if (!Number.isFinite(n)) return toneFromLabel(String(p));
-  if (n <= 1) return "rose";
-  if (n === 2) return "amber";
-  if (n === 3) return "sage";
-  if (n === 4) return "violet";
-  return "slate";
-}
 
 export default function TasksPage() {
   const [project] = useProject();
@@ -109,7 +89,7 @@ export default function TasksPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         {COLUMNS.map((col) => {
           const items = roots.filter((t) => (t.status ?? "pending") === col.key);
-          const colTone = STATUS_TONE[col.key] ?? "slate";
+          const colTone = domainTone("taskStatus", col.key) ?? "slate";
           return (
             <Card key={col.key} className="!p-4">
               <div className="flex items-center justify-between mb-3">

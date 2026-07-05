@@ -364,7 +364,7 @@ export default function ConsolidationPage() {
           <p className="text-xs opacity-60 mt-3 leading-relaxed">
             {rollup.reflections_run === 0 ? (
               <>
-                <span className="text-amber-300/90">
+                <span className="text-[color:var(--accent-amber-fg)]">
                   {(rollup.pushbacks + rollup.tool_failures + rollup.bg_signals + rollup.memory_writes).toLocaleString()} signals
                 </span>{" "}
                 are queued but no reflection has run yet — none of this
@@ -506,12 +506,12 @@ export default function ConsolidationPage() {
                     </button>
                     <span className="flex gap-1 shrink-0">
                       {(sc.pushbacks ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300/90" title="user pushbacks">
+                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]" title="user pushbacks">
                           {sc.pushbacks} push
                         </span>
                       )}
                       {(sc.tool_failures ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90" title="tool failures">
+                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]" title="tool failures">
                           {sc.tool_failures} fail
                         </span>
                       )}
@@ -521,7 +521,7 @@ export default function ConsolidationPage() {
                         </span>
                       )}
                       {(sc.memory_writes ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90" title="memory_store call sites">
+                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]" title="memory_store call sites">
                           {sc.memory_writes} mem
                         </span>
                       )}
@@ -530,7 +530,7 @@ export default function ConsolidationPage() {
                       )}
                       {b.skip_reason && (
                         <span
-                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300/90"
+                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
                           title={`${b.skip_reason}. Use “Prune noise” to clear these — nothing for reflection to learn.`}
                         >
                           noise
@@ -551,13 +551,13 @@ export default function ConsolidationPage() {
                       <button
                         onClick={() => runReflection(b.id)}
                         disabled={reflectBusy !== null}
-                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 disabled:opacity-40 shrink-0"
+                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] hover:bg-[color:var(--accent-rose-bg)] disabled:opacity-40 shrink-0"
                         title={verdicts[b.id]?.error}
                       >
                         Retry
                       </button>
                     ) : verdicts[b.id] ? (
-                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-emerald-500/15 text-emerald-200 shrink-0 inline-flex items-center gap-1">
+                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] shrink-0 inline-flex items-center gap-1">
                         ✓ score {(verdicts[b.id].qualitative_score ?? 0).toFixed(2)} · {(verdicts[b.id].memories_stored ?? []).length} mem
                       </span>
                     ) : (
@@ -583,7 +583,7 @@ export default function ConsolidationPage() {
                     </div>
                   )}
                   {verdicts[b.id] && !verdicts[b.id].error && !reflectBusy && (
-                    <div className="ml-7 mt-2 p-3 rounded-md bg-emerald-500/5 border border-emerald-500/20 space-y-2 text-[12px]">
+                    <div className="ml-7 mt-2 p-3 rounded-md bg-[color:var(--accent-emerald-bg)] border border-[color:var(--accent-emerald-ring)] space-y-2 text-[12px]">
                       <div className="flex items-baseline gap-4 text-[11px]">
                         <span><span className="opacity-60">score:</span> <span className="font-mono">{(verdicts[b.id].qualitative_score ?? 0).toFixed(2)}</span></span>
                         <span><span className="opacity-60">confidence:</span> <span className="font-mono">{(verdicts[b.id].confidence ?? 0).toFixed(2)}</span></span>
@@ -608,7 +608,7 @@ export default function ConsolidationPage() {
                     </div>
                   )}
                   {verdicts[b.id]?.error && !reflectBusy && (
-                    <div className="ml-7 mt-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200/90">
+                    <div className="ml-7 mt-2 p-2 rounded-md bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] text-[11px] text-[color:var(--accent-rose-fg)]">
                       {verdicts[b.id].error}
                     </div>
                   )}

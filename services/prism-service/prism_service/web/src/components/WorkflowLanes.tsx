@@ -39,14 +39,14 @@ function StepCard({ step, isCurrent }: { step: Step; isCurrent: boolean }) {
 
   let dot, cls;
   if (done) {
-    dot = <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />;
+    dot = <CheckCircle2 className="w-3.5 h-3.5 text-[color:var(--accent-emerald-fg)]" />;
     cls = "border-[color:var(--midground-base)]/10 opacity-60";
   } else if (isCurrent) {
-    dot = <CircleDot className="w-3.5 h-3.5 text-cyan-300" />;
-    cls = "border-cyan-400/60 bg-cyan-400/10 shadow-[0_0_12px_-4px_rgba(34,211,238,0.4)]";
+    dot = <CircleDot className="w-3.5 h-3.5 text-[color:var(--accent-teal-fg)]" />;
+    cls = "border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] shadow-[0_0_12px_-4px_rgba(34,211,238,0.4)]";
   } else if (isGate) {
-    dot = <Lock className="w-3.5 h-3.5 text-amber-300/70" />;
-    cls = "border-amber-400/20 bg-amber-400/5";
+    dot = <Lock className="w-3.5 h-3.5 text-[color:var(--accent-amber-fg)]" />;
+    cls = "border-[color:var(--accent-amber-ring)] bg-[color:var(--accent-amber-bg)]";
   } else {
     dot = <Circle className="w-3.5 h-3.5 opacity-30" />;
     cls = "border-[color:var(--midground-base)]/10 opacity-60";
@@ -69,7 +69,7 @@ export default function WorkflowLanes({ steps, workflow }: { steps: Step[]; work
   return (
     <div className="space-y-4">
       {workflow?.active && currentStep ? (
-        <div className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.04] px-4 py-3">
+        <div className="rounded-md border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] px-4 py-3">
           <div className="text-[10px] uppercase tracking-wider opacity-70 mb-1">Now running</div>
           <div className="flex flex-wrap items-baseline gap-3 text-sm">
             <span className="font-medium capitalize">{humanize(currentStep.id)}</span>
@@ -82,7 +82,7 @@ export default function WorkflowLanes({ steps, workflow }: { steps: Step[]; work
             )}
           </div>
           <div className="mt-2.5 h-1 rounded-full bg-[color:var(--midground-base)]/10 overflow-hidden">
-            <div className="h-full bg-cyan-400/70 transition-[width]" style={{ width: `${steps.length ? (completed / steps.length) * 100 : 0}%` }} />
+            <div className="h-full bg-[color:var(--accent-teal-fg)] transition-[width]" style={{ width: `${steps.length ? (completed / steps.length) * 100 : 0}%` }} />
           </div>
           <div className="text-[10px] uppercase tracking-wider opacity-50 mt-1.5">
             {completed} of {steps.length} steps complete

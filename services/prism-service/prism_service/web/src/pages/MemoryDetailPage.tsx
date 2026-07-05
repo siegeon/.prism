@@ -5,6 +5,7 @@ import { useProject } from "@/lib/project";
 import {
   Page, Card, SectionLabel, Empty, ErrorBanner, type PillTone,
 } from "@/components/ui";
+import { domainTone, importanceTone } from "@/lib/domainTone";
 import EvidenceView from "@/components/EvidenceView";
 
 type Entry = {
@@ -27,34 +28,6 @@ type Entry = {
   recorded_at?: string;
   evidence?: Record<string, unknown>;
 };
-
-const TYPE_TONE: Record<string, PillTone> = {
-  expertise: "teal",
-  convention: "sage",
-  decision: "amber",
-  "anti-pattern": "rose",
-  feedback: "violet",
-  project: "amber",
-  reference: "teal",
-  user: "violet",
-  pattern: "teal",
-  failure: "rose",
-};
-
-const STATUS_TONE: Record<string, PillTone> = {
-  active: "emerald",
-  stale: "amber",
-  retired: "slate",
-  archived: "slate",
-  needs_review: "amber",
-};
-
-function importanceTone(n: number): PillTone {
-  if (n >= 9) return "rose";
-  if (n >= 7) return "amber";
-  if (n >= 4) return "sage";
-  return "slate";
-}
 
 function shortDate(iso?: string): string {
   if (!iso) return "—";
@@ -162,8 +135,8 @@ export default function MemoryDetailPage() {
   const type = (entry.type ?? "").toLowerCase();
   const status = (entry.status ?? "").toLowerCase();
   const classification = (entry.classification ?? "").toLowerCase();
-  const typeTone: PillTone = TYPE_TONE[type] ?? "slate";
-  const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
+  const typeTone: PillTone = domainTone("memoryType", type) ?? "slate";
+  const statusTone: PillTone = domainTone("memoryStatus", status) ?? "slate";
 
   return (
     <Page>
@@ -287,9 +260,9 @@ export default function MemoryDetailPage() {
           <Meta label="effectiveness">
             {typeof entry.effectiveness === "number" ? (
               <span className={entry.effectiveness > 0
-                ? "text-emerald-300/90"
+                ? "text-[color:var(--accent-emerald-fg)]"
                 : entry.effectiveness < 0
-                  ? "text-rose-300/90"
+                  ? "text-[color:var(--accent-rose-fg)]"
                   : "opacity-70"
               }>
                 {entry.effectiveness.toFixed(2)}

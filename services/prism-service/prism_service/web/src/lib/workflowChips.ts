@@ -1,7 +1,10 @@
-// Maps WORKFLOW_STEPS ids and gate states to the unified --accent-{tone}
-// palette /memory + /graph + /understand share. Conductor's visible
-// signal language — only render when conductor is engaged on a task
-// (workflow_step !== '' or gate_state !== 'none').
+// Conductor's visible signal language — step + gate chips. Tone selection
+// for both is owned by the single resolver in lib/domainTone (domainTone
+// "step" / "gate"); this module only builds the chip class strings and
+// exposes the ordered step list. Only render when conductor is engaged on a
+// task (workflow_step !== '' or gate_state !== 'none').
+
+import { domainTone, toneClass } from "./domainTone";
 
 export type WorkflowStep =
   | ""
@@ -19,27 +22,6 @@ export type WorkflowStep =
 
 export type GateState = "none" | "pending" | "passed" | "failed";
 
-const STEP_TONE: Record<string, string> = {
-  intake: "violet",
-  review_previous_notes: "teal",
-  draft_story: "teal",
-  story_gate: "slate",
-  verify_plan: "teal",
-  plan_gate: "slate",
-  write_failing_tests: "violet",
-  red_gate: "slate",
-  implement_tasks: "amber",
-  verify_green_state: "violet",
-  green_gate: "slate",
-};
-
-const GATE_TONE: Record<GateState, string> = {
-  none: "slate",
-  pending: "amber",
-  passed: "emerald",
-  failed: "rose",
-};
-
 export function stepLabel(step: string): string {
   if (!step) return "";
   return step.replace(/_/g, " ");
@@ -49,24 +31,14 @@ export function gateLabel(state: GateState): string {
   return state;
 }
 
+const CHIP_SIZING = "px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-mono";
+
 export function stepChipClass(step: string): string {
-  const tone = STEP_TONE[step] ?? "slate";
-  return [
-    "bg-[color:var(--accent-" + tone + "-bg)]",
-    "text-[color:var(--accent-" + tone + "-fg)]",
-    "ring-1 ring-[color:var(--accent-" + tone + "-ring)]",
-    "px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-mono",
-  ].join(" ");
+  return toneClass(domainTone("step", step) ?? "slate") + " " + CHIP_SIZING;
 }
 
 export function gateChipClass(state: GateState): string {
-  const tone = GATE_TONE[state];
-  return [
-    "bg-[color:var(--accent-" + tone + "-bg)]",
-    "text-[color:var(--accent-" + tone + "-fg)]",
-    "ring-1 ring-[color:var(--accent-" + tone + "-ring)]",
-    "px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-mono",
-  ].join(" ");
+  return toneClass(domainTone("gate", state) ?? "slate") + " " + CHIP_SIZING;
 }
 
 export function conductorEngaged(

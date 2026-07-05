@@ -65,7 +65,7 @@ function Row({ label, v, bad }: { label: string; v: number; bad: boolean }) {
     <div className="flex items-center justify-between">
       <span className="opacity-80">{label}</span>
       <span className={cn("font-mono text-xs px-2 py-0.5 rounded",
-        bad ? "bg-amber-400/15 text-amber-200" : "bg-emerald-400/10 text-emerald-200/80",
+        bad ? "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]" : "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]",
       )}>{v}</span>
     </div>
   );

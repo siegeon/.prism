@@ -6,6 +6,7 @@ import {
   Page, Card, Kpi, SectionLabel, Pill, Empty, toneFromLabel,
   type PillTone,
 } from "@/components/ui";
+import { domainTone, importanceTone } from "@/lib/domainTone";
 import { relativeTime } from "@/lib/relativeTime";
 
 type Entry = {
@@ -47,42 +48,6 @@ const TYPES = ["all", "expertise", "convention", "decision", "anti-pattern"];
 // "No entries match" — and the page defaulted to 'all', dumping every archived
 // generation (1.3MB) alongside the active set.
 const STATUSES = ["all", "active", "archived", "needs_review"];
-
-const TYPE_TONE: Record<string, PillTone> = {
-  expertise: "teal",
-  convention: "sage",
-  decision: "amber",
-  "anti-pattern": "rose",
-  feedback: "violet",
-  project: "amber",
-  reference: "teal",
-  user: "violet",
-  pattern: "teal",
-  failure: "rose",
-};
-
-const STATUS_TONE: Record<string, PillTone> = {
-  active: "emerald",
-  stale: "amber",
-  retired: "slate",
-  archived: "slate",
-  needs_review: "amber",
-};
-
-const CLASSIFICATION_TONE: Record<string, PillTone> = {
-  foundational: "violet",
-  tactical: "sage",
-  strategic: "amber",
-};
-
-// Importance 1-10 → a single colored dot. Low importance reads as
-// muted slate, mid as sage, high as amber, top as rose.
-function importanceTone(n: number): PillTone {
-  if (n >= 9) return "rose";
-  if (n >= 7) return "amber";
-  if (n >= 4) return "sage";
-  return "slate";
-}
 
 // Composite value score — what "by value" means in concrete terms.
 //   - importance (1-10) is the declared value the author assigned at write
@@ -264,8 +229,8 @@ export default function MemoryPage() {
       id: k,
       label: k,
       tone:
-        groupBy === "classification" ? (CLASSIFICATION_TONE[k] ?? "slate")
-        : groupBy === "type" ? (TYPE_TONE[k] ?? "slate")
+        groupBy === "classification" ? (domainTone("classification", k) ?? "slate")
+        : groupBy === "type" ? (domainTone("memoryType", k) ?? "slate")
         : toneFromLabel(k),
       items: [...buckets[k]].sort((a, x) => valueScore(x) - valueScore(a)),
     }));
@@ -341,7 +306,7 @@ export default function MemoryPage() {
         <SectionLabel>Type</SectionLabel>
         <div className="flex flex-wrap gap-2 mb-4">
           {TYPES.map((t) => (
-            <Pill key={t} active={type === t} onClick={() => setType(t)} tone={TYPE_TONE[t]}>
+            <Pill key={t} active={type === t} onClick={() => setType(t)} tone={domainTone("memoryType", t)}>
               {t}
             </Pill>
           ))}
@@ -349,7 +314,7 @@ export default function MemoryPage() {
         <SectionLabel>Status</SectionLabel>
         <div className="flex flex-wrap gap-2">
           {STATUSES.map((s) => (
-            <Pill key={s} active={status === s} onClick={() => setStatus(s)} tone={STATUS_TONE[s]}>
+            <Pill key={s} active={status === s} onClick={() => setStatus(s)} tone={domainTone("memoryStatus", s)}>
               {s}
             </Pill>
           ))}
@@ -410,9 +375,9 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
   const type = (entry.type ?? "").toLowerCase();
   const status = (entry.status ?? "").toLowerCase();
   const classification = (entry.classification ?? "").toLowerCase();
-  const typeTone: PillTone = TYPE_TONE[type] ?? "slate";
-  const statusTone: PillTone = STATUS_TONE[status] ?? "slate";
-  const classTone: PillTone = CLASSIFICATION_TONE[classification] ?? "slate";
+  const typeTone: PillTone = domainTone("memoryType", type) ?? "slate";
+  const statusTone: PillTone = domainTone("memoryStatus", status) ?? "slate";
+  const classTone: PillTone = domainTone("classification", classification) ?? "slate";
   const importance = entry.importance ?? 0;
   const recall = entry.recall_count ?? 0;
   const effectiveness = entry.effectiveness ?? 0;

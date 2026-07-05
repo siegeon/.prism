@@ -345,7 +345,7 @@ function UpdatesPanel() {
 
   if (!status) {
     return error
-      ? <div className="text-sm text-rose-200">{error}</div>
+      ? <div className="text-sm text-[color:var(--accent-rose-fg)]">{error}</div>
       : <div className="text-sm text-[color:var(--text-secondary)]">Loading…</div>;
   }
 
@@ -379,7 +379,7 @@ function UpdatesPanel() {
         <dd className="text-sm">
           {status.update_available ? (
             <span className="inline-flex items-center gap-2">
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200">
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
                 update available
               </span>
               <span className="text-[color:var(--text-secondary)]">
@@ -394,7 +394,7 @@ function UpdatesPanel() {
             </span>
           ) : status.last_check_ok ? (
             <span className="inline-flex items-center gap-2">
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200">
+              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]">
                 up to date
               </span>
               <span className="text-[color:var(--text-secondary)]">
@@ -402,7 +402,7 @@ function UpdatesPanel() {
               </span>
             </span>
           ) : (
-            <span className="text-rose-200">
+            <span className="text-[color:var(--accent-rose-fg)]">
               last check failed: {status.last_error || "unknown"}
             </span>
           )}
@@ -425,12 +425,12 @@ function UpdatesPanel() {
       </dl>
 
       {status.restart_required && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/15 text-amber-100 px-3 py-3 text-sm flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="rounded-md border border-[color:var(--accent-amber-ring)] bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] px-3 py-3 text-sm flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="font-serif text-base text-amber-50">
+            <div className="font-serif text-base text-[color:var(--accent-amber-fg)]">
               Update ready — click to restart
             </div>
-            <div className="text-xs text-amber-200/90 mt-0.5">
+            <div className="text-xs text-[color:var(--accent-amber-fg)] mt-0.5">
               A new version is installed and waiting. Restart the daemon now to
               flip the served version — if a held-open connection slows the
               drain it is force-closed after a bounded window.
@@ -440,7 +440,7 @@ function UpdatesPanel() {
             type="button"
             onClick={applyNow}
             disabled={applying}
-            className="shrink-0 rounded-md border border-amber-400/50 bg-amber-400/20 hover:bg-amber-400/30 disabled:opacity-50 px-3 py-1.5 text-sm font-medium text-amber-50"
+            className="shrink-0 rounded-md border border-[color:var(--accent-amber-ring)] bg-[color:var(--accent-amber-bg)] hover:bg-[color:var(--accent-amber-bg)] disabled:opacity-50 px-3 py-1.5 text-sm font-medium text-[color:var(--accent-amber-fg)]"
           >
             {applying ? "Restarting…" : "Click to restart"}
           </button>
@@ -448,13 +448,13 @@ function UpdatesPanel() {
       )}
 
       {appliedNotice && (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-100 px-3 py-2 text-sm">
+        <div className="rounded-md border border-[color:var(--accent-emerald-ring)] bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] px-3 py-2 text-sm">
           {appliedNotice}
         </div>
       )}
 
       {error && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-sm">
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-sm">
           {error}
         </div>
       )}
@@ -562,7 +562,7 @@ function ClaudeSourceCard({ project }: { project: string }) {
           className={
             "ml-auto rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] " +
             (isExplicit
-              ? "bg-emerald-400/15 text-emerald-200"
+              ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]"
               : "bg-[color:var(--midground-base)]/10 opacity-70")
           }
         >
@@ -625,7 +625,7 @@ function ClaudeAuthCard() {
     return (
       <div className="space-y-2">
         <div className="inline-flex items-center gap-2 text-sm">
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200 text-[9px] uppercase tracking-wider">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
             authenticated
           </span>
           <span className="opacity-70">
@@ -652,7 +652,7 @@ function ClaudeAuthCard() {
   return (
     <div className="space-y-3">
       <div className="inline-flex items-center gap-2 text-sm">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200 text-[9px] uppercase tracking-wider">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-[9px] uppercase tracking-wider">
           not authenticated
         </span>
         <span className="opacity-70">
@@ -788,7 +788,7 @@ function GithubAuthCard() {
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-200 text-[9px] uppercase tracking-wider">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
                 connected
               </span>
               <span className="text-sm font-semibold">
@@ -805,7 +805,7 @@ function GithubAuthCard() {
           </div>
         </div>
         {error && (
-          <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+          <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
             {error}
           </div>
         )}
@@ -829,7 +829,7 @@ function GithubAuthCard() {
   return (
     <div className="space-y-3">
       <div className="inline-flex items-center gap-2 text-sm">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200 text-[9px] uppercase tracking-wider">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-[9px] uppercase tracking-wider">
           not connected
         </span>
         <span className="opacity-70">
@@ -869,7 +869,7 @@ function GithubAuthCard() {
       )}
 
       {error && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
           {error}
         </div>
       )}
@@ -958,7 +958,7 @@ function ClientIdSetup({
         className="w-full px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--midground-base)]/20 text-sm font-mono"
       />
       {error && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
           {error}
         </div>
       )}
@@ -1088,7 +1088,7 @@ function DeviceFlowFooter({ poll, onClose }: { poll: DevicePoll; onClose: () => 
   }
   if (poll.status === "success") {
     return (
-      <div className="text-xs text-emerald-200">
+      <div className="text-xs text-[color:var(--accent-emerald-fg)]">
         Connected as <span className="font-mono">{poll.login}</span>!
       </div>
     );
@@ -1096,7 +1096,7 @@ function DeviceFlowFooter({ poll, onClose }: { poll: DevicePoll; onClose: () => 
   if (poll.status === "expired") {
     return (
       <div className="space-y-2">
-        <div className="text-xs text-amber-200">
+        <div className="text-xs text-[color:var(--accent-amber-fg)]">
           Code expired — start a new connect attempt.
         </div>
         <button
@@ -1111,14 +1111,14 @@ function DeviceFlowFooter({ poll, onClose }: { poll: DevicePoll; onClose: () => 
   }
   if (poll.status === "denied") {
     return (
-      <div className="text-xs text-amber-200">
+      <div className="text-xs text-[color:var(--accent-amber-fg)]">
         You declined the authorization. Close this dialog and try again if that was a mistake.
       </div>
     );
   }
   return (
     <div className="space-y-2">
-      <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+      <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
         {poll.error}
       </div>
     </div>
@@ -1171,7 +1171,7 @@ function PatFallback({ onConnected }: { onConnected: (s: GithubAuthStatus) => vo
         </button>
       </div>
       {error && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
           {error}
         </div>
       )}
@@ -1260,7 +1260,7 @@ function RepoPickerModal({
           />
         </label>
         {error && (
-          <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+          <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
             {error}
           </div>
         )}
@@ -1484,7 +1484,7 @@ function JobRow({ job }: { job: Job }) {
             <span className="font-medium">{meta.title}</span>
             <span className="text-[10px] opacity-50 font-mono">{stateLabel}</span>
             {job.attempts > 1 && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200/90">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
                 retried {job.attempts}×
               </span>
             )}
@@ -1524,7 +1524,7 @@ function JobRow({ job }: { job: Job }) {
             </div>
           )}
           {failureOpen && (
-            <pre className="text-[11px] whitespace-pre-wrap font-mono bg-rose-500/5 border border-rose-500/20 rounded-md p-3 text-rose-200 max-h-[200px] overflow-y-auto">
+            <pre className="text-[11px] whitespace-pre-wrap font-mono bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] rounded-md p-3 text-[color:var(--accent-rose-fg)] max-h-[200px] overflow-y-auto">
               {job.error}
             </pre>
           )}
@@ -1570,10 +1570,10 @@ function JobStateDot({ state }: { state: Job["state"] }) {
   // Color encodes state: amber pending, sky in-progress, emerald completed,
   // rose failed.
   const palette: Record<Job["state"], string> = {
-    pending: "bg-amber-400 shadow-[0_0_6px_2px_rgba(251,191,36,0.4)]",
+    pending: "bg-[color:var(--accent-amber-fg)] shadow-[0_0_6px_2px_rgba(251,191,36,0.4)]",
     in_progress: "bg-sky-400 shadow-[0_0_6px_2px_rgba(56,189,248,0.4)]",
-    completed: "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]",
-    failed: "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]",
+    completed: "bg-[color:var(--accent-emerald-fg)] shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]",
+    failed: "bg-[color:var(--accent-rose-fg)] shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]",
   };
   return (
     <span
@@ -1707,17 +1707,17 @@ function WatchdogPanel() {
     return () => { clearInterval(poll); clearInterval(tick); };
   }, [load]);
 
-  if (error && st === null) return <div className="text-sm text-rose-200">{error}</div>;
+  if (error && st === null) return <div className="text-sm text-[color:var(--accent-rose-fg)]">{error}</div>;
   if (st === null) return <div className="text-sm opacity-60">Loading…</div>;
 
   const probeOk = st.last_probe_ok;
   const dotClass = !st.enabled
-    ? "bg-slate-400"
+    ? "bg-[color:var(--accent-slate-fg)]"
     : probeOk === false || st.consecutive_failures > 0
-      ? "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+      ? "bg-[color:var(--accent-rose-fg)] shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
       : probeOk === true
-        ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
-        : "bg-amber-400 shadow-[0_0_6px_2px_rgba(251,191,36,0.4)]";
+        ? "bg-[color:var(--accent-emerald-fg)] shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+        : "bg-[color:var(--accent-amber-fg)] shadow-[0_0_6px_2px_rgba(251,191,36,0.4)]";
   const latency = st.last_probe_latency_ms != null
     ? `${st.last_probe_latency_ms.toFixed(0)}ms` : "—";
   const summary = !st.enabled
@@ -1744,7 +1744,7 @@ function WatchdogPanel() {
               probe {st.interval_s}s · timeout {st.timeout_s}s
             </span>
             {st.kill_enabled && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300/90">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
                 self-heal armed
               </span>
             )}
@@ -1814,7 +1814,7 @@ function BackgroundWorkersPanel() {
     : "";
 
   if (error && workers === null) {
-    return <div className="text-sm text-rose-200">{error}</div>;
+    return <div className="text-sm text-[color:var(--accent-rose-fg)]">{error}</div>;
   }
   if (workers === null) {
     return <div className="text-sm opacity-60">Loading…</div>;
@@ -1877,8 +1877,8 @@ function WorkerRow({ worker }: { worker: Worker }) {
         <span
           className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
             worker.running
-              ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
-              : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+              ? "bg-[color:var(--accent-emerald-fg)] shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+              : "bg-[color:var(--accent-rose-fg)] shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
           }`}
           aria-label={worker.running ? "running" : "not running"}
         />
@@ -1893,7 +1893,7 @@ function WorkerRow({ worker }: { worker: Worker }) {
               </span>
             )}
             {!worker.running && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
                 not running
               </span>
             )}
@@ -1929,8 +1929,8 @@ function StatusDot({ running }: { running: boolean }) {
     <span
       className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
         running
-          ? "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
-          : "bg-rose-400 shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
+          ? "bg-[color:var(--accent-emerald-fg)] shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]"
+          : "bg-[color:var(--accent-rose-fg)] shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]"
       }`}
       aria-label={running ? "running" : "not running"}
     />
@@ -1982,7 +1982,7 @@ function PipelineRow({ worker, now }: { worker: Worker; now: number }) {
               pipeline
             </span>
             {!worker.running && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
                 not running
               </span>
             )}
@@ -2044,11 +2044,11 @@ function ClockRow({ worker, now }: { worker: Worker; now: number }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{worker.label}</span>
-            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300/90">
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)]">
               clock
             </span>
             {!worker.running && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/90">
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
                 not running
               </span>
             )}
@@ -2068,9 +2068,9 @@ function ClockRow({ worker, now }: { worker: Worker; now: number }) {
 function PromptKindBadge({ kind }: { kind: NonNullable<Worker["prompt_kind"]> }) {
   if (kind === "none") return null;
   const styles: Record<string, string> = {
-    static: "bg-teal-500/15 text-teal-300/90",
-    dynamic: "bg-amber-500/15 text-amber-300/90",
-    per_job: "bg-violet-500/15 text-violet-300/90",
+    static: "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)]",
+    dynamic: "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]",
+    per_job: "bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)]",
   };
   const labels: Record<string, string> = {
     static: "claude · static prompt",
@@ -2112,8 +2112,8 @@ function ServiceInfoPanel() {
         <dt className="opacity-60">Claude auth</dt>
         <dd className="text-xs">
           {info.claude_authenticated
-            ? <span className="text-emerald-200">logged in</span>
-            : <span className="text-amber-200">not logged in — see Connections tab</span>}
+            ? <span className="text-[color:var(--accent-emerald-fg)]">logged in</span>
+            : <span className="text-[color:var(--accent-amber-fg)]">not logged in — see Connections tab</span>}
           <div className="opacity-60 font-mono mt-1">
             config dir → {info.claude_config_dir}
           </div>
@@ -2122,8 +2122,8 @@ function ServiceInfoPanel() {
         <dt className="opacity-60">GitHub</dt>
         <dd className="text-xs">
           {info.github_authenticated
-            ? <span className="text-emerald-200">connected</span>
-            : <span className="text-amber-200">not connected — see Connections tab</span>}
+            ? <span className="text-[color:var(--accent-emerald-fg)]">connected</span>
+            : <span className="text-[color:var(--accent-amber-fg)]">not connected — see Connections tab</span>}
           <div className="opacity-60 font-mono mt-1">
             credentials → {info.github_credentials_path}
           </div>
@@ -2341,8 +2341,8 @@ function ClaudeRunsPanel() {
                   className={
                     "inline-flex items-center px-2 py-0.5 rounded-full uppercase tracking-wider text-[9px] " +
                     (ok
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-rose-500/15 text-rose-200")
+                      ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]"
+                      : "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]")
                   }
                   title={ok ? "exit 0" : `exit ${r.exit_code}`}
                 >
@@ -2381,7 +2381,7 @@ function ClaudeRunsPanel() {
                     <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1">
                       stderr
                     </div>
-                    <pre className="text-[11px] whitespace-pre-wrap font-mono bg-rose-500/5 border border-rose-500/20 rounded-md p-3 max-h-[200px] overflow-y-auto text-rose-200">
+                    <pre className="text-[11px] whitespace-pre-wrap font-mono bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] rounded-md p-3 max-h-[200px] overflow-y-auto text-[color:var(--accent-rose-fg)]">
                       {r.stderr_excerpt}
                     </pre>
                   </div>
@@ -2444,7 +2444,7 @@ function NewProjectRow({ onCreated }: { onCreated: (name: string) => void | Prom
       >
         {submitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Add"}
       </button>
-      {error && <span className="text-[11px] text-rose-300">{error}</span>}
+      {error && <span className="text-[11px] text-[color:var(--accent-rose-fg)]">{error}</span>}
     </form>
   );
 }
@@ -2497,7 +2497,7 @@ function ProjectCard({
             <QueueBadge queue={info?.queue} />
             {drifted && !busy && (
               <span
-                className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-200"
+                className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
                 title="The tracked ref has advanced past last_analyzed_sha — click to re-run analyzers."
               >
                 drift
@@ -2608,7 +2608,7 @@ function ScanProgress({
 
   if (total === 0) {
     return (
-      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 px-3 py-2 text-xs flex items-start gap-3">
+      <div className="rounded-md border border-[color:var(--accent-emerald-ring)] bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] px-3 py-2 text-xs flex items-start gap-3">
         <Loader2 className="w-3.5 h-3.5 mt-0.5 shrink-0 animate-spin" />
         <span className="flex-1">Saved. Waiting for the analyzer queue to pick up the scan…</span>
         <button
@@ -2624,13 +2624,13 @@ function ScanProgress({
 
   if (allDone) {
     const tone = counts.failed > 0
-      ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
-      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+      ? "border-[color:var(--accent-amber-ring)] bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
+      : "border-[color:var(--accent-emerald-ring)] bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]";
     return (
       <div className={`rounded-md border px-3 py-2 text-xs flex items-start gap-3 ${tone}`}>
         <span className="flex-1">
           Scan complete: <strong>{counts.completed}</strong> done
-          {counts.failed > 0 && <>, <strong className="text-rose-300">{counts.failed} failed</strong></>}
+          {counts.failed > 0 && <>, <strong className="text-[color:var(--accent-rose-fg)]">{counts.failed} failed</strong></>}
           {counts.cancelled > 0 && <>, {counts.cancelled} cancelled</>}
           .{" "}
           <span className="opacity-70">See the Jobs tab for details.</span>
@@ -2647,7 +2647,7 @@ function ScanProgress({
   }
 
   return (
-    <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-100 px-3 py-2 text-xs space-y-2">
+    <div className="rounded-md border border-[color:var(--accent-emerald-ring)] bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] px-3 py-2 text-xs space-y-2">
       <div className="flex items-center gap-3">
         <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
         <span className="flex-1 font-mono tabular-nums">
@@ -2663,7 +2663,7 @@ function ScanProgress({
       </div>
       <div className="h-1.5 rounded-full bg-[color:var(--background-base)]/40 overflow-hidden">
         <div
-          className="h-full bg-emerald-400/80 transition-all duration-500"
+          className="h-full bg-[color:var(--accent-emerald-fg)] transition-all duration-500"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -2673,7 +2673,7 @@ function ScanProgress({
         </div>
       )}
       {counts.failed > 0 && (
-        <div className="text-[11px] text-rose-300">
+        <div className="text-[11px] text-[color:var(--accent-rose-fg)]">
           {counts.failed} failed so far — see Jobs tab.
         </div>
       )}
@@ -2701,7 +2701,7 @@ function QueueBadge({ queue }: { queue: QueueCounts | undefined }) {
   }
   if (queue.failed > 0) {
     return (
-      <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-200">
+      <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
         {queue.failed} failed
       </span>
     );
@@ -3011,7 +3011,7 @@ function ProjectEditor({
         </div>
       )}
       {error && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-200 px-3 py-2 text-xs">
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
           {error}
         </div>
       )}
@@ -3062,13 +3062,13 @@ function ProjectEditor({
             <button
               type="button"
               onClick={() => { setConfirming(true); setError(null); }}
-              className="text-[11px] uppercase tracking-wider text-rose-300/80 hover:text-rose-200"
+              className="text-[11px] uppercase tracking-wider text-[color:var(--accent-rose-fg)] hover:text-[color:var(--accent-rose-fg)]"
             >
               Delete project + all data
             </button>
           ) : (
             <div className="space-y-2">
-              <div className="text-[11px] text-rose-200">
+              <div className="text-[11px] text-[color:var(--accent-rose-fg)]">
                 This wipes <span className="font-mono">data/projects/{name}</span>:
                 brain, graph, tasks, scores, source clone, queue, all artifacts.
                 Type <span className="font-mono">{name}</span> to confirm.
@@ -3079,13 +3079,13 @@ function ProjectEditor({
                   onChange={(e) => setConfirmText(e.target.value)}
                   placeholder={name}
                   disabled={deleting}
-                  className="flex-1 px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-rose-500/30 text-sm font-mono"
+                  className="flex-1 px-3 py-2 rounded-md bg-[color:var(--background-base)]/60 border border-[color:var(--accent-rose-ring)] text-sm font-mono"
                 />
                 <button
                   type="button"
                   onClick={remove}
                   disabled={deleting || confirmText !== name}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-rose-500/80 text-white text-xs uppercase tracking-wider disabled:opacity-30"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[color:var(--accent-rose-fg)] text-white text-xs uppercase tracking-wider disabled:opacity-30"
                 >
                   {deleting && <Loader2 className="w-3 h-3 animate-spin" />}
                   {deleting ? "Deleting…" : "Delete forever"}
