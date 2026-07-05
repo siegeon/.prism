@@ -4,13 +4,10 @@ import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
-import {
-  stepChipClass, gateChipClass, gateLabel, stepLabel,
-} from "@/lib/workflowChips";
 import PlanView from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
-import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
-import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
+import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
 import { fmtTokens } from "@/lib/format";
@@ -696,102 +693,37 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
-      {conductorOn && (
+      {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype) && (
         <Stagger i={0} reduced={reduced}>
         <Card>
-          <SectionLabel>Conductor</SectionLabel>
-          <div className="mt-3 mb-1">
-            <SdlcProgress step={task.workflow_step} phase={task.phase_progress} status={task.status} reduced={reduced} />
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-3 text-[12px] mt-2 items-start">
-            <div>
-              <div className="opacity-50 mb-1">step</div>
-              {task.workflow_step
-                ? <span className={stepChipClass(task.workflow_step)}>{stepLabel(task.workflow_step)}</span>
-                : <span className="opacity-50">—</span>}
-            </div>
-            <div>
-              <div className="opacity-50 mb-1">gate</div>
-              {task.gate_state && task.gate_state !== "none"
-                ? <span className={gateChipClass(task.gate_state as any)}>{gateLabel(task.gate_state as any)}</span>
-                : <span className="opacity-50">none</span>}
-            </div>
-            <div className="md:col-span-1">
-              <div className="opacity-50 mb-1">
-                {task.gate_state === "passed" ? "validation"
-                  : task.gate_state === "failed" ? "failure reason"
-                  : "reason"}
-              </div>
-              {task.gate_reason
-                ? <button
-                    onClick={() => navigate(`/tasks/${id}/validation`, { state: { from: `/tasks/${id}` } })}
-                    className="flex items-center gap-1.5 text-left w-full group"
-                  >
-                    <span className="text-[12px] leading-snug opacity-80 group-hover:opacity-100 truncate">{oneLine(task.gate_reason)}</span>
-                    <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
-                  </button>
-                : <span className="opacity-50">-</span>}
-            </div>
-          </div>
-
-          {task.gate_state === "pending" && (
-            <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
-              <div className="opacity-50 mb-2 text-[11px] uppercase tracking-wider">
-                Resolve gate
-              </div>
-              <textarea
-                value={gateReason}
-                onChange={(e) => setGateReason(e.target.value)}
-                required
-                placeholder="Reason (required) — why approve or reject this gate?"
-                rows={3}
-                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
-              />
-              <label className="flex items-center gap-2 mt-2 text-[12px] opacity-80 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={gateOverride}
-                  onChange={(e) => setGateOverride(e.target.checked)}
-                />
-                override (bypass the verifier and release on manual judgment)
-              </label>
-              <div className="flex gap-2 mt-3">
-                <button
-                  type="button"
-                  disabled={busy || !gateReason.trim()}
-                  onClick={() => gateDecide("approve")}
-                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
-                  style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || !gateReason.trim()}
-                  onClick={() => gateDecide("reject")}
-                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
-                  style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
-                >
-                  Reject
-                </button>
-              </div>
-            </div>
-          )}
+          <PlanView
+            diagram={task.plan_diagram}
+            doc={task.plan_doc}
+            prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
+            reduced={reduced}
+            conductor={conductorOn ? {
+              step: task.workflow_step,
+              gateState: task.gate_state,
+              gateReason: task.gate_reason,
+              phase: task.phase_progress,
+              status: task.status,
+              timeline,
+            } : null}
+            gate={{
+              reason: gateReason,
+              setReason: setGateReason,
+              override: gateOverride,
+              setOverride: setGateOverride,
+              decide: gateDecide,
+              busy,
+            }}
+            onValidation={() => navigate(`/tasks/${id}/validation`, { state: { from: `/tasks/${id}` } })}
+          />
         </Card>
         </Stagger>
       )}
 
-      {(task.plan_doc || task.plan_diagram || task.has_prototype) ? (
-        <Stagger i={1} reduced={reduced}>
-        <Card>
-          <SectionLabel>Plan</SectionLabel>
-          <div className="mt-2">
-            <PlanView diagram={task.plan_diagram} doc={task.plan_doc}
-              prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined} />
-          </div>
-        </Card>
-        </Stagger>
-      ) : (
+      {!(task.plan_doc || task.plan_diagram || task.has_prototype) && (
         <Stagger i={1} reduced={reduced}>
         <Card>
           <SectionLabel>Description</SectionLabel>
@@ -967,15 +899,6 @@ export default function TaskDetailPage() {
             </div>
           )}
         </div>
-      </Card>
-
-      <Card>
-        <SectionLabel>Activity</SectionLabel>
-        {timeline ? (
-          <TaskActivityGantt timeline={timeline} reduced={reduced} />
-        ) : (
-          <Empty>No activity recorded yet.</Empty>
-        )}
       </Card>
 
       <Card>

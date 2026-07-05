@@ -4,3 +4,8 @@
 .seeds/templates.jsonl merge=union
 .canopy/prompts.jsonl merge=union
 .canopy/schemas.jsonl merge=union
+
+# Workflow scripts are read by the Claude Code harness as the approval
+# "script"; a CR (0x0d) trips its control-character check and blocks the
+# Workflow tool on Windows checkouts. Force LF so autocrlf never re-adds CRs.
+.claude/workflows/*.js text eol=lf

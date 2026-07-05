@@ -2,34 +2,73 @@ import { useState } from "react";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
+import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import StepRail from "@/components/conductor/StepRail";
+import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
 
 /**
- * Renders a task plan as TABS in one place — Prototype (the clickable mock,
- * iframed), Diagram (Mermaid), and Proposed change (markdown) share the same
- * slot, toggled by a tab bar. Full-width (max-w-none) so the task page uses
- * the whole screen like /understand. Default tab is the Prototype when present.
+ * The task's work panel, as TABS in one slot — Prototype (clickable mock,
+ * iframed) · Diagram (Mermaid) · Proposed change (markdown) · Implementation
+ * (the conductor drive). The Implementation tab MERGES what used to be the
+ * separate Conductor + Activity cards: an SdlcProgress minimap, a compact
+ * collapsible StepRail (gates expand to their receipts), a Rail/Timeline
+ * sub-toggle onto the retained wall-clock TaskActivityGantt, and the pending-
+ * gate resolve form. "This is how we drive PRISM locally" — not a product tab.
+ * Full-width (max-w-none) so the task page uses the whole screen.
  */
+export type ConductorInfo = {
+  step?: string;
+  gateState?: string;
+  gateReason?: string;
+  phase?: PhaseProgress | null;
+  status?: string;
+  timeline?: Timeline | null;
+};
+export type GateControls = {
+  reason: string;
+  setReason: (s: string) => void;
+  override: boolean;
+  setOverride: (b: boolean) => void;
+  decide: (action: "approve" | "reject") => void;
+  busy: boolean;
+};
+
 export default function PlanView({
   diagram,
   doc,
   prototypeSrc,
+  conductor,
+  reduced,
+  gate,
+  onValidation,
 }: {
   diagram?: string;
   doc?: string;
   prototypeSrc?: string;
+  conductor?: ConductorInfo | null;
+  reduced?: boolean | null;
+  gate?: GateControls | null;
+  onValidation?: () => void;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
   const hasProto = !!prototypeSrc;
+  const hasImpl = !!conductor && !!(conductor.step || (conductor.gateState && conductor.gateState !== "none"));
 
   const tabs: { key: string; label: string }[] = [];
   if (hasProto) tabs.push({ key: "prototype", label: "Prototype" });
   if (hasDiagram) tabs.push({ key: "diagram", label: "Diagram" });
   if (hasDoc) tabs.push({ key: "doc", label: "Proposed change" });
+  if (hasImpl) tabs.push({ key: "implementation", label: "Implementation" });
 
-  const [active, setActive] = useState(tabs[0]?.key ?? "doc");
+  // Default to Implementation when the conductor is engaged (the live status),
+  // else the first available artifact tab.
+  const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "doc");
+  const [subView, setSubView] = useState<"rail" | "timeline">("rail");
+
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
+  const c = conductor;
 
   return (
     <div className="space-y-3">
@@ -58,6 +97,22 @@ export default function PlanView({
             open full screen ↗
           </a>
         )}
+        {cur === "implementation" && hasImpl && (
+          <div className="ml-auto flex items-center rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] p-0.5">
+            {(["rail", "timeline"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setSubView(v)}
+                className={
+                  "px-2.5 py-1 text-[10px] uppercase tracking-wider rounded transition-colors " +
+                  (subView === v ? "bg-[color:var(--surface-3)] text-[color:var(--text-primary)]" : "text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]")
+                }
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {cur === "prototype" && hasProto && (
@@ -76,8 +131,81 @@ export default function PlanView({
         </div>
       )}
       {cur === "doc" && hasDoc && (
-        // full-width (max-w-none): whole screen like /understand, not 840px.
         <Markdown text={doc!} className="space-y-4 max-w-none" />
+      )}
+
+      {cur === "implementation" && hasImpl && c && (
+        <div>
+          <div className="mt-1 mb-1">
+            <SdlcProgress step={c.step} phase={c.phase} status={c.status} reduced={reduced} />
+          </div>
+
+          {subView === "rail" ? (
+            <StepRail
+              step={c.step}
+              gateState={c.gateState}
+              phase={c.phase}
+              status={c.status}
+              gates={c.timeline?.gates ?? []}
+              reduced={reduced}
+            />
+          ) : c.timeline ? (
+            <TaskActivityGantt timeline={c.timeline} reduced={reduced} />
+          ) : (
+            <Empty>No wall-clock activity recorded yet.</Empty>
+          )}
+
+          {c.gateReason && c.gateState !== "pending" && onValidation && (
+            <button
+              onClick={onValidation}
+              className="mt-3 flex items-center gap-1.5 text-left group"
+            >
+              <span className="text-[11px] uppercase tracking-wider text-[color:var(--text-muted)]">
+                {c.gateState === "failed" ? "failure reason" : "validation"}
+              </span>
+              <span className="text-[12px] leading-snug opacity-80 group-hover:opacity-100 truncate max-w-[520px]">{c.gateReason}</span>
+              <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
+            </button>
+          )}
+
+          {c.gateState === "pending" && gate && (
+            <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
+              <div className="opacity-50 mb-2 text-[11px] uppercase tracking-wider">Resolve gate</div>
+              <textarea
+                value={gate.reason}
+                onChange={(e) => gate.setReason(e.target.value)}
+                required
+                placeholder="Reason (required) — why approve or reject this gate?"
+                rows={3}
+                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
+              />
+              <label className="flex items-center gap-2 mt-2 text-[12px] opacity-80 cursor-pointer">
+                <input type="checkbox" checked={gate.override} onChange={(e) => gate.setOverride(e.target.checked)} />
+                override (bypass the verifier and release on manual judgment)
+              </label>
+              <div className="flex gap-2 mt-3">
+                <button
+                  type="button"
+                  disabled={gate.busy || !gate.reason.trim()}
+                  onClick={() => gate.decide("approve")}
+                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  disabled={gate.busy || !gate.reason.trim()}
+                  onClick={() => gate.decide("reject")}
+                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
