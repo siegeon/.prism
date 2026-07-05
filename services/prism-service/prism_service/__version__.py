@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.7.31"
+PRISM_VERSION = "6.7.32"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.7.32: COMPLETED WORK GETS ITS OWN SURFACE (task b7c828cc). The Done "
+    "kanban column is GONE from the /tasks board — completed tasks rendered "
+    "as full cards there, same weight as live work, sorted by priority/"
+    "created_at (never completed_at), growing without bound (the standing "
+    "done-tasks-off-board feedback, finally shipped; the v6.5.3 attribution "
+    "was wrong — it never landed). NOW: COLUMNS drops 'done' (board = Pending/"
+    "In Progress/Blocked), and a clickable emerald Completed tile links to a "
+    "new /tasks/completed route (CompletedTasksPage, App.tsx, static segment "
+    "ranked above /tasks/:id). The surface reuses /api/tasks, filters done+"
+    "root, sorts completed_at DESC, and offers TWO views over one dataset: a "
+    "time-grouped Timeline (Today/Yesterday/This week/Last week/Earlier this "
+    "month/Month YYYY, recent buckets open, migration-clustered same-timestamp "
+    "rows fold into one group) and a Search & filter table (title search, "
+    "This-month filter, sortable Task/Completed columns). Hermes primitives "
+    "throughout; no tokens/in-memory columns (not on the list payload — "
+    "deferred, not faked). Prototyped + confirmed in-app on the task's "
+    "Prototype tab before build. "
     "v6.7.31: UNIFY domain color-coding on ONE palette resolver (task 3df51df3). "
     "The seven Hermes tones (--accent-{teal,sage,amber,rose,violet,emerald,slate}-"
     "{bg,ring,fg} in web/src/index.css) were the intended single source, but two "

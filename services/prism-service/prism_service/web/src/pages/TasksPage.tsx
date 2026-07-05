@@ -30,12 +30,14 @@ type Task = {
 //   pending      → amber  (waiting for attention)
 //   in_progress  → teal   (actively being worked)
 //   blocked      → rose   (problem, stop)
-//   done         → emerald (complete)
+// NOTE: there is deliberately no "done" column. Completed work leaves the
+// active board entirely (feedback: done-tasks-off-board) so it can never
+// pile up here — it lives on the dedicated /tasks/completed surface,
+// reached via the clickable Completed tile below.
 const COLUMNS: { key: string; label: string }[] = [
   { key: "pending", label: "Pending" },
   { key: "in_progress", label: "In Progress" },
   { key: "blocked", label: "Blocked" },
-  { key: "done", label: "Done" },
 ];
 
 export default function TasksPage() {
@@ -69,6 +71,19 @@ export default function TasksPage() {
         {COLUMNS.map((c) => (
           <Kpi key={c.key} label={c.label} value={roots.filter((t) => (t.status ?? "pending") === c.key).length} />
         ))}
+        {/* Completed is a TILE, not a column — click through to the dedicated
+            surface so finished work never occupies the active board. */}
+        <button
+          onClick={() => navigate("/tasks/completed")}
+          className="flex-1 min-w-[150px] text-left rounded-md border border-[color:var(--accent-emerald-ring)] bg-[color:var(--surface-1)] p-4 hover:bg-[color:var(--surface-2)] transition-colors cursor-pointer relative"
+          style={{ backgroundImage: "linear-gradient(180deg, var(--accent-emerald-bg), transparent)" }}
+        >
+          <span className="absolute top-3 right-4 text-[color:var(--accent-emerald-fg)] text-sm">→</span>
+          <div className="text-[10px] uppercase tracking-wider text-[color:var(--accent-emerald-fg)] mb-2">Completed</div>
+          <div className="text-2xl font-semibold leading-none text-[color:var(--accent-emerald-fg)] tabular-nums">
+            {roots.filter((t) => (t.status ?? "") === "done").length}
+          </div>
+        </button>
       </section>
 
       <Card>
@@ -86,7 +101,7 @@ export default function TasksPage() {
         )}
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {COLUMNS.map((col) => {
           const items = roots.filter((t) => (t.status ?? "pending") === col.key);
           const colTone = domainTone("taskStatus", col.key) ?? "slate";

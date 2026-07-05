@@ -16,6 +16,7 @@ import LiveStatusStrip from "@/components/LiveStatusStrip";
 import DashboardPage from "@/pages/DashboardPage";
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
 const TasksPage = lazy(() => import("@/pages/TasksPage"));
+const CompletedTasksPage = lazy(() => import("@/pages/CompletedTasksPage"));
 const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
 const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
 const ConductorPage = lazy(() => import("@/pages/ConductorPage"));
@@ -68,6 +69,10 @@ export default function App() {
             />
             <Route path="/okf" element={<Navigate to="/understand" replace />} />
             <Route path="/tasks" element={<TasksPage />} />
+            {/* Completed work lives on its own surface, off the active board
+                (feedback: done-tasks-off-board). Static segment ranks above
+                /tasks/:id so it never resolves as a task detail. */}
+            <Route path="/tasks/completed" element={<CompletedTasksPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/tasks/:id/:section" element={<TaskTextPage />} />
             <Route path="/conductor" element={<ConductorPage />} />
