@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.7"
+PRISM_VERSION = "6.8.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.9: CONDUCTOR FANOUT SUBDIVISION — the tile's SDLC stepper now SUBDIVIDES "
+    "the current step's node into one cell per dispatched sub-agent (returned "
+    "filled teal + 'R/D' count) when that step is in fanout mode, so a fan-out reads "
+    "'5 of 8 back' inline instead of a single opaque dot. Plus JIRA SLICE C CORE: "
+    "first-class User store (users.db) + User model + principal field on "
+    "PrismRequestContext (foundation; UI + principal-population still pending). "
+    "v6.8.8: JIRA SLICE B — task<->Jira issue mapping. Additive 1:1 jira_issue_key "
+    "TEXT column threaded through models/task.py + task_service (create/update/"
+    "_row_to_task + idempotent ALTER migration) + api/tasks.py + mcp/tools.py; "
+    "GET /api/tasks now returns jira_issue_key and it round-trips create/update. "
+    "11/11 test-first green. Epic now 2/4 slices. "
     "v6.8.7: CONDUCTOR TILE — SLICES are now the visual HERO. An epic's tile shows "
     "a labeled chip per sub-task (SLICES 1/4: Slice A emerald-✓, rest muted) right "
     "under the title, so real feature progress is legible at a glance instead of a "
