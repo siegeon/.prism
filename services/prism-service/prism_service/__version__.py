@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.11"
+PRISM_VERSION = "6.8.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.12: CONDUCTOR TILE — FOCUSED SLICE. The epic tile no longer lists all N "
+    "slice chips; it shows just the ONE being worked (or 'next: …') + the stage: "
+    "'Slice 3/4 · ▶ Bidirectional Jira sync · implement'. Less noise, the current "
+    "work + where it's at. "
     "v6.8.11: CONDUCTOR TILE LIVENESS — a card that isn't being driven still "
     "VISIBLY ticks so it's never mistaken for frozen: a heartbeat ('live Ns' + "
     "pulsing dot) counts 0..5 and resets each 5s poll, and the idle clock on "
