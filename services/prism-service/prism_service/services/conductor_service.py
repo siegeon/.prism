@@ -2889,11 +2889,37 @@ class ConductorService:
                             latest = ts
             except Exception:
                 latest = None
+        # A SUB-TASK completing/moving IS the parent moving, even though the
+        # parent's own step didn't transition — otherwise an epic reads "stalled"
+        # for hours while its slices are actively getting done underneath it.
+        if self._task_svc is not None and tid:
+            try:
+                for c in self._task_svc.list():
+                    if (getattr(c, "parent_id", "") or "") != tid:
+                        continue
+                    for fld in ("completed_at", "updated_at"):
+                        ts = self._parse_iso(getattr(c, fld, "") or "")
+                        if ts is not None and (latest is None or ts > latest):
+                            latest = ts
+            except Exception:
+                pass
         if latest is None:
             latest = self._parse_iso(getattr(task, "updated_at", "") or "")
         if latest is None:
             return None
         return max(0.0, self._now_epoch() - latest)
+
+    def _children(self, task) -> list:
+        """Non-cancelled child tasks of this task (parent_id == task.id)."""
+        tid = getattr(task, "id", "") or ""
+        if self._task_svc is None or not tid:
+            return []
+        try:
+            return [c for c in self._task_svc.list()
+                    if (getattr(c, "parent_id", "") or "") == tid
+                    and (getattr(c, "status", "") or "") != "cancelled"]
+        except Exception:
+            return []
 
     def activity_for(self, task, phase_progress: dict) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
@@ -2913,7 +2939,22 @@ class ConductorService:
         elif status == "pending":
             state = "pending"
         elif status == "in_progress":
-            if step.endswith("_gate") and gate in ("pending", "failed"):
+            kids = self._children(task)
+            if kids:
+                # An EPIC's activity is its slices': a slice actively moving =>
+                # working; some slices done but none active => paused (real
+                # progress, between bursts — NOT the alarming "stalled");
+                # nothing done and nothing active => stalled.
+                active = any((getattr(k, "status", "") or "") == "in_progress"
+                             and (self._task_motion_s(k) or 1e9) <= 120 for k in kids)
+                done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
+                if active:
+                    state = "working"
+                elif done > 0:
+                    state = "paused"         # progress made, idle between slices
+                else:
+                    state = "stalled"
+            elif step.endswith("_gate") and gate in ("pending", "failed"):
                 state = "awaiting_gate"      # a WAIT for review, not work
             elif motion is not None and motion <= 120:
                 state = "working"            # a real recent transition on THIS task

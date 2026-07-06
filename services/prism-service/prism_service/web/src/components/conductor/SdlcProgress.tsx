@@ -77,6 +77,7 @@ function fmtEta(s: number): string {
 // teal "in progress" lie. adrift/stalled append a mm:ss idle clock (see below).
 const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   working: { label: "in progress", tone: "teal" },
+  paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
   adrift: { label: "session busy · task idle", tone: "slate" },
   stalled: { label: "stalled · idle", tone: "rose" },
@@ -131,6 +132,7 @@ export default function SdlcProgress({
   const stateLabel =
     state === "adrift" ? `session busy · task idle${idleClock ? ` ${idleClock}` : ""}`
     : state === "stalled" ? `stalled · idle${idleClock ? ` ${idleClock}` : ""}`
+    : state === "paused" ? `paused · ${phase?.children_done ?? 0}/${phase?.children_total ?? 0} done`
     : meta.label;
   // "live" = the task is genuinely being DRIVEN right now — ONLY the "working"
   // state (a real recent conductor transition on THIS task), NEVER raw
