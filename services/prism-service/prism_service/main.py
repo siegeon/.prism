@@ -435,6 +435,13 @@ async def lifespan(_app: FastAPI):
         # them) and backfills the user's historical sessions.
         from prism_service.services.claude_transcripts import start_transcript_importer
         threading.Thread(target=start_transcript_importer, daemon=True).start()
+        # Slice D — bidirectional task<->Jira sync poller. OFF by default:
+        # start_jira_sync returns None (spawns nothing) unless
+        # PRISM_JIRA_SYNC_INTERVAL>0, and its loop body is fully guarded so a
+        # Jira/network error can never crash the daemon. Explicit spawn line —
+        # a defined-but-unwired worker silently never runs.
+        from prism_service.services.jira_sync import start_jira_sync
+        start_jira_sync()
         # Phase 3 (epic 4fd1e6b4) — TIMERS RETIRED ONTO THE BUS. The
         # Reflection Worker and Memory Summary Worker no longer run on their
         # own polling clocks; session.imported reflects (coalesced, read-

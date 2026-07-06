@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from prism_service.services import jira_auth as ja
 from prism_service.services import jira_oauth
+from prism_service.services import jira_sync
 
 router = APIRouter()
 
@@ -97,6 +98,13 @@ def configure(body: ConfigureBody) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _status_payload()
+
+
+@router.get("/sync/receipts")
+def sync_receipts(limit: int = 50) -> dict:
+    """Recent bidirectional-sync receipts for the UI. No secrets — only
+    {direction, task_id, jira_issue_key, ok, ts}."""
+    return {"receipts": jira_sync.recent_receipts(limit=limit)}
 
 
 @router.post("/connect")

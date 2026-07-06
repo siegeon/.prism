@@ -413,7 +413,21 @@ class TaskService:
         # has something to search over. Silent on embedder-offline —
         # the row still exists, just without a vector.
         self._store_embedding(task.id, task.title, task.description)
+        # Jira outbound (Slice D): push this task to Jira as a new issue when
+        # Jira is connected AND a project mapping resolves. A pure no-op when
+        # disconnected/unmapped, so existing flows are unaffected. Best-effort.
+        self._jira_outbound(task)
         return task
+
+    def _jira_outbound(self, task) -> None:
+        """Best-effort outbound Jira sync at the create/update trigger points.
+        No-op unless Jira is connected AND a project mapping resolves (default
+        OFF). Lazy-imported + fully guarded so it can never break a task write."""
+        try:
+            from prism_service.services import jira_sync
+            jira_sync.outbound_create(self, task)
+        except Exception:
+            pass
 
     def get(self, task_id: str) -> Optional[Task]:
         """Fetch a single task by ID, or None."""
@@ -553,6 +567,10 @@ class TaskService:
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:
             self._store_embedding(task.id, task.title, task.description)
+        # Jira outbound (Slice D): an update to a still-unmapped task can now
+        # create its Jira issue. When jira_sync itself set jira_issue_key, the
+        # task is already mapped so outbound_create no-ops (no recursion).
+        self._jira_outbound(task)
         return task
 
     # ------------------------------------------------------------------

@@ -35,6 +35,14 @@ DRIFT_INTERVAL_SECONDS = int(
     os.environ.get("PRISM_DRIFT_INTERVAL", "1800"),  # 30 min default
 )
 
+# Jira bidirectional sync (Slice D) — how often the poller pulls changed
+# issues onto mapped tasks. 0 DISABLES the loop entirely (the DEFAULT): the
+# daemon boots with Jira sync OFF unless an operator opts in, so a Jira /
+# network hiccup can never touch a fresh install. Env override wins.
+JIRA_SYNC_INTERVAL_SECONDS = int(
+    os.environ.get("PRISM_JIRA_SYNC_INTERVAL", "0"),
+)
+
 # Quality timer (LL-04) — how often to score merged tasks against git
 # truth. 6h default so the 14d durability window has time to accumulate
 # revert/churn/follow-up signals. 0 disables.
