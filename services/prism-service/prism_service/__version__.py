@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.3"
+PRISM_VERSION = "6.8.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.4: HONEST CONDUCTOR ACTIVITY STATES — a task no longer claims 'in "
+    "progress' + a live burn when nothing is driving it. New activity classifier "
+    "(working / awaiting_gate / adrift / stalled) from REAL Claude-Code-integration "
+    "signals: task_motion_s (last conductor transition in task_history) + "
+    "session_quiet_s (linked-session live-transcript recency). The pulse/shimmer + "
+    "burn graph only read as 'work' when working; a gate reads 'awaiting review', a "
+    "live-session-but-idle-task reads 'session busy · task idle Nm', a dead one "
+    "'stalled · idle Nm'. Under-claims when uncertain. "
     "v6.8.3: JIRA SLICE A — OAuth-first credential connect. New /api/jira/* "
     "(status/authorize/callback/configure/clear) backed by services/jira_auth.py "
     "(server-side store: atomic write + chmod 600, env-override precedence, "

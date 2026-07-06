@@ -2401,6 +2401,7 @@ class ConductorService:
                     step = self.INTAKE_STEP
                 else:
                     continue
+            pp = self.phase_progress(t.id)
             out.append({
                 "id": t.id,
                 "title": t.title,
@@ -2418,7 +2419,10 @@ class ConductorService:
                 "tags": list(getattr(t, "tags", []) or []),
                 # Animated SDLC progress bar (a5e0d9f5): blended current-step
                 # fill so the tile bar tweens between polls.
-                "phase_progress": self.phase_progress(t.id),
+                "phase_progress": pp,
+                # Honest work state (working/adrift/stalled/awaiting_gate/…) —
+                # the tile pill + live pulse read this, NOT the raw status.
+                "activity": self.activity_for(t, pp),
             })
         return out
 
@@ -2767,6 +2771,12 @@ class ConductorService:
         # duplication). Empty for a task with no on-disk transcript yet.
         token_turns: list[dict] = []
         total_turns = 0
+        # Recency of the linked session's live transcript: server-now minus the
+        # newest token event across the task's sessions. Powers activity_for's
+        # 'adrift' vs 'stalled' split (session alive but task idle). None when
+        # there is no on-disk transcript. Server-side now() is fine here — this
+        # is the daemon reading its own clock, not a workflow script.
+        session_quiet_s: Optional[float] = None
         # 'linked' = series came from authoritative per-session live events (or
         # is honestly empty); 'wallclock' = the project-wide fallback supplied
         # it. The SPA dims/labels the 'wallclock' case as approximate.
@@ -2810,6 +2820,8 @@ class ConductorService:
                         except Exception:
                             pass
                 live_events.sort(key=lambda e: e[0])
+                if live_events:
+                    session_quiet_s = max(0.0, self._now_epoch() - live_events[-1][0])
                 # PER-TASK-EXCLUSIVE (owner decision, task 5ecbbfb8): the tile
                 # shows ONLY this task's authoritative linked-session activity.
                 # The old #134/#137 project-WIDE wall-clock fallback (bucket the
@@ -2852,4 +2864,67 @@ class ConductorService:
             # 'linked' (authoritative/empty) | 'wallclock' (project-wide
             # approximate fallback — the SPA dims + labels it).
             "tokens_source": tokens_source,
+            # Recency of the linked session's live transcript (s). None when no
+            # transcript. activity_for reads this for the adrift/stalled split.
+            "session_quiet_s": round(session_quiet_s, 3) if session_quiet_s is not None else None,
+        }
+
+    # ------------------------------------------------------------------
+    # activity — the HONEST per-task work state (not the raw status)
+    # ------------------------------------------------------------------
+    def _task_motion_s(self, task) -> Optional[float]:
+        """Seconds since the last CONDUCTOR TRANSITION on this task: the newest
+        advance_task/gate_decide row in task_history (both written by
+        advance_task/gate_decide via TaskService.record_history). Falls back to
+        task.updated_at ONLY when the task has no transition history. None when
+        neither resolves."""
+        latest: Optional[float] = None
+        tid = getattr(task, "id", "") or ""
+        if self._task_svc is not None and tid:
+            try:
+                for r in self._task_svc.history(tid):
+                    if getattr(r, "action", "") in ("advance_task", "gate_decide"):
+                        ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+                        if ts is not None and (latest is None or ts > latest):
+                            latest = ts
+            except Exception:
+                latest = None
+        if latest is None:
+            latest = self._parse_iso(getattr(task, "updated_at", "") or "")
+        if latest is None:
+            return None
+        return max(0.0, self._now_epoch() - latest)
+
+    def activity_for(self, task, phase_progress: dict) -> dict:
+        """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
+        means a REAL recent conductor transition on THIS task (<=120s); when
+        uncertain we UNDER-claim (stalled/adrift over working). session_quiet_s
+        rides in on the already-computed phase_progress dict (transcript recency)
+        so we don't re-read the transcript."""
+        status = (getattr(task, "status", "") or "")
+        step = (getattr(task, "workflow_step", "") or "")
+        gate = (getattr(task, "gate_state", "none") or "none")
+        motion = self._task_motion_s(task)
+        quiet = phase_progress.get("session_quiet_s") if isinstance(phase_progress, dict) else None
+        if status == "done":
+            state = "done"
+        elif status == "blocked":
+            state = "blocked"
+        elif status == "pending":
+            state = "pending"
+        elif status == "in_progress":
+            if step.endswith("_gate") and gate in ("pending", "failed"):
+                state = "awaiting_gate"      # a WAIT for review, not work
+            elif motion is not None and motion <= 120:
+                state = "working"            # a real recent transition on THIS task
+            elif quiet is not None and quiet <= 90:
+                state = "adrift"             # session alive but busy elsewhere
+            else:
+                state = "stalled"            # nothing is driving it
+        else:
+            state = status or "pending"
+        return {
+            "state": state,
+            "task_motion_s": round(motion, 3) if motion is not None else None,
+            "session_quiet_s": round(quiet, 3) if isinstance(quiet, (int, float)) else None,
         }

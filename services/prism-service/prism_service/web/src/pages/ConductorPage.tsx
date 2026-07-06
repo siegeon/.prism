@@ -9,7 +9,7 @@ import {
 } from "@/lib/workflowChips";
 import { relativeTime } from "@/lib/relativeTime";
 import { motion, useReducedMotion } from "motion/react";
-import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
 
 type ManagedTask = {
@@ -26,7 +26,29 @@ type ManagedTask = {
   updated_at?: string;
   tags?: string[];
   phase_progress?: PhaseProgress | null;
+  // Honest work state (server: conductor_service.activity_for). The tile pill
+  // + burn graph read THIS, not the raw status — a task nobody is driving must
+  // NOT read as a teal "in progress".
+  activity?: Activity | null;
 };
+
+// Honest activity STATE → tile pill label + tone. adrift/stalled append an idle
+// mm:ss (from task_motion_s) so the pill says how long it's been dark.
+const ACT_TILE: Record<string, { label: string; tone: PillTone }> = {
+  working: { label: "working", tone: "teal" },
+  awaiting_gate: { label: "awaiting review", tone: "amber" },
+  adrift: { label: "session busy", tone: "slate" },
+  stalled: { label: "stalled", tone: "rose" },
+  done: { label: "done", tone: "emerald" },
+  blocked: { label: "blocked", tone: "rose" },
+  pending: { label: "pending", tone: "amber" },
+};
+
+function fmtIdle(s?: number | null): string {
+  if (s == null) return "";
+  const m = Math.floor(s / 60);
+  return `${m}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+}
 
 type BoardHealth = {
   consecutive_low_value?: number;
@@ -111,6 +133,15 @@ export default function ConductorPage() {
 function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: boolean | null; onClick: () => void }) {
   const status = (task.status ?? "").toLowerCase();
   const statusTone: PillTone = domainTone("taskStatus", status) ?? "slate";
+  // Honest state drives the pill (fall back to raw status pre-activity).
+  const actState = (task.activity?.state ?? status).toLowerCase();
+  const actTone: PillTone = ACT_TILE[actState]?.tone ?? statusTone;
+  const actWorking = actState === "working";
+  const idle = fmtIdle(task.activity?.task_motion_s);
+  const actLabel =
+    actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
+    : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
+    : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
   const gateTone: PillTone = domainTone("gate", gate) ?? "slate";
@@ -146,7 +177,7 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
       {/* Animated SDLC stepper — dots fill to the current phase as the task advances. */}
       <SdlcDots step={stepId} reduced={reduced} />
       <div className="flex flex-wrap items-center gap-1">
-        <TileBadge tone={statusTone}>{status || "—"}</TileBadge>
+        <TileBadge tone={actTone}>{actLabel}</TileBadge>
         {showGate && (
           <TileBadge tone={gateTone}>{gateLabel(gate as any)}</TileBadge>
         )}
@@ -206,9 +237,11 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
           <TokenTurns
             turns={task.phase_progress?.token_turns}
             total={task.phase_progress?.turns}
-            live={status === "in_progress"}
+            live={actWorking}
             reduced={reduced}
             tokens_source={task.phase_progress?.tokens_source}
+            state={actState}
+            session_quiet_s={task.activity?.session_quiet_s}
           />
         </div>
       </div>

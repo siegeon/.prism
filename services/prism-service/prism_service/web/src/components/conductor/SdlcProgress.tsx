@@ -50,6 +50,15 @@ export type PhaseProgress = {
   eta_total_s?: number | null;
 };
 
+// Honest per-task work state (server: conductor_service.activity_for). The
+// tile pill + live pulse read THIS, not the raw status — "working" is the ONLY
+// state that means the task is actively being driven right now.
+export type Activity = {
+  state?: string;             // working|adrift|stalled|awaiting_gate|done|blocked|pending
+  task_motion_s?: number | null;   // s since the last conductor transition on THIS task
+  session_quiet_s?: number | null; // s since the linked session's transcript moved
+};
+
 function fmtClock(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -63,9 +72,15 @@ function fmtEta(s: number): string {
   return `${Math.round(s)}s`;
 }
 
-// Real task status → label + accent tone (honest; no guessed "idle").
-const STATUS_META: Record<string, { label: string; tone: string }> = {
-  in_progress: { label: "in progress", tone: "teal" },
+// Honest activity STATE → label + accent tone. Keyed by activity.state (not the
+// raw status) so a task the conductor isn't driving reads as slate/rose, not a
+// teal "in progress" lie. adrift/stalled append a mm:ss idle clock (see below).
+const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
+  working: { label: "in progress", tone: "teal" },
+  awaiting_gate: { label: "awaiting review", tone: "amber" },
+  adrift: { label: "session busy · task idle", tone: "slate" },
+  stalled: { label: "stalled · idle", tone: "rose" },
+  in_progress: { label: "in progress", tone: "teal" },  // pre-activity fallback
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
   pending: { label: "pending", tone: "slate" },
@@ -84,6 +99,7 @@ export default function SdlcProgress({
   step,
   phase,
   status,
+  activity,
   reduced,
   showCaption = true,
   hideTokens = false,
@@ -91,6 +107,9 @@ export default function SdlcProgress({
   step?: string;
   phase?: PhaseProgress | null;
   status?: string;
+  // Honest work state — drives the pill + pulse. When omitted we fall back to
+  // the raw status (legacy callers) so nothing regresses to a blank pill.
+  activity?: Activity | null;
   reduced?: boolean | null;
   showCaption?: boolean;
   // When the tile renders a dedicated TokenTurns graph, suppress the caption's
@@ -104,10 +123,20 @@ export default function SdlcProgress({
   const tokFrac = Math.max(0, Math.min(1, tokens / 500_000));
   const seed = Math.max(0, Math.min(1, phase?.pct ?? 0));
 
-  const meta = STATUS_META[(status ?? "").toLowerCase()] ?? { label: status || "", tone: "slate" };
-  // "live" = the task is genuinely being worked (status in_progress) — the
-  // honest basis for the shimmer + pulse, instead of a laggy token delta.
-  const live = (status ?? "").toLowerCase() === "in_progress";
+  // The honest state: prefer activity.state, fall back to raw status.
+  const state = (activity?.state ?? status ?? "").toLowerCase();
+  const meta = ACTIVITY_META[state] ?? { label: state || "", tone: "slate" };
+  // adrift/stalled surface HOW LONG the task has been idle (from task_motion_s).
+  const idleClock = activity?.task_motion_s != null ? fmtClock(activity.task_motion_s) : "";
+  const stateLabel =
+    state === "adrift" ? `session busy · task idle${idleClock ? ` ${idleClock}` : ""}`
+    : state === "stalled" ? `stalled · idle${idleClock ? ` ${idleClock}` : ""}`
+    : meta.label;
+  // "live" = the task is genuinely being DRIVEN right now — ONLY the "working"
+  // state (a real recent conductor transition on THIS task), NEVER raw
+  // in_progress. This is the honest basis for the shimmer + pulse; an adrift or
+  // stalled tile must read as still, not animated.
+  const live = state === "working";
 
   // Overall task progress toward DONE: completed steps + current phase fraction.
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
@@ -222,7 +251,7 @@ export default function SdlcProgress({
                 </span>
               )}
               {!hideTokens && <span className="opacity-70">· {fmtTokens(tokens)} tok</span>}
-              {meta.label && <span style={{ color: `var(--accent-${meta.tone}-fg)` }}>· {meta.label}</span>}
+              {stateLabel && <span style={{ color: `var(--accent-${meta.tone}-fg)` }}>· {stateLabel}</span>}
             </span>
           </div>
           {!hideTokens && tokens > 0 && (

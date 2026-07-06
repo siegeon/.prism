@@ -19,12 +19,19 @@ function fmtRate(n: number): string {
   return `${Math.round(n)}`;
 }
 
+function mmss(s: number): string {
+  const m = Math.floor(s / 60);
+  return `${m}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+}
+
 export default function TokenTurns({
   turns,
   total,
   live,
   reduced,
   tokens_source,
+  state,
+  session_quiet_s,
 }: {
   turns?: TokenTurn[];
   total?: number;
@@ -34,22 +41,37 @@ export default function TokenTurns({
   // approximate fallback — render dimmed + labelled so the number is never
   // presented as authoritative per-task truth.
   tokens_source?: "linked" | "wallclock";
+  // Honest work state (conductor_service.activity_for). When NOT "working" the
+  // burn is real spend but NOT this task's progress — dim it + relabel so it
+  // can't masquerade as work getting done here.
+  state?: string;
+  session_quiet_s?: number | null;
 }) {
   const series = turns ?? [];
   const count = total ?? series.length;
   const peak = series.reduce((m, t) => Math.max(m, t.tok_s), 0) || 1;
   const latest = series.length ? series[series.length - 1] : null;
   const approximate = tokens_source === "wallclock";
+  // The burn belongs to THIS task only while working; adrift/stalled ⇒ dim it
+  // and say so honestly instead of presenting it as task progress.
+  const st = (state ?? "").toLowerCase();
+  const quietClock = session_quiet_s != null ? mmss(session_quiet_s) : "";
+  const heading =
+    st === "adrift" ? "linked session busy — not this task"
+    : st === "stalled" ? `no active driver${quietClock ? ` · quiet ${quietClock}` : ""}`
+    : approximate ? "project activity (approximate)"
+    : "burn · tok/s by turn";
+  const dimmed = approximate || st === "adrift" || st === "stalled";
 
   return (
     <div
       className="flex flex-col gap-1.5 h-full"
-      style={approximate ? { opacity: 0.55 } : undefined}
-      title={approximate ? "project activity (approximate)" : undefined}
+      style={dimmed ? { opacity: 0.5 } : undefined}
+      title={heading}
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">
-          {approximate ? "project activity (approximate)" : "burn · tok/s by turn"}
+          {heading}
         </span>
         <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums text-[color:var(--text-muted)]">
           {live && (

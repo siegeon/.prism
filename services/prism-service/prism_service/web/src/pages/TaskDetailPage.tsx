@@ -7,7 +7,7 @@ import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@
 import { domainTone, priorityTone } from "@/lib/domainTone";
 import PlanView from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
-import { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
@@ -44,6 +44,8 @@ type Task = {
   plan_doc?: string;
   plan_diagram?: string;
   phase_progress?: PhaseProgress | null;
+  // Honest work state — rides top-level on the detail response (see load()).
+  activity?: Activity | null;
   has_prototype?: boolean;
 };
 
@@ -400,13 +402,13 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; timeline?: Timeline | null; has_prototype?: boolean }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + has_prototype ride at the TOP LEVEL of the response
-      // (not nested in task) — merge onto the task so the SDLC bar and the
-      // prototype iframe read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, has_prototype: d.has_prototype ?? false } : d.task);
+      // phase_progress + activity + has_prototype ride at the TOP LEVEL of the
+      // response (not nested in task) — merge onto the task so the SDLC bar, the
+      // honest work-state pill, and the prototype iframe read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
@@ -683,6 +685,7 @@ export default function TaskDetailPage() {
               gateReason: task.gate_reason,
               phase: task.phase_progress,
               status: task.status,
+              activity: task.activity,
               timeline,
             } : null}
             gate={{
