@@ -1,3 +1,9 @@
+// CONDUCTOR DRIVER CONTRACT (see mcp/instructions.py): the daemon NEVER self-
+// advances — a task moves only while this workflow drives it. Keep the session
+// linked; advance/gate at EVERY step boundary; when a fan-out's units all return,
+// FAN IN and advance (completion = move, not sit); report activity so the tile
+// isn't blind to sub-agent work; never leave a task un-driven (advance, block, or
+// hand off — never a silent stall). A stalled/adrift task is a DRIVER bug.
 export const meta = {
   name: 'implement',
   description: 'Drive one PRISM task through the conductor-gated SDLC (review -> story -> story_gate -> verify_plan -> plan_gate -> red tests -> red_gate -> implement -> verify_green -> green_gate). story_gate/plan_gate are rubric-verified (no override on a compliant drive). Brain is the primary knowledge source; grepping source on disk is the fallback. The build-half companion to the `prototype` planning workflow.',

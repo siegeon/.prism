@@ -1,3 +1,8 @@
+// CONDUCTOR DRIVER CONTRACT (see mcp/instructions.py): the daemon NEVER self-
+// advances — a task moves only while a driver drives it. If this workflow parks a
+// planning task in the conductor, keep the session linked and leave it in an
+// HONEST state; never register work that then sits un-driven (a silent stall is a
+// DRIVER bug). Report fan-out activity so the tile shows the truth, not adrift.
 export const meta = {
   name: 'prototype',
   description: 'PRISM-first research -> source fallback -> synthesize plan -> build a clickable MOCK-data prototype (PRISM-skinned, isolated) -> register as a conductor-tracked planning task. The engine behind the /prototype phase router.',

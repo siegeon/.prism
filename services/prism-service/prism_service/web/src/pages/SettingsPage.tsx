@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   ChevronDown, ChevronRight, ExternalLink, FolderTree, GitBranch,
   Github, Loader2, Plus, Search, X,
@@ -214,6 +214,10 @@ export default function SettingsPage() {
           <Card>
             <SectionLabel>Claude source</SectionLabel>
             <ClaudeSourceCard project={active} />
+          </Card>
+          <Card>
+            <SectionLabel>Jira Cloud</SectionLabel>
+            <JiraAuthCard />
           </Card>
         </div>
       )}
@@ -680,6 +684,263 @@ function ClaudeAuthCard() {
   );
 }
 
+
+type JiraAuthStatus = {
+  authenticated: boolean;
+  credentials_path: string;
+  fingerprint: string;
+  from_env: boolean;
+  source: string;
+  auth_type: string;
+  email: string;
+  base_url: string;
+};
+
+/** Jira Cloud connect — OAuth 3LO (primary) or an email + API-token
+ * fallback. Mirrors GithubAuthCard's status/configure/clear idiom; the
+ * raw token never returns — only a masked `fingerprint` reaches the SPA. */
+function JiraAuthCard() {
+  const [status, setStatus] = useState<JiraAuthStatus | null>(null);
+  const [method, setMethod] = useState<"oauth" | "token">("oauth");
+  const [site, setSite] = useState("");
+  const [email, setEmail] = useState("");
+  const [apiToken, setApiToken] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const load = useCallback(() => {
+    api.get<JiraAuthStatus>("/api/jira/status")
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Handle the OAuth callback return: /api/jira/callback 303-redirects to
+  // /settings/connections?jira=connected|error. Surface it, refetch, then
+  // strip the param so a refresh doesn't re-toast.
+  useEffect(() => {
+    const j = searchParams.get("jira");
+    if (!j) return;
+    if (j === "connected") {
+      setNotice("Authorized via Atlassian — connection stored server-side.");
+      setError(null);
+      load();
+    } else if (j === "error") {
+      setError("Atlassian authorization failed or was cancelled. Try again.");
+    }
+    searchParams.delete("jira");
+    setSearchParams(searchParams, { replace: true });
+  }, [searchParams, setSearchParams, load]);
+
+  const authorize = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const r = await api.get<{ authorize_url: string }>("/api/jira/authorize");
+      window.location.href = r.authorize_url;
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+      setSubmitting(false);
+    }
+  };
+
+  const configure = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || !apiToken.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const next = await api.post<JiraAuthStatus>("/api/jira/configure", {
+        email: email.trim(), api_token: apiToken.trim(), base_url: site.trim(),
+      });
+      setStatus(next);
+      setApiToken("");
+      setNotice("Jira connected — only the masked fingerprint reached the SPA.");
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const next = await api.post<JiraAuthStatus>("/api/jira/clear", {});
+      setStatus(next);
+      setNotice(null);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!status) {
+    return <div className="text-sm opacity-60">Loading…</div>;
+  }
+
+  if (status.authenticated) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
+            connected
+          </span>
+          <span className="text-sm opacity-70">
+            {status.auth_type === "oauth" ? "3LO OAuth" : "email + API token"}
+            {status.from_env && " · from environment"}
+          </span>
+        </div>
+        <dl className="text-sm grid grid-cols-[120px_1fr] gap-y-1.5">
+          {status.base_url && (<>
+            <dt className="text-[color:var(--text-label)]">Site</dt>
+            <dd className="font-mono text-xs">{status.base_url}</dd>
+          </>)}
+          {status.email && (<>
+            <dt className="text-[color:var(--text-label)]">Account</dt>
+            <dd className="text-xs">{status.email}</dd>
+          </>)}
+          <dt className="text-[color:var(--text-label)]">Credential</dt>
+          <dd>
+            <span className="px-2 py-1 rounded-md bg-[color:var(--surface-0)] border border-[color:var(--border-default)] text-xs font-mono">
+              {status.fingerprint}
+            </span>
+          </dd>
+        </dl>
+        <p className="text-[11px] opacity-60 leading-snug">
+          The raw token is written server-side (atomic, chmod 600) and never
+          crosses the API — only the masked <span className="font-mono">{status.fingerprint}</span> form
+          reaches the SPA.
+        </p>
+        {error && (
+          <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
+            {error}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={disconnect}
+          disabled={submitting || status.from_env}
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-[11px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
+        >
+          {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
+          {submitting ? "Disconnecting…" : "Disconnect"}
+        </button>
+      </div>
+    );
+  }
+
+  const tabBtn = (m: "oauth" | "token", label: ReactNode) => (
+    <button
+      type="button"
+      onClick={() => setMethod(m)}
+      className={
+        "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors " +
+        (method === m
+          ? "border-[color:var(--accent-teal-fg)] text-[color:var(--text-primary)]"
+          : "border-transparent text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)]")
+      }
+    >{label}</button>
+  );
+
+  return (
+    <div className="space-y-4">
+      {notice && (
+        <div className="rounded-md border border-[color:var(--accent-emerald-ring)] bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] px-3 py-2 text-sm">
+          {notice}
+        </div>
+      )}
+      <div className="flex items-center gap-1 border-b border-[color:var(--border-default)]">
+        {tabBtn("oauth", <>OAuth <span className="opacity-60 text-[11px] font-normal">· recommended</span></>)}
+        {tabBtn("token", "Email + API token")}
+      </div>
+
+      {method === "oauth" ? (
+        <div className="space-y-3">
+          <p className="text-[11px] opacity-60 leading-snug">
+            3-legged OAuth — redirect to Atlassian to authorize, then PRISM
+            stores the returned refresh token server-side. Scoped, revocable,
+            no long-lived secret pasted by hand.
+          </p>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">Jira site</span>
+            <input
+              value={site}
+              onChange={(e) => setSite(e.target.value)}
+              placeholder="your-team.atlassian.net"
+              className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={authorize}
+            disabled={submitting}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-sm uppercase tracking-wider disabled:opacity-30 hover:opacity-90"
+          >
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+            {submitting ? "Redirecting…" : "Authorize with Atlassian"}
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={configure} className="space-y-3">
+          <p className="text-[11px] opacity-60 leading-snug">
+            Fallback for instances without a configured OAuth app — the raw
+            token is stored server-side and never returned.
+          </p>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">Jira site</span>
+            <input
+              value={site}
+              onChange={(e) => setSite(e.target.value)}
+              placeholder="your-team.atlassian.net"
+              className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">Account email</span>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="ops@your-team.io"
+              autoComplete="off"
+              className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">API token</span>
+            <input
+              type="password"
+              value={apiToken}
+              onChange={(e) => setApiToken(e.target.value)}
+              placeholder="paste Atlassian API token"
+              autoComplete="off"
+              className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={submitting || !email.trim() || !apiToken.trim()}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-sm uppercase tracking-wider disabled:opacity-30 hover:opacity-90"
+          >
+            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+            {submitting ? "Connecting…" : "Connect Jira"}
+          </button>
+        </form>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type GithubAuthStatus = {
   authenticated: boolean;

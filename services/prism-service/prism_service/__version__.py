@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.4"
+PRISM_VERSION = "6.8.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.5: JIRA SLICE A UI (Settings→Connections Jira sub-panel, OAuth-first, "
+    "flips to Connected w/ masked fingerprint + Disconnect; ?jira= callback) + "
+    "CONDUCTOR DRIVER CONTRACT documented (mcp/instructions.py taught at connect, "
+    "implement.js/prototype.js headers, Brain mx-85c9c1): the daemon never self-"
+    "advances — a task moves only while a driver drives it, so keep the session "
+    "linked, advance/gate every step, fan-in+advance on fanout completion, report "
+    "activity, and never leave a task un-driven. A stall is a DRIVER bug. "
     "v6.8.4: HONEST CONDUCTOR ACTIVITY STATES — a task no longer claims 'in "
     "progress' + a live burn when nothing is driving it. New activity classifier "
     "(working / awaiting_gate / adrift / stalled) from REAL Claude-Code-integration "
