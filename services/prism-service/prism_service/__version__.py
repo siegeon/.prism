@@ -13,10 +13,12 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.14"
+PRISM_VERSION = "6.8.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.15: CONDUCTOR TILE wider/landscape — auto-fill grid min-width 380px->520px "
+    "so each tile reads wide-screen instead of portrait. "
     "v6.8.14: HONEST ETA — the tile's '~N left' chip + countdown bar now show ONLY "
     "when the tile is actually WORKING and has work left (children_done<total). A "
     "paused/adrift/done epic no longer shows a frozen 'ETA 4:58 left' lie on a "
