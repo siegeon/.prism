@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.9"
+PRISM_VERSION = "6.8.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.10: JIRA SLICE C COMPLETE — users API (/api/users {,/status,/link-jira,"
+    "/unlink}) surfaces the auto-provisioned single-operator PRISM User + links the "
+    "authenticated Jira account (email/masked fingerprint, never a token); "
+    "PrismRequestContext.principal populated from operator().id at the MCP seam "
+    "(try/except, can't reject); Settings 'Identity & Users' panel (PRISM-owned "
+    "user + OAuth-auto-matched Jira link). Epic 3/4. "
     "v6.8.9: CONDUCTOR FANOUT SUBDIVISION — the tile's SDLC stepper now SUBDIVIDES "
     "the current step's node into one cell per dispatched sub-agent (returned "
     "filled teal + 'R/D' count) when that step is in fanout mode, so a fan-out reads "
