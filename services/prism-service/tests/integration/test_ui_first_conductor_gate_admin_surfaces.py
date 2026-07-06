@@ -262,13 +262,23 @@ def test_task_detail_page_has_operable_gate_controls():
     # Approve / Reject controls.
     assert re.search(r"[Aa]pprove", src), "missing Approve control"
     assert re.search(r"[Rr]eject", src), "missing Reject control"
-    # A reason textarea (required) + an override checkbox.
-    assert "textarea" in src.lower(), "missing required reason textarea"
+    # A REQUIRED reason input + an override checkbox. The #208 restructure moved
+    # the raw <textarea>/<input> markup into PlanView's "Resolve gate" form, but
+    # TaskDetailPage still OWNS the operable gate: a required-reason state guard
+    # feeding the POST, plus the override toggle, handed down as gate controls.
+    assert "gateReason" in src, "missing required reason state"
+    assert "setGateReason" in src, "reason input must be wired to state"
     assert re.search(r"override", src, re.IGNORECASE), "missing override checkbox"
     # Wired to the new HTTP endpoint, not the bare status PATCH.
     assert "/api/conductor/gate" in src or "conductor/gate" in src, (
         "gate controls must POST to the conductor gate endpoint"
     )
+    # The reason input itself (a REQUIRED <textarea>) now renders in PlanView,
+    # the render owner the page hands its gate controls to — the control moved,
+    # it was not lost.
+    plan = (_WEB_SRC / "components" / "plan" / "PlanView.tsx").read_text(encoding="utf-8")
+    assert "textarea" in plan.lower(), "gate reason textarea must render in PlanView"
+    assert "required" in plan, "gate reason textarea must be required"
 
 
 # =====================================================================

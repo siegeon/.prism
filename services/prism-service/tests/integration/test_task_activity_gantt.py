@@ -241,13 +241,23 @@ def test_gantt_component_exists_and_exports_timeline_type():
 
 
 def test_taskdetail_threads_timeline_and_renders_activity_card():
+    """#208 restructure: TaskDetailPage no longer renders <TaskActivityGantt>
+    inline — it threads d.timeline into state and hands it to PlanView, whose
+    Implementation tab renders the TaskActivityGantt wall-clock view. The
+    guarantee is unchanged: the activity timeline is wired to the API's
+    `timeline` field and actually rendered (now via the PlanView render owner)."""
     src = _read("pages/TaskDetailPage.tsx")
-    assert "TaskActivityGantt" in src
+    assert "TaskActivityGantt" in src     # Timeline type still imported from it
     assert "import" in src and "TaskActivityGantt" in src
     assert "timeline" in src              # state threaded from d.timeline
     assert "setTimeline" in src
-    assert "Activity" in src              # the new Card label
-    assert "<TaskActivityGantt" in src
+    assert "setTimeline(d.timeline" in src  # wired to the API's timeline field
+    assert "Activity" in src              # honest work-state still surfaced
+    assert "<PlanView" in src             # rendered through the plan work panel
+    # PlanView (the render owner the page hands `timeline` to) draws the actual
+    # wall-clock Gantt — the render moved here, it was not lost.
+    plan = _read("components/plan/PlanView.tsx")
+    assert "<TaskActivityGantt" in plan
 
 
 def test_taskdetail_sessions_list_filters_to_real_uuid_sessions():
