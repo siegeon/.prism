@@ -10,8 +10,15 @@ import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/
 // useSpring tweens the current-step fill between 5s polls; its config keys off
 // `reduced` so prefers-reduced-motion collapses the tween (see segSpring below).
 import { useSpring } from "motion/react";
-import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
+import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { fmtTokens } from "@/lib/format";
+
+// Per-segment tooltip: step name + the role that owns it ("story gate ·
+// Steward"), so hovering the minimap says WHO drives each phase.
+function segTitle(s: { id: string; persona?: string }): string {
+  const who = personaLabel(s.persona);
+  return who ? `${stepLabel(s.id)} · ${who}` : stepLabel(s.id);
+}
 
 export type TokenTurn = { out: number; dt_s: number; tok_s: number };
 
@@ -147,14 +154,14 @@ export default function SdlcProgress({
               <div
                 key={s.id}
                 className={base}
-                title={stepLabel(s.id)}
+                title={segTitle(s)}
                 style={{ background: "var(--accent-emerald-bg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
               />
             );
           }
           if (current) {
             return (
-              <div key={s.id} className={base} title={stepLabel(s.id)} style={{ background: "var(--surface-3)" }}>
+              <div key={s.id} className={base} title={segTitle(s)} style={{ background: "var(--surface-3)" }}>
                 <motion.div
                   className="absolute inset-y-0 left-0 rounded-full"
                   style={{ width: segWidth, background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
@@ -175,7 +182,7 @@ export default function SdlcProgress({
             <div
               key={s.id}
               className={base}
-              title={stepLabel(s.id)}
+              title={segTitle(s)}
               style={{ background: "var(--surface-2)", opacity: isGate ? 0.45 : 0.7 }}
             />
           );

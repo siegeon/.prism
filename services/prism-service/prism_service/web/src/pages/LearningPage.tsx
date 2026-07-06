@@ -3,6 +3,8 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty } from "@/components/ui";
 import { fmtTokens } from "@/lib/format";
+import { useRoles } from "@/lib/useRoles";
+import { domainTone, toneClass } from "@/lib/domainTone";
 
 type Row = {
   task_id?: string;
@@ -108,6 +110,10 @@ function ScorePill({ value }: { value: number | null | undefined }) {
 
 export default function LearningPage() {
   const [project] = useProject();
+  // Single source of truth for agent roles (/api/roles). Joins the per-role
+  // token ledger below to human labels + tier + effort. Degrades to raw ids if
+  // the endpoint 404s.
+  const { roleMeta } = useRoles();
   const [rows, setRows] = useState<Row[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [reflections, setReflections] = useState<Reflection[]>([]);
@@ -302,15 +308,49 @@ export default function LearningPage() {
             <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
               Token cost per role
             </div>
+            {/* Wargame economics: frontier tier plans & signs the gates (Steward),
+                fast tier does the bulk execution (Builder). This ledger reads as
+                per-tier spend once tokens land. */}
+            <div className="text-[10px] text-[color:var(--text-muted)] mb-1.5 leading-snug">
+              Frontier plans &amp; gates, fast executes — spend should skew to the
+              cheap tier.
+            </div>
             {(agentAgg.per_role ?? []).length === 0 ? (
               <div className="text-xs opacity-50">—</div>
             ) : (
-              (agentAgg.per_role ?? []).map((r) => (
-                <div key={r.role} className="flex justify-between text-xs py-0.5">
-                  <span className="font-mono opacity-80">{r.role ?? "—"}</span>
-                  <span className="font-mono opacity-60">{fmtTokens(r.total_tokens ?? 0)} tok</span>
-                </div>
-              ))
+              (agentAgg.per_role ?? []).map((r) => {
+                const meta = r.role ? roleMeta(r.role) : undefined;
+                const tier = meta?.tier;
+                return (
+                  <div key={r.role} className="flex items-center justify-between text-xs py-1 gap-2">
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        className="truncate text-[color:var(--text-primary)]"
+                        title={meta?.purpose}
+                      >
+                        {meta?.label ?? r.role ?? "—"}
+                      </span>
+                      {tier && (
+                        <span
+                          className={
+                            "px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider font-mono flex-none " +
+                            toneClass(domainTone("tier", tier) ?? "slate")
+                          }
+                          title={meta?.tier_desc}
+                        >
+                          {tier}
+                        </span>
+                      )}
+                      {meta?.effort && (
+                        <span className="text-[9px] uppercase tracking-wider font-mono text-[color:var(--text-muted)] flex-none">
+                          {meta.effort}
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-mono opacity-60 flex-none">{fmtTokens(r.total_tokens ?? 0)} tok</span>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

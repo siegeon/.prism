@@ -22,6 +22,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 
 from prism_service.config import DEFAULT_PROJECT
+from prism_service.mcp.instructions import PRISM_INSTRUCTIONS
 from prism_service.mcp.request_context import (
     PrismRequestContext,
     get_request_context,
@@ -38,7 +39,7 @@ from prism_service.mcp.tools import (
 # MCP Server instance
 # ---------------------------------------------------------------------------
 
-server = Server("prism-service")
+server = Server("prism-service", instructions=PRISM_INSTRUCTIONS)
 
 
 @server.list_tools()

@@ -48,16 +48,37 @@ export function conductorEngaged(
   return Boolean((step && step !== "") || (gate && gate !== "none"));
 }
 
+// Canonical role labels for the three roles in the /api/roles registry. Kept
+// as a static fallback so the sync StepRail/SdlcProgress can name a persona
+// without awaiting the async useRoles fetch; the /learning ledger uses the live
+// registry (richer: tier + effort). These three ids never change — the old
+// sprawl (lead/architect/general) collapsed to sm/qa/dev.
+export const PERSONA_LABELS: Record<string, string> = {
+  sm: "Steward",
+  qa: "Verifier",
+  dev: "Builder",
+};
+
+/** Human label for a role/persona id (Steward/Verifier/Builder), else the id. */
+export function personaLabel(id: string | undefined | null): string {
+  if (!id) return "";
+  return PERSONA_LABELS[id] ?? id;
+}
+
+// Each step's `persona` is the role that OWNS it, aligned to the backend
+// step_roles map: sm-planning + ALL GATES are Steward-reviewed (gates are no
+// longer blank — the Steward is the distinct-actor reviewer), qa authors/checks
+// tests, dev implements. StepRail reads `persona` to tag WHO owns each row.
 export const WORKFLOW_STEPS_ORDERED: { id: string; persona: string; type: "agent" | "gate" | "intake" }[] = [
   { id: "intake", persona: "", type: "intake" },
   { id: "review_previous_notes", persona: "sm", type: "agent" },
   { id: "draft_story", persona: "sm", type: "agent" },
-  { id: "story_gate", persona: "", type: "gate" },
+  { id: "story_gate", persona: "sm", type: "gate" },
   { id: "verify_plan", persona: "sm", type: "agent" },
-  { id: "plan_gate", persona: "", type: "gate" },
+  { id: "plan_gate", persona: "sm", type: "gate" },
   { id: "write_failing_tests", persona: "qa", type: "agent" },
-  { id: "red_gate", persona: "", type: "gate" },
+  { id: "red_gate", persona: "sm", type: "gate" },
   { id: "implement_tasks", persona: "dev", type: "agent" },
   { id: "verify_green_state", persona: "qa", type: "agent" },
-  { id: "green_gate", persona: "", type: "gate" },
+  { id: "green_gate", persona: "sm", type: "gate" },
 ];

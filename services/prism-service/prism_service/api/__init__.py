@@ -25,6 +25,7 @@ from prism_service.api.memory import router as memory_router
 from prism_service.api.okf import router as okf_router
 from prism_service.api.projects import router as projects_router
 from prism_service.api.retrievals import router as retrievals_router
+from prism_service.api.roles import router as roles_router
 from prism_service.api.service_info import router as service_info_router
 from prism_service.api.sessions import router as sessions_router
 from prism_service.api.tasks import router as tasks_router
@@ -51,6 +52,7 @@ api_router.include_router(memory_router, prefix="/memory", tags=["memory"])
 api_router.include_router(okf_router, prefix="/okf", tags=["okf"])
 api_router.include_router(projects_router, prefix="/projects", tags=["projects"])
 api_router.include_router(retrievals_router, prefix="/retrievals", tags=["retrievals"])
+api_router.include_router(roles_router, prefix="/roles", tags=["roles"])
 api_router.include_router(service_info_router, prefix="/service-info", tags=["service-info"])
 api_router.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
