@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.0"
+PRISM_VERSION = "6.8.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.2: CONDUCTOR PER-STEP FANOUT TELEMETRY — the conductor now visualizes, "
+    "for the current workflow step, how many sub-agents were dispatched vs how "
+    "many have returned (e.g. write_failing_tests: '8/8 agents back'), plus a "
+    "'verified by <Role>' tag naming the reviewer of the upcoming gate. New "
+    "step_fanout store + POST /api/conductor/fanout; phase_progress gains "
+    "basis='fanout' (pct=returned/dispatched) + fanout_dispatched/returned; "
+    "SdlcProgress caption + StepRail current-step chip render it. "
     "v6.8.0: LEARNING PAGE THAT SHOWS WHAT PRISM LEARNED (task 62674246, MINOR "
     "cap on the role/tier + learning-loop work). The /learning surface was six "
     "stacked mono-font telemetry tables, most broken or empty: Scored-tasks "
