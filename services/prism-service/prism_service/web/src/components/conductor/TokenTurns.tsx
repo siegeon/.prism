@@ -52,21 +52,27 @@ export default function TokenTurns({
   const peak = series.reduce((m, t) => Math.max(m, t.tok_s), 0) || 1;
   const latest = series.length ? series[series.length - 1] : null;
   const approximate = tokens_source === "wallclock";
-  // The burn belongs to THIS task only while working; adrift/stalled ⇒ dim it
-  // and say so honestly instead of presenting it as task progress.
+  // The burn belongs to THIS task only while working. EVERY other state
+  // (paused/adrift/stalled/awaiting_gate) is real spend but NOT this task's
+  // progress ⇒ dim + shrink it and say so honestly, so a borrowed orchestrator
+  // burn can't masquerade as work getting done on this tile.
   const st = (state ?? "").toLowerCase();
+  const working = st === "working";
   const quietClock = session_quiet_s != null ? mmss(session_quiet_s) : "";
   const heading =
-    st === "adrift" ? "linked session busy — not this task"
+    st === "paused" ? "linked session · not this task"
+    : st === "adrift" ? "linked session busy — not this task"
     : st === "stalled" ? `no active driver${quietClock ? ` · quiet ${quietClock}` : ""}`
+    : st === "awaiting_gate" ? "awaiting review · paused here"
     : approximate ? "project activity (approximate)"
     : "burn · tok/s by turn";
-  const dimmed = approximate || st === "adrift" || st === "stalled";
+  // Only a task actively being WORKED gets the full-strength graph.
+  const dimmed = approximate || (st !== "" && !working);
 
   return (
     <div
       className="flex flex-col gap-1.5 h-full"
-      style={dimmed ? { opacity: 0.5 } : undefined}
+      style={dimmed ? { opacity: 0.4 } : undefined}
       title={heading}
     >
       <div className="flex items-baseline justify-between gap-2">
@@ -88,7 +94,7 @@ export default function TokenTurns({
 
       {/* Bar field — flex row, newest on the right. Each bar tweens its height
           between polls so the field flows as the live tail advances. */}
-      <div className="relative flex-1 min-h-[56px] flex items-end gap-[2px] rounded bg-[color:var(--surface-2)]/40 px-1.5 pt-1.5 pb-1 overflow-hidden">
+      <div className={`relative flex-1 ${working ? "min-h-[56px]" : "min-h-[30px]"} flex items-end gap-[2px] rounded bg-[color:var(--surface-2)]/40 px-1.5 pt-1.5 pb-1 overflow-hidden`}>
         {series.length === 0 ? (
           <span className="absolute inset-0 grid place-items-center text-[10px] font-mono opacity-30 italic">
             awaiting first turn…
