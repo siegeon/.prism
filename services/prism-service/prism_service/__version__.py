@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.12"
+PRISM_VERSION = "6.8.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.14: HONEST ETA — the tile's '~N left' chip + countdown bar now show ONLY "
+    "when the tile is actually WORKING and has work left (children_done<total). A "
+    "paused/adrift/done epic no longer shows a frozen 'ETA 4:58 left' lie on a "
+    "4/4-done feature. "
+    "v6.8.13: JIRA SLICE D — bidirectional task<->Jira sync. services/jira_client.py "
+    "(stdlib urllib) + services/jira_sync.py (receipts + outbound_create on task "
+    "create/update + inbound reconcile + env-gated poller, OFF by default) + main.py "
+    "lifespan spawn + GET /api/jira/sync/receipts. Epic 4/4 — all slices done. "
     "v6.8.12: CONDUCTOR TILE — FOCUSED SLICE. The epic tile no longer lists all N "
     "slice chips; it shows just the ONE being worked (or 'next: …') + the stage: "
     "'Slice 3/4 · ▶ Bidirectional Jira sync · implement'. Less noise, the current "
