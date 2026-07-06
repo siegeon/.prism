@@ -161,6 +161,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const actState = (task.activity?.state ?? status).toLowerCase();
   const actTone: PillTone = ACT_TILE[actState]?.tone ?? statusTone;
   const actWorking = actState === "working";
+  // An ETA/countdown is only honest while the tile is ACTUALLY being driven and
+  // has work left. A paused/done tile must NOT show "N left" (a frozen lie).
+  const _ct = task.phase_progress?.children_total ?? 0;
+  const workLeft = _ct === 0 || (task.phase_progress?.children_done ?? 0) < _ct;
+  const showEta = actWorking && workLeft;
   // LIVE idle clock: server snapshot + seconds since the last poll, so it ticks
   // up every second instead of freezing between the 5s data refreshes.
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
@@ -216,7 +221,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
         {showGate && (
           <TileBadge tone={gateTone}>{gateLabel(gate as any)}</TileBadge>
         )}
-        {status === "in_progress" && (task.phase_progress?.eta_s ?? 0) > 5 && (
+        {showEta && (task.phase_progress?.eta_s ?? 0) > 5 && (
           <span
             className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
             style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
@@ -295,7 +300,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
           />
         </div>
       </div>
-      {status === "in_progress" && (task.phase_progress?.eta_s ?? 0) > 5 && (task.phase_progress?.eta_total_s ?? 0) > 0 && (
+      {showEta && (task.phase_progress?.eta_s ?? 0) > 5 && (task.phase_progress?.eta_total_s ?? 0) > 0 && (
         <EtaCountdownBar
           etaS={task.phase_progress!.eta_s!}
           totalS={task.phase_progress!.eta_total_s!}
