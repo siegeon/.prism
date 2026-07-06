@@ -79,12 +79,24 @@ export default function ConductorPage() {
   const navigate = useNavigate();
   const reduced = useReducedMotion();
   const [data, setData] = useState<State | null>(null);
+  // Liveness: a card that isn't being driven still must VISIBLY tick, or it's
+  // indistinguishable from frozen. fetchedAt marks the last successful poll;
+  // sinceFetchS counts up every second and RESETS each 5s poll — a heartbeat the
+  // eye can see. It also drives the per-second idle clock on paused/adrift tiles.
+  const fetchedAt = useRef(0);
+  const [sinceFetchS, setSinceFetchS] = useState(0);
 
   const load = useCallback(() => {
-    api.get<State>(`/api/conductor/state?project=${project}`).then(setData).catch(() => setData(null));
+    api.get<State>(`/api/conductor/state?project=${project}`)
+      .then((d) => { setData(d); fetchedAt.current = performance.now(); setSinceFetchS(0); })
+      .catch(() => setData(null));
   }, [project]);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  useEffect(() => {
+    const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const managed = data?.managed_tasks ?? [];
   const boardHealth = data?.board_health;
@@ -118,7 +130,7 @@ export default function ConductorPage() {
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-3">
             {managed.map((t) => (
-              <TaskTile key={t.id} task={t} reduced={reduced} onClick={() =>
+              <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
               } />
             ))}
@@ -142,18 +154,22 @@ export default function ConductorPage() {
 //   - owner: {assigned_agent or 'unassigned'}
 //   - up to 3 tag chips
 // ---------------------------------------------------------------------------
-function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: boolean | null; onClick: () => void }) {
+function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; reduced: boolean | null; sinceFetchS: number; onClick: () => void }) {
   const status = (task.status ?? "").toLowerCase();
   const statusTone: PillTone = domainTone("taskStatus", status) ?? "slate";
   // Honest state drives the pill (fall back to raw status pre-activity).
   const actState = (task.activity?.state ?? status).toLowerCase();
   const actTone: PillTone = ACT_TILE[actState]?.tone ?? statusTone;
   const actWorking = actState === "working";
-  const idle = fmtIdle(task.activity?.task_motion_s);
+  // LIVE idle clock: server snapshot + seconds since the last poll, so it ticks
+  // up every second instead of freezing between the 5s data refreshes.
+  const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
+  const idle = fmtIdle(liveMotionS);
+  const kids = `${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0}`;
   const actLabel =
     actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
     : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
-    : actState === "paused" ? `paused · ${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0} done`
+    : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
@@ -209,6 +225,21 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
             ~{fmtEtaTile(task.phase_progress!.eta_s!)} left{(task.phase_progress?.eta_sample_n ?? 0) < 2 ? " ~rough" : ""}
           </span>
         )}
+        {/* Liveness heartbeat: pulses + counts 0..5s and RESETS each 5s poll, so
+            the card visibly proves it is live-polling — even a paused/idle tile
+            is never mistaken for frozen. */}
+        <span
+          className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums"
+          title={`live — data refreshed ${Math.floor(sinceFetchS)}s ago (auto-polls every 5s)`}
+        >
+          <motion.span
+            className="inline-block h-1.5 w-1.5 rounded-full"
+            style={{ background: "var(--accent-emerald-fg)" }}
+            animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }}
+            transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }}
+          />
+          live {Math.floor(sinceFetchS)}s
+        </span>
       </div>
       {gateReason && (
         <div className="text-[11px] text-[color:var(--text-muted)]">
