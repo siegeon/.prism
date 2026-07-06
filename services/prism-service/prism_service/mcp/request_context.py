@@ -20,6 +20,11 @@ class PrismRequestContext:
     request_id: str = ""
     transport: str = "mcp-http"
     tool_profile: str = "interactive"
+    # Slice C — the authenticated PRISM User id ('usr_xxxx'), or '' when the
+    # request is unauthenticated (the default today: nothing populates this
+    # yet). A safe default so every existing construction site keeps working
+    # unchanged; wiring real auth into it is a deliberate follow-up.
+    principal: str = ""
 
 
 _current_request: ContextVar[PrismRequestContext] = ContextVar(
