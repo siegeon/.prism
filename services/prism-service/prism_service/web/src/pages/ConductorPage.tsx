@@ -128,7 +128,7 @@ export default function ConductorPage() {
         {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(520px,1fr))] gap-3">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
