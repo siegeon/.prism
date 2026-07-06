@@ -29,6 +29,11 @@ export type PhaseProgress = {
   typical_s?: number;
   children_done?: number;
   children_total?: number;
+  // Ephemeral per-step sub-agent fanout for the CURRENT step: how many
+  // disposable units (e.g. test-writers) were dispatched vs returned. 0/0
+  // when the step handed out none. basis==="fanout" ⇒ pct = returned/dispatched.
+  fanout_dispatched?: number;
+  fanout_returned?: number;
   tokens_since_step?: number;
   // Per-turn burn series (oldest..newest) + honest total turn count — drives
   // the live TokenTurns graph beside each conductor tile.
@@ -195,6 +200,9 @@ export default function SdlcProgress({
             <span className="uppercase tracking-wider truncate">
               {stepLabel(steps[curIdx].id)} · {liveLabel.toFixed(2)}%
               {basis === "children" && phase?.children_total ? ` · ${phase.children_done}/${phase.children_total}` : ""}
+              {(basis === "fanout" || (phase?.fanout_dispatched ?? 0) > 0)
+                ? ` · ${phase?.fanout_returned ?? 0}/${phase?.fanout_dispatched ?? 0} back`
+                : ""}
             </span>
             <span className="flex items-center gap-1.5 shrink-0 tabular-nums">
               <motion.span

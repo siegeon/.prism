@@ -655,6 +655,55 @@ class ConductorService:
             return []
 
     # ------------------------------------------------------------------
+    # Per-step fanout telemetry — ephemeral sub-agent dispatch/return counts
+    # for the CURRENT workflow step (e.g. "8 test-writers handed out, 8 back").
+    # Distinct from phase_progress' children basis, which counts CHILD TASKS.
+    # ------------------------------------------------------------------
+
+    def set_step_fanout(
+        self, task_id: str, step: str, dispatched: int, returned: int
+    ) -> dict:
+        """UPSERT the fanout row for (task_id, step) and return it."""
+        from datetime import datetime, timezone
+
+        self._ensure_meta_schema()
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._scores_conn()
+        conn.execute(
+            "INSERT INTO step_fanout (task_id, step, dispatched, returned, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(task_id, step) DO UPDATE SET "
+            "dispatched=excluded.dispatched, returned=excluded.returned, "
+            "updated_at=excluded.updated_at",
+            (task_id, step, int(dispatched), int(returned), now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM step_fanout WHERE task_id = ? AND step = ?",
+            (task_id, step),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else {}
+
+    def _step_fanout(self, task_id: str, step: str) -> tuple[int, int]:
+        """Return (dispatched, returned) for a step, or (0, 0) if none."""
+        if not step:
+            return (0, 0)
+        try:
+            conn = self._scores_conn()
+            row = conn.execute(
+                "SELECT dispatched, returned FROM step_fanout "
+                "WHERE task_id = ? AND step = ?",
+                (task_id, step),
+            ).fetchone()
+            conn.close()
+            if row:
+                return (int(row["dispatched"]), int(row["returned"]))
+        except Exception:
+            pass
+        return (0, 0)
+
+    # ------------------------------------------------------------------
     # Meta-Conductor: offline prompt-variant candidate loop
     # ------------------------------------------------------------------
 
@@ -733,6 +782,14 @@ class ConductorService:
                 reason TEXT,
                 metrics_json TEXT,
                 evaluated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS step_fanout (
+                task_id TEXT NOT NULL,
+                step TEXT NOT NULL,
+                dispatched INTEGER NOT NULL DEFAULT 0,
+                returned INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT,
+                PRIMARY KEY (task_id, step)
             );
             """
         )
@@ -2677,6 +2734,10 @@ class ConductorService:
             except Exception:
                 children_total = 0
 
+        # Per-step ephemeral fanout (test-writers etc.) for the CURRENT step —
+        # a real returned/dispatched signal that beats the wall-clock estimate.
+        fanout_dispatched, fanout_returned = self._step_fanout(task_id, cur_step)
+
         # A finished task is 100%, period — never a stale children/time ratio.
         if task_status == "done":
             pct = 1.0
@@ -2684,6 +2745,10 @@ class ConductorService:
         elif children_total > 0:
             pct = children_done / children_total
             basis = "children"
+        elif fanout_dispatched > 0:
+            # write_failing_tests has no child tasks, so fanout wins over time.
+            pct = fanout_returned / fanout_dispatched
+            basis = "fanout"
         else:
             ratio = in_step_s / typical_s if typical_s > 0 else 0.0
             pct = min(0.95, ratio)
@@ -2775,6 +2840,10 @@ class ConductorService:
             "eta_total_s": round(eta_total, 1) if eta_total is not None else None,
             "children_done": children_done,
             "children_total": children_total,
+            # Ephemeral per-step sub-agent fanout (0/0 when the step dispatched
+            # no disposable units) — powers the "N/M agents back" chip.
+            "fanout_dispatched": fanout_dispatched,
+            "fanout_returned": fanout_returned,
             # Task-total linked-session tokens (see note above).
             "tokens_since_step": tokens,
             # Per-turn burn rate series + honest total turn count.

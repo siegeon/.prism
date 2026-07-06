@@ -67,6 +67,11 @@ export default function StepRail({
   flush();
 
   const railHasCur = curIdx >= 0;
+  // The VERIFIER for the upcoming gate — persona of the next gate step ahead of
+  // the current one (honest: omitted when no gate remains). Surfaced on the
+  // current step so you can see WHO signs off before you get there.
+  const nextGate = curIdx >= 0 ? steps.slice(curIdx + 1).find((s) => s.type === "gate") : undefined;
+  const verifierPersona = nextGate?.persona || "";
 
   return (
     <div className="mt-3 select-none">
@@ -126,12 +131,27 @@ export default function StepRail({
                     {stepLabel(s.id)}
                   </span>
                   {cur && !isGate && (
-                    <span className="ml-auto text-[10px] font-mono tabular-nums flex items-center gap-1.5" style={{ color: "var(--accent-teal-fg)" }}>
-                      <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
-                        animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
-                        transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
-                      {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
-                    </span>
+                    <div className="ml-auto flex items-center gap-2 min-w-0">
+                      {verifierPersona && <VerifiedBy persona={verifierPersona} />}
+                      {(phase?.fanout_dispatched ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
+                          title="ephemeral sub-agents dispatched vs returned for this step">
+                          <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
+                          <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                            <span className="block h-full rounded-full" style={{
+                              width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
+                              background: "var(--accent-teal-bg)",
+                            }} />
+                          </span>
+                        </span>
+                      )}
+                      <span className="text-[10px] font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
+                        <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
+                          animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
+                          transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
+                        {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
+                      </span>
+                    </div>
                   )}
                 </div>
               )}
@@ -205,6 +225,23 @@ function Persona({ persona, isGate }: { persona: string; isGate: boolean }) {
       style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}>
       {isGate && persona && <span aria-hidden>◇</span>}
       {label}
+    </span>
+  );
+}
+
+// "verified by {Role}" — the persona that reviews the UPCOMING gate, shown on
+// the current step so the reviewer is legible before the gate is reached. Same
+// domainTone("role") palette + ◇ marker as the gate Persona tag (subtle: the
+// tag is outlined, not filled, so it reads as a forward-looking hint).
+function VerifiedBy({ persona }: { persona: string }) {
+  const tone = domainTone("role", persona) ?? "slate";
+  return (
+    <span
+      title={`${personaLabel(persona)} verifies the next gate`}
+      className="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
+      style={{ color: `var(--accent-${tone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)` }}>
+      <span aria-hidden>◇</span>
+      verified by {personaLabel(persona)}
     </span>
   );
 }
