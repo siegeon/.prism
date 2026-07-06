@@ -82,6 +82,11 @@ class Task:
     # page falls back to the existing description view.
     plan_doc: str = ""
     plan_diagram: str = ""
+    # Jira mapping (Slice B) — the 1:1 key of the Jira issue this task maps
+    # to (e.g. "PLAT-1"), or '' when the task is not linked to Jira. An
+    # additive TEXT column (NOT a join table) that rides the same DB path as
+    # the other additive fields; the sync worker (Slice D) reads/writes it.
+    jira_issue_key: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

@@ -109,6 +109,7 @@ class TaskCreate(BaseModel):
     tags: Optional[list[str]] = None
     likely_misfire: str = ""
     full_outcome_complete: bool = False
+    jira_issue_key: str = ""
     enter_conductor: bool = False
     # Conductor session gate (ef81fc15): optional driving session linked in
     # the same request right after create (two writes, not one transaction —
@@ -143,6 +144,7 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         tags=body.tags or [],
         likely_misfire=body.likely_misfire or "",
         full_outcome_complete=bool(body.full_outcome_complete),
+        jira_issue_key=body.jira_issue_key or "",
     )
     out: dict = {"task": task, "advanced": None}
     if sid:
@@ -354,6 +356,7 @@ class TaskUpdate(BaseModel):
     stop_if: Optional[list[str]] = None
     plan_doc: Optional[str] = None
     plan_diagram: Optional[str] = None
+    jira_issue_key: Optional[str] = None
 
 
 @router.patch("/{task_id}")

@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     verify TEXT DEFAULT '[]',
     stop_if TEXT DEFAULT '[]',
     plan_doc TEXT DEFAULT '',
-    plan_diagram TEXT DEFAULT ''
+    plan_diagram TEXT DEFAULT '',
+    jira_issue_key TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -124,6 +125,9 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     # SPA keeps the current description view).
     ("plan_doc", "TEXT DEFAULT ''"),
     ("plan_diagram", "TEXT DEFAULT ''"),
+    # Jira mapping (Slice B): 1:1 issue key ("PLAT-1"). Existing rows
+    # backfill to '' (not linked to Jira).
+    ("jira_issue_key", "TEXT DEFAULT ''"),
 ]
 
 
@@ -292,6 +296,8 @@ class TaskService:
                       and row["plan_doc"] is not None else ""),
             plan_diagram=(row["plan_diagram"] if "plan_diagram" in keys
                           and row["plan_diagram"] is not None else ""),
+            jira_issue_key=(row["jira_issue_key"] if "jira_issue_key" in keys
+                            and row["jira_issue_key"] is not None else ""),
         )
 
     def _record_history(
@@ -339,6 +345,7 @@ class TaskService:
         stop_if: Optional[list[str]] = None,
         plan_doc: str = "",
         plan_diagram: str = "",
+        jira_issue_key: str = "",
     ) -> Task:
         """Create a new task and return it."""
         task = Task(
@@ -360,6 +367,7 @@ class TaskService:
             stop_if=stop_if or [],
             plan_doc=plan_doc,
             plan_diagram=plan_diagram,
+            jira_issue_key=jira_issue_key,
         )
         self._db.execute(
             "INSERT INTO tasks "
@@ -368,8 +376,9 @@ class TaskService:
             "blocked_reason, dependencies, tags, parent_id, "
             "oracle, proof_type, completion_proof, likely_misfire, "
             "full_outcome_complete, "
-            "allowed_files, verify, stop_if, plan_doc, plan_diagram) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "allowed_files, verify, stop_if, plan_doc, plan_diagram, "
+            "jira_issue_key) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -395,6 +404,7 @@ class TaskService:
                 json.dumps(task.stop_if),
                 task.plan_doc,
                 task.plan_diagram,
+                task.jira_issue_key,
             ),
         )
         self._db.commit()
@@ -505,7 +515,7 @@ class TaskService:
             "oracle=?, proof_type=?, completion_proof=?, likely_misfire=?, "
             "full_outcome_complete=?, "
             "allowed_files=?, verify=?, stop_if=?, "
-            "plan_doc=?, plan_diagram=? "
+            "plan_doc=?, plan_diagram=?, jira_issue_key=? "
             "WHERE id=?",
             (
                 task.title,
@@ -533,6 +543,7 @@ class TaskService:
                 json.dumps(task.stop_if),
                 task.plan_doc,
                 task.plan_diagram,
+                task.jira_issue_key,
                 task.id,
             ),
         )
