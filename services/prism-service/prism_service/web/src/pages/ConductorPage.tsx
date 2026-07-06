@@ -194,7 +194,7 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
         <SlicesBar subtasks={task.subtasks!} reduced={reduced} />
       )}
       {/* Animated SDLC stepper — now SECONDARY to the slice bar above. */}
-      <SdlcDots step={stepId} reduced={reduced} />
+      <SdlcDots step={stepId} phase={task.phase_progress} reduced={reduced} />
       <div className="flex flex-wrap items-center gap-1">
         <TileBadge tone={actTone}>{actLabel}</TileBadge>
         {showGate && (
@@ -395,9 +395,13 @@ function SlicesBar({ subtasks, reduced }: {
 // before the current step read "done" (emerald), the current node pulses
 // teal with a ring, later nodes are muted. Color/size transition on advance
 // so a task visibly moves between phases (motion suppressed under reduced).
-function SdlcDots({ step, reduced }: { step?: string; reduced: boolean | null }) {
+function SdlcDots({ step, phase, reduced }: { step?: string; phase?: PhaseProgress | null; reduced: boolean | null }) {
   const steps = WORKFLOW_STEPS_ORDERED;
   const curIdx = steps.findIndex((s) => s.id === (step ?? ""));
+  // Fanout mode: when the CURRENT step dispatched sub-agents, subdivide its node
+  // into one cell per unit (returned filled) so "5 of 8 back" is visible inline.
+  const fd = phase?.fanout_dispatched ?? 0;
+  const fr = phase?.fanout_returned ?? 0;
   return (
     <div
       className="flex items-center"
@@ -417,17 +421,30 @@ function SdlcDots({ step, reduced }: { step?: string; reduced: boolean | null })
                 style={{ height: "1px", width: "0.55rem", background: reached ? "var(--accent-emerald-fg)" : "var(--border-default)" }}
               />
             )}
-            <span
-              className={[
-                isGate ? "rounded-[2px]" : "rounded-full",
-                current ? "w-2.5 h-2.5" : "w-2 h-2",
-                reduced ? "" : "transition-all duration-500",
-              ].join(" ")}
-              style={{
-                background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
-                boxShadow: current ? "0 0 0 2px var(--accent-teal-ring)" : "none",
-              }}
-            />
+            {current && fd > 0 ? (
+              <span className="inline-flex items-center gap-[1.5px] mx-0.5" title={`fanout: ${fr}/${fd} sub-agents back`}>
+                {Array.from({ length: Math.min(fd, 12) }).map((_, k) => (
+                  <span key={k} style={{
+                    width: "3px", height: "10px", borderRadius: "1px",
+                    background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)",
+                    boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)",
+                  }} />
+                ))}
+                <span className="ml-0.5 text-[8px] font-mono tabular-nums" style={{ color: "var(--accent-teal-fg)" }}>{fr}/{fd}</span>
+              </span>
+            ) : (
+              <span
+                className={[
+                  isGate ? "rounded-[2px]" : "rounded-full",
+                  current ? "w-2.5 h-2.5" : "w-2 h-2",
+                  reduced ? "" : "transition-all duration-500",
+                ].join(" ")}
+                style={{
+                  background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
+                  boxShadow: current ? "0 0 0 2px var(--accent-teal-ring)" : "none",
+                }}
+              />
+            )}
           </div>
         );
       })}
