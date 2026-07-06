@@ -207,7 +207,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
           Rendered ABOVE the abstract SDLC stepper so "1 of 4 done, here's
           which" is the first thing read on the tile. */}
       {(task.subtasks?.length ?? 0) > 0 && (
-        <SlicesBar subtasks={task.subtasks!} reduced={reduced} />
+        <SlicesBar subtasks={task.subtasks!} stage={phaseLabel} reduced={reduced} />
       )}
       {/* Animated SDLC stepper — now SECONDARY to the slice bar above. */}
       <SdlcDots step={stepId} phase={task.phase_progress} reduced={reduced} />
@@ -376,47 +376,45 @@ function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) 
 // done-first (server-ordered), so the row reads left-to-right as progress:
 // filled emerald + ✓ = done, teal (subtle pulse) = in progress, muted outline
 // = pending. Uses the shared Hermes accent vars — no per-surface palette.
-function SlicesBar({ subtasks, reduced }: {
+// Focused slice line: shows ONLY the slice we're working on (or the next up) +
+// the stage — not all N chips. "Slice 3/4 · ▶ Bidirectional Jira sync · implement".
+function SlicesBar({ subtasks, stage, reduced }: {
   subtasks: { id: string; title: string; status: string }[];
+  stage?: string;
   reduced: boolean | null;
 }) {
   const done = subtasks.filter((s) => (s.status || "").toLowerCase() === "done").length;
+  const active = subtasks.find((s) => (s.status || "").toLowerCase() === "in_progress");
+  const next = subtasks.find((s) => (s.status || "").toLowerCase() === "pending");
+  const focus = active ?? next;
+  const allDone = done === subtasks.length && subtasks.length > 0;
   return (
-    <div className="flex flex-col gap-1" title={`${done} of ${subtasks.length} slices done`}>
-      <span className="text-[10px] uppercase tracking-[0.14em] font-mono text-[color:var(--text-secondary)]">
-        Slices <span className="text-[color:var(--accent-emerald-fg)]">{done}</span>/{subtasks.length}
+    <div className="flex items-center gap-2 flex-wrap" title={`${done} of ${subtasks.length} slices done`}>
+      <span className="text-[10px] uppercase tracking-[0.14em] font-mono text-[color:var(--text-secondary)] shrink-0">
+        Slice <span className="text-[color:var(--accent-emerald-fg)]">{done}</span>/{subtasks.length}
       </span>
-      <div className="flex flex-wrap gap-1">
-        {subtasks.map((s) => {
-          const st = (s.status || "").toLowerCase();
-          const isDone = st === "done";
-          const isActive = st === "in_progress";
-          const tone = isDone ? "emerald" : isActive ? "teal" : null;
-          const chip = (
-            <span
-              key={s.id}
-              className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-sm max-w-[11rem] truncate"
-              style={tone ? {
-                background: `var(--accent-${tone}-bg)`,
-                color: `var(--accent-${tone}-fg)`,
-                boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
-              } : {
-                color: "var(--text-muted)",
-                boxShadow: "inset 0 0 0 1px var(--border-default)",
-              }}
-              title={`${s.title} · ${st || "pending"}`}
-            >
-              {isDone && <span aria-hidden>✓</span>}
-              <span className="truncate">{sliceLabel(s)}</span>
+      {allDone ? (
+        <span className="text-[11px] font-mono" style={{ color: "var(--accent-emerald-fg)" }}>✓ all slices done</span>
+      ) : focus ? (
+        <span className="inline-flex items-center gap-1.5 min-w-0">
+          {active ? (
+            <motion.span className="inline-block h-1.5 w-1.5 rounded-full shrink-0" style={{ background: "var(--accent-teal-fg)" }}
+              animate={reduced ? { opacity: 1 } : { opacity: [1, 0.3, 1] }}
+              transition={reduced ? { duration: 0.2 } : { duration: 1.2, repeat: Infinity, ease: "easeInOut" }} />
+          ) : (
+            <span className="text-[9px] font-mono uppercase tracking-wide text-[color:var(--text-muted)] shrink-0">next</span>
+          )}
+          <span className="text-[12px] font-medium truncate max-w-[13rem] text-[color:var(--text-primary)]" title={focus.title}>
+            {sliceLabel(focus)}
+          </span>
+          {active && stage && (
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm shrink-0"
+              style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}>
+              {stage}
             </span>
-          );
-          return isActive && !reduced ? (
-            <motion.span key={s.id} animate={{ opacity: [1, 0.55, 1] }}
-              transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
-              className="inline-flex">{chip}</motion.span>
-          ) : chip;
-        })}
-      </div>
+          )}
+        </span>
+      ) : null}
     </div>
   );
 }
