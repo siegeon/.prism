@@ -8,11 +8,10 @@
 // TaskActivityGantt (the wall-clock Timeline sub-view).
 import { useState } from "react";
 import { motion } from "motion/react";
-import { WORKFLOW_STEPS_ORDERED, stepLabel } from "@/lib/workflowChips";
+import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
+import { domainTone } from "@/lib/domainTone";
 import type { PhaseProgress } from "./SdlcProgress";
 import type { GanttGate } from "./TaskActivityGantt";
-
-const PERSONA_TONE: Record<string, string> = { sm: "teal", dev: "amber", qa: "violet" };
 
 function clockHM(ts: number): string {
   try {
@@ -191,19 +190,27 @@ function Node({ isGate, gi, done, cur, live, reduced }: {
   return <span className="mt-2 h-3 w-3 rounded-full border-2" style={{ borderColor: "var(--accent-slate-ring)" }} />;
 }
 
+// One persona tag per row. Tone comes from the single domainTone("role") map
+// (sm→teal, qa→violet, dev→amber) — no local palette. An agent step names its
+// owning role (Steward/Verifier/Builder); a gate names its Steward reviewer
+// with a ◇ so it reads "who signs off here" rather than a blank "gate".
 function Persona({ persona, isGate }: { persona: string; isGate: boolean }) {
-  const tone = isGate ? "slate" : PERSONA_TONE[persona] || "slate";
-  const label = isGate ? "gate" : persona || "sdlc";
+  const tone = domainTone("role", persona) ?? "slate";
+  const label = persona ? personaLabel(persona) : isGate ? "gate" : "sdlc";
+  const title = isGate && persona ? `${personaLabel(persona)} reviews this gate` : undefined;
   return (
-    <span className="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none"
+    <span
+      title={title}
+      className="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
       style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}>
+      {isGate && persona && <span aria-hidden>◇</span>}
       {label}
     </span>
   );
 }
 
 function GateRow({ s, gi, open, onToggle }: {
-  s: { id: string }; gi: GateInfo; open: boolean; onToggle: () => void;
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void;
 }) {
   const [receipt, setReceipt] = useState(false);
   const g = gi.g;
@@ -213,7 +220,7 @@ function GateRow({ s, gi, open, onToggle }: {
   return (
     <div>
       <button onClick={onToggle} className="w-full flex items-center gap-2 min-h-[22px] text-left rounded-md px-1.5 -mx-1.5 hover:bg-[color:var(--surface-2)] transition-colors">
-        <Persona persona="" isGate />
+        <Persona persona={s.persona ?? ""} isGate />
         <span className="text-[13px] text-[color:var(--text-primary)] whitespace-nowrap">{stepLabel(s.id)}</span>
         <span className="ml-auto flex items-center gap-2 min-w-0">
           <span className="text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded flex-none"

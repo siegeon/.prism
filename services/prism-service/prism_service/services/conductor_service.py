@@ -1251,6 +1251,7 @@ class ConductorService:
         task_id: str,
         validation: Optional[str] = None,
         session_id: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> dict:
         """Move a task to the next entry in WORKFLOW_STEPS.
 
@@ -1342,6 +1343,16 @@ class ConductorService:
         # captured even if the session never reaches the Stop hook.
         self._stamp_session(task_id, session_id)
 
+        # Per-role token attribution (role/tier engine): the step we just
+        # LEFT (current_id) has completed its work — record it. The window
+        # start is when the task ENTERED current_id (its earlier advance_task
+        # history row); None falls back to whole-session best-effort.
+        if current_id:
+            self._record_agent_run(
+                task_id, current_id, session_id, model=model,
+                started_at=self._step_entry_epoch(task_id, current_id),
+            )
+
         return {
             "ok": True,
             "task_id": task_id,
@@ -1363,6 +1374,89 @@ class ConductorService:
             return
         try:
             link(task_id, session_id)
+        except Exception:
+            pass
+
+    def _step_entry_epoch(self, task_id: str, step_id: str) -> Optional[float]:
+        """Epoch seconds the task ENTERED step_id — the token-attribution
+        window start for that step. Reads the advance_task history row whose
+        details recorded ``to=<step_id>`` (the LAST such entry wins on
+        re-visits). None when unknown so the caller falls back to whole-session.
+        """
+        if not step_id or self._task_svc is None:
+            return None
+        try:
+            rows = self._task_svc.history(task_id)
+        except Exception:
+            return None
+        latest: Optional[float] = None
+        pat = re.compile(rf"to={re.escape(step_id)}(?:$|[;\s])")
+        for r in rows:
+            if getattr(r, "action", "") != "advance_task":
+                continue
+            if pat.search(getattr(r, "details", "") or ""):
+                ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+                if ts is not None:
+                    latest = ts
+        return latest
+
+    def _record_agent_run(
+        self, task_id: str, step: str, session_id: Optional[str],
+        model: Optional[str] = None, gate_state: Optional[str] = None,
+        verdict_summary: Optional[str] = None, ok: bool = True,
+        started_at: Optional[float] = None,
+    ) -> None:
+        """Best-effort per-role token attribution: write ONE agent_runs row
+        for the just-completed step. role = models.roles.role_for_step(step);
+        tokens = live-transcript output tokens in [started_at, now] (whole
+        session when started_at is None). NEVER raises — a telemetry failure
+        must not break a conductor transition."""
+        try:
+            import time as _time
+            from prism_service.models.roles import role_for_step
+            from prism_service.services.agent_runs_data import upsert_agent_run
+
+            role = role_for_step(step)
+            now = _time.time()
+            tokens = 0
+            try:
+                if session_id:
+                    from prism_service.services.claude_transcripts import (
+                        live_token_events_for_session,
+                    )
+                    events = live_token_events_for_session(
+                        session_id,
+                        self._project_source_path(),
+                        override_dir=self._project_override_dir(),
+                    )
+                    for epoch_s, tok in events:
+                        if started_at is None or epoch_s >= started_at:
+                            tokens += int(tok or 0)
+            except Exception:
+                tokens = 0
+            win_start = started_at if started_at is not None else now
+            duration_ms = int(max(0.0, now - win_start) * 1000)
+            row = {
+                "run_id": task_id,
+                "workflow_name": "conductor",
+                "task_id": task_id,
+                "session_id": session_id or "",
+                "agent_id": session_id or "conductor",
+                "parent_agent_id": None,
+                "role": role,
+                "step": step,
+                "model": model,
+                "started_at": win_start,
+                "ended_at": now,
+                "duration_ms": duration_ms,
+                "tokens": tokens,
+                "tool_uses": None,
+                "ok": ok,
+                "gate_state": gate_state,
+                "verdict_summary": verdict_summary,
+                "evidence_ref": None,
+            }
+            upsert_agent_run(self._scores_db, row)
         except Exception:
             pass
 
@@ -1614,6 +1708,7 @@ class ConductorService:
         override: bool = False,
         session_id: Optional[str] = None,
         actor: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> dict:
         """Resolve a pending gate on a task.
 
@@ -1714,6 +1809,11 @@ class ConductorService:
                 details=f"gate={gate_step_id}; action=reject; reason={reason}",
                 actor="conductor",
             )
+            self._record_agent_run(
+                task_id, gate_step_id, session_id, model=model,
+                gate_state="failed", ok=False,
+                verdict_summary=("reject: " + (reason or ""))[:200],
+            )
             return {
                 "ok": True,
                 "task_id": task_id,
@@ -1791,6 +1891,49 @@ class ConductorService:
         verifier_validation: Optional[str] = None
         verifier_reason = ""
         override_actor = actor   # who is clearing the gate (caller)
+
+        # GATE ACTOR-ROLE ENFORCEMENT (role/tier engine): generalize the
+        # no-self-override tooth to the NORMAL approve path too. A gate is
+        # adjudicated by its role — role_for_step(gate)='sm', the Steward —
+        # acting as an INDEPENDENT reviewer. If the deciding actor produced
+        # the work under review (is among prior_work_actors), refuse: a
+        # distinct actor must clear the gate. The override path keeps its own
+        # override-specific message below, so skip here when override=True.
+        if not override:
+            same_actor = same_actor_override_reason(override_actor,
+                                                    prior_work_actors)
+            if same_actor:
+                from prism_service.models.roles import ROLES, role_for_step
+                _gate_role = ROLES[role_for_step(gate_step_id)].label
+                distinct_reason = (
+                    f"gate '{gate_step_id}' must be cleared by a DISTINCT "
+                    f"actor: the gate role ({_gate_role}) is an independent "
+                    f"reviewer, but actor {override_actor!r} produced the "
+                    "work under review — self-review is refused. An "
+                    "independent verifier (distinct actor) must decide this "
+                    "gate."
+                )
+                self._task_svc.update(
+                    task_id, gate_state="failed", gate_reason=distinct_reason,
+                )
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate_step_id}; action=approve; "
+                             f"same-actor=rejected; actor={override_actor}"),
+                    actor="conductor",
+                )
+                self._record_agent_run(
+                    task_id, gate_step_id, session_id, model=model,
+                    gate_state="failed", verdict_summary="same-actor refused",
+                    ok=False,
+                )
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": "failed",
+                    "reason": distinct_reason,
+                }
 
         if override:
             # NO SELF-OVERRIDE (task 3826dac3): the actor who PRODUCED the
@@ -2001,7 +2144,21 @@ class ConductorService:
             actor=actor,
         )
 
-        advance_result = self.advance_task(task_id)
+        # Auto-advance past the passed gate, carrying the session + model so
+        # the transition's own attribution row is consistent (agent_id=session).
+        _gate_entry = self._step_entry_epoch(task_id, gate_step_id)
+        advance_result = self.advance_task(
+            task_id, session_id=session_id, model=model)
+        # Per-role attribution for the gate itself: record AFTER the advance so
+        # this row (carrying gate_state + verdict) UPSERT-wins over the one the
+        # auto-advance wrote for the same (task, session, gate) triple.
+        _verdict = (verifier_validation and f"verified:{verifier_validation}") \
+            or (actor == "manual-override" and "override") or "approved"
+        self._record_agent_run(
+            task_id, gate_step_id, session_id, model=model,
+            gate_state="passed", verdict_summary=str(_verdict)[:200],
+            ok=True, started_at=_gate_entry,
+        )
         response: dict = {
             "ok": True,
             "task_id": task_id,

@@ -83,6 +83,27 @@ const STEP: Record<string, Tone> = {
   green_gate: "slate",
 };
 
+/** Canonical agent role id → tone (StepRail persona tags, per-role token
+ * ledger). The three roles from the /api/roles registry: sm=Steward (frontier
+ * planning/gates), qa=Verifier (balanced), dev=Builder (fast execution). Tones
+ * line up with the per-step STEP map above (sm-steps teal, qa-steps violet,
+ * dev-step amber) so a step and its owning role read the same hue. */
+const ROLE: Record<string, Tone> = {
+  sm: "teal",
+  qa: "violet",
+  dev: "amber",
+};
+
+/** Model tier id → tone (per-role token ledger badges). Mirrors the ROLE
+ * tones because each canonical role sits in exactly one tier (sm/frontier teal,
+ * qa/balanced violet, dev/fast amber), so a tier badge and its role read the
+ * same hue — the frontier spend and the Steward that drives it match. */
+const TIER: Record<string, Tone> = {
+  frontier: "teal",
+  balanced: "violet",
+  fast: "amber",
+};
+
 /** SDLC gate state → tone (workflowChips gate chips). */
 const GATE: Record<string, Tone> = {
   none: "slate",
@@ -99,6 +120,8 @@ const MAPS = {
   action: ACTION,
   step: STEP,
   gate: GATE,
+  role: ROLE,
+  tier: TIER,
 } as const;
 
 /** Priority band → tone. Lower number = higher priority; non-numeric
@@ -143,7 +166,7 @@ export function typeToneHashed(type: string): Tone {
 
 export type DomainKind =
   | "taskStatus" | "memoryStatus" | "memoryType"
-  | "classification" | "action" | "step" | "gate"
+  | "classification" | "action" | "step" | "gate" | "role" | "tier"
   | "priority" | "importance";
 
 /**
