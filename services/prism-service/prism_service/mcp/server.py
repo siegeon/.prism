@@ -107,11 +107,21 @@ async def handle_mcp(scope, receive, send):
     qs = parse_qs(scope.get("query_string", b"").decode())
     project_id = qs.get("project", [DEFAULT_PROJECT])[0]
     tool_profile = qs.get("tool_profile", qs.get("profile", ["interactive"]))[0]
+    # Populate the request principal with the single-operator PRISM user id
+    # (Slice C). Best-effort ONLY: this never gates or rejects a request —
+    # any failure leaves principal='' and the request proceeds unchanged.
+    principal = ""
+    try:
+        from prism_service.services.users import operator
+        principal = operator().id
+    except Exception:
+        principal = ""
     request_ctx = PrismRequestContext(
         project_id=project_id,
         request_id=uuid.uuid4().hex,
         transport="mcp-http",
         tool_profile=tool_profile,
+        principal=principal,
     )
 
     # Force `Connection: close` on every MCP response so uvicorn closes

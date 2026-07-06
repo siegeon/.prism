@@ -219,6 +219,10 @@ export default function SettingsPage() {
             <SectionLabel>Jira Cloud</SectionLabel>
             <JiraAuthCard />
           </Card>
+          <Card>
+            <SectionLabel>Identity &amp; Users</SectionLabel>
+            <UserIdentityCard />
+          </Card>
         </div>
       )}
 
@@ -931,6 +935,175 @@ function JiraAuthCard() {
             {submitting ? "Connecting…" : "Connect Jira"}
           </button>
         </form>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type PrismUser = {
+  id: string;
+  name: string;
+  handle: string;
+  jira_account_id: string;
+  created_at: string;
+};
+
+type UserIdentityStatus = {
+  user: PrismUser;
+  principal: string;
+  jira_linked: boolean;
+  jira_connected: boolean;
+  jira_account_hint: string;
+  store_path: string;
+};
+
+/** Identity & Users — the PRISM-OWNED operator user with the Jira account
+ * linked ONTO it (never the reverse). Mirrors JiraAuthCard's status/post
+ * idiom: shows the usr_ id + "PRISM-owned", a "what linking does" line,
+ * and — when Jira is connected — an "Auto-matched from OAuth" action that
+ * POSTs /api/users/link-jira (accountId/handle only, NEVER a token). */
+function UserIdentityCard() {
+  const [status, setStatus] = useState<UserIdentityStatus | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.get<UserIdentityStatus>("/api/users/status")
+      .then(setStatus)
+      .catch((e) => setError(String((e as Error).message ?? e)));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const link = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      setStatus(await api.post<UserIdentityStatus>("/api/users/link-jira", {}));
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const unlink = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      setStatus(await api.post<UserIdentityStatus>("/api/users/unlink", {}));
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!status) {
+    return error
+      ? <ErrorBanner>{error}</ErrorBanner>
+      : <div className="text-sm opacity-60">Loading…</div>;
+  }
+
+  const u = status.user;
+  const initials = (u.name || u.handle || "PR")
+    .split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3.5 rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-4 py-3">
+        <div className="w-10 h-10 rounded-full bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] flex items-center justify-center text-xs font-semibold">
+          {initials}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold">{u.name || "PRISM Operator"}</div>
+          <div className="text-xs opacity-60">
+            @{u.handle} · <span className="font-mono">{u.id}</span>{" "}
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] text-[9px] uppercase tracking-wider">
+              PRISM-owned
+            </span>
+          </div>
+        </div>
+        {status.jira_linked ? (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
+            Jira linked
+          </span>
+        ) : (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-[9px] uppercase tracking-wider">
+            no Jira account
+          </span>
+        )}
+      </div>
+
+      <dl className="text-sm grid grid-cols-[130px_1fr] gap-y-1.5">
+        <dt className="text-[color:var(--text-label)]">Request principal</dt>
+        <dd className="font-mono text-xs">{status.principal}</dd>
+        <dt className="text-[color:var(--text-label)]">Store</dt>
+        <dd className="font-mono text-xs opacity-70">users.db · DATA_DIR (cross-project)</dd>
+      </dl>
+
+      <p className="text-[11px] opacity-60 leading-snug">
+        <span className="font-semibold">What linking does:</span> maps this
+        PRISM user ⇌ a Jira <span className="font-mono">accountId</span> so
+        synced issues resolve to the right person and the request{" "}
+        <span className="font-mono">principal</span> is stamped on synced
+        work. Only the account id/handle is stored — never a token.
+      </p>
+
+      {status.jira_linked ? (
+        <div className="space-y-2">
+          <dl className="text-sm grid grid-cols-[130px_1fr] gap-y-1.5">
+            <dt className="text-[color:var(--text-label)]">Linked Jira account</dt>
+            <dd className="flex items-center gap-2">
+              <span className="px-2 py-1 rounded-md bg-[color:var(--surface-0)] border border-[color:var(--border-default)] text-xs font-mono">
+                {u.jira_account_id}
+              </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
+                resolved
+              </span>
+            </dd>
+          </dl>
+          <button
+            type="button"
+            onClick={unlink}
+            disabled={submitting}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-[11px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
+          >
+            {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
+            {submitting ? "Unlinking…" : "Unlink Jira account"}
+          </button>
+        </div>
+      ) : status.jira_connected ? (
+        <div className="rounded-lg border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)]/40 px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold">Auto-matched from OAuth</div>
+            <div className="text-xs opacity-70 mt-0.5">
+              The Atlassian account you authorized —{" "}
+              <span className="font-mono">{status.jira_account_hint}</span> —
+              matches this PRISM user. Link it?
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={link}
+            disabled={submitting}
+            className="shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-sm uppercase tracking-wider disabled:opacity-30 hover:opacity-90"
+          >
+            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+            {submitting ? "Linking…" : "Link account →"}
+          </button>
+        </div>
+      ) : (
+        <p className="text-[11px] opacity-60">
+          Connect Jira in the panel above first — then PRISM auto-matches the
+          authorized account to this user.
+        </p>
       )}
 
       {error && (

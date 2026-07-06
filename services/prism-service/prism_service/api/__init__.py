@@ -33,6 +33,7 @@ from prism_service.api.tasks import router as tasks_router
 from prism_service.api.staleness import router as staleness_router
 from prism_service.api.understand import router as understand_router
 from prism_service.api.update import router as update_router
+from prism_service.api.users import router as users_router
 from prism_service.api.version import router as version_router
 from prism_service.api.watchdog import router as watchdog_router
 from prism_service.api.xref import router as xref_router
@@ -61,6 +62,7 @@ api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(staleness_router, prefix="/staleness", tags=["staleness"])
 api_router.include_router(understand_router, prefix="/understand", tags=["understand"])
 api_router.include_router(update_router, prefix="/update", tags=["update"])
+api_router.include_router(users_router, prefix="/users", tags=["users"])
 api_router.include_router(version_router, prefix="/version", tags=["version"])
 api_router.include_router(watchdog_router, prefix="/watchdog", tags=["watchdog"])
 api_router.include_router(xref_router, prefix="/xref", tags=["xref"])

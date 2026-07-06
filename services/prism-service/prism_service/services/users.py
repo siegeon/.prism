@@ -159,3 +159,41 @@ class UserService:
         """Link a Jira account to a user by storing its account id/handle
         (NEVER a token). Returns the updated user, or None if unknown."""
         return self.update(user_id, jira_account_id=account_id)
+
+    def get_or_create_operator(self) -> User:
+        """Return THE single-operator PRISM user, provisioning it once.
+
+        PRISM is single-operator today (scoping is project-only), so the
+        oldest row in the store IS the operator; an empty store gets one
+        stable default user seeded so `principal` can carry a real usr_ id.
+        Idempotent — never creates a second operator."""
+        row = self._db.execute(
+            "SELECT * FROM users ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        if row is not None:
+            return self._row_to_user(row)
+        return self.create(name="PRISM Operator", handle="operator")
+
+
+# ----------------------------------------------------------------------
+# Process-wide default service + operator resolver
+# ----------------------------------------------------------------------
+
+_DEFAULT_SERVICE: Optional[UserService] = None
+_DEFAULT_LOCK = threading.Lock()
+
+
+def default_service() -> UserService:
+    """The DATA_DIR-level UserService the live process shares (lazy, once)."""
+    global _DEFAULT_SERVICE
+    if _DEFAULT_SERVICE is None:
+        with _DEFAULT_LOCK:
+            if _DEFAULT_SERVICE is None:
+                _DEFAULT_SERVICE = UserService()
+    return _DEFAULT_SERVICE
+
+
+def operator() -> User:
+    """The single-operator PRISM user (auto-provisioned). A stable usr_ id
+    a request `principal` can be pinned to."""
+    return default_service().get_or_create_operator()
