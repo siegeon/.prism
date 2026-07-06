@@ -10,7 +10,7 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { domainTone } from "@/lib/domainTone";
-import type { PhaseProgress } from "./SdlcProgress";
+import type { PhaseProgress, Activity } from "./SdlcProgress";
 import type { GanttGate } from "./TaskActivityGantt";
 
 function clockHM(ts: number): string {
@@ -24,18 +24,22 @@ function clockHM(ts: number): string {
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, gates, reduced,
+  step, gateState, phase, status, activity, gates, reduced,
 }: {
   step?: string;
   gateState?: string;
   phase?: PhaseProgress | null;
   status?: string;
+  // Honest work state — the current-step node/% only pulses when "working".
+  activity?: Activity | null;
   gates: GanttGate[];
   reduced?: boolean | null;
 }) {
   const steps = WORKFLOW_STEPS_ORDERED;
   const curIdx = steps.findIndex((s) => s.id === step);
-  const live = (status ?? "").toLowerCase() === "in_progress";
+  // Pulse ONLY when genuinely being driven now (a real recent conductor
+  // transition on THIS task), never merely because status is in_progress.
+  const live = (activity?.state ?? status ?? "").toLowerCase() === "working";
   const [open, setOpen] = useState<string | null>(null);
   const [collapseDone, setCollapseDone] = useState(true);
 

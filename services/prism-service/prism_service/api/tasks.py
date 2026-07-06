@@ -304,7 +304,12 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     try:
         cond = get_project(project).conductor_svc
         if cond is not None and hasattr(cond, "phase_progress"):
-            out["phase_progress"] = cond.phase_progress(task_id)
+            pp = cond.phase_progress(task_id)
+            out["phase_progress"] = pp
+            # Honest work state (working/adrift/stalled/…) rides the detail
+            # route alongside phase_progress so the header pill can't lie.
+            if hasattr(cond, "activity_for"):
+                out["activity"] = cond.activity_for(t, pp)
     except Exception:
         pass
     # has_prototype: a clickable MOCK prototype HTML the /prototype workflow

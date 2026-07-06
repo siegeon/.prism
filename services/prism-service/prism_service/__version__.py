@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.2"
+PRISM_VERSION = "6.8.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.4: HONEST CONDUCTOR ACTIVITY STATES — a task no longer claims 'in "
+    "progress' + a live burn when nothing is driving it. New activity classifier "
+    "(working / awaiting_gate / adrift / stalled) from REAL Claude-Code-integration "
+    "signals: task_motion_s (last conductor transition in task_history) + "
+    "session_quiet_s (linked-session live-transcript recency). The pulse/shimmer + "
+    "burn graph only read as 'work' when working; a gate reads 'awaiting review', a "
+    "live-session-but-idle-task reads 'session busy · task idle Nm', a dead one "
+    "'stalled · idle Nm'. Under-claims when uncertain. "
+    "v6.8.3: JIRA SLICE A — OAuth-first credential connect. New /api/jira/* "
+    "(status/authorize/callback/configure/clear) backed by services/jira_auth.py "
+    "(server-side store: atomic write + chmod 600, env-override precedence, "
+    "fingerprint-only echo — raw token never crosses the API) + services/"
+    "jira_oauth.py (stdlib Atlassian 3LO seam). OAuth is the PRIMARY path, "
+    "email+API-token the fallback. 8/8 red use-cases now green. UI Settings "
+    "panel + slices B/C/D still pending. "
     "v6.8.2: CONDUCTOR PER-STEP FANOUT TELEMETRY — the conductor now visualizes, "
     "for the current workflow step, how many sub-agents were dispatched vs how "
     "many have returned (e.g. write_failing_tests: '8/8 agents back'), plus a "
