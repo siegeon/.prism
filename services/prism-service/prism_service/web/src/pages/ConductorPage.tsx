@@ -36,6 +36,7 @@ type ManagedTask = {
 // mm:ss (from task_motion_s) so the pill says how long it's been dark.
 const ACT_TILE: Record<string, { label: string; tone: PillTone }> = {
   working: { label: "working", tone: "teal" },
+  paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
   adrift: { label: "session busy", tone: "slate" },
   stalled: { label: "stalled", tone: "rose" },
@@ -141,6 +142,7 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
   const actLabel =
     actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
     : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
+    : actState === "paused" ? `paused · ${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0} done`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";

@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.5"
+PRISM_VERSION = "6.8.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.6: CONDUCTOR ACTIVITY now EPIC-AWARE — a parent/epic's activity reflects "
+    "its SUB-TASKS: a slice actively moving => working, some slices done but none "
+    "active => 'paused · N/M done' (real progress between bursts, NOT the alarming "
+    "'stalled'), nothing done+nothing active => stalled. _task_motion_s now counts "
+    "sub-task completion as parent motion (an epic no longer reads stalled for hours "
+    "while its slices get done underneath it). "
     "v6.8.5: JIRA SLICE A UI (Settings→Connections Jira sub-panel, OAuth-first, "
     "flips to Connected w/ masked fingerprint + Disconnect; ?jira= callback) + "
     "CONDUCTOR DRIVER CONTRACT documented (mcp/instructions.py taught at connect, "
