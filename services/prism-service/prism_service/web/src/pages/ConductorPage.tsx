@@ -30,7 +30,18 @@ type ManagedTask = {
   // + burn graph read THIS, not the raw status — a task nobody is driving must
   // NOT read as a teal "in progress".
   activity?: Activity | null;
+  // Epic slices (server: managed_tasks). Done-first ordered non-cancelled
+  // children; drives the SLICES hero bar. Empty/absent for leaf tasks.
+  subtasks?: { id: string; title: string; status: string }[];
 };
+
+// Strip a leading "Slice X · " / "Slice X: " prefix and truncate so a slice
+// chip reads at tile width. Falls back to the short id when a title is empty.
+function sliceLabel(s: { id: string; title: string }): string {
+  let t = (s.title || "").replace(/^\s*slice\s+\S+\s*[·:\-]\s*/i, "").trim();
+  if (!t) t = s.id.slice(0, 6);
+  return t.length > 22 ? t.slice(0, 21) + "…" : t;
+}
 
 // Honest activity STATE → tile pill label + tone. adrift/stalled append an idle
 // mm:ss (from task_motion_s) so the pill says how long it's been dark.
@@ -176,7 +187,13 @@ function TaskTile({ task, reduced, onClick }: { task: ManagedTask; reduced: bool
           {phaseLabel}
         </span>
       </div>
-      {/* Animated SDLC stepper — dots fill to the current phase as the task advances. */}
+      {/* Real progress HERO: the epic's slices, done-first, one chip each.
+          Rendered ABOVE the abstract SDLC stepper so "1 of 4 done, here's
+          which" is the first thing read on the tile. */}
+      {(task.subtasks?.length ?? 0) > 0 && (
+        <SlicesBar subtasks={task.subtasks!} reduced={reduced} />
+      )}
+      {/* Animated SDLC stepper — now SECONDARY to the slice bar above. */}
       <SdlcDots step={stepId} reduced={reduced} />
       <div className="flex flex-wrap items-center gap-1">
         <TileBadge tone={actTone}>{actLabel}</TileBadge>
@@ -321,6 +338,55 @@ function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) 
     >
       {children}
     </span>
+  );
+}
+
+// SlicesBar — the REAL-progress hero for an epic tile. One chip per slice,
+// done-first (server-ordered), so the row reads left-to-right as progress:
+// filled emerald + ✓ = done, teal (subtle pulse) = in progress, muted outline
+// = pending. Uses the shared Hermes accent vars — no per-surface palette.
+function SlicesBar({ subtasks, reduced }: {
+  subtasks: { id: string; title: string; status: string }[];
+  reduced: boolean | null;
+}) {
+  const done = subtasks.filter((s) => (s.status || "").toLowerCase() === "done").length;
+  return (
+    <div className="flex flex-col gap-1" title={`${done} of ${subtasks.length} slices done`}>
+      <span className="text-[10px] uppercase tracking-[0.14em] font-mono text-[color:var(--text-secondary)]">
+        Slices <span className="text-[color:var(--accent-emerald-fg)]">{done}</span>/{subtasks.length}
+      </span>
+      <div className="flex flex-wrap gap-1">
+        {subtasks.map((s) => {
+          const st = (s.status || "").toLowerCase();
+          const isDone = st === "done";
+          const isActive = st === "in_progress";
+          const tone = isDone ? "emerald" : isActive ? "teal" : null;
+          const chip = (
+            <span
+              key={s.id}
+              className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-sm max-w-[11rem] truncate"
+              style={tone ? {
+                background: `var(--accent-${tone}-bg)`,
+                color: `var(--accent-${tone}-fg)`,
+                boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
+              } : {
+                color: "var(--text-muted)",
+                boxShadow: "inset 0 0 0 1px var(--border-default)",
+              }}
+              title={`${s.title} · ${st || "pending"}`}
+            >
+              {isDone && <span aria-hidden>✓</span>}
+              <span className="truncate">{sliceLabel(s)}</span>
+            </span>
+          );
+          return isActive && !reduced ? (
+            <motion.span key={s.id} animate={{ opacity: [1, 0.55, 1] }}
+              transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+              className="inline-flex">{chip}</motion.span>
+          ) : chip;
+        })}
+      </div>
+    </div>
   );
 }
 

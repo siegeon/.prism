@@ -2402,6 +2402,20 @@ class ConductorService:
                 else:
                     continue
             pp = self.phase_progress(t.id)
+            # Compact ordered slice list for the tile: done first (by
+            # completed_at) then the rest by created_at, so the slice bar reads
+            # left-to-right as progress. Only title/status/id — keep it small.
+            kids = self._children(t)
+            subtasks = [
+                {"id": c.id, "title": c.title, "status": getattr(c, "status", "") or ""}
+                for c in sorted(
+                    kids,
+                    key=lambda c: (
+                        0 if (getattr(c, "status", "") or "") == "done" else 1,
+                        getattr(c, "completed_at", "") or getattr(c, "created_at", "") or "",
+                    ),
+                )
+            ]
             out.append({
                 "id": t.id,
                 "title": t.title,
@@ -2423,6 +2437,10 @@ class ConductorService:
                 # Honest work state (working/adrift/stalled/awaiting_gate/…) —
                 # the tile pill + live pulse read this, NOT the raw status.
                 "activity": self.activity_for(t, pp),
+                # Real progress: the epic's non-cancelled slices, done-first.
+                # Omitted (empty) for leaf tasks — the tile only renders a slice
+                # bar when this is non-empty.
+                "subtasks": subtasks,
             })
         return out
 

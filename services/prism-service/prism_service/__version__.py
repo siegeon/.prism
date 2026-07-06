@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.6"
+PRISM_VERSION = "6.8.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.7: CONDUCTOR TILE — SLICES are now the visual HERO. An epic's tile shows "
+    "a labeled chip per sub-task (SLICES 1/4: Slice A emerald-✓, rest muted) right "
+    "under the title, so real feature progress is legible at a glance instead of a "
+    "tiny text pill. The borrowed-token burn graph is DIMMED + shrunk + honestly "
+    "labeled ('linked session · not this task') on every non-working state so it no "
+    "longer visually dominates/lies on a paused tile. New tile.subtasks payload. "
     "v6.8.6: CONDUCTOR ACTIVITY now EPIC-AWARE — a parent/epic's activity reflects "
     "its SUB-TASKS: a slice actively moving => working, some slices done but none "
     "active => 'paused · N/M done' (real progress between bursts, NOT the alarming "
