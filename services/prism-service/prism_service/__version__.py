@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.2"
+PRISM_VERSION = "6.8.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.3: JIRA SLICE A — OAuth-first credential connect. New /api/jira/* "
+    "(status/authorize/callback/configure/clear) backed by services/jira_auth.py "
+    "(server-side store: atomic write + chmod 600, env-override precedence, "
+    "fingerprint-only echo — raw token never crosses the API) + services/"
+    "jira_oauth.py (stdlib Atlassian 3LO seam). OAuth is the PRIMARY path, "
+    "email+API-token the fallback. 8/8 red use-cases now green. UI Settings "
+    "panel + slices B/C/D still pending. "
     "v6.8.2: CONDUCTOR PER-STEP FANOUT TELEMETRY — the conductor now visualizes, "
     "for the current workflow step, how many sub-agents were dispatched vs how "
     "many have returned (e.g. write_failing_tests: '8/8 agents back'), plus a "

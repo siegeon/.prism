@@ -19,6 +19,7 @@ from prism_service.api.conductor import router as conductor_router
 from prism_service.api.dashboard import router as dashboard_router
 from prism_service.api.github_auth import router as github_auth_router
 from prism_service.api.graph import router as graph_router
+from prism_service.api.jira import router as jira_router
 from prism_service.api.jobs import router as jobs_router
 from prism_service.api.learning import router as learning_router
 from prism_service.api.memory import router as memory_router
@@ -46,6 +47,7 @@ api_router.include_router(conductor_router, prefix="/conductor", tags=["conducto
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
 api_router.include_router(github_auth_router, prefix="/github-auth", tags=["github-auth"])
 api_router.include_router(graph_router, prefix="/graph", tags=["graph"])
+api_router.include_router(jira_router, prefix="/jira", tags=["jira"])
 api_router.include_router(jobs_router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(learning_router, prefix="/learning", tags=["learning"])
 api_router.include_router(memory_router, prefix="/memory", tags=["memory"])
