@@ -2065,6 +2065,14 @@ Requires a maintenance profile such as `?tool_profile=all`.
     "orchestration": """\
 # Working tasks the PRISM way
 
+Every feature travels the 6-phase SDLC arc (see `prism_guide('lifecycle')`):
+discover -> prototype -> implement -> verify -> ship -> operate. Be HONEST about
+what the state machine actually enforces: only IMPLEMENT is fully conductor-gated
+(the TDD cycle below); PROTOTYPE drives the planning gates (story/plan);
+DISCOVER / VERIFY / SHIP / OPERATE are skills with no gate backing yet (VERIFY
+also lives as gates inside implement). Run each phase's /skill; the conductor
+mechanics below are the IMPLEMENT phase.
+
 PRISM does NOT auto-run your work — YOU (the calling agent) orchestrate the
 conductor through the `task_*` / `conductor_*` MCP tools. MAXIMIZE FAN-OUT:
 decompose wide, run subtasks IN PARALLEL, verify with a distinct actor.
@@ -2194,9 +2202,34 @@ def _roles_guide_section() -> str:
 _GUIDE_SECTIONS["roles"] = _roles_guide_section()
 
 
+def _lifecycle_guide_section() -> str:
+    """Render the model-agnostic SDLC lifecycle arc (folded into prism_guide as
+    the PRIMARY orientation) plus a compact phase -> skill -> deliverable ->
+    status table. Single source of truth: models.workflow LIFECYCLE."""
+    from prism_service.models import workflow as _wf
+    reg = _wf.lifecycle_registry()
+    lines = ["# Lifecycle — the SDLC arc (model-agnostic)", "",
+             _wf.lifecycle_doctrine(), "",
+             "## Phase -> skill -> deliverable -> status"]
+    for pid in reg["order"]:
+        p = reg["phases"][pid]
+        lines.append(f"- **{p['title']}** ({p['skill']}) [tier={p['tier']}, "
+                     f"{p['status']}]: {p['deliverable']}")
+    lines += ["", "Statuses are HONEST: `enforced` = conductor gates protect "
+              "the boundary; `partial` = conductor drives some of it; "
+              "`gates_only` = exists only as gates inside another phase; "
+              "`skill_only` = a real skill runs it with no state-machine "
+              "backing; `missing` = no engine yet. Start each phase with its "
+              "matching /skill; drive IMPLEMENT through the conductor."]
+    return "\n".join(lines)
+
+
+_GUIDE_SECTIONS["lifecycle"] = _lifecycle_guide_section()
+
+
 def _prism_guide(section: str | None) -> str:
-    order = ["overview", "tools", "workflow", "orchestration", "memory",
-             "graph", "roles", "examples"]
+    order = ["overview", "lifecycle", "tools", "workflow", "orchestration",
+             "memory", "graph", "roles", "examples"]
     if section and section in _GUIDE_SECTIONS:
         return _GUIDE_SECTIONS[section]
     return "\n\n".join(_GUIDE_SECTIONS[s] for s in order)
@@ -3915,7 +3948,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "and parent_id to task_list to scope to one epic's children.",
                 ],
                 "next": ("Call prism_guide first — it returns the live "
-                         "orientation + the max-fan-out task playbook."),
+                         "orientation + the max-fan-out task playbook. Call "
+                         "prism_guide(section=\"lifecycle\") for the SDLC arc "
+                         "(discover -> prototype -> implement -> verify -> ship "
+                         "-> operate) and which phase-skill starts each."),
                 "web_ui": f"http://localhost:{_cfg.UI_PORT}/",
             }))]
 

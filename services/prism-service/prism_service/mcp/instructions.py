@@ -7,7 +7,7 @@ model names) so any model/harness can honor it.
 
 from __future__ import annotations
 
-from prism_service.models import roles
+from prism_service.models import roles, workflow
 
 _PREAMBLE = """\
 PRISM is an on-prem engineering substrate for coding agents. It brings three
@@ -23,8 +23,11 @@ Start a session with prism_guide; onboard a fresh project with prism_onboard.
 
 
 def build_instructions() -> str:
-    """Compact server instructions: what PRISM is + role/tier doctrine."""
-    return _PREAMBLE + "\n" + roles.doctrine()
+    """Compact server instructions: what PRISM is + the SDLC lifecycle arc +
+    role/tier doctrine. Lifecycle comes FIRST (top-level orientation: the six
+    phases a feature travels); roles follow (how each step is staffed)."""
+    return (_PREAMBLE + "\n" + workflow.lifecycle_doctrine()
+            + "\n\n" + roles.doctrine())
 
 
 PRISM_INSTRUCTIONS = build_instructions()
