@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.15"
+PRISM_VERSION = "6.8.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.18: CONDUCTOR CARD SHIPPED TO PRODUCTION (task 696cacf5) — the approved "
+    "Timeline-D design is now the REAL ConductorPage TaskTile, combined onto the "
+    "honest-activity conductor (working/awaiting_gate/adrift/stalled pill, fanout "
+    "subdivision, focused-slice hero, live idle clock, honest ETA). The tile leads "
+    "with a completion RING (done SDLC steps/total over WORKFLOW_STEPS_ORDERED) + a "
+    "2x2 LIVE metric grid, then a LABELED phase timeline (real steps, stepLabel "
+    "caption, current node pulses only when working + subdivides in fanout) "
+    "replacing the abstract SdlcDots; TokenTurns keeps its marked peak bar. Version "
+    "reconciled past the stranded 6.8.1-6.8.17 range. Pure SPA change on the unified "
+    "conductor base. "
     "v6.8.15: CONDUCTOR TILE wider/landscape — auto-fill grid min-width 380px->520px "
     "so each tile reads wide-screen instead of portrait. "
     "v6.8.14: HONEST ETA — the tile's '~N left' chip + countdown bar now show ONLY "

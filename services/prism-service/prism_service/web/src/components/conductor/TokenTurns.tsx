@@ -50,6 +50,11 @@ export default function TokenTurns({
   const series = turns ?? [];
   const count = total ?? series.length;
   const peak = series.reduce((m, t) => Math.max(m, t.tok_s), 0) || 1;
+  // Index of the window-peak bar so it can be visually MARKED (not just a
+  // scalar readout) — a teal cap makes the burst legible at a glance.
+  const peakIdx = series.length
+    ? series.reduce((mi, t, i) => (t.tok_s > series[mi].tok_s ? i : mi), 0)
+    : -1;
   const latest = series.length ? series[series.length - 1] : null;
   const approximate = tokens_source === "wallclock";
   // The burn belongs to THIS task only while working. EVERY other state
@@ -102,6 +107,7 @@ export default function TokenTurns({
         ) : (
           series.map((t, i) => {
             const isLast = i === series.length - 1;
+            const isPeak = i === peakIdx;
             // Log-scale height: with all four usage fields counted, a
             // cache-heavy turn can run ~1000x a plain generation turn — a
             // linear tok_s/peak normalization pins peak and flattens every
@@ -115,10 +121,16 @@ export default function TokenTurns({
                 style={{
                   transformOrigin: "bottom",
                   background: isLast ? "var(--accent-amber-fg)" : "var(--accent-amber-bg)",
-                  boxShadow: isLast ? "0 0 6px var(--accent-amber-fg)" : "inset 0 0 0 1px var(--accent-amber-ring)",
+                  // Peak bar gets a teal cap so the window maximum is MARKED,
+                  // not merely printed as a scalar in the readout below.
+                  boxShadow: isPeak
+                    ? "inset 0 3px 0 var(--accent-teal-fg), inset 0 0 0 1px var(--accent-teal-ring)"
+                    : isLast
+                    ? "0 0 6px var(--accent-amber-fg)"
+                    : "inset 0 0 0 1px var(--accent-amber-ring)",
                   opacity: isLast ? 1 : 0.55 + 0.4 * (i / series.length),
                 }}
-                title={`${fmtRate(t.tok_s)} tok/s · ${fmtTokens(t.out)} tok / ${t.dt_s}s`}
+                title={`${fmtRate(t.tok_s)} tok/s · ${fmtTokens(t.out)} tok / ${t.dt_s}s${isPeak ? " · window peak" : ""}`}
                 initial={false}
                 animate={{ height: `${h * 100}%` }}
                 transition={{ duration: reduced ? 0 : 0.4, ease: [0.16, 1, 0.3, 1] }}
