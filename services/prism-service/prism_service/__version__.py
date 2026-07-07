@@ -13,9 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.15"
+PRISM_VERSION = "6.8.18"
 
 # Changelog-ish notes (free-form; keep short)
+_NOTES_618 = (
+    "v6.8.18: JIRA PULL fixed + enriched, live-validated on a real Jira (PRIS). "
+    "search_project now hits /rest/api/3/search/jql (Atlassian retired /search -> "
+    "410 Gone) requesting summary+status; the deterministic upsert now SYNCS THE "
+    "BOARD STATE — Jira status category -> the linked top-level task's status on "
+    "every pull (To Do->pending, In Progress->in_progress, Done->done), not just "
+    "the title. Proven end-to-end: create issue -> pull (pending) -> move to In "
+    "Progress in Jira -> re-pull (in_progress), idempotent. Absorbs the uncommitted "
+    "6.8.16 (connector UI) + 6.8.17 (multi-source) version strings."
+)
 PRISM_VERSION_NOTES = (
     "v6.8.15: CONDUCTOR TILE wider/landscape — auto-fill grid min-width 380px->520px "
     "so each tile reads wide-screen instead of portrait. "

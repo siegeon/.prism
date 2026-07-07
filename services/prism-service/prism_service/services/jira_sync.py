@@ -258,8 +258,16 @@ def _upsert_issue(task_svc, issue: dict, by_key: dict):
     summary = (fields.get("summary") or "").strip()
     existing = by_key.get(key)
     if existing is not None:
+        upd = {}
         if summary and summary != existing.title:
-            task_svc.update(existing.id, title=summary)
+            upd["title"] = summary
+        # Sync the Jira BOARD STATE onto the linked top-level task's status so
+        # the two stay in step (Jira status category -> PRISM status).
+        jstatus = _prism_status_for(issue)
+        if jstatus != (getattr(existing, "status", "") or ""):
+            upd["status"] = jstatus
+        if upd:
+            task_svc.update(existing.id, **upd)
         return (existing.id, "updated", key)
     task = task_svc.create(
         title=summary or key,

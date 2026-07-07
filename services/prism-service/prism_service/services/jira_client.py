@@ -126,7 +126,11 @@ def search_project(project_key: str) -> list[dict]:
     the exact `key` on each issue."""
     cred = _cred()
     jql = f'project="{project_key}" ORDER BY updated DESC'
-    q = urllib.parse.urlencode({"jql": jql, "maxResults": 100})
-    data = _request("GET", f"{_api_base(cred)}/search?{q}")
+    # Atlassian RETIRED GET /rest/api/3/search (returns 410 Gone) — use the
+    # enhanced-JQL endpoint, which also requires `fields` to be named. We need
+    # summary (title) + status (the board state) for the deterministic upsert.
+    q = urllib.parse.urlencode({"jql": jql, "maxResults": 100,
+                                "fields": "summary,status"})
+    data = _request("GET", f"{_api_base(cred)}/search/jql?{q}")
     issues = data.get("issues")
     return issues if isinstance(issues, list) else []
