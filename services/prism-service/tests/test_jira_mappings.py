@@ -84,6 +84,7 @@ def _tasksvc(tmp_path, project_id, name="tasks.db"):
 def test_outbound_uses_mapping_over_env_fallback(tmp_path, monkeypatch):
     from prism_service.services import jira_client, jira_sync, jira_auth, jira_mappings
     monkeypatch.setattr(jira_auth, "is_authenticated", lambda: True)
+    monkeypatch.setenv("PRISM_JIRA_OUTBOUND", "1")  # outbound is opt-in (off by default)
     # A mapping store bound to THIS project; the env points somewhere else.
     store = _store(tmp_path)
     store.set("myproj", "MAP")
@@ -104,6 +105,7 @@ def test_outbound_uses_mapping_over_env_fallback(tmp_path, monkeypatch):
 def test_outbound_falls_back_to_env_when_unmapped(tmp_path, monkeypatch):
     from prism_service.services import jira_client, jira_sync, jira_auth, jira_mappings
     monkeypatch.setattr(jira_auth, "is_authenticated", lambda: True)
+    monkeypatch.setenv("PRISM_JIRA_OUTBOUND", "1")  # outbound is opt-in (off by default)
     store = _store(tmp_path)  # empty — no mapping for this project
     monkeypatch.setattr(jira_mappings, "default_service", lambda: store)
     monkeypatch.setenv("PRISM_JIRA_PROJECT_KEY", "ENVKEY")
