@@ -99,6 +99,12 @@ def outbound_create(task_svc, task, project_key: str | None = None) -> str | Non
     key, or None when skipped (Jira disconnected, no project mapping, or the
     task is already mapped). Never raises into the caller's task flow — a Jira
     failure records an unsuccessful OUT receipt and returns None."""
+    # OPT-IN, off by default. PRISM's model is pull-first: Jira issues are pulled
+    # IN as tasks. A native PRISM task must NOT auto-create a Jira issue on every
+    # create/update just because Jira is connected (that pushed stray issues into
+    # the real project). Outbound only when PRISM_JIRA_OUTBOUND is explicitly set.
+    if (os.environ.get("PRISM_JIRA_OUTBOUND", "") or "").strip().lower() not in ("1", "true", "on", "yes"):
+        return None
     if not jira_auth.is_authenticated():
         return None
     if getattr(task, "jira_issue_key", "") or "":

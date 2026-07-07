@@ -59,6 +59,7 @@ def test_jira_client_create_issue_is_monkeypatchable(monkeypatch):
 def test_outbound_create_calls_client_and_stores_key(tmp_path, monkeypatch):
     from prism_service.services import jira_client, jira_sync, jira_auth
     monkeypatch.setattr(jira_auth, "is_authenticated", lambda: True)
+    monkeypatch.setenv("PRISM_JIRA_OUTBOUND", "1")  # outbound is opt-in (off by default)
     calls = []
     monkeypatch.setattr(jira_client, "create_issue",
                         lambda pk, summary: calls.append((pk, summary)) or "PLAT-7")
@@ -94,6 +95,7 @@ def test_task_create_hook_syncs_when_connected(tmp_path, monkeypatch):
     from prism_service.services import jira_client, jira_sync, jira_auth
     monkeypatch.setattr(jira_auth, "is_authenticated", lambda: True)
     monkeypatch.setenv("PRISM_JIRA_PROJECT_KEY", "PLAT")
+    monkeypatch.setenv("PRISM_JIRA_OUTBOUND", "1")  # outbound is opt-in (off by default)
     monkeypatch.setattr(jira_client, "create_issue", lambda pk, summary: f"{pk}-100")
     jira_sync.reset_receipts()
     t = _svc(tmp_path).create(title="hook task")
