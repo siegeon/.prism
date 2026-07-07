@@ -241,13 +241,19 @@ def test_gantt_component_exists_and_exports_timeline_type():
 
 
 def test_taskdetail_threads_timeline_and_renders_activity_card():
+    # v6.7.30 folded the Conductor+Activity panel into PlanView's Implementation
+    # tab: TaskDetailPage still owns the timeline STATE (imports the Timeline
+    # type, threads d.timeline via setTimeline, passes it down), while the
+    # actual <TaskActivityGantt> render + its "Activity"/Timeline surface moved
+    # to the render owner PlanView. Re-pointed to both real owners.
     src = _read("pages/TaskDetailPage.tsx")
-    assert "TaskActivityGantt" in src
+    assert "TaskActivityGantt" in src    # Timeline type imported here
     assert "import" in src and "TaskActivityGantt" in src
     assert "timeline" in src              # state threaded from d.timeline
     assert "setTimeline" in src
-    assert "Activity" in src              # the new Card label
-    assert "<TaskActivityGantt" in src
+    plan = _read("components/plan/PlanView.tsx")
+    assert "Activity" in plan             # the Card / sub-view label
+    assert "<TaskActivityGantt" in plan   # the wall-clock Gantt render
 
 
 def test_taskdetail_sessions_list_filters_to_real_uuid_sessions():
