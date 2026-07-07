@@ -1,6 +1,7 @@
 """Conductor API — prompt variants, scores, session outcomes, and SDLC state."""
 
 from fastapi import APIRouter, Body, HTTPException, Query
+from pydantic import BaseModel
 
 from prism_service.project_context import get_project
 from prism_service.services.conductor_service import board_health
@@ -70,6 +71,25 @@ def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
         # NO-SELF-OVERRIDE actor (task 3826dac3): defaults to the session.
         actor=body.get("actor") or body.get("session_id"),
     )
+
+
+class FanoutBody(BaseModel):
+    task_id: str
+    step: str
+    dispatched: int = 0
+    returned: int = 0
+
+
+@router.post("/fanout")
+def fanout(project: str = Query("default"), body: FanoutBody = Body(...)) -> dict:
+    """Record per-step sub-agent fanout (dispatched vs returned) for the SPA.
+
+    Ephemeral units — e.g. "8 test-writers handed out, 8 back" — for the
+    CURRENT workflow step; distinct from phase_progress' CHILD-TASK basis.
+    UPSERTs on (task_id, step) and returns the stored row.
+    """
+    s = _svc(project)
+    return s.set_step_fanout(body.task_id, body.step, body.dispatched, body.returned)
 
 
 @router.post("/advance")

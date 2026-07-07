@@ -655,6 +655,55 @@ class ConductorService:
             return []
 
     # ------------------------------------------------------------------
+    # Per-step fanout telemetry — ephemeral sub-agent dispatch/return counts
+    # for the CURRENT workflow step (e.g. "8 test-writers handed out, 8 back").
+    # Distinct from phase_progress' children basis, which counts CHILD TASKS.
+    # ------------------------------------------------------------------
+
+    def set_step_fanout(
+        self, task_id: str, step: str, dispatched: int, returned: int
+    ) -> dict:
+        """UPSERT the fanout row for (task_id, step) and return it."""
+        from datetime import datetime, timezone
+
+        self._ensure_meta_schema()
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._scores_conn()
+        conn.execute(
+            "INSERT INTO step_fanout (task_id, step, dispatched, returned, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(task_id, step) DO UPDATE SET "
+            "dispatched=excluded.dispatched, returned=excluded.returned, "
+            "updated_at=excluded.updated_at",
+            (task_id, step, int(dispatched), int(returned), now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM step_fanout WHERE task_id = ? AND step = ?",
+            (task_id, step),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else {}
+
+    def _step_fanout(self, task_id: str, step: str) -> tuple[int, int]:
+        """Return (dispatched, returned) for a step, or (0, 0) if none."""
+        if not step:
+            return (0, 0)
+        try:
+            conn = self._scores_conn()
+            row = conn.execute(
+                "SELECT dispatched, returned FROM step_fanout "
+                "WHERE task_id = ? AND step = ?",
+                (task_id, step),
+            ).fetchone()
+            conn.close()
+            if row:
+                return (int(row["dispatched"]), int(row["returned"]))
+        except Exception:
+            pass
+        return (0, 0)
+
+    # ------------------------------------------------------------------
     # Meta-Conductor: offline prompt-variant candidate loop
     # ------------------------------------------------------------------
 
@@ -733,6 +782,14 @@ class ConductorService:
                 reason TEXT,
                 metrics_json TEXT,
                 evaluated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS step_fanout (
+                task_id TEXT NOT NULL,
+                step TEXT NOT NULL,
+                dispatched INTEGER NOT NULL DEFAULT 0,
+                returned INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT,
+                PRIMARY KEY (task_id, step)
             );
             """
         )
@@ -2344,6 +2401,21 @@ class ConductorService:
                     step = self.INTAKE_STEP
                 else:
                     continue
+            pp = self.phase_progress(t.id)
+            # Compact ordered slice list for the tile: done first (by
+            # completed_at) then the rest by created_at, so the slice bar reads
+            # left-to-right as progress. Only title/status/id — keep it small.
+            kids = self._children(t)
+            subtasks = [
+                {"id": c.id, "title": c.title, "status": getattr(c, "status", "") or ""}
+                for c in sorted(
+                    kids,
+                    key=lambda c: (
+                        0 if (getattr(c, "status", "") or "") == "done" else 1,
+                        getattr(c, "completed_at", "") or getattr(c, "created_at", "") or "",
+                    ),
+                )
+            ]
             out.append({
                 "id": t.id,
                 "title": t.title,
@@ -2361,7 +2433,14 @@ class ConductorService:
                 "tags": list(getattr(t, "tags", []) or []),
                 # Animated SDLC progress bar (a5e0d9f5): blended current-step
                 # fill so the tile bar tweens between polls.
-                "phase_progress": self.phase_progress(t.id),
+                "phase_progress": pp,
+                # Honest work state (working/adrift/stalled/awaiting_gate/…) —
+                # the tile pill + live pulse read this, NOT the raw status.
+                "activity": self.activity_for(t, pp),
+                # Real progress: the epic's non-cancelled slices, done-first.
+                # Omitted (empty) for leaf tasks — the tile only renders a slice
+                # bar when this is non-empty.
+                "subtasks": subtasks,
             })
         return out
 
@@ -2677,6 +2756,10 @@ class ConductorService:
             except Exception:
                 children_total = 0
 
+        # Per-step ephemeral fanout (test-writers etc.) for the CURRENT step —
+        # a real returned/dispatched signal that beats the wall-clock estimate.
+        fanout_dispatched, fanout_returned = self._step_fanout(task_id, cur_step)
+
         # A finished task is 100%, period — never a stale children/time ratio.
         if task_status == "done":
             pct = 1.0
@@ -2684,6 +2767,10 @@ class ConductorService:
         elif children_total > 0:
             pct = children_done / children_total
             basis = "children"
+        elif fanout_dispatched > 0:
+            # write_failing_tests has no child tasks, so fanout wins over time.
+            pct = fanout_returned / fanout_dispatched
+            basis = "fanout"
         else:
             ratio = in_step_s / typical_s if typical_s > 0 else 0.0
             pct = min(0.95, ratio)
@@ -2702,6 +2789,12 @@ class ConductorService:
         # duplication). Empty for a task with no on-disk transcript yet.
         token_turns: list[dict] = []
         total_turns = 0
+        # Recency of the linked session's live transcript: server-now minus the
+        # newest token event across the task's sessions. Powers activity_for's
+        # 'adrift' vs 'stalled' split (session alive but task idle). None when
+        # there is no on-disk transcript. Server-side now() is fine here — this
+        # is the daemon reading its own clock, not a workflow script.
+        session_quiet_s: Optional[float] = None
         # 'linked' = series came from authoritative per-session live events (or
         # is honestly empty); 'wallclock' = the project-wide fallback supplied
         # it. The SPA dims/labels the 'wallclock' case as approximate.
@@ -2745,6 +2838,8 @@ class ConductorService:
                         except Exception:
                             pass
                 live_events.sort(key=lambda e: e[0])
+                if live_events:
+                    session_quiet_s = max(0.0, self._now_epoch() - live_events[-1][0])
                 # PER-TASK-EXCLUSIVE (owner decision, task 5ecbbfb8): the tile
                 # shows ONLY this task's authoritative linked-session activity.
                 # The old #134/#137 project-WIDE wall-clock fallback (bucket the
@@ -2775,6 +2870,10 @@ class ConductorService:
             "eta_total_s": round(eta_total, 1) if eta_total is not None else None,
             "children_done": children_done,
             "children_total": children_total,
+            # Ephemeral per-step sub-agent fanout (0/0 when the step dispatched
+            # no disposable units) — powers the "N/M agents back" chip.
+            "fanout_dispatched": fanout_dispatched,
+            "fanout_returned": fanout_returned,
             # Task-total linked-session tokens (see note above).
             "tokens_since_step": tokens,
             # Per-turn burn rate series + honest total turn count.
@@ -2783,4 +2882,108 @@ class ConductorService:
             # 'linked' (authoritative/empty) | 'wallclock' (project-wide
             # approximate fallback — the SPA dims + labels it).
             "tokens_source": tokens_source,
+            # Recency of the linked session's live transcript (s). None when no
+            # transcript. activity_for reads this for the adrift/stalled split.
+            "session_quiet_s": round(session_quiet_s, 3) if session_quiet_s is not None else None,
+        }
+
+    # ------------------------------------------------------------------
+    # activity — the HONEST per-task work state (not the raw status)
+    # ------------------------------------------------------------------
+    def _task_motion_s(self, task) -> Optional[float]:
+        """Seconds since the last CONDUCTOR TRANSITION on this task: the newest
+        advance_task/gate_decide row in task_history (both written by
+        advance_task/gate_decide via TaskService.record_history). Falls back to
+        task.updated_at ONLY when the task has no transition history. None when
+        neither resolves."""
+        latest: Optional[float] = None
+        tid = getattr(task, "id", "") or ""
+        if self._task_svc is not None and tid:
+            try:
+                for r in self._task_svc.history(tid):
+                    if getattr(r, "action", "") in ("advance_task", "gate_decide"):
+                        ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+                        if ts is not None and (latest is None or ts > latest):
+                            latest = ts
+            except Exception:
+                latest = None
+        # A SUB-TASK completing/moving IS the parent moving, even though the
+        # parent's own step didn't transition — otherwise an epic reads "stalled"
+        # for hours while its slices are actively getting done underneath it.
+        if self._task_svc is not None and tid:
+            try:
+                for c in self._task_svc.list():
+                    if (getattr(c, "parent_id", "") or "") != tid:
+                        continue
+                    for fld in ("completed_at", "updated_at"):
+                        ts = self._parse_iso(getattr(c, fld, "") or "")
+                        if ts is not None and (latest is None or ts > latest):
+                            latest = ts
+            except Exception:
+                pass
+        if latest is None:
+            latest = self._parse_iso(getattr(task, "updated_at", "") or "")
+        if latest is None:
+            return None
+        return max(0.0, self._now_epoch() - latest)
+
+    def _children(self, task) -> list:
+        """Non-cancelled child tasks of this task (parent_id == task.id)."""
+        tid = getattr(task, "id", "") or ""
+        if self._task_svc is None or not tid:
+            return []
+        try:
+            return [c for c in self._task_svc.list()
+                    if (getattr(c, "parent_id", "") or "") == tid
+                    and (getattr(c, "status", "") or "") != "cancelled"]
+        except Exception:
+            return []
+
+    def activity_for(self, task, phase_progress: dict) -> dict:
+        """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
+        means a REAL recent conductor transition on THIS task (<=120s); when
+        uncertain we UNDER-claim (stalled/adrift over working). session_quiet_s
+        rides in on the already-computed phase_progress dict (transcript recency)
+        so we don't re-read the transcript."""
+        status = (getattr(task, "status", "") or "")
+        step = (getattr(task, "workflow_step", "") or "")
+        gate = (getattr(task, "gate_state", "none") or "none")
+        motion = self._task_motion_s(task)
+        quiet = phase_progress.get("session_quiet_s") if isinstance(phase_progress, dict) else None
+        if status == "done":
+            state = "done"
+        elif status == "blocked":
+            state = "blocked"
+        elif status == "pending":
+            state = "pending"
+        elif status == "in_progress":
+            kids = self._children(task)
+            if kids:
+                # An EPIC's activity is its slices': a slice actively moving =>
+                # working; some slices done but none active => paused (real
+                # progress, between bursts — NOT the alarming "stalled");
+                # nothing done and nothing active => stalled.
+                active = any((getattr(k, "status", "") or "") == "in_progress"
+                             and (self._task_motion_s(k) or 1e9) <= 120 for k in kids)
+                done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
+                if active:
+                    state = "working"
+                elif done > 0:
+                    state = "paused"         # progress made, idle between slices
+                else:
+                    state = "stalled"
+            elif step.endswith("_gate") and gate in ("pending", "failed"):
+                state = "awaiting_gate"      # a WAIT for review, not work
+            elif motion is not None and motion <= 120:
+                state = "working"            # a real recent transition on THIS task
+            elif quiet is not None and quiet <= 90:
+                state = "adrift"             # session alive but busy elsewhere
+            else:
+                state = "stalled"            # nothing is driving it
+        else:
+            state = status or "pending"
+        return {
+            "state": state,
+            "task_motion_s": round(motion, 3) if motion is not None else None,
+            "session_quiet_s": round(quiet, 3) if isinstance(quiet, (int, float)) else None,
         }

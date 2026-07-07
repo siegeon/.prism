@@ -258,15 +258,23 @@ def test_brain_and_graph_pages_deleted():
 
 
 def test_task_detail_page_has_operable_gate_controls():
-    src = _read("TaskDetailPage.tsx")
+    # v6.7.30 folded the gate controls into PlanView's Implementation tab:
+    # TaskDetailPage still owns the /api/conductor/gate WIRING (gateDecide) and
+    # delegates the operable Approve/Reject + required reason textarea + override
+    # checkbox to the render owner PlanView via the `gate` prop. Re-pointed the
+    # control assertions to PlanView, keeping the endpoint wiring on TaskDetail.
+    plan = (_WEB_SRC / "components" / "plan" / "PlanView.tsx").read_text(
+        encoding="utf-8"
+    )
     # Approve / Reject controls.
-    assert re.search(r"[Aa]pprove", src), "missing Approve control"
-    assert re.search(r"[Rr]eject", src), "missing Reject control"
+    assert re.search(r"[Aa]pprove", plan), "missing Approve control"
+    assert re.search(r"[Rr]eject", plan), "missing Reject control"
     # A reason textarea (required) + an override checkbox.
-    assert "textarea" in src.lower(), "missing required reason textarea"
-    assert re.search(r"override", src, re.IGNORECASE), "missing override checkbox"
+    assert "textarea" in plan.lower(), "missing required reason textarea"
+    assert re.search(r"override", plan, re.IGNORECASE), "missing override checkbox"
     # Wired to the new HTTP endpoint, not the bare status PATCH.
-    assert "/api/conductor/gate" in src or "conductor/gate" in src, (
+    detail = _read("TaskDetailPage.tsx")
+    assert "/api/conductor/gate" in detail or "conductor/gate" in detail, (
         "gate controls must POST to the conductor gate endpoint"
     )
 

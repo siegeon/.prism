@@ -82,14 +82,16 @@ def test_tile_autofill_grid_widens_and_gaps_for_progress_bar():
 
 def test_tile_renders_animated_stepper_and_phase_label():
     src = _read(_CONDUCTOR)
-    # SUPERSEDED by v6.3.19: the SDLC bar + "SDLC" text label were replaced by
-    # an animated dot stepper (SdlcDots) plus the current-phase label moved to
-    # the tile's top-right. The tile must render BOTH so progress still reads
-    # at a glance. Scope to the TaskTile function (the SdlcDots definition also
-    # lives later in the file, but the JSX <SdlcDots/> usage is in the tile).
+    # RE-POINTED by v6.8.18 (task 696cacf5): the abstract SdlcDots dot stepper
+    # is REPLACED by the LabeledTimeline (a node per real WORKFLOW_STEPS_ORDERED
+    # step with a visible stepLabel caption) — AC-4 of the production ring+
+    # timeline tile. The at-a-glance progress invariant this test guards is now
+    # owned by <LabeledTimeline/>; the current-phase label (top-right) is
+    # unchanged. Scope to the TaskTile function (the LabeledTimeline definition
+    # also lives later in the file, but the JSX usage is in the tile).
     tile = src[src.index("function TaskTile"):]
-    assert "<SdlcDots" in tile, \
-        "the TaskTile must render the animated SDLC dot stepper (<SdlcDots/>)"
+    assert "<LabeledTimeline" in tile, \
+        "the TaskTile must render the labeled phase timeline (<LabeledTimeline/>)"
     assert "stepChipClass(stepId)" in tile and "{phaseLabel}" in tile, \
         "the TaskTile must render the current-phase label (top-right) so the " \
         "information hierarchy reads at a glance"

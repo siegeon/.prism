@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
-import SdlcProgress, { type PhaseProgress } from "@/components/conductor/SdlcProgress";
+import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import StepRail from "@/components/conductor/StepRail";
 import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
 
@@ -22,6 +22,8 @@ export type ConductorInfo = {
   gateReason?: string;
   phase?: PhaseProgress | null;
   status?: string;
+  // Honest work state — drives the pulse/pill (only "working" animates).
+  activity?: Activity | null;
   timeline?: Timeline | null;
 };
 export type GateControls = {
@@ -137,7 +139,7 @@ export default function PlanView({
       {cur === "implementation" && hasImpl && c && (
         <div>
           <div className="mt-1 mb-1">
-            <SdlcProgress step={c.step} phase={c.phase} status={c.status} reduced={reduced} />
+            <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} />
           </div>
 
           {subView === "rail" ? (
@@ -146,6 +148,7 @@ export default function PlanView({
               gateState={c.gateState}
               phase={c.phase}
               status={c.status}
+              activity={c.activity}
               gates={c.timeline?.gates ?? []}
               reduced={reduced}
             />
