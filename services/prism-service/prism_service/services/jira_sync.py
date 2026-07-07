@@ -163,6 +163,117 @@ def _reconcile_issue(task_svc, issue: dict) -> int:
 
 
 # --------------------------------------------------------------------------
+# Pull-in — Jira as a SOURCE. Deterministically upsert PRISM tasks from a
+# project's issues, keyed by jira_issue_key (key equality only — no inference).
+# --------------------------------------------------------------------------
+
+# Jira status CATEGORY key -> PRISM status. The category (new/indeterminate/
+# done) is stable across custom workflows, unlike the per-project status name.
+_STATUS_CATEGORY_MAP = {
+    "new": "pending",
+    "indeterminate": "in_progress",
+    "done": "done",
+}
+
+
+def _prism_status_for(issue: dict) -> str:
+    """Map a Jira issue's status CATEGORY to a PRISM status; default pending."""
+    try:
+        cat = (((issue.get("fields") or {}).get("status") or {})
+               .get("statusCategory") or {})
+        key = (cat.get("key") or "").strip().lower()
+        return _STATUS_CATEGORY_MAP.get(key, "pending")
+    except Exception:
+        return "pending"
+
+
+def pull_from_jira(task_svc, jira_project_key: str | None = None) -> dict:
+    """Pull a Jira project's issues in as PRISM tasks. For EACH issue, UPSERT
+    a task keyed on jira_issue_key: an unknown key CREATEs {source='jira',
+    title=summary, status mapped from the issue's status category}; a known
+    key UPDATEs the linked task's title. Idempotent — key equality only, so
+    running twice creates no duplicates. Returns {created, updated, pulled,
+    receipts}, or {pulled:0, reason} when Jira is disconnected or no project
+    resolves. Fully guarded: a Jira/network error can never raise or leak a
+    token."""
+    if not jira_auth.is_authenticated():
+        return {"created": 0, "updated": 0, "pulled": 0,
+                "reason": "jira not connected", "receipts": []}
+    key = (jira_project_key or "").strip() or _resolve_project_key(task_svc)
+    if not key:
+        return {"created": 0, "updated": 0, "pulled": 0,
+                "reason": "no jira project resolves for this project",
+                "receipts": []}
+    try:
+        issues = jira_client.search_project(key)
+    except Exception:
+        return {"created": 0, "updated": 0, "pulled": 0,
+                "reason": "jira search failed", "receipts": []}
+    # Index existing tasks by their jira_issue_key ONCE (the dedupe key).
+    by_key = {}
+    for t in task_svc.list():
+        k = (getattr(t, "jira_issue_key", "") or "").strip()
+        if k:
+            by_key[k] = t
+    created = updated = 0
+    receipts: list[dict] = []
+    for issue in issues or []:
+        try:
+            r = _upsert_issue(task_svc, issue, by_key)
+        except Exception:
+            ik = (issue or {}).get("key", "") if isinstance(issue, dict) else ""
+            receipts.append(record_receipt("IN", "", ik, False))
+            continue
+        if not r:
+            continue
+        created += 1 if r[1] == "created" else 0
+        updated += 1 if r[1] == "updated" else 0
+        receipts.append(record_receipt("IN", r[0], r[2], True))
+    return {"created": created, "updated": updated,
+            "pulled": created + updated, "receipts": receipts}
+
+
+def _resolve_project_key(task_svc) -> str:
+    """The Jira project key to pull from: the task_svc's per-project mapping,
+    then the PRISM_JIRA_PROJECT_KEY env. '' when neither resolves."""
+    project_id = (getattr(task_svc, "project_id", "") or "").strip()
+    if project_id:
+        try:
+            from prism_service.services import jira_mappings
+            mapped = jira_mappings.default_service().get(project_id)
+            if mapped:
+                return mapped
+        except Exception:
+            pass
+    return (os.environ.get("PRISM_JIRA_PROJECT_KEY", "") or "").strip()
+
+
+def _upsert_issue(task_svc, issue: dict, by_key: dict):
+    """Create or update the PRISM task for `issue`, keyed on jira_issue_key.
+    Returns (task_id, 'created'|'updated', key) or None (no key)."""
+    key = (issue.get("key") or "").strip()
+    if not key:
+        return None
+    fields = issue.get("fields") or {}
+    summary = (fields.get("summary") or "").strip()
+    existing = by_key.get(key)
+    if existing is not None:
+        if summary and summary != existing.title:
+            task_svc.update(existing.id, title=summary)
+        return (existing.id, "updated", key)
+    task = task_svc.create(
+        title=summary or key,
+        source="jira",
+        jira_issue_key=key,
+    )
+    status = _prism_status_for(issue)
+    if status != "pending":
+        task_svc.update(task.id, status=status)
+    by_key[key] = task
+    return (task.id, "created", key)
+
+
+# --------------------------------------------------------------------------
 # Poller — OFF by default. start_jira_sync returns None unless an interval is
 # explicitly set > 0, so the daemon boots with sync disabled.
 # --------------------------------------------------------------------------

@@ -28,6 +28,12 @@ class MappingBody(BaseModel):
 _SPA_CONNECTIONS = "/settings/connections"
 
 
+class PullBody(BaseModel):
+    """Deterministic pull-in — optionally override the Jira project key
+    (else it resolves from the project's mapping / PRISM_JIRA_PROJECT_KEY)."""
+    project_key: str = ""
+
+
 class ConfigureBody(BaseModel):
     """email + API-token fallback. Extra fields (token/refresh_token/…) ignored."""
     email: str = ""
@@ -112,6 +118,24 @@ def sync_receipts(limit: int = 50) -> dict:
     """Recent bidirectional-sync receipts for the UI. No secrets — only
     {direction, task_id, jira_issue_key, ok, ts}."""
     return {"receipts": jira_sync.recent_receipts(limit=limit)}
+
+
+def _pull_task_svc(project: str):
+    """The task service to pull Jira issues into — the current project's
+    store. Broken out so tests can route it at an isolated TaskService."""
+    from prism_service.project_context import get_project
+    return get_project(project).task_svc
+
+
+@router.post("/pull")
+def pull(body: PullBody, project: str = "default") -> dict:
+    """Deterministically PULL a Jira project's issues in as PRISM tasks
+    (upsert by jira_issue_key — no inference). Returns {created, updated,
+    pulled, receipts}; empty-safe {pulled:0, reason} when disconnected or
+    no project resolves."""
+    svc = _pull_task_svc(project)
+    key = (body.project_key or "").strip() or None
+    return jira_sync.pull_from_jira(svc, jira_project_key=key)
 
 
 @router.get("/mappings")

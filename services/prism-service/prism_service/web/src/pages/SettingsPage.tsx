@@ -220,7 +220,7 @@ export default function SettingsPage() {
             <JiraAuthCard />
           </Card>
           <Card>
-            <SectionLabel>Project mapping</SectionLabel>
+            <SectionLabel>Jira source</SectionLabel>
             <JiraMappingCard />
           </Card>
           <Card>
@@ -1003,6 +1003,11 @@ function JiraSyncActivityCard() {
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
   }, [load]);
+  // Refresh immediately when a "Pull issues now" completes (Jira source card).
+  useEffect(() => {
+    window.addEventListener("jira-sync-refresh", load);
+    return () => window.removeEventListener("jira-sync-refresh", load);
+  }, [load]);
 
   if (error) return <ErrorBanner>{error}</ErrorBanner>;
   if (!receipts) return <div className="text-sm opacity-60">Loading…</div>;
@@ -1096,9 +1101,11 @@ type JiraMapping = {
   updated_at?: string;
 };
 
-/** Project mapping — bind a PRISM project to a Jira project key. Gated on
- * Jira being connected (a hint to connect first otherwise). POSTs
- * /api/jira/mapping and DELETEs by project_id; follows the JiraAuthCard idiom. */
+/** Jira source — bind a PRISM project to a Jira project key, then PULL that
+ * project's issues in as PRISM tasks (deterministic, keyed by issue key —
+ * no inference). Gated on Jira being connected. POSTs /api/jira/mapping,
+ * DELETEs by project_id, and POSTs /api/jira/pull; follows the JiraAuthCard
+ * idiom. */
 function JiraMappingCard() {
   const [mappings, setMappings] = useState<JiraMapping[] | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -1106,6 +1113,8 @@ function JiraMappingCard() {
   const [pid, setPid] = useState("");
   const [jkey, setJkey] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [pulling, setPulling] = useState<string | null>(null);
+  const [pullResult, setPullResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -1158,6 +1167,31 @@ function JiraMappingCard() {
     }
   };
 
+  // Deterministic pull-in: upsert PRISM tasks from the mapped Jira project's
+  // issues (by key). Shows created/updated counts and pokes the Sync Activity
+  // card to refresh (it listens for the "jira-sync-refresh" event).
+  const pull = async (project_id: string, jira_project_key: string) => {
+    setPulling(project_id);
+    setPullResult(null);
+    setError(null);
+    try {
+      const r = await api.post<{ created: number; updated: number; pulled: number; reason?: string }>(
+        `/api/jira/pull?project=${encodeURIComponent(project_id)}`,
+        { project_key: jira_project_key },
+      );
+      setPullResult(
+        r.reason
+          ? `${jira_project_key}: ${r.reason}`
+          : `${jira_project_key}: pulled ${r.pulled} (${r.created} created, ${r.updated} updated)`,
+      );
+      window.dispatchEvent(new CustomEvent("jira-sync-refresh"));
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setPulling(null);
+    }
+  };
+
   if (mappings === null || connected === null) {
     return <div className="text-sm opacity-60">Loading…</div>;
   }
@@ -1187,9 +1221,18 @@ function JiraMappingCard() {
               </span>
               <button
                 type="button"
+                onClick={() => pull(m.project_id, m.jira_project_key)}
+                disabled={!!pulling || submitting || !connected}
+                className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] text-[11px] uppercase tracking-wider hover:opacity-90 disabled:opacity-40"
+              >
+                {pulling === m.project_id && <Loader2 className="w-3 h-3 animate-spin" />}
+                Pull issues now
+              </button>
+              <button
+                type="button"
                 onClick={() => remove(m.project_id)}
                 disabled={submitting}
-                className="ml-auto inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[color:var(--text-muted)] hover:text-[color:var(--accent-rose-fg)] disabled:opacity-40"
+                className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[color:var(--text-muted)] hover:text-[color:var(--accent-rose-fg)] disabled:opacity-40"
               >
                 <X className="w-3 h-3" /> remove
               </button>
@@ -1230,6 +1273,12 @@ function JiraMappingCard() {
           Bind
         </button>
       </form>
+
+      {pullResult && (
+        <div className="rounded-md border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] px-3 py-2 text-xs font-mono">
+          {pullResult}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">

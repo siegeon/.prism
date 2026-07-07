@@ -1127,6 +1127,7 @@ TOOLS: list[Tool] = [
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
                 "jira_issue_key": {"type": "string", "description": "The 1:1 Jira issue key this task maps to (e.g. 'PLAT-1'), or '' when not linked to Jira."},
+                "source": {"type": "string", "description": "Where the task originated: prism (default, created in-app) | jira (pulled from a Jira issue by key) | github."},
             },
             "required": ["title"],
         },
@@ -1185,6 +1186,7 @@ TOOLS: list[Tool] = [
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
                 "jira_issue_key": {"type": "string", "description": "Set/replace the 1:1 Jira issue key this task maps to (e.g. 'PLAT-1'), or '' to unlink."},
+                "source": {"type": "string", "description": "Origin of the task: prism | jira | github."},
                 "session_id": {"type": "string", "description": "Driving session to auto-link when flipping status to in_progress. The conductor session gate (ef81fc15) refuses a sessionless in_progress transition; when omitted the active request session is resolved and linked automatically."},
             },
             "required": ["id"],
@@ -3945,6 +3947,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 plan_doc=arguments.get("plan_doc", ""),
                 plan_diagram=arguments.get("plan_diagram", ""),
                 jira_issue_key=arguments.get("jira_issue_key", ""),
+                source=arguments.get("source", "prism"),
             )
             return [TextContent(type="text", text=_json(task))]
 
@@ -3995,7 +3998,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram", "jira_issue_key"):
+            for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram", "jira_issue_key", "source"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             # Conductor session gate (ef81fc15): flipping to in_progress

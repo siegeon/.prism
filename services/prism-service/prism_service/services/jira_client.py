@@ -117,3 +117,16 @@ def list_updated_since(ts) -> list[dict]:
     data = _request("GET", f"{_api_base(cred)}/search?{q}")
     issues = data.get("issues")
     return issues if isinstance(issues, list) else []
+
+
+def search_project(project_key: str) -> list[dict]:
+    """All issues in a Jira project (deterministic pull-in source), newest-
+    updated first. Returns the raw issue dicts ([] when none). JQL is
+    `project=KEY` — no fuzzy matching; the caller upserts PRISM tasks by
+    the exact `key` on each issue."""
+    cred = _cred()
+    jql = f'project="{project_key}" ORDER BY updated DESC'
+    q = urllib.parse.urlencode({"jql": jql, "maxResults": 100})
+    data = _request("GET", f"{_api_base(cred)}/search?{q}")
+    issues = data.get("issues")
+    return issues if isinstance(issues, list) else []

@@ -87,6 +87,12 @@ class Task:
     # additive TEXT column (NOT a join table) that rides the same DB path as
     # the other additive fields; the sync worker (Slice D) reads/writes it.
     jira_issue_key: str = ""
+    # Multi-source task model — WHERE this task originated. 'prism' (the
+    # DEFAULT, so every existing row migrates to it) is a task created
+    # in-app; 'jira' is one PULLED IN from a Jira issue (deterministically,
+    # keyed by jira_issue_key); 'github' is reserved for a GitHub source.
+    # Additive TEXT column, rides the same DB path as jira_issue_key.
+    source: str = "prism"
 
     def __post_init__(self) -> None:
         if not self.id:
