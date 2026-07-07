@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.15"
+PRISM_VERSION = "6.8.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.17: PROGRAMMATIC MULTI-SOURCE TASKS — Task gains source (prism|github|"
+    "jira); Jira is a pull-in SOURCE: pull_from_jira upserts tasks from a project's "
+    "issues BY jira_issue_key (deterministic, idempotent, NO inference/MCP/LLM — "
+    "direct REST). POST /api/jira/pull + 'Pull issues now' UI. GitHub slots in as a "
+    "parallel source next. "
+    "v6.8.16: JIRA CONNECTOR finished UI — Settings gains a Sync Activity receipts "
+    "panel (direction chips + click-to-expand diff, progressive disclosure) + a "
+    "Project Mapping panel (bind PRISM project -> Jira key); outbound resolves the "
+    "Jira project from the new jira_mappings store first, env only as fallback. "
     "v6.8.15: CONDUCTOR TILE wider/landscape — auto-fill grid min-width 380px->520px "
     "so each tile reads wide-screen instead of portrait. "
     "v6.8.14: HONEST ETA — the tile's '~N left' chip + countdown bar now show ONLY "
