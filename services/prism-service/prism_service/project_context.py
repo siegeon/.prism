@@ -64,6 +64,7 @@ class ProjectContext:
             self._task_svc = TaskService(
                 db_path=str(self._data_dir / "tasks.db"),
                 scores_db=str(self._data_dir / "scores.db"),
+                project_id=self.project_id,
             )
         return self._task_svc
 

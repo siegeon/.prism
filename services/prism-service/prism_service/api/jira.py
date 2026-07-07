@@ -13,10 +13,17 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from prism_service.services import jira_auth as ja
+from prism_service.services import jira_mappings
 from prism_service.services import jira_oauth
 from prism_service.services import jira_sync
 
 router = APIRouter()
+
+
+class MappingBody(BaseModel):
+    """Bind a PRISM project to a Jira project key."""
+    project_id: str = ""
+    jira_project_key: str = ""
 
 _SPA_CONNECTIONS = "/settings/connections"
 
@@ -105,6 +112,33 @@ def sync_receipts(limit: int = 50) -> dict:
     """Recent bidirectional-sync receipts for the UI. No secrets — only
     {direction, task_id, jira_issue_key, ok, ts}."""
     return {"receipts": jira_sync.recent_receipts(limit=limit)}
+
+
+@router.get("/mappings")
+def list_mappings() -> dict:
+    """Current PRISM-project -> Jira-project-key bindings (no secrets)."""
+    return {"mappings": jira_mappings.default_service().list()}
+
+
+@router.post("/mapping")
+def set_mapping(body: MappingBody) -> dict:
+    """Bind (or rebind) a PRISM project to a Jira project key."""
+    pid = (body.project_id or "").strip()
+    key = (body.jira_project_key or "").strip()
+    if not pid or not key:
+        raise HTTPException(400, "project_id and jira_project_key are required")
+    row = jira_mappings.default_service().set(pid, key)
+    return {"mapping": row, "mappings": jira_mappings.default_service().list()}
+
+
+@router.delete("/mapping")
+def delete_mapping(project_id: str = "") -> dict:
+    """Remove a PRISM project's Jira binding. Idempotent."""
+    pid = (project_id or "").strip()
+    if not pid:
+        raise HTTPException(400, "project_id is required")
+    deleted = jira_mappings.default_service().delete(pid)
+    return {"deleted": deleted, "mappings": jira_mappings.default_service().list()}
 
 
 @router.post("/connect")

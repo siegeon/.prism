@@ -220,6 +220,14 @@ export default function SettingsPage() {
             <JiraAuthCard />
           </Card>
           <Card>
+            <SectionLabel>Project mapping</SectionLabel>
+            <JiraMappingCard />
+          </Card>
+          <Card>
+            <SectionLabel>Sync activity</SectionLabel>
+            <JiraSyncActivityCard />
+          </Card>
+          <Card>
             <SectionLabel>Identity &amp; Users</SectionLabel>
             <UserIdentityCard />
           </Card>
@@ -936,6 +944,292 @@ function JiraAuthCard() {
           </button>
         </form>
       )}
+
+      {error && (
+        <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type JiraReceipt = {
+  direction: string;         // IN | OUT | conflict
+  task_id: string;
+  jira_issue_key: string;
+  ok: boolean;
+  ts: string;
+  // Optional field-level diff [name, before, after] — rendered as a table
+  // when present, never a raw JSON blob (progressive disclosure).
+  fields?: [string, string, string][];
+};
+
+/** Coarse relative time from an ISO ts — "12s / 4m / 3h / 2d ago". */
+function relTime(ts: string): string {
+  const t = Date.parse(ts);
+  if (Number.isNaN(t)) return ts || "";
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/** direction chip: IN teal / OUT violet / conflict (or failed) amber. */
+function receiptTone(r: JiraReceipt): "teal" | "violet" | "amber" {
+  if (r.direction === "conflict" || !r.ok) return "amber";
+  return r.direction === "OUT" ? "violet" : "teal";
+}
+
+/** Sync activity — bidirectional Jira sync receipts. One-line summary per
+ * row (direction chip + task⇌issue + ok/failed + relative time) with a
+ * click-to-expand field-level detail. No secrets — /api/jira/sync/receipts
+ * returns only {direction, task_id, jira_issue_key, ok, ts}. */
+function JiraSyncActivityCard() {
+  const [receipts, setReceipts] = useState<JiraReceipt[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<Record<number, boolean>>({});
+
+  const load = useCallback(() => {
+    api.get<{ receipts: JiraReceipt[] }>("/api/jira/sync/receipts")
+      .then((r) => setReceipts(r.receipts ?? []))
+      .catch((e) => setError(String((e as Error).message ?? e)));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  // Poll — receipts land from inline outbound + the (optional) poller.
+  useEffect(() => {
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  if (error) return <ErrorBanner>{error}</ErrorBanner>;
+  if (!receipts) return <div className="text-sm opacity-60">Loading…</div>;
+  if (receipts.length === 0) return <Empty>No sync activity yet.</Empty>;
+
+  const rows = receipts.map((r, i) => ({ r, i })).reverse(); // newest first
+  return (
+    <div className="space-y-2">
+      {rows.map(({ r, i }) => {
+        const tone = receiptTone(r);
+        const id8 = (r.task_id || "").slice(0, 8) || "—";
+        const key = r.jira_issue_key || "(no issue)";
+        const isOpen = !!open[i];
+        return (
+          <div
+            key={i}
+            className="rounded-lg border border-[color:var(--border-default)] overflow-hidden"
+          >
+            <button
+              type="button"
+              onClick={() => setOpen((p) => ({ ...p, [i]: !p[i] }))}
+              className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-[color:var(--surface-2)]"
+            >
+              <span className={
+                "inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-mono uppercase tracking-wider " +
+                `bg-[color:var(--accent-${tone}-bg)] text-[color:var(--accent-${tone}-fg)]`
+              }>
+                {r.direction === "OUT" ? "⇢ OUT" : r.direction === "conflict" ? "conflict" : "⇠ IN"}
+              </span>
+              <span className="flex-1 min-w-0 text-sm truncate">
+                task <span className="font-mono">{id8}</span> ⇌{" "}
+                <span className="font-mono">{key}</span>{" "}
+                <span className={r.ok
+                  ? "text-[color:var(--accent-emerald-fg)]"
+                  : "text-[color:var(--accent-amber-fg)]"}>
+                  · {r.ok ? "ok" : "failed"}
+                </span>
+              </span>
+              <span className="text-[11px] text-[color:var(--text-muted)] whitespace-nowrap">
+                {relTime(r.ts)}
+              </span>
+              {isOpen
+                ? <ChevronDown className="w-4 h-4 opacity-50 shrink-0" />
+                : <ChevronRight className="w-4 h-4 opacity-50 shrink-0" />}
+            </button>
+            {isOpen && (
+              <div className="px-3 pb-3 pt-1 border-t border-[color:var(--border-subtle)] text-xs">
+                {r.fields && r.fields.length > 0 ? (
+                  <table className="w-full mt-2">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)]">
+                        <th className="text-left py-1 pr-3">field</th>
+                        <th className="text-left py-1 pr-3">before</th>
+                        <th className="text-left py-1">after</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.fields.map((f, fi) => (
+                        <tr key={fi} className="border-t border-[color:var(--border-subtle)]">
+                          <td className="py-1 pr-3 font-mono">{f[0]}</td>
+                          <td className="py-1 pr-3 font-mono text-[color:var(--accent-rose-fg)]">{f[1] || "∅"}</td>
+                          <td className="py-1 font-mono text-[color:var(--accent-emerald-fg)]">{f[2] || "∅"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <dl className="mt-2 grid grid-cols-[110px_1fr] gap-y-1">
+                    <dt className="text-[color:var(--text-label)]">direction</dt>
+                    <dd className="font-mono">{r.direction}</dd>
+                    <dt className="text-[color:var(--text-label)]">task</dt>
+                    <dd className="font-mono">{r.task_id || "—"}</dd>
+                    <dt className="text-[color:var(--text-label)]">Jira issue</dt>
+                    <dd className="font-mono">{r.jira_issue_key || "—"}</dd>
+                    <dt className="text-[color:var(--text-label)]">when</dt>
+                    <dd className="font-mono">{r.ts}</dd>
+                  </dl>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type JiraMapping = {
+  project_id: string;
+  jira_project_key: string;
+  updated_at?: string;
+};
+
+/** Project mapping — bind a PRISM project to a Jira project key. Gated on
+ * Jira being connected (a hint to connect first otherwise). POSTs
+ * /api/jira/mapping and DELETEs by project_id; follows the JiraAuthCard idiom. */
+function JiraMappingCard() {
+  const [mappings, setMappings] = useState<JiraMapping[] | null>(null);
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [projects, setProjects] = useState<string[]>([]);
+  const [pid, setPid] = useState("");
+  const [jkey, setJkey] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [m, s, p] = await Promise.all([
+        api.get<{ mappings: JiraMapping[] }>("/api/jira/mappings"),
+        api.get<{ authenticated: boolean }>("/api/jira/status"),
+        api.get<{ projects: string[] }>("/api/projects"),
+      ]);
+      setMappings(m.mappings ?? []);
+      setConnected(!!s.authenticated);
+      setProjects(p.projects ?? []);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const bind = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pid.trim() || !jkey.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const r = await api.post<{ mappings: JiraMapping[] }>("/api/jira/mapping", {
+        project_id: pid.trim(), jira_project_key: jkey.trim().toUpperCase(),
+      });
+      setMappings(r.mappings ?? []);
+      setJkey("");
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const remove = async (project_id: string) => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const r = await api.delete<{ mappings: JiraMapping[] }>(
+        `/api/jira/mapping?project_id=${encodeURIComponent(project_id)}`,
+      );
+      setMappings(r.mappings ?? []);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (mappings === null || connected === null) {
+    return <div className="text-sm opacity-60">Loading…</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {!connected && (
+        <div className="rounded-md border border-[color:var(--accent-amber-ring)] bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] px-3 py-2 text-xs">
+          Jira not connected — connect it in the panel above first, then bind
+          your PRISM projects to Jira projects here.
+        </div>
+      )}
+
+      {mappings.length === 0 ? (
+        <Empty>No project mappings yet.</Empty>
+      ) : (
+        <ul className="space-y-2">
+          {mappings.map((m) => (
+            <li
+              key={m.project_id}
+              className="flex items-center gap-3 rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-3 py-2.5"
+            >
+              <span className="font-mono text-xs">{m.project_id}</span>
+              <span className="text-[color:var(--text-muted)]">⇌</span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] border border-[color:var(--accent-violet-ring)] text-xs font-mono">
+                {m.jira_project_key}
+              </span>
+              <button
+                type="button"
+                onClick={() => remove(m.project_id)}
+                disabled={submitting}
+                className="ml-auto inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-[color:var(--text-muted)] hover:text-[color:var(--accent-rose-fg)] disabled:opacity-40"
+              >
+                <X className="w-3 h-3" /> remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <form onSubmit={bind} className="flex items-end gap-2 flex-wrap">
+        <label className="block flex-1 min-w-[180px]">
+          <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">PRISM project</span>
+          <select
+            value={pid}
+            onChange={(e) => setPid(e.target.value)}
+            disabled={!connected}
+            className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 text-sm disabled:opacity-40"
+          >
+            <option value="">— select project —</option>
+            {projects.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </label>
+        <label className="block flex-1 min-w-[140px]">
+          <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">Jira project key</span>
+          <input
+            value={jkey}
+            onChange={(e) => setJkey(e.target.value)}
+            placeholder="PLAT"
+            disabled={!connected}
+            className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs disabled:opacity-40"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={submitting || !connected || !pid.trim() || !jkey.trim()}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-sm uppercase tracking-wider disabled:opacity-30 hover:opacity-90"
+        >
+          {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+          Bind
+        </button>
+      </form>
 
       {error && (
         <div className="rounded-md border border-[color:var(--accent-rose-ring)] bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] px-3 py-2 text-xs">

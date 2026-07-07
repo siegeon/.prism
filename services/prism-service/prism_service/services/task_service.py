@@ -136,8 +136,13 @@ class TaskService:
 
     def __init__(
         self, db_path: str, embed_fn: Optional[EmbedFn] = None,
-        scores_db: Optional[str] = None,
+        scores_db: Optional[str] = None, project_id: str = "",
     ) -> None:
+        # The PRISM project this store belongs to — read by the Jira outbound
+        # hook to resolve the per-project Jira mapping (services/jira_mappings).
+        # Empty in unit contexts that never map to Jira; the hook then falls
+        # back to the PRISM_JIRA_PROJECT_KEY env exactly as before.
+        self.project_id = project_id
         # THREAD-SAFE STORAGE (task 0584addb, PR #196 follow-up): one
         # sqlite connection PER THREAD via a thread-local factory — the
         # old single shared handle (check_same_thread=False) let

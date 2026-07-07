@@ -68,13 +68,25 @@ def reset_receipts() -> None:
 
 
 # --------------------------------------------------------------------------
-# Mapping — for this slice, a single default project key from the env. The
-# per-task / per-project mapping STORE is a follow-up (see the slice notes).
+# Mapping — resolve a task's Jira project from the per-PRISM-project mapping
+# store FIRST (services/jira_mappings.py), and fall back to the single global
+# PRISM_JIRA_PROJECT_KEY env only when that project has no mapping.
 # --------------------------------------------------------------------------
 
-def project_key_for_task(task) -> str:
-    """Resolve the Jira project key a task maps to. Slice D: the single
-    default from PRISM_JIRA_PROJECT_KEY ('' when unmapped => outbound no-ops)."""
+def project_key_for_task(task, task_svc=None) -> str:
+    """Resolve the Jira project key a task maps to. Consults the per-project
+    mapping store keyed by the task's PRISM project_id (carried on task_svc),
+    then falls back to PRISM_JIRA_PROJECT_KEY ('' when neither resolves =>
+    outbound no-ops, so existing/unmapped flows stay untouched)."""
+    project_id = (getattr(task_svc, "project_id", "") or "").strip()
+    if project_id:
+        try:
+            from prism_service.services import jira_mappings
+            mapped = jira_mappings.default_service().get(project_id)
+            if mapped:
+                return mapped
+        except Exception:
+            pass
     return (os.environ.get("PRISM_JIRA_PROJECT_KEY", "") or "").strip()
 
 
@@ -91,7 +103,7 @@ def outbound_create(task_svc, task, project_key: str | None = None) -> str | Non
         return None
     if getattr(task, "jira_issue_key", "") or "":
         return None  # already mapped — nothing to create (and no recursion)
-    key = project_key if project_key is not None else project_key_for_task(task)
+    key = project_key if project_key is not None else project_key_for_task(task, task_svc)
     if not key:
         return None
     try:
