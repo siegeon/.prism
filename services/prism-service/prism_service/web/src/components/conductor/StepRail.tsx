@@ -58,16 +58,33 @@ function stepTokens(rows: StepTurn[]): number {
   return (rows ?? []).reduce((a, r) => a + (typeof r.turn_tokens === "number" ? r.turn_tokens : 0), 0);
 }
 
-// Right-aligned per-stage metric: duration + tokens (when known) + a drill
-// chevron. Replaces the redundant passed-pill/receipt on a collapsed row —
-// the green ✓ on the spine already says "done".
-function StepMeta({ durMs, tokens, hasTurns, open }: { durMs?: number; tokens: number; hasTurns: boolean; open: boolean }) {
+// Per-stage metric rendered as a RELATIVE bar (filled vs the heaviest stage)
+// with the numbers tucked underneath — fills the row's empty middle and lets
+// you eyeball where the tokens/time went across the run. The bar tracks tokens
+// when any stage spent tokens, else duration; the caption shows both. Replaces
+// the redundant passed-pill — the spine ✓ already says "done".
+function StepMeta({ durMs, tokens, maxTokens, maxDur, hasTurns, open }: {
+  durMs?: number; tokens: number; maxTokens: number; maxDur: number; hasTurns: boolean; open: boolean;
+}) {
+  const useTokens = maxTokens > 0;
+  const val = useTokens ? tokens : (durMs ?? 0);
+  const max = useTokens ? maxTokens : maxDur;
+  const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
+  const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
   return (
-    <span className="ml-auto flex items-center gap-2.5 flex-none text-[10px] font-mono text-[color:var(--text-muted)] tabular-nums">
-      {durMs != null && durMs >= 1000 && <span title="time this stage was active">{fmtDur(durMs)}</span>}
-      {tokens > 0 && <span title="tokens spent on this stage" style={{ color: "var(--accent-violet-fg)" }}>{fmtTokens(tokens)} tok</span>}
-      {hasTurns && <span className="inline-block transition-transform text-[color:var(--text-muted)]" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>}
-    </span>
+    <div className="ml-auto flex items-center gap-2 flex-1 min-w-0 max-w-[420px] pl-6">
+      <div className="flex-1 min-w-0 flex flex-col gap-1">
+        <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+          {val > 0 && <div className="h-full rounded-full" style={{ width: `${pct}%`, background: useTokens ? "var(--accent-violet-bg)" : "var(--accent-teal-bg)" }} />}
+        </div>
+        <div className="flex items-center gap-2.5 text-[9px] font-mono tabular-nums leading-none text-[color:var(--text-muted)] justify-end">
+          {tokens > 0 && <span style={{ color: "var(--accent-violet-fg)" }}>{fmtTokens(tokens)} tok</span>}
+          {durMs != null && durMs >= 1000 && <span>{fmtDur(durMs)}</span>}
+          {!hasCaption && <span className="opacity-40">—</span>}
+        </div>
+      </div>
+      {hasTurns && <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none self-start mt-0.5" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>}
+    </div>
   );
 }
 
@@ -139,6 +156,14 @@ export default function StepRail({
   const steps = WORKFLOW_STEPS_ORDERED;
   const byStep = turnsByStep(turns ?? []);
   const durByStep = stageDurations(turns ?? []);
+  // Bar scale: the heaviest stage across the run (so bars are relative to it).
+  let maxTokens = 0, maxDur = 0;
+  for (const s of steps) {
+    const tk = stepTokens(byStep[s.id] ?? []);
+    if (tk > maxTokens) maxTokens = tk;
+    const d = durByStep[s.id] ?? 0;
+    if (d > maxDur) maxDur = d;
+  }
   const curIdx = steps.findIndex((s) => s.id === step);
   // Pulse ONLY when genuinely being driven now (a real recent conductor
   // transition on THIS task), never merely because status is in_progress.
@@ -233,7 +258,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} maxTokens={maxTokens} maxDur={maxDur} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -270,7 +295,7 @@ export default function StepRail({
                               {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
                             </span>
                           )}
-                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens(stepTurns)} hasTurns={hasTurns} open={rowOpen} />}
+                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens(stepTurns)} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
                           {cur && hasTurns && (
                             <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
                           )}
@@ -372,8 +397,8 @@ function VerifiedBy({ persona }: { persona: string }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns, durMs }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number;
+function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; maxTokens: number; maxDur: number;
 }) {
   const [receipt, setReceipt] = useState(false);
   const g = gi.g;
@@ -392,7 +417,7 @@ function GateRow({ s, gi, open, onToggle, turns, durMs }: {
             <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
-          <StepMeta durMs={durMs} tokens={stepTokens(turns ?? [])} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+          <StepMeta durMs={durMs} tokens={stepTokens(turns ?? [])} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
         )}
       </button>
       {open && g && (
