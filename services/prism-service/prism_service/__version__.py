@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.18"
+PRISM_VERSION = "6.8.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.19: INVERTED-QUEUE SANDBOX (task e825e00a) — isolated prove-out of "
+    "server-owned orchestration. New services/job_queue.py (own sqlite file + "
+    "sandbox_jobs table) + /api/conductor/jobs/{enqueue,claim,report,state}: the "
+    "server holds a staged step-plan and DISPENSES self-describing jobs; any client "
+    "(curl or MCP) works the pull-loop claim->do->report. Lease + visibility-timeout "
+    "requeue, fanout stages drained concurrently, gate released only to a worker "
+    "DISTINCT from the prior producer. Deliberately off the real conductor. "
     "v6.8.18: CONDUCTOR CARD SHIPPED TO PRODUCTION (task 696cacf5) — the approved "
     "Timeline-D design is now the REAL ConductorPage TaskTile, combined onto the "
     "honest-activity conductor (working/awaiting_gate/adrift/stalled pill, fanout "
