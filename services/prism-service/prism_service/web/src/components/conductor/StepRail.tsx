@@ -10,6 +10,7 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { domainTone } from "@/lib/domainTone";
+import { fmtTokens } from "@/lib/format";
 import type { PhaseProgress, Activity } from "./SdlcProgress";
 import type { GanttGate } from "./TaskActivityGantt";
 
@@ -24,7 +25,51 @@ function clockHM(ts: number): string {
 // One raw audit turn (same rows as the Timeline card). Drilling into a step
 // reveals the turns that fired WHILE it was current — the implementation view
 // and the timeline are the same thing, disclosed hierarchically.
-export type StepTurn = { actor?: string; action?: string; details?: string; timestamp?: string };
+export type StepTurn = { actor?: string; action?: string; details?: string; timestamp?: string; turn_tokens?: number };
+
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+// Duration a task SAT on each step = gap between when it entered that step and
+// entered the next. The terminal/current step has no "next", so no duration.
+function stageDurations(turns: StepTurn[]): Record<string, number> {
+  const entries: { step: string; ts: number }[] = [];
+  let cur = "";
+  for (const t of turns ?? []) {
+    const dest = stepDestOf(t.action, t.details);
+    if (dest && dest !== cur) {
+      cur = dest;
+      const ts = t.timestamp ? new Date(t.timestamp).getTime() : NaN;
+      if (!isNaN(ts)) entries.push({ step: dest, ts });
+    }
+  }
+  const out: Record<string, number> = {};
+  for (let i = 0; i < entries.length - 1; i++) {
+    out[entries[i].step] = Math.max(0, entries[i + 1].ts - entries[i].ts);
+  }
+  return out;
+}
+function stepTokens(rows: StepTurn[]): number {
+  return (rows ?? []).reduce((a, r) => a + (typeof r.turn_tokens === "number" ? r.turn_tokens : 0), 0);
+}
+
+// Right-aligned per-stage metric: duration + tokens (when known) + a drill
+// chevron. Replaces the redundant passed-pill/receipt on a collapsed row —
+// the green ✓ on the spine already says "done".
+function StepMeta({ durMs, tokens, hasTurns, open }: { durMs?: number; tokens: number; hasTurns: boolean; open: boolean }) {
+  return (
+    <span className="ml-auto flex items-center gap-2.5 flex-none text-[10px] font-mono text-[color:var(--text-muted)] tabular-nums">
+      {durMs != null && durMs >= 1000 && <span title="time this stage was active">{fmtDur(durMs)}</span>}
+      {tokens > 0 && <span title="tokens spent on this stage" style={{ color: "var(--accent-violet-fg)" }}>{fmtTokens(tokens)} tok</span>}
+      {hasTurns && <span className="inline-block transition-transform text-[color:var(--text-muted)]" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>}
+    </span>
+  );
+}
 
 function clockISO(ts?: string): string {
   return ts ? String(ts).slice(11, 19) : "";
@@ -93,6 +138,7 @@ export default function StepRail({
 }) {
   const steps = WORKFLOW_STEPS_ORDERED;
   const byStep = turnsByStep(turns ?? []);
+  const durByStep = stageDurations(turns ?? []);
   const curIdx = steps.findIndex((s) => s.id === step);
   // Pulse ONLY when genuinely being driven now (a real recent conductor
   // transition on THIS task), never merely because status is in_progress.
@@ -187,7 +233,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -224,11 +270,9 @@ export default function StepRail({
                               {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
                             </span>
                           )}
-                          {hasTurns && (
-                            <span className="text-[9px] font-mono text-[color:var(--text-muted)] flex items-center gap-1 flex-none">
-                              {stepTurns.length} turn{stepTurns.length === 1 ? "" : "s"}
-                              <span className="inline-block transition-transform" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
-                            </span>
+                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens(stepTurns)} hasTurns={hasTurns} open={rowOpen} />}
+                          {cur && hasTurns && (
+                            <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
                           )}
                         </div>
                       </div>
@@ -328,30 +372,28 @@ function VerifiedBy({ persona }: { persona: string }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[];
+function GateRow({ s, gi, open, onToggle, turns, durMs }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number;
 }) {
   const [receipt, setReceipt] = useState(false);
   const g = gi.g;
   const override = gi.state === "override";
-  const badgeTone = gi.state === "pending" ? "amber" : "emerald";
-  const badgeLabel = gi.state === "pending" ? "pending" : "passed";
   return (
     <div>
       <button onClick={onToggle} className="w-full flex items-center gap-2 min-h-[22px] text-left rounded-md px-1.5 -mx-1.5 hover:bg-[color:var(--surface-2)] transition-colors">
         <Persona persona={s.persona ?? ""} isGate />
         <span className="text-[13px] text-[color:var(--text-primary)] whitespace-nowrap">{stepLabel(s.id)}</span>
-        <span className="ml-auto flex items-center gap-2 min-w-0">
-          <span className="text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded flex-none"
-            style={{ background: `var(--accent-${badgeTone}-fg)`, color: badgeTone === "amber" ? "#3a2a04" : "#06281c" }}>
-            {badgeLabel}
+        {/* A resolved gate needs no "passed" pill or receipt line here — the
+            spine node is already a green ✓ (amber ! on override). Show the
+            useful stage metric instead; the receipt lives in the panel below. */}
+        {gi.state === "pending" ? (
+          <span className="ml-auto flex items-center gap-2 flex-none">
+            <span className="text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ background: "var(--accent-amber-fg)", color: "#3a2a04" }}>pending</span>
+            <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
-          <span className="text-[11px] font-mono font-bold flex-none" style={{ color: override ? "var(--accent-amber-fg)" : "var(--accent-emerald-fg)" }}>
-            {override ? "!" : "✓"}
-          </span>
-          {g?.reason && <span className="text-[11.5px] text-[color:var(--text-muted)] truncate hidden sm:block">{g.reason}</span>}
-          <span className="text-[10px] font-mono text-[color:var(--text-muted)] flex-none transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
-        </span>
+        ) : (
+          <StepMeta durMs={durMs} tokens={stepTokens(turns ?? [])} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+        )}
       </button>
       {open && g && (
         <div className="mt-2 rounded-lg p-3 border"
