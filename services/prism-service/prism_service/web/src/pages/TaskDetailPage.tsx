@@ -919,14 +919,15 @@ export default function TaskDetailPage() {
         )}
       </Card>
 
-      <Card>
-        <SectionLabel>Timeline ({history.length})</SectionLabel>
-        {history.length === 0 ? (
-          <Empty>No turns recorded.</Empty>
-        ) : (
+      {/* The timeline now lives INSIDE the Implementation tab, drilled per
+          step (hierarchical). Keep the flat standalone card only for tasks
+          that never entered the conductor (no Implementation tab to hold it). */}
+      {!conductorOn && history.length > 0 && (
+        <Card>
+          <SectionLabel>Timeline ({history.length})</SectionLabel>
           <Timeline rows={history} tokens={task.phase_progress?.tokens_since_step} />
-        )}
-      </Card>
+        </Card>
+      )}
     </Page>
   );
 }

@@ -120,8 +120,11 @@ export default function StepRail({
   };
   steps.forEach((s, i) => {
     const done = curIdx >= 0 && i < curIdx;
+    const stepHasTurns = (byStep[s.id]?.length ?? 0) > 0;
     const isDoneAgent = done && s.type !== "gate";
-    if (collapseDone && isDoneAgent) { pend.push({ s, i }); return; }
+    // Fold only EMPTY done agent steps; a done step that carries turns stays
+    // visible so its drilled-in timeline is reachable (hierarchy over brevity).
+    if (collapseDone && isDoneAgent && !stepHasTurns) { pend.push({ s, i }); return; }
     flush();
     items.push({ kind: "step", s, i });
   });

@@ -4,7 +4,7 @@ import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
 import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
-import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
+import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -70,7 +70,6 @@ export default function PlanView({
   // Default to Implementation when the conductor is engaged (the live status),
   // else the first available artifact tab.
   const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "doc");
-  const [subView, setSubView] = useState<"rail" | "timeline">("rail");
 
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
@@ -103,22 +102,6 @@ export default function PlanView({
             open full screen ↗
           </a>
         )}
-        {cur === "implementation" && hasImpl && (
-          <div className="ml-auto flex items-center rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] p-0.5">
-            {(["rail", "timeline"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setSubView(v)}
-                className={
-                  "px-2.5 py-1 text-[10px] uppercase tracking-wider rounded transition-colors " +
-                  (subView === v ? "bg-[color:var(--surface-3)] text-[color:var(--text-primary)]" : "text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]")
-                }
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {cur === "prototype" && hasProto && (
@@ -146,22 +129,16 @@ export default function PlanView({
             <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} />
           </div>
 
-          {subView === "rail" ? (
-            <StepRail
-              step={c.step}
-              gateState={c.gateState}
-              phase={c.phase}
-              status={c.status}
-              activity={c.activity}
-              gates={c.timeline?.gates ?? []}
-              turns={c.turns ?? []}
-              reduced={reduced}
-            />
-          ) : c.timeline ? (
-            <TaskActivityGantt timeline={c.timeline} reduced={reduced} />
-          ) : (
-            <Empty>No wall-clock activity recorded yet.</Empty>
-          )}
+          <StepRail
+            step={c.step}
+            gateState={c.gateState}
+            phase={c.phase}
+            status={c.status}
+            activity={c.activity}
+            gates={c.timeline?.gates ?? []}
+            turns={c.turns ?? []}
+            reduced={reduced}
+          />
 
           {c.gateReason && c.gateState !== "pending" && onValidation && (
             <button
