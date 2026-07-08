@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.20"
+PRISM_VERSION = "6.8.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.21: STATE REPLAY on the task detail (task e825e00a) — new "
+    "components/conductor/StateReplay.tsx renders a VISUAL playback of a task's "
+    "journey through the SDLC ladder, read from the real advance_task/gate_decide "
+    "history. Play/step/scrub through every transition: which step, when, by whom, "
+    "and how each gate resolved. Answers 'let me see in the ticket what happened'. "
     "v6.8.20: INVERTED PULL-LOOP OVER THE REAL CONDUCTOR (task e825e00a) — "
     "additive api/conductor_flow.py -> /api/conductor/flow/{start,next,report}. "
     "Turns the existing conductor state machine into a job dispenser WITHOUT "

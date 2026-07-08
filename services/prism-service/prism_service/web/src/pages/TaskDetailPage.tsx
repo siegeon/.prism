@@ -6,6 +6,7 @@ import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
 import { domainTone, priorityTone } from "@/lib/domainTone";
 import PlanView from "@/components/plan/PlanView";
+import StateReplay, { framesFromHistory } from "@/components/conductor/StateReplay";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
@@ -917,6 +918,15 @@ export default function TaskDetailPage() {
           </ul>
         )}
       </Card>
+
+      {framesFromHistory(history).length > 0 && (
+        <Card>
+          <SectionLabel>State replay — the task's journey through the conductor</SectionLabel>
+          <div className="mt-2">
+            <StateReplay history={history} />
+          </div>
+        </Card>
+      )}
 
       <Card>
         <SectionLabel>Timeline ({history.length})</SectionLabel>
