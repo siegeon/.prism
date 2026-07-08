@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.21"
+PRISM_VERSION = "6.8.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.22: DRILL-DOWN timeline in the Implementation view (task e825e00a) — "
+    "removed the standalone State Replay (noise). Each StepRail step in the "
+    "Implementation tab now DRILLS DOWN into the audit turns that fired on it "
+    "(indented + smaller, progressive disclosure) — the implementation view and "
+    "the Timeline are one thing, disclosed hierarchically. Reverts v6.8.21. "
     "v6.8.21: STATE REPLAY on the task detail (task e825e00a) — new "
     "components/conductor/StateReplay.tsx renders a VISUAL playback of a task's "
     "journey through the SDLC ladder, read from the real advance_task/gate_decide "

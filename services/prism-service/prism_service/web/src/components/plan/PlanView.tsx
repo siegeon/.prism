@@ -3,7 +3,7 @@ import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
 import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
-import StepRail from "@/components/conductor/StepRail";
+import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
 
 /**
@@ -25,6 +25,10 @@ export type ConductorInfo = {
   // Honest work state — drives the pulse/pill (only "working" animates).
   activity?: Activity | null;
   timeline?: Timeline | null;
+  // Raw audit turns (same rows as the Timeline card) so each StepRail step
+  // can DRILL DOWN into the turns that happened on it — the implementation
+  // view and the timeline are one thing, disclosed hierarchically.
+  turns?: StepTurn[];
 };
 export type GateControls = {
   reason: string;
@@ -150,6 +154,7 @@ export default function PlanView({
               status={c.status}
               activity={c.activity}
               gates={c.timeline?.gates ?? []}
+              turns={c.turns ?? []}
               reduced={reduced}
             />
           ) : c.timeline ? (

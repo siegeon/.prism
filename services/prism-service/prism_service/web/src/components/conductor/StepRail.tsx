@@ -21,10 +21,65 @@ function clockHM(ts: number): string {
   }
 }
 
+// One raw audit turn (same rows as the Timeline card). Drilling into a step
+// reveals the turns that fired WHILE it was current — the implementation view
+// and the timeline are the same thing, disclosed hierarchically.
+export type StepTurn = { actor?: string; action?: string; details?: string; timestamp?: string };
+
+function clockISO(ts?: string): string {
+  return ts ? String(ts).slice(11, 19) : "";
+}
+function shortDetail(details?: string): string {
+  const d = (details ?? "").replace(/\s+/g, " ").trim();
+  return d.length > 84 ? d.slice(0, 84) + "…" : d;
+}
+// The workflow_step this row moved the task INTO, or null (no step change).
+function stepDestOf(action?: string, details?: string): string | null {
+  const d = details ?? "";
+  if (action === "advance_task") return /(?:^|;\s*)to=([^;]*)/.exec(d)?.[1]?.trim() ?? null;
+  if (action === "updated") return /workflow_step:\s*'[^']*'\s*->\s*'([^']*)'/.exec(d)?.[1] ?? null;
+  return null;
+}
+// Bucket every turn under the step that was current when it fired.
+function turnsByStep(turns: StepTurn[]): Record<string, StepTurn[]> {
+  const out: Record<string, StepTurn[]> = {};
+  let cur = "";
+  for (const t of turns ?? []) {
+    const dest = stepDestOf(t.action, t.details);
+    if (dest) cur = dest;
+    (out[cur || "__pre__"] ??= []).push(t);
+  }
+  return out;
+}
+
+// Indented, smaller sub-step list under a drilled-open step (progressive
+// disclosure). Kept deliberately compact so the rail stays scannable.
+function TurnList({ rows }: { rows: StepTurn[] }) {
+  if (!rows.length) return <div className="ml-1 pl-3 text-[10px] text-[color:var(--text-muted)] py-1">no turns recorded on this step</div>;
+  return (
+    <div className="mt-1.5 mb-1 ml-1 pl-3 border-l border-[color:var(--border-default)] space-y-1">
+      {rows.map((r, i) => {
+        const tone = domainTone("action", r.action ?? "") ?? "slate";
+        return (
+          <div key={i} className="flex items-baseline gap-2 text-[10.5px] leading-snug">
+            <span className="font-mono tabular-nums text-[color:var(--text-muted)] flex-none">{clockISO(r.timestamp)}</span>
+            <span className="uppercase tracking-wide text-[8.5px] px-1 py-0.5 rounded flex-none"
+              style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}>
+              {(r.action ?? "—").replace(/_/g, " ")}
+            </span>
+            {r.actor && <span className="text-[9px] font-mono text-[color:var(--text-muted)] flex-none opacity-70">{r.actor}</span>}
+            <span className="text-[color:var(--text-secondary)] truncate">{shortDetail(r.details)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, reduced,
+  step, gateState, phase, status, activity, gates, turns, reduced,
 }: {
   step?: string;
   gateState?: string;
@@ -33,9 +88,11 @@ export default function StepRail({
   // Honest work state — the current-step node/% only pulses when "working".
   activity?: Activity | null;
   gates: GanttGate[];
+  turns?: StepTurn[];
   reduced?: boolean | null;
 }) {
   const steps = WORKFLOW_STEPS_ORDERED;
+  const byStep = turnsByStep(turns ?? []);
   const curIdx = steps.findIndex((s) => s.id === step);
   // Pulse ONLY when genuinely being driven now (a real recent conductor
   // transition on THIS task), never merely because status is in_progress.
@@ -127,37 +184,55 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} />
               ) : (
-                <div className="flex items-center gap-2 min-h-[22px]">
-                  <Persona persona={persona} isGate={isGate} />
-                  <span className={"text-[13px] " + (future ? "text-[color:var(--text-disabled)]" : "text-[color:var(--text-primary)]")}>
-                    {stepLabel(s.id)}
-                  </span>
-                  {cur && !isGate && (
-                    <div className="ml-auto flex items-center gap-2 min-w-0">
-                      {verifierPersona && <VerifiedBy persona={verifierPersona} />}
-                      {(phase?.fanout_dispatched ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
-                          title="ephemeral sub-agents dispatched vs returned for this step">
-                          <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
-                          <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
-                            <span className="block h-full rounded-full" style={{
-                              width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
-                              background: "var(--accent-teal-bg)",
-                            }} />
-                          </span>
+                (() => {
+                  const stepTurns = byStep[s.id] ?? [];
+                  const hasTurns = stepTurns.length > 0;
+                  return (
+                    <div>
+                      <div
+                        onClick={hasTurns ? () => setOpen(rowOpen ? null : s.id) : undefined}
+                        className={"flex items-center gap-2 min-h-[22px] rounded-md px-1.5 -mx-1.5 " + (hasTurns ? "cursor-pointer hover:bg-[color:var(--surface-2)] transition-colors" : "")}
+                      >
+                        <Persona persona={persona} isGate={isGate} />
+                        <span className={"text-[13px] " + (future ? "text-[color:var(--text-disabled)]" : "text-[color:var(--text-primary)]")}>
+                          {stepLabel(s.id)}
                         </span>
-                      )}
-                      <span className="text-[10px] font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
-                        <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
-                          animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
-                          transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
-                        {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
-                      </span>
+                        <div className="ml-auto flex items-center gap-2 min-w-0">
+                          {cur && !isGate && verifierPersona && <VerifiedBy persona={verifierPersona} />}
+                          {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
+                            <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
+                              title="ephemeral sub-agents dispatched vs returned for this step">
+                              <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
+                              <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                                <span className="block h-full rounded-full" style={{
+                                  width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
+                                  background: "var(--accent-teal-bg)",
+                                }} />
+                              </span>
+                            </span>
+                          )}
+                          {cur && !isGate && (
+                            <span className="text-[10px] font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
+                              <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
+                                animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
+                                transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
+                              {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
+                            </span>
+                          )}
+                          {hasTurns && (
+                            <span className="text-[9px] font-mono text-[color:var(--text-muted)] flex items-center gap-1 flex-none">
+                              {stepTurns.length} turn{stepTurns.length === 1 ? "" : "s"}
+                              <span className="inline-block transition-transform" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {rowOpen && hasTurns && <TurnList rows={stepTurns} />}
                     </div>
-                  )}
-                </div>
+                  );
+                })()
               )}
             </div>
           </div>
@@ -250,8 +325,8 @@ function VerifiedBy({ persona }: { persona: string }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void;
+function GateRow({ s, gi, open, onToggle, turns }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[];
 }) {
   const [receipt, setReceipt] = useState(false);
   const g = gi.g;
@@ -303,6 +378,7 @@ function GateRow({ s, gi, open, onToggle }: {
           )}
         </div>
       )}
+      {open && (turns?.length ?? 0) > 0 && <TurnList rows={turns!} />}
     </div>
   );
 }
