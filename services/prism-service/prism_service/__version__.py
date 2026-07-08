@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.19"
+PRISM_VERSION = "6.8.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.20: INVERTED PULL-LOOP OVER THE REAL CONDUCTOR (task e825e00a) — "
+    "additive api/conductor_flow.py -> /api/conductor/flow/{start,next,report}. "
+    "Turns the existing conductor state machine into a job dispenser WITHOUT "
+    "touching conductor_service: start enters the flow, next reads the on-deck "
+    "job, report advances the SERVER (advance_task for agent steps, gate_decide "
+    "for gates). Gate jobs enforce distinct-actor by session identity up front. "
+    "The worker never encodes the SDLC sequence. "
     "v6.8.19: INVERTED-QUEUE SANDBOX (task e825e00a) — isolated prove-out of "
     "server-owned orchestration. New services/job_queue.py (own sqlite file + "
     "sandbox_jobs table) + /api/conductor/jobs/{enqueue,claim,report,state}: the "
