@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from prism_service.project_context import get_project
 from prism_service.services.conductor_service import ConductorService
+from prism_service.services import task_workspace
 
 router = APIRouter()
 
@@ -92,11 +93,25 @@ def flow_start(body: Ident, project: str = Query("default")) -> dict:
     task = svc._task_svc.get(body.task_id)
     if task is None:
         return {"ok": False, "error": "unknown task"}
+    # HONEST LOOP: give the task a real scratch workspace where the worker
+    # commits real tests/impl. red/green gates verify against THIS repo.
+    try:
+        ws = task_workspace.ensure_workspace(body.task_id)
+    except Exception as exc:  # never block the flow on workspace setup
+        ws = {"error": str(exc)}
     if not task.workflow_step:
         svc.advance_task(body.task_id, session_id=body.session_id,
                          model=body.model)
         task = svc._task_svc.get(body.task_id)
-    return {"ok": True, "job": _job(task)}
+    return {"ok": True, "job": _job(task), "workspace": ws}
+
+
+@router.get("/workspace")
+def flow_workspace(task_id: str) -> dict:
+    """Where the worker does its real work for this task. The verifier reads
+    the same path, so the worker's committed tests are what gates check."""
+    ws = task_workspace.workspace_for(task_id)
+    return {"workspace": ws}
 
 
 @router.post("/report")

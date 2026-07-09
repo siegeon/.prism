@@ -1707,11 +1707,25 @@ class ConductorService:
         # a verifier is attached, so we don't need a None-check here.
         try:
             run_kwargs: dict[str, Any] = {"task_id": task.id}
+            # HONEST LOOP (task e825e00a): if this task has its OWN scratch
+            # workspace, verify against THAT — the worker's real committed
+            # tests — scoped to its recorded baseline. A fabricated trace with
+            # no committed test yields zero tier0 claims and is refused. Falls
+            # back to the shared daemon checkout when no per-task workspace.
+            _tw = None
+            try:
+                from prism_service.services import task_workspace
+                _tw = task_workspace.workspace_for(task.id)
+            except Exception:
+                _tw = None
+            if _tw:
+                run_kwargs["workspace"] = _tw["path"]
+                run_kwargs["baseline_rev"] = _tw["baseline"]
             # Pass the agent checkout so Tier0 scopes the real diff. Without
             # it verifier.run() falls back to the daemon cwd (no diff ->
             # status=error 'nothing to verify'). project_root is the host
             # working tree wired by ProjectContext.attach_project_root.
-            if self._project_root:
+            elif self._project_root:
                 run_kwargs["workspace"] = str(self._project_root)
                 # Scope Tier0 to the COMMITTED BRANCH diff, not just the
                 # working tree. In a source-run dev checkout the working tree
