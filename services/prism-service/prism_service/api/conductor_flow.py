@@ -71,6 +71,10 @@ class Ident(BaseModel):
     session_id: Optional[str] = None
     outcome: object = ""
     model: Optional[str] = None
+    # Gates enforce for REAL by default (rubric for story/plan, verifier +
+    # artifact for red/green). override is an explicit, audited exception —
+    # a genuine independent reviewer forcing a decision — never the default.
+    override: bool = False
 
 
 @router.get("/next")
@@ -121,11 +125,13 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                               "clear its own gate — route to a distinct worker "
                               "(or the claude -p adjudicator)",
                     "producers": producers}
-        # Manual-kind gates (story/plan) need override; a DISTINCT actor
-        # supplying it is honest recovery, not self-approval.
+        # Approve on MERIT: no blanket override. story/plan are scored by
+        # their YAML rubric (plan_doc/plan_diagram); red/green run the
+        # verifier + the proof-carrying artifact tooth. A fabricated or
+        # missing proof is refused here, exactly as it should be.
         res = svc.gate_decide(body.task_id, "approve",
-                              reason=str(body.outcome) or "distinct-actor approval",
-                              override=True, session_id=body.session_id,
+                              reason=str(body.outcome) or "flow approval",
+                              override=body.override, session_id=body.session_id,
                               model=body.model)
     else:
         res = svc.advance_task(body.task_id, session_id=body.session_id,
