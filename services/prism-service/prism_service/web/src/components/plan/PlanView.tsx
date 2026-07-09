@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
@@ -39,6 +39,38 @@ export type GateControls = {
   decide: (action: "approve" | "reject") => void;
   busy: boolean;
 };
+
+// One committed RED test that pins the task's oracle: its function name, its
+// docstring (whose lead "AC-N / FR-N —" correlates it to an acceptance
+// criterion), and the file it lives in. Sourced from GET /api/tasks/:id/tests.
+export type PinTest = {
+  name: string;
+  doc?: string;
+  file?: string;
+};
+
+// Pull the leading acceptance-criterion id(s) out of a test's docstring.
+// Docs read like "AC-1 / FR-1 — a header row pins to the top". We surface the
+// AC id (preferring AC over FR) as a badge and keep the remainder as the
+// human explanation. No leading id → no badge, whole doc is the explanation.
+export function parseAc(doc?: string): { badge: string | null; rest: string } {
+  const d = (doc ?? "").trim();
+  // Leading run of "AC-N" / "FR-N" ids joined by "/", then an em/en dash or
+  // hyphen separator before the prose.
+  const m = /^((?:AC|FR)-\d+)(?:\s*\/\s*(?:AC|FR)-\d+)*\s*(?:[—–-]\s*)?/i.exec(d);
+  if (!m) return { badge: null, rest: d };
+  const ids = m[0].match(/(?:AC|FR)-\d+/gi)?.map((s) => s.toUpperCase()) ?? [];
+  const badge = ids.find((x) => x.startsWith("AC")) ?? ids[0] ?? null;
+  return { badge, rest: d.slice(m[0].length).trim() };
+}
+
+// Ascending numeric order of the AC/FR ids (AC-2 before AC-10); tests without
+// a parsed id sink to the end but keep a stable order.
+function acOrder(t: PinTest): number {
+  const b = parseAc(t.doc).badge;
+  const n = b ? parseInt(b.replace(/\D+/g, ""), 10) : NaN;
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
 
 // ── Gate evidence ("what you're approving") ─────────────────────────────
 // When a gate is PENDING a human is asked to approve/reject with NO visible
@@ -142,6 +174,8 @@ export default function PlanView({
   reduced,
   gate,
   onValidation,
+  pinTests,
+  tabRequest,
 }: {
   diagram?: string;
   doc?: string;
@@ -150,21 +184,35 @@ export default function PlanView({
   reduced?: boolean | null;
   gate?: GateControls | null;
   onValidation?: () => void;
+  // RED tests pinning this task, drilled from the parent (avoids a 2nd fetch).
+  pinTests?: PinTest[];
+  // External tab drive: the oracle card's "view tests" summary bumps `n` to
+  // switch this panel to the Tests tab. The nonce lets a repeat click re-fire.
+  tabRequest?: { tab: string; n: number } | null;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
   const hasProto = !!prototypeSrc;
   const hasImpl = !!conductor && !!(conductor.step || (conductor.gateState && conductor.gateState !== "none"));
+  const tests = pinTests ?? [];
+  const hasTests = tests.length > 0;
 
   const tabs: { key: string; label: string }[] = [];
   if (hasProto) tabs.push({ key: "prototype", label: "Prototype" });
   if (hasDiagram) tabs.push({ key: "diagram", label: "Diagram" });
   if (hasDoc) tabs.push({ key: "doc", label: "Proposed change" });
   if (hasImpl) tabs.push({ key: "implementation", label: "Implementation" });
+  if (hasTests) tabs.push({ key: "tests", label: "Tests" });
 
   // Default to Implementation when the conductor is engaged (the live status),
   // else the first available artifact tab.
   const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "doc");
+
+  // Honor an external tab request (e.g. the oracle "N RED" summary click).
+  // Keyed on the nonce so clicking again after a manual tab change re-fires.
+  useEffect(() => {
+    if (tabRequest?.tab) setActive(tabRequest.tab);
+  }, [tabRequest?.n, tabRequest?.tab]);
 
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
@@ -216,6 +264,66 @@ export default function PlanView({
       )}
       {cur === "doc" && hasDoc && (
         <Markdown text={doc!} className="space-y-4 max-w-none" />
+      )}
+
+      {cur === "tests" && hasTests && (
+        <div className="space-y-3">
+          <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
+            The committed tests whose failure currently proves this task is{" "}
+            <span className="font-medium">not done</span> — each pins an
+            acceptance criterion. They turn green only when the outcome is met.
+          </div>
+          <ul className="space-y-3">
+            {[...tests].sort((a, b) => acOrder(a) - acOrder(b)).map((t) => {
+              const { badge, rest } = parseAc(t.doc);
+              return (
+                <li
+                  key={`${t.file}:${t.name}`}
+                  className="rounded-md p-3 border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {badge && (
+                      <span
+                        className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{
+                          background: "var(--accent-violet-bg)",
+                          color: "var(--accent-violet-fg)",
+                          boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)",
+                        }}
+                        title="pins acceptance criterion"
+                      >
+                        {badge}
+                      </span>
+                    )}
+                    <code className="font-mono text-[12px] text-[color:var(--text-primary)] break-all">
+                      {t.name}
+                    </code>
+                    <span
+                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                      style={{
+                        color: "var(--accent-rose-fg)",
+                        boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
+                      }}
+                      title="this test is currently RED"
+                    >
+                      ✗ red
+                    </span>
+                  </div>
+                  {rest && (
+                    <div className="text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed mt-1.5">
+                      {rest}
+                    </div>
+                  )}
+                  {t.file && (
+                    <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-1.5 truncate">
+                      {t.file}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
 
       {cur === "implementation" && hasImpl && c && (

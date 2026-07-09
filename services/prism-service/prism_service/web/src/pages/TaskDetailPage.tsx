@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
 import { domainTone, priorityTone } from "@/lib/domainTone";
-import PlanView from "@/components/plan/PlanView";
+import PlanView, { parseAc } from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
@@ -384,6 +384,10 @@ export default function TaskDetailPage() {
   // The RED tests that pin this task's oracle (empty unless a committed test
   // file names the task) — rendered beneath the oracle panel.
   const [pinTests, setPinTests] = useState<PinTest[]>([]);
+  // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
+  // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
+  const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
+  const planRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -529,6 +533,12 @@ export default function TaskDetailPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Oracle "N RED" summary → drive PlanView to the Tests tab + scroll to it.
+  const showTests = () => {
+    setTabRequest((p) => ({ tab: "tests", n: (p?.n ?? 0) + 1 }));
+    planRef.current?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
   };
 
   if (error) {
@@ -691,14 +701,17 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
-      {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype) && (
+      {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype || pinTests.length > 0) && (
         <Stagger i={0} reduced={reduced}>
+        <div ref={planRef}>
         <Card>
           <PlanView
             diagram={task.plan_diagram}
             doc={task.plan_doc}
             prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
             reduced={reduced}
+            pinTests={pinTests}
+            tabRequest={tabRequest}
             conductor={conductorOn ? {
               step: task.workflow_step,
               gateState: task.gate_state,
@@ -720,6 +733,7 @@ export default function TaskDetailPage() {
             onValidation={() => navigate(`/tasks/${id}/validation`, { state: { from: `/tasks/${id}` } })}
           />
         </Card>
+        </div>
         </Stagger>
       )}
 
@@ -791,53 +805,36 @@ export default function TaskDetailPage() {
                     <span className="opacity-90">Owner outcome: slice-only — a green slice is not yet proof the full owner outcome is met</span>
                   </div>}
             </div>
-            {pinTests.length > 0 && (
-              <div
-                className="pt-3"
-                style={{ borderTop: "1px solid var(--surface-3)" }}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="opacity-50 text-[11px] uppercase tracking-wider">
+            {pinTests.length > 0 && (() => {
+              // One-line, highlight-free summary: "Pinning tests · 3 RED ·
+              // AC-1, AC-4, AC-2". Clicking opens the full readable list in the
+              // Tests tab of the work panel above (progressive disclosure).
+              const acs = pinTests.map((t) => parseAc(t.doc).badge).filter(Boolean) as string[];
+              return (
+                <div className="pt-3" style={{ borderTop: "1px solid var(--surface-3)" }}>
+                  <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">
                     pinning tests — what currently proves it&apos;s NOT done
-                  </span>
-                  <span
-                    className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                    style={{
-                      background: "var(--accent-rose-bg)",
-                      color: "var(--accent-rose-fg)",
-                      boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
-                    }}
-                    title="these tests are RED"
+                  </div>
+                  <button
+                    type="button"
+                    onClick={showTests}
+                    className="flex items-center gap-2 text-left w-full group"
+                    title="view the pinning tests, correlated to their acceptance criteria"
                   >
-                    {pinTests.length} red
-                  </span>
+                    <span className="shrink-0 text-[color:var(--accent-rose-fg)]" aria-hidden>✗</span>
+                    <span className="leading-relaxed text-[color:var(--text-primary)]">
+                      Pinning tests · {pinTests.length} RED
+                      {acs.length > 0 && (
+                        <span className="text-[color:var(--text-secondary)]"> · {acs.join(", ")}</span>
+                      )}
+                    </span>
+                    <span className="ml-auto text-[11px] uppercase tracking-wider text-[color:var(--text-muted)] group-hover:text-[color:var(--text-secondary)] shrink-0">
+                      view →
+                    </span>
+                  </button>
                 </div>
-                <ul className="space-y-2">
-                  {pinTests.map((t) => (
-                    <li key={`${t.file}:${t.name}`} className="flex items-start gap-2">
-                      <span
-                        className="shrink-0 mt-[3px] text-[color:var(--accent-rose-fg)]"
-                        title="failing"
-                        aria-hidden
-                      >
-                        ✗
-                      </span>
-                      <div className="min-w-0">
-                        <code className="font-mono text-[12px] text-[color:var(--accent-rose-fg)] break-all">
-                          {t.name}
-                        </code>
-                        {t.doc && (
-                          <div className="opacity-80 leading-relaxed mt-0.5">{t.doc}</div>
-                        )}
-                        {t.file && (
-                          <div className="opacity-40 text-[11px] font-mono mt-0.5 truncate">{t.file}</div>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </Card>
       )}
