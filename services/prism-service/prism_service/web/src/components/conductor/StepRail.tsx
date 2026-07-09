@@ -169,7 +169,9 @@ export default function StepRail({
   // transition on THIS task), never merely because status is in_progress.
   const live = (activity?.state ?? status ?? "").toLowerCase() === "working";
   const [open, setOpen] = useState<string | null>(null);
-  const [collapseDone, setCollapseDone] = useState(true);
+  // Default to EXPANDED so the per-stage bars + drill-downs are visible up
+  // front; the toggle folds all completed agent steps into one pill.
+  const [collapseDone, setCollapseDone] = useState(false);
 
   const gateFor = (id: string) => gates.find((g) => id === `${g.gate}_gate`);
   const gateInfo = (id: string, i: number): GateInfo => {
@@ -191,11 +193,10 @@ export default function StepRail({
   };
   steps.forEach((s, i) => {
     const done = curIdx >= 0 && i < curIdx;
-    const stepHasTurns = (byStep[s.id]?.length ?? 0) > 0;
     const isDoneAgent = done && s.type !== "gate";
-    // Fold only EMPTY done agent steps; a done step that carries turns stays
-    // visible so its drilled-in timeline is reachable (hierarchy over brevity).
-    if (collapseDone && isDoneAgent && !stepHasTurns) { pend.push({ s, i }); return; }
+    // Collapse Done folds every completed agent step into one pill; expand to
+    // get them back (with their per-stage bars + drilled-in turns).
+    if (collapseDone && isDoneAgent) { pend.push({ s, i }); return; }
     flush();
     items.push({ kind: "step", s, i });
   });
