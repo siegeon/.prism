@@ -361,6 +361,34 @@ export default function PlanView({
               {/* Show the evidence FIRST — what the reviewer is approving —
                   then the approve/reject control directly beneath it. */}
               <GateEvidence step={c.step} turns={c.turns ?? []} />
+              {tests.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--accent-rose-fg)" }}>
+                    {tests.length} failing test{tests.length > 1 ? "s" : ""} you're approving — each must go green to finish
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {[...tests].sort((a, b) => {
+                      const na = parseInt((parseAc(a.doc).badge || "").replace(/\D/g, "") || "999", 10);
+                      const nb = parseInt((parseAc(b.doc).badge || "").replace(/\D/g, "") || "999", 10);
+                      return na - nb;
+                    }).map((t) => {
+                      const { badge, rest } = parseAc(t.doc);
+                      return (
+                        <div key={`${t.file}:${t.name}`} className="rounded-md p-2.5 border border-[color:var(--border-default)] bg-[color:var(--surface-2)]">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {badge && (
+                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{badge}</span>
+                            )}
+                            <span className="font-mono text-[12px] break-all bg-transparent text-[color:var(--text-primary)]">{t.name}</span>
+                            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>✗ red</span>
+                          </div>
+                          <div className="text-[12px] leading-snug mt-1 text-[color:var(--text-secondary)]">{rest}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">Resolve gate</div>
               <textarea
                 value={gate.reason}
