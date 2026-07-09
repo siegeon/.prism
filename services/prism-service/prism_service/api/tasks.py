@@ -337,6 +337,67 @@ def get_task_prototype(task_id: str):
     return FileResponse(str(path), media_type="text/html")
 
 
+def _clean_doc(doc: str) -> str:
+    """Collapse whitespace and demote RST double-backtick literals so a test
+    docstring reads as plain prose in the UI panel."""
+    doc = (doc or "").strip()
+    doc = re.sub(r"``([^`]+)``", r"\1", doc)
+    return " ".join(doc.split())
+
+
+def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
+    """AST-parse a test module and return one record per ``def test_*`` with
+    its (cleaned) docstring. Never raises — a syntax error yields []."""
+    import ast
+
+    out: list[dict] = []
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return out
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            out.append(
+                {
+                    "name": node.name,
+                    "doc": _clean_doc(ast.get_docstring(node) or ""),
+                    "file": rel_file,
+                }
+            )
+    return out
+
+
+@router.get("/{task_id}/tests")
+def get_task_tests(task_id: str):
+    """Discover the test file(s) that PIN this task's oracle and return each
+    ``def test_*`` as ``{name, doc, file}`` so the detail page can show, next
+    to the oracle, exactly which tests currently prove the work is NOT done.
+
+    Discovery is content-based and read-only: scan ``tests/**/*.py`` for files
+    that mention the task id (full or first 8 chars) — the red-test file names
+    the task in its module docstring. Best-effort: any parse/read failure is
+    swallowed and an empty list is returned. task_id is validated (same shape
+    as the prototype route) so a crafted id can't influence the scan."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+
+    from pathlib import Path
+
+    tests_root = Path(__file__).resolve().parents[2] / "tests"
+    short = task_id[:8]
+    results: list[dict] = []
+    if tests_root.is_dir():
+        for p in sorted(tests_root.rglob("*.py")):
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if task_id in text or (len(short) >= 8 and short in text):
+                rel = p.relative_to(tests_root.parent).as_posix()
+                results.extend(_extract_tests_from_source(text, rel))
+    return {"tests": results}
+
+
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     status: Optional[str] = None

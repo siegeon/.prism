@@ -49,6 +49,15 @@ type Task = {
   has_prototype?: boolean;
 };
 
+// One PINNING/RED test surfaced next to the oracle: the committed test whose
+// failure currently proves the work is NOT done. Discovered server-side from
+// the real test file (GET /api/tasks/:id/tests) — name + its docstring.
+type PinTest = {
+  name: string;
+  doc?: string;
+  file?: string;
+};
+
 // Slim shape for the child-task list — only what the row renders.
 type ChildTask = {
   id?: string;
@@ -372,6 +381,9 @@ export default function TaskDetailPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [children, setChildren] = useState<ChildTask[]>([]);
+  // The RED tests that pin this task's oracle (empty unless a committed test
+  // file names the task) — rendered beneath the oracle panel.
+  const [pinTests, setPinTests] = useState<PinTest[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -420,6 +432,14 @@ export default function TaskDetailPage() {
         setChildren((all.tasks ?? []).filter((t) => t.parent_id === id));
       } catch {
         setChildren([]);
+      }
+      // Pinning/RED tests: the committed test file(s) whose failure proves this
+      // task is NOT done. Best-effort — a task with no test file yields [].
+      try {
+        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests`);
+        setPinTests(tr.tests ?? []);
+      } catch {
+        setPinTests([]);
       }
     } catch (e) {
       setError((e as Error).message ?? "task not found");
@@ -718,7 +738,7 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
-      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined) && (
+      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined || pinTests.length > 0) && (
         <Card>
           <SectionLabel>Oracle — observable completion signal</SectionLabel>
           <div className="mt-2 space-y-3 text-[13px]">
@@ -771,6 +791,53 @@ export default function TaskDetailPage() {
                     <span className="opacity-90">Owner outcome: slice-only — a green slice is not yet proof the full owner outcome is met</span>
                   </div>}
             </div>
+            {pinTests.length > 0 && (
+              <div
+                className="pt-3"
+                style={{ borderTop: "1px solid var(--surface-3)" }}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="opacity-50 text-[11px] uppercase tracking-wider">
+                    pinning tests — what currently proves it&apos;s NOT done
+                  </span>
+                  <span
+                    className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                    style={{
+                      background: "var(--accent-rose-bg)",
+                      color: "var(--accent-rose-fg)",
+                      boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
+                    }}
+                    title="these tests are RED"
+                  >
+                    {pinTests.length} red
+                  </span>
+                </div>
+                <ul className="space-y-2">
+                  {pinTests.map((t) => (
+                    <li key={`${t.file}:${t.name}`} className="flex items-start gap-2">
+                      <span
+                        className="shrink-0 mt-[3px] text-[color:var(--accent-rose-fg)]"
+                        title="failing"
+                        aria-hidden
+                      >
+                        ✗
+                      </span>
+                      <div className="min-w-0">
+                        <code className="font-mono text-[12px] text-[color:var(--accent-rose-fg)] break-all">
+                          {t.name}
+                        </code>
+                        {t.doc && (
+                          <div className="opacity-80 leading-relaxed mt-0.5">{t.doc}</div>
+                        )}
+                        {t.file && (
+                          <div className="opacity-40 text-[11px] font-mono mt-0.5 truncate">{t.file}</div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </Card>
       )}
