@@ -129,7 +129,7 @@ export default function ConductorPage() {
         {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(520px,1fr))] gap-3">
+          <div className="flex flex-col gap-4 items-stretch">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -196,7 +196,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
       title={title}
-      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors cursor-pointer"
+      className="text-left w-full max-w-[880px] rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-5 flex flex-col gap-3 transition-colors cursor-pointer"
     >
       {/* Header — title (left) + current SDLC phase (top-right). */}
       <div className="flex items-start justify-between gap-2">
@@ -473,25 +473,25 @@ function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: numbe
     : liveMotionS != null ? fmtIdle(liveMotionS)
     : relativeTime(task.updated_at || task.created_at || "");
 
-  const R = 20, STROKE = 5, CIRC = 2 * Math.PI * R;
+  const SZ = 84, C = SZ / 2, R = 32, STROKE = 7, CIRC = 2 * Math.PI * R;
   return (
-    <div className="mt-1 flex items-center gap-3">
-      <div className="relative shrink-0" style={{ width: 52, height: 52 }} title={`${done} of ${total} SDLC phases complete`}>
-        <svg width="52" height="52" viewBox="0 0 52 52" role="img" aria-label={`${done} of ${total} phases complete`}>
-          <circle cx="26" cy="26" r={R} fill="none" stroke="var(--surface-3)" strokeWidth={STROKE} />
+    <div className="mt-1 flex items-center gap-4">
+      <div className="relative shrink-0" style={{ width: SZ, height: SZ }} title={`${done} of ${total} phases complete`}>
+        <svg width={SZ} height={SZ} viewBox={`0 0 ${SZ} ${SZ}`} role="img" aria-label={`${done} of ${total} phases complete`}>
+          <circle cx={C} cy={C} r={R} fill="none" stroke="var(--surface-3)" strokeWidth={STROKE} />
           <circle
-            cx="26" cy="26" r={R} fill="none"
+            cx={C} cy={C} r={R} fill="none"
             stroke="var(--accent-emerald-fg)" strokeWidth={STROKE} strokeLinecap="round"
             strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - frac)}
-            transform="rotate(-90 26 26)"
+            transform={`rotate(-90 ${C} ${C})`}
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-          <span className="text-[12px] font-mono font-semibold tabular-nums text-[color:var(--text-primary)]">{done}/{total}</span>
-          <span className="text-[7px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">phases</span>
+          <span className="text-[20px] font-mono font-semibold tabular-nums text-[color:var(--text-primary)]">{done}/{total}</span>
+          <span className="text-[8px] uppercase tracking-[0.16em] text-[color:var(--text-muted)] mt-0.5">phases</span>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-1.5 flex-1 min-w-0">
+      <div className="grid grid-cols-2 gap-2 flex-1 min-w-0">
         <MetricCell label="Current phase" value={curPhase} />
         <MetricCell label="Time left" value={timeLeft} />
         <MetricCell label="Throughput" value={throughput} />
@@ -505,9 +505,9 @@ function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: numbe
 // single value, all in canonical --text-* tokens.
 function MetricCell({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded bg-[color:var(--surface-3)]/50 px-1.5 py-1 min-w-0">
-      <div className="text-[8px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] truncate">{label}</div>
-      <div className="text-[11px] font-mono tabular-nums text-[color:var(--text-secondary)] truncate">{value}</div>
+    <div className="rounded-md bg-[color:var(--surface-3)]/50 px-2.5 py-1.5 min-w-0">
+      <div className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] truncate">{label}</div>
+      <div className="text-[13px] font-mono tabular-nums text-[color:var(--text-secondary)] truncate">{value}</div>
     </div>
   );
 }
@@ -526,50 +526,53 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
   const fr = phase?.fanout_returned ?? 0;
   const last = phases.length - 1;
   return (
-    <div
-      className="mt-2 flex items-start"
-      role="img"
-      aria-label={curIdx < 0 ? "not started" : `Phase ${curIdx + 1} of ${phases.length}: ${phases[curIdx].label}`}
-    >
-      {phases.map((p, i) => {
-        const done = curIdx >= 0 && i < curIdx;
-        const current = i === curIdx;
-        return (
-          <div key={p.key} className="flex flex-col items-center flex-1 min-w-0" title={p.label}>
-            <div className="flex items-center w-full">
-              {/* left connector */}
-              <div className="h-[2px] flex-1" style={{ background: i === 0 ? "transparent" : (i <= curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
-              {current && fd > 0 ? (
-                <span className="inline-flex items-center gap-[1.5px] h-3.5 px-0.5 shrink-0" title={`fanout: ${fr}/${fd} sub-agents back`}>
-                  {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
-                    <span key={k} style={{ width: "3px", height: "13px", borderRadius: "1px", background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)", boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)" }} />
-                  ))}
-                </span>
-              ) : (
-                <motion.span
-                  className="w-3.5 h-3.5 rounded-full grid place-items-center shrink-0"
-                  style={{
-                    background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
-                    boxShadow: current ? "0 0 0 3px var(--accent-teal-ring)" : done ? "none" : "inset 0 0 0 1px var(--border-default)",
-                  }}
-                  animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
-                  transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
-                >
-                  {done && <span className="text-[8px] font-bold" style={{ color: "#06281c" }}>✓</span>}
-                </motion.span>
-              )}
-              {/* right connector */}
-              <div className="h-[2px] flex-1" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+    <div className="mt-2 pt-3 border-t border-[color:var(--border-default)]">
+      <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">Phase timeline</div>
+      <div
+        className="flex items-start"
+        role="img"
+        aria-label={curIdx < 0 ? "not started" : `Phase ${curIdx + 1} of ${phases.length}: ${phases[curIdx].label}`}
+      >
+        {phases.map((p, i) => {
+          const done = curIdx >= 0 && i < curIdx;
+          const current = i === curIdx;
+          return (
+            <div key={p.key} className="flex flex-col items-center flex-1 min-w-0" title={p.label}>
+              <div className="flex items-center w-full">
+                {/* left connector */}
+                <div className="h-[3px] flex-1 rounded-full" style={{ background: i === 0 ? "transparent" : (i <= curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+                {current && fd > 0 ? (
+                  <span className="inline-flex items-center gap-[2px] h-6 px-1 shrink-0" title={`fanout: ${fr}/${fd} sub-agents back`}>
+                    {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
+                      <span key={k} style={{ width: "4px", height: "22px", borderRadius: "2px", background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)", boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)" }} />
+                    ))}
+                  </span>
+                ) : (
+                  <motion.span
+                    className="w-6 h-6 rounded-full grid place-items-center shrink-0"
+                    style={{
+                      background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
+                      boxShadow: current ? "0 0 0 4px var(--accent-teal-ring)" : done ? "none" : "inset 0 0 0 1.5px var(--border-default)",
+                    }}
+                    animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
+                    transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+                  >
+                    {done && <span className="text-[12px] font-bold" style={{ color: "#06281c" }}>✓</span>}
+                  </motion.span>
+                )}
+                {/* right connector */}
+                <div className="h-[3px] flex-1 rounded-full" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+              </div>
+              <span
+                className="text-[11px] leading-tight text-center w-full truncate mt-2"
+                style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
+              >
+                {p.label}
+              </span>
             </div>
-            <span
-              className="text-[9px] leading-tight text-center w-full truncate mt-1.5"
-              style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
-            >
-              {p.label}
-            </span>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
