@@ -295,9 +295,9 @@ export default function PlanView({
                         {badge}
                       </span>
                     )}
-                    <code className="font-mono text-[12px] text-[color:var(--text-primary)] break-all">
+                    <span className="font-mono text-[12px] text-[color:var(--text-primary)] break-all bg-transparent">
                       {t.name}
-                    </code>
+                    </span>
                     <span
                       className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
                       style={{
