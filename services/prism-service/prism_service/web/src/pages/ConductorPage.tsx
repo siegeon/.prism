@@ -129,7 +129,7 @@ export default function ConductorPage() {
         {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
         ) : (
-          <div className="flex flex-col gap-4 max-w-[780px] mx-auto">
+          <div className="flex flex-col gap-4">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -429,19 +429,23 @@ function SlicesBar({ subtasks, stage, reduced }: {
 // phase from workflow_step, time-left from eta_s (only while working with work
 // left, else "—" so a paused tile shows no frozen lie), throughput from the
 // token-turn series, idle from the honest motion clock.
-// The tile speaks in HUMAN PHASES, not raw SDLC step-ids (matches the
-// approved prototype): the 11 workflow steps fold into a legible lifecycle.
-// The step-level detail lives on the task-detail Implementation rail.
-const LIFECYCLE_PHASES: { key: string; label: string; steps: string[] }[] = [
-  { key: "intake", label: "Intake", steps: ["intake"] },
-  { key: "plan", label: "Plan", steps: ["review_previous_notes", "draft_story", "story_gate", "verify_plan", "plan_gate"] },
-  { key: "test", label: "Test", steps: ["write_failing_tests", "red_gate"] },
-  { key: "build", label: "Build", steps: ["implement_tasks"] },
-  { key: "verify", label: "Verify", steps: ["verify_green_state"] },
-  { key: "ship", label: "Ship", steps: ["green_gate"] },
+// The tile mirrors the e825e00a prototype: the 10 real SDLC steps, gates
+// drawn as [G] diamonds, a role caption under each, and an N/10 ring — "the
+// conductor drives this task through its SDLC steps and pauses only at gates".
+const SDLC_STEPS: { id: string; label: string; role: string; gate: boolean }[] = [
+  { id: "review_previous_notes", label: "Review notes", role: "Steward", gate: false },
+  { id: "draft_story", label: "Draft story", role: "Steward", gate: false },
+  { id: "story_gate", label: "Story gate", role: "gate", gate: true },
+  { id: "verify_plan", label: "Verify plan", role: "Steward", gate: false },
+  { id: "plan_gate", label: "Plan gate", role: "gate", gate: true },
+  { id: "write_failing_tests", label: "Write failing tests", role: "Verifier", gate: false },
+  { id: "red_gate", label: "Red gate", role: "gate", gate: true },
+  { id: "implement_tasks", label: "Implement", role: "Builder", gate: false },
+  { id: "verify_green_state", label: "Verify green", role: "Verifier", gate: false },
+  { id: "green_gate", label: "Green gate", role: "gate", gate: true },
 ];
 function phaseIndexOf(stepId: string): number {
-  return LIFECYCLE_PHASES.findIndex((p) => p.steps.includes(stepId));
+  return SDLC_STEPS.findIndex((s) => s.id === stepId);
 }
 
 function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: number }) {
@@ -449,8 +453,8 @@ function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: numbe
   const status = (task.status ?? "").toLowerCase();
   const actState = (task.activity?.state ?? status).toLowerCase();
   const working = actState === "working";
-  // Ring + metrics count PHASES, not steps (6-phase lifecycle).
-  const total = LIFECYCLE_PHASES.length;
+  // Ring + metrics count the 10 SDLC steps (matches the e825e00a prototype).
+  const total = SDLC_STEPS.length;
   const curPhaseIdx = phaseIndexOf(stepId);
   const done = curPhaseIdx < 0 ? (status === "done" ? total : 0) : curPhaseIdx;
   const frac = total > 0 ? done / total : 0;
@@ -458,7 +462,7 @@ function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: numbe
   const pp = task.phase_progress;
   const _ct = pp?.children_total ?? 0;
   const workLeft = _ct === 0 || (pp?.children_done ?? 0) < _ct;
-  const curPhase = curPhaseIdx >= 0 ? LIFECYCLE_PHASES[curPhaseIdx].label : status === "done" ? "done" : "queued";
+  const curPhase = curPhaseIdx >= 0 ? SDLC_STEPS[curPhaseIdx].label : status === "done" ? "done" : "queued";
   // Honest time-left: only while actually working with work left.
   const timeLeft = working && workLeft && (pp?.eta_s ?? 0) > 0 ? `~${fmtEtaTile(pp!.eta_s!)}` : "—";
   // Throughput as tok/s (the prototype's unit) — the latest turn's rate off
@@ -488,7 +492,7 @@ function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: numbe
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
           <span className="text-[20px] font-mono font-semibold tabular-nums text-[color:var(--text-primary)]">{done}/{total}</span>
-          <span className="text-[8px] uppercase tracking-[0.16em] text-[color:var(--text-muted)] mt-0.5">phases</span>
+          <span className="text-[8px] uppercase tracking-[0.16em] text-[color:var(--text-muted)] mt-0.5">steps</span>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 flex-1 min-w-0">
@@ -520,54 +524,59 @@ function MetricCell({ label, value }: { label: string; value: string }) {
 // step dispatched sub-agents, its node SUBDIVIDES into one cell per unit
 // (returned filled teal) so "5 of 8 back" is visible inline.
 function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?: PhaseProgress | null; reduced: boolean | null; live: boolean }) {
-  const phases = LIFECYCLE_PHASES;
+  const steps = SDLC_STEPS;
   const curIdx = phaseIndexOf(step ?? "");
   const fd = phase?.fanout_dispatched ?? 0;
   const fr = phase?.fanout_returned ?? 0;
-  const last = phases.length - 1;
+  const last = steps.length - 1;
   return (
     <div className="mt-2 pt-3 border-t border-[color:var(--border-default)]">
-      <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">Phase timeline</div>
+      <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">SDLC steps · gates pause for a distinct reviewer</div>
       <div
         className="flex items-start"
         role="img"
-        aria-label={curIdx < 0 ? "not started" : `Phase ${curIdx + 1} of ${phases.length}: ${phases[curIdx].label}`}
+        aria-label={curIdx < 0 ? "not started" : `Step ${curIdx + 1} of ${steps.length}: ${steps[curIdx].label}`}
       >
-        {phases.map((p, i) => {
+        {steps.map((s, i) => {
           const done = curIdx >= 0 && i < curIdx;
           const current = i === curIdx;
+          const isGate = s.gate;
+          const nodeBg = current ? (isGate ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)")
+            : done ? (isGate ? "var(--accent-amber-fg)" : "var(--accent-emerald-fg)") : "var(--surface-3)";
           return (
-            <div key={p.key} className="flex flex-col items-center flex-1 min-w-0" title={p.label}>
+            <div key={s.id} className="flex flex-col items-center flex-1 min-w-0" title={s.label}>
               <div className="flex items-center w-full">
                 {/* left connector */}
-                <div className="h-[3px] flex-1 rounded-full" style={{ background: i === 0 ? "transparent" : (i <= curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+                <div className="h-[2px] flex-1 rounded-full" style={{ background: i === 0 ? "transparent" : (i <= curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
                 {current && fd > 0 ? (
-                  <span className="inline-flex items-center gap-[2px] h-6 px-1 shrink-0" title={`fanout: ${fr}/${fd} sub-agents back`}>
+                  <span className="inline-flex items-center gap-[2px] h-5 px-1 shrink-0" title={`fanout: ${fr}/${fd} sub-agents back`}>
                     {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
-                      <span key={k} style={{ width: "4px", height: "22px", borderRadius: "2px", background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)", boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)" }} />
+                      <span key={k} style={{ width: "3px", height: "18px", borderRadius: "1px", background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)", boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)" }} />
                     ))}
                   </span>
                 ) : (
                   <motion.span
-                    className="w-6 h-6 rounded-full grid place-items-center shrink-0"
-                    style={{
-                      background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
-                      boxShadow: current ? "0 0 0 4px var(--accent-teal-ring)" : done ? "none" : "inset 0 0 0 1.5px var(--border-default)",
-                    }}
+                    className={(isGate ? "w-4 h-4 rotate-45 rounded-[3px]" : "w-4 h-4 rounded-full") + " grid place-items-center shrink-0"}
+                    style={{ background: nodeBg, boxShadow: current ? `0 0 0 3px ${isGate ? "var(--accent-amber-ring)" : "var(--accent-teal-ring)"}` : done ? "none" : "inset 0 0 0 1.5px var(--border-default)" }}
                     animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
                     transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
                   >
-                    {done && <span className="text-[12px] font-bold" style={{ color: "#06281c" }}>✓</span>}
+                    <span className="text-[8px] font-bold leading-none" style={{ transform: isGate ? "rotate(-45deg)" : "none", color: isGate ? "#3a2a04" : "#06281c" }}>
+                      {isGate ? "G" : (done ? "✓" : "")}
+                    </span>
                   </motion.span>
                 )}
                 {/* right connector */}
-                <div className="h-[3px] flex-1 rounded-full" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+                <div className="h-[2px] flex-1 rounded-full" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
               </div>
               <span
-                className="text-[11px] leading-tight text-center w-full truncate mt-2"
+                className="text-[9px] leading-tight text-center w-full px-0.5 mt-2 line-clamp-2"
                 style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
               >
-                {p.label}
+                {s.label}
+              </span>
+              <span className="text-[7.5px] uppercase tracking-wide text-center w-full truncate mt-0.5 text-[color:var(--text-muted)]">
+                {s.role}
               </span>
             </div>
           );
