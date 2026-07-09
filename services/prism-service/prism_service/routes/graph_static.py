@@ -8,12 +8,13 @@ files. None of these routes depend on NiceGUI.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import sqlite3
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from prism_service.project_context import get_project
@@ -1783,7 +1784,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
 
 
 @router.get("/graphify-visual/{project_id}/hierarchy.json")
-def _graphify_hierarchy(project_id: str):
+def _graphify_hierarchy(
+    project_id: str,
+    request: Request,
+    limit: int | None = None,
+):
     """Multi-level hierarchical view of the project graph.
 
     Each leaf node is tagged with l0/l1/l2 parent keys derived from
@@ -1825,6 +1830,29 @@ def _graphify_hierarchy(project_id: str):
         # Mark leaves as level 3 so the client doesn't have to special-case
         # them after super-nodes are added with level 0/1/2.
         out_nodes.append({**n, "level": 3, **h})
+
+    # FR-1 / AC-1 — progressive loading cap. When the client passes ?limit=N,
+    # bound the initial payload to the top-N highest-degree nodes (edge count
+    # in the raw graph links), so the hub survives and drill-in fetches the
+    # rest on demand via /neighbors. Edges to dropped nodes are pruned so the
+    # capped subgraph stays internally consistent.
+    if limit is not None and 0 <= limit < len(out_nodes):
+        degree: dict = {}
+        for e in raw_edges:
+            s, t = e.get("source"), e.get("target")
+            if s is not None:
+                degree[s] = degree.get(s, 0) + 1
+            if t is not None:
+                degree[t] = degree.get(t, 0) + 1
+        out_nodes = sorted(
+            out_nodes,
+            key=lambda n: (-degree.get(n.get("id"), 0), str(n.get("id"))),
+        )[:limit]
+        survived = {n.get("id") for n in out_nodes}
+        raw_edges = [
+            e for e in raw_edges
+            if e.get("source") in survived and e.get("target") in survived
+        ]
 
     # Pull DB-derived community labels so super-nodes that fall back to
     # comm:<id> at L0 (flat repos) get a human label instead of the raw id.
@@ -1877,14 +1905,88 @@ def _graphify_hierarchy(project_id: str):
     except Exception:
         pass
 
-    return JSONResponse({
+    payload = {
         "nodes": out_nodes,
         "edges": raw_edges,
         "community_labels": comm_labels,
         "hierarchy_labels": hierarchy_labels,
         "hierarchy_purposes": hierarchy_purposes,
-    }, headers={"Cache-Control": "no-store"})
+    }
 
+    # FR-4 / AC-4 — content-addressed ETag + conditional GET. The tag hashes
+    # the response content (nodes/edges/labels), so background enrichment that
+    # rewrites labels busts the cache, but a repeat visit to an unchanged graph
+    # revalidates with a cheap 304 instead of re-downloading the whole payload.
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    etag = f'"{digest}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(payload, headers={"ETag": etag})
+
+
+@router.get("/graphify-visual/{project_id}/neighbors")
+def _graphify_neighbors(project_id: str, node: str, hops: int = 1):
+    """FR-2 / AC-2 — expand-on-demand neighborhood for a single node.
+
+    Sibling of hierarchy.json (same project/data resolution + path safety).
+    Reads the same graph.json, BFS-expands ``hops`` levels out from ``node``,
+    and returns just that bounded subgraph — the node plus its k-hop
+    neighborhood and the edges among them — so drill-in never re-downloads the
+    whole graph.
+    """
+    from fastapi.responses import JSONResponse
+    if not _SAFE_PROJECT_RE.match(project_id or ""):
+        raise HTTPException(status_code=400, detail="invalid project id")
+    ctx = get_project(project_id)
+    json_path = ctx._data_dir / "graphify-src" / "graphify-out" / "graph.json"
+    if not json_path.exists():
+        raise HTTPException(
+            status_code=404, detail="graph.json not generated yet"
+        )
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(status_code=500, detail="graph.json parse error")
+
+    raw_nodes = [
+        n for n in data.get("nodes", [])
+        if n.get("file_type") != "rationale"
+    ]
+    raw_edges = data.get("links") or data.get("edges") or []
+    node_ids = {n.get("id") for n in raw_nodes}
+    if node not in node_ids:
+        raise HTTPException(status_code=404, detail="node not in graph")
+
+    # Undirected adjacency, restricted to non-rationale nodes.
+    adj: dict = {}
+    for e in raw_edges:
+        s, t = e.get("source"), e.get("target")
+        if s in node_ids and t in node_ids:
+            adj.setdefault(s, set()).add(t)
+            adj.setdefault(t, set()).add(s)
+
+    # BFS out to `hops` levels from the seed node.
+    hops = max(0, int(hops))
+    reached = {node}
+    frontier = {node}
+    for _ in range(hops):
+        nxt: set = set()
+        for cur in frontier:
+            nxt |= adj.get(cur, set())
+        nxt -= reached
+        if not nxt:
+            break
+        reached |= nxt
+        frontier = nxt
+
+    sub_nodes = [n for n in raw_nodes if n.get("id") in reached]
+    sub_links = [
+        e for e in raw_edges
+        if e.get("source") in reached and e.get("target") in reached
+    ]
+    return JSONResponse({"nodes": sub_nodes, "links": sub_links})
 
 
 @router.get("/graphify-visual/{project_id}/communities.json")
