@@ -166,6 +166,12 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // try to redraw too.
   const yieldToBrowser = () => new Promise(r => requestAnimationFrame(r));
   const PROJECT_ID = "__PROJECT_ID__";
+  // Cap the initial graph payload: /brain used to load the WHOLE graph
+  // (~3792 nodes) uncapped, which downloads everything and chokes WebGL.
+  // 500 top-by-degree nodes is a rich overview that stays fast. The
+  // backend serves ?limit=N (top-N by degree) with an ETag for cheap
+  // conditional-GET (304) on repeat visits.
+  const GRAPH_CAP = 500;
   const statusEl = document.getElementById("status");
   // Community palette: 14 hue-distinct swatches (7 base + 7 lifted)
   // sourced from web/src/lib/palette.ts ACCENT_HEX + ACCENT_HEX_LIFTED.
@@ -282,11 +288,12 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // the LOD super-node assembly (after FA2) and the legend.
   async function loadGraph() {
       statusEl.textContent = "Fetching graph data...";
-      // Cache-bust: enrichment rewrites community_labels in the background,
-      // so a cached hierarchy.json would keep painting stale cluster names.
+      // Request a CAPPED graph (top-GRAPH_CAP by degree) so /brain loads a
+      // small, fast payload instead of the whole graph. No cache-bust /
+      // no-store here so the browser can honor the backend's ETag and get a
+      // cheap 304 on repeat visits.
       const data = await fetch(
-        `/graphify-visual/${PROJECT_ID}/hierarchy.json?_=${Date.now()}`,
-        { cache: "no-store" })
+        `/graphify-visual/${PROJECT_ID}/hierarchy.json?limit=${GRAPH_CAP}`)
         .then(r => {
           if (!r.ok) throw new Error("hierarchy " + r.status);
           return r.json();
@@ -515,7 +522,12 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       settings.slowDown = 1;
       settings.adjustSizes = false;
       settings.outboundAttractionDistribution = false;
-      const computeMs = g.order > 20000 ? 5000 : g.order > 5000 ? 4000 : 3000;
+      // With the capped (~500-node) payload the layout converges fast, so
+      // don't hard-wait 3-5s. Cap the FA2 compute window at ~1200ms for the
+      // small graphs /brain now loads; keep the longer waits as a fallback
+      // if an uncapped/large graph is ever loaded here.
+      const computeMs = g.order > 20000 ? 5000 : g.order > 5000 ? 4000
+        : g.order > 1500 ? 3000 : Math.min(1200, 400 + g.order * 2);
       const layout = new FA2Layout(g, { settings });
       const t0 = performance.now();
       layout.start();
