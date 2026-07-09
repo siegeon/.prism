@@ -5,6 +5,7 @@ import Mermaid from "./Mermaid";
 import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
+import { stepLabel } from "@/lib/workflowChips";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -38,6 +39,100 @@ export type GateControls = {
   decide: (action: "approve" | "reject") => void;
   busy: boolean;
 };
+
+// ── Gate evidence ("what you're approving") ─────────────────────────────
+// When a gate is PENDING a human is asked to approve/reject with NO visible
+// evidence of what led here. This surfaces that evidence straight from the
+// audit turns: the validation note(s) the conductor recorded on the
+// advance(s) into this gate (e.g. "Red tests committed (c0581c2…): 3 failing
+// — hierarchy cap ignored …, no ETag header, /neighbors 404"). Real history,
+// never a hardcoded string.
+
+// The validation text an advance_task turn carried (its work-done evidence),
+// with any trailing "; gate=<state>" marker stripped off.
+function advanceValidation(t: StepTurn): string {
+  if (t.action !== "advance_task") return "";
+  const v = /validation=([\s\S]*)$/.exec(t.details ?? "")?.[1]?.trim() ?? "";
+  return v.replace(/;\s*gate=\w+\s*$/, "").trim();
+}
+
+// Evidence lines for the CURRENT pending gate: every advance validation
+// recorded SINCE the last resolved gate (that's the work this gate reviews).
+// Falls back to the single most-recent advance validation if no prior gate
+// boundary exists. Each note is split into distinct, deduped, readable lines.
+function gateEvidenceLines(turns: StepTurn[]): string[] {
+  const rows = turns ?? [];
+  let start = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].action === "gate_decide") { start = i + 1; break; }
+  }
+  const notes: string[] = [];
+  for (let i = start; i < rows.length; i++) {
+    const v = advanceValidation(rows[i]);
+    if (v) notes.push(v);
+  }
+  if (notes.length === 0) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const v = advanceValidation(rows[i]);
+      if (v) { notes.push(v); break; }
+    }
+  }
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const note of notes) {
+    // Split on sentence boundaries so distinct claims bullet separately.
+    for (const part of note.split(/(?<=\.)\s+(?=[A-Z0-9/])/)) {
+      const s = part.trim();
+      if (s && !seen.has(s)) { seen.add(s); lines.push(s); }
+    }
+  }
+  return lines;
+}
+
+function GateEvidence({ step, turns }: { step?: string; turns: StepTurn[] }) {
+  const lines = gateEvidenceLines(turns);
+  const label = stepLabel(step ?? "");
+  return (
+    <div
+      className="rounded-md p-3"
+      style={{
+        background: "var(--accent-amber-bg)",
+        boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)",
+      }}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[13px]" style={{ color: "var(--accent-amber-fg)" }}>⚖</span>
+        <span
+          className="text-[11px] uppercase tracking-wider font-medium"
+          style={{ color: "var(--accent-amber-fg)" }}
+        >
+          What you're approving{label ? ` — ${label}` : ""}
+        </span>
+      </div>
+      {lines.length > 0 ? (
+        <ul className="space-y-1.5">
+          {lines.map((l, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-2 text-[12.5px] leading-relaxed text-[color:var(--text-secondary)]"
+            >
+              <span
+                className="mt-[6px] h-1.5 w-1.5 rounded-full shrink-0"
+                style={{ background: "var(--accent-amber-fg)" }}
+              />
+              <span>{l}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-[12px] text-[color:var(--text-muted)]">
+          No recorded evidence for this step yet — the conductor logged no
+          validation note on the advance into this gate.
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function PlanView({
   diagram,
@@ -155,7 +250,10 @@ export default function PlanView({
 
           {c.gateState === "pending" && gate && (
             <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
-              <div className="opacity-50 mb-2 text-[11px] uppercase tracking-wider">Resolve gate</div>
+              {/* Show the evidence FIRST — what the reviewer is approving —
+                  then the approve/reject control directly beneath it. */}
+              <GateEvidence step={c.step} turns={c.turns ?? []} />
+              <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">Resolve gate</div>
               <textarea
                 value={gate.reason}
                 onChange={(e) => gate.setReason(e.target.value)}
