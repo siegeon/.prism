@@ -5,9 +5,10 @@ import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import { domainTone } from "@/lib/domainTone";
 import {
-  stepLabel, gateLabel, stepChipClass, WORKFLOW_STEPS_ORDERED,
+  stepLabel, gateLabel, stepChipClass,
 } from "@/lib/workflowChips";
 import { relativeTime } from "@/lib/relativeTime";
+import { fmtTokens } from "@/lib/format";
 import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
@@ -428,25 +429,43 @@ function SlicesBar({ subtasks, stage, reduced }: {
 // phase from workflow_step, time-left from eta_s (only while working with work
 // left, else "—" so a paused tile shows no frozen lie), throughput from the
 // token-turn series, idle from the honest motion clock.
+// The tile speaks in HUMAN PHASES, not raw SDLC step-ids (matches the
+// approved prototype): the 11 workflow steps fold into a legible lifecycle.
+// The step-level detail lives on the task-detail Implementation rail.
+const LIFECYCLE_PHASES: { key: string; label: string; steps: string[] }[] = [
+  { key: "intake", label: "Intake", steps: ["intake"] },
+  { key: "plan", label: "Plan", steps: ["review_previous_notes", "draft_story", "story_gate", "verify_plan", "plan_gate"] },
+  { key: "test", label: "Test", steps: ["write_failing_tests", "red_gate"] },
+  { key: "build", label: "Build", steps: ["implement_tasks"] },
+  { key: "verify", label: "Verify", steps: ["verify_green_state"] },
+  { key: "ship", label: "Ship", steps: ["green_gate"] },
+];
+function phaseIndexOf(stepId: string): number {
+  return LIFECYCLE_PHASES.findIndex((p) => p.steps.includes(stepId));
+}
+
 function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: number }) {
-  const steps = WORKFLOW_STEPS_ORDERED;
   const stepId = task.workflow_step ?? "";
   const status = (task.status ?? "").toLowerCase();
   const actState = (task.activity?.state ?? status).toLowerCase();
   const working = actState === "working";
-  const curIdx = steps.findIndex((s) => s.id === stepId);
-  const total = steps.length;
-  const done = curIdx < 0 ? (status === "done" ? total : 0) : curIdx;
+  // Ring + metrics count PHASES, not steps (6-phase lifecycle).
+  const total = LIFECYCLE_PHASES.length;
+  const curPhaseIdx = phaseIndexOf(stepId);
+  const done = curPhaseIdx < 0 ? (status === "done" ? total : 0) : curPhaseIdx;
   const frac = total > 0 ? done / total : 0;
 
   const pp = task.phase_progress;
   const _ct = pp?.children_total ?? 0;
   const workLeft = _ct === 0 || (pp?.children_done ?? 0) < _ct;
-  const curPhase = stepId ? stepLabel(stepId) : status === "done" ? "done" : "queued";
+  const curPhase = curPhaseIdx >= 0 ? LIFECYCLE_PHASES[curPhaseIdx].label : status === "done" ? "done" : "queued";
   // Honest time-left: only while actually working with work left.
   const timeLeft = working && workLeft && (pp?.eta_s ?? 0) > 0 ? `~${fmtEtaTile(pp!.eta_s!)}` : "—";
-  const turns = pp?.turns ?? pp?.token_turns?.length ?? 0;
-  const throughput = turns > 0 ? `${turns} turns` : "—";
+  // Throughput as tok/s (the prototype's unit) — the latest turn's rate off
+  // the live token-turn series; "—" when nothing has burned yet.
+  const tt = pp?.token_turns ?? [];
+  const rate = tt.length ? tt[tt.length - 1].tok_s : 0;
+  const throughput = rate > 0 ? `${fmtTokens(Math.round(rate))}/s` : "—";
   // Honest idle: the live motion clock when the server serves activity;
   // "active" while working; else the time since the last board motion.
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
@@ -501,48 +520,52 @@ function MetricCell({ label, value }: { label: string; value: string }) {
 // step dispatched sub-agents, its node SUBDIVIDES into one cell per unit
 // (returned filled teal) so "5 of 8 back" is visible inline.
 function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?: PhaseProgress | null; reduced: boolean | null; live: boolean }) {
-  const steps = WORKFLOW_STEPS_ORDERED;
-  const curIdx = steps.findIndex((s) => s.id === (step ?? ""));
+  const phases = LIFECYCLE_PHASES;
+  const curIdx = phaseIndexOf(step ?? "");
   const fd = phase?.fanout_dispatched ?? 0;
   const fr = phase?.fanout_returned ?? 0;
+  const last = phases.length - 1;
   return (
     <div
-      className="mt-1 flex items-start gap-0.5 overflow-x-auto"
+      className="mt-2 flex items-start"
       role="img"
-      aria-label={curIdx < 0 ? "SDLC not started" : `SDLC phase ${curIdx + 1} of ${steps.length}: ${stepLabel(steps[curIdx].id)}`}
+      aria-label={curIdx < 0 ? "not started" : `Phase ${curIdx + 1} of ${phases.length}: ${phases[curIdx].label}`}
     >
-      {steps.map((s, i) => {
+      {phases.map((p, i) => {
         const done = curIdx >= 0 && i < curIdx;
         const current = i === curIdx;
-        const isGate = s.type === "gate";
         return (
-          <div key={s.id} className="flex flex-col items-center gap-1 flex-1 min-w-[26px]" title={stepLabel(s.id) || s.id}>
-            {current && fd > 0 ? (
-              <span className="inline-flex items-center gap-[1.5px] h-2.5" title={`fanout: ${fr}/${fd} sub-agents back`}>
-                {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
-                  <span key={k} style={{
-                    width: "3px", height: "10px", borderRadius: "1px",
-                    background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)",
-                    boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)",
-                  }} />
-                ))}
-              </span>
-            ) : (
-              <motion.span
-                className={[isGate ? "rounded-[2px]" : "rounded-full", "w-2.5 h-2.5"].join(" ")}
-                style={{
-                  background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
-                  boxShadow: current ? "0 0 0 2px var(--accent-teal-ring)" : "none",
-                }}
-                animate={!reduced && current && live ? { opacity: [1, 0.4, 1] } : { opacity: 1 }}
-                transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
-              />
-            )}
+          <div key={p.key} className="flex flex-col items-center flex-1 min-w-0" title={p.label}>
+            <div className="flex items-center w-full">
+              {/* left connector */}
+              <div className="h-[2px] flex-1" style={{ background: i === 0 ? "transparent" : (i <= curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+              {current && fd > 0 ? (
+                <span className="inline-flex items-center gap-[1.5px] h-3.5 px-0.5 shrink-0" title={`fanout: ${fr}/${fd} sub-agents back`}>
+                  {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
+                    <span key={k} style={{ width: "3px", height: "13px", borderRadius: "1px", background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)", boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)" }} />
+                  ))}
+                </span>
+              ) : (
+                <motion.span
+                  className="w-3.5 h-3.5 rounded-full grid place-items-center shrink-0"
+                  style={{
+                    background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
+                    boxShadow: current ? "0 0 0 3px var(--accent-teal-ring)" : done ? "none" : "inset 0 0 0 1px var(--border-default)",
+                  }}
+                  animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
+                  transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+                >
+                  {done && <span className="text-[8px] font-bold" style={{ color: "#06281c" }}>✓</span>}
+                </motion.span>
+              )}
+              {/* right connector */}
+              <div className="h-[2px] flex-1" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+            </div>
             <span
-              className="text-[7px] leading-tight text-center w-full truncate"
-              style={{ color: done || current ? "var(--text-secondary)" : "var(--text-muted)" }}
+              className="text-[9px] leading-tight text-center w-full truncate mt-1.5"
+              style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
             >
-              {stepLabel(s.id) || s.id}
+              {p.label}
             </span>
           </div>
         );
