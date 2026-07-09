@@ -115,7 +115,10 @@ export default function ConductorPage() {
         {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
         ) : (
-          <div className="flex flex-col gap-4">
+          // Up to 4 tiles per row, container-relative so it fills to 4 on a wide
+          // board and drops to 3/2/1 as width shrinks — independent of viewport/DPR
+          // (each column is at least a 4-across share, min 280px).
+          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(max(280px,calc((100%-3rem)/4)),1fr))]">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -147,6 +150,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
   const idle = fmtIdle(liveMotionS);
   const kids = `${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0}`;
+  // Queued sub-tasks for THIS conductor item — the card is a summary, so it
+  // shows the pending count; click the tile to open the task and see the list.
+  const qTotal = task.phase_progress?.children_total ?? 0;
+  const qDone = task.phase_progress?.children_done ?? 0;
+  const qPending = Math.max(0, qTotal - qDone);
   const actLabel =
     actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
     : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
@@ -196,6 +204,18 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
         <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
         <span className="font-mono text-[12.5px] truncate" style={{ color: showGate ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)" }}>{handoff}</span>
       </div>
+      {/* QUEUE strip — the count of sub-tasks queued under this item. The card
+          summarizes; clicking the tile opens the task where each queued item is
+          listed (child-task checklist). Only shown for epics with children. */}
+      {qTotal > 0 && (
+        <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Queue</span>
+          <span className="font-mono text-[12.5px] truncate" style={{ color: qPending > 0 ? "var(--accent-teal-fg)" : "var(--accent-emerald-fg)" }}>
+            {qPending > 0 ? `${qPending} task${qPending > 1 ? "s" : ""} pending` : "all queued tasks done"}
+          </span>
+          <span className="ml-auto font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
+        </div>
+      )}
       {/* worked by + live heartbeat */}
       <div className="flex items-center gap-2 text-[12px] flex-wrap">
         <span className="text-[color:var(--text-muted)]">worked by:</span>
