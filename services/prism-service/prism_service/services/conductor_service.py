@@ -1958,6 +1958,63 @@ class ConductorService:
             if _kids:
                 rollup_ok, rollup_reason = epic_rollup_verdict(_kids)
 
+        # ORACLE-OUTCOME TOOTH (task 3eb67fb3) — promote the ADVISORY
+        # oracle/misfire notes (green_gate_proof_note/green_gate_misfire_note,
+        # appended to the pass reason at :2159-2201) into a BLOCKING green_gate
+        # refusal. On a green_gate approve that is NOT an audited override and
+        # NOT an epic roll-up, the task's OWN stored completion_proof must
+        # evidence the task's oracle: a real proof that cites the oracle's
+        # observable token AND addresses the pre-declared likely_misfire. Reads
+        # the LIVE task's fields (re-get) and judges the STORED proof, never
+        # the decision reason — a green-looking approve reason must not clear an
+        # empty/mismatched proof (the b521af05 false-green). Runs ahead of the
+        # pass path; the audited distinct-actor override (below) still bypasses
+        # it for the genuine no-machine-oracle terminal case (FR-6).
+        # The tooth is ORACLE-BOUND: it only fires when the task DECLARES an
+        # oracle (the b521af05 class). A task with no oracle has nothing for
+        # the proof to evidence — leave it to the verifier / audited override.
+        # Epics (rollup_has_children) are owned by the roll-up path below, so
+        # skip them here (their child-proof reason must survive).
+        green_outcome_note = ""
+        _live = self._task_svc.get(task_id)
+        _has_oracle = bool(str(getattr(_live, "oracle", "") or "").strip())
+        if (gate_step_id == "green_gate" and not override
+                and not rollup_has_children and _has_oracle):
+            from prism_service.services import arc_governance as gov
+            _oracle_verdict = gov.score_green_outcome(
+                {
+                    "oracle": getattr(_live, "oracle", ""),
+                    "completion_proof": getattr(_live, "completion_proof", ""),
+                    "likely_misfire": getattr(_live, "likely_misfire", ""),
+                },
+                gov.load_rubrics().get("green_outcome", {}),
+            )
+            if not _oracle_verdict.get("ok"):
+                oracle_reason = _oracle_verdict.get(
+                    "reason", "green_outcome: refused")
+                self._task_svc.update(
+                    task_id, gate_state="failed", gate_reason=oracle_reason,
+                )
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate_step_id}; action=approve; "
+                             f"oracle-outcome=fail; reason={oracle_reason}"),
+                    actor="conductor",
+                )
+                self._record_agent_run(
+                    task_id, gate_step_id, session_id, model=model,
+                    gate_state="failed", ok=False,
+                    verdict_summary=("oracle-outcome: " + oracle_reason)[:200],
+                )
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": "failed",
+                    "reason": oracle_reason,
+                }
+            green_outcome_note = _oracle_verdict.get("reason", "")
+
         verifier_payload: Optional[dict] = None
         verifier_validation: Optional[str] = None
         verifier_reason = ""
@@ -2198,6 +2255,11 @@ class ConductorService:
             # ANNOTATE (never block) beside the proof/misfire/outcome notes.
             passed_gate_reason += green_gate_conformance_note(
                 self._conformance_payload())
+            # Oracle-outcome tooth verdict (task 3eb67fb3): when the blocking
+            # tooth PASSED, surface WHY (proof cited the oracle + addressed the
+            # misfire) so a compliant close is legibly attributed.
+            if green_outcome_note:
+                passed_gate_reason += f"  ✓ {green_outcome_note}"
             _complete, _ = full_outcome_verdict(True, _proof, _incomplete)
             _outcome_complete = _complete
         self._task_svc.update(
