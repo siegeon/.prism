@@ -1658,8 +1658,15 @@ class ConductorService:
             tree_sha = osp.current_tree_sha(
                 (ws or {}).get("path") if ws else None)
             spec = osp.OracleSpec.from_task(task)
+            # PINNED CONTROL-PLANE (inverted-flow #3): a receipt minted under a
+            # different pinned policy_hash is stale, like a spec edit. Resolved
+            # best-effort; "" (unpinnable) keeps the tree+spec behavior.
+            from prism_service.services import control_plane as _cp
+            _pin = _cp.pinned_policy(getattr(task, "id", ""))
+            _policy_hash = _pin.get("policy_hash", "")
             fresh = osp.fresh_passing_receipt(
-                project, getattr(task, "id", ""), tree_sha, spec.spec_hash())
+                project, getattr(task, "id", ""), tree_sha, spec.spec_hash(),
+                policy_hash=_policy_hash)
             if fresh is not None:
                 return "", fresh
             # Override may accept a logged manual acknowledgement, but only
@@ -1681,6 +1688,15 @@ class ConductorService:
                           f"(adapter={latest.adapter}): {latest.reason}")
             elif not latest.passed:
                 detail = (f"latest receipt FAILED: {latest.reason}")
+            elif (_policy_hash and latest.policy_hash
+                  and latest.policy_hash != _policy_hash
+                  and latest.tree_sha == tree_sha
+                  and latest.spec_hash == spec.spec_hash()):
+                detail = ("latest passing receipt is STALE — it was minted "
+                          f"under pinned policy {latest.policy_hash[:19]}, but "
+                          f"the control-plane is now pinned at "
+                          f"{_policy_hash[:19]} (the gate policy changed — "
+                          "re-run the oracle under the current pinned policy)")
             else:
                 detail = ("latest passing receipt is STALE — it was run at "
                           f"tree={latest.tree_sha[:12] or 'n/a'} / "
@@ -2000,6 +2016,40 @@ class ConductorService:
                     "approve requires reason describing the validation "
                     "used (test run, screenshot, manual review, etc.)"
                 ),
+            }
+        # CANDIDATE-CONTROLS-JUDGE REFUSAL (inverted-flow #3): the branch under
+        # test must not supply its own judge. If the task's WORKTREE diff (vs
+        # its baseline) modifies ANY enumerated gate-policy file — the rubrics
+        # YAML, the arc-governance scorer, the verifier ignore/lane rules, the
+        # oracle spec/thresholds, the conductor gate logic, or the pin loader —
+        # the gate REFUSES on EVERY gate, override or not: a task cannot loosen
+        # the rubric/ignores it is graded by. A legitimate policy change routes
+        # through the authorized control-plane path (PRISM_POLICY_CHANGE_APPROVED
+        # or a 'policy-change'-tagged task), never silently from inside the
+        # graded task. Fail-open only on an internal error (never a false pass).
+        try:
+            from prism_service.services import control_plane as _cp
+            _cj_reason = _cp.candidate_controls_judge_reason(task)
+        except Exception:
+            _cj_reason = ""
+        if _cj_reason:
+            self._task_svc.update(
+                task_id, gate_state="failed", gate_reason=_cj_reason)
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; "
+                         f"control-plane=fail; reason={_cj_reason}"),
+                actor="conductor")
+            self._record_agent_run(
+                task_id, gate_step_id, session_id, model=model,
+                gate_state="failed", ok=False,
+                verdict_summary=("control-plane: " + _cj_reason)[:200])
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": "failed",
+                "reason": _cj_reason,
             }
         # STRAND C — demonstrable-UI requirement at green_gate (task
         # 56458db1). A `ui`-tagged task cannot green-gate on a pytest/unit
@@ -2397,6 +2447,24 @@ class ConductorService:
                     pass
             _complete, _ = full_outcome_verdict(True, _proof, _incomplete)
             _outcome_complete = _complete
+        # PINNED CONTROL-PLANE PROVENANCE (inverted-flow #3): stamp WHICH pinned
+        # policy adjudicated this pass onto the gate_reason + audit detail +
+        # response, so every green is attributable to a specific control ref +
+        # policy hash (the candidate could not have edited it — the refusal
+        # above blocked that). Best-effort; never blocks a pass.
+        _pin: dict = {}
+        try:
+            from prism_service.services import control_plane as _cp
+            _pin = _cp.pinned_policy(task_id)
+        except Exception:
+            _pin = {}
+        if _pin.get("policy_hash"):
+            passed_gate_reason += (
+                f"  ✓ policy pinned {_pin['policy_hash'][:19]} @ "
+                f"{(_pin.get('control_ref') or 'n/a')[:12]}")
+            detail_bits.append(
+                f"policy_hash={_pin['policy_hash'][:19]}; "
+                f"control_ref={(_pin.get('control_ref') or '')[:12]}")
         self._task_svc.update(
             task_id,
             gate_state="passed",
@@ -2441,6 +2509,11 @@ class ConductorService:
             response["validation"] = verifier_validation
         if override:
             response["override"] = True
+        if _pin.get("control_ref") or _pin.get("policy_hash"):
+            response["control_ref"] = _pin.get("control_ref", "")
+            response["policy_hash"] = _pin.get("policy_hash", "")
+            response["policy_version"] = _pin.get(
+                "policy_version", "")
         return response
 
     # Session-id prefixes used by smoke tests, dogfood probes, and the

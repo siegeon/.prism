@@ -199,6 +199,11 @@ class EvidenceReceipt:
     status: str
     runner_version: str = RUNNER_VERSION
     policy_version: str = POLICY_VERSION
+    # Pinned control-plane provenance (inverted-flow #3): the ref the gate
+    # policy was pinned to for this run + a content hash over that policy set,
+    # so every pass is attributable to a specific, un-candidate-editable policy.
+    control_ref: str = ""
+    policy_hash: str = ""
     env: dict = field(default_factory=dict)
     started_at: str = ""
     ended_at: str = ""
@@ -213,7 +218,9 @@ class EvidenceReceipt:
             "spec_hash": self.spec_hash, "tree_sha": self.tree_sha,
             "adapter": self.adapter, "passed": self.passed,
             "status": self.status, "runner_version": self.runner_version,
-            "policy_version": self.policy_version, "env": self.env,
+            "policy_version": self.policy_version,
+            "control_ref": self.control_ref, "policy_hash": self.policy_hash,
+            "env": self.env,
             "started_at": self.started_at, "ended_at": self.ended_at,
             "observations": self.observations, "artifacts": self.artifacts,
             "reason": self.reason, "derived_spec": self.derived_spec,
@@ -228,6 +235,8 @@ class EvidenceReceipt:
             status=d.get("status", ""),
             runner_version=d.get("runner_version", ""),
             policy_version=d.get("policy_version", ""),
+            control_ref=d.get("control_ref", "") or "",
+            policy_hash=d.get("policy_hash", "") or "",
             env=d.get("env", {}) or {}, started_at=d.get("started_at", ""),
             ended_at=d.get("ended_at", ""),
             observations=d.get("observations", []) or [],
@@ -284,14 +293,25 @@ def latest_receipt(project: str, task_id: str) -> Optional[EvidenceReceipt]:
 
 
 def fresh_passing_receipt(project: str, task_id: str, tree_sha: str,
-                          spec_hash: str) -> Optional[EvidenceReceipt]:
+                          spec_hash: str,
+                          policy_hash: Optional[str] = None
+                          ) -> Optional[EvidenceReceipt]:
     """The most-recent receipt that PASSED at THIS ``tree_sha`` AND THIS
     ``spec_hash``. A new commit (different tree_sha) or an oracle edit
     (different spec_hash) makes every prior receipt STALE — so this returns
-    None and the gate refuses until a fresh run lands."""
+    None and the gate refuses until a fresh run lands.
+
+    POLICY DRIFT (inverted-flow #3): when a current pinned ``policy_hash`` is
+    supplied AND the receipt carries one, they must match — a receipt minted
+    under a different pinned policy is stale, exactly as a spec edit is stale.
+    Enforced only when BOTH are present so an unpinnable environment (both "")
+    keeps the prior tree+spec behavior."""
     for r in reversed(read_receipts(project, task_id)):
-        if r.passed and r.tree_sha == tree_sha and r.spec_hash == spec_hash:
-            return r
+        if not (r.passed and r.tree_sha == tree_sha and r.spec_hash == spec_hash):
+            continue
+        if policy_hash and r.policy_hash and r.policy_hash != policy_hash:
+            continue
+        return r
     return None
 
 
@@ -491,10 +511,27 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
             [], [], False, ST_ERROR, f"unknown adapter {spec.adapter!r}")
     else:
         observations, artifacts, passed, status, reason = runner(spec, ctx)
+    # PINNED CONTROL-PLANE PROVENANCE (inverted-flow #3): stamp the ref the
+    # gate policy is pinned to + a hash over that policy set. Best-effort —
+    # an unpinnable environment stamps "" (the gate then skips the policy tooth
+    # rather than false-refusing), never raises.
+    control_ref = str(ctx.get("control_ref") or "")
+    pol_hash = str(ctx.get("policy_hash") or "")
+    if not control_ref or not pol_hash:
+        try:
+            from prism_service.services import control_plane as _cp
+            pin = _cp.pinned_policy(task_id, ctx={
+                k: ctx[k] for k in ("workspace", "baseline", "repo_root",
+                                    "control_ref") if k in ctx})
+            control_ref = control_ref or pin.get("control_ref", "")
+            pol_hash = pol_hash or pin.get("policy_hash", "")
+        except Exception:
+            pass
     receipt = EvidenceReceipt(
         task_id=task_id, job_id=str(uuid.uuid4()), spec_hash=spec.spec_hash(),
         tree_sha=tree_sha or "", adapter=spec.adapter, passed=bool(passed),
-        status=status, env=_env_fingerprint(), started_at=started,
+        status=status, control_ref=control_ref, policy_hash=pol_hash,
+        env=_env_fingerprint(), started_at=started,
         ended_at=_now_iso(), observations=observations, artifacts=artifacts,
         reason=reason, derived_spec=spec.derived)
     if persist:
