@@ -184,32 +184,60 @@ def test_green_gate_refuses_proof_that_ignores_oracle_and_misfire(tmp_path):
     assert task_svc.get(t.id).gate_state == "failed"
 
 
-# ── Test C (GREEN now + after): a compliant proof still PASSES ────────────
+# ── Test C (GREEN after fix): a FRESH PASSING RECEIPT still PASSES ─────────
+#
+# NOTE (inverted-flow #2): the deciding authority is no longer the token
+# scorer — it is a fresh passing EvidenceReceipt from a REAL run. A compliant
+# prose proof ALONE no longer passes (that was the gameable defect). This test
+# now stands up a live surface, runs the oracle for real to mint a passing
+# receipt, and asserts the gate is then claimable — guarding against the
+# over-strict failure mode (a genuinely-evidenced oracle must still pass).
 
-def test_green_gate_passes_compliant_oracle_proof(tmp_path):
-    """AC-2: the SAME kind of task with a COMPLIANT completion_proof — one
-    that cites the oracle's observable (the :8888/brain URL) AND addresses the
-    misfire (a blank/white/screen citation) — must PASS. Guards against the
-    over-strict failure mode (the misfire's other half): the tooth must have
-    teeth WITHOUT rejecting a legitimate proof. Expected GREEN today and after
-    the guardrail lands."""
+def test_green_gate_passes_on_fresh_passing_receipt(tmp_path):
+    """AC-2: an oracle-bearing task whose oracle was actually RUN (a fresh
+    passing EvidenceReceipt against a live surface) must PASS — the tooth has
+    teeth WITHOUT rejecting a genuinely-evidenced close."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from prism_service.services import oracle_spec as osp
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html>brain page renders fine</html>")
+
+        def log_message(self, *a):
+            return
+
+    srv = HTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/brain"
+
     task_svc, cond = _services(tmp_path)
-    proof = (
-        "agent-browser loaded http://localhost:8888/brain — the page renders "
-        "without crashing; verified it is NOT a blank white screen "
-        "(screenshot docs/brain_loads.png)"
-    )
-    t = _make_green_gate_task(task_svc, cond, completion_proof=proof)
+    proof = (f"agent-browser loaded {url} — renders without crashing; NOT a "
+             "blank white screen (screenshot docs/brain_loads.png)")
+    try:
+        t = _make_green_gate_task(task_svc, cond, oracle=url,
+                                  completion_proof=proof)
+        live = task_svc.get(t.id)
+        receipt = osp.run_oracle(osp.OracleSpec.from_task(live), live,
+                                 ctx={"project": "default"})
+        assert receipt.passed is True, receipt
+    finally:
+        srv.shutdown()
 
     result = cond.gate_decide(
         t.id, action="approve",
-        reason=("verified: agent-browser walkthrough of "
-                "http://localhost:8888/brain, page loads, no crash"),
+        reason=("verified: agent-browser walkthrough of the /brain surface, "
+                "page loads, no crash; pytest suite green"),
     )
 
     assert result["ok"] is True, (
-        "a COMPLIANT proof that cites the oracle observable AND addresses the "
-        f"misfire was REFUSED — the tooth is over-strict. result={result!r}"
+        "a task whose oracle was RUN (fresh passing receipt) was REFUSED — "
+        f"the tooth is over-strict. result={result!r}"
     )
     assert result["gate_state"] == "passed"
     assert task_svc.get(t.id).gate_state == "passed"
