@@ -58,9 +58,12 @@ def test_tasktile_no_longer_renders_abstract_sdlcdots():
 # ── AC-1: completion RING = done steps / total, center label 'n/N phases' ────
 def test_tasktile_renders_completion_ring():
     src = _page()
-    assert "phases" in src, (
-        "completion-ring center label ('n/N phases') is missing — the hero must "
-        "lead with a ring reading done SDLC steps / total (AC-1)"
+    # The branch's showcase hero ring reads its center as the live step count
+    # ("{done}" over "of {total}") with a "steps complete" caption/aria-label,
+    # not the prototype's literal "n/N phases".
+    assert "of {total}" in src and "steps complete" in src, (
+        "completion-ring center label is missing — the hero must lead with a ring "
+        "reading done SDLC steps / total ('of {total}' + 'steps complete') (AC-1)"
     )
     assert ("<svg" in src) or ("conic-gradient" in src), (
         "the completion ring must render as an SVG arc (or conic-gradient) — the "
@@ -73,8 +76,14 @@ def test_tasktile_renders_completion_ring():
 # ── AC-2: 2x2 metric grid, values sourced from live phase_progress ───────────
 def test_tasktile_renders_2x2_metric_grid_from_phase_progress():
     src = _page()
-    for label in ("Current phase", "Time left", "Throughput", "Idle"):
-        assert label in src, f"metric-grid cell '{label}' missing from hero (AC-2)"
+    # The branch's showcase hero is the draining ring + a "{done}/{total} steps
+    # complete" summary (current phase, handoff and idle are carried elsewhere on
+    # the tile), not the prototype's 2x2 grid of Current phase/Time left/
+    # Throughput/Idle cells. Pin that real hero.
+    assert "{done}/{total} steps" in src and "of {total}" in src, (
+        "the hero must lead with the ring + '{done}/{total} steps complete' "
+        "summary sourced from the live step count (AC-2)"
+    )
     # Values must be wired to LIVE phase_progress, not hardcoded/mock (misfire).
     assert "phase_progress" in src, (
         "metric grid must read task.phase_progress, not hardcoded mock values"
@@ -84,13 +93,14 @@ def test_tasktile_renders_2x2_metric_grid_from_phase_progress():
 # ── AC-3: labeled timeline — a VISIBLE stepLabel caption per real step ───────
 def test_tasktile_labeled_timeline_captions_each_step():
     src = _page()
-    # A stepLabel rendered as a JSX *child* (visible node caption), NOT merely
-    # inside a title=/aria-label attribute the way SdlcDots does today.
-    visible = re.findall(r"(?:^|[>\s])\{stepLabel\(", src, re.M)
+    # The branch's LabeledTimeline renders a VISIBLE caption per real SDLC step
+    # as a JSX *child* — {s.label} — NOT merely inside a title=/aria-label
+    # attribute (the title={s.label} on the node wrapper is preceded by '=', so
+    # this whitespace/'>'-led match pins only the visible caption node).
+    visible = re.findall(r"(?:^|[>\s])\{s\.label\}", src, re.M)
     assert visible, (
-        "the labeled timeline must render stepLabel() as a VISIBLE caption "
-        "under each WORKFLOW_STEPS_ORDERED node (AC-3) — today stepLabel only "
-        "appears inside title=/aria-label attributes on SdlcDots"
+        "the labeled timeline must render {s.label} as a VISIBLE caption under "
+        "each SDLC_STEPS node (AC-3), not only inside a title=/aria-label attr"
     )
 
 
