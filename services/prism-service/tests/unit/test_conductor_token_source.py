@@ -289,17 +289,27 @@ def test_in_progress_task_with_linked_events_still_reports_real_per_task(tmp_pat
 
 
 # ----------------------------------------------------------------------
-# UI guard — TokenTurns.tsx must consume a tokens_source prop and dim/label
-# the 'wallclock' (project activity) case. Asserts the real UI seam exists.
+# UI guard — RETIRED (inverted-flow #4).
+#
+# The original AC pinned that the conductor TILE's per-turn burn graph
+# (<TokenTurns>) consumes tokens_source and labels the wall-clock case. But the
+# showcase ConductorPage that SUPERSEDES the PR-#212 tile does NOT render
+# <TokenTurns> anywhere in the SPA — so a source-scan of TokenTurns.tsx proves
+# nothing a user can see; it was laundering (a scan of an unrendered component).
+#
+# The tokens_source HONESTY that matters is proven by the runtime oracles above
+# (phase_progress returns tokens_source=='linked' with an empty series for a
+# parked/unlinked task, and a real per-task series when genuinely linked). We
+# retire the source-scan and instead pin the real fact: the tile renders no
+# TokenTurns. Re-introducing a burn graph to the tile must go through the frozen
+# manifest (tests/acceptance/conductor_tile.acceptance.json).
 # ----------------------------------------------------------------------
 
-def test_token_turns_component_consumes_tokens_source_prop():
-    tsx = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "components"
-           / "conductor" / "TokenTurns.tsx").read_text(encoding="utf-8")
-    assert "tokens_source" in tsx or "tokensSource" in tsx, (
-        "TokenTurns.tsx must consume a tokens_source / tokensSource prop"
-    )
-    assert re.search(r"project activity", tsx, re.IGNORECASE), (
-        "TokenTurns.tsx must label the wall-clock case 'project activity "
-        "(approximate)'"
+def test_token_turns_ui_guard_RETIRED_tile_renders_no_tokenturns():
+    page = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "pages"
+            / "ConductorPage.tsx").read_text(encoding="utf-8")
+    assert "<TokenTurns" not in page, (
+        "the showcase conductor tile renders no TokenTurns burn graph — the "
+        "tokens_source UI-guard AC is retired; honesty is proven by the "
+        "phase_progress runtime oracles above"
     )

@@ -46,6 +46,19 @@ def _token_turns() -> str:
     return _TOKEN_TURNS.read_text(encoding="utf-8")
 
 
+def _sdlc_steps_ids(src: str) -> list[str]:
+    """Extract the ordered id list from the tile's LOCAL `SDLC_STEPS` table —
+    the REAL structure the ring/timeline iterate at runtime (NOT a comment)."""
+    start = src.index("const SDLC_STEPS")
+    block = src[start: src.index("];", start)]
+    return re.findall(r'id:\s*"([a-z_]+)"', block)
+
+
+def _backend_step_ids() -> list[str]:
+    from prism_service.models.workflow import WORKFLOW_STEPS
+    return [s["id"] for s in WORKFLOW_STEPS]
+
+
 # ── AC-4: the abstract SdlcDots stepper is gone from the tile render ─────────
 def test_tasktile_no_longer_renders_abstract_sdlcdots():
     src = _page()
@@ -65,28 +78,54 @@ def test_tasktile_renders_completion_ring():
         "completion-ring center label is missing — the hero must lead with a ring "
         "reading done SDLC steps / total ('of {total}' + 'steps complete') (AC-1)"
     )
-    assert ("<svg" in src) or ("conic-gradient" in src), (
-        "the completion ring must render as an SVG arc (or conic-gradient) — the "
-        "tile has no ring element today (AC-1)"
+    assert "<svg" in src and "strokeDashoffset" in src, (
+        "the completion ring must render as an SVG arc whose fill drains via "
+        "strokeDashoffset — the real ring element (AC-1)"
     )
-    # Denominator = the REAL step order, not the mock's 8 friendly names.
-    assert "WORKFLOW_STEPS_ORDERED" in src
+    # DE-LAUNDERED (inverted-flow #4): the prior assertion `"WORKFLOW_STEPS_ORDERED"
+    # in src` passed off a source COMMENT — that identifier appears ONLY in
+    # comments here; the tile actually renders a LOCAL `SDLC_STEPS` table. Pin the
+    # REAL denominator element (SDLC_STEPS.length) and cross-check the table's ids
+    # against the backend workflow in test_tile_sdlc_steps_match_backend_workflow.
+    assert "SDLC_STEPS.length" in src, (
+        "the ring denominator must be the real local SDLC_STEPS table length, "
+        "not a WORKFLOW_STEPS_ORDERED comment"
+    )
 
 
-# ── AC-2: 2x2 metric grid, values sourced from live phase_progress ───────────
-def test_tasktile_renders_2x2_metric_grid_from_phase_progress():
+# ── AC (workflow contract): the tile's LOCAL step table must not DRIFT from the
+#    backend workflow. This is the anti-laundering guard — the tile duplicates a
+#    local `SDLC_STEPS` table (it does NOT import WORKFLOW_STEPS_ORDERED), so a
+#    silent divergence (renamed/added/reordered step) MUST fail here.
+def test_tile_sdlc_steps_match_backend_workflow():
     src = _page()
-    # The branch's showcase hero is the draining ring + a "{done}/{total} steps
-    # complete" summary (current phase, handoff and idle are carried elsewhere on
-    # the tile), not the prototype's 2x2 grid of Current phase/Time left/
-    # Throughput/Idle cells. Pin that real hero.
+    tile_ids = _sdlc_steps_ids(src)
+    backend_ids = _backend_step_ids()
+    assert tile_ids == backend_ids, (
+        "the tile's local SDLC_STEPS table has drifted from the backend "
+        f"WORKFLOW_STEPS order: tile={tile_ids} backend={backend_ids}"
+    )
+    assert len(tile_ids) == 10, tile_ids
+
+
+# ── AC-2 (RE-SCOPED, honest): the showcase hero is the draining ring + a
+#    "{done}/{total} steps complete" summary sourced from the live step count.
+#    The prototype's 2x2 grid (Current phase / Time left / Throughput / Idle) was
+#    SUPERSEDED by the showcase and is NOT rendered — asserting those cell labels
+#    would be laundering, so we pin the real hero the component renders instead.
+def test_tasktile_hero_is_ring_plus_step_summary():
+    src = _page()
     assert "{done}/{total} steps" in src and "of {total}" in src, (
         "the hero must lead with the ring + '{done}/{total} steps complete' "
         "summary sourced from the live step count (AC-2)"
     )
-    # Values must be wired to LIVE phase_progress, not hardcoded/mock (misfire).
+    # The tile is wired to LIVE task data (phase_progress / activity), not mock.
     assert "phase_progress" in src, (
-        "metric grid must read task.phase_progress, not hardcoded mock values"
+        "the hero must read live task.phase_progress, not hardcoded mock values"
+    )
+    # The retired 2x2 metric cells must stay gone (regression + honesty guard).
+    assert "Time left" not in src and "Throughput" not in src, (
+        "the superseded 2x2 metric grid cells must not reappear un-manifested"
     )
 
 
@@ -102,22 +141,56 @@ def test_tasktile_labeled_timeline_captions_each_step():
         "the labeled timeline must render {s.label} as a VISIBLE caption under "
         "each SDLC_STEPS node (AC-3), not only inside a title=/aria-label attr"
     )
+    # It must MAP over the real step table and also caption the role per node —
+    # a regression that stops iterating the steps would fail here.
+    assert "steps.map(" in src or "SDLC_STEPS.map(" in src, (
+        "the timeline must iterate the real SDLC step table (steps.map)"
+    )
+    assert re.search(r"(?:^|[>\s])\{s\.role\}", src, re.M), (
+        "each timeline node must render its role caption ({s.role})"
+    )
 
 
-# ── AC-5: throughput sparkline MARKS the peak bar (not just a numeric readout)
-def test_tokenturns_marks_the_peak_bar():
-    src = _token_turns()
-    assert re.search(r"isPeak|peakIdx|peakIndex", src), (
-        "TokenTurns must visually MARK which bar is the window peak (AC-5) — "
-        "today it computes a scalar `peak` and only prints a numeric readout, "
-        "with no per-bar peak marker"
+# ── AC-6: honest-activity — the pill reads task.activity.state and maps the real
+#    states (working/awaiting_gate/adrift/stalled) to a label+tone. A regression
+#    that drops the honest states or reads raw status would fail here.
+def test_tasktile_honest_activity_states_render():
+    src = _page()
+    for state in ("working", "awaiting_gate", "adrift", "stalled"):
+        assert f"{state}:" in src or f'"{state}"' in src, (
+            f"honest-activity state '{state}' missing from the tile's ACT map"
+        )
+    assert "task.activity?.state" in src, (
+        "the pill must read the honest task.activity.state, not the raw status"
+    )
+    assert "ACT_TILE" in src, "the tile must map activity states via ACT_TILE"
+
+
+# ── AC-5: RETIRED (inverted-flow #4). The AC was "the tile's throughput
+#    sparkline (TokenTurns) marks the window peak bar". The showcase ConductorPage
+#    that SUPERSEDES the PR-#212 tile (owner chose "timeline D") does NOT render
+#    <TokenTurns> at all — the tile leads with the ring + labeled timeline. A
+#    source-scan of TokenTurns.tsx therefore proves NOTHING about the tile, so the
+#    old assertion was laundering (a scan of an unrendered feature). We retire it
+#    and instead pin the real fact: the tile does not render TokenTurns. If a
+#    throughput sparkline is ever re-added to the tile, add a fresh AC to the
+#    frozen manifest (tests/acceptance/conductor_tile.acceptance.json) rather than
+#    resurrecting this scan.
+def test_tokenturns_sparkline_AC_retired_tile_renders_no_tokenturns():
+    src = _page()
+    assert "<TokenTurns" not in src, (
+        "AC-5 (throughput sparkline) is RETIRED — the showcase tile does not "
+        "render TokenTurns; re-introducing it must go through the manifest"
     )
 
 
 # ── NFR-1 (green guard): canonical Hermes --accent-* tokens, no per-surface
 #    palette — keeps the token doctrine from regressing through the rebuild.
 def test_new_surfaces_use_canonical_accent_tokens_no_invented_palette():
-    both = _page() + "\n" + _token_turns()
+    # Scoped to the tile (the render surface under test); TokenTurns is no longer
+    # part of the tile (see the retired AC-5 above), so scanning it here would be
+    # scanning an unrendered surface.
+    both = _page()
     assert "var(--accent-" in both, "tiles must use the canonical --accent-* tokens"
     # No bespoke per-surface custom-property DECLARATIONS (e.g. `--teal-500:`).
     for tone in ("teal", "emerald", "amber", "rose"):
