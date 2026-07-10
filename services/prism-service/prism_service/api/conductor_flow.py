@@ -238,6 +238,21 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 "outcome is not step completion)",
                 "next_job": _job(task)}
     else:
+        # MINT GREEN EVIDENCE at verify_green (inverted-flow #5): a SUCCESS
+        # report on the verify_green_state step runs the 3-lane honest signal
+        # (oracle receipt + red->green continuity + baseline-diff regression)
+        # in a clean isolated env from the task's worktree, so the oracle
+        # EvidenceReceipt the following green_gate requires is produced HERE —
+        # before the advance — instead of expecting a self-attested proof. It
+        # is best-effort: a lane error never blocks the advance (the gate's own
+        # fresh-receipt tooth still refuses on a missing/failing receipt).
+        if step["id"] == "verify_green_state":
+            try:
+                svc.mint_green_evidence(body.task_id,
+                                        session_id=body.session_id,
+                                        model=body.model)
+            except Exception:
+                pass
         res = svc.advance_task(body.task_id, session_id=body.session_id,
                               model=body.model)
 

@@ -1559,9 +1559,15 @@ class ConductorService:
             "expectation": "green expects verifier.status=pass with tier0=pass",
         },
         "green_full": {
+            # NOT-RUN IS A REFUSAL (inverted-flow #5): green_full no longer
+            # accepts tier0=not-run — a run that verified NOTHING is not a
+            # pass. The honest green signal is carried by the 3-lane verifier
+            # (oracle receipt + red->green continuity + baseline-diff
+            # regression); tier0=pass here means the impacted suite really ran.
             "expect_status": ("pass",),
-            "expect_tier0": ("pass", "not-run"),
-            "expectation": "green_full expects verifier.status=pass with tier0=pass",
+            "expect_tier0": ("pass",),
+            "expectation": ("green_full expects verifier.status=pass with "
+                            "tier0=pass (not-run is refused, not a pass)"),
         },
         "story_complete": {
             "rubric": "story_complete",
@@ -1688,6 +1694,33 @@ class ConductorService:
             return (f"green_gate: oracle receipt check errored "
                     f"({type(exc).__name__}: {exc}) — refusing (fail closed)",
                     None)
+
+    def mint_green_evidence(self, task_id: str,
+                            session_id: Optional[str] = None,
+                            model: Optional[str] = None,
+                            release: bool = False) -> dict:
+        """Run the 3-lane honest green signal and MINT the oracle
+        EvidenceReceipt the green_gate later requires (inverted-flow #5).
+
+        Called when the drive reports SUCCESS on verify_green_state — so the
+        gate that follows sees a FRESH receipt (produced from the task's
+        worktree in a clean isolated env), not a self-attested proof string.
+        No-op ok=False when no lane-capable VerifierService is attached."""
+        if self._task_svc is None:
+            return {"ok": False, "reason": "no TaskService attached"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "reason": "unknown task"}
+        verifier = self._verifier_svc
+        if verifier is None or not hasattr(verifier, "run_green_lanes"):
+            return {"ok": False, "reason": "no lane-capable verifier attached"}
+        try:
+            report = verifier.run_green_lanes(
+                task, release=release, project=self._project_name or "default")
+        except Exception as exc:
+            return {"ok": False, "reason": f"lanes errored: "
+                    f"{type(exc).__name__}: {exc}"}
+        return {"ok": report.get("verdict") == "pass", "lanes": report}
 
     def _verify_rubric_gate(self, task, validation: str) -> dict:
         """Score a rubric validation kind (story_complete/plan_coverage)
