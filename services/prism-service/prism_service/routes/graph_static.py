@@ -161,10 +161,25 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // hub" straight-line tangle.
   import EdgeCurveProgram from "https://esm.sh/@sigma/edge-curve@3.1.0?deps=sigma@3.0.3";
   // Yield to the browser between batches of synchronous work so paint /
-  // input can run. requestAnimationFrame is the right primitive here —
-  // it lines us up with the next frame, which is the moment Sigma will
-  // try to redraw too.
-  const yieldToBrowser = () => new Promise(r => requestAnimationFrame(r));
+  // input can run. requestAnimationFrame lines us up with the next frame
+  // (the moment Sigma redraws) WHEN THE TAB IS VISIBLE — but Chrome
+  // *pauses* rAF entirely in a hidden / background / occluded tab. A
+  // build that yields only via rAF therefore stalls forever the instant
+  // it hits the first `await yieldToBrowser()` in such a tab: node/edge
+  // assembly never resumes, Sigma never mounts, the canvas stays blank.
+  // That was the "/brain hangs" freeze — it only reproduces when /brain
+  // is NOT the foreground tab (the common case under CDP/automation, or
+  // when the window sits behind another). Race rAF against a macrotask
+  // timer, which DOES fire in a hidden tab, so the batched load always
+  // makes progress and the page becomes interactive regardless of tab
+  // visibility. Visible tabs are unchanged — rAF wins the race (~16ms)
+  // before the 32ms fallback, so we still land on a real frame boundary.
+  const yieldToBrowser = () => new Promise(r => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; r(); };
+    requestAnimationFrame(fin);
+    setTimeout(fin, 32);
+  });
   const PROJECT_ID = "__PROJECT_ID__";
   // Cap the initial graph payload: /brain used to load the WHOLE graph
   // (~3792 nodes) uncapped, which downloads everything and chokes WebGL.
@@ -1740,7 +1755,14 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
 
       const fadeMs = 450;
       const SKIP_REVEAL_BELOW = 5;
-      const shouldAnimate = !skipped && l0Items.length >= SKIP_REVEAL_BELOW;
+      // Skip the rAF-driven reveal in a hidden tab: requestAnimationFrame
+      // never fires there, so `await`-ing the animation would hang the
+      // build on its last critical-path step and leave the canvas empty.
+      // The snap branch below sets final sizes synchronously, so a graph
+      // built in the background finishes and is ready the instant the tab
+      // is shown (no janky replay of the reveal on first paint either).
+      const shouldAnimate =
+        !skipped && !document.hidden && l0Items.length >= SKIP_REVEAL_BELOW;
 
       if (shouldAnimate) {
         const revealBudget = 1600;
