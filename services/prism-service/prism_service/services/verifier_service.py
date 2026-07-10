@@ -287,8 +287,27 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
         # saw a FALSE pass (0 tests run). sys.executable is the daemon's
         # interpreter, which has pytest importable, so `-m pytest` always runs.
         import sys as _sys
+        # SCOPE THE GATE SUITE (task 3eb67fb3): full pytest discovery from the
+        # repo root recursed two enormous non-source trees and blew up with
+        # ~9651 collection errors — a mechanical FALSE-RED, not a real failure:
+        #   * benchmarks/repos/** — vendored upstream repos (astropy/django…)
+        #     whose conftests import deps we don't install (e.g. hypothesis).
+        #   * the runtime DATA stores (…/data/**, …/data-bench/**) — FULL COPIES
+        #     of upstream repos live under */graphify-src/**, with colliding
+        #     conftests (ImportPathMismatch) + deps we don't install.
+        # Neither is source-under-review (pytest's default norecursedirs skips
+        # .venvs/.git/node_modules but NOT these). Ignore them so the gate
+        # observes the REAL project suite (services/prism-service/tests).
+        # Glob-ignore any graphify-src / data-bench tree wherever it lives, plus
+        # the top-level data/benchmark dirs — this takes 9651 collection errors
+        # -> 0 (verified 2026-07-09).
+        _ignores: list[str] = ["--ignore-glob=*graphify-src*", "--ignore-glob=*data-bench*"]
+        for _rel in ("benchmarks", "services/prism-service/data", "data"):
+            _p = workspace / _rel
+            if _p.exists():
+                _ignores.append(f"--ignore={_p}")
         rc, out, err = _run_tool(
-            [_sys.executable, "-m", "pytest", "-q", "--no-header"],
+            [_sys.executable, "-m", "pytest", "-q", "--no-header", *_ignores],
             workspace, timeout_s=600.0)
         claims.append(_claim(0, "tooling.pytest", "<full-suite>", rc, out, err))
     return claims
