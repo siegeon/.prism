@@ -72,10 +72,44 @@ class Ident(BaseModel):
     session_id: Optional[str] = None
     outcome: object = ""
     model: Optional[str] = None
+    # expected_step names the step this report is FOR. flow_report REQUIRES
+    # it (see there) so a stale/duplicate report cannot advance whatever
+    # step is now current; flow_start ignores it.
+    expected_step: Optional[str] = None
+    # Optional queue claim id (job_queue.py leases). Carried for audit; the
+    # conductor flow is idempotent on expected_step, not the lease.
+    job_id: Optional[str] = None
     # Gates enforce for REAL by default (rubric for story/plan, verifier +
     # artifact for red/green). override is an explicit, audited exception —
     # a genuine independent reviewer forcing a decision — never the default.
     override: bool = False
+
+
+# A worker's outcome only signals FAILURE when it is UNAMBIGUOUS — an
+# explicit token or a structured ok/success=false / status in this set. A
+# free-text narrative (a gate-approval reason, "pytest -q -> 2 failed / 0
+# passed") is NOT a failure, so we never misread a reason that merely
+# mentions "failed". Success (anything else) is what advances.
+_FAILURE_TOKENS = {"failure", "failed", "fail", "error", "errored",
+                   "blocked", "false", "reject", "rejected"}
+
+
+def _is_failure(outcome: object) -> bool:
+    if outcome is None:
+        return False
+    if isinstance(outcome, bool):
+        return outcome is False
+    if isinstance(outcome, dict):
+        if outcome.get("ok") is False or outcome.get("success") is False:
+            return True
+        for key in ("status", "outcome", "result", "state"):
+            v = outcome.get(key)
+            if isinstance(v, str) and v.strip().lower() in _FAILURE_TOKENS:
+                return True
+        return False
+    if isinstance(outcome, str):
+        return outcome.strip().lower() in _FAILURE_TOKENS
+    return False
 
 
 @router.get("/next")
@@ -93,12 +127,17 @@ def flow_start(body: Ident, project: str = Query("default")) -> dict:
     task = svc._task_svc.get(body.task_id)
     if task is None:
         return {"ok": False, "error": "unknown task"}
-    # HONEST LOOP: give the task a real scratch workspace where the worker
-    # commits real tests/impl. red/green gates verify against THIS repo.
+    # HONEST LOOP: a real git worktree of the PRISM repo is REQUIRED before
+    # the flow may start — the red/green gates verify against THIS checkout.
+    # FAIL CLOSED: if a real worktree cannot be created we REFUSE to start
+    # rather than silently sharing the current branch (cross-task contam).
     try:
         ws = task_workspace.ensure_workspace(body.task_id)
-    except Exception as exc:  # never block the flow on workspace setup
-        ws = {"error": str(exc)}
+    except Exception as exc:
+        return {"ok": False,
+                "error": f"workspace unavailable, refusing to start "
+                         f"(fail closed): {exc}",
+                "workspace": None}
     if not task.workflow_step:
         svc.advance_task(body.task_id, session_id=body.session_id,
                          model=body.model)
@@ -116,14 +155,42 @@ def flow_workspace(task_id: str) -> dict:
 
 @router.post("/report")
 def flow_report(body: Ident, project: str = Query("default")) -> dict:
-    """Record the worker's outcome and let the SERVER advance the flow."""
+    """Record the worker's outcome and let the SERVER advance the flow —
+    but SOUNDLY: a report only advances on SUCCESS, must name the step it is
+    for (idempotent + stale-safe), and must carry a session identity so the
+    distinct-actor gate rule is trustworthy. 'worker reported' is NOT
+    'step completed'."""
     svc = _svc(project)
+    # (3) REQUIRE SESSION IDENTITY — distinct-actor gate enforcement is only
+    # trustworthy if every report names its actor. No session -> reject.
+    if not (body.session_id and str(body.session_id).strip()):
+        return {"ok": False, "error": "session_id is required on a report "
+                "(distinct-actor gate enforcement needs a named actor)"}
     task = svc._task_svc.get(body.task_id)
     if task is None:
         return {"ok": False, "error": "unknown task"}
     step = ConductorService._step_by_id(task.workflow_step)
     if step is None:
         return {"ok": False, "error": "task has not started the flow"}
+
+    # (2) IDEMPOTENT + STALE-SAFE — the report must name the step it is FOR.
+    # A report whose expected_step != the task's current step is stale or a
+    # duplicate (the step already advanced, or the worker is out of sync):
+    # no-op, so a late report can never advance whatever step is now current.
+    # This also makes the desync case (task already sitting on a pending
+    # gate) a benign no-op that echoes the true current step, not a failure.
+    if not (body.expected_step and str(body.expected_step).strip()):
+        return {"ok": False, "step": step["id"],
+                "error": "expected_step is required — name the current step "
+                "this report is for so a stale report cannot advance"}
+    if body.expected_step != step["id"]:
+        return {"ok": False, "noop": True, "step": step["id"],
+                "expected_step": body.expected_step,
+                "reason": "stale/duplicate report: expected_step does not "
+                "match the task's current step; not advancing",
+                "next_job": _job(task)}
+
+    failed = _is_failure(body.outcome)
 
     if step["type"] == "gate":
         # Distinct-actor, enforced up front by session identity: a worker
@@ -134,20 +201,42 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                          for s in svc._task_svc.sessions_for_task(body.task_id)]
         except Exception:
             producers = []
-        if body.session_id and body.session_id in producers:
+        if body.session_id in producers:
             return {"ok": False, "step": step["id"],
                     "reason": "distinct-actor: the producing session cannot "
                               "clear its own gate — route to a distinct worker "
                               "(or the claude -p adjudicator)",
                     "producers": producers}
-        # Approve on MERIT: no blanket override. story/plan are scored by
-        # their YAML rubric (plan_doc/plan_diagram); red/green run the
-        # verifier + the proof-carrying artifact tooth. A fabricated or
-        # missing proof is refused here, exactly as it should be.
-        res = svc.gate_decide(body.task_id, "approve",
-                              reason=str(body.outcome) or "flow approval",
-                              override=body.override, session_id=body.session_id,
-                              model=body.model)
+        if failed:
+            # (1) A reported FAILURE at a gate is a REJECT, never an approve —
+            # it records the failure (gate_state=failed) and does NOT advance.
+            res = svc.gate_decide(body.task_id, "reject",
+                                  reason=str(body.outcome) or "flow rejection",
+                                  session_id=body.session_id, model=body.model)
+        else:
+            # Approve on MERIT: no blanket override. story/plan are scored by
+            # their YAML rubric (plan_doc/plan_diagram); red/green run the
+            # verifier + the proof-carrying artifact tooth. A fabricated or
+            # missing proof is refused here, exactly as it should be.
+            res = svc.gate_decide(body.task_id, "approve",
+                                  reason=str(body.outcome) or "flow approval",
+                                  override=body.override, session_id=body.session_id,
+                                  model=body.model)
+    elif failed:
+        # (1) OUTCOME-AWARE ADVANCE — a reported failure on an agent step
+        # records a history row and LEAVES the task on the SAME step. The
+        # worker reporting is not the step being done.
+        try:
+            svc._task_svc.record_history(
+                body.task_id, action="flow_report_failure",
+                details=f"step={step['id']}; outcome={str(body.outcome)[:200]}",
+                actor=body.session_id)
+        except Exception:
+            pass
+        return {"ok": False, "step": step["id"], "advanced": False,
+                "reason": "reported failure: step not advanced (a reported "
+                "outcome is not step completion)",
+                "next_job": _job(task)}
     else:
         res = svc.advance_task(body.task_id, session_id=body.session_id,
                               model=body.model)
