@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.43"
+PRISM_VERSION = "6.8.44"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.44: conductor_work loop can now HONESTLY reach done (task ae63e375). "
+    "(1) pending->done desync fixed — a PASSED terminal green_gate flips "
+    "task.status='done' + stamps completed_at in the same update (was left "
+    "status=pending forever, never leaving the board). (2) end-to-end proof: "
+    "test_conductor_work_honest_green drives a REAL task through the flow loop "
+    "to status=done where the terminal green_gate passes on a machine-minted "
+    "oracle receipt (http_probe) with override=FALSE — not a manual bypass. "
     "v6.8.43: corrected the conductor empty-state copy 'Call conductor_advance' "
     "-> 'Call conductor_work() to pull the next task and start the loop'. "
     "v6.8.42: HONEST HEARTBEAT — the conductor tile's emerald 'live Ns' tick now "

@@ -2471,8 +2471,15 @@ class ConductorService:
             gate_reason=passed_gate_reason,
         )
         if gate_step_id == "green_gate":
+            # TERMINAL STEP REACHED (task ae63e375): green_gate is the LAST
+            # WORKFLOW_STEPS entry, so a PASSED terminal gate IS the task
+            # done — mirrors conductor_work's own `done` predicate (final
+            # step + gate_state=passed). Without this a task sat at
+            # status=pending forever (never left the board, completed_at
+            # never stamped) even though its own SDLC had finished.
             self._task_svc.update(
-                task_id, full_outcome_complete=_outcome_complete)
+                task_id, full_outcome_complete=_outcome_complete,
+                status="done")
         self._task_svc.record_history(
             task_id,
             action="gate_decide",
