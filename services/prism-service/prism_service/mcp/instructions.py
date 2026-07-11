@@ -17,7 +17,16 @@ things to the table, all over this one MCP endpoint:
 - CONTEXT: a deterministic context layer (context_bundle) — role card, rules,
   live tasks, and workflow state assembled the same way every time.
 - SDLC: a STATE-MACHINE-ENFORCED delivery flow — the conductor gates each step
-  (story -> plan -> red -> green) and refuses self-review at the gate.
+  (story -> plan -> red -> green) and refuses self-review at the gate. Work it
+  as a SERVER-DRIVEN QUEUE: loop on the single verb `conductor_work` — the
+  server owns the step sequence, so you never name a step:
+    job = conductor_work()            # omit id -> server picks the next task
+    while not job["done"]:
+        # do EXACTLY job["instructions"], produce job["expected_proof"]
+        job = conductor_work(id=job["task_id"], outcome="pass", proof=<artifact>)
+  A gate job is decided by a DISTINCT actor (the producing session cannot clear
+  its own gate). conductor_advance/conductor_gate/workflow_state still exist for
+  admin/debug behind tool_profile=all, but the loop verb supersedes them.
 Start a session with prism_guide; onboard a fresh project with prism_onboard.
 """
 

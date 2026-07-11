@@ -91,6 +91,17 @@
   --accent-slate-ring:  rgba(148, 163, 184, 0.24);
   --accent-slate-fg:    #cbd5e1;
 
+  /* Legibility override (2026-07-09): the Nous brand faces — 'Collapse'
+   * (a display typeface) for sans and 'Courier Prime' for mono — are hard
+   * to read as UI/body text, especially at the 9-11px sizes this app uses
+   * heavily. Swap to Jira-like neutral system stacks: on Windows this
+   * resolves to Segoe UI (sans) + Cascadia/Consolas (mono). Zero new font
+   * assets. index.css loads AFTER the Nous globals, so these :root values
+   * win and cascade to the base body font + every `font-mono` utility.
+   * To restore the brand faces, delete these two lines. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
   --noise-opacity-mul: 1;
   --radius: 0.5rem;
   --theme-radius: 0.5rem;

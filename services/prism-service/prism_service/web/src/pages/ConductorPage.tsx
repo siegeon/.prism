@@ -113,7 +113,7 @@ export default function ConductorPage() {
           conductor drives it. Tasks worked without conductor (status flips only) don't appear here. Click a tile to open it.
         </p>
         {managed.length === 0 ? (
-          <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
+          <Empty>No tasks under conductor management. Call conductor_work() to pull the next task and start the loop.</Empty>
         ) : (
           // Up to 4 tiles per row, container-relative so it fills to 4 on a wide
           // board and drops to 3/2/1 as width shrinks — independent of viewport/DPR
@@ -216,17 +216,28 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
           <span className="ml-auto font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
         </div>
       )}
-      {/* worked by + live heartbeat */}
+      {/* worked by + heartbeat. HONEST: the emerald "live Ns" tick renders ONLY
+          when the work is actually live (working/awaiting_gate). A stalled/adrift/
+          paused tile shows a MUTED grey "board Ns" poll tick instead — it still
+          proves the board isn't frozen, but can't be mistaken for work-liveness
+          (fixes the "STALLED · IDLE" pill contradicted by a green live tick). */}
       <div className="flex items-center gap-2 text-[12px] flex-wrap">
-        <span className="text-[color:var(--text-muted)]">worked by:</span>
+        <span className="text-[color:var(--text-muted)]">{actWorking ? "worked by:" : "last worked by:"}</span>
         <span className="font-mono text-[12px] px-2 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-secondary)] border border-[color:var(--border-default)]">{worker}</span>
-        <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums" title="live board poll">
-          <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-emerald-fg)" }}
-            animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }} transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }} />
-          live {Math.floor(sinceFetchS)}s
-        </span>
+        {actWorking ? (
+          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums" title="work is live — recent conductor transition on this task">
+            <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-emerald-fg)" }}
+              animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }} transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }} />
+            live {Math.floor(sinceFetchS)}s
+          </span>
+        ) : (
+          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] opacity-60 tabular-nums" title="board poll only — the task is idle, not being worked">
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--text-muted)" }} />
+            board {Math.floor(sinceFetchS)}s
+          </span>
+        )}
       </div>
-      <div className="text-[11px] text-[color:var(--text-muted)] font-mono">any MCP agent · job_claim/job_report are standard MCP tools</div>
+      <div className="text-[11px] text-[color:var(--text-muted)] font-mono">one MCP loop verb · conductor_work (call until done)</div>
       {gateReason && (
         <div className="text-[11px] text-[color:var(--text-muted)]">
           <button type="button" onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }} className="font-mono uppercase tracking-wider text-[10px] opacity-70 hover:opacity-100 transition-opacity">
