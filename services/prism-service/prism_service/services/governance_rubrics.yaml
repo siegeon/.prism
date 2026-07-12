@@ -29,3 +29,16 @@ plan_coverage:
   # (b3-ii / c1) plan_diagram edges are diffed against Brain-stored
   # principles BEFORE code; zero seeded principles never pass.
   require_principles: true
+
+green_outcome:
+  # (task 3eb67fb3) the terminal green_gate ORACLE tooth. A green close must
+  # EVIDENCE the task's oracle, not merely report tests-green — the hard
+  # version of conductor_service's advisory proof/misfire notes.
+  # completion_proof must cite at least one observable token named in the
+  # task.oracle (a URL, a :8888/:7778 dev-surface citation, a
+  # screenshot/artifact path, or a snake_case metric name).
+  require_oracle_citation: true
+  # ...and it must address the pre-declared task.likely_misfire: share a
+  # meaningful word (>= misfire_word_min_len chars) with the recorded misfire.
+  require_misfire_addressed: true
+  misfire_word_min_len: 5

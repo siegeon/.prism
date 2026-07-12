@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os as _os
 import sqlite3
+from prism_service.services import sqlite_db
 import sys
 from typing import Optional
 
@@ -535,7 +536,7 @@ class BrainService:
             return result
 
         try:
-            conn = sqlite3.connect(self._brain_db, timeout=5.0)
+            conn = sqlite_db.connect(self._brain_db, timeout=5.0)
             row = conn.execute("SELECT COUNT(*) FROM docs").fetchone()
             result["doc_count"] = row[0] if row else 0
             try:
@@ -550,7 +551,7 @@ class BrainService:
             pass
 
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             row = conn.execute(
                 "SELECT COUNT(*) FROM entities"
             ).fetchone()

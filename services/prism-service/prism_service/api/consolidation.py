@@ -3,6 +3,7 @@
 import json as _json
 import os
 import sqlite3
+from prism_service.services import sqlite_db
 from pathlib import Path
 
 from fastapi import APIRouter, Query
@@ -243,7 +244,7 @@ def next_brief(project: str = Query("default")) -> dict:
     # Non-mutating preview: read the oldest pending candidate directly
     # rather than calling JanitorService.check() (which would flip its
     # status to dispensed).
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(

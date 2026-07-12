@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from prism_service.services import sqlite_db
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,7 @@ def _drifted_files(brain_db: str, files: list[str], valid_at: str) -> list[dict]
     va = _parse_iso(valid_at)
     if va is None or not Path(brain_db).exists():
         return []
-    conn = sqlite3.connect(brain_db, timeout=5.0)
+    conn = sqlite_db.connect(brain_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     drifted: list[dict] = []
     try:
@@ -130,7 +131,7 @@ class VerifyStalenessOperation(MemoryOperation):
         from prism_service.project_context import get_project
         ctx = get_project(project)
         scores_db = str(ctx._data_dir / "scores.db")
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(

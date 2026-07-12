@@ -55,17 +55,19 @@ def test_conductor_uses_flat_tile_list_not_swimlanes():
 
 def test_tile_autofill_grid_widens_and_gaps_for_progress_bar():
     src = _read(_CONDUCTOR)
-    # 220px tiles are too narrow once the multi-segment SDLC bar + caption sit
-    # inside; the v6.3.9 two-column redesign (meta + SDLC on the left, the live
-    # per-turn burn graph on the right) needs even more room, so the auto-fill
-    # min widened to >=360px. Keep the inter-tile gap open.
+    # 220px tiles are too narrow once the ring hero + labeled SDLC timeline sit
+    # inside; the branch's showcase grid uses a container-relative "up-to-4-per-
+    # row, min 280px" track — minmax(max(280px,calc((100%-3rem)/4)),1fr) — so it
+    # fills to 4 across on a wide board and drops to 3/2/1 as width shrinks.
     assert "minmax(220px" not in src, \
         "tile auto-fill min must widen past 220px for the progress bar"
     import re
-    m = re.search(r"auto-fill,minmax\((\d+)px", src)
-    assert m, "tile grid must use an auto-fill minmax(<n>px ...) track"
-    assert int(m.group(1)) >= 360, \
-        "tile auto-fill min must widen to >=360px to seat the two-column card + burn graph"
+    m = re.search(r"auto-fill,minmax\(max\((\d+)px,calc\(\(100%-3rem\)/4\)\)", src)
+    assert m, \
+        "tile grid must use the container-relative auto-fill minmax(max(<n>px," \
+        "calc((100%-3rem)/4)) ...) track (4-across, min floor)"
+    assert int(m.group(1)) >= 280, \
+        "tile auto-fill floor must be >=280px to seat the ring hero + labeled timeline"
     # The tile grid gap was gap-2; open it so tiles don't feel cluttered.
     assert "minmax(" in src
     grid_line = next(ln for ln in src.splitlines() if "auto-fill,minmax(" in ln)
@@ -92,9 +94,13 @@ def test_tile_renders_animated_stepper_and_phase_label():
     tile = src[src.index("function TaskTile"):]
     assert "<LabeledTimeline" in tile, \
         "the TaskTile must render the labeled phase timeline (<LabeledTimeline/>)"
-    assert "stepChipClass(stepId)" in tile and "{phaseLabel}" in tile, \
-        "the TaskTile must render the current-phase label (top-right) so the " \
-        "information hierarchy reads at a glance"
+    # RE-POINTED for the showcase tile: the current phase is surfaced honestly
+    # via the curStep.label handoff line ("ready -> <worker> on deck for <phase>")
+    # and the honest-activity {actLabel} pill (top-right), not the absent
+    # stepChipClass(stepId)/{phaseLabel} from the prior design.
+    assert "curStep.label" in tile and "{actLabel}" in tile, \
+        "the TaskTile must surface the current phase legibly — the curStep.label " \
+        "handoff line and the {actLabel} activity pill (top-right)"
 
 
 # ---------------------------------------------------------------------------

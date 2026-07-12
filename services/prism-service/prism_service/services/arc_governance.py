@@ -226,6 +226,103 @@ def score_plan_coverage(evidence: dict, rubric: dict,
 
 
 # ----------------------------------------------------------------------
+# Green-gate oracle tooth (task 3eb67fb3) — pure scorer
+# ----------------------------------------------------------------------
+
+# Observable-token extractors. An oracle names something OBSERVABLE the
+# worker must have exercised: a URL, a dev-surface :8888/:7778 citation, a
+# screenshot/artifact path, or a named (snake_case) metric. The green_gate
+# tooth requires the completion_proof to cite at least one such token that
+# ALSO appears in the task's oracle.
+_ORACLE_URL_RE = re.compile(r"https?://[^\s)\"'<>]+")
+_ORACLE_PORT_RE = re.compile(r":(?:8888|7778)\b")
+_ORACLE_ARTIFACT_RE = re.compile(
+    r"[\w./\\-]+\.(?:png|jpe?g|webp|gif|svg)\b", re.IGNORECASE)
+_ORACLE_METRIC_RE = re.compile(r"\b\w+_\w+\b")
+
+
+def _weak_proof_value(value: object) -> bool:
+    """A completion proof is weak when absent or a placeholder — it does not
+    actually evidence the outcome. Mirrors conductor_service.is_weak_proof so
+    this scorer stays a self-contained pure function of its evidence."""
+    if value is None:
+        return True
+    s = str(value).strip().lower()
+    if s in ("", "unknown", "tbd", "todo", "none"):
+        return True
+    return s.startswith("<") and s.endswith(">")
+
+
+def oracle_observables(oracle: object) -> set[str]:
+    """Derive the observable token(s) named in a task's oracle (pure).
+
+    Returns the set of citation tokens (URLs, :8888/:7778 ports,
+    screenshot/artifact paths, snake_case metric names) that a compliant
+    completion_proof must reference. Empty when the oracle names nothing
+    machine-observable (the audited override handles that terminal case).
+    """
+    low = str(oracle or "").lower()
+    toks: set[str] = set()
+    for m in _ORACLE_URL_RE.finditer(low):
+        toks.add(m.group(0).rstrip(".,;)!?\"'"))
+    toks.update(m.group(0) for m in _ORACLE_PORT_RE.finditer(low))
+    toks.update(m.group(0) for m in _ORACLE_ARTIFACT_RE.finditer(low))
+    if "screenshot" in low:
+        toks.add("screenshot")
+    toks.update(m.group(0) for m in _ORACLE_METRIC_RE.finditer(low))
+    return {t for t in toks if len(t) >= 4}
+
+
+def score_green_outcome(evidence: dict, rubric: dict) -> dict:
+    """PURE rubric verdict for the terminal green_gate oracle tooth.
+
+    evidence: {"oracle", "completion_proof", "likely_misfire"}; rubric: the
+    green_outcome entry from governance_rubrics.yaml. Returns
+    {"ok": bool, "reason": str}. Promotes conductor_service's ADVISORY
+    proof/misfire notes into a BLOCKING verdict: a compliant green close has a
+    real completion_proof that (a) cites an observable token named in the
+    oracle AND (b) addresses the pre-declared likely_misfire (shares a
+    meaningful word). Judges the STORED proof, never a decision reason — so a
+    green-looking approve cannot clear an empty/mismatched proof.
+    """
+    proof_raw = evidence.get("completion_proof")
+    oracle = str(evidence.get("oracle") or "")
+    misfire = str(evidence.get("likely_misfire") or "").strip()
+
+    if _weak_proof_value(proof_raw):
+        return {"ok": False,
+                "reason": ("green_outcome: no completion_proof recorded — the "
+                           "oracle was never evidenced (empty/weak proof)")}
+    proof = str(proof_raw).lower()
+
+    cited_token = ""
+    if rubric.get("require_oracle_citation", True):
+        tokens = oracle_observables(oracle)
+        if tokens:
+            cited = sorted(t for t in tokens if t in proof)
+            if not cited:
+                shown = ", ".join(sorted(tokens)[:4])
+                return {"ok": False,
+                        "reason": ("green_outcome: completion_proof does not "
+                                   f"cite the oracle observable ({shown}) — "
+                                   "tests-green is not oracle-met")}
+            cited_token = cited[0]
+
+    if rubric.get("require_misfire_addressed", True) and misfire:
+        min_len = int(rubric.get("misfire_word_min_len", 5))
+        misfire_words = set(re.findall(rf"[a-z]{{{min_len},}}", misfire.lower()))
+        if misfire_words and not any(w in proof for w in misfire_words):
+            return {"ok": False,
+                    "reason": ("green_outcome: completion_proof does not "
+                               "address the likely_misfire "
+                               f"(\"{misfire[:80]}\")")}
+
+    cite = f"oracle {cited_token}" if cited_token else "oracle"
+    return {"ok": True,
+            "reason": f"green_outcome: proof cites {cite} and addresses misfire"}
+
+
+# ----------------------------------------------------------------------
 # Intended-vs-observed conformance (d1) — pure function
 # ----------------------------------------------------------------------
 

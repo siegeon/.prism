@@ -240,20 +240,36 @@ def test_gantt_component_exists_and_exports_timeline_type():
     assert "onClick" in src  # click-to-drill
 
 
-def test_taskdetail_threads_timeline_and_renders_activity_card():
-    # v6.7.30 folded the Conductor+Activity panel into PlanView's Implementation
-    # tab: TaskDetailPage still owns the timeline STATE (imports the Timeline
-    # type, threads d.timeline via setTimeline, passes it down), while the
-    # actual <TaskActivityGantt> render + its "Activity"/Timeline surface moved
-    # to the render owner PlanView. Re-pointed to both real owners.
+def test_taskdetail_activity_gantt_render_MOVED_to_steprail_gate_receipts():
+    """MOVED (inverted-flow #4), task ade01b38 → v6.7.30.
+
+    The ORIGINAL AC was 'TaskDetailPage renders a standalone <TaskActivityGantt>
+    Activity card (per-session lane/time-axis view)'. That standalone render is
+    RETIRED — grep confirms <TaskActivityGantt> is rendered NOWHERE in the SPA;
+    only its Timeline/GanttGate *types* survive. The gate-receipt half of that
+    view MOVED onto <StepRail> (which draws each resolved gate along its spine
+    from timeline.gates receipts). This test asserts that REAL new owner honestly.
+
+    Commit d512190 re-pointed the old assertion to <StepRail without saying the
+    per-session lane/axis view was retired — this rename + docstring makes the
+    MOVE explicit so the green isn't mistaken for 'the gantt still renders'.
+    """
+    # Guard the retirement premise: the standalone gantt is genuinely unrendered.
+    for rel in ("pages/TaskDetailPage.tsx", "components/plan/PlanView.tsx"):
+        assert "<TaskActivityGantt" not in _read(rel), (
+            f"{rel} must not render the retired standalone <TaskActivityGantt>"
+        )
+    # TaskDetailPage still OWNS the timeline state (type import + setTimeline).
     src = _read("pages/TaskDetailPage.tsx")
     assert "TaskActivityGantt" in src    # Timeline type imported here
     assert "import" in src and "TaskActivityGantt" in src
     assert "timeline" in src              # state threaded from d.timeline
     assert "setTimeline" in src
+    # The REAL render owner: PlanView feeds StepRail the Timeline gate receipts.
     plan = _read("components/plan/PlanView.tsx")
     assert "Activity" in plan             # the Card / sub-view label
-    assert "<TaskActivityGantt" in plan   # the wall-clock Gantt render
+    assert "<StepRail" in plan            # the gate-receipt render owner
+    assert "timeline?.gates" in plan      # real Timeline gate receipts threaded in
 
 
 def test_taskdetail_sessions_list_filters_to_real_uuid_sessions():

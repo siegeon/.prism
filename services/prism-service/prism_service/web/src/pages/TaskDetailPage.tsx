@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
 import { domainTone, priorityTone } from "@/lib/domainTone";
-import PlanView from "@/components/plan/PlanView";
+import PlanView, { parseAc } from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
@@ -47,6 +47,15 @@ type Task = {
   // Honest work state — rides top-level on the detail response (see load()).
   activity?: Activity | null;
   has_prototype?: boolean;
+};
+
+// One PINNING/RED test surfaced next to the oracle: the committed test whose
+// failure currently proves the work is NOT done. Discovered server-side from
+// the real test file (GET /api/tasks/:id/tests) — name + its docstring.
+type PinTest = {
+  name: string;
+  doc?: string;
+  file?: string;
 };
 
 // Slim shape for the child-task list — only what the row renders.
@@ -372,6 +381,13 @@ export default function TaskDetailPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [children, setChildren] = useState<ChildTask[]>([]);
+  // The RED tests that pin this task's oracle (empty unless a committed test
+  // file names the task) — rendered beneath the oracle panel.
+  const [pinTests, setPinTests] = useState<PinTest[]>([]);
+  // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
+  // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
+  const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
+  const planRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -420,6 +436,14 @@ export default function TaskDetailPage() {
         setChildren((all.tasks ?? []).filter((t) => t.parent_id === id));
       } catch {
         setChildren([]);
+      }
+      // Pinning/RED tests: the committed test file(s) whose failure proves this
+      // task is NOT done. Best-effort — a task with no test file yields [].
+      try {
+        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests`);
+        setPinTests(tr.tests ?? []);
+      } catch {
+        setPinTests([]);
       }
     } catch (e) {
       setError((e as Error).message ?? "task not found");
@@ -509,6 +533,12 @@ export default function TaskDetailPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Oracle "N RED" summary → drive PlanView to the Tests tab + scroll to it.
+  const showTests = () => {
+    setTabRequest((p) => ({ tab: "tests", n: (p?.n ?? 0) + 1 }));
+    planRef.current?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
   };
 
   if (error) {
@@ -671,14 +701,17 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
-      {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype) && (
+      {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype || pinTests.length > 0) && (
         <Stagger i={0} reduced={reduced}>
+        <div ref={planRef}>
         <Card>
           <PlanView
             diagram={task.plan_diagram}
             doc={task.plan_doc}
             prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
             reduced={reduced}
+            pinTests={pinTests}
+            tabRequest={tabRequest}
             conductor={conductorOn ? {
               step: task.workflow_step,
               gateState: task.gate_state,
@@ -687,6 +720,7 @@ export default function TaskDetailPage() {
               status: task.status,
               activity: task.activity,
               timeline,
+              turns: history,
             } : null}
             gate={{
               reason: gateReason,
@@ -699,6 +733,7 @@ export default function TaskDetailPage() {
             onValidation={() => navigate(`/tasks/${id}/validation`, { state: { from: `/tasks/${id}` } })}
           />
         </Card>
+        </div>
         </Stagger>
       )}
 
@@ -717,7 +752,7 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
-      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined) && (
+      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined || pinTests.length > 0) && (
         <Card>
           <SectionLabel>Oracle — observable completion signal</SectionLabel>
           <div className="mt-2 space-y-3 text-[13px]">
@@ -770,6 +805,36 @@ export default function TaskDetailPage() {
                     <span className="opacity-90">Owner outcome: slice-only — a green slice is not yet proof the full owner outcome is met</span>
                   </div>}
             </div>
+            {pinTests.length > 0 && (() => {
+              // One-line, highlight-free summary: "Pinning tests · 3 RED ·
+              // AC-1, AC-4, AC-2". Clicking opens the full readable list in the
+              // Tests tab of the work panel above (progressive disclosure).
+              const acs = pinTests.map((t) => parseAc(t.doc).badge).filter(Boolean) as string[];
+              return (
+                <div className="pt-3" style={{ borderTop: "1px solid var(--surface-3)" }}>
+                  <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">
+                    pinning tests — what currently proves it&apos;s NOT done
+                  </div>
+                  <button
+                    type="button"
+                    onClick={showTests}
+                    className="flex items-center gap-2 text-left w-full group"
+                    title="view the pinning tests, correlated to their acceptance criteria"
+                  >
+                    <span className="shrink-0 text-[color:var(--accent-rose-fg)]" aria-hidden>✗</span>
+                    <span className="leading-relaxed text-[color:var(--text-primary)]">
+                      Pinning tests · {pinTests.length} RED
+                      {acs.length > 0 && (
+                        <span className="text-[color:var(--text-secondary)]"> · {acs.join(", ")}</span>
+                      )}
+                    </span>
+                    <span className="ml-auto text-[11px] uppercase tracking-wider text-[color:var(--text-muted)] group-hover:text-[color:var(--text-secondary)] shrink-0">
+                      view →
+                    </span>
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         </Card>
       )}
@@ -816,7 +881,7 @@ export default function TaskDetailPage() {
       {children.length > 0 && (
         <Card>
           <SectionLabel>
-            Child tasks ({children.filter((c) => (c.status ?? "") === "done").length}/{children.length} done)
+            Slices ({children.filter((c) => (c.status ?? "") === "done").length}/{children.length} done)
           </SectionLabel>
           <div className="space-y-2 mt-2">
             {children.map((c) => {
@@ -918,14 +983,15 @@ export default function TaskDetailPage() {
         )}
       </Card>
 
-      <Card>
-        <SectionLabel>Timeline ({history.length})</SectionLabel>
-        {history.length === 0 ? (
-          <Empty>No turns recorded.</Empty>
-        ) : (
+      {/* The timeline now lives INSIDE the Implementation tab, drilled per
+          step (hierarchical). Keep the flat standalone card only for tasks
+          that never entered the conductor (no Implementation tab to hold it). */}
+      {!conductorOn && history.length > 0 && (
+        <Card>
+          <SectionLabel>Timeline ({history.length})</SectionLabel>
           <Timeline rows={history} tokens={task.phase_progress?.tokens_since_step} />
-        )}
-      </Card>
+        </Card>
+      )}
     </Page>
   );
 }

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json as _json
 import os
 import sqlite3
+from prism_service.services import sqlite_db
 import sys as _sys
 import threading
 import time
@@ -36,7 +37,7 @@ def _is_noise_candidate(scores_db: str, candidate_id: str) -> bool:
     noise filter so the self-draining loop reflects real signal only and
     never burns claude tokens on an empty brief."""
     try:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         try:
             row = conn.execute(
                 "SELECT task_id, scope_json FROM consolidation_candidates "

@@ -26,20 +26,32 @@ function startLiveWatchdog() {
   if (watchdogStarted || typeof window === "undefined") return;
   watchdogStarted = true;
   let initial: string | null = null;
-  const es = new EventSource("/sse/live");
-  es.onmessage = (ev) => {
-    try {
-      const v = (JSON.parse(ev.data) as { version?: string }).version;
-      if (!v) return;
-      if (initial === null) {
-        initial = v;
-      } else if (v !== initial) {
-        window.location.reload();
-      }
-    } catch {
-      /* ignore malformed payloads */
-    }
+  const onVersion = (v: string | undefined) => {
+    if (!v) return;
+    if (initial === null) initial = v;
+    else if (v !== initial) window.location.reload();
   };
+  // Fast path: SSE reconnect after a backend swap surfaces the new version.
+  try {
+    const es = new EventSource("/sse/live");
+    es.onmessage = (ev) => {
+      try { onVersion((JSON.parse(ev.data) as { version?: string }).version); }
+      catch { /* ignore malformed payloads */ }
+    };
+  } catch { /* EventSource unavailable — polling still covers it */ }
+  // Robust fallback: poll every 15s so a throttled/suspended tab whose SSE
+  // stalled still picks up a new build without a manual hard-refresh. Also
+  // re-checks on refocus, when a backgrounded tab wakes up.
+  const poll = () => {
+    fetch("/api/version", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((r: { version?: string }) => onVersion(r.version))
+      .catch(() => {});
+  };
+  setInterval(poll, 15000);
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") poll();
+  });
 }
 
 export function useVersion(): ServiceVersion | null {

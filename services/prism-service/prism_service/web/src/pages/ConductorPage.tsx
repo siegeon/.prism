@@ -4,13 +4,8 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import { domainTone } from "@/lib/domainTone";
-import {
-  stepLabel, gateLabel, stepChipClass, WORKFLOW_STEPS_ORDERED,
-} from "@/lib/workflowChips";
-import { relativeTime } from "@/lib/relativeTime";
 import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
-import TokenTurns from "@/components/conductor/TokenTurns";
 
 type ManagedTask = {
   id: string;
@@ -34,14 +29,6 @@ type ManagedTask = {
   // children; drives the SLICES hero bar. Empty/absent for leaf tasks.
   subtasks?: { id: string; title: string; status: string }[];
 };
-
-// Strip a leading "Slice X · " / "Slice X: " prefix and truncate so a slice
-// chip reads at tile width. Falls back to the short id when a title is empty.
-function sliceLabel(s: { id: string; title: string }): string {
-  let t = (s.title || "").replace(/^\s*slice\s+\S+\s*[·:\-]\s*/i, "").trim();
-  if (!t) t = s.id.slice(0, 6);
-  return t.length > 22 ? t.slice(0, 21) + "…" : t;
-}
 
 // Honest activity STATE → tile pill label + tone. adrift/stalled append an idle
 // mm:ss (from task_motion_s) so the pill says how long it's been dark.
@@ -126,9 +113,12 @@ export default function ConductorPage() {
           conductor drives it. Tasks worked without conductor (status flips only) don't appear here. Click a tile to open it.
         </p>
         {managed.length === 0 ? (
-          <Empty>No tasks under conductor management. Call conductor_advance on a task to start one.</Empty>
+          <Empty>No tasks under conductor management. Call conductor_work() to pull the next task and start the loop.</Empty>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(520px,1fr))] gap-3">
+          // Up to 4 tiles per row, container-relative so it fills to 4 on a wide
+          // board and drops to 3/2/1 as width shrinks — independent of viewport/DPR
+          // (each column is at least a 4-across share, min 280px).
+          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(max(280px,calc((100%-3rem)/4)),1fr))]">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -154,21 +144,17 @@ export default function ConductorPage() {
 // ---------------------------------------------------------------------------
 function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; reduced: boolean | null; sinceFetchS: number; onClick: () => void }) {
   const status = (task.status ?? "").toLowerCase();
-  const statusTone: PillTone = domainTone("taskStatus", status) ?? "slate";
-  // Honest state drives the pill (fall back to raw status pre-activity).
   const actState = (task.activity?.state ?? status).toLowerCase();
-  const actTone: PillTone = ACT_TILE[actState]?.tone ?? statusTone;
+  const actTone: PillTone = ACT_TILE[actState]?.tone ?? domainTone("taskStatus", status) ?? "slate";
   const actWorking = actState === "working";
-  // An ETA/countdown is only honest while the tile is ACTUALLY being driven and
-  // has work left. A paused/done tile must NOT show "N left" (a frozen lie).
-  const _ct = task.phase_progress?.children_total ?? 0;
-  const workLeft = _ct === 0 || (task.phase_progress?.children_done ?? 0) < _ct;
-  const showEta = actWorking && workLeft;
-  // LIVE idle clock: server snapshot + seconds since the last poll, so it ticks
-  // up every second instead of freezing between the 5s data refreshes.
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
   const idle = fmtIdle(liveMotionS);
   const kids = `${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0}`;
+  // Queued sub-tasks for THIS conductor item — the card is a summary, so it
+  // shows the pending count; click the tile to open the task and see the list.
+  const qTotal = task.phase_progress?.children_total ?? 0;
+  const qDone = task.phase_progress?.children_done ?? 0;
+  const qPending = Math.max(0, qTotal - qDone);
   const actLabel =
     actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
     : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
@@ -176,18 +162,17 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
     : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
-  const gateTone: PillTone = domainTone("gate", gate) ?? "slate";
   const stepId = task.workflow_step ?? "";
-  const phaseLabel = stepId ? stepLabel(stepId) : (status === "done" ? "done" : "queued");
-  const priority = task.priority ?? 0;
-  const updated = task.updated_at || task.created_at || "";
-  const age = relativeTime(updated);
-  const shortId = task.id.slice(0, 8);
-  const owner = task.assigned_agent || "unassigned";
-  const tags = (task.tags ?? []).slice(0, 3);
   const gateReason = task.gate_reason?.trim() || "";
   const [showReason, setShowReason] = useState(false);
   const title = `${task.title}\nid: ${task.id}`;
+  const curIdx = phaseIndexOf(stepId);
+  const curStep = curIdx >= 0 ? SDLC_STEPS[curIdx] : null;
+  const worker = task.assigned_agent || "claude-code";
+  const handoff = showGate
+    ? "paused at gate — awaiting a distinct reviewer"
+    : curStep ? `ready → ${worker} on deck for ${curStep.label}`
+    : status === "done" ? "all steps complete" : "queued — awaiting first turn";
   return (
     <div
       role="button"
@@ -195,172 +180,78 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
       title={title}
-      className="text-left rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-3 flex flex-col gap-1.5 transition-colors cursor-pointer"
+      className="text-left w-full rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-5 flex flex-col gap-3 transition-colors cursor-pointer"
     >
-      {/* Header — title (left) + current SDLC phase (top-right). */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="text-[13px] leading-snug font-medium line-clamp-2 text-[color:var(--text-primary)]">
-          {task.title}
+      {/* Header — title + "conductor task · SDLC drive" + honest status pill. */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[17px] font-semibold leading-snug text-[color:var(--text-primary)] line-clamp-1">{task.title}</div>
+          <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
         </div>
-        <span className={`${stepChipClass(stepId)} shrink-0 whitespace-nowrap`} title={`SDLC phase: ${phaseLabel}`}>
-          {phaseLabel}
+        <span
+          className="shrink-0 text-[11px] uppercase tracking-wider px-2.5 py-1 rounded-full font-mono whitespace-nowrap"
+          style={{ background: `var(--accent-${actTone}-bg)`, color: `var(--accent-${actTone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${actTone}-ring)` }}
+        >
+          {actLabel}
         </span>
       </div>
-      {/* Real-progress hero for epics: the focused slice + stage, above the
-          at-a-glance ring so "which slice" reads first on an epic tile. */}
-      {(task.subtasks?.length ?? 0) > 0 && (
-        <SlicesBar subtasks={task.subtasks!} stage={phaseLabel} reduced={reduced} />
-      )}
-      {/* Hero (variant C): completion ring + 2×2 live metric grid. */}
-      <TileHero task={task} sinceFetchS={sinceFetchS} />
-      {/* Labeled phase timeline (variant D) — replaces the abstract SdlcDots,
-          keeping the fanout subdivision + working-only pulse on the current step. */}
+      {/* ring + "N/10 steps complete · the conductor drives this task…" */}
+      <TileHero task={task} />
+      {/* the 10-step SDLC timeline with gate diamonds + roles */}
       <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
-      <div className="flex flex-wrap items-center gap-1">
-        <TileBadge tone={actTone}>{actLabel}</TileBadge>
-        {showGate && (
-          <TileBadge tone={gateTone}>{gateLabel(gate as any)}</TileBadge>
-        )}
-        {showEta && (task.phase_progress?.eta_s ?? 0) > 5 && (
-          <span
-            className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
-            style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
-            title={`ETA to done — forward-projected from learned per-step medians${task.phase_progress?.eta_sample_n != null ? ` (current step n=${task.phase_progress.eta_sample_n})` : ""}`}
-          >
-            ~{fmtEtaTile(task.phase_progress!.eta_s!)} left{(task.phase_progress?.eta_sample_n ?? 0) < 2 ? " ~rough" : ""}
+      {/* HANDOFF strip — which worker is on deck for the current step. */}
+      <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
+        <span className="font-mono text-[12.5px] truncate" style={{ color: showGate ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)" }}>{handoff}</span>
+      </div>
+      {/* QUEUE strip — the count of sub-tasks queued under this item. The card
+          summarizes; clicking the tile opens the task where each queued item is
+          listed (child-task checklist). Only shown for epics with children. */}
+      {qTotal > 0 && (
+        <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Queue</span>
+          <span className="font-mono text-[12.5px] truncate" style={{ color: qPending > 0 ? "var(--accent-teal-fg)" : "var(--accent-emerald-fg)" }}>
+            {qPending > 0 ? `${qPending} task${qPending > 1 ? "s" : ""} pending` : "all queued tasks done"}
+          </span>
+          <span className="ml-auto font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
+        </div>
+      )}
+      {/* worked by + heartbeat. HONEST: the emerald "live Ns" tick renders ONLY
+          when the work is actually live (working/awaiting_gate). A stalled/adrift/
+          paused tile shows a MUTED grey "board Ns" poll tick instead — it still
+          proves the board isn't frozen, but can't be mistaken for work-liveness
+          (fixes the "STALLED · IDLE" pill contradicted by a green live tick). */}
+      <div className="flex items-center gap-2 text-[12px] flex-wrap">
+        <span className="text-[color:var(--text-muted)]">{actWorking ? "worked by:" : "last worked by:"}</span>
+        <span className="font-mono text-[12px] px-2 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-secondary)] border border-[color:var(--border-default)]">{worker}</span>
+        {actWorking ? (
+          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums" title="work is live — recent conductor transition on this task">
+            <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-emerald-fg)" }}
+              animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }} transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }} />
+            live {Math.floor(sinceFetchS)}s
+          </span>
+        ) : (
+          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] opacity-60 tabular-nums" title="board poll only — the task is idle, not being worked">
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--text-muted)" }} />
+            board {Math.floor(sinceFetchS)}s
           </span>
         )}
-        {/* Liveness heartbeat: pulses + counts 0..5s and RESETS each 5s poll, so
-            the card visibly proves it is live-polling — even a paused/idle tile
-            is never mistaken for frozen. */}
-        <span
-          className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums"
-          title={`live — data refreshed ${Math.floor(sinceFetchS)}s ago (auto-polls every 5s)`}
-        >
-          <motion.span
-            className="inline-block h-1.5 w-1.5 rounded-full"
-            style={{ background: "var(--accent-emerald-fg)" }}
-            animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }}
-            transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }}
-          />
-          live {Math.floor(sinceFetchS)}s
-        </span>
       </div>
+      <div className="text-[11px] text-[color:var(--text-muted)] font-mono">one MCP loop verb · conductor_work (call until done)</div>
       {gateReason && (
         <div className="text-[11px] text-[color:var(--text-muted)]">
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }}
-            className="font-mono uppercase tracking-wider text-[10px] opacity-70 hover:opacity-100 transition-opacity"
-          >
+          <button type="button" onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }} className="font-mono uppercase tracking-wider text-[10px] opacity-70 hover:opacity-100 transition-opacity">
             {showReason ? "▾" : "▸"} gate reason
           </button>
           {showReason && (
-            <p className="mt-1 leading-snug text-[color:var(--text-secondary)] whitespace-pre-wrap break-words">
-              {gateReason}
-            </p>
+            <p className="mt-1 leading-snug text-[color:var(--text-secondary)] whitespace-pre-wrap break-words">{gateReason}</p>
           )}
         </div>
-      )}
-
-      {/* Two-column body: identity/meta on the LEFT, the live per-turn burn
-          graph on the RIGHT. The graph is the only token surface on the tile
-          (rate), the left is the only meta surface — no overlap. */}
-      <div className="mt-1 grid grid-cols-[1fr_44%] gap-3 items-stretch">
-        <div className="flex flex-col gap-1.5 min-w-0">
-          <div className="text-[11px] font-mono text-[color:var(--text-muted)] truncate">
-            p{priority} · {age} · id {shortId}
-          </div>
-          <div className="text-[11px] text-[color:var(--text-muted)] truncate">
-            owner: <span className="text-[color:var(--text-secondary)]">{owner}</span>
-          </div>
-          {tags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)]"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="border-l border-[color:var(--border-default)]/60 pl-3">
-          <TokenTurns
-            turns={task.phase_progress?.token_turns}
-            total={task.phase_progress?.turns}
-            live={actWorking}
-            reduced={reduced}
-            tokens_source={task.phase_progress?.tokens_source}
-            state={actState}
-            session_quiet_s={task.activity?.session_quiet_s}
-          />
-        </div>
-      </div>
-      {showEta && (task.phase_progress?.eta_s ?? 0) > 5 && (task.phase_progress?.eta_total_s ?? 0) > 0 && (
-        <EtaCountdownBar
-          etaS={task.phase_progress!.eta_s!}
-          totalS={task.phase_progress!.eta_total_s!}
-          reduced={reduced}
-        />
       )}
     </div>
   );
 }
 
-// Coarse remaining-time label for the tile ETA chip.
-function fmtEtaTile(s: number): string {
-  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
-  if (s >= 60) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s)}s`;
-}
-
-// Prominent ETA countdown bar pinned to the bottom of the tile: a teal fill
-// that DRAINS left→right as the projected time-to-done elapses, with the live
-// MM:SS remaining centered in it. Ticks every second off a local anchor and
-// re-anchors whenever a fresh poll changes eta_s, so it stays honest.
-function EtaCountdownBar({ etaS, totalS, reduced }: {
-  etaS: number; totalS: number; reduced: boolean | null;
-}) {
-  const [remaining, setRemaining] = useState(etaS);
-  const anchor = useRef({ at: Date.now(), eta: etaS });
-  useEffect(() => {
-    anchor.current = { at: Date.now(), eta: etaS };
-    setRemaining(etaS);
-    const id = setInterval(() => {
-      const elapsed = (Date.now() - anchor.current.at) / 1000;
-      setRemaining(Math.max(0, anchor.current.eta - elapsed));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [etaS]);
-  const frac = totalS > 0 ? Math.max(0.015, Math.min(1, remaining / totalS)) : 0;
-  const mm = Math.floor(remaining / 60);
-  const ss = Math.floor(remaining % 60);
-  return (
-    <div
-      className="mt-2 relative h-5 w-full rounded-sm overflow-hidden"
-      style={{ background: "var(--surface-2)" }}
-      title="ETA to done — drains as the projected time-to-done elapses (learned per-step medians)"
-    >
-      <motion.div
-        className="absolute inset-y-0 left-0"
-        style={{ background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}
-        initial={false}
-        animate={{ width: `${frac * 100}%` }}
-        transition={{ duration: reduced ? 0 : 1, ease: "linear" }}
-      />
-      <span
-        className="absolute inset-0 grid place-items-center text-[10px] font-mono tabular-nums uppercase tracking-wider"
-        style={{ color: "var(--text-secondary)" }}
-      >
-        ETA {mm}:{String(ss).padStart(2, "0")} left
-      </span>
-    </div>
-  );
-}
 
 function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
   return (
@@ -377,118 +268,65 @@ function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) 
   );
 }
 
-// SlicesBar — the REAL-progress hero for an epic tile. Focused slice line: shows
-// ONLY the slice we're working on (or the next up) + the stage — not all N
-// chips. "Slice 3/4 · ▶ Bidirectional Jira sync · implement". Uses the shared
-// Hermes accent vars — no per-surface palette.
-function SlicesBar({ subtasks, stage, reduced }: {
-  subtasks: { id: string; title: string; status: string }[];
-  stage?: string;
-  reduced: boolean | null;
-}) {
-  const done = subtasks.filter((s) => (s.status || "").toLowerCase() === "done").length;
-  const active = subtasks.find((s) => (s.status || "").toLowerCase() === "in_progress");
-  const next = subtasks.find((s) => (s.status || "").toLowerCase() === "pending");
-  const focus = active ?? next;
-  const allDone = done === subtasks.length && subtasks.length > 0;
-  return (
-    <div className="flex items-center gap-2 flex-wrap" title={`${done} of ${subtasks.length} slices done`}>
-      <span className="text-[10px] uppercase tracking-[0.14em] font-mono text-[color:var(--text-secondary)] shrink-0">
-        Slice <span className="text-[color:var(--accent-emerald-fg)]">{done}</span>/{subtasks.length}
-      </span>
-      {allDone ? (
-        <span className="text-[11px] font-mono" style={{ color: "var(--accent-emerald-fg)" }}>✓ all slices done</span>
-      ) : focus ? (
-        <span className="inline-flex items-center gap-1.5 min-w-0">
-          {active ? (
-            <motion.span className="inline-block h-1.5 w-1.5 rounded-full shrink-0" style={{ background: "var(--accent-teal-fg)" }}
-              animate={reduced ? { opacity: 1 } : { opacity: [1, 0.3, 1] }}
-              transition={reduced ? { duration: 0.2 } : { duration: 1.2, repeat: Infinity, ease: "easeInOut" }} />
-          ) : (
-            <span className="text-[9px] font-mono uppercase tracking-wide text-[color:var(--text-muted)] shrink-0">next</span>
-          )}
-          <span className="text-[12px] font-medium truncate max-w-[13rem] text-[color:var(--text-primary)]" title={focus.title}>
-            {sliceLabel(focus)}
-          </span>
-          {active && stage && (
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm shrink-0"
-              style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}>
-              {stage}
-            </span>
-          )}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
 // TileHero — the completion RING (done SDLC steps / total over the REAL
 // WORKFLOW_STEPS_ORDERED) beside a 2×2 metric grid. Every value is sourced from
 // LIVE task.phase_progress / task.activity (never mock/hardcoded): current
 // phase from workflow_step, time-left from eta_s (only while working with work
 // left, else "—" so a paused tile shows no frozen lie), throughput from the
 // token-turn series, idle from the honest motion clock.
-function TileHero({ task, sinceFetchS }: { task: ManagedTask; sinceFetchS: number }) {
-  const steps = WORKFLOW_STEPS_ORDERED;
+// The tile mirrors the e825e00a prototype: the 10 real SDLC steps, gates
+// drawn as [G] diamonds, a role caption under each, and an N/10 ring — "the
+// conductor drives this task through its SDLC steps and pauses only at gates".
+const SDLC_STEPS: { id: string; label: string; role: string; gate: boolean }[] = [
+  { id: "review_previous_notes", label: "Review notes", role: "Steward", gate: false },
+  { id: "draft_story", label: "Draft story", role: "Steward", gate: false },
+  { id: "story_gate", label: "Story gate", role: "gate", gate: true },
+  { id: "verify_plan", label: "Verify plan", role: "Steward", gate: false },
+  { id: "plan_gate", label: "Plan gate", role: "gate", gate: true },
+  { id: "write_failing_tests", label: "Write failing tests", role: "Verifier", gate: false },
+  { id: "red_gate", label: "Red gate", role: "gate", gate: true },
+  { id: "implement_tasks", label: "Implement", role: "Builder", gate: false },
+  { id: "verify_green_state", label: "Verify green", role: "Verifier", gate: false },
+  { id: "green_gate", label: "Green gate", role: "gate", gate: true },
+];
+function phaseIndexOf(stepId: string): number {
+  return SDLC_STEPS.findIndex((s) => s.id === stepId);
+}
+
+function TileHero({ task }: { task: ManagedTask }) {
   const stepId = task.workflow_step ?? "";
   const status = (task.status ?? "").toLowerCase();
-  const actState = (task.activity?.state ?? status).toLowerCase();
-  const working = actState === "working";
-  const curIdx = steps.findIndex((s) => s.id === stepId);
-  const total = steps.length;
-  const done = curIdx < 0 ? (status === "done" ? total : 0) : curIdx;
+  const total = SDLC_STEPS.length;
+  const curPhaseIdx = phaseIndexOf(stepId);
+  const done = curPhaseIdx < 0 ? (status === "done" ? total : 0) : curPhaseIdx;
   const frac = total > 0 ? done / total : 0;
-
-  const pp = task.phase_progress;
-  const _ct = pp?.children_total ?? 0;
-  const workLeft = _ct === 0 || (pp?.children_done ?? 0) < _ct;
-  const curPhase = stepId ? stepLabel(stepId) : status === "done" ? "done" : "queued";
-  // Honest time-left: only while actually working with work left.
-  const timeLeft = working && workLeft && (pp?.eta_s ?? 0) > 0 ? `~${fmtEtaTile(pp!.eta_s!)}` : "—";
-  const turns = pp?.turns ?? pp?.token_turns?.length ?? 0;
-  const throughput = turns > 0 ? `${turns} turns` : "—";
-  // Honest idle: the live motion clock when the server serves activity;
-  // "active" while working; else the time since the last board motion.
-  const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
-  const idle = working ? "active"
-    : liveMotionS != null ? fmtIdle(liveMotionS)
-    : relativeTime(task.updated_at || task.created_at || "");
-
-  const R = 20, STROKE = 5, CIRC = 2 * Math.PI * R;
+  const SZ = 84, C = SZ / 2, R = 32, STROKE = 7, CIRC = 2 * Math.PI * R;
   return (
-    <div className="mt-1 flex items-center gap-3">
-      <div className="relative shrink-0" style={{ width: 52, height: 52 }} title={`${done} of ${total} SDLC phases complete`}>
-        <svg width="52" height="52" viewBox="0 0 52 52" role="img" aria-label={`${done} of ${total} phases complete`}>
-          <circle cx="26" cy="26" r={R} fill="none" stroke="var(--surface-3)" strokeWidth={STROKE} />
+    <div className="flex items-center gap-5">
+      <div className="relative shrink-0" style={{ width: SZ, height: SZ }} title={`${done} of ${total} steps complete`}>
+        <svg width={SZ} height={SZ} viewBox={`0 0 ${SZ} ${SZ}`} role="img" aria-label={`${done} of ${total} steps complete`}>
+          <circle cx={C} cy={C} r={R} fill="none" stroke="var(--surface-3)" strokeWidth={STROKE} />
           <circle
-            cx="26" cy="26" r={R} fill="none"
-            stroke="var(--accent-emerald-fg)" strokeWidth={STROKE} strokeLinecap="round"
+            cx={C} cy={C} r={R} fill="none"
+            stroke="var(--accent-teal-fg)" strokeWidth={STROKE} strokeLinecap="round"
             strokeDasharray={CIRC} strokeDashoffset={CIRC * (1 - frac)}
-            transform="rotate(-90 26 26)"
+            transform={`rotate(-90 ${C} ${C})`}
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
-          <span className="text-[12px] font-mono font-semibold tabular-nums text-[color:var(--text-primary)]">{done}/{total}</span>
-          <span className="text-[7px] uppercase tracking-[0.14em] text-[color:var(--text-muted)]">phases</span>
+          <span className="text-[22px] font-semibold tabular-nums text-[color:var(--text-primary)]">{done}</span>
+          <span className="text-[9px] text-[color:var(--text-muted)] mt-0.5">of {total}</span>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-1.5 flex-1 min-w-0">
-        <MetricCell label="Current phase" value={curPhase} />
-        <MetricCell label="Time left" value={timeLeft} />
-        <MetricCell label="Throughput" value={throughput} />
-        <MetricCell label="Idle" value={idle} />
+      <div className="flex-1 min-w-0">
+        <div className="text-[14px] text-[color:var(--text-primary)]">
+          <span className="font-semibold tabular-nums">{done}/{total} steps</span>{" "}
+          <span className="text-[color:var(--text-muted)]">complete</span>
+        </div>
+        <div className="text-[12px] text-[color:var(--text-muted)] mt-1 leading-snug">
+          the conductor drives this task through its SDLC steps and pauses only at gates
+        </div>
       </div>
-    </div>
-  );
-}
-
-// One cell of the hero's 2×2 live-metric grid: a muted uppercase label over a
-// single value, all in canonical --text-* tokens.
-function MetricCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded bg-[color:var(--surface-3)]/50 px-1.5 py-1 min-w-0">
-      <div className="text-[8px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] truncate">{label}</div>
-      <div className="text-[11px] font-mono tabular-nums text-[color:var(--text-secondary)] truncate">{value}</div>
     </div>
   );
 }
@@ -501,52 +339,64 @@ function MetricCell({ label, value }: { label: string; value: string }) {
 // step dispatched sub-agents, its node SUBDIVIDES into one cell per unit
 // (returned filled teal) so "5 of 8 back" is visible inline.
 function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?: PhaseProgress | null; reduced: boolean | null; live: boolean }) {
-  const steps = WORKFLOW_STEPS_ORDERED;
-  const curIdx = steps.findIndex((s) => s.id === (step ?? ""));
+  const steps = SDLC_STEPS;
+  const curIdx = phaseIndexOf(step ?? "");
   const fd = phase?.fanout_dispatched ?? 0;
   const fr = phase?.fanout_returned ?? 0;
+  const last = steps.length - 1;
   return (
-    <div
-      className="mt-1 flex items-start gap-0.5 overflow-x-auto"
-      role="img"
-      aria-label={curIdx < 0 ? "SDLC not started" : `SDLC phase ${curIdx + 1} of ${steps.length}: ${stepLabel(steps[curIdx].id)}`}
-    >
-      {steps.map((s, i) => {
-        const done = curIdx >= 0 && i < curIdx;
-        const current = i === curIdx;
-        const isGate = s.type === "gate";
-        return (
-          <div key={s.id} className="flex flex-col items-center gap-1 flex-1 min-w-[26px]" title={stepLabel(s.id) || s.id}>
-            {current && fd > 0 ? (
-              <span className="inline-flex items-center gap-[1.5px] h-2.5" title={`fanout: ${fr}/${fd} sub-agents back`}>
-                {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
-                  <span key={k} style={{
-                    width: "3px", height: "10px", borderRadius: "1px",
-                    background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)",
-                    boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)",
-                  }} />
-                ))}
+    <div className="mt-2 pt-3 border-t border-[color:var(--border-default)]">
+      <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">SDLC steps · gates pause for a distinct reviewer</div>
+      <div
+        className="flex items-start"
+        role="img"
+        aria-label={curIdx < 0 ? "not started" : `Step ${curIdx + 1} of ${steps.length}: ${steps[curIdx].label}`}
+      >
+        {steps.map((s, i) => {
+          const done = curIdx >= 0 && i < curIdx;
+          const current = i === curIdx;
+          const isGate = s.gate;
+          const nodeBg = current ? (isGate ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)")
+            : done ? (isGate ? "var(--accent-amber-fg)" : "var(--accent-emerald-fg)") : "var(--surface-3)";
+          return (
+            <div key={s.id} className="flex flex-col items-center flex-1 min-w-0" title={s.label}>
+              <div className="flex items-center w-full">
+                {/* left connector */}
+                <div className="h-[2px] flex-1 rounded-full" style={{ background: i === 0 ? "transparent" : (i <= curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+                {current && fd > 0 ? (
+                  <span className="inline-flex items-center gap-[2px] h-5 px-1 shrink-0" title={`fanout: ${fr}/${fd} sub-agents back`}>
+                    {Array.from({ length: Math.min(fd, 8) }).map((_, k) => (
+                      <span key={k} style={{ width: "3px", height: "18px", borderRadius: "1px", background: k < fr ? "var(--accent-teal-fg)" : "var(--surface-3)", boxShadow: k < fr ? "none" : "inset 0 0 0 1px var(--border-default)" }} />
+                    ))}
+                  </span>
+                ) : (
+                  <motion.span
+                    className={(isGate ? "w-4 h-4 rotate-45 rounded-[3px]" : "w-4 h-4 rounded-full") + " grid place-items-center shrink-0"}
+                    style={{ background: nodeBg, boxShadow: current ? `0 0 0 3px ${isGate ? "var(--accent-amber-ring)" : "var(--accent-teal-ring)"}` : done ? "none" : "inset 0 0 0 1.5px var(--border-default)" }}
+                    animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
+                    transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
+                  >
+                    <span className="text-[8px] font-bold leading-none" style={{ transform: isGate ? "rotate(-45deg)" : "none", color: isGate ? "#3a2a04" : "#06281c" }}>
+                      {isGate ? "G" : (done ? "✓" : "")}
+                    </span>
+                  </motion.span>
+                )}
+                {/* right connector */}
+                <div className="h-[2px] flex-1 rounded-full" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
+              </div>
+              <span
+                className="text-[9px] leading-tight text-center w-full px-0.5 mt-2 line-clamp-2"
+                style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
+              >
+                {s.label}
               </span>
-            ) : (
-              <motion.span
-                className={[isGate ? "rounded-[2px]" : "rounded-full", "w-2.5 h-2.5"].join(" ")}
-                style={{
-                  background: current ? "var(--accent-teal-fg)" : done ? "var(--accent-emerald-fg)" : "var(--surface-3)",
-                  boxShadow: current ? "0 0 0 2px var(--accent-teal-ring)" : "none",
-                }}
-                animate={!reduced && current && live ? { opacity: [1, 0.4, 1] } : { opacity: 1 }}
-                transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
-              />
-            )}
-            <span
-              className="text-[7px] leading-tight text-center w-full truncate"
-              style={{ color: done || current ? "var(--text-secondary)" : "var(--text-muted)" }}
-            >
-              {stepLabel(s.id) || s.id}
-            </span>
-          </div>
-        );
-      })}
+              <span className="text-[7.5px] uppercase tracking-wide text-center w-full truncate mt-0.5 text-[color:var(--text-muted)]">
+                {s.role}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

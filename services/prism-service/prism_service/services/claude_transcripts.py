@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sqlite3
+from prism_service.services import sqlite_db
 import sys
 import time
 from pathlib import Path
@@ -494,7 +495,7 @@ def import_unseen(
         return 0
     n = 0
     try:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
     except sqlite3.Error:
         return 0
     try:
@@ -686,7 +687,7 @@ def backfill_token_totals(
     {"recomputed", "skipped_no_transcript", "unchanged"}."""
     stats = {"recomputed": 0, "skipped_no_transcript": 0, "unchanged": 0}
     try:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
     except sqlite3.Error:
         return stats
     try:

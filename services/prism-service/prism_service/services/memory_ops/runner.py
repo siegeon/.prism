@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json as _json
 import sqlite3
+from prism_service.services import sqlite_db
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -91,7 +92,7 @@ def run_one(op: MemoryOperation, item: Any, project: str) -> OperationResult:
 
     # Idempotency: only process a candidate that is still pending. A second
     # tick on the same (already-completed) item short-circuits to a skip.
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(

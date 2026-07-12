@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -287,8 +288,16 @@ def _run_python_tools(workspace: Path, py_files: list[str]) -> list[Claim]:
         # saw a FALSE pass (0 tests run). sys.executable is the daemon's
         # interpreter, which has pytest importable, so `-m pytest` always runs.
         import sys as _sys
+        # SCOPE THE GATE SUITE (task 3eb67fb3 + inverted-flow #5): full pytest
+        # discovery from the repo root recursed enormous non-source trees and
+        # blew up with ~9651 collection errors — a mechanical FALSE-RED. The
+        # ignore rule now excludes by DATA-DIR LOCATION (copied upstream repos
+        # under graphify-src / data-bench / the runtime store), NOT by the word
+        # "benchmark" — first-party benchmarks/*/run.py stay in scope. See
+        # _pytest_ignore_args for the exact rule.
+        _ignores = _pytest_ignore_args(workspace)
         rc, out, err = _run_tool(
-            [_sys.executable, "-m", "pytest", "-q", "--no-header"],
+            [_sys.executable, "-m", "pytest", "-q", "--no-header", *_ignores],
             workspace, timeout_s=600.0)
         claims.append(_claim(0, "tooling.pytest", "<full-suite>", rc, out, err))
     return claims
@@ -302,6 +311,103 @@ def _pytest_available() -> bool:
         return True
     import importlib.util
     return importlib.util.find_spec("pytest") is not None
+
+
+def _pytest_ignore_args(workspace: Path,
+                        data_dir: Optional[str] = None) -> list[str]:
+    """Pytest --ignore args that exclude ONLY the copied DATA repos that cause
+    the ~9651 collection errors — NOT first-party source (inverted-flow #5).
+
+    The prior fix blanket-excluded ``benchmarks/`` by NAME, which threw out
+    first-party ``benchmarks/*/run.py`` harnesses along with the vendored
+    upstream trees. The CORRECT rule excludes by DATA-DIR LOCATION:
+
+      * ``*graphify-src*`` / ``*data-bench*`` — full copies of upstream repos
+        with colliding conftests (ImportPathMismatch) + uninstalled deps,
+        wherever they live under the runtime store.
+      * the resolved PRISM_DATA_DIR and the in-repo data stores
+        (``services/prism-service/data``, ``data``, ``.dev-data``) — vendored
+        venvs / site-packages / graphify copy trees that are not source.
+
+    First-party ``benchmarks/`` is DELIBERATELY NOT ignored: its ``run.py``
+    harnesses import the service package and belong in the impact/full matrix
+    (they re-validate after MCP-shape changes — see the bench-harness memory).
+    """
+    ignores: list[str] = ["--ignore-glob=*graphify-src*",
+                          "--ignore-glob=*data-bench*"]
+    # Location-based: the runtime data stores (copied repos live UNDER these),
+    # never the first-party benchmarks/ tree.
+    data_rels = ["services/prism-service/data", "data", ".dev-data"]
+    seen: set[str] = set()
+    for rel in data_rels:
+        p = (workspace / rel)
+        if p.exists():
+            ap = str(p.resolve())
+            if ap not in seen:
+                seen.add(ap)
+                ignores.append(f"--ignore={ap}")
+    # The active PRISM_DATA_DIR, when it sits inside the workspace (a source-run
+    # dev checkout keeps its store under the repo as untracked .dev-data).
+    dd = data_dir or os.environ.get("PRISM_DATA_DIR")
+    if dd:
+        try:
+            ddp = Path(dd).resolve()
+            if ddp.exists() and str(ddp) not in seen and (
+                    ddp == workspace.resolve()
+                    or workspace.resolve() in ddp.parents):
+                ignores.append(f"--ignore={ddp}")
+        except OSError:
+            pass
+    return ignores
+
+
+# ---------------------------------------------------------------------------
+# CLEAN ISOLATED ENV (inverted-flow #5, lane #1)
+# ---------------------------------------------------------------------------
+#
+# A gate/verifier pytest run MUST NOT inherit the live dev daemon's coupling.
+# PRISM_DEV_MODE + a running daemon make env-fragile tests (auto-updater,
+# pidfile, port binding) false-RED against a candidate that is perfectly fine.
+# We run the subprocess in a SANITIZED env: PRISM_DEV_MODE stripped,
+# PRISM_AUTO_UPDATE* forced off, daemon-coupling vars dropped, PRISM_DATA_DIR
+# pointed at a THROWAWAY dir, and cwd = the task's worktree checkout.
+
+# Vars that couple a process to THIS daemon instance — stripped so a child
+# pytest never talks to (or trips over) the running dev daemon.
+_DAEMON_COUPLING_ENV = {
+    "PRISM_PIDFILE", "PRISM_DAEMON", "PRISM_SERVICE_PORT", "PRISM_WEB_PORT",
+    "PRISM_MCP_PORT", "PRISM_PORT", "PRISM_PID", "PRISM_RUNNING",
+}
+
+
+def sanitized_run_env(data_dir: str,
+                      base_env: Optional[dict] = None) -> dict[str, str]:
+    """Return a COPY of the environment safe for a candidate pytest run.
+
+    * PRISM_DEV_MODE is STRIPPED (the subprocess env lacks it) so the
+      auto-updater / dev-only branches don't false-RED.
+    * PRISM_AUTO_UPDATE* is forced OFF (override) so no updater fires.
+    * daemon-coupling vars (pidfile/ports) are dropped.
+    * PRISM_DATA_DIR is repointed at the throwaway ``data_dir`` so the run
+      never reads or mutates the live store.
+    * PYTHONNOUSERSITE=1 so a stray user-site prism_service can't shadow the
+      checkout under test.
+
+    Pure w.r.t. ``base_env`` (defaults to os.environ) — returns a new dict,
+    never mutates the process environment.
+    """
+    env = dict(os.environ if base_env is None else base_env)
+    for k in list(env):
+        up = k.upper()
+        if up == "PRISM_DEV_MODE" or up.startswith("PRISM_AUTO_UPDATE") \
+                or up in _DAEMON_COUPLING_ENV:
+            env.pop(k, None)
+    # Hard, explicit overrides (belt-and-braces over the strip above).
+    env["PRISM_AUTO_UPDATE"] = "off"
+    env["PRISM_AUTO_UPDATE_INTERVAL"] = "0"
+    env["PYTHONNOUSERSITE"] = "1"
+    env["PRISM_DATA_DIR"] = str(data_dir)
+    return env
 
 
 def _run_node_tools(workspace: Path, js_files: list[str]) -> list[Claim]:
@@ -570,6 +676,12 @@ def _tier_status(claims: list[Claim], tier: int) -> str:
         return "partial"
     if has_fail:
         return "fail"
+    # SKIPPED/TIMEOUT != PASS (inverted-flow #5): a tier whose only outcomes
+    # are skipped/unverifiable (tool not installed, timed out) verified
+    # NOTHING — reporting "pass" there was the false-green. Not-run is a
+    # refusal, not a pass.
+    if not has_pass:
+        return "not-run"
     return "pass"
 
 
@@ -584,6 +696,332 @@ def _overall_status(tier0: str, tier1: str, tier2: str) -> str:
     if "partial" in statuses:
         return "partial"
     return "pass"
+
+
+# ---------------------------------------------------------------------------
+# THREE-LANE HONEST GREEN SIGNAL (inverted-flow #5)
+# ---------------------------------------------------------------------------
+#
+# The per-task green predicate was "the full pytest suite passes", which is
+# both the WRONG predicate (a whole-suite green is neither necessary nor
+# sufficient for THIS task's outcome) and UNRELIABLE (skipped/timed-out tests
+# aggregated as pass; env-fragile tests false-RED inside the live daemon).
+# Replace it with THREE distinct, blocking lanes reported separately:
+#
+#   (a) ORACLE PROBE — run the task's OracleSpec for real and MINT an
+#       EvidenceReceipt. Lane passes iff receipt.passed. (This is the seam the
+#       green_gate's fresh-receipt tooth later requires.)
+#   (b) RED->GREEN CONTINUITY — the EXACT test node-ids that were RED at the
+#       red_gate must now PASS. Not "some failure is gone" / not "any green".
+#       No recorded ids -> inconclusive (honest), never an auto-pass.
+#   (c) IMPACT-SELECTED REGRESSION — run tests impacted by the CHANGED files
+#       and DIFF the pass/fail matrix against a BASELINE run, so only
+#       NEWLY-introduced failures block. A test red on baseline too is not
+#       this task's fault-signal (recorded, not blocking).
+#
+# Whole-suite green is reserved for release / high-risk tasks (lane d).
+
+# Per-test outcome vocabulary shared by every lane. skipped / not-run /
+# timeout are DISTINCT from passed — never silently folded into "pass".
+_ST_PASS = "passed"
+_ST_FAIL = "failed"
+_ST_ERROR = "error"
+_ST_SKIP = "skipped"
+_ST_TIMEOUT = "timeout"
+_ST_NOTRUN = "not-run"
+# Outcomes that count as a real FAILURE for regression / continuity purposes.
+_BAD_OUTCOMES = (_ST_FAIL, _ST_ERROR, _ST_TIMEOUT)
+
+# A pytest node id: <path>.py::<test>[params].
+_NODEID_RE = re.compile(r"[\w./\\-]+\.py::[\w:.\[\]\-]+")
+# A pytest -v result line: "<nodeid> PASSED [ 12%]".
+_VERBOSE_RE = re.compile(
+    r"^(?P<node>\S+::\S+?)\s+(?P<outcome>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\b")
+_VERBOSE_MAP = {"PASSED": _ST_PASS, "XPASS": _ST_PASS, "XFAIL": _ST_SKIP,
+                "FAILED": _ST_FAIL, "ERROR": _ST_ERROR, "SKIPPED": _ST_SKIP}
+
+
+@dataclass
+class LaneResult:
+    """One blocking lane's honest verdict. ``state`` is lane-specific:
+    green/red for a definite pass/fail, ``inconclusive`` when the lane had no
+    signal to judge (never an auto-pass), ``clean`` for regression-with-no-
+    new-failures. ``blocking`` is the single boolean the aggregate reads."""
+    name: str
+    state: str
+    blocking: bool
+    detail: str = ""
+    evidence: dict = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        return {"name": self.name, "state": self.state,
+                "blocking": self.blocking, "detail": self.detail,
+                "evidence": self.evidence}
+
+
+def parse_pytest_statuses(output: str) -> dict[str, str]:
+    """Parse ``pytest -v`` output into {nodeid: outcome}. Pure + unit-tested —
+    this is where skipped/xfail are kept DISTINCT from passed so a skipped
+    required test can never aggregate as a pass."""
+    matrix: dict[str, str] = {}
+    for line in (output or "").splitlines():
+        m = _VERBOSE_RE.match(line.strip())
+        if m:
+            matrix[m.group("node")] = _VERBOSE_MAP[m.group("outcome")]
+    return matrix
+
+
+def planned_failing_ids(task: object) -> list[str]:
+    """The test node-ids that were PLANNED to fail at the red_gate.
+
+    There is no dedicated field, so read the same places the red step already
+    records its committed failing-test trace: the task's ``verify`` commands
+    (the slice's proof commands) first, then any node-ids embedded in the
+    stored ``completion_proof`` (the red_gate artifact). Returns [] when none
+    are recorded — the caller renders that as an INCONCLUSIVE continuity lane,
+    never an auto-pass."""
+    ids: list[str] = []
+    verify = getattr(task, "verify", None) or []
+    if isinstance(verify, (list, tuple)):
+        for v in verify:
+            ids.extend(_NODEID_RE.findall(str(v)))
+    for src_attr in ("completion_proof", "description"):
+        ids.extend(_NODEID_RE.findall(
+            str(getattr(task, src_attr, "") or "")))
+    seen: set[str] = set()
+    out: list[str] = []
+    for i in ids:
+        norm = i.replace("\\", "/")
+        if norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def oracle_lane(task: object, ctx: dict,
+                run_oracle_fn=None) -> tuple[LaneResult, object]:
+    """Lane (a): run the task's OracleSpec FOR REAL and MINT an
+    EvidenceReceipt. Passes iff ``receipt.passed``. Returns (lane, receipt).
+    Reuses oracle_spec.run_oracle (fix #2) — the receipt this mints is exactly
+    what the green_gate's fresh-receipt tooth later requires."""
+    from prism_service.services import oracle_spec as osp
+    runner = run_oracle_fn or osp.run_oracle
+    try:
+        spec = osp.OracleSpec.from_task(task)
+        receipt = runner(spec, task, ctx)
+    except Exception as exc:  # fail closed — an errored oracle is not a pass
+        return (LaneResult("oracle", "red", True,
+                           f"oracle run errored ({type(exc).__name__}: {exc})"),
+                None)
+    passed = bool(getattr(receipt, "passed", False))
+    status = getattr(receipt, "status", "")
+    return (LaneResult(
+        "oracle", "green" if passed else "red", not passed,
+        (f"oracle receipt {getattr(receipt, 'job_id', '')} "
+         f"adapter={getattr(receipt, 'adapter', '')} status={status}"),
+        {"passed": passed, "status": status,
+         "job_id": getattr(receipt, "job_id", ""),
+         "spec_hash": getattr(receipt, "spec_hash", ""),
+         "tree_sha": getattr(receipt, "tree_sha", "")}), receipt)
+
+
+def continuity_lane(planned_ids: list[str],
+                    candidate: dict[str, str]) -> LaneResult:
+    """Lane (b): the EXACT planned-red node-ids must now PASS.
+
+    green  — every planned id is ``passed``.
+    red    — at least one planned id is NOT passed (failed/skipped/not-run/…);
+             a skipped or never-collected required test is NOT a pass.
+    inconclusive — no planned ids recorded (honest; never an auto-pass)."""
+    if not planned_ids:
+        return LaneResult(
+            "continuity", "inconclusive", False,
+            "no planned failing test-ids recorded at red_gate — cannot confirm "
+            "red->green continuity (not an auto-pass)", {"planned": []})
+    outcomes = {i: candidate.get(i, _ST_NOTRUN) for i in planned_ids}
+    not_passed = {i: st for i, st in outcomes.items() if st != _ST_PASS}
+    if not not_passed:
+        return LaneResult("continuity", "green", False,
+                          f"all {len(planned_ids)} planned red test-id(s) now pass",
+                          {"outcomes": outcomes})
+    return LaneResult(
+        "continuity", "red", True,
+        ("planned red test-id(s) did not turn green: "
+         + "; ".join(f"{i} -> {st}" for i, st in not_passed.items())),
+        {"outcomes": outcomes})
+
+
+def regression_lane(baseline: dict[str, str],
+                    candidate: dict[str, str]) -> LaneResult:
+    """Lane (c): DIFF the impacted candidate matrix against a BASELINE run so
+    only NEWLY-introduced failures block.
+
+    A test that is bad (failed/error/timeout) on the candidate blocks ONLY when
+    it was NOT already bad on the baseline. A test red on baseline too is
+    pre-existing — recorded, never this task's fault-signal. Skipped/not-run
+    are surfaced separately, never counted as a pass."""
+    newly: dict[str, str] = {}
+    preexisting: dict[str, str] = {}
+    skipped: dict[str, str] = {}
+    for node, st in candidate.items():
+        if st in _BAD_OUTCOMES:
+            if baseline.get(node, _ST_PASS) in _BAD_OUTCOMES:
+                preexisting[node] = st
+            else:
+                newly[node] = st
+        elif st in (_ST_SKIP, _ST_NOTRUN):
+            skipped[node] = st
+    evidence = {"newly_introduced": newly, "preexisting": preexisting,
+                "skipped": skipped}
+    if newly:
+        return LaneResult(
+            "regression", "red", True,
+            ("NEWLY-introduced failure(s): "
+             + "; ".join(f"{n} -> {st}" for n, st in newly.items())
+             + (f" (+{len(preexisting)} pre-existing, not blocking)"
+                if preexisting else "")),
+            evidence)
+    detail = "no newly-introduced failures"
+    if preexisting:
+        detail += f" ({len(preexisting)} pre-existing failure(s) recorded, not blocking)"
+    return LaneResult("regression", "clean", False, detail, evidence)
+
+
+def full_suite_lane(matrix: dict[str, str]) -> LaneResult:
+    """Lane (d): whole-suite green — reserved for release / high-risk. Green
+    iff every collected test passed (skipped allowed) with no failed/error/
+    timeout and something actually ran."""
+    bad = {n: st for n, st in matrix.items() if st in _BAD_OUTCOMES}
+    ran = any(st == _ST_PASS for st in matrix.values())
+    if bad:
+        return LaneResult("full_suite", "red", True,
+                          f"{len(bad)} failing test(s) in the full suite",
+                          {"failing": bad})
+    if not ran:
+        return LaneResult("full_suite", "red", True,
+                          "full suite verified nothing (no passing tests ran) "
+                          "— not-run is a refusal, not a pass", {})
+    return LaneResult("full_suite", "green", False,
+                      f"full suite green ({len(matrix)} test(s) collected)", {})
+
+
+def is_release_task(task: object, release: bool = False) -> bool:
+    """Whole-suite green is gated on this: an explicit ``release`` flag, a
+    high-risk OracleSpec.risk_class, or a release/high-risk tag. Ordinary
+    tasks pass on lanes (a)+(b)+(c) WITHOUT a whole-suite run."""
+    if release:
+        return True
+    tags = {str(t).strip().lower() for t in (getattr(task, "tags", None) or [])}
+    if tags & {"release", "high-risk", "high_risk", "critical"}:
+        return True
+    try:
+        from prism_service.services import oracle_spec as osp
+        rc = str(getattr(osp.OracleSpec.from_task(task), "risk_class", "")).lower()
+        if rc in ("release", "high", "high-risk", "high_risk", "critical"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def aggregate_lanes(lanes: list[LaneResult]) -> dict:
+    """The single honest verdict over the blocking lanes. ``pass`` iff no lane
+    blocks; ``fail`` otherwise. Continuity ``inconclusive`` never blocks (we
+    have no ids) but is surfaced so it is not read as a positive pass."""
+    blocking = [ln.name for ln in lanes if ln.blocking]
+    verdict = "pass" if not blocking else "fail"
+    return {"verdict": verdict, "blocking": blocking,
+            "lanes": {ln.name: ln.as_dict() for ln in lanes}}
+
+
+def _pytest_run(targets: list[str], workspace: str,
+                env: Optional[dict] = None, python: Optional[str] = None,
+                timeout_s: float = 600.0) -> dict[str, str]:
+    """Runner boundary (monkeypatchable in tests): run pytest on ``targets``
+    (node-ids or paths) in ``workspace`` under a SANITIZED ``env`` and return
+    the {nodeid: outcome} matrix. On timeout every requested target is marked
+    ``timeout`` (never silently dropped -> never a false pass)."""
+    import sys as _sys
+    if not targets:
+        return {}
+    py = python or _sys.executable
+    cmd = [py, "-m", "pytest", "-v", "-p", "no:cacheprovider", "--no-header",
+           "--tb=no", *_pytest_ignore_args(Path(workspace)), *targets]
+    try:
+        r = subprocess.run(cmd, cwd=str(workspace), capture_output=True,
+                           text=True, env=env, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        return {t: _ST_TIMEOUT for t in targets}
+    except (FileNotFoundError, OSError):
+        return {t: _ST_ERROR for t in targets}
+    return parse_pytest_statuses((r.stdout or "") + "\n" + (r.stderr or ""))
+
+
+def _impacted_test_targets(workspace: Path,
+                           baseline: Optional[str]) -> list[str]:
+    """Test files impacted by the CHANGED files: changed test files
+    themselves, first-party benchmarks/*/run.py, and tests whose stem matches
+    a changed non-test source module. Keeps regression scoped + cheap while
+    still catching the modules a change most plausibly breaks."""
+    changed = _git_changed_files(workspace, baseline)
+    targets: set[str] = set()
+    stems: set[str] = set()
+    for f in changed:
+        fn = f.replace("\\", "/")
+        base = fn.rsplit("/", 1)[-1]
+        if not base.endswith(".py"):
+            continue
+        if base.startswith("test_") or base.endswith("_test.py") or (
+                base == "run.py" and fn.startswith("benchmarks/")):
+            if (workspace / f).exists():
+                targets.add(fn)
+        else:
+            stems.add(base[:-3])
+    if stems:
+        tests_root = workspace / "services" / "prism-service" / "tests"
+        if tests_root.exists():
+            for tf in tests_root.rglob("test_*.py"):
+                core = tf.stem[len("test_"):]
+                if core in stems:
+                    targets.add(str(tf.relative_to(workspace)).replace("\\", "/"))
+    return sorted(targets)
+
+
+def _pytest_run_at_rev(ws_path: str, rev: str, targets: list[str],
+                       env: Optional[dict] = None,
+                       timeout_s: float = 600.0) -> dict[str, str]:
+    """Run ``targets`` at a past ``rev`` (the BASELINE) via a throwaway detached
+    ``git worktree`` of the task's repo, so the regression diff compares the
+    same impacted tests before/after this task. Best-effort: a git failure
+    yields an empty baseline (regression then treats candidate failures as
+    newly-introduced — the conservative honest default)."""
+    import tempfile as _tf
+    if not targets or not rev:
+        return {}
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                           cwd=str(ws_path), capture_output=True, text=True,
+                           timeout=10)
+        repo = r.stdout.strip() if r.returncode == 0 else str(ws_path)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        repo = str(ws_path)
+    tmp = _tf.mkdtemp(prefix="prism-baseline-")
+    wt = str(Path(tmp) / "wt")
+    try:
+        add = subprocess.run(["git", "worktree", "add", "--detach", wt, rev],
+                            cwd=repo, capture_output=True, text=True, timeout=90)
+        if add.returncode != 0:
+            return {}
+        return _pytest_run(targets, wt, env=env, timeout_s=timeout_s)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {}
+    finally:
+        try:
+            subprocess.run(["git", "worktree", "remove", "--force", wt],
+                          cwd=repo, capture_output=True, text=True, timeout=30)
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -814,3 +1252,79 @@ class VerifierService:
             if len(out) >= limit:
                 break
         return out
+
+    # ------------------------------------------------------------------
+    # Three-lane honest green signal (inverted-flow #5)
+    # ------------------------------------------------------------------
+
+    def run_green_lanes(self, task: object, *, release: bool = False,
+                        workspace: Optional[str] = None,
+                        baseline: Optional[str] = None,
+                        project: str = "default",
+                        planned_ids: Optional[list[str]] = None,
+                        pytest_runner=None, oracle_runner=None,
+                        data_dir: Optional[str] = None) -> dict:
+        """Compute the 3 (or 4) blocking lanes and MINT the oracle receipt.
+
+        The candidate pytest lanes run in a SANITIZED subprocess env (no
+        PRISM_DEV_MODE / auto-updater / daemon coupling; PRISM_DATA_DIR at a
+        throwaway dir) from the task's WORKTREE checkout, not the live daemon
+        cwd — the fix for env-fragile false-REDs. Ordinary tasks pass on lanes
+        (a)+(b)+(c); release/high-risk also require whole-suite green (d).
+
+        ``pytest_runner(targets, rev=None)`` and ``oracle_runner`` are optional
+        injection seams for tests; the defaults run for real."""
+        import tempfile as _tf
+        ws_rec = None
+        try:
+            from prism_service.services import task_workspace as _tw
+            ws_rec = _tw.workspace_for(getattr(task, "id", "") or "")
+        except Exception:
+            ws_rec = None
+        ws_path = workspace or (ws_rec or {}).get("path") or str(self.workspace)
+        base = baseline or (ws_rec or {}).get("baseline")
+
+        throwaway = data_dir or _tf.mkdtemp(prefix="prism-verify-lane-")
+        env = sanitized_run_env(throwaway)
+
+        from prism_service.services import oracle_spec as osp
+        tree_sha = osp.current_tree_sha(ws_path)
+        ctx = {"project": project, "workspace": ws_path, "tree_sha": tree_sha}
+        lane_a, receipt = oracle_lane(task, ctx, run_oracle_fn=oracle_runner)
+
+        def _run(targets, rev=None):
+            if pytest_runner is not None:
+                return pytest_runner(targets, rev)
+            if rev:
+                return _pytest_run_at_rev(ws_path, rev, targets, env=env)
+            return _pytest_run(targets, ws_path, env=env)
+
+        pids = (planned_ids if planned_ids is not None
+                else planned_failing_ids(task))
+        cand_continuity = _run(pids) if pids else {}
+        lane_b = continuity_lane(pids, cand_continuity)
+
+        targets = _impacted_test_targets(Path(ws_path), base)
+        cand_reg = _run(targets) if targets else {}
+        base_reg = _run(targets, rev=base) if (targets and base) else {}
+        lane_c = regression_lane(base_reg, cand_reg)
+
+        lanes = [lane_a, lane_b, lane_c]
+        release_task = is_release_task(task, release)
+        if release_task:
+            full = _run(["services/prism-service/tests"])
+            lanes.append(full_suite_lane(full))
+
+        agg = aggregate_lanes(lanes)
+        agg.update({
+            "release": release_task, "workspace": ws_path,
+            "tree_sha": tree_sha, "data_dir": str(throwaway),
+            "env_sanitized": {
+                "PRISM_DEV_MODE_present": "PRISM_DEV_MODE" in env,
+                "PRISM_AUTO_UPDATE": env.get("PRISM_AUTO_UPDATE"),
+                "PRISM_DATA_DIR": env.get("PRISM_DATA_DIR"),
+            },
+            "receipt": receipt.as_dict() if receipt is not None else None,
+            "planned_ids": pids,
+        })
+        return agg

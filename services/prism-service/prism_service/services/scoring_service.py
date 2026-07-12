@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from prism_service.services import sqlite_db
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -357,7 +358,7 @@ def score_merged_tasks(
     if not _is_git_repo(repo_path):
         return []
 
-    scores_conn = sqlite3.connect(scores_db, timeout=5.0)
+    scores_conn = sqlite_db.connect(scores_db, timeout=5.0)
     try:
         already = {
             r[0] for r in scores_conn.execute(

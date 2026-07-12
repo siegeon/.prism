@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from prism_service.services import sqlite_db
 from threading import Thread
 from typing import Optional
 
@@ -38,7 +39,7 @@ def _count_tasks(name: str) -> int:
     if not db.exists():
         return 0
     try:
-        c = sqlite3.connect(str(db), timeout=5.0)
+        c = sqlite_db.connect(str(db), timeout=5.0)
         v = c.execute("SELECT COUNT(*) FROM tasks").fetchone()
         c.close()
         return int(v[0]) if v else 0

@@ -1384,6 +1384,77 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="conductor_work",
+        description=(
+            "Work a task as a SERVER-DRIVEN QUEUE — the ONE verb the calling "
+            "model loops on. The server owns WORKFLOW_STEPS; you never name a "
+            "step. Loop:\n"
+            "  job = conductor_work()            # omit id -> server picks next task\n"
+            "  while not job['done']:\n"
+            "      # do EXACTLY job['instructions'], produce job['expected_proof']\n"
+            "      job = conductor_work(id=job['task_id'], outcome='pass', proof=<artifact>)\n"
+            "Call with NO outcome to START/PEEK (enters the flow, creates the "
+            "task's git worktree, returns the first self-describing job). Call "
+            "WITH outcome to REPORT the current step: the server advances an "
+            "agent step, or DECIDES a gate (running the verifier + honest-gate "
+            "teeth), then hands back the next job. A gate job is decided by an "
+            "independent DISTINCT actor — the producing session cannot clear "
+            "its own gate; route gate jobs to a distinct seat. Returns "
+            "{ok, job, done, task_id, detail}; job is the next step "
+            "(self-describing: {step, kind, role, instructions, "
+            "expected_proof, gate_state}) or null when done=true (terminal "
+            "green_gate passed). Supersedes conductor_advance/conductor_gate/"
+            "workflow_state (now tool_profile=all)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": (
+                        "Task ID to work. Omit to let the server pull the "
+                        "next highest-priority unblocked task (kickoff)."
+                    ),
+                },
+                "outcome": {
+                    "description": (
+                        "Report outcome for the CURRENT step. Omit to "
+                        "START/PEEK (get the job without reporting). 'pass' "
+                        "(or any non-failure value) advances / approves; a "
+                        "failure token (fail/error/false/reject) records a "
+                        "failure and does NOT advance (a gate failure is a "
+                        "reject)."
+                    ),
+                },
+                "proof": {
+                    "type": "string",
+                    "description": (
+                        "The artifact/evidence for the step (test output, "
+                        "screenshot path, receipt, review notes). Written to "
+                        "task.completion_proof so the gate's proof-carrying "
+                        "artifact tooth can read it."
+                    ),
+                },
+                "override": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Audited gate override (distinct-actor still "
+                        "enforced). Only for the terminal green_gate with no "
+                        "machine-runnable oracle; never the default."
+                    ),
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "Model you used for this step — recorded for per-role "
+                        "cost attribution; PRISM never forces a model."
+                    ),
+                },
+            },
+        },
+    ),
+    Tool(
         name="context_bundle",
         description=(
             "Build a deterministic MCP-side context bundle: role card, rules, "
@@ -1566,10 +1637,12 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "task_next",
     "task_update",
     "task_link_session",
-    "workflow_state",
-    "workflow_advance",
-    "conductor_advance",
-    "conductor_gate",
+    # SERVER-DRIVEN QUEUE (task 7b219546): the calling model loops on the
+    # single `conductor_work` verb — the server owns WORKFLOW_STEPS. The four
+    # driver-pushed verbs it supersedes (workflow_state, workflow_advance,
+    # conductor_advance, conductor_gate) are DEMOTED to tool_profile=all so the
+    # default surface stays small; they remain reachable for admin/debug.
+    "conductor_work",
     "context_bundle",
     "register_claude_source",
     # GH #173 — the prism-reflect sub-agent connects through this default
@@ -1783,6 +1856,21 @@ def _resolve_link_session_id() -> str:
     if real:
         return real
     return get_request_context().request_id
+
+
+def _mark_in_progress(task_svc, task, done: bool, session_id: str) -> None:
+    """HONEST ACTIVITY: a task being driven by conductor_work is WORKING. Flip
+    a pending/blocked task to in_progress (with the real session) so the tile's
+    activity state reads 'working' and its live ETA/throughput indicator renders
+    instead of a frozen 'pending / —'. No-op when terminal or already moving."""
+    if task is None or done:
+        return
+    if str(getattr(task, "status", "") or "") in ("pending", "blocked", ""):
+        try:
+            task_svc.update(getattr(task, "id", None),
+                            status="in_progress", session_id=session_id)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -4181,6 +4269,118 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             else:
                 result["task"] = task_svc.get(task_id)
             return [TextContent(type="text", text=_json(result))]
+
+        # ------------------------------------------------------------------
+        # Conductor v2 — SERVER-DRIVEN QUEUE (single loop verb, task 7b219546)
+        # ------------------------------------------------------------------
+        if name == "conductor_work":
+            # Thin wrapper over the live api/conductor_flow pull-loop — no new
+            # state machine; keeps every honest-gate tooth (distinct-actor,
+            # proof-carrying artifact, gate verifier). No outcome -> START/PEEK
+            # (flow_start); outcome given -> REPORT (flow_report). `done` is
+            # (on the FINAL step AND that gate passed) — advance past green_gate
+            # is a no-op, so next_job is never null at terminal.
+            from prism_service.api import conductor_flow as _flow
+            from prism_service.models.workflow import WORKFLOW_STEPS as _STEPS
+            _sid = str(arguments.get("session_id") or "").strip() \
+                or _resolve_link_session_id()
+            _task_id = str(arguments.get("id") or "").strip()
+            _outcome = arguments.get("outcome")
+            _proof = arguments.get("proof")
+            _has_report = _outcome is not None or bool(
+                _proof and str(_proof).strip())
+
+            def _terminal(t) -> bool:
+                if t is None:
+                    return False
+                if str(getattr(t, "status", "") or "") in ("done", "cancelled"):
+                    return True
+                _last = _STEPS[-1]["id"]
+                return (getattr(t, "workflow_step", "") == _last
+                        and getattr(t, "gate_state", "") == "passed")
+
+            # Kickoff: no id -> pull the next task. Can't report without an id.
+            if not _task_id:
+                if _has_report:
+                    return [TextContent(type="text", text=_json({
+                        "ok": False,
+                        "error": "id is required to report an outcome"}))]
+                _nxt = task_svc.next_task()
+                if _nxt is None:
+                    return [TextContent(type="text", text=_json({
+                        "ok": True, "done": True, "job": None,
+                        "reason": "no pending task to work"}))]
+                _task_id = _nxt.id
+            if not _has_report:
+                # START/PEEK — enter the flow (idempotent) and return the job.
+                _body = _flow.Ident(task_id=_task_id, session_id=_sid,
+                                    model=arguments.get("model"))
+                _res = _flow.flow_start(_body, project=project_id)
+                _t = task_svc.get(_task_id)
+                _done = _terminal(_t)
+                # HONEST ACTIVITY: a task being DRIVEN is WORKING, not pending.
+                # Flip status->in_progress on entry (with the real session) so
+                # the conductor tile reads 'working' and its live ETA/throughput
+                # indicator renders instead of a frozen 'pending / —' (the gap
+                # noted in conductor_honest_activity: the driver must set it).
+                _mark_in_progress(task_svc, _t, _done, _sid)
+                return [TextContent(type="text", text=_json({
+                    "ok": _res.get("ok", True),
+                    "done": _done,
+                    "job": None if _done else _res.get("job"),
+                    "workspace": _res.get("workspace"),
+                    "task_id": _task_id,
+                    "error": _res.get("error"),
+                }))]
+            # REPORT — name the current step so a stale report can't advance;
+            # persist proof to completion_proof for the gate artifact tooth.
+            _t = task_svc.get(_task_id)
+            if _t is None:
+                return [TextContent(type="text", text=_json({
+                    "ok": False, "error": "unknown task",
+                    "task_id": _task_id}))]
+            _cur = conductor_svc._step_by_id(
+                getattr(_t, "workflow_step", "") or "")
+            if _cur is None:
+                # Not entered yet — a report with no current step: START it.
+                _body = _flow.Ident(task_id=_task_id, session_id=_sid,
+                                    model=arguments.get("model"))
+                _res = _flow.flow_start(_body, project=project_id)
+                return [TextContent(type="text", text=_json({
+                    "ok": _res.get("ok", True), "done": False,
+                    "job": _res.get("job"), "task_id": _task_id,
+                    "note": "task had not entered the flow; started it"}))]
+            if _proof and str(_proof).strip():
+                try:
+                    task_svc.update(_task_id, completion_proof=str(_proof))
+                except Exception:
+                    pass
+            _body = _flow.Ident(
+                task_id=_task_id, session_id=_sid,
+                outcome=(_outcome if _outcome is not None else "pass"),
+                model=arguments.get("model"), expected_step=_cur["id"],
+                override=bool(arguments.get("override", False)))
+            _res = _flow.flow_report(_body, project=project_id)
+            _t2 = task_svc.get(_task_id)
+            _done = _terminal(_t2)
+            # Terminal green: flip the leaf task to done so it leaves the board.
+            if _done and str(getattr(_t2, "status", "") or "") not in (
+                    "done", "cancelled"):
+                try:
+                    task_svc.update(_task_id, status="done")
+                except Exception:
+                    pass
+            else:
+                # Still mid-drive: keep the tile 'working' (honest activity).
+                _mark_in_progress(task_svc, _t2, _done, _sid)
+            return [TextContent(type="text", text=_json({
+                "ok": _res.get("ok", False),
+                "done": _done,
+                "job": None if _done else _res.get("next_job"),
+                "task_id": _task_id,
+                "detail": {k: _res.get(k) for k in (
+                    "reason", "noop", "advanced", "step") if k in _res},
+            }))]
 
         # ------------------------------------------------------------------
         # Context bundle
