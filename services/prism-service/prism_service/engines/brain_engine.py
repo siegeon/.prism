@@ -791,13 +791,14 @@ class Brain:
 
     @staticmethod
     def _connect(path: str) -> sqlite3.Connection:
-        conn = sqlite3.connect(path, timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        # Cap waiters on the per-connection mutex / writer lock so a stuck
-        # transaction surfaces as SQLITE_BUSY instead of stalling the
-        # uvicorn event loop indefinitely (see issue #38).
-        conn.execute("PRAGMA busy_timeout=5000")
+        # Delegate the canonical hardening (timeout=5.0, Row, WAL,
+        # busy_timeout=5000) to the ONE chokepoint so there is a single
+        # source of truth; this method only layers the Brain-specific FTS
+        # function on top. Local import keeps the engines->services edge
+        # lazy and cycle-proof (sqlite_db is a dependency-free leaf).
+        from prism_service.services import sqlite_db
+
+        conn = sqlite_db.connect(path)
         # Register identifier-expander so FTS5 triggers can call it.
         # Deterministic: same input always yields same output (pure fn).
         try:

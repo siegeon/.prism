@@ -26,6 +26,7 @@ and circuit-breaks them.
 from __future__ import annotations
 
 import sqlite3
+from prism_service.services import sqlite_db
 import sys
 from difflib import SequenceMatcher
 
@@ -225,7 +226,7 @@ def _disposition(scores_db: str, candidate_ids: list[str]) -> None:
     if not candidate_ids:
         return
     try:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         try:
             conn.executemany(
                 "UPDATE consolidation_candidates SET status='completed' "
@@ -259,7 +260,7 @@ def handle_session_imported(event) -> None:
     scores_db = str(ctx._data_dir / "scores.db")
 
     try:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         try:
             rows = conn.execute(
                 "SELECT id FROM consolidation_candidates "
@@ -294,7 +295,7 @@ def _reflect_once(project: str, ctx, scores_db: str, candidate_id: str) -> dict:
     from prism_service.services import reflection_runner as rr
     from prism_service.services import source_service as ss
 
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(

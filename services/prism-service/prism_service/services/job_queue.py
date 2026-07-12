@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from prism_service.services import sqlite_db
 import threading
 import time
 import uuid
@@ -63,7 +64,7 @@ def _db_path() -> str:
 
 
 def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(_db_path(), timeout=5.0)
+    c = sqlite_db.connect(_db_path(), timeout=5.0)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(_CREATE)

@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.44"
+PRISM_VERSION = "6.8.45"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.45: SQLITE CHOKEPOINT (task dde1162f). (1) ONE connection funnel — new "
+    "services/sqlite_db.connect() applies the canonical timeout=5.0 + row_factory=Row "
+    "+ PRAGMA journal_mode=WAL + busy_timeout=5000 in a single place; 71 of the 80 "
+    "scattered bare connect sites reroute through it and brain_engine._connect delegates "
+    "(keeping its FTS expand_identifiers fn), so a new call site can no longer silently "
+    "forget timeout= and reintroduce the 97.6% lock rate. The 8 sites in the gate's OWN "
+    "judge (verifier_service, conductor_service) keep their existing timeout=5.0 connects "
+    "and are allowlisted — the control-plane guard refuses a candidate that edits its own "
+    "judge, so routing them is deferred to a policy-change task. A grep-gate test pins zero "
+    "bare connects outside that allowlist. (2) sqlite_maint now GLOB-discovers "
+    "*.db recursively per project data dir (checkpoint_data_dir) instead of a hardcoded "
+    "5-tuple, so a new db under any subdir gets its -wal checkpointed. (3) Vector bench: "
+    "docs_vec=475 rows @512d, brute-force KNN p50=1.14ms — sqlite-vec scan is a non-issue "
+    "at this scale; no ANN needed. "
     "v6.8.44: conductor_work loop can now HONESTLY reach done (task ae63e375). "
     "(1) pending->done desync fixed — a PASSED terminal green_gate flips "
     "task.status='done' + stamps completed_at in the same update (was left "
