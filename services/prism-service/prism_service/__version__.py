@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.46"
+PRISM_VERSION = "6.9.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.0: INVERTED CONDUCTOR + SQLITE HARDENING. The SDLC is now a SERVER-DRIVEN QUEUE: the agent loops on ONE verb (conductor_work) and the server owns WORKFLOW_STEPS — the 4 legacy driver verbs (workflow_state/workflow_advance/conductor_advance/conductor_gate) are demoted to tool_profile=all, so an agent can no longer hand-drive (or hand-clear) its own SDLC. HONEST GATES: distinct-actor enforcement (a producing session cannot clear its own gate), proof-carrying artifacts, OracleSpec + trusted runner + EvidenceReceipt (a gate needs a REAL run, not a self-attested proof string), control-plane pinning (a candidate may not edit its own judge), and a terminal green_gate that reaches done on a real oracle receipt. SQLITE CHOKEPOINT: one services/sqlite_db.connect() funnel (timeout=5.0 + row_factory=Row + WAL + busy_timeout=5000) with 71/80 bare connect sites rerouted and a grep-gate test pinning zero bare connects; sqlite_maint now GLOB-discovers *.db recursively so a new store's -wal can never bloat forever. Measured: an unhardened connect fails 41% under an 8-writer load vs ~0% through the helper; a live daemon took 90 concurrent writes with zero lock errors and folded an 881KB WAL. Suite: 1402 passed, 0 failed. "
     "v6.8.46: suite fully green — corrected the STALE default-MCP-surface test. inverted-flow #6 (8b7993f) demoted 4 driver verbs (workflow_state/workflow_advance/conductor_advance/conductor_gate) to tool_profile=all and added the single conductor_work loop verb, but test_mcp_tool_profiles still asserted the pre-demotion count (31) and listed the demoted verbs as expected-present. Now pins the INTENT: 31-4+1=28, conductor_work served, the 4 drivers asserted ABSENT from the default surface. "
     "v6.8.45: SQLITE CHOKEPOINT (task dde1162f). (1) ONE connection funnel — new "
     "services/sqlite_db.connect() applies the canonical timeout=5.0 + row_factory=Row "
