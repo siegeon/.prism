@@ -28,7 +28,6 @@ import os
 import re
 import shutil
 import sqlite3
-from prism_service.services import sqlite_db
 import subprocess
 import time
 import uuid
@@ -485,7 +484,7 @@ def _check_brain_indexed(brain_db: Optional[str], workspace: Path,
     if not brain_db or not Path(brain_db).exists():
         return claims
     try:
-        conn = sqlite_db.connect(brain_db, timeout=5.0)
+        conn = sqlite3.connect(brain_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         if not _table_exists(conn, "code_docs"):
             return claims
@@ -543,7 +542,7 @@ def _check_tasks_done(tasks_db: Optional[str], session_id: Optional[str],
     if not tasks_db or not Path(tasks_db).exists():
         return claims
     try:
-        conn = sqlite_db.connect(tasks_db, timeout=5.0)
+        conn = sqlite3.connect(tasks_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         if not _table_exists(conn, "tasks"):
             return claims
@@ -1048,7 +1047,7 @@ class VerifierService:
         self.workspace = Path(workspace) if workspace else Path.cwd()
         # Run schema migration once on init.
         Path(scores_db).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite_db.connect(scores_db, timeout=5.0) as conn:
+        with sqlite3.connect(scores_db, timeout=5.0) as conn:
             _verifier_schema(conn)
 
     # ------------------------------------------------------------------
@@ -1063,7 +1062,7 @@ class VerifierService:
         # Try session_outcomes for a started_at marker.
         if session_id and Path(self.scores_db).exists():
             try:
-                with sqlite_db.connect(self.scores_db, timeout=5.0) as conn:
+                with sqlite3.connect(self.scores_db, timeout=5.0) as conn:
                     if _table_exists(conn, "session_outcomes"):
                         row = conn.execute(
                             "SELECT timestamp FROM session_outcomes "
@@ -1170,7 +1169,7 @@ class VerifierService:
                 task_id: Optional[str], status: str, tier0_status: str,
                 tier1_status: str, tier2_status: str, summary: str,
                 feedback_json: str, claims: list[Claim]) -> None:
-        with sqlite_db.connect(self.scores_db, timeout=5.0) as conn:
+        with sqlite3.connect(self.scores_db, timeout=5.0) as conn:
             conn.execute(
                 "INSERT INTO verifier_runs "
                 "(run_id, session_id, task_id, status, backend, model, "
@@ -1209,7 +1208,7 @@ class VerifierService:
 
     def history(self, task_id: Optional[str] = None, limit: int = 20) -> list[dict]:
         """Recent verifier runs (newest first). Filters by task_id if given."""
-        with sqlite_db.connect(self.scores_db, timeout=5.0) as conn:
+        with sqlite3.connect(self.scores_db, timeout=5.0) as conn:
             conn.row_factory = sqlite3.Row
             if task_id:
                 rows = conn.execute(
@@ -1229,7 +1228,7 @@ class VerifierService:
         couldn't verify. Surfaced by SessionStart hook as
         additionalContext so the agent picks up where the last run
         left off."""
-        with sqlite_db.connect(self.scores_db, timeout=5.0) as conn:
+        with sqlite3.connect(self.scores_db, timeout=5.0) as conn:
             rows = conn.execute(
                 "SELECT feedback FROM verifier_runs "
                 "WHERE status IN ('fail', 'partial', 'error') "
