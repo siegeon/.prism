@@ -40,7 +40,19 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # default surface (superseded by okf_*; reachable via tool_profile=all and,
     # for the stop hook, the automation profile) — keeps the default agent
     # surface small per the tool-surface-reduction objective.
-    assert len(names) == 31
+    # inverted-flow #6 (8b7993f): the SDLC is driven by the ONE loop verb
+    # conductor_work, so the 4 driver verbs (workflow_state / workflow_advance
+    # / conductor_advance / conductor_gate) were DEMOTED to tool_profile=all.
+    # Net: 31 - 4 demoted + 1 conductor_work = 28.
+    assert len(names) == 28
+    # Pin the INTENT, not just the number: the loop verb is served and the
+    # legacy drivers stay off the default surface (tool-surface reduction).
+    assert "conductor_work" in names
+    for demoted in ("workflow_state", "workflow_advance",
+                    "conductor_advance", "conductor_gate"):
+        assert demoted not in names, (
+            f"{demoted} must stay demoted to tool_profile=all — the default "
+            "surface is driven by the single conductor_work loop verb")
     assert "prism_onboard" in names
     assert "brain_understand" in names
     assert "task_link_session" in names
@@ -57,9 +69,10 @@ def test_interactive_profile_exposes_core_agent_tools_only():
         "brain_call_chain",
         "memory_recall",
         "task_next",
-        "workflow_state",
-        "conductor_advance",
-        "conductor_gate",
+        # inverted-flow #6: the SDLC is driven by the ONE loop verb. The old
+        # driver verbs (workflow_state / conductor_advance / conductor_gate)
+        # are demoted to tool_profile=all and asserted ABSENT above.
+        "conductor_work",
         "context_bundle",
         "prism_status",
     } <= names

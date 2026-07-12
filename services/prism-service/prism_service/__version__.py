@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.8.45"
+PRISM_VERSION = "6.8.46"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.8.46: suite fully green — corrected the STALE default-MCP-surface test. inverted-flow #6 (8b7993f) demoted 4 driver verbs (workflow_state/workflow_advance/conductor_advance/conductor_gate) to tool_profile=all and added the single conductor_work loop verb, but test_mcp_tool_profiles still asserted the pre-demotion count (31) and listed the demoted verbs as expected-present. Now pins the INTENT: 31-4+1=28, conductor_work served, the 4 drivers asserted ABSENT from the default surface. "
     "v6.8.45: SQLITE CHOKEPOINT (task dde1162f). (1) ONE connection funnel — new "
     "services/sqlite_db.connect() applies the canonical timeout=5.0 + row_factory=Row "
     "+ PRAGMA journal_mode=WAL + busy_timeout=5000 in a single place; 71 of the 80 "
