@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from prism_service.services import sqlite_db
 import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -187,7 +188,7 @@ class TaskService:
         are reclaimed with their thread-local slot at GC."""
         conn = getattr(self._tlocal, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            conn = sqlite_db.connect(self._db_path, timeout=5.0)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
@@ -668,7 +669,7 @@ class TaskService:
             if ended_at is not None:
                 row["ended_at"] = ended_at
             return True
-        conn = sqlite3.connect(self._scores_db, timeout=5.0)
+        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
         try:
             self._ensure_task_sessions(conn)
             existing = [
@@ -707,7 +708,7 @@ class TaskService:
                  "files_read": 0, "files_modified": 0, "skills_invoked": 0}
                 for r in self._session_links.get(task_id, {}).values()
             ]
-        conn = sqlite3.connect(self._scores_db, timeout=5.0)
+        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             self._ensure_task_sessions(conn)

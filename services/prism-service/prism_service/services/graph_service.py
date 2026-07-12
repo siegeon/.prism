@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from prism_service.services import sqlite_db
 import subprocess
 import sys
 from pathlib import Path
@@ -581,7 +582,7 @@ class GraphService:
         Returns the number of files staged. Safe to call repeatedly.
         """
         try:
-            conn = sqlite3.connect(brain_db_path, timeout=5.0)
+            conn = sqlite_db.connect(brain_db_path, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return 0
@@ -823,7 +824,7 @@ class GraphService:
             if tgt:
                 in_degree[tgt] = in_degree.get(tgt, 0) + 1
 
-        conn = sqlite3.connect(self._graph_db, timeout=5.0)
+        conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             # issue #136 — fresh folder-mode project never indexes.
@@ -1088,7 +1089,7 @@ class GraphService:
         """Return one row per community with label, summary, size, and
         top files. Powers the top-level node graph on /graph."""
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return []
@@ -1129,7 +1130,7 @@ class GraphService:
         (pre-v6.1.5 graph.db) or the rebuild hasn't populated it.
         """
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return []
@@ -1162,7 +1163,7 @@ class GraphService:
     def community_files(self, community_id: int) -> list[str]:
         """Distinct file paths whose entities belong to the given community."""
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return []
         try:
@@ -1189,7 +1190,7 @@ class GraphService:
         if not files:
             return {}
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return {}
         placeholders = ",".join("?" for _ in files)
@@ -1246,7 +1247,7 @@ class GraphService:
         returned input_hash to decide whether to re-enrich ('escape' when
         it still matches the live inputs)."""
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return None
@@ -1273,7 +1274,7 @@ class GraphService:
         """Write/replace the current annotation for a scope+task."""
         from datetime import datetime, timezone
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return False
         self._ensure_annotations_table(conn)
@@ -1299,7 +1300,7 @@ class GraphService:
     def annotations_for(self, scope_kind: str, task: str = "name") -> dict:
         """All current annotations of a kind+task as {scope_id: {...}}."""
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return {}
@@ -1349,7 +1350,7 @@ class GraphService:
         pile up dispensable work. Returns True if a NEW row was created."""
         from datetime import datetime, timezone
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return False
         self._ensure_jobs_table(conn)
@@ -1375,7 +1376,7 @@ class GraphService:
         and return it, or None. Mirrors JanitorService.check dispense-one."""
         from datetime import datetime, timezone
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return None
@@ -1406,7 +1407,7 @@ class GraphService:
 
     def get_job(self, brief_id: str) -> Optional[dict]:
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return None
@@ -1428,7 +1429,7 @@ class GraphService:
     def mark_job(self, brief_id: str, status: str) -> bool:
         from datetime import datetime, timezone
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         except sqlite3.Error:
             return False
         self._ensure_jobs_table(conn)
@@ -1449,7 +1450,7 @@ class GraphService:
         hard limit, then -> abandoned. Returns {status, retries}."""
         from datetime import datetime, timezone
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return {"status": "unknown", "retries": 0}
@@ -1478,7 +1479,7 @@ class GraphService:
     def job_status_counts(self) -> dict:
         """Queue depth by status for graph_annotate_status."""
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return {}
@@ -1505,7 +1506,7 @@ class GraphService:
         out: dict = {"path": path, "entities": [],
                      "inbound": [], "outbound": []}
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return out
@@ -1561,7 +1562,7 @@ class GraphService:
         if not paths:
             return []
         try:
-            conn = sqlite3.connect(self._graph_db, timeout=5.0)
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             return []

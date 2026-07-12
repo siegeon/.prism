@@ -7,6 +7,7 @@ import math
 import os
 import secrets
 import sqlite3
+from prism_service.services import sqlite_db
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,7 +75,7 @@ class MemoryService:
         complement the per-thread handle (which is the race fix)."""
         conn = getattr(self._tlocal, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self._recall_db_path, timeout=5.0)
+            conn = sqlite_db.connect(self._recall_db_path, timeout=5.0)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             self._tlocal.conn = conn

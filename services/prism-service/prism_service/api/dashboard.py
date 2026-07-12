@@ -10,6 +10,7 @@ project SQLite DBs used elsewhere.
 
 import logging
 import sqlite3
+from prism_service.services import sqlite_db
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def _count(db: Path, sql: str) -> int:
     if not db.exists():
         return 0
     try:
-        c = sqlite3.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
+        c = sqlite_db.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
         return int(v[0]) if v else 0
     except Exception as exc:
         # Graceful fallback stays (dashboard must render), but never
@@ -39,7 +40,7 @@ def _rows(db: Path, sql: str) -> list:
     if not db.exists():
         return []
     try:
-        c = sqlite3.connect(str(db), timeout=5.0); v = c.execute(sql).fetchall(); c.close()
+        c = sqlite_db.connect(str(db), timeout=5.0); v = c.execute(sql).fetchall(); c.close()
         return v
     except Exception as exc:
         logger.warning("dashboard _rows fallback for %s: %s", db, exc)

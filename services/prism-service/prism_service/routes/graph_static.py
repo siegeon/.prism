@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import sqlite3
+from prism_service.services import sqlite_db
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -1894,7 +1895,7 @@ def _graphify_hierarchy(
     comm_labels: dict[int, str] = {}
     if db_path.exists():
         try:
-            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            conn = sqlite_db.connect(str(db_path), timeout=5.0)
             try:
                 for r in conn.execute("SELECT id, label FROM communities"):
                     comm_labels[int(r[0])] = r[1] or ""
@@ -2038,7 +2039,7 @@ def _graphify_communities(project_id: str):
     db_path = ctx._data_dir / "graph.db"
     if not db_path.exists():
         return JSONResponse({"communities": []})
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = sqlite_db.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         try:

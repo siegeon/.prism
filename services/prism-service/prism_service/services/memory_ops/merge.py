@@ -127,8 +127,9 @@ class MergeOperation(MemoryOperation):
     def _member_ids_for(self, ctx, item: Any) -> list:
         """Read the cluster member ids out of the candidate's scope_json."""
         import sqlite3
+        from prism_service.services import sqlite_db
 
-        conn = sqlite3.connect(self._scores_db(ctx), timeout=5.0)
+        conn = sqlite_db.connect(self._scores_db(ctx), timeout=5.0)
         try:
             row = conn.execute(
                 "SELECT scope_json FROM consolidation_candidates WHERE id=?",

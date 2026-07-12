@@ -24,20 +24,12 @@ import asyncio
 import logging
 import os
 import sqlite3
+from prism_service.services import sqlite_db
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_S = 900  # 15 min
-
-# Known per-project stores, relative to the project data dir.
-_STORE_RELPATHS = (
-    "tasks.db",
-    "scores.db",
-    "brain.db",
-    "graph.db",
-    "mulch/recall_log.db",
-)
 
 
 def maint_interval_s() -> float:
@@ -63,7 +55,7 @@ def checkpoint_db(path: str | Path) -> bool:
     if not p.exists():
         return False
     try:
-        conn = sqlite3.connect(str(p), timeout=5.0)
+        conn = sqlite_db.connect(str(p), timeout=5.0)
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.execute("PRAGMA optimize")
@@ -73,6 +65,23 @@ def checkpoint_db(path: str | Path) -> bool:
     except Exception as exc:  # noqa: BLE001 — maintenance must never raise
         logger.warning("sqlite maintenance failed for %s: %s", p, exc)
         return False
+
+
+def checkpoint_data_dir(data_dir: str | Path) -> int:
+    """Discover + checkpoint every ``*.db`` under ``data_dir`` recursively.
+
+    Replaces the old hardcoded relpath tuple: a recursive glob covers
+    ``mulch/`` AND any FUTURE subdir, so a newly-added store can never
+    silently bloat its ``-wal`` forever — the exact regression the
+    v6.7.24 hardcoded list left open. Best-effort: a bad file is logged
+    and skipped, and a glob failure returns 0 rather than raising."""
+    root = Path(data_dir)
+    try:
+        dbs = sorted(root.glob("**/*.db"))
+    except Exception as exc:  # noqa: BLE001 — maintenance must never raise
+        logger.warning("sqlite maintenance: glob failed under %s: %s", root, exc)
+        return 0
+    return sum(1 for db in dbs if checkpoint_db(db))
 
 
 def run_sqlite_maintenance() -> int:
@@ -93,9 +102,7 @@ def run_sqlite_maintenance() -> int:
         return 0
     for pid in projects:
         data_dir = Path(PROJECTS_DIR) / pid
-        for rel in _STORE_RELPATHS:
-            if checkpoint_db(data_dir / rel):
-                done += 1
+        done += checkpoint_data_dir(data_dir)
     logger.info("sqlite maintenance pass: %d store(s) checkpointed", done)
     return done
 
