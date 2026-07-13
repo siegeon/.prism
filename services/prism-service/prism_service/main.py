@@ -668,6 +668,41 @@ if __name__ == "__main__":
         target=_restart_watcher, daemon=True, name="prism-restart-watcher",
     ).start()
 
+    # DEV WATCH (PRISM_DEV_WATCH=1): the running daemon updates itself when
+    # the code on disk changes. An editable-install source watcher polls the
+    # package's *.py mtimes and, on any change, requests the SAME graceful
+    # restart the auto-updater uses (drain -> main-thread os.execv above), so
+    # the re-exec'd image picks up the new source in place. Dev-only: release
+    # installs never set the flag, and the poll is local-stat cheap.
+    if os.environ.get("PRISM_DEV_WATCH", "").strip().lower() in (
+            "1", "true", "on"):
+        def _dev_watch() -> None:
+            root = Path(__file__).resolve().parent
+
+            def _snap() -> dict:
+                s: dict = {}
+                for p in root.rglob("*.py"):
+                    if "__pycache__" in p.parts:
+                        continue
+                    try:
+                        s[str(p)] = p.stat().st_mtime_ns
+                    except OSError:
+                        pass
+                return s
+
+            baseline = _snap()
+            while not _server.should_exit:
+                time.sleep(2.0)
+                cur = _snap()
+                if cur != baseline:
+                    _log.info("dev-watch: source changed on disk; "
+                              "requesting in-place restart")
+                    _au.request_restart()
+                    return
+        threading.Thread(
+            target=_dev_watch, daemon=True, name="prism-dev-watch",
+        ).start()
+
     try:
         _server.run()
     except Exception:

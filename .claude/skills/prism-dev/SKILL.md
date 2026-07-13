@@ -62,13 +62,15 @@ $env:PRISM_DEV_MODE  = "1"        # surfaces the amber DEV pill in the SPA foote
 $env:PRISM_AUTO_UPDATE          = "off"  # never pip-install a release wheel over the editable source
 $env:PRISM_AUTO_UPDATE_INTERVAL = "0"    # kill the background poll loop entirely
 $env:PYTHONNOUSERSITE           = "1"    # ignore the %APPDATA% user-site shadow copy
-Start-Process -FilePath "E:\.prism\.venvs\dev\Scripts\python.exe" `
-  -ArgumentList "-m","prism_service.main" `
-  -WorkingDirectory "E:\.prism" `
-  -PassThru -NoNewWindow `
-  -RedirectStandardOutput "$env:USERPROFILE\.claude\jobs\prism-dev-stdout.log" `
-  -RedirectStandardError  "$env:USERPROFILE\.claude\jobs\prism-dev-stderr.log"
-Start-Sleep 5
+# DURABLE LAUNCH — use the CLI daemon path, NEVER a raw Start-Process of
+# prism_service.main: the CLI spawns with DETACHED_PROCESS + CREATE_NEW_
+# PROCESS_GROUP + CREATE_BREAKAWAY_FROM_JOB (cli/prism_cli.py) so the daemon
+# survives the launching shell/job teardown. A raw Start-Process child dies
+# with the tool session that started it (killed the dev daemon twice on
+# 2026-07-13). Writes a pidfile under the data dir; logs via `prism logs`.
+Set-Location E:\.prism
+& "E:\.prism\.venvs\dev\Scripts\prism.exe" start --daemon
+Start-Sleep 6
 
 # Verify it actually bound + serves the SPA (not a 503)
 Invoke-WebRequest -Uri "http://127.0.0.1:8888/api/version" -UseBasicParsing |

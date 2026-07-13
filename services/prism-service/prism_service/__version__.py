@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.4"
+PRISM_VERSION = "6.9.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.5: DEV DAEMON SELF-UPDATES FROM DISK (PRISM_DEV_WATCH=1). A source "
+    "watcher polls the editable package's *.py mtimes and, on change, requests "
+    "the auto-updater's own graceful restart (drain -> main-thread os.execv), "
+    "so the running daemon re-execs onto the code on disk — same PID, pidfile "
+    "stays valid. Dev-only flag; paired with the Windows Scheduled Task "
+    "'PRISM Dev Daemon' (at-logon + restart-on-failure, owned by Task "
+    "Scheduler, not any shell's job object) so local dev is ALWAYS running. "
     "v6.9.4: EASE-UP THE GATES (owner directive after the 22ee4cb3 drive). "
     "(1) RUBRIC GATES AUTO-CLEAR: conductor_flow now approves story_gate/"
     "plan_gate itself the moment their pure-rubric machine check scores "
