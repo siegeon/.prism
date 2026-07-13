@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json as _json
 import sqlite3
+from prism_service.services import sqlite_db
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ def _cluster_sessions(scores_db: str) -> list[dict]:
     """Group sessions that share skills (and/or a task) into recurring-
     sequence clusters. Each cluster: a key, its member session_ids, the
     shared skill set, and a representative task_id. Deterministic ordering."""
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         skill_rows = conn.execute(
@@ -143,7 +144,7 @@ class DistillProceduralOperation(MemoryOperation):
 
     @staticmethod
     def _candidate_for_session(scores_db: str, session_id: str) -> str | None:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         try:
             row = conn.execute(
                 "SELECT id FROM consolidation_candidates "
@@ -157,7 +158,7 @@ class DistillProceduralOperation(MemoryOperation):
 
     @staticmethod
     def _load_scope(scores_db: str, item: Any) -> dict:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(

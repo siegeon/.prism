@@ -1,0 +1,539 @@
+"""Proof-carrying green-gate oracle (inverted-flow soundness #2).
+
+The old green_gate oracle tooth (arc_governance.score_green_outcome) validated
+PROSE SHAPE, not the customer observable: it token-matched the stored
+completion_proof against words scraped from task.oracle. That is gameable
+(paste a URL, never run it), polarity-blind ("crashed at :8888" satisfied the
+URL citation), and failed OPEN when the oracle carried no URL/port/image/
+snake_case token. This module replaces prose-shape scoring with a REAL run.
+
+Three pieces (per the Codex punch-list):
+
+  * ``OracleSpec`` — a frozen, versioned, content-hashed spec. It names an
+    ADAPTER (http_probe | pytest_ids | browser), a TARGET, POSITIVE assertions
+    (must hold) and NEGATIVE assertions (must NOT hold — the polarity fix:
+    "status < 400", "body has no error token"), thresholds + a timeout.
+    ``spec_hash()`` is a stable content hash. ``from_task`` best-effort derives
+    a spec from a task.oracle string (marked ``derived=True`` — a weaker,
+    inferred spec).
+  * ``EvidenceReceipt`` — an APPEND-ONLY record of one real run: the spec_hash,
+    the ``tree_sha`` the run happened at, runner/policy versions, an env
+    fingerprint, per-assertion observations, artifact content-hashes, and an
+    overall ``passed`` bool. Persisted under
+    ``<data>/projects/<project>/receipts/<task_id>.jsonl`` — never mutated.
+  * ``run_oracle(spec, task, ctx)`` — the trusted runner. Executes the spec's
+    adapter FOR REAL (http_probe actually GETs the surface; pytest_ids actually
+    runs the named tests) and records what it observed. The ``browser`` adapter
+    is an honest boundary: with no Playwright/agent-browser runner wired it
+    records ``manual_evidence_required`` (passed=False) — NOT a silent pass.
+
+The green_gate is claimable ONLY when a FRESH passing receipt exists — fresh =
+its ``tree_sha`` matches the task's current workspace commit AND its
+``spec_hash`` matches the task's current OracleSpec. A new commit or an oracle
+edit invalidates prior receipts. See ``fresh_passing_receipt``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+RUNNER_VERSION = "oracle-runner/1"
+POLICY_VERSION = "green-gate-receipt/1"
+SPEC_VERSION = 1
+
+# Adapters
+ADAPTER_HTTP = "http_probe"
+ADAPTER_PYTEST = "pytest_ids"
+ADAPTER_BROWSER = "browser"
+
+# Statuses
+ST_PASSED = "passed"
+ST_FAILED = "failed"
+ST_MANUAL = "manual_evidence_required"
+ST_ERROR = "error"
+
+# Body tokens that, if present in an HTTP response, evidence a broken surface
+# (the polarity fix: a page that "crashed" no longer satisfies a URL citation).
+_ERROR_BODY_TOKENS = (
+    "traceback (most recent call last)", "internal server error",
+    "uncaught exception", "referenceerror", "typeerror:", "is not defined",
+)
+
+_URL_RE = re.compile(r"https?://[^\s)\"'<>]+")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# OracleSpec
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Assertion:
+    """One checkable claim. ``polarity`` is 'positive' (must hold) or
+    'negative' (must NOT hold). ``kind`` names the check the adapter runs;
+    ``value`` is its parameter (a status bound, a token, a threshold)."""
+    name: str
+    polarity: str
+    kind: str
+    value: Any = None
+
+    def as_dict(self) -> dict:
+        return {"name": self.name, "polarity": self.polarity,
+                "kind": self.kind, "value": self.value}
+
+
+@dataclass(frozen=True)
+class OracleSpec:
+    """A frozen, versioned, content-hashed proof spec."""
+    adapter: str
+    target: str
+    positive: tuple[Assertion, ...] = ()
+    negative: tuple[Assertion, ...] = ()
+    thresholds: dict[str, Any] = field(default_factory=dict)
+    timeout_s: float = 10.0
+    risk_class: str = "standard"
+    spec_version: int = SPEC_VERSION
+    derived: bool = False
+
+    def _canonical(self) -> dict:
+        """The content used for the hash. ``derived`` (provenance) is
+        DELIBERATELY excluded so re-deriving the same oracle string yields a
+        stable hash."""
+        return {
+            "spec_version": self.spec_version,
+            "adapter": self.adapter,
+            "target": self.target,
+            "positive": [a.as_dict() for a in self.positive],
+            "negative": [a.as_dict() for a in self.negative],
+            "thresholds": {k: self.thresholds[k]
+                           for k in sorted(self.thresholds)},
+            "timeout_s": self.timeout_s,
+            "risk_class": self.risk_class,
+        }
+
+    def spec_hash(self) -> str:
+        blob = json.dumps(self._canonical(), sort_keys=True,
+                          separators=(",", ":"))
+        return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def as_dict(self) -> dict:
+        out = self._canonical()
+        out["derived"] = self.derived
+        out["spec_hash"] = self.spec_hash()
+        return out
+
+    @classmethod
+    def from_task(cls, task: Any) -> "OracleSpec":
+        """Best-effort DERIVED spec from a task's oracle string.
+
+        A URL in the oracle -> an http_probe (GET the surface; require
+        status<400, a non-empty body, no error token, bounded latency). No
+        URL -> a ``browser`` spec, which the runner reports as
+        ``manual_evidence_required`` — the honest boundary for an oracle we
+        cannot auto-run (this REPLACES the old fail-OPEN behavior). Always
+        ``derived=True`` so a caller knows it was inferred, not authored."""
+        oracle = str(getattr(task, "oracle", "") or "")
+        misfire = str(getattr(task, "likely_misfire", "") or "")
+        m = _URL_RE.search(oracle)
+        if m:
+            url = m.group(0).rstrip(".,;)!?\"'")
+            negative = [
+                Assertion("status_under_400", "negative", "status_ge", 400),
+                Assertion("no_error_token", "negative", "body_contains_any",
+                          list(_ERROR_BODY_TOKENS)),
+            ]
+            # Fold misfire tokens into negative body assertions (polarity fix:
+            # the pre-declared pass-but-wrong signal must NOT appear).
+            for tok in _misfire_body_tokens(misfire):
+                negative.append(Assertion(
+                    f"no_misfire_{tok}", "negative", "body_contains", tok))
+            positive = [Assertion("reachable", "positive", "reachable", True),
+                        Assertion("nonempty_body", "positive",
+                                  "body_nonempty", True)]
+            return cls(adapter=ADAPTER_HTTP, target=url,
+                       positive=tuple(positive), negative=tuple(negative),
+                       thresholds={"max_ms": 10000, "max_payload_bytes":
+                                   8_000_000}, timeout_s=10.0, derived=True)
+        return cls(adapter=ADAPTER_BROWSER, target=oracle.strip(),
+                   positive=(Assertion("customer_observable_holds", "positive",
+                                       "manual", True),),
+                   derived=True)
+
+
+_MISFIRE_TOKENS = ("blank", "white", "crash", "error", "500", "undefined")
+
+
+def _misfire_body_tokens(misfire: str) -> list[str]:
+    low = (misfire or "").lower()
+    return [t for t in _MISFIRE_TOKENS if t in low]
+
+
+# ---------------------------------------------------------------------------
+# EvidenceReceipt
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EvidenceReceipt:
+    """Append-only record of one trusted oracle run."""
+    task_id: str
+    job_id: str
+    spec_hash: str
+    tree_sha: str
+    adapter: str
+    passed: bool
+    status: str
+    runner_version: str = RUNNER_VERSION
+    policy_version: str = POLICY_VERSION
+    # Pinned control-plane provenance (inverted-flow #3): the ref the gate
+    # policy was pinned to for this run + a content hash over that policy set,
+    # so every pass is attributable to a specific, un-candidate-editable policy.
+    control_ref: str = ""
+    policy_hash: str = ""
+    env: dict = field(default_factory=dict)
+    started_at: str = ""
+    ended_at: str = ""
+    observations: list = field(default_factory=list)
+    artifacts: list = field(default_factory=list)
+    reason: str = ""
+    derived_spec: bool = False
+
+    def as_dict(self) -> dict:
+        return {
+            "task_id": self.task_id, "job_id": self.job_id,
+            "spec_hash": self.spec_hash, "tree_sha": self.tree_sha,
+            "adapter": self.adapter, "passed": self.passed,
+            "status": self.status, "runner_version": self.runner_version,
+            "policy_version": self.policy_version,
+            "control_ref": self.control_ref, "policy_hash": self.policy_hash,
+            "env": self.env,
+            "started_at": self.started_at, "ended_at": self.ended_at,
+            "observations": self.observations, "artifacts": self.artifacts,
+            "reason": self.reason, "derived_spec": self.derived_spec,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "EvidenceReceipt":
+        return cls(
+            task_id=d.get("task_id", ""), job_id=d.get("job_id", ""),
+            spec_hash=d.get("spec_hash", ""), tree_sha=d.get("tree_sha", ""),
+            adapter=d.get("adapter", ""), passed=bool(d.get("passed")),
+            status=d.get("status", ""),
+            runner_version=d.get("runner_version", ""),
+            policy_version=d.get("policy_version", ""),
+            control_ref=d.get("control_ref", "") or "",
+            policy_hash=d.get("policy_hash", "") or "",
+            env=d.get("env", {}) or {}, started_at=d.get("started_at", ""),
+            ended_at=d.get("ended_at", ""),
+            observations=d.get("observations", []) or [],
+            artifacts=d.get("artifacts", []) or [],
+            reason=d.get("reason", ""),
+            derived_spec=bool(d.get("derived_spec")))
+
+
+def _env_fingerprint() -> dict:
+    return {"python": sys.version.split()[0], "platform": sys.platform,
+            "runner": RUNNER_VERSION}
+
+
+# ---------------------------------------------------------------------------
+# Append-only persistence
+# ---------------------------------------------------------------------------
+
+
+def _receipts_path(project: str, task_id: str) -> Path:
+    from prism_service.config import project_data_dir
+    d = project_data_dir(project or "default") / "receipts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{task_id}.jsonl"
+
+
+def append_receipt(project: str, receipt: EvidenceReceipt) -> Path:
+    """APPEND a receipt as one JSONL line. Never mutates prior lines — each
+    run adds a row so the full run history for a task survives."""
+    path = _receipts_path(project, receipt.task_id)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(receipt.as_dict(), separators=(",", ":")) + "\n")
+    return path
+
+
+def read_receipts(project: str, task_id: str) -> list[EvidenceReceipt]:
+    path = _receipts_path(project, task_id)
+    if not path.exists():
+        return []
+    out: list[EvidenceReceipt] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(EvidenceReceipt.from_dict(json.loads(line)))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return out
+
+
+def latest_receipt(project: str, task_id: str) -> Optional[EvidenceReceipt]:
+    receipts = read_receipts(project, task_id)
+    return receipts[-1] if receipts else None
+
+
+def fresh_passing_receipt(project: str, task_id: str, tree_sha: str,
+                          spec_hash: str,
+                          policy_hash: Optional[str] = None
+                          ) -> Optional[EvidenceReceipt]:
+    """The most-recent receipt that PASSED at THIS ``tree_sha`` AND THIS
+    ``spec_hash``. A new commit (different tree_sha) or an oracle edit
+    (different spec_hash) makes every prior receipt STALE — so this returns
+    None and the gate refuses until a fresh run lands.
+
+    POLICY DRIFT (inverted-flow #3): when a current pinned ``policy_hash`` is
+    supplied AND the receipt carries one, they must match — a receipt minted
+    under a different pinned policy is stale, exactly as a spec edit is stale.
+    Enforced only when BOTH are present so an unpinnable environment (both "")
+    keeps the prior tree+spec behavior."""
+    for r in reversed(read_receipts(project, task_id)):
+        if not (r.passed and r.tree_sha == tree_sha and r.spec_hash == spec_hash):
+            continue
+        if policy_hash and r.policy_hash and r.policy_hash != policy_hash:
+            continue
+        return r
+    return None
+
+
+# ---------------------------------------------------------------------------
+# tree_sha resolution
+# ---------------------------------------------------------------------------
+
+
+def current_tree_sha(workspace: Optional[str]) -> str:
+    """HEAD commit of the task's workspace checkout, or '' when there is no
+    workspace / git is unavailable. This is the candidate commit a receipt is
+    bound to — the freshness key."""
+    if not workspace:
+        return ""
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(workspace),
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ""
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Adapters
+# ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: str) -> str:
+    try:
+        return "sha256:" + hashlib.sha256(
+            Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _obs(name: str, polarity: str, expected: Any, observed: Any,
+         passed: bool) -> dict:
+    return {"name": name, "polarity": polarity, "expected": expected,
+            "observed": observed, "passed": bool(passed)}
+
+
+def _run_http_probe(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, str]:
+    """Actually GET the target. Evaluates the spec's positive + negative
+    assertions against the real (status, latency, body)."""
+    import urllib.error
+    import urllib.request
+
+    observations: list = []
+    status: Optional[int] = None
+    body = ""
+    reachable = False
+    started = time.time()
+    try:
+        req = urllib.request.Request(spec.target, method="GET")
+        with urllib.request.urlopen(req, timeout=spec.timeout_s) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            body = resp.read(spec.thresholds.get(
+                "max_payload_bytes", 8_000_000) + 1).decode(
+                "utf-8", errors="replace")
+            reachable = True
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        reachable = True
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        observations.append(_obs("reachable", "positive", True,
+                                 f"unreachable: {exc}", False))
+        elapsed_ms = (time.time() - started) * 1000
+        return observations, [], False, ST_FAILED, (
+            f"http_probe: {spec.target} unreachable ({exc})")
+    elapsed_ms = (time.time() - started) * 1000
+    low_body = body.lower()
+
+    observations.append(_obs("reachable", "positive", True, reachable, reachable))
+    observations.append(_obs("nonempty_body", "positive", True,
+                             len(body) > 0, len(body) > 0))
+    # Negative assertions
+    for a in spec.negative:
+        if a.kind == "status_ge":
+            bad = status is not None and status >= int(a.value)
+            observations.append(_obs(a.name, "negative",
+                                     f"status<{a.value}", status, not bad))
+        elif a.kind == "body_contains":
+            bad = str(a.value).lower() in low_body
+            observations.append(_obs(a.name, "negative",
+                                     f"body has no '{a.value}'",
+                                     bad, not bad))
+        elif a.kind == "body_contains_any":
+            hit = next((t for t in (a.value or []) if str(t).lower() in low_body),
+                       None)
+            observations.append(_obs(a.name, "negative",
+                                     "no error token", hit, hit is None))
+    # Thresholds
+    max_ms = spec.thresholds.get("max_ms")
+    if max_ms is not None:
+        observations.append(_obs("latency", "positive", f"<{max_ms}ms",
+                                 round(elapsed_ms, 1), elapsed_ms <= max_ms))
+    max_bytes = spec.thresholds.get("max_payload_bytes")
+    if max_bytes is not None:
+        observations.append(_obs("payload_bytes", "positive",
+                                 f"<={max_bytes}", len(body.encode("utf-8")),
+                                 len(body.encode("utf-8")) <= max_bytes))
+    passed = all(o["passed"] for o in observations)
+    reason = ("http_probe: all assertions held" if passed else
+              "http_probe: " + "; ".join(
+                  f"{o['name']} FAILED (observed={o['observed']})"
+                  for o in observations if not o["passed"]))
+    return observations, [], passed, (ST_PASSED if passed else ST_FAILED), reason
+
+
+def _run_pytest_ids(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, str]:
+    """Run the named pytest node ids and require them to PASS. Reuses the
+    project's own runner via the (dev) interpreter — the same subprocess shape
+    VerifierService uses for the full-suite gate."""
+    ids = [i for i in re.split(r"[\s,]+", spec.target.strip()) if i]
+    if not ids:
+        return ([], [], False, ST_ERROR,
+                "pytest_ids: no test node ids in target")
+    python = ctx.get("pytest_python") or sys.executable
+    cwd = ctx.get("workspace") or "."
+    cmd = [python, "-m", "pytest", *ids, "-q", "-p", "no:cacheprovider"]
+    try:
+        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
+                           timeout=float(ctx.get("pytest_timeout_s", 600)))
+        rc, out, err = r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return ([_obs("pytest_pass", "positive", "rc==0", "timeout", False)],
+                [], False, ST_FAILED, "pytest_ids: timed out")
+    except (FileNotFoundError, OSError) as exc:
+        return ([], [], False, ST_ERROR, f"pytest_ids: could not run ({exc})")
+    passed = rc == 0
+    obs = [_obs("pytest_pass", "positive", "rc==0", rc, passed)]
+    tail = (out or err or "").strip().splitlines()[-1:] or [""]
+    reason = f"pytest_ids: {' '.join(ids)} -> rc={rc} ({tail[0][:160]})"
+    return obs, [], passed, (ST_PASSED if passed else ST_FAILED), reason
+
+
+def _run_browser(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, str]:
+    """Browser adapter INTERFACE. When a real runner is wired via
+    ``ctx['browser_runner']`` (a callable spec,ctx -> dict) it is used;
+    otherwise the run is INCONCLUSIVE and recorded as
+    ``manual_evidence_required`` (passed=False) — an honest boundary, NOT a
+    silent pass."""
+    runner = ctx.get("browser_runner")
+    if callable(runner):
+        res = runner(spec, ctx) or {}
+        obs = res.get("observations", [])
+        artifacts = []
+        for p in res.get("artifacts", []) or []:
+            artifacts.append({"path": p, "sha256": _sha256_file(p)})
+        passed = bool(res.get("passed"))
+        return (obs, artifacts, passed,
+                (ST_PASSED if passed else ST_FAILED),
+                res.get("reason", "browser: ran via wired runner"))
+    return ([_obs("customer_observable_holds", "positive",
+                  "human/agent-browser evidence", "no runner wired", False)],
+            [], False, ST_MANUAL,
+            "browser: no Playwright/agent-browser runner wired — manual "
+            "evidence required (NOT auto-passed)")
+
+
+_ADAPTERS = {
+    ADAPTER_HTTP: _run_http_probe,
+    ADAPTER_PYTEST: _run_pytest_ids,
+    ADAPTER_BROWSER: _run_browser,
+}
+
+
+# ---------------------------------------------------------------------------
+# Trusted runner
+# ---------------------------------------------------------------------------
+
+
+def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
+               persist: bool = True) -> EvidenceReceipt:
+    """Execute ``spec``'s adapter FOR REAL and return an EvidenceReceipt.
+
+    ctx keys (all optional): ``project`` (for persistence), ``tree_sha`` (else
+    resolved from ``workspace``), ``workspace`` (checkout path), ``pytest_python``
+    / ``pytest_timeout_s`` (pytest_ids), ``browser_runner`` (browser). The
+    receipt is APPENDED to the task's receipts.jsonl unless ``persist=False``."""
+    ctx = dict(ctx or {})
+    task_id = getattr(task, "id", "") or ctx.get("task_id", "")
+    project = ctx.get("project") or ""
+    tree_sha = ctx.get("tree_sha")
+    if tree_sha is None:
+        tree_sha = current_tree_sha(ctx.get("workspace"))
+    started = _now_iso()
+    runner = _ADAPTERS.get(spec.adapter)
+    if runner is None:
+        observations, artifacts, passed, status, reason = (
+            [], [], False, ST_ERROR, f"unknown adapter {spec.adapter!r}")
+    else:
+        observations, artifacts, passed, status, reason = runner(spec, ctx)
+    # PINNED CONTROL-PLANE PROVENANCE (inverted-flow #3): stamp the ref the
+    # gate policy is pinned to + a hash over that policy set. Best-effort —
+    # an unpinnable environment stamps "" (the gate then skips the policy tooth
+    # rather than false-refusing), never raises.
+    control_ref = str(ctx.get("control_ref") or "")
+    pol_hash = str(ctx.get("policy_hash") or "")
+    if not control_ref or not pol_hash:
+        try:
+            from prism_service.services import control_plane as _cp
+            pin = _cp.pinned_policy(task_id, ctx={
+                k: ctx[k] for k in ("workspace", "baseline", "repo_root",
+                                    "control_ref") if k in ctx})
+            control_ref = control_ref or pin.get("control_ref", "")
+            pol_hash = pol_hash or pin.get("policy_hash", "")
+        except Exception:
+            pass
+    receipt = EvidenceReceipt(
+        task_id=task_id, job_id=str(uuid.uuid4()), spec_hash=spec.spec_hash(),
+        tree_sha=tree_sha or "", adapter=spec.adapter, passed=bool(passed),
+        status=status, control_ref=control_ref, policy_hash=pol_hash,
+        env=_env_fingerprint(), started_at=started,
+        ended_at=_now_iso(), observations=observations, artifacts=artifacts,
+        reason=reason, derived_spec=spec.derived)
+    if persist:
+        append_receipt(project, receipt)
+    return receipt

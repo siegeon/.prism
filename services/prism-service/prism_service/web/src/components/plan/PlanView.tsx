@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
 import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
-import StepRail from "@/components/conductor/StepRail";
-import TaskActivityGantt, { type Timeline } from "@/components/conductor/TaskActivityGantt";
+import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
+import { type Timeline } from "@/components/conductor/TaskActivityGantt";
+import { stepLabel } from "@/lib/workflowChips";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -25,6 +26,10 @@ export type ConductorInfo = {
   // Honest work state — drives the pulse/pill (only "working" animates).
   activity?: Activity | null;
   timeline?: Timeline | null;
+  // Raw audit turns (same rows as the Timeline card) so each StepRail step
+  // can DRILL DOWN into the turns that happened on it — the implementation
+  // view and the timeline are one thing, disclosed hierarchically.
+  turns?: StepTurn[];
 };
 export type GateControls = {
   reason: string;
@@ -35,6 +40,132 @@ export type GateControls = {
   busy: boolean;
 };
 
+// One committed RED test that pins the task's oracle: its function name, its
+// docstring (whose lead "AC-N / FR-N —" correlates it to an acceptance
+// criterion), and the file it lives in. Sourced from GET /api/tasks/:id/tests.
+export type PinTest = {
+  name: string;
+  doc?: string;
+  file?: string;
+};
+
+// Pull the leading acceptance-criterion id(s) out of a test's docstring.
+// Docs read like "AC-1 / FR-1 — a header row pins to the top". We surface the
+// AC id (preferring AC over FR) as a badge and keep the remainder as the
+// human explanation. No leading id → no badge, whole doc is the explanation.
+export function parseAc(doc?: string): { badge: string | null; rest: string } {
+  const d = (doc ?? "").trim();
+  // Leading run of "AC-N" / "FR-N" ids joined by "/", then an em/en dash or
+  // hyphen separator before the prose.
+  const m = /^((?:AC|FR)-\d+)(?:\s*\/\s*(?:AC|FR)-\d+)*\s*(?:[—–-]\s*)?/i.exec(d);
+  if (!m) return { badge: null, rest: d };
+  const ids = m[0].match(/(?:AC|FR)-\d+/gi)?.map((s) => s.toUpperCase()) ?? [];
+  const badge = ids.find((x) => x.startsWith("AC")) ?? ids[0] ?? null;
+  return { badge, rest: d.slice(m[0].length).trim() };
+}
+
+// Ascending numeric order of the AC/FR ids (AC-2 before AC-10); tests without
+// a parsed id sink to the end but keep a stable order.
+function acOrder(t: PinTest): number {
+  const b = parseAc(t.doc).badge;
+  const n = b ? parseInt(b.replace(/\D+/g, ""), 10) : NaN;
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+// ── Gate evidence ("what you're approving") ─────────────────────────────
+// When a gate is PENDING a human is asked to approve/reject with NO visible
+// evidence of what led here. This surfaces that evidence straight from the
+// audit turns: the validation note(s) the conductor recorded on the
+// advance(s) into this gate (e.g. "Red tests committed (c0581c2…): 3 failing
+// — hierarchy cap ignored …, no ETag header, /neighbors 404"). Real history,
+// never a hardcoded string.
+
+// The validation text an advance_task turn carried (its work-done evidence),
+// with any trailing "; gate=<state>" marker stripped off.
+function advanceValidation(t: StepTurn): string {
+  if (t.action !== "advance_task") return "";
+  const v = /validation=([\s\S]*)$/.exec(t.details ?? "")?.[1]?.trim() ?? "";
+  return v.replace(/;\s*gate=\w+\s*$/, "").trim();
+}
+
+// Evidence lines for the CURRENT pending gate: every advance validation
+// recorded SINCE the last resolved gate (that's the work this gate reviews).
+// Falls back to the single most-recent advance validation if no prior gate
+// boundary exists. Each note is split into distinct, deduped, readable lines.
+function gateEvidenceLines(turns: StepTurn[]): string[] {
+  const rows = turns ?? [];
+  let start = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].action === "gate_decide") { start = i + 1; break; }
+  }
+  const notes: string[] = [];
+  for (let i = start; i < rows.length; i++) {
+    const v = advanceValidation(rows[i]);
+    if (v) notes.push(v);
+  }
+  if (notes.length === 0) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const v = advanceValidation(rows[i]);
+      if (v) { notes.push(v); break; }
+    }
+  }
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const note of notes) {
+    // Split on sentence boundaries so distinct claims bullet separately.
+    for (const part of note.split(/(?<=\.)\s+(?=[A-Z0-9/])/)) {
+      const s = part.trim();
+      if (s && !seen.has(s)) { seen.add(s); lines.push(s); }
+    }
+  }
+  return lines;
+}
+
+function GateEvidence({ step, turns }: { step?: string; turns: StepTurn[] }) {
+  const lines = gateEvidenceLines(turns);
+  const label = stepLabel(step ?? "");
+  return (
+    <div
+      className="rounded-md p-3"
+      style={{
+        background: "var(--accent-amber-bg)",
+        boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)",
+      }}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[13px]" style={{ color: "var(--accent-amber-fg)" }}>⚖</span>
+        <span
+          className="text-[11px] uppercase tracking-wider font-medium"
+          style={{ color: "var(--accent-amber-fg)" }}
+        >
+          What you're approving{label ? ` — ${label}` : ""}
+        </span>
+      </div>
+      {lines.length > 0 ? (
+        <ul className="space-y-1.5">
+          {lines.map((l, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-2 text-[12.5px] leading-relaxed text-[color:var(--text-secondary)]"
+            >
+              <span
+                className="mt-[6px] h-1.5 w-1.5 rounded-full shrink-0"
+                style={{ background: "var(--accent-amber-fg)" }}
+              />
+              <span>{l}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-[12px] text-[color:var(--text-muted)]">
+          No recorded evidence for this step yet — the conductor logged no
+          validation note on the advance into this gate.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PlanView({
   diagram,
   doc,
@@ -43,6 +174,8 @@ export default function PlanView({
   reduced,
   gate,
   onValidation,
+  pinTests,
+  tabRequest,
 }: {
   diagram?: string;
   doc?: string;
@@ -51,22 +184,35 @@ export default function PlanView({
   reduced?: boolean | null;
   gate?: GateControls | null;
   onValidation?: () => void;
+  // RED tests pinning this task, drilled from the parent (avoids a 2nd fetch).
+  pinTests?: PinTest[];
+  // External tab drive: the oracle card's "view tests" summary bumps `n` to
+  // switch this panel to the Tests tab. The nonce lets a repeat click re-fire.
+  tabRequest?: { tab: string; n: number } | null;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
   const hasProto = !!prototypeSrc;
   const hasImpl = !!conductor && !!(conductor.step || (conductor.gateState && conductor.gateState !== "none"));
+  const tests = pinTests ?? [];
+  const hasTests = tests.length > 0;
 
   const tabs: { key: string; label: string }[] = [];
   if (hasProto) tabs.push({ key: "prototype", label: "Prototype" });
   if (hasDiagram) tabs.push({ key: "diagram", label: "Diagram" });
   if (hasDoc) tabs.push({ key: "doc", label: "Proposed change" });
   if (hasImpl) tabs.push({ key: "implementation", label: "Implementation" });
+  if (hasTests) tabs.push({ key: "tests", label: "Tests" });
 
   // Default to Implementation when the conductor is engaged (the live status),
   // else the first available artifact tab.
   const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "doc");
-  const [subView, setSubView] = useState<"rail" | "timeline">("rail");
+
+  // Honor an external tab request (e.g. the oracle "N RED" summary click).
+  // Keyed on the nonce so clicking again after a manual tab change re-fires.
+  useEffect(() => {
+    if (tabRequest?.tab) setActive(tabRequest.tab);
+  }, [tabRequest?.n, tabRequest?.tab]);
 
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
@@ -99,22 +245,6 @@ export default function PlanView({
             open full screen ↗
           </a>
         )}
-        {cur === "implementation" && hasImpl && (
-          <div className="ml-auto flex items-center rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] p-0.5">
-            {(["rail", "timeline"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setSubView(v)}
-                className={
-                  "px-2.5 py-1 text-[10px] uppercase tracking-wider rounded transition-colors " +
-                  (subView === v ? "bg-[color:var(--surface-3)] text-[color:var(--text-primary)]" : "text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]")
-                }
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {cur === "prototype" && hasProto && (
@@ -136,27 +266,82 @@ export default function PlanView({
         <Markdown text={doc!} className="space-y-4 max-w-none" />
       )}
 
+      {cur === "tests" && hasTests && (
+        <div className="space-y-3">
+          <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
+            The committed tests whose failure currently proves this task is{" "}
+            <span className="font-medium">not done</span> — each pins an
+            acceptance criterion. They turn green only when the outcome is met.
+          </div>
+          <ul className="space-y-3">
+            {[...tests].sort((a, b) => acOrder(a) - acOrder(b)).map((t) => {
+              const { badge, rest } = parseAc(t.doc);
+              return (
+                <li
+                  key={`${t.file}:${t.name}`}
+                  className="rounded-md p-3 border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {badge && (
+                      <span
+                        className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{
+                          background: "var(--accent-violet-bg)",
+                          color: "var(--accent-violet-fg)",
+                          boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)",
+                        }}
+                        title="pins acceptance criterion"
+                      >
+                        {badge}
+                      </span>
+                    )}
+                    <span className="font-mono text-[12px] text-[color:var(--text-primary)] break-all bg-transparent">
+                      {t.name}
+                    </span>
+                    <span
+                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                      style={{
+                        color: "var(--accent-rose-fg)",
+                        boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
+                      }}
+                      title="this test is currently RED"
+                    >
+                      ✗ red
+                    </span>
+                  </div>
+                  {rest && (
+                    <div className="text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed mt-1.5">
+                      {rest}
+                    </div>
+                  )}
+                  {t.file && (
+                    <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-1.5 truncate">
+                      {t.file}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {cur === "implementation" && hasImpl && c && (
         <div>
           <div className="mt-1 mb-1">
             <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} />
           </div>
 
-          {subView === "rail" ? (
-            <StepRail
-              step={c.step}
-              gateState={c.gateState}
-              phase={c.phase}
-              status={c.status}
-              activity={c.activity}
-              gates={c.timeline?.gates ?? []}
-              reduced={reduced}
-            />
-          ) : c.timeline ? (
-            <TaskActivityGantt timeline={c.timeline} reduced={reduced} />
-          ) : (
-            <Empty>No wall-clock activity recorded yet.</Empty>
-          )}
+          <StepRail
+            step={c.step}
+            gateState={c.gateState}
+            phase={c.phase}
+            status={c.status}
+            activity={c.activity}
+            gates={c.timeline?.gates ?? []}
+            turns={c.turns ?? []}
+            reduced={reduced}
+          />
 
           {c.gateReason && c.gateState !== "pending" && onValidation && (
             <button
@@ -173,7 +358,38 @@ export default function PlanView({
 
           {c.gateState === "pending" && gate && (
             <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
-              <div className="opacity-50 mb-2 text-[11px] uppercase tracking-wider">Resolve gate</div>
+              {/* Show the evidence FIRST — what the reviewer is approving —
+                  then the approve/reject control directly beneath it. */}
+              <GateEvidence step={c.step} turns={c.turns ?? []} />
+              {tests.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--accent-rose-fg)" }}>
+                    {tests.length} failing test{tests.length > 1 ? "s" : ""} you're approving — each must go green to finish
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {[...tests].sort((a, b) => {
+                      const na = parseInt((parseAc(a.doc).badge || "").replace(/\D/g, "") || "999", 10);
+                      const nb = parseInt((parseAc(b.doc).badge || "").replace(/\D/g, "") || "999", 10);
+                      return na - nb;
+                    }).map((t) => {
+                      const { badge, rest } = parseAc(t.doc);
+                      return (
+                        <div key={`${t.file}:${t.name}`} className="rounded-md p-2.5 border border-[color:var(--border-default)] bg-[color:var(--surface-2)]">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {badge && (
+                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{badge}</span>
+                            )}
+                            <span className="font-mono text-[12px] break-all bg-transparent text-[color:var(--text-primary)]">{t.name}</span>
+                            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>✗ red</span>
+                          </div>
+                          <div className="text-[12px] leading-snug mt-1 text-[color:var(--text-secondary)]">{rest}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">Resolve gate</div>
               <textarea
                 value={gate.reason}
                 onChange={(e) => gate.setReason(e.target.value)}

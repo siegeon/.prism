@@ -8,12 +8,14 @@ files. None of these routes depend on NiceGUI.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
 import sqlite3
+from prism_service.services import sqlite_db
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from prism_service.project_context import get_project
@@ -160,11 +162,32 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // hub" straight-line tangle.
   import EdgeCurveProgram from "https://esm.sh/@sigma/edge-curve@3.1.0?deps=sigma@3.0.3";
   // Yield to the browser between batches of synchronous work so paint /
-  // input can run. requestAnimationFrame is the right primitive here —
-  // it lines us up with the next frame, which is the moment Sigma will
-  // try to redraw too.
-  const yieldToBrowser = () => new Promise(r => requestAnimationFrame(r));
+  // input can run. requestAnimationFrame lines us up with the next frame
+  // (the moment Sigma redraws) WHEN THE TAB IS VISIBLE — but Chrome
+  // *pauses* rAF entirely in a hidden / background / occluded tab. A
+  // build that yields only via rAF therefore stalls forever the instant
+  // it hits the first `await yieldToBrowser()` in such a tab: node/edge
+  // assembly never resumes, Sigma never mounts, the canvas stays blank.
+  // That was the "/brain hangs" freeze — it only reproduces when /brain
+  // is NOT the foreground tab (the common case under CDP/automation, or
+  // when the window sits behind another). Race rAF against a macrotask
+  // timer, which DOES fire in a hidden tab, so the batched load always
+  // makes progress and the page becomes interactive regardless of tab
+  // visibility. Visible tabs are unchanged — rAF wins the race (~16ms)
+  // before the 32ms fallback, so we still land on a real frame boundary.
+  const yieldToBrowser = () => new Promise(r => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; r(); };
+    requestAnimationFrame(fin);
+    setTimeout(fin, 32);
+  });
   const PROJECT_ID = "__PROJECT_ID__";
+  // Cap the initial graph payload: /brain used to load the WHOLE graph
+  // (~3792 nodes) uncapped, which downloads everything and chokes WebGL.
+  // 500 top-by-degree nodes is a rich overview that stays fast. The
+  // backend serves ?limit=N (top-N by degree) with an ETag for cheap
+  // conditional-GET (304) on repeat visits.
+  const GRAPH_CAP = 500;
   const statusEl = document.getElementById("status");
   // Community palette: 14 hue-distinct swatches (7 base + 7 lifted)
   // sourced from web/src/lib/palette.ts ACCENT_HEX + ACCENT_HEX_LIFTED.
@@ -281,11 +304,12 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
   // the LOD super-node assembly (after FA2) and the legend.
   async function loadGraph() {
       statusEl.textContent = "Fetching graph data...";
-      // Cache-bust: enrichment rewrites community_labels in the background,
-      // so a cached hierarchy.json would keep painting stale cluster names.
+      // Request a CAPPED graph (top-GRAPH_CAP by degree) so /brain loads a
+      // small, fast payload instead of the whole graph. No cache-bust /
+      // no-store here so the browser can honor the backend's ETag and get a
+      // cheap 304 on repeat visits.
       const data = await fetch(
-        `/graphify-visual/${PROJECT_ID}/hierarchy.json?_=${Date.now()}`,
-        { cache: "no-store" })
+        `/graphify-visual/${PROJECT_ID}/hierarchy.json?limit=${GRAPH_CAP}`)
         .then(r => {
           if (!r.ok) throw new Error("hierarchy " + r.status);
           return r.json();
@@ -514,7 +538,12 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
       settings.slowDown = 1;
       settings.adjustSizes = false;
       settings.outboundAttractionDistribution = false;
-      const computeMs = g.order > 20000 ? 5000 : g.order > 5000 ? 4000 : 3000;
+      // With the capped (~500-node) payload the layout converges fast, so
+      // don't hard-wait 3-5s. Cap the FA2 compute window at ~1200ms for the
+      // small graphs /brain now loads; keep the longer waits as a fallback
+      // if an uncapped/large graph is ever loaded here.
+      const computeMs = g.order > 20000 ? 5000 : g.order > 5000 ? 4000
+        : g.order > 1500 ? 3000 : Math.min(1200, 400 + g.order * 2);
       const layout = new FA2Layout(g, { settings });
       const t0 = performance.now();
       layout.start();
@@ -1727,7 +1756,14 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
 
       const fadeMs = 450;
       const SKIP_REVEAL_BELOW = 5;
-      const shouldAnimate = !skipped && l0Items.length >= SKIP_REVEAL_BELOW;
+      // Skip the rAF-driven reveal in a hidden tab: requestAnimationFrame
+      // never fires there, so `await`-ing the animation would hang the
+      // build on its last critical-path step and leave the canvas empty.
+      // The snap branch below sets final sizes synchronously, so a graph
+      // built in the background finishes and is ready the instant the tab
+      // is shown (no janky replay of the reveal on first paint either).
+      const shouldAnimate =
+        !skipped && !document.hidden && l0Items.length >= SKIP_REVEAL_BELOW;
 
       if (shouldAnimate) {
         const revealBudget = 1600;
@@ -1783,7 +1819,11 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
 
 
 @router.get("/graphify-visual/{project_id}/hierarchy.json")
-def _graphify_hierarchy(project_id: str):
+def _graphify_hierarchy(
+    project_id: str,
+    request: Request,
+    limit: int | None = None,
+):
     """Multi-level hierarchical view of the project graph.
 
     Each leaf node is tagged with l0/l1/l2 parent keys derived from
@@ -1826,13 +1866,36 @@ def _graphify_hierarchy(project_id: str):
         # them after super-nodes are added with level 0/1/2.
         out_nodes.append({**n, "level": 3, **h})
 
+    # FR-1 / AC-1 — progressive loading cap. When the client passes ?limit=N,
+    # bound the initial payload to the top-N highest-degree nodes (edge count
+    # in the raw graph links), so the hub survives and drill-in fetches the
+    # rest on demand via /neighbors. Edges to dropped nodes are pruned so the
+    # capped subgraph stays internally consistent.
+    if limit is not None and 0 <= limit < len(out_nodes):
+        degree: dict = {}
+        for e in raw_edges:
+            s, t = e.get("source"), e.get("target")
+            if s is not None:
+                degree[s] = degree.get(s, 0) + 1
+            if t is not None:
+                degree[t] = degree.get(t, 0) + 1
+        out_nodes = sorted(
+            out_nodes,
+            key=lambda n: (-degree.get(n.get("id"), 0), str(n.get("id"))),
+        )[:limit]
+        survived = {n.get("id") for n in out_nodes}
+        raw_edges = [
+            e for e in raw_edges
+            if e.get("source") in survived and e.get("target") in survived
+        ]
+
     # Pull DB-derived community labels so super-nodes that fall back to
     # comm:<id> at L0 (flat repos) get a human label instead of the raw id.
     db_path = ctx._data_dir / "graph.db"
     comm_labels: dict[int, str] = {}
     if db_path.exists():
         try:
-            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            conn = sqlite_db.connect(str(db_path), timeout=5.0)
             try:
                 for r in conn.execute("SELECT id, label FROM communities"):
                     comm_labels[int(r[0])] = r[1] or ""
@@ -1877,14 +1940,88 @@ def _graphify_hierarchy(project_id: str):
     except Exception:
         pass
 
-    return JSONResponse({
+    payload = {
         "nodes": out_nodes,
         "edges": raw_edges,
         "community_labels": comm_labels,
         "hierarchy_labels": hierarchy_labels,
         "hierarchy_purposes": hierarchy_purposes,
-    }, headers={"Cache-Control": "no-store"})
+    }
 
+    # FR-4 / AC-4 — content-addressed ETag + conditional GET. The tag hashes
+    # the response content (nodes/edges/labels), so background enrichment that
+    # rewrites labels busts the cache, but a repeat visit to an unchanged graph
+    # revalidates with a cheap 304 instead of re-downloading the whole payload.
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    etag = f'"{digest}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(payload, headers={"ETag": etag})
+
+
+@router.get("/graphify-visual/{project_id}/neighbors")
+def _graphify_neighbors(project_id: str, node: str, hops: int = 1):
+    """FR-2 / AC-2 — expand-on-demand neighborhood for a single node.
+
+    Sibling of hierarchy.json (same project/data resolution + path safety).
+    Reads the same graph.json, BFS-expands ``hops`` levels out from ``node``,
+    and returns just that bounded subgraph — the node plus its k-hop
+    neighborhood and the edges among them — so drill-in never re-downloads the
+    whole graph.
+    """
+    from fastapi.responses import JSONResponse
+    if not _SAFE_PROJECT_RE.match(project_id or ""):
+        raise HTTPException(status_code=400, detail="invalid project id")
+    ctx = get_project(project_id)
+    json_path = ctx._data_dir / "graphify-src" / "graphify-out" / "graph.json"
+    if not json_path.exists():
+        raise HTTPException(
+            status_code=404, detail="graph.json not generated yet"
+        )
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        raise HTTPException(status_code=500, detail="graph.json parse error")
+
+    raw_nodes = [
+        n for n in data.get("nodes", [])
+        if n.get("file_type") != "rationale"
+    ]
+    raw_edges = data.get("links") or data.get("edges") or []
+    node_ids = {n.get("id") for n in raw_nodes}
+    if node not in node_ids:
+        raise HTTPException(status_code=404, detail="node not in graph")
+
+    # Undirected adjacency, restricted to non-rationale nodes.
+    adj: dict = {}
+    for e in raw_edges:
+        s, t = e.get("source"), e.get("target")
+        if s in node_ids and t in node_ids:
+            adj.setdefault(s, set()).add(t)
+            adj.setdefault(t, set()).add(s)
+
+    # BFS out to `hops` levels from the seed node.
+    hops = max(0, int(hops))
+    reached = {node}
+    frontier = {node}
+    for _ in range(hops):
+        nxt: set = set()
+        for cur in frontier:
+            nxt |= adj.get(cur, set())
+        nxt -= reached
+        if not nxt:
+            break
+        reached |= nxt
+        frontier = nxt
+
+    sub_nodes = [n for n in raw_nodes if n.get("id") in reached]
+    sub_links = [
+        e for e in raw_edges
+        if e.get("source") in reached and e.get("target") in reached
+    ]
+    return JSONResponse({"nodes": sub_nodes, "links": sub_links})
 
 
 @router.get("/graphify-visual/{project_id}/communities.json")
@@ -1902,7 +2039,7 @@ def _graphify_communities(project_id: str):
     db_path = ctx._data_dir / "graph.db"
     if not db_path.exists():
         return JSONResponse({"communities": []})
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = sqlite_db.connect(str(db_path), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         try:

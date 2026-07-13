@@ -12,6 +12,7 @@ the same step updates rather than duplicates.
 from __future__ import annotations
 
 import sqlite3
+from prism_service.services import sqlite_db
 from pathlib import Path
 
 # Columns persisted on agent_runs (order == the ingest payload contract).
@@ -27,7 +28,7 @@ _FILTERS = ("task_id", "session_id", "workflow_name", "role", "step")
 
 
 def _connect(scores_db: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sqlite3
+from prism_service.services import sqlite_db
 import sys as _sys
 import threading
 import time
@@ -164,7 +165,7 @@ def community_scopes(project: str, min_size: int = 3) -> list[dict]:
     except Exception:
         return []
     try:
-        conn = sqlite3.connect(db, timeout=5.0)
+        conn = sqlite_db.connect(db, timeout=5.0)
         rows = conn.execute(
             "SELECT community, file, name FROM entities "
             "WHERE community IS NOT NULL"

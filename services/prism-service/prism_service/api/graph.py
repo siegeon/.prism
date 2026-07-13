@@ -8,6 +8,7 @@ to embed the viewer or show a 'rebuild' prompt.
 
 import logging
 import sqlite3
+from prism_service.services import sqlite_db
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -25,7 +26,7 @@ def _count(db: Path, sql: str) -> int:
     if not db.exists():
         return 0
     try:
-        c = sqlite3.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
+        c = sqlite_db.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
         return int(v[0]) if v else 0
     except Exception as exc:
         # Graceful fallback stays (summary must render), but never

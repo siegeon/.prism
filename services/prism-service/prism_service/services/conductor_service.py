@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from prism_service.services import sqlite_db
+
 
 META_MIN_HOLDOUT_DELTA = 0.03
 META_MAX_TOKEN_RATIO = 1.15
@@ -596,7 +598,7 @@ class ConductorService:
 
     def _scores_conn(self) -> sqlite3.Connection:
         """Open a read-only connection to scores.db."""
-        conn = sqlite3.connect(self._scores_db, timeout=5.0)
+        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -1559,9 +1561,15 @@ class ConductorService:
             "expectation": "green expects verifier.status=pass with tier0=pass",
         },
         "green_full": {
+            # NOT-RUN IS A REFUSAL (inverted-flow #5): green_full no longer
+            # accepts tier0=not-run — a run that verified NOTHING is not a
+            # pass. The honest green signal is carried by the 3-lane verifier
+            # (oracle receipt + red->green continuity + baseline-diff
+            # regression); tier0=pass here means the impacted suite really ran.
             "expect_status": ("pass",),
-            "expect_tier0": ("pass", "not-run"),
-            "expectation": "green_full expects verifier.status=pass with tier0=pass",
+            "expect_tier0": ("pass",),
+            "expectation": ("green_full expects verifier.status=pass with "
+                            "tier0=pass (not-run is refused, not a pass)"),
         },
         "story_complete": {
             "rubric": "story_complete",
@@ -1629,6 +1637,108 @@ class ConductorService:
             return empty
         except Exception:
             return empty
+
+    def _oracle_receipt_refusal(self, task, *, override: bool,
+                                reason: str):
+        """Decide the green_gate ORACLE tooth by a REAL run, not prose shape
+        (inverted-flow soundness #2).
+
+        Returns ``(refusal_reason, fresh_receipt)``. ``refusal_reason`` is ""
+        (the gate may proceed) when a FRESH PASSING EvidenceReceipt exists —
+        fresh = its ``tree_sha`` matches the task's current workspace commit
+        AND its ``spec_hash`` matches the task's CURRENT OracleSpec (so a new
+        commit or an oracle edit invalidates prior receipts). On the override
+        path only, an explicit ``manual_evidence_required`` acknowledgement in
+        ``reason`` (backed by a manual-status receipt on file) is also
+        accepted — the honest terminal case for an oracle we cannot auto-run.
+        Never raises: any error yields a refusal (fail closed), never a pass."""
+        try:
+            from prism_service.services import oracle_spec as osp
+            from prism_service.services import task_workspace
+            project = self._project_name or "default"
+            ws = task_workspace.workspace_for(getattr(task, "id", ""))
+            tree_sha = osp.current_tree_sha(
+                (ws or {}).get("path") if ws else None)
+            spec = osp.OracleSpec.from_task(task)
+            # PINNED CONTROL-PLANE (inverted-flow #3): a receipt minted under a
+            # different pinned policy_hash is stale, like a spec edit. Resolved
+            # best-effort; "" (unpinnable) keeps the tree+spec behavior.
+            from prism_service.services import control_plane as _cp
+            _pin = _cp.pinned_policy(getattr(task, "id", ""))
+            _policy_hash = _pin.get("policy_hash", "")
+            fresh = osp.fresh_passing_receipt(
+                project, getattr(task, "id", ""), tree_sha, spec.spec_hash(),
+                policy_hash=_policy_hash)
+            if fresh is not None:
+                return "", fresh
+            # Override may accept a logged manual acknowledgement, but only
+            # when a manual-status receipt for THIS spec/tree is actually on
+            # file — a typed token alone is not evidence.
+            if override and "manual_evidence_required" in (reason or "").lower():
+                for r in reversed(osp.read_receipts(
+                        project, getattr(task, "id", ""))):
+                    if (r.status == osp.ST_MANUAL and r.tree_sha == tree_sha
+                            and r.spec_hash == spec.spec_hash()):
+                        return "", r
+            latest = osp.latest_receipt(project, getattr(task, "id", ""))
+            if latest is None:
+                detail = ("no EvidenceReceipt on file — the oracle was never "
+                          "run (green_gate requires a trusted run, not a "
+                          "self-attested proof string)")
+            elif latest.status == osp.ST_MANUAL:
+                detail = ("latest receipt is manual_evidence_required "
+                          f"(adapter={latest.adapter}): {latest.reason}")
+            elif not latest.passed:
+                detail = (f"latest receipt FAILED: {latest.reason}")
+            elif (_policy_hash and latest.policy_hash
+                  and latest.policy_hash != _policy_hash
+                  and latest.tree_sha == tree_sha
+                  and latest.spec_hash == spec.spec_hash()):
+                detail = ("latest passing receipt is STALE — it was minted "
+                          f"under pinned policy {latest.policy_hash[:19]}, but "
+                          f"the control-plane is now pinned at "
+                          f"{_policy_hash[:19]} (the gate policy changed — "
+                          "re-run the oracle under the current pinned policy)")
+            else:
+                detail = ("latest passing receipt is STALE — it was run at "
+                          f"tree={latest.tree_sha[:12] or 'n/a'} / "
+                          f"{latest.spec_hash[:19]}, but the task is now at "
+                          f"tree={tree_sha[:12] or 'n/a'} / "
+                          f"{spec.spec_hash()[:19]} (a new commit or an oracle "
+                          "edit invalidated it — re-run the oracle)")
+            return (f"green_gate: oracle not evidenced — {detail}. The token "
+                    "proof scorer is advisory only.", None)
+        except Exception as exc:  # fail closed
+            return (f"green_gate: oracle receipt check errored "
+                    f"({type(exc).__name__}: {exc}) — refusing (fail closed)",
+                    None)
+
+    def mint_green_evidence(self, task_id: str,
+                            session_id: Optional[str] = None,
+                            model: Optional[str] = None,
+                            release: bool = False) -> dict:
+        """Run the 3-lane honest green signal and MINT the oracle
+        EvidenceReceipt the green_gate later requires (inverted-flow #5).
+
+        Called when the drive reports SUCCESS on verify_green_state — so the
+        gate that follows sees a FRESH receipt (produced from the task's
+        worktree in a clean isolated env), not a self-attested proof string.
+        No-op ok=False when no lane-capable VerifierService is attached."""
+        if self._task_svc is None:
+            return {"ok": False, "reason": "no TaskService attached"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "reason": "unknown task"}
+        verifier = self._verifier_svc
+        if verifier is None or not hasattr(verifier, "run_green_lanes"):
+            return {"ok": False, "reason": "no lane-capable verifier attached"}
+        try:
+            report = verifier.run_green_lanes(
+                task, release=release, project=self._project_name or "default")
+        except Exception as exc:
+            return {"ok": False, "reason": f"lanes errored: "
+                    f"{type(exc).__name__}: {exc}"}
+        return {"ok": report.get("verdict") == "pass", "lanes": report}
 
     def _verify_rubric_gate(self, task, validation: str) -> dict:
         """Score a rubric validation kind (story_complete/plan_coverage)
@@ -1707,11 +1817,25 @@ class ConductorService:
         # a verifier is attached, so we don't need a None-check here.
         try:
             run_kwargs: dict[str, Any] = {"task_id": task.id}
+            # HONEST LOOP (task e825e00a): if this task has its OWN scratch
+            # workspace, verify against THAT — the worker's real committed
+            # tests — scoped to its recorded baseline. A fabricated trace with
+            # no committed test yields zero tier0 claims and is refused. Falls
+            # back to the shared daemon checkout when no per-task workspace.
+            _tw = None
+            try:
+                from prism_service.services import task_workspace
+                _tw = task_workspace.workspace_for(task.id)
+            except Exception:
+                _tw = None
+            if _tw:
+                run_kwargs["workspace"] = _tw["path"]
+                run_kwargs["baseline_rev"] = _tw["baseline"]
             # Pass the agent checkout so Tier0 scopes the real diff. Without
             # it verifier.run() falls back to the daemon cwd (no diff ->
             # status=error 'nothing to verify'). project_root is the host
             # working tree wired by ProjectContext.attach_project_root.
-            if self._project_root:
+            elif self._project_root:
                 run_kwargs["workspace"] = str(self._project_root)
                 # Scope Tier0 to the COMMITTED BRANCH diff, not just the
                 # working tree. In a source-run dev checkout the working tree
@@ -1895,6 +2019,40 @@ class ConductorService:
                     "used (test run, screenshot, manual review, etc.)"
                 ),
             }
+        # CANDIDATE-CONTROLS-JUDGE REFUSAL (inverted-flow #3): the branch under
+        # test must not supply its own judge. If the task's WORKTREE diff (vs
+        # its baseline) modifies ANY enumerated gate-policy file — the rubrics
+        # YAML, the arc-governance scorer, the verifier ignore/lane rules, the
+        # oracle spec/thresholds, the conductor gate logic, or the pin loader —
+        # the gate REFUSES on EVERY gate, override or not: a task cannot loosen
+        # the rubric/ignores it is graded by. A legitimate policy change routes
+        # through the authorized control-plane path (PRISM_POLICY_CHANGE_APPROVED
+        # or a 'policy-change'-tagged task), never silently from inside the
+        # graded task. Fail-open only on an internal error (never a false pass).
+        try:
+            from prism_service.services import control_plane as _cp
+            _cj_reason = _cp.candidate_controls_judge_reason(task)
+        except Exception:
+            _cj_reason = ""
+        if _cj_reason:
+            self._task_svc.update(
+                task_id, gate_state="failed", gate_reason=_cj_reason)
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; "
+                         f"control-plane=fail; reason={_cj_reason}"),
+                actor="conductor")
+            self._record_agent_run(
+                task_id, gate_step_id, session_id, model=model,
+                gate_state="failed", ok=False,
+                verdict_summary=("control-plane: " + _cj_reason)[:200])
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": "failed",
+                "reason": _cj_reason,
+            }
         # STRAND C — demonstrable-UI requirement at green_gate (task
         # 56458db1). A `ui`-tagged task cannot green-gate on a pytest/unit
         # line alone; it needs proof_type='demo' + a real UI artifact path.
@@ -1943,6 +2101,57 @@ class ConductorService:
             rollup_has_children = bool(_kids)
             if _kids:
                 rollup_ok, rollup_reason = epic_rollup_verdict(_kids)
+
+        # ORACLE-OUTCOME TOOTH (task 3eb67fb3) — promote the ADVISORY
+        # oracle/misfire notes (green_gate_proof_note/green_gate_misfire_note,
+        # appended to the pass reason at :2159-2201) into a BLOCKING green_gate
+        # refusal. On a green_gate approve that is NOT an audited override and
+        # NOT an epic roll-up, the task's OWN stored completion_proof must
+        # evidence the task's oracle: a real proof that cites the oracle's
+        # observable token AND addresses the pre-declared likely_misfire. Reads
+        # the LIVE task's fields (re-get) and judges the STORED proof, never
+        # the decision reason — a green-looking approve reason must not clear an
+        # empty/mismatched proof (the b521af05 false-green). Runs ahead of the
+        # pass path; the audited distinct-actor override (below) still bypasses
+        # it for the genuine no-machine-oracle terminal case (FR-6).
+        # The tooth is ORACLE-BOUND: it only fires when the task DECLARES an
+        # oracle (the b521af05 class). A task with no oracle has nothing for
+        # the proof to evidence — leave it to the verifier / audited override.
+        # Epics (rollup_has_children) are owned by the roll-up path below, so
+        # skip them here (their child-proof reason must survive).
+        green_outcome_note = ""
+        _live = self._task_svc.get(task_id)
+        _has_oracle = bool(str(getattr(_live, "oracle", "") or "").strip())
+        if (gate_step_id == "green_gate" and not override
+                and not rollup_has_children and _has_oracle):
+            receipt_reason, _fresh = self._oracle_receipt_refusal(
+                _live, override=False, reason=reason)
+            if receipt_reason:
+                self._task_svc.update(
+                    task_id, gate_state="failed", gate_reason=receipt_reason,
+                )
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate_step_id}; action=approve; "
+                             f"oracle-receipt=fail; reason={receipt_reason}"),
+                    actor="conductor",
+                )
+                self._record_agent_run(
+                    task_id, gate_step_id, session_id, model=model,
+                    gate_state="failed", ok=False,
+                    verdict_summary=("oracle-receipt: " + receipt_reason)[:200],
+                )
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": "failed",
+                    "reason": receipt_reason,
+                }
+            green_outcome_note = (
+                f"oracle evidenced by receipt {_fresh.job_id} "
+                f"(adapter={_fresh.adapter}, tree={(_fresh.tree_sha or 'n/a')[:12]}, "
+                f"{_fresh.spec_hash[:19]})") if _fresh else ""
 
         verifier_payload: Optional[dict] = None
         verifier_validation: Optional[str] = None
@@ -2015,6 +2224,36 @@ class ConductorService:
                     "gate_state": task.gate_state,
                     "reason": same_actor,
                 }
+            # NO OVERRIDE-SKIPS-THE-ORACLE (inverted-flow #2): the override
+            # path used to bypass the oracle scorer entirely — the biggest
+            # hole. On a green_gate with a declared oracle, override STILL
+            # requires a fresh passing EvidenceReceipt, OR an explicit, logged
+            # `manual_evidence_required` acknowledgement in the reason (the
+            # honest terminal case: an oracle we cannot auto-run). Epics
+            # (rollup_has_children) keep their child-proof path.
+            if (gate_step_id == "green_gate" and not rollup_has_children
+                    and _has_oracle):
+                receipt_reason, _fresh_ov = self._oracle_receipt_refusal(
+                    _live, override=True, reason=reason)
+                if receipt_reason:
+                    self._task_svc.update(
+                        task_id, gate_state="failed",
+                        gate_reason=receipt_reason,
+                    )
+                    self._task_svc.record_history(
+                        task_id, action="gate_decide",
+                        details=(f"gate={gate_step_id}; action=approve; "
+                                 f"override=True; oracle-receipt=fail; "
+                                 f"reason={receipt_reason}"),
+                        actor="conductor",
+                    )
+                    return {
+                        "ok": False,
+                        "task_id": task_id,
+                        "gate_step": gate_step_id,
+                        "gate_state": "failed",
+                        "reason": receipt_reason,
+                    }
             # Manual override path — bypass the verifier entirely but
             # tag the audit row so the override is auditable. Override is a
             # separately-logged exception; the DISTINCT override actor is
@@ -2184,16 +2423,65 @@ class ConductorService:
             # ANNOTATE (never block) beside the proof/misfire/outcome notes.
             passed_gate_reason += green_gate_conformance_note(
                 self._conformance_payload())
+            # Oracle-receipt tooth verdict (inverted-flow #2): when the
+            # BLOCKING tooth passed (a fresh passing EvidenceReceipt cleared
+            # the gate), surface WHICH receipt so a compliant close is legibly
+            # attributed to a real run.
+            if green_outcome_note:
+                passed_gate_reason += f"  ✓ {green_outcome_note}"
+            # TOKEN SCORER DEMOTED TO A WARNING (inverted-flow #2): the old
+            # gameable prose-shape scorer (arc_governance.score_green_outcome)
+            # is no longer the deciding authority — the fresh-receipt tooth is.
+            # Keep it as an ADVISORY omission note only (never blocks): it can
+            # still flag a completion_proof that forgot to cite the oracle.
+            if _has_oracle:
+                try:
+                    from prism_service.services import arc_governance as gov
+                    _tok = gov.score_green_outcome(
+                        {"oracle": getattr(_live, "oracle", ""),
+                         "completion_proof": _proof,
+                         "likely_misfire": _misfire},
+                        gov.load_rubrics().get("green_outcome", {}))
+                    if not _tok.get("ok"):
+                        passed_gate_reason += (
+                            "  ⚠ (advisory) " + str(_tok.get("reason", "")))
+                except Exception:
+                    pass
             _complete, _ = full_outcome_verdict(True, _proof, _incomplete)
             _outcome_complete = _complete
+        # PINNED CONTROL-PLANE PROVENANCE (inverted-flow #3): stamp WHICH pinned
+        # policy adjudicated this pass onto the gate_reason + audit detail +
+        # response, so every green is attributable to a specific control ref +
+        # policy hash (the candidate could not have edited it — the refusal
+        # above blocked that). Best-effort; never blocks a pass.
+        _pin: dict = {}
+        try:
+            from prism_service.services import control_plane as _cp
+            _pin = _cp.pinned_policy(task_id)
+        except Exception:
+            _pin = {}
+        if _pin.get("policy_hash"):
+            passed_gate_reason += (
+                f"  ✓ policy pinned {_pin['policy_hash'][:19]} @ "
+                f"{(_pin.get('control_ref') or 'n/a')[:12]}")
+            detail_bits.append(
+                f"policy_hash={_pin['policy_hash'][:19]}; "
+                f"control_ref={(_pin.get('control_ref') or '')[:12]}")
         self._task_svc.update(
             task_id,
             gate_state="passed",
             gate_reason=passed_gate_reason,
         )
         if gate_step_id == "green_gate":
+            # TERMINAL STEP REACHED (task ae63e375): green_gate is the LAST
+            # WORKFLOW_STEPS entry, so a PASSED terminal gate IS the task
+            # done — mirrors conductor_work's own `done` predicate (final
+            # step + gate_state=passed). Without this a task sat at
+            # status=pending forever (never left the board, completed_at
+            # never stamped) even though its own SDLC had finished.
             self._task_svc.update(
-                task_id, full_outcome_complete=_outcome_complete)
+                task_id, full_outcome_complete=_outcome_complete,
+                status="done")
         self._task_svc.record_history(
             task_id,
             action="gate_decide",
@@ -2230,6 +2518,11 @@ class ConductorService:
             response["validation"] = verifier_validation
         if override:
             response["override"] = True
+        if _pin.get("control_ref") or _pin.get("policy_hash"):
+            response["control_ref"] = _pin.get("control_ref", "")
+            response["policy_hash"] = _pin.get("policy_hash", "")
+            response["policy_version"] = _pin.get(
+                "policy_version", "")
         return response
 
     # Session-id prefixes used by smoke tests, dogfood probes, and the

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from prism_service.services import sqlite_db
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -94,7 +95,7 @@ class JanitorService:
         per-thread handle (which is the actual race fix)."""
         conn = getattr(self._tlocal, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            conn = sqlite_db.connect(self._db_path, timeout=5.0)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")

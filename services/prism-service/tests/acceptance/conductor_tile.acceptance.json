@@ -1,0 +1,79 @@
+{
+  "contract": "conductor-tile",
+  "supersedes": "PR #212 ring+timeline tile — the owner chose the showcase 'timeline D' ConductorPage, which SUPERSEDES the PR-#212-era tile ACs.",
+  "note": "Frozen acceptance manifest for the conductor showcase tile (web/src/pages/ConductorPage.tsx). Each 'delivered' AC names the REAL test node-id that would FAIL if the component regressed; 'retired'/'moved' ACs name a guard test that pins the retirement premise. A drift between this manifest and the named node-ids (a renamed/removed test, or a delivered AC with no proof) is itself a FAILURE — enforced by test_conductor_tile_acceptance_manifest.py. Do NOT re-point a proof to a comment or to a source-scan of an unrendered feature; add/retire an AC here instead.",
+  "acceptance_criteria": [
+    {
+      "id": "AC-RING-1",
+      "statement": "The tile leads with a completion ring reading done SDLC steps / total (draining SVG arc, 'N' over 'of {total}', 'steps complete').",
+      "status": "delivered",
+      "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tasktile_renders_completion_ring",
+      "guard_node_id": null,
+      "note": "Ring center + strokeDashoffset arc are the real rendered elements."
+    },
+    {
+      "id": "AC-WF-CONTRACT",
+      "statement": "The tile's local SDLC_STEPS table matches the backend WORKFLOW_STEPS order exactly (no drift).",
+      "status": "delivered",
+      "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tile_sdlc_steps_match_backend_workflow",
+      "guard_node_id": null,
+      "note": "De-launders the old 'WORKFLOW_STEPS_ORDERED in src' comment-scan: the tile duplicates a LOCAL table, so this cross-checks its ids against the backend."
+    },
+    {
+      "id": "AC-HERO-2",
+      "statement": "The hero is the ring + a '{done}/{total} steps complete' summary sourced from live task data.",
+      "status": "delivered",
+      "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tasktile_hero_is_ring_plus_step_summary",
+      "guard_node_id": null,
+      "note": "The prototype's 2x2 metric grid (Current phase/Time left/Throughput/Idle) was superseded and is NOT rendered."
+    },
+    {
+      "id": "AC-TIMELINE-3",
+      "statement": "A labeled timeline renders a VISIBLE caption ({s.label}) and role ({s.role}) under each real SDLC step, mapping the real step table.",
+      "status": "delivered",
+      "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tasktile_labeled_timeline_captions_each_step",
+      "guard_node_id": null,
+      "note": null
+    },
+    {
+      "id": "AC-SDLCDOTS-4",
+      "statement": "The abstract SdlcDots stepper is gone from the tile (replaced by the labeled timeline).",
+      "status": "delivered",
+      "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tasktile_no_longer_renders_abstract_sdlcdots",
+      "guard_node_id": null,
+      "note": null
+    },
+    {
+      "id": "AC-ACTIVITY-6",
+      "statement": "The status pill reads honest task.activity.state and maps the real states (working/awaiting_gate/adrift/stalled) to a label+tone via ACT_TILE.",
+      "status": "delivered",
+      "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tasktile_honest_activity_states_render",
+      "guard_node_id": null,
+      "note": null
+    },
+    {
+      "id": "AC-SPARKLINE-5",
+      "statement": "The tile's throughput sparkline (TokenTurns) marks the window peak bar.",
+      "status": "retired",
+      "proof_node_id": null,
+      "guard_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tokenturns_sparkline_AC_retired_tile_renders_no_tokenturns",
+      "note": "The showcase tile renders no <TokenTurns>; a source-scan of TokenTurns.tsx proved nothing about the tile. Retired; guard asserts the tile stays TokenTurns-free."
+    },
+    {
+      "id": "AC-ETA-UI",
+      "statement": "The tile renders a task-card ETA UI (EtaCountdownBar + '~Xm left' chip) consuming eta_s/eta_total_s.",
+      "status": "moved:68a9720e",
+      "proof_node_id": null,
+      "guard_node_id": "tests/unit/test_conductor_per_step_eta.py::test_conductor_page_eta_ui_RETIRED_superseded_by_ring_arc_and_idle_clock",
+      "note": "The showcase tile never ported an ETA UI; a real task-card ETA remains OPEN + tracked on task 68a9720e and is NOT fake-satisfied. Backend ETA projection + SdlcProgress caption are delivered/proven by the runtime oracles in the same test file."
+    },
+    {
+      "id": "AC-TOKENSOURCE-UI",
+      "statement": "The tile's per-turn burn graph (TokenTurns) consumes tokens_source and labels the wall-clock 'project activity' case.",
+      "status": "retired",
+      "proof_node_id": null,
+      "guard_node_id": "tests/unit/test_conductor_token_source.py::test_token_turns_ui_guard_RETIRED_tile_renders_no_tokenturns",
+      "note": "The showcase tile renders no <TokenTurns>. tokens_source honesty is proven at runtime by the phase_progress oracles in test_conductor_token_source.py, not a source-scan of an unrendered component."
+    }
+  ]
+}

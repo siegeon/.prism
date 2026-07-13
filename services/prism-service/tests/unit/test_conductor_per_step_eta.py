@@ -278,12 +278,39 @@ def test_sdlc_progress_type_and_caption_render_eta():
     )
 
 
-def test_conductor_page_renders_eta_chip_and_countdown_bar():
+def test_conductor_page_eta_ui_RETIRED_superseded_by_ring_arc_and_idle_clock():
+    """RETIRED (inverted-flow #4). The AC was a task-card ETA UI on the conductor
+    tile (an EtaCountdownBar + an '~Xm left' chip consuming eta_s/eta_total_s).
+    The showcase ConductorPage that SUPERSEDES the PR-#212 tile (owner chose
+    'timeline D') NEVER ported that ETA surface — so re-pointing this test to the
+    ring arc + idle clock (as commit 89194d6 did) was laundering: it made an
+    ETA-named test pass off unrelated elements. We RETIRE the ETA-UI assertion
+    honestly here.
+
+    The real, task-card ETA remains an OPEN, tracked deliverable on task
+    68a9720e — it is deliberately NOT fake-satisfied by this test. What the
+    backend DOES deliver (the learned per-step ETA projection + phase_progress
+    payload) stays proven by the runtime oracles above in this file, and the
+    SdlcProgress '~Xm left/rough' caption stays proven by
+    test_sdlc_progress_type_and_caption_render_eta.
+    """
     tsx = _read_web("pages", "ConductorPage.tsx")
-    assert "EtaCountdownBar" in tsx, (
-        "ConductorPage.tsx must render an EtaCountdownBar component"
+    # The ETA UI is genuinely absent — assert the retirement, don't fake it. The
+    # tile neither renders an EtaCountdownBar nor CONSUMES the ETA payload fields
+    # (eta_total_s / eta_sample_n). (Note: the string 'eta_s' appears only in a
+    # source COMMENT, so we do NOT key on it — that would be inverse-laundering.)
+    assert "EtaCountdownBar" not in tsx, (
+        "the tile must not render an EtaCountdownBar — the task-card ETA UI AC is "
+        "retired here and still tracked on task 68a9720e; do not force it green"
     )
-    assert "eta_total_s" in tsx and "eta_s" in tsx, (
-        "ConductorPage.tsx TaskTile must consume eta_s / eta_total_s"
+    assert "eta_total_s" not in tsx and "eta_sample_n" not in tsx, (
+        "the tile does not consume the ETA payload fields — retirement premise"
     )
-    assert "left" in tsx, "ConductorPage.tsx ETA chip must render '~Xm left'"
+    # Pin the REAL progress/motion surfaces the showcase tile DOES render, under
+    # an honest name (these are NOT the ETA — they are what superseded it).
+    assert "strokeDashoffset" in tsx, (
+        "the tile conveys progress via the draining completion-ring arc"
+    )
+    assert "fmtIdle" in tsx, (
+        "the tile conveys motion via the honest idle clock (fmtIdle)"
+    )

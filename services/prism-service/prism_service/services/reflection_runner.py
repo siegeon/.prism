@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json as _json
 import sqlite3
+from prism_service.services import sqlite_db
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -316,7 +317,7 @@ def run_one(
         return ReflectionResult(ok=False, error="no scores.db",
                                 candidate_id=candidate_id)
 
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(
@@ -461,7 +462,7 @@ def next_pending_candidate_id(
     advances past them instead of re-claiming the same head."""
     if not Path(scores_db).exists():
         return None
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     try:
         rows = conn.execute(
             "SELECT id FROM consolidation_candidates "

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from prism_service.services import sqlite_db
 from pathlib import Path
 
 # Threshold below which variant rankings are flagged as correlational.
@@ -22,7 +23,7 @@ def get_learning_rows(scores_db: str, limit: int = 50) -> list[dict]:
     """Return recent task_quality_rollup rows ordered newest-first."""
     if not Path(scores_db).exists():
         return []
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -45,7 +46,7 @@ def get_variant_performance(
     crossed the ``n_threshold`` reliability gate."""
     if not Path(scores_db).exists():
         return []
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -79,7 +80,7 @@ def get_recent_reflections(scores_db: str, limit: int = 25) -> list[dict]:
     """
     if not Path(scores_db).exists():
         return []
-    conn = sqlite3.connect(scores_db, timeout=5.0)
+    conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(

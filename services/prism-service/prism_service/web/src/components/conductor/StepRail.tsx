@@ -10,6 +10,7 @@ import { useState } from "react";
 import { motion } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { domainTone } from "@/lib/domainTone";
+import { fmtTokens } from "@/lib/format";
 import type { PhaseProgress, Activity } from "./SdlcProgress";
 import type { GanttGate } from "./TaskActivityGantt";
 
@@ -21,10 +22,130 @@ function clockHM(ts: number): string {
   }
 }
 
+// One raw audit turn (same rows as the Timeline card). Drilling into a step
+// reveals the turns that fired WHILE it was current — the implementation view
+// and the timeline are the same thing, disclosed hierarchically.
+export type StepTurn = { actor?: string; action?: string; details?: string; timestamp?: string; turn_tokens?: number };
+
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+// Duration a task SAT on each step = gap between when it entered that step and
+// entered the next. The terminal/current step has no "next", so no duration.
+function stageDurations(turns: StepTurn[]): Record<string, number> {
+  const entries: { step: string; ts: number }[] = [];
+  let cur = "";
+  for (const t of turns ?? []) {
+    const dest = stepDestOf(t.action, t.details);
+    if (dest && dest !== cur) {
+      cur = dest;
+      const ts = t.timestamp ? new Date(t.timestamp).getTime() : NaN;
+      if (!isNaN(ts)) entries.push({ step: dest, ts });
+    }
+  }
+  const out: Record<string, number> = {};
+  for (let i = 0; i < entries.length - 1; i++) {
+    out[entries[i].step] = Math.max(0, entries[i + 1].ts - entries[i].ts);
+  }
+  return out;
+}
+function stepTokens(rows: StepTurn[]): number {
+  return (rows ?? []).reduce((a, r) => a + (typeof r.turn_tokens === "number" ? r.turn_tokens : 0), 0);
+}
+
+// Per-stage metric rendered as a RELATIVE bar (filled vs the heaviest stage)
+// with the numbers tucked underneath — fills the row's empty middle and lets
+// you eyeball where the tokens/time went across the run. The bar tracks tokens
+// when any stage spent tokens, else duration; the caption shows both. Replaces
+// the redundant passed-pill — the spine ✓ already says "done".
+function StepMeta({ durMs, tokens, maxTokens, maxDur, hasTurns, open }: {
+  durMs?: number; tokens: number; maxTokens: number; maxDur: number; hasTurns: boolean; open: boolean;
+}) {
+  const useTokens = maxTokens > 0;
+  const val = useTokens ? tokens : (durMs ?? 0);
+  const max = useTokens ? maxTokens : maxDur;
+  const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
+  const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
+  return (
+    <div className="ml-auto flex items-center gap-2 flex-1 min-w-0 max-w-[420px] pl-6">
+      <div className="flex-1 min-w-0 flex flex-col gap-1">
+        <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-3)", boxShadow: "inset 0 0 0 1px var(--border-default)" }}>
+          {val > 0 && <div className="h-full rounded-full" style={{
+            width: `${pct}%`,
+            background: `var(--accent-${useTokens ? "violet" : "teal"}-fg)`,
+            boxShadow: `0 0 8px var(--accent-${useTokens ? "violet" : "teal"}-ring)`,
+          }} />}
+        </div>
+        <div className="flex items-center gap-2.5 text-[9px] font-mono tabular-nums leading-none text-[color:var(--text-muted)] justify-end">
+          {tokens > 0 && <span style={{ color: "var(--accent-violet-fg)" }}>{fmtTokens(tokens)} tok</span>}
+          {durMs != null && durMs >= 1000 && <span>{fmtDur(durMs)}</span>}
+          {!hasCaption && <span className="opacity-40">—</span>}
+        </div>
+      </div>
+      {hasTurns && <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none self-start mt-0.5" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>}
+    </div>
+  );
+}
+
+function clockISO(ts?: string): string {
+  return ts ? String(ts).slice(11, 19) : "";
+}
+function shortDetail(details?: string): string {
+  const d = (details ?? "").replace(/\s+/g, " ").trim();
+  return d.length > 84 ? d.slice(0, 84) + "…" : d;
+}
+// The workflow_step this row moved the task INTO, or null (no step change).
+function stepDestOf(action?: string, details?: string): string | null {
+  const d = details ?? "";
+  if (action === "advance_task") return /(?:^|;\s*)to=([^;]*)/.exec(d)?.[1]?.trim() ?? null;
+  if (action === "updated") return /workflow_step:\s*'[^']*'\s*->\s*'([^']*)'/.exec(d)?.[1] ?? null;
+  return null;
+}
+// Bucket every turn under the step that was current when it fired.
+function turnsByStep(turns: StepTurn[]): Record<string, StepTurn[]> {
+  const out: Record<string, StepTurn[]> = {};
+  let cur = "";
+  for (const t of turns ?? []) {
+    const dest = stepDestOf(t.action, t.details);
+    if (dest) cur = dest;
+    (out[cur || "__pre__"] ??= []).push(t);
+  }
+  return out;
+}
+
+// Indented, smaller sub-step list under a drilled-open step (progressive
+// disclosure). Kept deliberately compact so the rail stays scannable.
+function TurnList({ rows }: { rows: StepTurn[] }) {
+  if (!rows.length) return <div className="ml-1 pl-3 text-[10px] text-[color:var(--text-muted)] py-1">no turns recorded on this step</div>;
+  return (
+    <div className="mt-1.5 mb-1 ml-1 pl-3 border-l border-[color:var(--border-default)] space-y-1">
+      {rows.map((r, i) => {
+        const tone = domainTone("action", r.action ?? "") ?? "slate";
+        return (
+          <div key={i} className="flex items-baseline gap-2 text-[10.5px] leading-snug">
+            <span className="font-mono tabular-nums text-[color:var(--text-muted)] flex-none">{clockISO(r.timestamp)}</span>
+            <span className="uppercase tracking-wide text-[8.5px] px-1 py-0.5 rounded flex-none"
+              style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}>
+              {(r.action ?? "—").replace(/_/g, " ")}
+            </span>
+            {r.actor && <span className="text-[9px] font-mono text-[color:var(--text-muted)] flex-none opacity-70">{r.actor}</span>}
+            <span className="text-[color:var(--text-secondary)] truncate">{shortDetail(r.details)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, reduced,
+  step, gateState, phase, status, activity, gates, turns, reduced,
 }: {
   step?: string;
   gateState?: string;
@@ -33,15 +154,28 @@ export default function StepRail({
   // Honest work state — the current-step node/% only pulses when "working".
   activity?: Activity | null;
   gates: GanttGate[];
+  turns?: StepTurn[];
   reduced?: boolean | null;
 }) {
   const steps = WORKFLOW_STEPS_ORDERED;
+  const byStep = turnsByStep(turns ?? []);
+  const durByStep = stageDurations(turns ?? []);
+  // Bar scale: the heaviest stage across the run (so bars are relative to it).
+  let maxTokens = 0, maxDur = 0;
+  for (const s of steps) {
+    const tk = stepTokens(byStep[s.id] ?? []);
+    if (tk > maxTokens) maxTokens = tk;
+    const d = durByStep[s.id] ?? 0;
+    if (d > maxDur) maxDur = d;
+  }
   const curIdx = steps.findIndex((s) => s.id === step);
   // Pulse ONLY when genuinely being driven now (a real recent conductor
   // transition on THIS task), never merely because status is in_progress.
   const live = (activity?.state ?? status ?? "").toLowerCase() === "working";
   const [open, setOpen] = useState<string | null>(null);
-  const [collapseDone, setCollapseDone] = useState(true);
+  // Default to EXPANDED so the per-stage bars + drill-downs are visible up
+  // front; the toggle folds all completed agent steps into one pill.
+  const [collapseDone, setCollapseDone] = useState(false);
 
   const gateFor = (id: string) => gates.find((g) => id === `${g.gate}_gate`);
   const gateInfo = (id: string, i: number): GateInfo => {
@@ -64,6 +198,8 @@ export default function StepRail({
   steps.forEach((s, i) => {
     const done = curIdx >= 0 && i < curIdx;
     const isDoneAgent = done && s.type !== "gate";
+    // Collapse Done folds every completed agent step into one pill; expand to
+    // get them back (with their per-stage bars + drilled-in turns).
     if (collapseDone && isDoneAgent) { pend.push({ s, i }); return; }
     flush();
     items.push({ kind: "step", s, i });
@@ -127,37 +263,53 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} maxTokens={maxTokens} maxDur={maxDur} />
               ) : (
-                <div className="flex items-center gap-2 min-h-[22px]">
-                  <Persona persona={persona} isGate={isGate} />
-                  <span className={"text-[13px] " + (future ? "text-[color:var(--text-disabled)]" : "text-[color:var(--text-primary)]")}>
-                    {stepLabel(s.id)}
-                  </span>
-                  {cur && !isGate && (
-                    <div className="ml-auto flex items-center gap-2 min-w-0">
-                      {verifierPersona && <VerifiedBy persona={verifierPersona} />}
-                      {(phase?.fanout_dispatched ?? 0) > 0 && (
-                        <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
-                          title="ephemeral sub-agents dispatched vs returned for this step">
-                          <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
-                          <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
-                            <span className="block h-full rounded-full" style={{
-                              width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
-                              background: "var(--accent-teal-bg)",
-                            }} />
-                          </span>
+                (() => {
+                  const stepTurns = byStep[s.id] ?? [];
+                  const hasTurns = stepTurns.length > 0;
+                  return (
+                    <div>
+                      <div
+                        onClick={hasTurns ? () => setOpen(rowOpen ? null : s.id) : undefined}
+                        className={"flex items-center gap-2 min-h-[22px] rounded-md px-1.5 -mx-1.5 " + (hasTurns ? "cursor-pointer hover:bg-[color:var(--surface-2)] transition-colors" : "")}
+                      >
+                        <Persona persona={persona} isGate={isGate} />
+                        <span className={"text-[13px] " + (future ? "text-[color:var(--text-disabled)]" : "text-[color:var(--text-primary)]")}>
+                          {stepLabel(s.id)}
                         </span>
-                      )}
-                      <span className="text-[10px] font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
-                        <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
-                          animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
-                          transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
-                        {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
-                      </span>
+                        <div className="ml-auto flex items-center gap-2 min-w-0">
+                          {cur && !isGate && verifierPersona && <VerifiedBy persona={verifierPersona} />}
+                          {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
+                            <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
+                              title="ephemeral sub-agents dispatched vs returned for this step">
+                              <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
+                              <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                                <span className="block h-full rounded-full" style={{
+                                  width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
+                                  background: "var(--accent-teal-bg)",
+                                }} />
+                              </span>
+                            </span>
+                          )}
+                          {cur && !isGate && (
+                            <span className="text-[10px] font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
+                              <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
+                                animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
+                                transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
+                              {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
+                            </span>
+                          )}
+                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens(stepTurns)} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
+                          {cur && hasTurns && (
+                            <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
+                          )}
+                        </div>
+                      </div>
+                      {rowOpen && hasTurns && <TurnList rows={stepTurns} />}
                     </div>
-                  )}
-                </div>
+                  );
+                })()
               )}
             </div>
           </div>
@@ -250,30 +402,28 @@ function VerifiedBy({ persona }: { persona: string }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void;
+function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; maxTokens: number; maxDur: number;
 }) {
   const [receipt, setReceipt] = useState(false);
   const g = gi.g;
   const override = gi.state === "override";
-  const badgeTone = gi.state === "pending" ? "amber" : "emerald";
-  const badgeLabel = gi.state === "pending" ? "pending" : "passed";
   return (
     <div>
       <button onClick={onToggle} className="w-full flex items-center gap-2 min-h-[22px] text-left rounded-md px-1.5 -mx-1.5 hover:bg-[color:var(--surface-2)] transition-colors">
         <Persona persona={s.persona ?? ""} isGate />
         <span className="text-[13px] text-[color:var(--text-primary)] whitespace-nowrap">{stepLabel(s.id)}</span>
-        <span className="ml-auto flex items-center gap-2 min-w-0">
-          <span className="text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded flex-none"
-            style={{ background: `var(--accent-${badgeTone}-fg)`, color: badgeTone === "amber" ? "#3a2a04" : "#06281c" }}>
-            {badgeLabel}
+        {/* A resolved gate needs no "passed" pill or receipt line here — the
+            spine node is already a green ✓ (amber ! on override). Show the
+            useful stage metric instead; the receipt lives in the panel below. */}
+        {gi.state === "pending" ? (
+          <span className="ml-auto flex items-center gap-2 flex-none">
+            <span className="text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ background: "var(--accent-amber-fg)", color: "#3a2a04" }}>pending</span>
+            <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
-          <span className="text-[11px] font-mono font-bold flex-none" style={{ color: override ? "var(--accent-amber-fg)" : "var(--accent-emerald-fg)" }}>
-            {override ? "!" : "✓"}
-          </span>
-          {g?.reason && <span className="text-[11.5px] text-[color:var(--text-muted)] truncate hidden sm:block">{g.reason}</span>}
-          <span className="text-[10px] font-mono text-[color:var(--text-muted)] flex-none transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
-        </span>
+        ) : (
+          <StepMeta durMs={durMs} tokens={stepTokens(turns ?? [])} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+        )}
       </button>
       {open && g && (
         <div className="mt-2 rounded-lg p-3 border"
@@ -303,6 +453,7 @@ function GateRow({ s, gi, open, onToggle }: {
           )}
         </div>
       )}
+      {open && (turns?.length ?? 0) > 0 && <TurnList rows={turns!} />}
     </div>
   );
 }
