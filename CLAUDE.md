@@ -4,11 +4,29 @@ PRISM is a software engineering methodology and Claude Code plugin with an MCP s
 
 ## Project Knowledge
 
-Use Brain (MCP) for all project knowledge — do not create static architecture docs.
+Use Prism (MCP) for all project knowledge — do not create static architecture docs.
 
-- `brain_search` — find code, docs, patterns across the project
+- `brain_search` — find code, docs, patterns across the project (reach for it before grep)
 - `memory_recall` — recall conventions, decisions, and expertise
 - `brain_call_chain` — trace call flow and blast radius from the graph
+- `memory_store` — write decisions back the moment they're made; PRISM is the memory layer, chat is not
+
+## Working tasks
+
+All in-progress work is a PRISM task driven through the conductor — never bare `/api` pokes.
+
+- Implement a task through the conductor loop: `job = conductor_work()` → do exactly `job["instructions"]`, produce `job["expected_proof"]` → `conductor_work(id=..., outcome=..., proof=...)`. The server owns the step sequence; never hand-drive or hand-clear SDLC steps or gates.
+- Create work with `task_create` (title = human-friendly WHAT, ~4-9 words; mechanics in description; define the `oracle` + `likely_misfire` up front). Watchable tasks are root tasks (`parent_id=""`).
+- A gate is decided by a DISTINCT actor — the producing session cannot clear its own gate; a red test is always your fault, never "pre-existing".
+
+## Self-learning
+
+When I correct you, or you catch yourself making a mistake: before continuing, add the lesson as a one-line rule under `## Lessons`, so it never happens again.
+
+## Lessons
+
+- Never clean up a planted/temporary line with `git checkout -- <file>` while the file holds uncommitted real work — it reverts EVERYTHING; remove the planted line with a targeted edit instead.
+- On a conductor_work drive, the story/plan rubrics read `task.plan_doc` — writing the story only as step `proof=` (→ completion_proof) auto-fails story_gate with "story_md is empty"; always `task_update(plan_doc=...)` alongside the draft_story/verify_plan report.
 
 ## Key Conventions
 
@@ -24,7 +42,7 @@ Use Brain (MCP) for all project knowledge — do not create static architecture 
 .prism/
   plugins/prism-devtools/                  # Claude Code plugin (skills, commands, hooks, agents)
   services/prism-service/                  # MCP server + React SPA (pip package: prism-service)
-    pyproject.toml                         # v5.3.0 — installable via pip / pipx
+    pyproject.toml                         # installable via pip / pipx (version = __version__.py PRISM_VERSION)
     prism_service/main.py                  # FastAPI + uvicorn entrypoint
     prism_service/cli/prism_cli.py         # `prism` CLI (start/stop/status/logs/update/version)
     prism_service/api/                     # JSON /api/* endpoints backing the SPA
@@ -32,28 +50,27 @@ Use Brain (MCP) for all project knowledge — do not create static architecture 
     prism_service/web/                     # Vite + React 19 + Tailwind v4 + @nous-research/ui
     prism_service/web_dist/                # SPA build output (gitignored, shipped as package_data)
   docs/stories/                            # Story files
-  .mcp.json                                # MCP config -> localhost:7777
+  .mcp.json                                # repo-default MCP config -> 7777 (release); ~/.claude.json overrides to 8887 (dev)
 ```
 
 ## Service ports
 
-- **MCP** on `http://localhost:7777/mcp/?project=prism` — agent-facing tool surface (default profile `interactive`; use `tool_profile=all` for admin sessions).
-- **Web UI** on `http://localhost:7778/` — React SPA. Same FastAPI process also serves `/api/*` (JSON), `/sse/sessions` (events), and `/graph/viewer/{project}` (Sigma WebGL).
+Two instances live on this machine — never mix them:
 
-Start everything (docker path — still supported for server / CI deploys):
-```bash
-cd services/prism-service && docker compose up -d
-```
+- **DEV (what sessions in this repo use)** — Windows source-run: MCP `http://127.0.0.1:8887/mcp/?project=prism`, Web UI `http://127.0.0.1:8888/`. Claude Code's prism MCP for `E:\.prism` is overridden to 8887 in `~/.claude.json`; if it's unreachable, ask the owner to start dev (`prism-dev` skill) and `/mcp` reconnect — never build an HTTP shim around it. Use `127.0.0.1`, not `localhost` (IPv6-first resolution stalls ~200ms/request). Every code change ends with this daemon bounced and `/api/version` reporting the new build.
+- **RELEASE (leave alone)** — WSL pipx: MCP `http://localhost:7777/mcp/?project=prism`, Web UI `http://localhost:7778/`. The same FastAPI process serves `/api/*` (JSON), `/sse/sessions` (events), and `/graph/viewer/{project}` (Sigma WebGL) on both instances. Default tool profile is `interactive`; use `tool_profile=all` for admin sessions.
 
-Or run natively via the v5.3.0 pip distribution:
+**Dev on this machine**: use the `prism-dev` skill — editable install from `E:\.prism\.venvs\dev`, source-run on 8887/8888, Edge `--app` window. Never docker/pipx/Tauri for local dev; any path >30s build/install is wrong. Patch-bump `PRISM_VERSION` on every user-visible change and bounce the daemon.
+
+End-user / server paths (not for dev):
 ```bash
 pipx install prism-service        # isolated; recommended for end-users
-prism start                       # foreground, http://localhost:7778/
 prism start --daemon              # detach + pidfile under the data dir
 prism status / prism logs --follow / prism stop / prism update
+cd services/prism-service && docker compose up -d   # server / CI deploys
 ```
 
-Iterate on the UI locally (HMR, hits the dockerized or pip-installed API):
+Iterate on the UI with HMR (hits the running API):
 ```bash
 cd services/prism-service/prism_service/web && npm install && npm run dev
 # then open http://localhost:5173

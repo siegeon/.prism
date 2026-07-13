@@ -126,6 +126,39 @@ def _is_failure(outcome: object) -> bool:
     return False
 
 
+# Gates whose validation is a PURE rubric function (arc_governance scored on
+# the task's own evidence) auto-clear on a machine PASS — the rubric IS the
+# independent judge, so parking a green verdict on a human click is ceremony
+# (the owner's 2026-07-13 'ease up the process' directive). red/green gates
+# stay human: their checks run the shell verifier / oracle receipt in the
+# daemon env, which is not yet trustworthy enough to sign alone
+# (inverted-flow soundness gap: full-suite-in-daemon is env-fragile).
+_AUTOCLEAR_GATES = {"story_gate", "plan_gate"}
+
+
+def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
+    """Approve a just-entered PENDING rubric gate iff its machine check says
+    verified=True. Anything else (fail, None, non-rubric gate) is left
+    pending for a human. Runs as the server's own seat — distinct from every
+    producing session by construction."""
+    task = svc._task_svc.get(task_id)
+    if task is None or getattr(task, "gate_state", "") != "pending":
+        return None
+    step = ConductorService._step_by_id(task.workflow_step)
+    if step is None or step["type"] != "gate" \
+            or step["id"] not in _AUTOCLEAR_GATES:
+        return None
+    check = svc._verify_gate(task, step["id"],
+                             getattr(task, "proof_type", None))
+    if check.get("verified") is not True:
+        return None
+    return svc.gate_decide(
+        task_id, "approve",
+        reason=("auto-clear: machine check passed — "
+                + str(check.get("reason", ""))),
+        session_id="conductor-autoclear", model="machine")
+
+
 @router.get("/next")
 def flow_next(task_id: str, project: str = Query("default")) -> dict:
     svc = _svc(project)
@@ -269,6 +302,10 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 pass
         res = svc.advance_task(body.task_id, session_id=body.session_id,
                               model=body.model)
+
+    # If the advance parked the task on a rubric gate that already scores
+    # green, clear it now — no human click for a machine-verified pass.
+    _autoclear_machine_gate(svc, body.task_id)
 
     nxt = svc._task_svc.get(body.task_id)
     return {"ok": res.get("ok", False), "advanced": res,

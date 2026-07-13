@@ -4352,7 +4352,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "note": "task had not entered the flow; started it"}))]
             if _proof and str(_proof).strip():
                 try:
-                    task_svc.update(_task_id, completion_proof=str(_proof))
+                    # draft_story's artifact IS the story — the story/plan
+                    # rubrics read task.plan_doc (conductor_service reads
+                    # story_md from plan_doc), so a story left only in
+                    # completion_proof auto-fails story_gate with
+                    # "story_md is empty". Route it to BOTH homes.
+                    if _cur["id"] == "draft_story":
+                        task_svc.update(_task_id, plan_doc=str(_proof),
+                                        completion_proof=str(_proof))
+                    else:
+                        task_svc.update(_task_id, completion_proof=str(_proof))
                 except Exception:
                     pass
             _body = _flow.Ident(
