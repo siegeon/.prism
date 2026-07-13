@@ -11,6 +11,9 @@ set PRISM_DEV_MODE=1
 set PRISM_AUTO_UPDATE=off
 set PRISM_AUTO_UPDATE_INTERVAL=0
 set PYTHONNOUSERSITE=1
-set PRISM_DEV_WATCH=1
+rem PRISM_DEV_WATCH stays OFF here: the watch restart rides the auto-updater's
+rem os.execv path, which DIES on Windows without a supervisor to respawn it
+rem (verified live 2026-07-13: touch -> re-exec -> successor died, 0 daemons).
+rem Only enable it under `prism start --daemon` (supervisor respawns on exit).
 cd /d E:\.prism
 "E:\.prism\.venvs\dev\Scripts\python.exe" -m prism_service.main >> "%USERPROFILE%\.claude\jobs\prism-dev-stdout.log" 2>> "%USERPROFILE%\.claude\jobs\prism-dev-stderr.log"
