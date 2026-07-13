@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from prism_service.services import sqlite_db
+
 
 META_MIN_HOLDOUT_DELTA = 0.03
 META_MAX_TOKEN_RATIO = 1.15
@@ -596,7 +598,7 @@ class ConductorService:
 
     def _scores_conn(self) -> sqlite3.Connection:
         """Open a read-only connection to scores.db."""
-        conn = sqlite3.connect(self._scores_db, timeout=5.0)
+        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         return conn
 
