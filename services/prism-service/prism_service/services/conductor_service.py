@@ -1945,21 +1945,48 @@ class ConductorService:
                 "gate_state": task.gate_state,
                 "reason": "task is not currently on a gate step",
             }
-        # Conductor v2 follow-up (#79): allow manual recovery on failed
-        # gates. An explicit override=True on action='approve' supersedes
-        # the verifier's earlier ruling; the audit row tags actor=
-        # 'manual-override' so the recovery stays visible in task_history.
+        # Conductor v2 follow-up (#79) + rewind verb (2026-07-13 ease-up):
+        # a failed gate recovers two ways —
+        #   (a) EVIDENCE-DRIVEN: action='approve' WITHOUT override re-runs the
+        #       gate's own machine check against the task's CURRENT evidence;
+        #       a verified=True recheck falls through to the normal approve
+        #       path (released on merit, no override signature). This is the
+        #       fix-the-evidence-then-re-present flow that used to be
+        #       impossible (override was the ONLY exit from 'failed').
+        #   (b) MANUAL: override=True supersedes the earlier ruling; audit row
+        #       tags actor='manual-override' as before.
         # 'reject' on a failed gate is still pointless (already failed).
         if task.gate_state == "failed":
-            if not (action == "approve" and override):
+            if action == "approve" and not override:
+                recheck = self._verify_gate(
+                    task, task.workflow_step,
+                    getattr(task, "proof_type", None))
+                if recheck.get("verified") is not True:
+                    return {
+                        "ok": False,
+                        "task_id": task_id,
+                        "gate_step": task.workflow_step,
+                        "gate_state": task.gate_state,
+                        "reason": (
+                            "gate_state is 'failed'; the machine recheck did "
+                            "not pass on current evidence ("
+                            + str(recheck.get("reason", "no verdict"))
+                            + ") — fix the evidence, or recover manually "
+                            "with override=True"
+                        ),
+                        "verifier": recheck.get("verifier"),
+                    }
+                # verified recheck: fall through to the normal approve path.
+            elif not (action == "approve" and override):
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": task.workflow_step,
                     "gate_state": task.gate_state,
                     "reason": (
-                        "gate_state is 'failed'; recovery requires "
-                        "action='approve' with override=True"
+                        "gate_state is 'failed'; recovery requires a passing "
+                        "machine recheck via action='approve' (no override), "
+                        "or action='approve' with override=True"
                     ),
                 }
         elif task.gate_state != "pending":

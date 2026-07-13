@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.3"
+PRISM_VERSION = "6.9.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.4: EASE-UP THE GATES (owner directive after the 22ee4cb3 drive). "
+    "(1) RUBRIC GATES AUTO-CLEAR: conductor_flow now approves story_gate/"
+    "plan_gate itself the moment their pure-rubric machine check scores "
+    "verified=True (actor conductor-autoclear) — a compliant drive needs ZERO "
+    "clicks at rubric gates; anything not machine-PASS stays pending for a "
+    "human. red/green stay human until the trusted-runner lands. "
+    "(2) STORY ROUTES TO plan_doc: conductor_work's draft_story proof writes "
+    "plan_doc AND completion_proof, killing the 'story_md is empty' auto-fail. "
+    "(3) REWIND VERB: gate_decide on a FAILED gate with action=approve and NO "
+    "override re-runs the machine check on current evidence and releases on "
+    "merit; override remains the audited manual force. PlanView recover form "
+    "updated to match (plain Approve legal on failed). "
     "v6.9.3: DONE TASKS RENDER A CLOSED FLOW. A task PATCHed to status=done while "
     "its conductor pointer was parked mid-gate used to keep showing a live "
     "'awaiting review' pulse + PENDING badge + operable gate form on the task page "

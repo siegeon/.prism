@@ -408,7 +408,7 @@ export default function PlanView({
                   <span className="uppercase tracking-wider text-[11px] mr-2">gate failed</span>
                   {c.gateReason || "no reason recorded"}
                   <div className="opacity-80 mt-1">
-                    Recovering a failed gate is an audited manual override — fix the evidence first, then approve with override checked.
+                    Fix the evidence, then Approve — the gate re-runs its machine check and releases on merit. Check override only to force past a failing check (audited).
                   </div>
                 </div>
               )}
@@ -430,11 +430,11 @@ export default function PlanView({
               <div className="flex gap-2 mt-3">
                 <button
                   type="button"
-                  disabled={gate.busy || !gate.reason.trim() || (c.gateState === "failed" && !gate.override)}
+                  disabled={gate.busy || !gate.reason.trim()}
                   onClick={() => gate.decide("approve")}
                   className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
-                  title={c.gateState === "failed" ? "recovery requires the override checkbox (audited as manual-override)" : undefined}
+                  title={c.gateState === "failed" ? "re-runs the machine check on current evidence; override forces past a failing check" : undefined}
                 >
                   {c.gateState === "failed" ? "Approve (recover)" : "Approve"}
                 </button>
@@ -452,7 +452,7 @@ export default function PlanView({
               </div>
               {!gate.reason.trim() && (
                 <div className="text-[11px] mt-1.5 text-[color:var(--text-muted)]">
-                  type a reason above to enable the button{c.gateState === "failed" ? " (and check override)" : "s"}
+                  type a reason above to enable the button{c.gateState === "failed" ? "" : "s"}
                 </div>
               )}
             </div>
