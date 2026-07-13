@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from prism_service.project_context import get_project
 from prism_service.services.conductor_service import ConductorService
 from prism_service.services import task_workspace
+from prism_service.services.context_builder import role_rule_assets
 
 router = APIRouter()
 
@@ -51,17 +52,30 @@ def _job(task) -> Optional[dict]:
     if step is None:
         return None
     kind = step["type"]
+    role = step.get("agent") or ""
+    base = ("GATE: an independent, DISTINCT actor decides."
+            if kind == "gate" else _GUIDE.get(step["id"], step["id"]))
+    # ROLE-CONDITIONED DOCTRINE (fd297cf0): splice the SAME role-scoped rules
+    # context_bundle composes into the per-job instructions, so the dumb queue
+    # worker is TOLD what to follow without calling context_bundle itself.
+    # Agent steps only, keyed by the step's role — gates stay doctrine-free so a
+    # reviewer is never nudged to be lazy; qa/sm never receive the Builder's
+    # minimum-change rule (role_rule_assets enforces the allow-list).
+    doctrine = ([a.content for a in role_rule_assets(role)]
+                if kind != "gate" else [])
+    instructions = base
+    if doctrine:
+        instructions = base + "\n\nRules for this role (" + (role or "-") \
+            + "):\n" + "\n".join(f"- {d}" for d in doctrine)
     return {
         "task_id": task.id,
         "step": step["id"],
         "kind": kind,
-        "role": step.get("agent") or "",
-        "role_label": _ROLE.get(step.get("agent") or "", "-"),
+        "role": role,
+        "role_label": _ROLE.get(role, "-"),
         "gate_state": task.gate_state,
-        "instructions": (
-            "GATE: an independent, DISTINCT actor decides."
-            if kind == "gate" else _GUIDE.get(step["id"], step["id"])
-        ),
+        "instructions": instructions,
+        "doctrine": doctrine,
         "expected_proof": step.get("validation") or (
             "prior step's validation" if kind == "gate" else "n/a"),
     }

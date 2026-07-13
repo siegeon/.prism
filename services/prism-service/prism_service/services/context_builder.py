@@ -73,6 +73,31 @@ RULES = {
         "Preserve existing MCP tool names and response fields unless a migration "
         "plan and tests cover the change."
     ),
+    "minimum-change": (
+        "Builder doctrine — climb the ladder, stop at the first rung that works: "
+        "(1) does this need to exist at all? (2) reuse existing code in THIS repo "
+        "(brain_search before you write)? (3) stdlib? (4) the framework already "
+        "here? (5) an installed dependency? (6) a one-line addition? — only THEN "
+        "build new. Smallest correct diff, fewest new files (extend the existing "
+        "owner). HARD CARVE-OUT: never drop or skip a demonstrable UI surface to "
+        "cut lines — UI-FIRST beats LOC; a diff that removes the customer-visible "
+        "surface is a regression, not a win."
+    ),
+}
+
+# Role-scoped rule allow-list. A rule id absent from a role's list is NOT
+# injected for that role. The base rules apply to every role; `minimum-change`
+# is Builder(dev)-ONLY on purpose — a lazy-senior doctrine must never reach the
+# Verifier(qa) or Steward(sm), whose whole value is being adversarial/thorough
+# (fd297cf0 misfire #2). Unlisted roles fall back to BASE_RULE_IDS.
+BASE_RULE_IDS = ["mcp-first", "deterministic-context", "retrieval-led",
+                 "compatibility"]
+ROLE_RULES = {
+    "dev": BASE_RULE_IDS + ["minimum-change"],
+    "qa": BASE_RULE_IDS,
+    "sm": BASE_RULE_IDS,
+    "architect": BASE_RULE_IDS,
+    "general": BASE_RULE_IDS,
 }
 
 TEMPLATES = {
@@ -146,11 +171,22 @@ def _role_asset(persona_key: str) -> ContextAsset:
     return ContextAsset(id=f"role-card:{persona_key}", content=content)
 
 
-def _rule_assets() -> list[ContextAsset]:
+def role_rule_assets(persona: Optional[str]) -> list[ContextAsset]:
+    """Role-scoped rule assets — the SINGLE source of truth for which rules a
+    role is told to follow. Consumed by BOTH injection points: context_bundle
+    (build/_pack) and the conductor_work per-job splice (conductor_flow._job),
+    so a role sees the same rules however the context reaches it."""
+    persona_key = normalize_persona(persona)
+    rule_ids = ROLE_RULES.get(persona_key, BASE_RULE_IDS)
     return [
-        ContextAsset(id=f"rule:{rule_id}", content=content)
-        for rule_id, content in RULES.items()
+        ContextAsset(id=f"rule:{rule_id}", content=RULES[rule_id])
+        for rule_id in rule_ids
+        if rule_id in RULES
     ]
+
+
+def _rule_assets(persona: Optional[str] = None) -> list[ContextAsset]:
+    return role_rule_assets(persona)
 
 
 def _template_asset(persona_key: str) -> ContextAsset:
@@ -336,7 +372,7 @@ class ContextBuilder:
         health: dict[str, Any],
     ) -> dict[str, Any]:
         role = _role_asset(persona_key)
-        rules = _rule_assets()
+        rules = _rule_assets(persona_key)
         template = _template_asset(persona_key)
         return {
             "schema": CONTEXT_PACK_SCHEMA,
