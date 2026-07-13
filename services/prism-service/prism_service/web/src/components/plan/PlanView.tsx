@@ -328,20 +328,31 @@ export default function PlanView({
 
       {cur === "implementation" && hasImpl && c && (
         <div>
+          {/* A done task's flow is CLOSED: freeze the rail (no live activity
+              pulse, no operable gate) — the pointer may legitimately be parked
+              mid-gate when the owner waived the ceremony (audit in history). */}
           <div className="mt-1 mb-1">
-            <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} />
+            <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.status === "done" ? null : c.activity} reduced={reduced} />
           </div>
 
           <StepRail
             step={c.step}
-            gateState={c.gateState}
+            gateState={c.status === "done" ? "none" : c.gateState}
             phase={c.phase}
             status={c.status}
-            activity={c.activity}
+            activity={c.status === "done" ? null : c.activity}
             gates={c.timeline?.gates ?? []}
             turns={c.turns ?? []}
             reduced={reduced}
           />
+
+          {c.status === "done" && (c.gateState === "pending" || c.gateState === "failed") && (
+            <div className="mt-3 text-[12px] text-[color:var(--text-muted)] leading-relaxed">
+              Task closed as done while the conductor flow was parked at{" "}
+              <span className="font-mono">{c.step?.replace(/_/g, " ")}</span> — the remaining
+              ceremony was waived by the owner; completion proof lives on the task (audit in history).
+            </div>
+          )}
 
           {c.gateReason && c.gateState !== "pending" && onValidation && (
             <button
@@ -356,7 +367,7 @@ export default function PlanView({
             </button>
           )}
 
-          {c.gateState === "pending" && gate && (
+          {c.status !== "done" && (c.gateState === "pending" || c.gateState === "failed") && gate && (
             <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
               {/* Show the evidence FIRST — what the reviewer is approving —
                   then the approve/reject control directly beneath it. */}
@@ -389,7 +400,21 @@ export default function PlanView({
                   </div>
                 </div>
               )}
-              <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">Resolve gate</div>
+              {c.gateState === "failed" && (
+                <div
+                  className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
+                  style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                >
+                  <span className="uppercase tracking-wider text-[11px] mr-2">gate failed</span>
+                  {c.gateReason || "no reason recorded"}
+                  <div className="opacity-80 mt-1">
+                    Recovering a failed gate is an audited manual override — fix the evidence first, then approve with override checked.
+                  </div>
+                </div>
+              )}
+              <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">
+                {c.gateState === "failed" ? "Recover gate" : "Resolve gate"}
+              </div>
               <textarea
                 value={gate.reason}
                 onChange={(e) => gate.setReason(e.target.value)}
@@ -405,13 +430,15 @@ export default function PlanView({
               <div className="flex gap-2 mt-3">
                 <button
                   type="button"
-                  disabled={gate.busy || !gate.reason.trim()}
+                  disabled={gate.busy || !gate.reason.trim() || (c.gateState === "failed" && !gate.override)}
                   onClick={() => gate.decide("approve")}
                   className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
+                  title={c.gateState === "failed" ? "recovery requires the override checkbox (audited as manual-override)" : undefined}
                 >
-                  Approve
+                  {c.gateState === "failed" ? "Approve (recover)" : "Approve"}
                 </button>
+                {c.gateState !== "failed" && (
                 <button
                   type="button"
                   disabled={gate.busy || !gate.reason.trim()}
@@ -421,7 +448,13 @@ export default function PlanView({
                 >
                   Reject
                 </button>
+                )}
               </div>
+              {!gate.reason.trim() && (
+                <div className="text-[11px] mt-1.5 text-[color:var(--text-muted)]">
+                  type a reason above to enable the button{c.gateState === "failed" ? " (and check override)" : "s"}
+                </div>
+              )}
             </div>
           )}
         </div>
