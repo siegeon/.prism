@@ -328,11 +328,25 @@ export default function PlanView({
 
       {cur === "implementation" && hasImpl && c && (
         <div>
-          {/* A done task's flow is CLOSED: freeze the rail (no live activity
-              pulse, no operable gate) — the pointer may legitimately be parked
-              mid-gate when the owner waived the ceremony (audit in history). */}
+          {/* A done task's flow is CLOSED: no mid-flight phase readout. The
+              "PLAN GATE · 54%" header + half-filled bar read as 'stopped
+              halfway' even next to a DONE chip (owner hit exactly this) — so
+              status=done replaces the progress header with a closed banner.
+              The rail below stays as frozen history (no pulse, no gate). */}
           <div className="mt-1 mb-1">
-            <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.status === "done" ? null : c.activity} reduced={reduced} />
+            {c.status === "done" ? (
+              <div
+                className="flex items-center gap-2 rounded-md px-3 py-2 text-[12px] uppercase tracking-wider"
+                style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
+              >
+                <span>✓ closed — done</span>
+                <span className="normal-case tracking-normal opacity-80">
+                  flow ended at {c.step?.replace(/_/g, " ")}; steps below are history, not remaining work
+                </span>
+              </div>
+            ) : (
+              <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} />
+            )}
           </div>
 
           <StepRail

@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.5"
+PRISM_VERSION = "6.9.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.6: DONE TASKS DROP THE MID-FLIGHT PHASE HEADER. A done task's "
+    "Implementation tab still led with 'PLAN GATE · 54.27%' + a half-filled "
+    "bar + greyed steps — which reads 'stopped halfway' even beside the DONE "
+    "chip (owner hit exactly this on 22ee4cb3). status=done now swaps the "
+    "SdlcProgress readout for a closed banner ('✓ closed — done; steps below "
+    "are history, not remaining work'). "
     "v6.9.5: DEV DAEMON SELF-UPDATES FROM DISK (PRISM_DEV_WATCH=1). A source "
     "watcher polls the editable package's *.py mtimes and, on change, requests "
     "the auto-updater's own graceful restart (drain -> main-thread os.execv), "
