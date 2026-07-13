@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
@@ -954,7 +954,13 @@ export default function TaskDetailPage() {
             {realSessions.map((s) => (
               <li key={s.session_id} className="py-3">
                 <div className="flex items-baseline justify-between gap-3 flex-wrap">
-                  <span className="font-mono text-[12px] break-all">{s.session_id}</span>
+                  <Link
+                    to={`/sessions/${s.session_id}`}
+                    state={{ from: `/tasks/${id}` }}
+                    className="font-mono text-[12px] break-all underline decoration-dotted underline-offset-2 hover:opacity-80"
+                  >
+                    {s.session_id}
+                  </Link>
                   <span className="text-[11px] opacity-50">
                     {s.started_at ? String(s.started_at).slice(0, 19) : "—"}
                     {s.ended_at ? ` → ${String(s.ended_at).slice(0, 19)}` : ""}

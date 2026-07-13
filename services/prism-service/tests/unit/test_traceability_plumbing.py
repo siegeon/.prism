@@ -235,6 +235,39 @@ def test_import_unseen_persists_file_paths(tmp_path):
         "session file paths were discarded on import (counts only)"
 
 
+def test_import_refresh_backfills_paths_on_legacy_rows(tmp_path):
+    """A row imported BEFORE path persistence (both path columns NULL) gets
+    its file lists backfilled by import_unseen(refresh_paths=True) from the
+    real transcript — without double-counting skills or re-importing."""
+    from prism_service.services import claude_transcripts as ct
+    b = _brain(tmp_path)
+    scores = tmp_path / "scores.db"
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir()
+    _write_transcript(tdir, "sess-legacy-1")
+    conn = sqlite3.connect(str(scores))
+    try:
+        conn.execute(
+            "INSERT INTO session_outcomes (session_id, duration_s, "
+            "tokens_used, files_read, files_modified, skills_invoked, "
+            "timestamp) VALUES ('sess-legacy-1', 1, 5, 1, 1, 0, "
+            "'2026-07-13 00:00:00')")
+        conn.commit()
+    finally:
+        conn.close()
+    n = ct.import_unseen(str(scores), "unused", override_dir=str(tdir),
+                         refresh_paths=True)
+    assert n == 1
+    conn = sqlite3.connect(str(scores))
+    try:
+        row = conn.execute(
+            "SELECT files_read_paths FROM session_outcomes "
+            "WHERE session_id='sess-legacy-1'").fetchone()
+    finally:
+        conn.close()
+    assert row and row[0] and "src/alpha.py" in row[0]
+
+
 # ---------------------------------------------------------------------------
 # D. searches table: session/task attribution for every retrieval
 # ---------------------------------------------------------------------------

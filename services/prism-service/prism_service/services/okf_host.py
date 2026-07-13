@@ -46,9 +46,10 @@ def _memory_body(entry, evidence: dict) -> str:
         parts.append(entry.description)
     cites: list[str] = []
     for p in (evidence.get("file_paths") or []):
-        # Code references navigate into the existing /understand graph (the
-        # visual of the same connections) rather than fabricating /brain md.
-        cites.append(f"- [`{p}`](/understand)")
+        # Code references deep-link to the unified /artifact surface for that
+        # exact file — the SAME destination the xref file rung resolves to
+        # (xref.py) — instead of dumping into the generic /understand graph.
+        cites.append(f"- [`{p}`](/artifact?focus={p})")
     if evidence.get("commit"):
         cites.append(f"- commit `{evidence['commit']}`")
     if evidence.get("pr"):

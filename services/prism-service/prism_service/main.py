@@ -551,6 +551,18 @@ from prism_service.routes import routes_router
 app.include_router(api_router)
 app.include_router(routes_router)
 
+# FastAPI's lazy router inclusion (_IncludedRouter) keeps every include_router'd
+# path OUT of the top-level app.routes table — only routes registered directly
+# on the app surface there. The session-detail seam is served fine through the
+# include above, but route-table introspection and the SPA deep-link contract
+# need it discoverable at the top level, so promote that one handler with a
+# direct registration (include_in_schema=False so OpenAPI isn't duplicated).
+from prism_service.api.sessions import detail as _sessions_detail
+app.add_api_route(
+    "/api/sessions/{session_id}", _sessions_detail,
+    methods=["GET"], include_in_schema=False,
+)
+
 
 # Static SPA. /assets/* served directly; everything else falls through to
 # index.html so client-side routing handles deep links.

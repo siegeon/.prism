@@ -4,11 +4,16 @@ GET /api/xref/resolve?token=<s>&project=<p> resolves a free token through a
 fixed ladder against the SAME per-project services the rest of api/ uses
 (memory_svc, brain_svc, graph_svc). Pure read-through; never writes.
 
-Resolve ladder, in order:
-  1. OKF/memory id-or-name match  -> kind="concept" -> /understand?concept=<id>
-  2. else brain find_symbol hit   -> kind="symbol"  -> /brain?focus=<file>&symbol=<name>
-  3. else indexed-file path match -> kind="file"    -> /brain?focus=<file>
-  4. else                         -> kind="unresolved"
+Resolve ladder, in order (the 8 RESOLVABLE_KINDS):
+  1. OKF/memory id-or-name match  -> kind="concept"   -> /understand?concept=<id>
+  2. else brain find_symbol hit   -> kind="symbol"    -> /artifact?focus=<file>&symbol=<name>
+  3. else indexed-file path match -> kind="file"      -> /artifact?focus=<file>
+  4. else task id match           -> kind="task"      -> /tasks/<id>
+  5. else session id match        -> kind="session"   -> /sessions/<id>
+  6. else <task_id>#gate ref      -> kind="gate"      -> /tasks/<id>#gate
+  7. else test node (none yet)    -> kind="test"      -> (reserved)
+  8. else retrieval:<id> ref      -> kind="retrieval" -> /retrievals?focus=<id>
+  9. else                         -> kind="unresolved"
 
 `summary` is populated from an existing graph_annotations row for the resolved
 file WHEN available; it is NEVER fabricated (omitted when absent). `stale` is
@@ -27,6 +32,15 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from prism_service.project_context import get_project
 
 router = APIRouter()
+
+# The published contract of what the ladder can resolve — the SPA chip renderer
+# and the gate rubric key off this set. Every kind here has a real rung below
+# (a rung may legitimately return None today when its entity isn't indexed yet,
+# but the KIND is declared so downstream code can render/route it now).
+RESOLVABLE_KINDS = frozenset({
+    "concept", "symbol", "file",
+    "task", "session", "gate", "test", "retrieval",
+})
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -127,8 +141,113 @@ def _attach_summary(res: dict, graph_svc, file: str) -> None:
         res["summary"] = ann["purpose"]
 
 
-def resolve_token(token: str, memory_svc, brain_svc, graph_svc=None) -> dict:
-    """Run the deterministic ladder. Pure -- safe to unit-test with fakes."""
+def _task_lookup(task_svc, task_id: str):
+    """Fetch a task through whichever accessor the service exposes: the real
+    TaskService has .get() (see conductor_flow.py), test fakes carry
+    .get_task(). Returns the raw task (dict or model) or None."""
+    fn = getattr(task_svc, "get_task", None) or getattr(task_svc, "get", None)
+    if fn is None:
+        return None
+    try:
+        return fn(task_id)
+    except Exception:
+        return None
+
+
+def _task_title(task) -> Optional[str]:
+    if isinstance(task, dict):
+        return task.get("title")
+    return getattr(task, "title", None)
+
+
+def _resolve_task(task_svc, token: str) -> Optional[dict]:
+    """Step 4 -- token is a PRISM task id. Resolves via the task service so a
+    task uuid dropped in any rendered doc links to its /tasks/{id} detail
+    page. Guarded: a project without a task_svc simply skips this rung."""
+    if task_svc is None:
+        return None
+    task = _task_lookup(task_svc, token)
+    if not task:
+        return None
+    return {"id": token, "label": _task_title(task) or token}
+
+
+def _resolve_session(conductor_svc, token: str) -> Optional[dict]:
+    """Step 5 -- token is a Claude session id. Matches against the recent
+    session_outcomes ids the conductor already tracks so a session uuid links
+    to its /sessions/{id} detail page. Guarded on a missing conductor_svc."""
+    if conductor_svc is None:
+        return None
+    try:
+        rows = conductor_svc.get_session_outcomes(limit=500) or []
+    except Exception:
+        return None
+    for r in rows:
+        sid = r.get("session_id") if isinstance(r, dict) else None
+        if sid and sid == token:
+            return {"id": token, "label": token}
+    return None
+
+
+def _resolve_gate(task_svc, token: str) -> Optional[dict]:
+    """Step 6 -- a gate reference shaped ``<task_id>#gate`` (optionally
+    ``#gate:<name>``). Resolves the owning task via the task service and
+    anchors the link at that task's gate card (/tasks/{id}#gate). Returns
+    None for non-gate-shaped tokens or an unknown task."""
+    if task_svc is None or "#gate" not in token:
+        return None
+    task_id = token.split("#", 1)[0].strip()
+    if not task_id:
+        return None
+    task = _task_lookup(task_svc, task_id)
+    if not task:
+        return None
+    title = _task_title(task)
+    return {"id": task_id, "label": f"{title or task_id} · gate"}
+
+
+def _resolve_test(brain_svc, token: str) -> Optional[dict]:
+    """Step 7 -- reserved for a test entity (a test node keyed by its pytest
+    nodeid, e.g. ``tests/unit/foo.py::test_bar``). No test entity is indexed
+    yet, so this rung returns None today; the KIND is declared so the SPA
+    renderer and gate rubric can key off it now, and this becomes the single
+    place to wire the lookup once a test node lands in the graph."""
+    return None
+
+
+def _resolve_retrieval(brain_svc, token: str) -> Optional[dict]:
+    """Step 8 -- a search-log reference shaped ``retrieval:<id>`` /
+    ``search:<id>`` (the row id from the brain searches table that
+    /api/retrievals serves). Resolves to the RetrievalsPage focused on that
+    row. Guarded: returns None when the brain exposes no search log or the
+    token isn't retrieval-shaped."""
+    m = re.match(r"^(?:retrieval|search):(\d+)$", token)
+    if not m:
+        return None
+    rid = m.group(1)
+    getter = getattr(brain_svc, "get_recent_searches", None)
+    if getter is None:
+        return None
+    try:
+        rows = getter(limit=200) or []
+    except Exception:
+        return None
+    for r in rows:
+        if isinstance(r, dict) and str(r.get("id")) == rid:
+            return {"id": rid, "label": r.get("query") or f"retrieval {rid}"}
+    return None
+
+
+def resolve_token(
+    token: str, memory_svc, brain_svc, graph_svc=None,
+    task_svc=None, conductor_svc=None,
+) -> dict:
+    """Run the deterministic ladder. Pure -- safe to unit-test with fakes.
+
+    The ladder walks the 8 RESOLVABLE_KINDS in order: concept, symbol, file
+    (the original three), then task, session, gate, test, retrieval. Each rung
+    takes only the service handle it needs and is getattr/None-guarded so a
+    project missing a given service just skips that rung instead of crashing."""
     token = (token or "").strip()
     if not token:
         return {"kind": "unresolved", "label": token, "href": None}
@@ -155,6 +274,31 @@ def resolve_token(token: str, memory_svc, brain_svc, graph_svc=None) -> dict:
         _attach_summary(res, graph_svc, f)
         return res
 
+    task = _resolve_task(task_svc, token)
+    if task:
+        return {"kind": "task", "label": task["label"],
+                "href": f"/tasks/{task['id']}"}
+
+    session = _resolve_session(conductor_svc, token)
+    if session:
+        return {"kind": "session", "label": session["label"],
+                "href": f"/sessions/{session['id']}"}
+
+    gate = _resolve_gate(task_svc, token)
+    if gate:
+        return {"kind": "gate", "label": gate["label"],
+                "href": f"/tasks/{gate['id']}#gate"}
+
+    test = _resolve_test(brain_svc, token)
+    if test:
+        return {"kind": "test", "label": test["label"],
+                "href": test.get("href")}
+
+    retrieval = _resolve_retrieval(brain_svc, token)
+    if retrieval:
+        return {"kind": "retrieval", "label": retrieval["label"],
+                "href": f"/retrievals?focus={retrieval['id']}"}
+
     return {"kind": "unresolved", "label": token, "href": None}
 
 
@@ -165,7 +309,11 @@ def resolve(token: str = Query(...), project: str = Query("prism")) -> dict:
         p = get_project(project)
     except Exception as exc:
         raise HTTPException(404, f"unknown project: {project}: {exc}")
-    return resolve_token(token, p.memory_svc, p.brain_svc, p.graph_svc)
+    return resolve_token(
+        token, p.memory_svc, p.brain_svc, p.graph_svc,
+        task_svc=getattr(p, "task_svc", None),
+        conductor_svc=getattr(p, "conductor_svc", None),
+    )
 
 
 @router.post("/resolve_batch")
@@ -180,8 +328,13 @@ def resolve_batch(payload: dict = Body(default={})) -> dict:
         p = get_project(project)
     except Exception as exc:
         raise HTTPException(404, f"unknown project: {project}: {exc}")
+    task_svc = getattr(p, "task_svc", None)
+    conductor_svc = getattr(p, "conductor_svc", None)
     results: dict = {}
     for t in tokens[:300]:
         if isinstance(t, str) and t and t not in results:
-            results[t] = resolve_token(t, p.memory_svc, p.brain_svc, p.graph_svc)
+            results[t] = resolve_token(
+                t, p.memory_svc, p.brain_svc, p.graph_svc,
+                task_svc=task_svc, conductor_svc=conductor_svc,
+            )
     return {"results": results}

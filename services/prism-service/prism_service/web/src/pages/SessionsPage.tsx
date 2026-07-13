@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
@@ -119,9 +120,17 @@ export default function SessionsPage() {
                   <span className="font-mono opacity-70 w-40 text-xs truncate" title={o.timestamp ?? o.recorded_at ?? ""}>
                     {fmtTs(o.timestamp ?? o.recorded_at)}
                   </span>
-                  <span className="font-mono opacity-80 flex-1 truncate" title={o.session_id ?? ""}>
-                    {o.session_id ?? "—"}
-                  </span>
+                  {o.session_id ? (
+                    <Link
+                      to={`/sessions/${o.session_id}`}
+                      className="font-mono opacity-80 flex-1 truncate underline decoration-dotted underline-offset-2 hover:opacity-100"
+                      title={o.session_id}
+                    >
+                      {o.session_id}
+                    </Link>
+                  ) : (
+                    <span className="font-mono opacity-80 flex-1 truncate">—</span>
+                  )}
                   <span className="text-xs opacity-60 w-20 text-right" title="tokens used">
                     {fmtTokens(tk)}
                   </span>

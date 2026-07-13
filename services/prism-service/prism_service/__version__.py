@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.6"
+PRISM_VERSION = "6.9.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.7: TRACEABILITY PLUMBING — EVERY ENTITY CLICKABLE (ui-redesign "
+    "workstream 0, task 961f273b). Xref ladder grows 3->8 resolvable kinds "
+    "(+task/session/gate/test/retrieval) served through /api/xref/resolve_batch; "
+    "new /sessions/:id SPA page + GET /api/sessions/{id}; session ids on "
+    "TaskDetail/Sessions/Retrievals are links, not dead text; transcript "
+    "ingest persists files_read/files_modified PATH LISTS (counts kept for "
+    "back-compat); searches table gains session_id/task_id so every retrieval "
+    "answers 'who asked'; final_top doc ids render through XrefLink; memory "
+    "evidence deep-links /artifact?focus=<path> instead of generic /understand. "
     "v6.9.6: DONE TASKS DROP THE MID-FLIGHT PHASE HEADER. A done task's "
     "Implementation tab still led with 'PLAN GATE · 54.27%' + a half-filled "
     "bar + greyed steps — which reads 'stopped halfway' even beside the DONE "

@@ -903,7 +903,11 @@ class Brain:
                 limit_requested INTEGER,
                 n_results INTEGER,
                 latency_ms INTEGER,
-                final_top TEXT
+                final_top TEXT,
+                -- Attribution: WHO asked (the session) and for WHAT task, so
+                -- /api/retrievals can link each retrieval back to its origin.
+                session_id TEXT,
+                task_id TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_searches_ts
                 ON searches(ts DESC);
@@ -936,6 +940,25 @@ class Brain:
                 try:
                     self._brain.execute(
                         f"ALTER TABLE docs ADD COLUMN {_col} {_col_type}"
+                    )
+                    self._brain.commit()
+                except sqlite3.OperationalError:
+                    pass
+
+        # Migrate existing DBs: add search attribution columns if missing so a
+        # searches table created before this slice can record the asking
+        # session/task. Existing rows keep NULL.
+        _search_cols = {
+            row[1]
+            for row in self._brain.execute(
+                "PRAGMA table_info(searches)"
+            ).fetchall()
+        }
+        for _col in ("session_id", "task_id"):
+            if _col not in _search_cols:
+                try:
+                    self._brain.execute(
+                        f"ALTER TABLE searches ADD COLUMN {_col} TEXT"
                     )
                     self._brain.commit()
                 except sqlite3.OperationalError:
@@ -1143,7 +1166,11 @@ class Brain:
                 files_read INTEGER DEFAULT 0,
                 files_modified INTEGER DEFAULT 0,
                 skills_invoked INTEGER DEFAULT 0,
-                timestamp TEXT DEFAULT (datetime('now'))
+                timestamp TEXT DEFAULT (datetime('now')),
+                -- JSON arrays of the actual paths a session read/modified;
+                -- the *_read/*_modified ints above stay the legacy counts.
+                files_read_paths TEXT,
+                files_modified_paths TEXT
             );
             CREATE TABLE IF NOT EXISTS skill_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1345,6 +1372,25 @@ class Brain:
                 self._scores.commit()
             except sqlite3.OperationalError:
                 pass
+        # Migrate existing scores.db: add the per-session file-path columns so a
+        # store created before this slice can hold WHICH files a session
+        # touched (the transcript importer writes JSON arrays here). Existing
+        # rows keep NULL, which the readers treat as [].
+        _so_cols = {
+            row[1]
+            for row in self._scores.execute(
+                "PRAGMA table_info(session_outcomes)"
+            ).fetchall()
+        }
+        for _col in ("files_read_paths", "files_modified_paths"):
+            if _col not in _so_cols:
+                try:
+                    self._scores.execute(
+                        f"ALTER TABLE session_outcomes ADD COLUMN {_col} TEXT"
+                    )
+                    self._scores.commit()
+                except sqlite3.OperationalError:
+                    pass
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -2742,6 +2788,8 @@ class Brain:
         domain: Optional[str] = None,
         limit: int = 5,
         domains: Optional[list[str]] = None,
+        session_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> list[dict]:
         """3-index hybrid search with RRF fusion.
 
@@ -2755,6 +2803,8 @@ class Brain:
             domains: Multi-domain filter list; takes precedence over ``domain``.
                      When provided, results are restricted to docs whose domain
                      is in this list (e.g. ['expertise', 'md'] for SM persona).
+            session_id: Asking session, logged to searches for attribution.
+            task_id: Task this retrieval served, logged for attribution.
         """
         # NOTE: Auto-bootstrap disabled for service mode.
         # In CLI mode the Brain auto-ingests CWD on first search.
@@ -2947,6 +2997,8 @@ class Brain:
             limit_requested=limit,
             results=results,
             latency_ms=int((_time.perf_counter() - _search_t0) * 1000),
+            session_id=session_id,
+            task_id=task_id,
         )
         if search_id is not None:
             for r in results:
@@ -2966,12 +3018,16 @@ class Brain:
         limit_requested: int,
         results: list[dict],
         latency_ms: int,
+        session_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Optional[int]:
         """Persist one search event to the ``searches`` table.
 
         Returns the new row id (used by search() to stamp each result with a
-        ``search_id`` so feedback can be tied back later). Silent on failure —
-        observability must never break retrieval.
+        ``search_id`` so feedback can be tied back later). ``session_id`` /
+        ``task_id`` attribute the retrieval to the session that asked and the
+        task it served (both optional — legacy callers pass neither). Silent on
+        failure — observability must never break retrieval.
         """
         try:
             import json as _json
@@ -2988,7 +3044,8 @@ class Brain:
             cur = self._brain.execute(
                 "INSERT INTO searches (query, domain, domains, mode, rerank, "
                 "context_prefix, chunk_agg, limit_requested, n_results, "
-                "latency_ms, final_top) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "latency_ms, final_top, session_id, task_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     query, domain,
                     _json.dumps(domains) if domains else None,
@@ -2996,6 +3053,7 @@ class Brain:
                     1 if context_prefix else 0,
                     1 if chunk_agg else 0,
                     limit_requested, len(results), latency_ms, final_top,
+                    session_id, task_id,
                 ),
             )
             self._brain.commit()
@@ -3015,6 +3073,7 @@ class Brain:
                 "SELECT s.id, s.ts, s.query, s.domain, s.domains, s.mode, "
                 "s.rerank, s.context_prefix, s.chunk_agg, s.limit_requested, "
                 "s.n_results, s.latency_ms, s.final_top, "
+                "s.session_id, s.task_id, "
                 "COALESCE(SUM(CASE WHEN f.signal='up' THEN 1 ELSE 0 END), 0) "
                 "    AS up_count, "
                 "COALESCE(SUM(CASE WHEN f.signal='down' THEN 1 ELSE 0 END), 0) "
