@@ -15,18 +15,14 @@ from pathlib import Path
 import prism_service
 
 # Where a bare sqlite3.connect() is allowed to live, with the reason on record:
-#  - services/sqlite_db.py — the central helper itself (the ONE funnel).
-#  - services/verifier_service.py + services/conductor_service.py — the gate's
-#    OWN judge/policy machinery. The control-plane guard (commit bf86b76)
-#    REFUSES a green_gate whose candidate worktree edits its own judge, so this
-#    task must NOT reroute them. Their connects already carry timeout=5.0 from
-#    the v6.7.24 sweep (safe); routing them through the helper is deferred to a
-#    separate 'policy-change'-tagged task. brain_engine._connect is NOT
-#    allowlisted — it delegates to the helper, so it holds no bare connect.
+#  - services/sqlite_db.py — the central helper itself (the ONE funnel), and
+#    NOTHING else. The judge machinery (verifier_service.py,
+#    conductor_service.py) was rerouted through the helper by the authorized
+#    'policy-change'-tagged follow-up (task 22ee4cb3), so a future bare
+#    connect can no longer hide in the judge files. brain_engine._connect is
+#    NOT allowlisted — it delegates to the helper, so it holds no bare connect.
 _ALLOWLIST = {
     ("services", "sqlite_db.py"),
-    ("services", "verifier_service.py"),
-    ("services", "conductor_service.py"),
 }
 
 _PAT = re.compile(r"sqlite3\.connect\(")
