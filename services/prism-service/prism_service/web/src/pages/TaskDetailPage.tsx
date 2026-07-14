@@ -8,6 +8,7 @@ import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip } from "@/components/EntityChip";
 import { domainTone } from "@/lib/domainTone";
 import PlanView, { parseAc } from "@/components/plan/PlanView";
+import { stepLabel } from "@/lib/workflowChips";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
@@ -1013,6 +1014,44 @@ export default function TaskDetailPage() {
 
       {docTab === "overview" && (<>
 
+      {/* TASK NOTIFICATIONS — things needing the owner's ACTION, at the very
+          top of Overview (owner 2026-07-14: "these are notifications of the
+          task, not just the implementation"). Each is clickable and jumps to
+          the view where the action lives (the gate form in Implementation). */}
+      {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") && (
+        <button
+          type="button"
+          onClick={() => {
+            setTabRequest({ tab: "implementation", n: (tabRequest?.n ?? 0) + 1 });
+            planRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+          className="w-full text-left rounded-md px-4 py-3 text-[13px] leading-relaxed"
+          style={gateReadiness?.receipt_ok
+            ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
+            : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+          title="go to the gate decision form"
+        >
+          <span className="text-2xs uppercase tracking-wider font-semibold mr-2">
+            ⚖ action needed · {stepLabel(task.workflow_step ?? "gate")}{task.gate_state === "failed" ? " · last decision failed" : ""}
+          </span>
+          {gateReadiness?.receipt_ok
+            ? "Live evidence check PASSES — approve this gate with a reason (no override needed)."
+            : gateReadiness
+              ? "Live evidence is not ready — open the gate to re-run the oracle or release with override."
+              : "This task is parked at a gate awaiting your decision."}
+          <span className="ml-2 opacity-80">→ act</span>
+        </button>
+      )}
+      {task.status === "blocked" && task.blocked_reason && (
+        <div
+          className="rounded-md px-4 py-3 text-[13px]"
+          style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+        >
+          <span className="text-2xs uppercase tracking-wider font-semibold mr-2">blocked</span>
+          {task.blocked_reason}
+        </div>
+      )}
+
       {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype || pinTests.length > 0) && (
         <Stagger i={0} reduced={reduced}>
         <div ref={planRef}>
@@ -1024,6 +1063,19 @@ export default function TaskDetailPage() {
             reduced={reduced}
             pinTests={pinTests}
             gateReadiness={gateReadiness}
+            onMintEvidence={async () => {
+              setNotice("re-running the oracle inside the daemon…");
+              try {
+                const r = await api.post<{ ok: boolean; receipt_ok: boolean; receipt_refusal?: string }>(
+                  `/api/conductor/gate/mint?project=${project}`, { task_id: id });
+                setNotice(r.receipt_ok
+                  ? "fresh evidence receipt minted — Approve will pass the evidence check"
+                  : `oracle ran but evidence still not ready: ${r.receipt_refusal || r.ok}`);
+              } catch (e) {
+                setNotice(`oracle re-run failed: ${(e as Error).message}`);
+              }
+              load();
+            }}
             tabRequest={tabRequest}
             conductor={conductorOn ? {
               step: task.workflow_step,

@@ -48,6 +48,25 @@ def _board_tasks(s) -> list:
         return []
 
 
+@router.post("/gate/mint")
+def gate_mint(task_id: str = Body(..., embed=True),
+              project: str = Query("default")) -> dict:
+    """Re-run the oracle and MINT a fresh EvidenceReceipt from INSIDE the
+    daemon — the same process whose pinned-policy resolution the gate's
+    approve check uses, so a receipt minted here is fresh BY CONSTRUCTION
+    (out-of-process mints hit cwd-dependent pin skew — defect 68e5c699).
+    This is the gate card's 'Re-run oracle' action."""
+    s = _svc(project)
+    res = s.mint_green_evidence(task_id, session_id="gate-card-rerun",
+                                model="daemon")
+    task = s._task_svc.get(task_id) if s._task_svc else None
+    refusal = ""
+    if task is not None:
+        refusal, _ = s._oracle_receipt_refusal(task, override=False, reason="")
+    return {"ok": bool(res.get("ok")), "reason": res.get("reason", ""),
+            "receipt_ok": not refusal, "receipt_refusal": refusal or ""}
+
+
 @router.get("/gate/readiness")
 def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     """LIVE gate-card truth (owner 2026-07-14: the stored gate_reason is a

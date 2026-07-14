@@ -182,6 +182,7 @@ export default function PlanView({
   onValidation,
   pinTests,
   gateReadiness,
+  onMintEvidence,
   tabRequest,
 }: {
   diagram?: string;
@@ -200,6 +201,9 @@ export default function PlanView({
     receipt_refusal?: string;
     receipt?: { adapter?: string; passed?: boolean; status?: string; ended_at?: string; reason?: string };
   } | null;
+  // Gate-card action: re-run the oracle inside the daemon and mint a fresh
+  // EvidenceReceipt (POST /api/conductor/gate/mint), then refresh readiness.
+  onMintEvidence?: () => void;
   // External tab drive: the oracle card's "view tests" summary bumps `n` to
   // switch this panel to the Tests tab. The nonce lets a repeat click re-fire.
   tabRequest?: { tab: string; n: number } | null;
@@ -469,8 +473,20 @@ export default function PlanView({
                   ) : (
                     <>
                       Oracle evidence is NOT ready: {gateReadiness.receipt_refusal || "no receipt on file"}
-                      <div className="opacity-90 mt-1">
-                        <b>Action:</b> re-run the oracle (a drive's verify-green step mints the receipt) — or check override to release on manual judgment (audited).
+                      <div className="opacity-90 mt-1 flex items-center gap-3 flex-wrap">
+                        <b>Action:</b>
+                        {onMintEvidence && (
+                          <button
+                            type="button"
+                            onClick={onMintEvidence}
+                            className="text-2xs uppercase tracking-wider px-2.5 py-1 rounded"
+                            style={{ background: "var(--accent-amber-fg)", color: "var(--accent-amber-bg)" }}
+                            title="run the oracle now, inside the daemon, and mint a fresh evidence receipt"
+                          >
+                            ↻ re-run oracle now
+                          </button>
+                        )}
+                        <span>then Approve — or check override to release on manual judgment (audited).</span>
                       </div>
                     </>
                   )}
