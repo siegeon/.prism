@@ -144,7 +144,7 @@ export default function MemoryDetailPage() {
 
       <header className="space-y-2">
         <div className="flex items-start gap-3 flex-wrap">
-          <h1 className="font-serif text-3xl tracking-tight flex-1 min-w-0 break-words">
+          <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em] flex-1 min-w-0 break-words">
             {entry.name ?? "—"}
           </h1>
           <div className="flex items-center gap-1 shrink-0">

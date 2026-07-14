@@ -714,7 +714,7 @@ export default function TaskDetailPage() {
           {editingTitle ? (
             <input
               autoFocus
-              className="font-serif text-3xl tracking-tight bg-transparent border-b border-current outline-none w-full"
+              className="text-3xl font-[650] tracking-[-0.01em] bg-transparent border-b border-current outline-none w-full"
               value={titleDraft}
               onChange={(e) => setTitleDraft(e.target.value)}
               onBlur={renameTitle}
@@ -725,7 +725,7 @@ export default function TaskDetailPage() {
             />
           ) : (
             <h1
-              className="font-serif text-3xl tracking-tight cursor-text hover:opacity-70"
+              className="text-3xl font-[650] tracking-[-0.01em] cursor-text hover:opacity-70"
               title="Click to rename"
               onClick={() => { setTitleDraft(task.title ?? ""); setEditingTitle(true); }}
             >

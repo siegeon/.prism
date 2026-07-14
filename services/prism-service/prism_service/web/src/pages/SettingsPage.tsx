@@ -161,7 +161,7 @@ export default function SettingsPage() {
   return (
     <Page>
       <div>
-        <h1 className="font-serif text-3xl tracking-tight">{meta.title}</h1>
+        <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em]">{meta.title}</h1>
         <p className="text-sm opacity-60 mt-1">{meta.description}</p>
       </div>
 

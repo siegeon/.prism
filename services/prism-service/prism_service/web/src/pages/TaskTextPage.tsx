@@ -54,7 +54,7 @@ export default function TaskTextPage() {
         ← back to task
       </button>
       <div>
-        <h1 className="font-serif text-2xl tracking-tight">{meta?.label ?? "Detail"}</h1>
+        <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em]">{meta?.label ?? "Detail"}</h1>
         {task?.title && <div className="text-[12px] opacity-60 mt-1 truncate">{task.title}</div>}
       </div>
       <Card>

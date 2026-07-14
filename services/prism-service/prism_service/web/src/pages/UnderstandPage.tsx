@@ -547,7 +547,7 @@ function DetailPanel({
     <div className="space-y-4">
       <header className="space-y-2">
         <div className="flex items-start gap-2 flex-wrap">
-          <h1 className="font-serif text-2xl tracking-tight flex-1 min-w-0 break-words">{title}</h1>
+          <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em] flex-1 min-w-0 break-words">{title}</h1>
           <span className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded shrink-0"
             style={{ background: toneVar(tone, "bg"), color: toneVar(tone, "fg"), boxShadow: `inset 0 0 0 1px ${toneVar(tone, "ring")}` }}>
             {concept.type}

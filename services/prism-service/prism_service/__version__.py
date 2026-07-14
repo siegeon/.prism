@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.10"
+PRISM_VERSION = "6.9.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.11: FOUNDATION CUTOVER — the canvas matches the direction "
+    "artifact's Foundation tab. Surfaces/borders/text re-valued to Radix "
+    "slate (both themes; light is first-class), nav rail navy #1c2333 and "
+    "theme-invariant, blue accent token set (--accent-solid #0090ff), "
+    "serif scoped to the PRISM brand mark (all page titles sans 20/650), "
+    "and a persisted ◐ theme toggle in the sidebar footer — toggle the "
+    "theme and every screen holds (contrast oracle 16/16 both themes). "
     "v6.9.10: THE VISIBLE REDESIGN — the app starts reading like the "
     "direction artifact (ui-redesign workstreams 2/3/5/6 first cut). NEW "
     "Lozenge + EntityChip primitives (shape-glyph per entity type, radix "

@@ -43,7 +43,7 @@ export default function PageHeader() {
 
   return (
     <header className="h-[80px] shrink-0 flex items-center justify-between px-8 border-b border-[color:var(--midground-base)]/10">
-      <h1 className="font-serif text-xl uppercase tracking-[0.2em] text-[color:var(--midground-base)]">
+      <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em] text-[color:var(--text-primary)]">
         {title}
       </h1>
       {projects.length > 0 && (

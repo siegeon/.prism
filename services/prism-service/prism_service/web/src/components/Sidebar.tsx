@@ -9,6 +9,7 @@ import {
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { useScanActivity } from "@/lib/scan-activity";
+import { currentTheme, toggleTheme } from "@/lib/theme";
 import { useVersion } from "@/lib/version";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +119,7 @@ export default function Sidebar() {
   const stale = useStaleness(project);
   const scan = useScanActivity();
   const version = useVersion();
+  const [theme, setTheme] = useState(currentTheme());
   const { pathname } = useLocation();
   const inSettings = pathname.startsWith("/settings");
 
@@ -130,10 +132,10 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className="w-[240px] shrink-0 flex flex-col border-r border-[color:var(--border-default)] bg-[color:var(--surface-1)]">
-      <div className="h-[80px] px-5 flex flex-col justify-center border-b border-[color:var(--border-default)]">
-        <div className="font-serif text-2xl leading-none tracking-tight text-[color:var(--text-primary)]">PRISM</div>
-        <div className="font-serif text-xl leading-none tracking-tight text-[color:var(--text-secondary)] mt-1">SERVICE</div>
+    <aside className="w-[240px] shrink-0 flex flex-col border-r border-[color:var(--nav-line)] bg-[color:var(--nav-bg)]">
+      <div className="h-[80px] px-5 flex flex-col justify-center border-b border-[color:var(--nav-line)]">
+        <div className="font-serif text-2xl leading-none tracking-tight text-[color:var(--nav-text-hi)]">PRISM</div>
+        <div className="font-serif text-xl leading-none tracking-tight text-[color:var(--nav-text)] mt-1">SERVICE</div>
       </div>
       <nav className="flex-1 overflow-y-auto py-3">
         {sections.map((section, i) => (
@@ -143,11 +145,11 @@ export default function Sidebar() {
           <div
             key={i}
             className={cn(
-              i > 0 && "mt-3 pt-3 border-t border-[color:var(--border-default)]",
+              i > 0 && "mt-3 pt-3 border-t border-[color:var(--nav-line)]",
             )}
           >
             {section.label && (
-              <div className="px-5 mb-1 text-2xs uppercase tracking-[0.18em] text-[color:var(--text-label)]">
+              <div className="px-5 mb-1 text-2xs uppercase tracking-[0.18em] text-[color:var(--nav-text)]">
                 {section.label}
               </div>
             )}
@@ -174,8 +176,8 @@ export default function Sidebar() {
                   className={({ isActive }) =>
                     cn(
                       "flex items-center gap-3 px-5 py-2 text-[13px] uppercase tracking-wider transition-colors relative",
-                      "text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--surface-2)]",
-                      isActive && "text-[color:var(--text-primary)] bg-[color:var(--surface-2)] border-l-2 border-[color:var(--text-primary)]",
+                      "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]",
+                      isActive && "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold",
                       // Soft slate-blue glow + animated pulse on the
                       // row itself while scanning. Subtle enough to
                       // not fight the active-route indicator, loud
@@ -203,7 +205,7 @@ export default function Sidebar() {
           </div>
         ))}
       </nav>
-      <div className="border-t border-[color:var(--border-default)]">
+      <div className="border-t border-[color:var(--nav-line)]">
         {/* Footer toggle. In default mode it's "Settings" and enters
             the Settings sidebar mode. In Settings mode it flips to
             "Application" with a different icon so the user has a
@@ -217,7 +219,7 @@ export default function Sidebar() {
             to="/"
             className={cn(
               "flex items-center gap-3 px-5 py-3 text-[13px] uppercase tracking-wider transition-colors",
-              "text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--surface-2)]",
+              "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]",
             )}
             title="Return to the main application"
           >
@@ -229,7 +231,7 @@ export default function Sidebar() {
             to="/settings"
             className={cn(
               "flex items-center gap-3 px-5 py-3 text-[13px] uppercase tracking-wider transition-colors",
-              "text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:bg-[color:var(--surface-2)]",
+              "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]",
             )}
             title="Open application settings"
           >
@@ -238,9 +240,17 @@ export default function Sidebar() {
           </NavLink>
         )}
         <div
-          className="px-5 py-3 text-2xs uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)] flex items-center gap-2"
+          className="px-5 py-3 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] border-t border-[color:var(--nav-line)] flex items-center gap-2"
           title={version?.notes ?? ""}
         >
+          <button
+            type="button"
+            onClick={() => setTheme(toggleTheme())}
+            className="inline-flex items-center gap-1 hover:text-[color:var(--nav-text-hi)] transition-colors"
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          >
+            ◐ <span className="sr-only">toggle theme</span>
+          </button>
           <span>Slate Blue · v{version?.version ?? "…"}</span>
           {version?.dev_mode && (
             <span

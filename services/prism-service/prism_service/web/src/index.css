@@ -61,31 +61,53 @@
   --foreground: color-mix(in srgb, #ffffff 0%, transparent);
   --foreground-base: #ffffff;
   --foreground-alpha: 0;
-  --midground: color-mix(in srgb, #edf1f7 100%, transparent);
-  --midground-base: #edf1f7;          /* alias of --text-primary */
+  --midground: color-mix(in srgb, #edeef0 100%, transparent);
+  --midground-base: #edeef0;          /* alias of --text-primary */
   --midground-alpha: 1;
-  --background: color-mix(in srgb, #0d1726 100%, transparent);
-  --background-base: #0d1726;         /* alias of --surface-0 */
+  --background: color-mix(in srgb, #111113 100%, transparent);
+  --background-base: #111113;         /* alias of --surface-0 */
   --background-alpha: 1;
   --warm-glow: rgba(120, 165, 220, 0.30);
 
-  /* Surface elevation — dark-mode "elevation = lighter" pattern. */
-  --surface-0: #0d1726;
-  --surface-1: #172234;
-  --surface-2: #212e44;
-  --surface-3: #2c3a55;
+  /* Surface elevation — Radix slate (dark), UI-direction-v2 Foundation.
+   * Re-valued off the old navy "slate blue" hexes to the neutral Radix
+   * slate steps 1/2/3/5 so the canvas matches the direction artifact. */
+  --surface-0: #111113;
+  --surface-1: #18191b;
+  --surface-2: #212225;
+  --surface-3: #2e3135;
 
-  /* Text hierarchy — every visible tier is WCAG AA on surface-0 + 1. */
-  --text-primary:   #edf1f7;
-  --text-secondary: #b8c3d4;
-  --text-muted:     #8b97ad;
-  --text-label:     #9aa6bd;
-  --text-disabled:  #5a6478;
+  /* Text hierarchy — Radix slate (dark) text steps 12/11/10. high/low/
+   * faint from the Foundation artifact; muted+label both land on faint. */
+  --text-primary:   #edeef0;
+  --text-secondary: #b0b4ba;
+  --text-muted:     #777d84;
+  --text-label:     #777d84;
+  --text-disabled:  #5a6169;
 
-  /* Borders — same hue, varied alpha. Strong is for emphasized cards. */
-  --border-subtle:  rgba(237, 241, 247, 0.06);
-  --border-default: rgba(237, 241, 247, 0.12);
-  --border-strong:  rgba(237, 241, 247, 0.22);
+  /* Borders — Radix slate (dark) steps 6/7/8, solid (Foundation). */
+  --border-subtle:  #363a3f;
+  --border-default: #43484e;
+  --border-strong:  #5a6169;
+
+  /* Primary accent — Radix blue (Foundation). Dark values; the light
+   * block below re-values to the light-tuned blue. */
+  --accent:        #70b8ff;
+  --accent-solid:  #0090ff;
+  --accent-weak:   #0d2847;
+  --accent-border: #104d87;
+
+  /* Nav rail — a DISTINCT navy panel that does NOT flip with the theme
+   * (owner: "the one panel that doesn't flip"). Same navy in light and
+   * dark so the rail always sets itself off from the slate canvas. All
+   * nav tokens live here only; the light block does not override them. */
+  --nav-bg:          #1c2333;
+  --nav-text:        #aab6c9;
+  --nav-text-hi:     #e9eef6;
+  --nav-line:        rgba(237, 241, 247, 0.10);
+  --nav-hover:       rgba(255, 255, 255, 0.06);
+  --nav-active-bg:   rgba(0, 144, 255, 0.16);
+  --nav-active-text: #8ec8ff;
 
   /* Semantic accents — aliased to Radix Colors so every chip/badge is
    * legible in BOTH themes (task 401811b8; the old hand-tuned rgba/hex
@@ -170,6 +192,30 @@
  * every lozenge pair holds >=4.5:1 on white; the --et-* categorical
  * ramp drops to L 0.52 for light canvases. */
 .light, .light-theme, :root[data-theme="light"] {
+  /* Radix slate (light) canvas — Foundation steps 1/2/3/5, text 12/11/10,
+   * borders 6/7/8; blue accent + navy nav rail (light-tuned). */
+  --background-base: #fcfcfd;
+  --background: color-mix(in srgb, #fcfcfd 100%, transparent);
+  --midground-base: #1c2024;
+  --midground: color-mix(in srgb, #1c2024 100%, transparent);
+  --surface-0: #fcfcfd;
+  --surface-1: #f9f9fb;
+  --surface-2: #f0f0f3;
+  --surface-3: #e0e1e6;
+  --text-primary:   #1c2024;
+  --text-secondary: #60646c;
+  --text-muted:     #8b8d98;
+  --text-label:     #8b8d98;
+  --text-disabled:  #b9bbc6;
+  --border-subtle:  #d9d9e0;
+  --border-default: #cdced6;
+  --border-strong:  #b9bbc6;
+  --accent:        #0d74ce;
+  --accent-solid:  #0090ff;
+  --accent-weak:   #e6f4fe;
+  --accent-border: #acd8fc;
+  /* nav rail tokens are theme-invariant navy — defined once in :root. */
+
   --accent-teal-fg:    var(--blue-12);
   --accent-sage-fg:    var(--green-12);
   --accent-amber-fg:   var(--amber-12);
