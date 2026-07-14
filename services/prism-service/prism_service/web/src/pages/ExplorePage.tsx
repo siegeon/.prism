@@ -27,7 +27,12 @@ type MeshNode = {
 // The center additionally carries last_motion (task rows only) for the
 // Selected card; it never appears on neighbors.
 type MeshCenter = MeshNode & { last_motion?: string | null };
-type MeshData = { center: MeshCenter; neighbors: MeshNode[] };
+// The TRUE mesh: every edge PRISM found among the collected node set (center
+// + hop1 + hop2), not just center-touching spokes -- memory<->memory
+// wikilinks, code<->code calls, session<->gate, session<->code, plus the
+// implicit spokes themselves. `from`/`to` are node tokens (see MeshNode.token).
+type MeshEdge = { from: string; to: string; label: string };
+type MeshData = { center: MeshCenter; neighbors: MeshNode[]; edges: MeshEdge[] };
 // The 6 canonical node shapes the mesh draws; anything else falls back to a
 // neutral dot. Mirrors EntityChip's EntityKind + the --et-* token set.
 const MESH_KINDS: EntityKind[] = ["code", "memory", "task", "test", "gate", "session"];
@@ -77,6 +82,11 @@ type Understanding = {
   counts: Record<string, number>; provenance: string;
 };
 
+// Mesh is the front door (owner direction: "the full map stays one click
+// away, pre-filtered — never the front door"). The last focused token is
+// persisted here so a bare /explore visit picks up right where you left off.
+const MESH_FOCUS_KEY = "prism-mesh-focus";
+
 const base = (p: string) => (p || "").replace(/\\/g, "/").split("/").pop() || p;
 // communityColor() is the single shared domain (palette.ts) used by the
 // WebGL canvas, its Clusters legend, and these panels — same id, same hue.
@@ -102,16 +112,24 @@ export default function ExplorePage() {
   const [busy, setBusy] = useState<string | null>(null);  // which control is running
 
   // Mesh focus lives in the URL (?focus=<token>) so it's shareable + back-
-  // navigable. When set, the mesh is the centerpiece; empty = the Sigma map.
+  // navigable. When set, the mesh is the centerpiece. Empty no longer means
+  // "show the Sigma map" — that's now an explicit opt-in (wantFullMap) via
+  // the Full map button; a bare visit resolves a default focus instead (see
+  // the default-focus effect below), so the mesh is the front door.
   const navigate = useNavigate();
   const [sp, setSp] = useSearchParams();
   const focus = sp.get("focus");
-  const setFocus = useCallback((token: string | null) => {
+  // True only once the owner explicitly clicks "Full map" — the ONLY way to
+  // reach the old Sigma canvas now. Any subsequent focus (search pick, mesh
+  // click, default-resolution) clears it so the mesh takes back over.
+  const [wantFullMap, setWantFullMap] = useState(false);
+  const setFocus = useCallback((token: string | null, opts?: { replace?: boolean }) => {
+    if (token) setWantFullMap(false);
     setSp((prev) => {
       const n = new URLSearchParams(prev);
       if (token) n.set("focus", token); else n.delete("focus");
       return n;
-    });
+    }, opts);
   }, [setSp]);
   // The focused entity's human label, reported up from the mesh once its
   // neighborhood loads — used to pre-seed the full-map search (delta 3).
@@ -209,6 +227,51 @@ export default function ExplorePage() {
   useEffect(() => { if (!deepLink) run(""); }, [run, deepLink]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (deepLink) focusSeed(deepLink.file, deepLink.symbol); }, []);
+
+  // Persist the last focused token — the first rung of the default-focus
+  // ladder below, so a bare /explore visit picks up where you left off.
+  useEffect(() => { if (focus) window.localStorage.setItem(MESH_FOCUS_KEY, focus); }, [focus]);
+
+  // Default-focus resolution: a bare visit (no ?focus, no deep-link) must
+  // land ON the mesh, never the Sigma canvas. Ladder: (1) the last focus
+  // persisted locally, (2) the most recently updated non-done task, (3) the
+  // most recent session. Runs once per project; guarded so it never fires
+  // again after an explicit Full-map click clears the focus.
+  const defaultResolvedProjectRef = useRef<string | null>(null);
+  const [resolvingDefault, setResolvingDefault] = useState(!deepLink);
+  useEffect(() => {
+    if (deepLink || focus) return;
+    if (defaultResolvedProjectRef.current === project) return;
+    defaultResolvedProjectRef.current = project;
+    let alive = true;
+    setResolvingDefault(true);
+    (async () => {
+      try {
+        const stored = window.localStorage.getItem(MESH_FOCUS_KEY);
+        if (stored) { setFocus(stored, { replace: true }); return; }
+        try {
+          const { tasks } = await api.get<{ tasks: { id: string; status?: string; updated_at?: string }[] }>(
+            `/api/tasks?project=${project}`);
+          const open = (tasks ?? []).filter((t) => t.id && (t.status ?? "").toLowerCase() !== "done");
+          if (open.length) {
+            const best = open.reduce((a, b) => ((b.updated_at ?? "") > (a.updated_at ?? "") ? b : a));
+            setFocus(best.id, { replace: true });
+            return;
+          }
+        } catch { /* fall through to sessions */ }
+        try {
+          const { outcomes } = await api.get<{ outcomes: { session_id?: string }[] }>(
+            `/api/sessions?project=${project}&limit=1`);
+          const sid = outcomes?.[0]?.session_id;
+          if (sid) { setFocus(sid, { replace: true }); return; }
+        } catch { /* no sessions either — fall through to the empty state */ }
+      } finally {
+        if (alive) setResolvingDefault(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [project, deepLink, focus, setFocus]);
+
   useEffect(() => {
     api.get<{ graph_json_exists: boolean; viewer_url: string }>(`/api/graph/summary?project=${project}`)
       .then((s) => setViewerUrl(s.graph_json_exists ? s.viewer_url : null))
@@ -237,6 +300,7 @@ export default function ExplorePage() {
   // back to the raw focus token when the label hasn't loaded yet.
   const openFullMap = () => {
     const q = (focusLabel || focus || "").trim();
+    setWantFullMap(true);
     setFocus(null);
     if (q) { setInput(q); run(q); }
   };
@@ -351,13 +415,17 @@ export default function ExplorePage() {
       <Card className="!p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="px-5 pt-3 pb-2 flex items-center gap-2 shrink-0">
           <Network className="w-4 h-4 opacity-60" />
-          <SectionLabel>{focus ? "Explore" : "Graph"}</SectionLabel>
+          <SectionLabel>{wantFullMap ? "Graph" : "Explore"}</SectionLabel>
           <span className="text-xs opacity-50 ml-1">
             {focus
               ? "Freeform mesh — knowledge links knowledge, code calls code, sessions touch gates. Click a node to wander, double-click to open it."
-              : data?.mode === "focus"
-              ? "highlighting your matches — scroll to explore, click empty space to clear"
-              : "whole graph, colored by community — type a query to focus it"}
+              : wantFullMap
+              ? (data?.mode === "focus"
+                ? "highlighting your matches — scroll to explore, click empty space to clear"
+                : "whole graph, colored by community — type a query to focus it")
+              : resolvingDefault
+              ? "finding somewhere to start…"
+              : "search or pick an entity to explore"}
           </span>
           {focus && (
             <div className="ml-auto flex items-center gap-2">
@@ -390,15 +458,23 @@ export default function ExplorePage() {
         {focus ? (
           <Mesh token={focus} project={project} hops={hops} onFocus={setFocus}
             onOpen={(href) => navigate(href)} onCenter={setFocusLabel} />
-        ) : viewerUrl ? (
-          <iframe
-            ref={iframeRef}
-            src={viewerUrl}
-            className="w-full flex-1 min-h-0 border-0 rounded-b-md"
-            style={{ background: "#0f0f1a" }}
-          />
+        ) : wantFullMap ? (
+          viewerUrl ? (
+            <iframe
+              ref={iframeRef}
+              src={viewerUrl}
+              className="w-full flex-1 min-h-0 border-0 rounded-b-md"
+              style={{ background: "#0f0f1a" }}
+            />
+          ) : (
+            <div className="px-5 pb-5"><Empty>No graph yet — rebuild on /graph.</Empty></div>
+          )
+        ) : resolvingDefault ? (
+          <div className="px-5 pb-5 text-xs opacity-60">Finding somewhere to start…</div>
         ) : (
-          <div className="px-5 pb-5"><Empty>No graph yet — rebuild on /graph.</Empty></div>
+          // The full map is a deliberate opt-in (button above), never the
+          // front door — the direction this mesh replaces a hairball with.
+          <div className="px-5 pb-5"><Empty>Search or pick an entity to explore.</Empty></div>
         )}
       </Card>
 
@@ -782,6 +858,8 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     return () => { alive = false; };
   }, [token, project, hops, onCenter]);
 
+  const center = data?.center;
+
   const visible = useMemo(
     () => (data?.neighbors ?? []).filter((n) => !hidden.has(n.kind)),
     [data, hidden]);
@@ -799,7 +877,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     }
     return [...[...byDom.values()].flat(), ...rest];
   }, [visible]);
-  const { placed, posByToken } = useMemo(() => layoutMesh(ordered), [ordered]);
+  const { placed } = useMemo(() => layoutMesh(ordered), [ordered]);
   // A dashed rounded hull behind each domain that has 2+ memory diamonds in
   // view — the Understand wiki's grouping drawn into the mesh (artifact hull()).
   const hulls = useMemo(() => meshHulls(placed), [placed]);
@@ -809,10 +887,28 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     return MESH_KINDS.filter((k) => s.has(k));
   }, [data]);
 
+  // Render position for EVERY currently-drawn node (center + placed hop1/2),
+  // keyed by token — this is what lets an edge connect ANY two nodes, not
+  // just spokes off the center. Nodes hidden by the kind filter are absent
+  // from `placed`, so their edges naturally drop out below.
+  const renderPos = useMemo(() => {
+    const m = new Map<string, { x: number; y: number }>();
+    if (center) m.set(center.token, { x: MESH_CX, y: MESH_CY });
+    placed.forEach((p) => m.set(p.token, { x: p.x, y: p.y }));
+    return m;
+  }, [placed, center]);
+  // The TRUE mesh edge list — spokes AND neighbor-to-neighbor links — pruned
+  // to only the ones whose both endpoints are currently placed on the canvas.
+  const renderEdges = useMemo(
+    () => (data?.edges ?? []).filter(
+      (e) => e.from !== e.to && renderPos.has(e.from) && renderPos.has(e.to)),
+    [data, renderPos]);
+
   // Stats line (artifact): counts live from the drawn mesh. nodes = center +
-  // every visible neighbor; edges = one per neighbor (to its parent/center);
-  // domains = distinct Understand domains among the visible memory diamonds
-  // (plus the center when it is itself a concept).
+  // every visible neighbor; edges = the true mesh edge count (spokes plus
+  // neighbor-to-neighbor links) currently on the canvas; domains = distinct
+  // Understand domains among the visible memory diamonds (plus the center
+  // when it is itself a concept).
   const domainCount = useMemo(() => {
     const s = new Set<string>();
     if (data?.center.kind === "memory" && data.center.domain) s.add(data.center.domain);
@@ -843,8 +939,6 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
       return n;
     });
 
-  const center = data?.center;
-
   return (
     <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-3 px-5 pb-4 overflow-hidden">
       {/* canvas */}
@@ -863,7 +957,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             );
           })}
           <span className="ml-auto text-2xs opacity-60 tabular-nums font-mono truncate max-w-[52%]">
-            {1 + visible.length} nodes · {visible.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}
+            {1 + visible.length} nodes · {renderEdges.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}
             {center ? <> · selected <span className="text-[color:var(--text-primary)]">{trunc(center.label, 22)}</span></> : null}
           </span>
         </div>
@@ -895,28 +989,23 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                   </text>
                 </g>
               ))}
-              {/* edges first, under the nodes. First-hop edges spring from the
-                  center and carry their relation label; second-hop edges spring
-                  from their `via` parent, drawn dimmer + label-free so the outer
-                  ring reads as growth off a node, not more spokes on the hub. */}
-              {placed.map((nb, i) => {
-                const src = nb.hop === 2
-                  ? (posByToken.get(nb.via ?? "") ?? { x: MESH_CX, y: MESH_CY })
-                  : { x: MESH_CX, y: MESH_CY };
-                if (nb.hop === 2) {
-                  return (
-                    <line key={`e${i}`} x1={src.x} y1={src.y} x2={nb.x} y2={nb.y}
-                      stroke="var(--border-default)" strokeWidth={0.9} opacity={0.5} />
-                  );
-                }
-                const mx = src.x + (nb.x - src.x) * 0.62;
-                const my = src.y + (nb.y - src.y) * 0.62;
+              {/* edges first, under the nodes. A TRUE mesh: any two placed
+                  nodes can edge to each other, not just center-touching
+                  spokes. A spoke (either end is the center) draws bolder +
+                  brighter than a neighbor-to-neighbor link, so the inner
+                  ring still reads as the doorway without spokes dominating. */}
+              {renderEdges.map((e) => {
+                const a = renderPos.get(e.from)!;
+                const b = renderPos.get(e.to)!;
+                const spoke = center && (e.from === center.token || e.to === center.token);
+                const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
                 return (
-                  <g key={`e${i}`}>
-                    <line x1={src.x} y1={src.y} x2={nb.x} y2={nb.y}
-                      stroke="var(--border-strong)" strokeWidth={1.1} />
-                    <text x={mx} y={my - 3} textAnchor="middle" fontSize={11}
-                      fill="var(--text-faint)">{nb.edge}</text>
+                  <g key={`${e.from}->${e.to}`}>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                      stroke={spoke ? "var(--border-strong)" : "var(--border-default)"}
+                      strokeWidth={spoke ? 1.1 : 0.9} opacity={spoke ? 1 : 0.6} />
+                    <text x={mx} y={my - 3} textAnchor="middle" fontSize={spoke ? 11 : 9.5}
+                      fill="var(--text-faint)" opacity={spoke ? 1 : 0.8}>{e.label}</text>
                   </g>
                 );
               })}

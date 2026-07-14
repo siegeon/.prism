@@ -372,6 +372,103 @@ def test_two_hops_degree_and_total_caps(monkeypatch):
     assert max(per_parent.values()) <= 8, per_parent  # per-node cap binds
 
 
+def test_memory_mesh_edges_between_two_neighbors(monkeypatch):
+    """Two memory neighbors that ALSO wikilink each other yield a memory<->
+    memory edge in `edges` -- a real mesh triangle, not just two spokes off
+    the center."""
+    from prism_service.services import okf_host as okf_mod
+
+    THIRD_ID = "third-concept"
+
+    class _TriangleHost:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def graph(self):
+            return {
+                "nodes": [
+                    {"id": CONCEPT_ID, "title": "center", "type": "decision", "domain": "conductor"},
+                    {"id": LINKED_ID, "title": "linked", "type": "convention", "domain": "conductor"},
+                    {"id": THIRD_ID, "title": "third", "type": "expertise", "domain": "conductor"},
+                ],
+                "edges": [
+                    {"source": CONCEPT_ID, "target": LINKED_ID},
+                    {"source": CONCEPT_ID, "target": THIRD_ID},
+                    # the neighbor-to-neighbor link the mesh must ALSO draw
+                    {"source": LINKED_ID, "target": THIRD_ID},
+                ],
+            }
+
+        def task_concepts(self, _t):
+            return []
+
+    monkeypatch.setattr(okf_mod, "OkfHost", _TriangleHost)
+
+    p = SimpleNamespace(
+        memory_svc=_MemoryWithConcept(), brain_svc=_NoBrain(),
+        graph_svc=None, task_svc=None, conductor_svc=None,
+    )
+    res = xref.neighbors_for(CONCEPT_ID, p, limit=24)
+    edges = res["edges"]
+    pairs = {frozenset((e["from"], e["to"])) for e in edges}
+    assert frozenset((LINKED_ID, THIRD_ID)) in pairs, edges
+    nb_edge = next(e for e in edges
+                   if frozenset((e["from"], e["to"])) == frozenset((LINKED_ID, THIRD_ID)))
+    assert nb_edge["label"] == "[[links]]"
+    # the spokes are still present too -- edges is spokes PLUS mesh links
+    assert frozenset((CONCEPT_ID, LINKED_ID)) in pairs
+    assert frozenset((CONCEPT_ID, THIRD_ID)) in pairs
+
+
+def test_mesh_edges_capped_and_deduped(monkeypatch):
+    """A densely interlinked neighborhood is capped at MESH_EDGE_CAP and
+    every (from, to) pair is unique regardless of edge direction."""
+    from prism_service.services import okf_host as okf_mod
+
+    n = 24
+    ids = [f"C{i}" for i in range(n + 1)]  # C0 (center) .. C24
+    nodes = [{"id": cid, "title": cid, "type": "expertise", "domain": "conductor"}
+              for cid in ids]
+    edges = [{"source": "C0", "target": f"C{i}"} for i in range(1, n + 1)]
+    # fully interlink the hop-1 ring so the raw edge count blows past the cap
+    for i in range(1, n + 1):
+        for j in range(i + 1, n + 1):
+            edges.append({"source": f"C{i}", "target": f"C{j}"})
+    graph = {"nodes": nodes, "edges": edges}
+
+    class _DenseHost:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def graph(self):
+            return graph
+
+        def task_concepts(self, _t):
+            return []
+
+    monkeypatch.setattr(okf_mod, "OkfHost", _DenseHost)
+
+    class _DenseMemory:
+        def get_entry(self, token):
+            return SimpleNamespace(id=token, name=token) if token in set(ids) else None
+
+        def list_domains(self):
+            return []
+
+        def list_entries(self, _d):
+            return []
+
+    p = SimpleNamespace(
+        memory_svc=_DenseMemory(), brain_svc=_NoBrain(),
+        graph_svc=None, task_svc=None, conductor_svc=None,
+    )
+    res = xref.neighbors_for("C0", p, limit=24, hops=1)
+    edges_out = res["edges"]
+    assert len(edges_out) <= xref.MESH_EDGE_CAP, len(edges_out)
+    pairs = [frozenset((e["from"], e["to"])) for e in edges_out]
+    assert len(pairs) == len(set(pairs)), "duplicate edge pairs leaked"
+
+
 def test_neighbors_endpoint_served_by_real_app(monkeypatch):
     """The REAL FastAPI route the SPA calls resolves a task to its mesh."""
     testclient_mod = pytest.importorskip("fastapi.testclient")

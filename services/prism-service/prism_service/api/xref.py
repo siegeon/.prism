@@ -595,6 +595,147 @@ def _gate_neighbors(p, token: str, out: list) -> None:
                        f"/tasks/{task_id}", "guards", task_id))
 
 
+# ---------------------------------------------------------------------------
+# Mesh v2 -- neighbor-to-neighbor edges. A true mesh, not a star: beyond the
+# implicit center->neighbor spokes, entities in the collected node set can
+# edge to EACH OTHER (memories cite memories, code calls code, a session
+# recorded the gate it drove, a session edited a file another neighbor names).
+# Every source below takes the node-set membership as an already-built lookup
+# and does ONE pass per node (never per pair), fully getattr/try-guarded.
+# ---------------------------------------------------------------------------
+
+MESH_EDGE_CAP = 80
+
+
+def _dedupe_edges(edges: list) -> list:
+    """Dedupe on the unordered (from, to) pair, first-seen order preserved
+    (spokes are appended before inter-neighbor edges, so a spoke always wins
+    over a redundant mesh edge covering the same pair). Drops self-loops and
+    hard-caps the total so a dense neighborhood can't blow up the canvas."""
+    seen: set = set()
+    out: list = []
+    for e in edges:
+        a, b = e.get("from"), e.get("to")
+        if not a or not b or a == b:
+            continue
+        key = frozenset((a, b))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+        if len(out) >= MESH_EDGE_CAP:
+            break
+    return out
+
+
+def _memory_mesh_edges(p, memory_tokens: set, g: Optional[dict] = None) -> list:
+    """memory<->memory: OKF wikilink edges where BOTH endpoints are already in
+    the mesh's node set -- this is what turns two sibling concept diamonds
+    into a real triangle instead of two spokes off the center."""
+    if len(memory_tokens) < 2:
+        return []
+    if g is None:
+        g = _okf_graph(p)
+    if not g:
+        return []
+    out = []
+    for e in g.get("edges", []):
+        src, tgt = e.get("source"), e.get("target")
+        if src in memory_tokens and tgt in memory_tokens:
+            out.append({"from": src, "to": tgt, "label": "[[links]]"})
+    return out
+
+
+def _code_mesh_edges(p, code_tokens: set) -> list:
+    """code<->code: the call graph between code nodes already in the set.
+    ONE call_chain lookup per code token (not per pair); a callee only
+    becomes an edge when it's ALSO a node already in the mesh."""
+    brain_svc = getattr(p, "brain_svc", None)
+    if brain_svc is None or len(code_tokens) < 2:
+        return []
+    out = []
+    for tok in code_tokens:
+        name = tok.rsplit("/", 1)[-1] if "/" in tok else tok  # tolerate file-path tokens
+        try:
+            callees = brain_svc.call_chain(
+                name, depth=1, limit=12, direction="callees") or []
+        except Exception:
+            continue
+        for e in callees:
+            to = e.get("to")
+            if to and to in code_tokens and to != tok:
+                out.append({"from": tok, "to": to, "label": "calls"})
+    return out
+
+
+def _session_gate_mesh_edges(p, session_tokens: set, gate_tokens: set) -> list:
+    """session<->gate: a session that recorded the gate's task decision (the
+    gate token is `<task_id>#gate`). ONE task_for_session lookup per session."""
+    task_svc = getattr(p, "task_svc", None)
+    if task_svc is None or not session_tokens or not gate_tokens:
+        return []
+    gate_by_task = {g.split("#", 1)[0]: g for g in gate_tokens}
+    out = []
+    for sid in session_tokens:
+        try:
+            tid = task_svc.task_for_session(sid)
+        except Exception:
+            tid = None
+        gate_tok = gate_by_task.get(tid) if tid else None
+        if gate_tok:
+            out.append({"from": sid, "to": gate_tok, "label": "recorded"})
+    return out
+
+
+def _session_code_mesh_edges(p, session_tokens: set, code_tokens: set) -> list:
+    """session<->code: the session's own touched-file paths (session_file_paths)
+    that happen to name a code node already in the set. ONE lookup per session."""
+    conductor_svc = getattr(p, "conductor_svc", None)
+    getter = getattr(conductor_svc, "session_file_paths", None)
+    if getter is None or not session_tokens or not code_tokens:
+        return []
+    out = []
+    for sid in session_tokens:
+        try:
+            paths = getter(sid) or {}
+        except Exception:
+            continue
+        touched = set(paths.get("modified") or []) | set(paths.get("read") or [])
+        for f in touched:
+            if f in code_tokens:
+                out.append({"from": sid, "to": f, "label": "edited"})
+    return out
+
+
+def _build_mesh_edges(p, center_out: dict, neighbors: list) -> list:
+    """The mesh's full edge list: the implicit spokes (center->hop1,
+    via-parent->hop2) PLUS whatever inter-neighbor edges the sources above
+    find among the collected node set. ONE list, so the SPA never special-
+    cases a spoke vs. a mesh edge. Deduped + capped at MESH_EDGE_CAP."""
+    edges: list = []
+    by_kind: dict = {center_out["token"]: center_out.get("kind")}
+    for n in neighbors:
+        by_kind.setdefault(n["token"], n.get("kind"))
+
+    for n in neighbors:
+        if n.get("hop", 1) == 2 and n.get("via"):
+            edges.append({"from": n["via"], "to": n["token"], "label": n["edge"]})
+        else:
+            edges.append({"from": center_out["token"], "to": n["token"], "label": n["edge"]})
+
+    memory_tokens = {t for t, k in by_kind.items() if k == "memory"}
+    code_tokens = {t for t, k in by_kind.items() if k == "code"}
+    session_tokens = {t for t, k in by_kind.items() if k == "session"}
+    gate_tokens = {t for t, k in by_kind.items() if k == "gate"}
+
+    edges.extend(_memory_mesh_edges(p, memory_tokens))
+    edges.extend(_code_mesh_edges(p, code_tokens))
+    edges.extend(_session_gate_mesh_edges(p, session_tokens, gate_tokens))
+    edges.extend(_session_code_mesh_edges(p, session_tokens, code_tokens))
+
+    return _dedupe_edges(edges)
+
+
 # hops=2 growth guards (artifact "2 hops"): each first-hop node contributes at
 # most HOP2_PER_NODE of ITS own neighbors, and the whole second ring is capped
 # at HOP2_TOTAL so a high-degree hub can't explode the mesh.
@@ -662,7 +803,10 @@ def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
     outer ring (degree-capped, total-capped, deduped, no center/self repeats).
     Every neighbor carries its `hop` (1|2); second-hop nodes also carry `via`,
     the first-hop token they hang off, so the mesh draws the edge to the right
-    parent instead of the center."""
+    parent instead of the center. The response's `edges` list is the full
+    mesh -- implicit spokes PLUS any inter-neighbor edges found among the
+    collected node set (see _build_mesh_edges) -- so the client renders one
+    edge list instead of assuming every edge touches the center."""
     center, out, center_domain, center_type, kind = _expand(token, p)
     hop1 = _dedupe(out)[: max(1, int(limit))]
     for n in hop1:
@@ -713,7 +857,8 @@ def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
                 added += 1
         neighbors.extend(hop2)
 
-    return {"center": center_out, "neighbors": neighbors}
+    edges = _build_mesh_edges(p, center_out, neighbors)
+    return {"center": center_out, "neighbors": neighbors, "edges": edges}
 
 
 @router.get("/neighbors")
@@ -722,8 +867,10 @@ def neighbors(
     limit: int = Query(24, ge=1, le=200),
     hops: int = Query(1, ge=1, le=2),
 ) -> dict:
-    """The Explore mesh's ego network: {center, neighbors[]} for one entity.
-    hops=2 grows a degree-capped second ring (artifact's "2 hops" toggle)."""
+    """The Explore mesh's ego network: {center, neighbors[], edges[]} for one
+    entity. hops=2 grows a degree-capped second ring (artifact's "2 hops"
+    toggle); edges is the TRUE mesh -- spokes plus neighbor-to-neighbor
+    links -- not just center-touching lines."""
     try:
         p = get_project(project)
     except Exception as exc:
