@@ -181,6 +181,7 @@ export default function PlanView({
   gate,
   onValidation,
   pinTests,
+  gateReadiness,
   tabRequest,
 }: {
   diagram?: string;
@@ -192,6 +193,13 @@ export default function PlanView({
   onValidation?: () => void;
   // RED tests pinning this task, drilled from the parent (avoids a 2nd fetch).
   pinTests?: PinTest[];
+  // LIVE evidence-tooth state (GET /api/conductor/gate/readiness) — the gate
+  // card renders CURRENT truth + a concrete action, never a stale snapshot.
+  gateReadiness?: {
+    receipt_ok: boolean;
+    receipt_refusal?: string;
+    receipt?: { adapter?: string; passed?: boolean; status?: string; ended_at?: string; reason?: string };
+  } | null;
   // External tab drive: the oracle card's "view tests" summary bumps `n` to
   // switch this panel to the Tests tab. The nonce lets a repeat click re-fire.
   tabRequest?: { tab: string; n: number } | null;
@@ -433,11 +441,39 @@ export default function PlanView({
                   className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
                   style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
                 >
-                  <span className="uppercase tracking-wider text-2xs mr-2">gate failed</span>
+                  <span className="uppercase tracking-wider text-2xs mr-2">last decision · gate failed</span>
                   {c.gateReason || "no reason recorded"}
-                  <div className="opacity-80 mt-1">
-                    Fix the evidence, then Approve — the gate re-runs its machine check and releases on merit. Check override only to force past a failing check (audited).
+                  <div className="opacity-70 mt-1 text-[11.5px]">
+                    This is the stored snapshot from the LAST decision — the live evidence check below is current truth.
                   </div>
+                </div>
+              )}
+              {gateReadiness && (
+                <div
+                  className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
+                  style={gateReadiness.receipt_ok
+                    ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
+                    : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+                >
+                  <span className="uppercase tracking-wider text-2xs mr-2">evidence check · live</span>
+                  {gateReadiness.receipt_ok ? (
+                    <>
+                      ✓ Oracle evidence receipt is FRESH and PASSING
+                      {gateReadiness.receipt?.adapter ? ` (${gateReadiness.receipt.adapter} — a real run, not a claim)` : ""}.
+                      <div className="opacity-90 mt-1">
+                        <b>Action:</b> type a reason and click Approve — the evidence tooth passes now.
+                        If the shell verifier still refuses (known engine defect 68e5c699), check override:
+                        that is the audited manual release, and your evidence is already on file.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      Oracle evidence is NOT ready: {gateReadiness.receipt_refusal || "no receipt on file"}
+                      <div className="opacity-90 mt-1">
+                        <b>Action:</b> re-run the oracle (a drive's verify-green step mints the receipt) — or check override to release on manual judgment (audited).
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               <div className="opacity-50 mb-2 mt-4 text-2xs uppercase tracking-wider">

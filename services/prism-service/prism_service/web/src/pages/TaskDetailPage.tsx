@@ -61,6 +61,20 @@ type PinTest = {
   status?: string;
 };
 
+// GET /api/conductor/gate/readiness — the evidence tooth evaluated LIVE, so
+// the gate card never contradicts itself with a stale stored decision.
+type GateReadiness = {
+  receipt_ok: boolean;
+  receipt_refusal?: string;
+  receipt?: {
+    adapter?: string;
+    passed?: boolean;
+    status?: string;
+    ended_at?: string;
+    reason?: string;
+  };
+};
+
 // GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
 // memory recall_log), resolved to live Understand nodes. Backs the rail's
 // "Knowledge · Understand" group; each row deep-links to /understand?concept=.
@@ -585,6 +599,9 @@ export default function TaskDetailPage() {
   // The RED tests that pin this task's oracle (empty unless a committed test
   // file names the task) — rendered beneath the oracle panel.
   const [pinTests, setPinTests] = useState<PinTest[]>([]);
+  // LIVE gate-card truth: the evidence tooth checked at render time (never a
+  // stale stored decision string) — GET /api/conductor/gate/readiness.
+  const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -647,6 +664,20 @@ export default function TaskDetailPage() {
         setPinTests(tr.tests ?? []);
       } catch {
         setPinTests([]);
+      }
+      // Live gate readiness: what a plain Approve would consult RIGHT NOW —
+      // fixes the stale-snapshot card that contradicted itself.
+      try {
+        const g = d.task?.gate_state;
+        if (g === "pending" || g === "failed") {
+          const gr = await api.get<GateReadiness>(
+            `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
+          setGateReadiness(gr);
+        } else {
+          setGateReadiness(null);
+        }
+      } catch {
+        setGateReadiness(null);
       }
     } catch (e) {
       setError((e as Error).message ?? "task not found");
@@ -992,6 +1023,7 @@ export default function TaskDetailPage() {
             prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
             reduced={reduced}
             pinTests={pinTests}
+            gateReadiness={gateReadiness}
             tabRequest={tabRequest}
             conductor={conductorOn ? {
               step: task.workflow_step,

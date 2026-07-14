@@ -48,6 +48,50 @@ def _board_tasks(s) -> list:
         return []
 
 
+@router.get("/gate/readiness")
+def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
+    """LIVE gate-card truth (owner 2026-07-14: the stored gate_reason is a
+    stale snapshot that contradicts reality and gives no action). Checks the
+    CHEAP evidence teeth at request time — never a cached decision string:
+      - receipt: the oracle EvidenceReceipt tooth exactly as the gate's
+        approve path evaluates it (fresh tree + spec + policy), read-only.
+    Returns what a plain Approve would consult, so the card can say
+    'Approve will pass the evidence tooth' vs 'evidence missing: <why>'."""
+    s = _svc(project)
+    task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, "unknown task")
+    refusal, receipt = s._oracle_receipt_refusal(
+        task, override=False, reason="")
+    out: dict = {
+        "receipt_ok": not refusal,
+        "receipt_refusal": refusal or "",
+    }
+    if receipt is not None:
+        out["receipt"] = {
+            "adapter": getattr(receipt, "adapter", ""),
+            "passed": bool(getattr(receipt, "passed", False)),
+            "status": getattr(receipt, "status", ""),
+            "ended_at": getattr(receipt, "ended_at", ""),
+            "reason": str(getattr(receipt, "reason", ""))[:300],
+        }
+    else:
+        try:
+            from prism_service.services import oracle_spec as osp
+            latest = osp.latest_receipt(project, task_id)
+            if latest is not None:
+                out["receipt"] = {
+                    "adapter": latest.adapter,
+                    "passed": bool(latest.passed),
+                    "status": latest.status,
+                    "ended_at": latest.ended_at,
+                    "reason": str(latest.reason)[:300],
+                }
+        except Exception:
+            pass
+    return out
+
+
 @router.post("/gate")
 def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
     """Resolve a pending conductor gate from the SPA.
