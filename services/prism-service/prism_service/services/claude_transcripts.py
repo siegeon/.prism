@@ -395,6 +395,11 @@ def parse_session_metrics(path: Path) -> dict | None:
         "tokens_used": tokens_out,
         "files_read": len(files_read),
         "files_modified": len(files_modified),
+        # Carry the actual paths alongside the legacy counts — the counts stay
+        # ints so every existing session_outcomes consumer keeps working, while
+        # the path lists let the store/UI show WHICH files a session touched.
+        "files_read_paths": sorted(files_read),
+        "files_modified_paths": sorted(files_modified),
         "skills_invoked": len(skill_invocations),
         "skill_invocations": skill_invocations,
         "signals": {
@@ -473,18 +478,72 @@ def _parse_ts(s: str) -> float | None:
         return None
 
 
+def _ensure_session_path_columns(conn: sqlite3.Connection) -> None:
+    """ALTER-if-missing: add the JSON-array path columns to session_outcomes so
+    a store created by an older schema (or predating this slice) can still hold
+    the per-session file paths. Pre-existing rows keep loading — the columns
+    default NULL, which the readers treat as []. Idempotent + best-effort."""
+    try:
+        cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(session_outcomes)"
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return
+    for col in ("files_read_paths", "files_modified_paths"):
+        if col not in cols:
+            try:
+                conn.execute(
+                    f"ALTER TABLE session_outcomes ADD COLUMN {col} TEXT"
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+
+
+def _refresh_path_columns(conn: sqlite3.Connection, metrics: dict) -> int:
+    """Backfill the JSON path columns on an already-imported session row that
+    predates path persistence (both columns NULL). Pure column fill — no
+    skill_usage rows, no reflection enqueue; those fired on first import.
+    Returns 1 when a row was updated."""
+    try:
+        cur = conn.execute(
+            "UPDATE session_outcomes SET files_read_paths=?, "
+            "files_modified_paths=? WHERE session_id=? "
+            "AND files_read_paths IS NULL AND files_modified_paths IS NULL",
+            (
+                json.dumps(metrics.get("files_read_paths") or []),
+                json.dumps(metrics.get("files_modified_paths") or []),
+                metrics["session_id"],
+            ),
+        )
+        if cur.rowcount > 0:
+            conn.commit()
+            return 1
+    except sqlite3.Error:
+        pass
+    return 0
+
+
 def import_unseen(
     scores_db: str,
     project_source_path: str,
     claude_home: Path | None = None,
     override_dir: str | None = None,
+    refresh_paths: bool = False,
 ) -> int:
     """Parse every transcript matching the project, insert any session
     whose id isn't already in `session_outcomes`. Returns the import count.
 
     v6.2.16 — when `override_dir` is set (the per-project claude_project_dir
     config), read transcripts directly from `<override_dir>/*.jsonl` instead
-    of slug-scanning ~/.claude/projects; used when auto-discovery misses."""
+    of slug-scanning ~/.claude/projects; used when auto-discovery misses.
+
+    v6.9.7 — `refresh_paths=True` additionally BACKFILLS the file-path
+    columns on already-imported rows that predate path persistence (both
+    columns NULL); refreshed rows count toward the return value."""
     claude_home = claude_home or resolve_claude_home()
     if override_dir and override_dir.strip():
         d = Path(override_dir.strip())
@@ -499,11 +558,14 @@ def import_unseen(
     except sqlite3.Error:
         return 0
     try:
+        _ensure_session_path_columns(conn)
         for path in paths:
             metrics = parse_session_metrics(path)
             if not metrics:
                 continue
             if _is_imported(conn, metrics["session_id"]):
+                if refresh_paths:
+                    n += _refresh_path_columns(conn, metrics)
                 continue
             # Use the file's mtime as recorded_at if possible — better
             # than the import moment for chronological ordering.
@@ -519,8 +581,9 @@ def import_unseen(
                 conn.execute(
                     "INSERT OR IGNORE INTO session_outcomes "
                     "(session_id, duration_s, tokens_used, files_read, "
-                    "files_modified, skills_invoked, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "files_modified, skills_invoked, timestamp, "
+                    "files_read_paths, files_modified_paths) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         metrics["session_id"],
                         metrics["duration_s"],
@@ -529,6 +592,8 @@ def import_unseen(
                         metrics["files_modified"],
                         metrics["skills_invoked"],
                         ts_iso,
+                        json.dumps(metrics.get("files_read_paths") or []),
+                        json.dumps(metrics.get("files_modified_paths") or []),
                     ),
                 )
                 if conn.total_changes > before:

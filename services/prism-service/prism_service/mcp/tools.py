@@ -3257,11 +3257,19 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # Brain tools
         # ------------------------------------------------------------------
         if name == "brain_search":
+            # Attribute the retrieval to its asking session/task (961f273b):
+            # the REAL transcript session (never the phantom MCP handle) and
+            # that session's linked task, when either exists.
+            _ask_sid = _resolve_real_session_id() or None
+            _ask_tid = (task_svc.task_for_session(_ask_sid) or None) \
+                if _ask_sid else None
             results = brain_svc.search(
                 query=arguments["query"],
                 domain=arguments.get("domain"),
                 limit=arguments.get("limit", 5),
                 domains=arguments.get("domains"),
+                session_id=_ask_sid,
+                task_id=_ask_tid,
             )
             return [TextContent(type="text", text=_json(results))]
 

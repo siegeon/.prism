@@ -21,6 +21,7 @@ const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
 const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
 const ConductorPage = lazy(() => import("@/pages/ConductorPage"));
 const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
+const SessionDetailPage = lazy(() => import("@/pages/SessionDetailPage"));
 const RetrievalsPage = lazy(() => import("@/pages/RetrievalsPage"));
 const LearningPage = lazy(() => import("@/pages/LearningPage"));
 const ConsolidationPage = lazy(() => import("@/pages/ConsolidationPage"));
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="/tasks/:id/:section" element={<TaskTextPage />} />
             <Route path="/conductor" element={<ConductorPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
+            <Route path="/sessions/:id" element={<SessionDetailPage />} />
             <Route path="/retrievals" element={<RetrievalsPage />} />
             <Route path="/learning" element={<LearningPage />} />
             <Route path="/consolidation" element={<ConsolidationPage />} />

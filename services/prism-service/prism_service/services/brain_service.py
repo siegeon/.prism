@@ -92,16 +92,22 @@ class BrainService:
         domain: Optional[str] = None,
         limit: int = 5,
         domains: Optional[list[str]] = None,
+        session_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> list[dict]:
         """Search the knowledge base.
 
         Expands PascalCase/camelCase terms in the query so 'FreshnessStatus'
         matches documents containing 'Freshness' or 'Status' as well.
+        session_id/task_id attribute the retrieval to its asking session and
+        task (persisted on the searches row; served by /api/retrievals).
         """
         if not self._available or self._brain is None:
             return []
         expanded_query = _expand_identifiers(query)
-        return self._brain.search(expanded_query, domain=domain, limit=limit, domains=domains)
+        return self._brain.search(expanded_query, domain=domain, limit=limit,
+                                  domains=domains, session_id=session_id,
+                                  task_id=task_id)
 
     def system_context(
         self,
