@@ -15,6 +15,10 @@ import { cn } from "@/lib/utils";
 // click re-centers (push ?focus=), double click opens the entity's page.
 type MeshNode = {
   kind: string; label: string; href: string | null; edge: string; token: string;
+  // Memory nodes carry their OKF metadata (from GET /api/xref/neighbors): the
+  // concept_type sub-captions each diamond, the domain groups same-domain
+  // diamonds under a dashed hull.
+  domain?: string | null; concept_type?: string | null;
 };
 type MeshData = { center: MeshNode; neighbors: MeshNode[] };
 // The 6 canonical node shapes the mesh draws; anything else falls back to a
@@ -102,6 +106,9 @@ export default function ExplorePage() {
       return n;
     });
   }, [setSp]);
+  // The focused entity's human label, reported up from the mesh once its
+  // neighborhood loads — used to pre-seed the full-map search (delta 3).
+  const [focusLabel, setFocusLabel] = useState<string | null>(null);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
@@ -211,6 +218,18 @@ export default function ExplorePage() {
 
   const submit = (e: React.FormEvent) => { e.preventDefault(); run(input.trim()); };
   const clear = () => { setInput(""); run(""); };
+
+  // "Full map" carries the mesh's focus context into the Sigma map. The viewer
+  // takes no focus/filter URL param (routes/graph_static.py drives it purely by
+  // postMessage), so the honest best-effort is to seed the page search with the
+  // focused entity's label and run it: that steers the WebGL canvas to
+  // highlight the matching subgraph via the existing prism:search bridge. Falls
+  // back to the raw focus token when the label hasn't loaded yet.
+  const openFullMap = () => {
+    const q = (focusLabel || focus || "").trim();
+    setFocus(null);
+    if (q) { setInput(q); run(q); }
+  };
 
   const ctxByFile = useMemo(() => {
     const m = new Map<string, Ctx>();
@@ -332,7 +351,8 @@ export default function ExplorePage() {
           </span>
           {focus && (
             <button
-              onClick={() => setFocus(null)}
+              onClick={openFullMap}
+              title="Open the full graph map, pre-filtered to this focus"
               className="ml-auto inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-2xs uppercase tracking-wider">
               <MapIcon className="w-3 h-3" /> Full map
             </button>
@@ -340,7 +360,7 @@ export default function ExplorePage() {
         </div>
         {focus ? (
           <Mesh token={focus} project={project} onFocus={setFocus}
-            onOpen={(href) => navigate(href)} />
+            onOpen={(href) => navigate(href)} onCenter={setFocusLabel} />
         ) : viewerUrl ? (
           <iframe
             ref={iframeRef}
@@ -642,9 +662,34 @@ function layoutMesh(neighbors: MeshNode[]): Placed[] {
   });
 }
 
-function Mesh({ token, project, onFocus, onOpen }: {
+type Hull = { domain: string; x: number; y: number; w: number; h: number };
+
+// A rounded bounding box per domain that has 2+ placed memory diamonds. Padded
+// enough to clear each diamond plus its label + type sub-caption; drawn behind
+// the edges so it reads as a backdrop, per the artifact's hull().
+function meshHulls(placed: Placed[]): Hull[] {
+  const byDom = new Map<string, Placed[]>();
+  for (const p of placed) {
+    if (p.kind !== "memory" || !p.domain) continue;
+    const g = byDom.get(p.domain) ?? [];
+    g.push(p); byDom.set(p.domain, g);
+  }
+  const PAD_X = 34, PAD_TOP = 30, PAD_BOTTOM = 46;  // extra below for captions
+  const out: Hull[] = [];
+  for (const [domain, pts] of byDom) {
+    if (pts.length < 2) continue;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs) - PAD_X, maxX = Math.max(...xs) + PAD_X;
+    const minY = Math.min(...ys) - PAD_TOP, maxY = Math.max(...ys) + PAD_BOTTOM;
+    out.push({ domain, x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+  }
+  return out;
+}
+
+function Mesh({ token, project, onFocus, onOpen, onCenter }: {
   token: string; project: string;
   onFocus: (t: string) => void; onOpen: (href: string) => void;
+  onCenter?: (label: string) => void;
 }) {
   const [data, setData] = useState<MeshData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -656,16 +701,33 @@ function Mesh({ token, project, onFocus, onOpen }: {
     let alive = true;
     setLoading(true); setErr(null);
     api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=48`)
-      .then((d) => { if (alive) { setData(d); setHidden(new Set()); } })
+      .then((d) => { if (alive) { setData(d); setHidden(new Set()); onCenter?.(d.center.label); } })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [token, project]);
+  }, [token, project, onCenter]);
 
   const visible = useMemo(
     () => (data?.neighbors ?? []).filter((n) => !hidden.has(n.kind)),
     [data, hidden]);
-  const placed = useMemo(() => layoutMesh(visible), [visible]);
+  // Group same-domain memory diamonds so they land adjacent on the ring
+  // (a prerequisite for a tight domain hull). Memory nodes lead, clustered by
+  // domain; every other kind keeps its order behind them.
+  const ordered = useMemo(() => {
+    const byDom = new Map<string, MeshNode[]>();
+    const rest: MeshNode[] = [];
+    for (const n of visible) {
+      if (n.kind === "memory" && n.domain) {
+        const g = byDom.get(n.domain) ?? [];
+        g.push(n); byDom.set(n.domain, g);
+      } else rest.push(n);
+    }
+    return [...[...byDom.values()].flat(), ...rest];
+  }, [visible]);
+  const placed = useMemo(() => layoutMesh(ordered), [ordered]);
+  // A dashed rounded hull behind each domain that has 2+ memory diamonds in
+  // view — the Understand wiki's grouping drawn into the mesh (artifact hull()).
+  const hulls = useMemo(() => meshHulls(placed), [placed]);
   const kindsPresent = useMemo(() => {
     const s = new Set<string>();
     (data?.neighbors ?? []).forEach((n) => s.add(n.kind));
@@ -724,6 +786,22 @@ function Mesh({ token, project, onFocus, onOpen }: {
             <svg viewBox={`0 0 ${MESH_W} ${MESH_H}`} preserveAspectRatio="xMidYMid meet"
               className="w-full h-full" role="img"
               aria-label={`Mesh around ${center.label}`}>
+              {/* domain hulls behind everything — the Understand grouping,
+                  --et-memory at low opacity with a dashed stroke */}
+              {hulls.map((h, i) => (
+                <g key={`h${i}`}>
+                  <rect x={h.x} y={h.y} width={h.w} height={h.h} rx={18}
+                    fill="var(--et-memory)" opacity={0.07} />
+                  <rect x={h.x} y={h.y} width={h.w} height={h.h} rx={18}
+                    fill="none" stroke="var(--et-memory)" strokeDasharray="4 4"
+                    opacity={0.35} />
+                  <text x={h.x + 12} y={h.y + 16} fontSize={9}
+                    letterSpacing="0.1em" fill="var(--et-memory)" opacity={0.9}
+                    style={{ textTransform: "uppercase" }}>
+                    DOMAIN · {h.domain}
+                  </text>
+                </g>
+              ))}
               {/* edges first, under the nodes */}
               {placed.map((nb, i) => {
                 const mx = MESH_CX + (nb.x - MESH_CX) * 0.62;
@@ -746,6 +824,11 @@ function Mesh({ token, project, onFocus, onOpen }: {
                 <MeshShape kind={center.kind} x={MESH_CX} y={MESH_CY} r={16} />
                 <text x={MESH_CX} y={MESH_CY + 34} textAnchor="middle" fontSize={12}
                   fontWeight={650} fill="var(--text-primary)">{trunc(center.label)}</text>
+                {center.kind === "memory" && center.concept_type && (
+                  <text x={MESH_CX} y={MESH_CY + 47} textAnchor="middle" fontSize={9}
+                    letterSpacing="0.06em" fill={meshFill("memory")}
+                    style={{ textTransform: "uppercase" }}>{center.concept_type}</text>
+                )}
               </g>
               {/* neighbors */}
               {placed.map((nb, i) => (
@@ -755,6 +838,15 @@ function Mesh({ token, project, onFocus, onOpen }: {
                   <MeshShape kind={nb.kind} x={nb.x} y={nb.y} r={12} />
                   <text x={nb.x} y={nb.y + 26} textAnchor="middle" fontSize={11}
                     fill="var(--text-secondary)">{trunc(nb.label, 16)}</text>
+                  {/* concept-type sub-caption under the diamond (decision/
+                      convention/expertise/anti-pattern/principle) */}
+                  {nb.kind === "memory" && nb.concept_type && (
+                    <text x={nb.x} y={nb.y + 37} textAnchor="middle" fontSize={8.5}
+                      letterSpacing="0.06em" fill={meshFill("memory")}
+                      style={{ textTransform: "uppercase" }}>
+                      {nb.concept_type}
+                    </text>
+                  )}
                 </g>
               ))}
             </svg>

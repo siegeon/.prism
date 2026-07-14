@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+import { Lozenge } from "@/components/Lozenge";
 import { fmtTokens } from "@/lib/format";
 import { useRoles } from "@/lib/useRoles";
 import { domainTone, toneClass } from "@/lib/domainTone";
@@ -93,18 +94,9 @@ function ScorePill({ value }: { value: number | null | undefined }) {
   if (value == null || Number.isNaN(value)) {
     return <span className="font-mono opacity-60">—</span>;
   }
-  // green ≥ 0.7 · amber 0.4-0.7 · rose < 0.4
-  const tone =
-    value >= 0.7
-      ? "text-[color:var(--accent-emerald-fg)] bg-[color:var(--accent-emerald-bg)] border-[color:var(--accent-emerald-ring)]"
-      : value >= 0.4
-        ? "text-[color:var(--accent-amber-fg)] bg-[color:var(--accent-amber-bg)] border-[color:var(--accent-amber-ring)]"
-        : "text-[color:var(--accent-rose-fg)] bg-[color:var(--accent-rose-bg)] border-[color:var(--accent-rose-ring)]";
-  return (
-    <span className={`font-mono text-xs px-2 py-0.5 rounded border ${tone}`}>
-      {value.toFixed(2)}
-    </span>
-  );
+  // ok ≥ 0.7 · warn 0.4-0.7 · danger < 0.4
+  const tone = value >= 0.7 ? "ok" : value >= 0.4 ? "warn" : "danger";
+  return <Lozenge tone={tone} className="tabular-nums">{value.toFixed(2)}</Lozenge>;
 }
 
 // Run-length collapse of adaptive-policy history: the tuner writes a row every

@@ -60,6 +60,19 @@ type PinTest = {
   file?: string;
 };
 
+// GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
+// memory recall_log), resolved to live Understand nodes. Backs the rail's
+// "Knowledge · Understand" group; each row deep-links to /understand?concept=.
+type KnowledgeConcept = {
+  id: string;
+  title: string;
+  type: string;
+  domain?: string;
+  path?: string;
+  recall_count?: number;
+  last_recalled?: string;
+};
+
 // Slim shape for the child-task list — only what the row renders.
 type ChildTask = {
   id?: string;
@@ -516,7 +529,12 @@ function TraceView({ trace, loading }: { trace: TaskTrace | null; loading: boole
             return (
               <div key={s.session_id} className="py-1.5 first:pt-0 last:pb-0">
                 <div className="flex items-center gap-2 py-1.5">
-                  <EntityChip kind="session" label={`${s.session_id.slice(0, 8)} · drive`} to={`/sessions/${s.session_id}`} />
+                  {/* Server-actor rows (conductor auto-clear, etc.) carry an
+                      EMPTY session_id — render them as a neutral machine
+                      lozenge, never a blank/unlinked session chip. */}
+                  {s.session_id && s.session_id.trim()
+                    ? <EntityChip kind="session" label={`${s.session_id.slice(0, 8)} · drive`} to={`/sessions/${s.session_id}`} />
+                    : <Lozenge tone="neutral">conductor · machine</Lozenge>}
                   <span className="ml-auto font-mono text-xs text-[color:var(--text-muted)] tabular-nums">{fmtTokens(s.tokens_total)} tok</span>
                 </div>
                 {s.steps.map((st, i) => (
@@ -560,6 +578,9 @@ export default function TaskDetailPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [children, setChildren] = useState<ChildTask[]>([]);
+  // OKF concepts this task recalled (recall_log attribution) — the rail's
+  // "Knowledge · Understand" group. Empty when the task recalled nothing.
+  const [knowledge, setKnowledge] = useState<KnowledgeConcept[]>([]);
   // The RED tests that pin this task's oracle (empty unless a committed test
   // file names the task) — rendered beneath the oracle panel.
   const [pinTests, setPinTests] = useState<PinTest[]>([]);
@@ -698,6 +719,25 @@ export default function TaskDetailPage() {
     return () => { cancelled = true; };
   }, [sessionIdsKey, project]);
 
+  // "Knowledge · Understand" rail group: the OKF concepts this task recalled,
+  // read from the memory recall_log (guarded — a task with no recalls, or a
+  // store without a recall db, yields []).
+  useEffect(() => {
+    if (!id) { setKnowledge([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await api.get<{ concepts: KnowledgeConcept[] }>(
+          `/api/okf/task_concepts?task_id=${encodeURIComponent(id)}&project=${project}`,
+        );
+        if (!cancelled) setKnowledge(d.concepts ?? []);
+      } catch {
+        if (!cancelled) setKnowledge([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id, project]);
+
   const setStatus = async (status: string) => {
     setBusy(true);
     try {
@@ -814,7 +854,7 @@ export default function TaskDetailPage() {
   const codeShown = codeExpanded ? codePaths : codePaths.slice(0, CODE_CAP);
   const codeHidden = codePaths.length - codeShown.length;
   const connectionCount =
-    realSessions.length + codePaths.length + (gateActive || gateStep ? 1 : 0) + children.length;
+    realSessions.length + codePaths.length + knowledge.length + (gateActive || gateStep ? 1 : 0) + children.length;
   const hasConnections = connectionCount > 0;
 
   return (
@@ -1283,6 +1323,20 @@ export default function TaskDetailPage() {
                   {codeHidden} more
                 </button>
               )}
+            </RelGroup>
+          )}
+          {knowledge.length > 0 && (
+            <RelGroup label="Knowledge · Understand">
+              {knowledge.map((k) => (
+                <RelRow key={k.id} why={k.type}>
+                  <EntityChip
+                    kind="memory"
+                    label={oneLine(k.title, 26)}
+                    title={k.title}
+                    to={`/understand?concept=${encodeURIComponent(k.id)}`}
+                  />
+                </RelRow>
+              ))}
             </RelGroup>
           )}
           {(gateActive || gateStep) && (

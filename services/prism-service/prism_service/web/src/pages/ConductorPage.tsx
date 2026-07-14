@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, lozengeTone, type PillTone } from "@/components/ui";
+import { Lozenge } from "@/components/Lozenge";
 import { domainTone } from "@/lib/domainTone";
 import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
@@ -98,7 +99,7 @@ export default function ConductorPage() {
       {reorient && (
         <Card>
           <div className="flex items-center gap-2">
-            <TileBadge tone="amber">reorient</TileBadge>
+            <Lozenge tone="warn">reorient</Lozenge>
             <span className="text-[12px] text-[color:var(--text-secondary)]">
               ⚠ {lowValueN} low-confidence slices in a row — reorient toward a milestone
             </span>
@@ -188,12 +189,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
           <div className="text-[17px] font-semibold leading-snug text-[color:var(--text-primary)] line-clamp-1">{task.title}</div>
           <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
         </div>
-        <span
-          className="shrink-0 text-2xs uppercase tracking-wider px-2.5 py-1 rounded-full font-mono whitespace-nowrap"
-          style={{ background: `var(--accent-${actTone}-bg)`, color: `var(--accent-${actTone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${actTone}-ring)` }}
-        >
-          {actLabel}
-        </span>
+        <Lozenge tone={lozengeTone(actTone)} className="shrink-0">{actLabel}</Lozenge>
       </div>
       {/* ring + "N/10 steps complete · the conductor drives this task…" */}
       <TileHero task={task} />
@@ -252,21 +248,6 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   );
 }
 
-
-function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
-  return (
-    <span
-      className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
-      style={{
-        background: `var(--accent-${tone}-bg)`,
-        color: `var(--accent-${tone}-fg)`,
-        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
-      }}
-    >
-      {children}
-    </span>
-  );
-}
 
 // TileHero — the completion RING (done SDLC steps / total over the REAL
 // WORKFLOW_STEPS_ORDERED) beside a 2×2 metric grid. Every value is sourced from

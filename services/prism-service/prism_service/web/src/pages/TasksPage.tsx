@@ -1,13 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page } from "@/components/ui";
 import { stepLabel } from "@/lib/workflowChips";
-import { useScanActivity } from "@/lib/scan-activity";
-import { type Activity } from "@/components/conductor/SdlcProgress";
 import { Lozenge } from "@/components/Lozenge";
-import { EntityChip } from "@/components/EntityChip";
 
 type Task = {
   id?: string;
@@ -20,19 +17,6 @@ type Task = {
   gate_reason?: string;
   parent_id?: string;
   updated_at?: string;
-};
-
-// Conductor live-state tile (server: /api/conductor/state → managed_tasks).
-// This is the SAME honest work-state ConductorPage reads: activity.state is
-// "working" ONLY when a task is actively being driven right now. The LIVE bar
-// below reads THIS, never the raw status, so it can't paint a parked task green.
-type ManagedTask = {
-  id: string;
-  title?: string;
-  workflow_step?: string;
-  gate_state?: string;
-  assigned_agent?: string;
-  activity?: Activity | null;
 };
 
 // Status buckets become the Jira-style group rows. Order is the reading order
@@ -83,32 +67,16 @@ export default function TasksPage() {
   const [project] = useProject();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [next, setNext] = useState<Task | null>(null);
-  const [managed, setManaged] = useState<ManagedTask[]>([]);
-  const [version, setVersion] = useState<string>("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const scan = useScanActivity();
-
-  // Heartbeat: the bar must VISIBLY tick or it's indistinguishable from frozen.
-  // sinceFetchS counts up every second and RESETS on each 5s poll — the same
-  // honest-liveness trick ConductorPage uses for its tiles.
-  const fetchedAt = useRef(0);
-  const [sinceFetchS, setSinceFetchS] = useState(0);
 
   const load = useCallback(() => {
     api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}`)
-      .then((d) => { setTasks(d.tasks); fetchedAt.current = performance.now(); setSinceFetchS(0); })
+      .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
     api.get<{ next: Task | null }>(`/api/tasks/next?project=${project}`).then((d) => setNext(d.next)).catch(() => setNext(null));
-    api.get<{ managed_tasks?: ManagedTask[] }>(`/api/conductor/state?project=${project}`)
-      .then((d) => setManaged(d.managed_tasks ?? [])).catch(() => setManaged([]));
   }, [project]);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
-  useEffect(() => {
-    const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);
-    return () => clearInterval(t);
-  }, []);
-  useEffect(() => { api.get<{ version: string }>(`/api/version`).then((d) => setVersion(d.version)).catch(() => {}); }, []);
 
   // Hierarchy: the board lists root tasks; a root with children gets an
   // expand twist that reveals the epic → workstream tree inline. The list API
@@ -126,11 +94,6 @@ export default function TasksPage() {
   const doneCount = roots.filter((t) => (t.status ?? "").toLowerCase() === "done").length;
   const nextId = next?.id;
 
-  const working = managed.filter((m) => m.activity?.state === "working");
-  const gated = managed.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
-  const isLive = working.length > 0;
-  const heartbeat = `poll ${Math.floor(sinceFetchS)}s · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
-
   const toggle = (id: string) => setExpanded((prev) => {
     const nn = new Set(prev);
     nn.has(id) ? nn.delete(id) : nn.add(id);
@@ -139,56 +102,8 @@ export default function TasksPage() {
 
   return (
     <Page>
-      {/* LIVE bar — the conductor's realtime pulse, persistent above the board.
-          Reads /api/conductor/state (honest activity.state), NOT a fake pulse:
-          when nothing is being driven it shows the quiet daemon-heartbeat state
-          rather than a frozen green dot. */}
-      <div
-        className="flex items-center gap-3 flex-wrap rounded-md border px-3.5 py-2.5 text-sm"
-        role="status"
-        style={{
-          borderColor: isLive ? "var(--accent-sage-ring)" : "var(--border-default)",
-          background: isLive ? "var(--accent-sage-bg)" : "var(--surface-1)",
-        }}
-      >
-        <span className="inline-flex items-center gap-2 shrink-0">
-          <span
-            className={"h-2.5 w-2.5 rounded-full " + (isLive ? "animate-pulse" : "")}
-            style={{ background: isLive ? "var(--accent-sage-fg)" : "var(--text-muted)" }}
-          />
-          <b className="text-2xs uppercase tracking-wider" style={{ color: isLive ? "var(--accent-sage-fg)" : "var(--text-muted)" }}>
-            {isLive ? "Live" : "Idle"}
-          </b>
-        </span>
-
-        {working.map((m) => (
-          <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
-            <span className="h-4 w-px shrink-0" style={{ background: "var(--border-default)" }} />
-            <EntityChip kind="task" label={`${shortId(m.id)} ${m.title ?? ""}`.trim()} to={`/tasks/${m.id}`} />
-            {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
-            <Lozenge tone="ok">working</Lozenge>
-            <span className="text-2xs font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>
-              {m.assigned_agent || "claude-code"}
-            </span>
-          </span>
-        ))}
-
-        {gated.map((m) => (
-          <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
-            <span className="h-4 w-px shrink-0" style={{ background: "var(--border-default)" }} />
-            <EntityChip kind="task" label={shortId(m.id)} to={`/tasks/${m.id}`} />
-            <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}`}</Lozenge>
-          </span>
-        ))}
-
-        {!isLive && gated.length === 0 && (
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>no task being driven — queue is quiet</span>
-        )}
-
-        <span className="ml-auto text-2xs font-mono tabular-nums shrink-0" style={{ color: isLive ? "var(--accent-sage-fg)" : "var(--text-muted)" }}>
-          {heartbeat}
-        </span>
-      </div>
+      {/* The conductor pulse (LIVE bar) now lives in the app shell (App.tsx →
+          LiveBar) so it persists on every page, not just the board. */}
 
       {/* Grouped Jira-style board. Group rows partition by status bucket; each
           task row carries its short id, clickable summary, step + gate lozenges,

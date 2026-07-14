@@ -13,10 +13,24 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { Tone } from "@/lib/domainTone";
 import { toneFromLabel } from "@/lib/domainTone";
+import type { LozengeTone } from "@/components/Lozenge";
 
 // Re-exported so existing `import { toneFromLabel } from "@/components/ui"`
 // call sites keep working; the implementation lives in lib/domainTone.
 export { toneFromLabel };
+
+// palette Tone (the 7-hue domainTone family) → Lozenge semantic tone (6).
+// Both emerald and sage read as the success "ok" green; every other hue maps
+// to the accent family Lozenge borrows (see Lozenge.tsx header). Lets a status
+// already resolved through domainTone() render as a Lozenge without a 2nd map —
+// e.g. the conductor tile's ACT_TILE tones and taskStatus fallbacks.
+const PALETTE_TO_LOZENGE: Record<Tone, LozengeTone> = {
+  teal: "info", sage: "ok", amber: "warn", rose: "danger",
+  violet: "new", emerald: "ok", slate: "neutral",
+};
+export function lozengeTone(tone: Tone): LozengeTone {
+  return PALETTE_TO_LOZENGE[tone];
+}
 
 export const Card = ({
   children, className, nested, raised,

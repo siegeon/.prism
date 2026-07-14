@@ -5,7 +5,7 @@ import { useProject } from "@/lib/project";
 import { Card, Empty } from "@/components/ui";
 import { typeToneHashed, toneVar, type Tone } from "@/lib/domainTone";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
-import { GlyphIcon } from "@/components/EntityChip";
+import { EntityChip, GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
 
 // Understand — the domain-first knowledge drill (owner doctrine): Understand
@@ -30,11 +30,17 @@ type GraphNode = {
 type GraphEdge = { source: string; target: string };
 type OkfGraph = { nodes: GraphNode[]; edges: GraphEdge[] };
 
+// Tasks that recalled this concept (from the memory recall_log) — the "Cited
+// by" extension beyond concept-to-concept backlinks. Sessions are not
+// attributable: recall_log records the asking task, not a session.
+type Recaller = { task_id: string; recall_count?: number; last_recalled?: string; outcome?: string };
+
 type Concept = {
   path: string; type: string;
   frontmatter: Record<string, unknown>;
   body: string; links: string[];
   backlinks: { id: string; title: string }[];
+  recalled_by?: Recaller[];
 };
 
 const DOMAIN_FALLBACK = "general";
@@ -530,6 +536,26 @@ function DetailPanel({
           </ul>
         )}
       </div>
+
+      {/* "Cited by" beyond concepts: tasks that recalled this concept, from
+          the memory recall_log. Guarded — hidden entirely when nothing has. */}
+      {(concept.recalled_by?.length ?? 0) > 0 && (
+        <div className="border-t border-[color:var(--border-default)] pt-3">
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">
+            Recalled by tasks ({concept.recalled_by!.length})
+          </div>
+          <ul className="space-y-1.5">
+            {concept.recalled_by!.map((t) => (
+              <li key={t.task_id} className="flex items-center gap-2 min-w-0">
+                <EntityChip kind="task" label={t.task_id.slice(0, 8)} to={`/tasks/${t.task_id}`} title={t.task_id} />
+                {t.outcome ? (
+                  <span className="text-2xs text-[color:var(--text-muted)] capitalize">{t.outcome}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

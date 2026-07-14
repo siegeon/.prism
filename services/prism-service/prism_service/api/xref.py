@@ -351,11 +351,20 @@ def _short(token: str, n: int = 8) -> str:
 
 
 def _nb(kind: str, label: str, href: Optional[str], edge: str,
-        token: str) -> dict:
+        token: str, *, domain: Optional[str] = None,
+        concept_type: Optional[str] = None) -> dict:
     """One neighbor: its shape (kind), display label, click-through href, the
-    relation label drawn on the edge, and the token to re-center on."""
-    return {"kind": kind, "label": label, "href": href,
-            "edge": edge, "token": token}
+    relation label drawn on the edge, and the token to re-center on. Memory
+    neighbors additionally carry their OKF `domain` + `concept_type` so the
+    mesh can sub-caption each diamond and group same-domain diamonds under a
+    dashed hull; both are omitted for kinds that don't have them."""
+    nb = {"kind": kind, "label": label, "href": href,
+          "edge": edge, "token": token}
+    if domain:
+        nb["domain"] = domain
+    if concept_type:
+        nb["concept_type"] = concept_type
+    return nb
 
 
 def _task_neighbors(p, task_id: str, task, out: list) -> None:
@@ -456,27 +465,45 @@ def _searches_for(p, out: list, session_id: str = "",
                            "searched here", rsid))
 
 
-def _memory_neighbors(p, concept_id: str, out: list) -> None:
-    """Concept<->concept: the OKF wikilink graph. Outbound [[links]] and
-    inbound backlinks are peers -- knowledge citing knowledge."""
+def _okf_graph(p) -> Optional[dict]:
+    """The OKF wiki's concept graph -- nodes carry {id, title, type, domain}
+    (see OkfHost.graph / api.okf) + directed wikilink edges. Read-only, guarded:
+    a project without a memory service (or a graph that fails to build) yields
+    None so callers just skip the concept edges instead of crashing."""
     memory_svc = getattr(p, "memory_svc", None)
     if memory_svc is None:
-        return
+        return None
     try:
         from prism_service.services.okf_host import OkfHost
-        host = OkfHost(memory_svc, getattr(p, "brain_svc", None))
-        g = host.graph()
+        return OkfHost(memory_svc, getattr(p, "brain_svc", None)).graph()
     except Exception:
+        return None
+
+
+def _memory_neighbors(p, concept_id: str, out: list,
+                      g: Optional[dict] = None) -> None:
+    """Concept<->concept: the OKF wikilink graph. Outbound [[links]] and
+    inbound backlinks are peers -- knowledge citing knowledge. Each memory
+    neighbor carries the counterpart concept's OKF `type` + `domain` so the
+    mesh can caption the diamond and hull same-domain concepts together."""
+    if g is None:
+        g = _okf_graph(p)
+    if not g:
         return
-    label_by_id = {n["id"]: n.get("title") or n["id"] for n in g.get("nodes", [])}
+    meta_by_id = {n["id"]: n for n in g.get("nodes", [])}
+
+    def _mem_nb(other_id: str, edge: str) -> dict:
+        m = meta_by_id.get(other_id, {})
+        return _nb("memory", m.get("title") or other_id,
+                   f"/understand?concept={other_id}", edge, other_id,
+                   domain=m.get("domain"), concept_type=m.get("type"))
+
     for e in g.get("edges", []):
         src, tgt = e.get("source"), e.get("target")
         if src == concept_id and tgt:
-            out.append(_nb("memory", label_by_id.get(tgt, tgt),
-                           f"/understand?concept={tgt}", "links", tgt))
+            out.append(_mem_nb(tgt, "links"))
         elif tgt == concept_id and src:
-            out.append(_nb("memory", label_by_id.get(src, src),
-                           f"/understand?concept={src}", "cited by", src))
+            out.append(_mem_nb(src, "cited by"))
 
 
 def _code_neighbors(p, sym: dict, out: list) -> None:
@@ -546,6 +573,8 @@ def neighbors_for(token: str, p, limit: int = 24) -> dict:
     )
     kind = center.get("kind", "unresolved")
     out: list = []
+    center_domain: Optional[str] = None
+    center_type: Optional[str] = None
     if kind == "task":
         task = _task_lookup(getattr(p, "task_svc", None), token)
         if task is not None:
@@ -554,8 +583,16 @@ def neighbors_for(token: str, p, limit: int = 24) -> dict:
     elif kind == "session":
         _session_neighbors(p, token, out)
     elif kind == "concept":
+        g = _okf_graph(p)
         cid = (_resolve_concept(p.memory_svc, token) or {}).get("id", token)
-        _memory_neighbors(p, cid, out)
+        _memory_neighbors(p, cid, out, g=g)
+        # The focused diamond carries its own type+domain too, so the mesh's
+        # center caption + hull grouping include it.
+        cm = next((n for n in (g or {}).get("nodes", []) if n["id"] == cid),
+                  None) if g else None
+        if cm:
+            center_domain = cm.get("domain")
+            center_type = cm.get("type")
     elif kind == "symbol":
         _code_neighbors(p, _resolve_symbol(p.brain_svc, token) or {}, out)
     elif kind == "file":
@@ -572,13 +609,18 @@ def neighbors_for(token: str, p, limit: int = 24) -> dict:
             continue
         seen.add(key)
         deduped.append(n)
+    center_out = {
+        "kind": _UI_KIND.get(kind, kind),
+        "label": center.get("label") or token,
+        "href": center.get("href"),
+        "token": token,
+    }
+    if center_domain:
+        center_out["domain"] = center_domain
+    if center_type:
+        center_out["concept_type"] = center_type
     return {
-        "center": {
-            "kind": _UI_KIND.get(kind, kind),
-            "label": center.get("label") or token,
-            "href": center.get("href"),
-            "token": token,
-        },
+        "center": center_out,
         "neighbors": deduped[: max(1, int(limit))],
     }
 

@@ -153,6 +153,81 @@ def test_sources_are_guarded_no_service_no_crash():
     assert res["center"]["token"] == TASK_ID
 
 
+CONCEPT_ID = "session-task-live-binding"
+LINKED_ID = "gate-enforcement-doctrine"
+
+
+class _MemoryWithConcept:
+    """A memory service that resolves one concept by id -- enough for the
+    resolver's step-1 concept match to fire so the center is a memory node."""
+
+    def get_entry(self, token):
+        if token == CONCEPT_ID:
+            return SimpleNamespace(id=CONCEPT_ID, name="Session-task live binding")
+        return None
+
+    def list_domains(self):
+        return []
+
+    def list_entries(self, domain):
+        return []
+
+
+class _FakeOkfHost:
+    """Stands in for OkfHost.graph(): typed concept nodes (type + domain, the
+    OKF shape api/okf projects) and one directed wikilink edge."""
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def graph(self):
+        return {
+            "nodes": [
+                {"id": CONCEPT_ID, "title": "Session-task live binding",
+                 "type": "decision", "domain": "conductor"},
+                {"id": LINKED_ID, "title": "Gate enforcement doctrine",
+                 "type": "convention", "domain": "conductor"},
+            ],
+            "edges": [{"source": CONCEPT_ID, "target": LINKED_ID}],
+        }
+
+
+def test_memory_neighbors_carry_type_and_domain(monkeypatch):
+    """A concept center + its wikilinked neighbor both carry OKF concept_type
+    and domain, and memory hrefs deep-link to /understand?concept=<id>."""
+    from prism_service.services import okf_host as okf_mod
+    monkeypatch.setattr(okf_mod, "OkfHost", _FakeOkfHost)
+
+    p = SimpleNamespace(
+        memory_svc=_MemoryWithConcept(), brain_svc=_NoBrain(),
+        graph_svc=None, task_svc=None, conductor_svc=None,
+    )
+    res = xref.neighbors_for(CONCEPT_ID, p, limit=24)
+
+    # Center is the focused concept, captioned with its own type + domain.
+    assert res["center"]["kind"] == "memory"
+    assert res["center"]["concept_type"] == "decision"
+    assert res["center"]["domain"] == "conductor"
+
+    mem = [n for n in res["neighbors"] if n["kind"] == "memory"]
+    assert mem, res["neighbors"]
+    nb = mem[0]
+    assert nb["concept_type"] == "convention"
+    assert nb["domain"] == "conductor"
+    assert nb["edge"] == "links"
+    assert nb["href"] == f"/understand?concept={LINKED_ID}"
+    assert nb["token"] == LINKED_ID
+
+
+def test_non_memory_neighbors_omit_concept_metadata():
+    """concept_type/domain are memory-only -- a task's session/child neighbors
+    must not sprout them."""
+    res = xref.neighbors_for(TASK_ID, _fake_project(), limit=24)
+    for n in res["neighbors"]:
+        assert "concept_type" not in n, n
+        assert "domain" not in n, n
+
+
 def test_neighbors_endpoint_served_by_real_app(monkeypatch):
     """The REAL FastAPI route the SPA calls resolves a task to its mesh."""
     testclient_mod = pytest.importorskip("fastapi.testclient")

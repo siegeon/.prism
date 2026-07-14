@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.13"
+PRISM_VERSION = "6.9.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.14: REDESIGN DELTAS CLOSED — the conductor LIVE bar is a "
+    "persistent app-shell strip on EVERY page (honest working/gated/idle, "
+    "collapsible); every status chip app-wide routes through Lozenge; type "
+    "scale lands on the artifact's 20/15/13.5/12/11 steps; the mesh draws "
+    "Understand primitives (concept-type captions, dashed DOMAIN hulls, "
+    "concept dbl-click -> reading page, full-map opens search-seeded); task "
+    "rail gains Knowledge·Understand (real recall_log attribution) and "
+    "concepts show Recalled-by-tasks; trace machine-actor rows labeled "
+    "honestly; dashboard hardened against transient payloads; entire test "
+    "tree green (1443) with stale pre-redesign pins re-pinned. "
     "v6.9.13: THE CONNECTED SCREENS — four redesign surfaces land at once. "
     "EXPLORE MESH v1 (/brain?focus=<entity>): typed ego-network over a new "
     "GET /api/xref/neighbors (task/session/code/memory/gate edges from the "

@@ -247,16 +247,21 @@ body {
 
 @theme inline { --spacing: calc(0.25rem * var(--theme-spacing-mul, 1)); }
 
-/* 5-step type scale (task 401811b8). The floor is text-2xs = 11px —
- * NOTHING in the app renders below 11px; the old inline text-[9-10px]
- * sizes were swept onto this scale. xs/sm/base/lg re-declare the
- * Tailwind defaults so the whole ladder is authored in one place. */
+/* 5-step type scale (task 401811b8; re-valued to the UI-direction-v2
+ * Foundation ladder — 20 title / 15 section / 13.5 body / 12 meta /
+ * 11 label). The floor is text-2xs = 11px — NOTHING in the app renders
+ * below 11px; the old inline text-[9-10px] sizes were swept onto this
+ * scale. The whole ladder is authored here in one place:
+ *   text-2xs 11px  label   ·  text-xs 12px  meta
+ *   text-sm 13.5px body    ·  text-base 15px section
+ *   text-xl 20px  title (Tailwind default, uncustomized)
+ * text-lg stays 18px as the one intermediate between section and title. */
 @theme {
-  --text-2xs: 0.6875rem;            /* 11px — the app-wide floor */
+  --text-2xs: 0.6875rem;            /* 11px — label, the app-wide floor */
   --text-2xs--line-height: 1.3;
-  --text-xs: 0.75rem;               /* 12px */
-  --text-sm: 0.875rem;              /* 14px */
-  --text-base: 1rem;                /* 16px */
+  --text-xs: 0.75rem;               /* 12px — meta */
+  --text-sm: 0.84375rem;            /* 13.5px — body */
+  --text-base: 0.9375rem;           /* 15px — section */
   --text-lg: 1.125rem;              /* 18px */
 }
 

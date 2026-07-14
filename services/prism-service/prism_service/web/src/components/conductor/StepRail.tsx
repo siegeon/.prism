@@ -11,6 +11,7 @@ import { motion } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { domainTone } from "@/lib/domainTone";
 import { fmtTokens } from "@/lib/format";
+import { Lozenge } from "@/components/Lozenge";
 import type { PhaseProgress, Activity } from "./SdlcProgress";
 import type { GanttGate } from "./TaskActivityGantt";
 
@@ -418,7 +419,7 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
             useful stage metric instead; the receipt lives in the panel below. */}
         {gi.state === "pending" ? (
           <span className="ml-auto flex items-center gap-2 flex-none">
-            <span className="text-2xs font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ background: "var(--accent-amber-fg)", color: "#3a2a04" }}>pending</span>
+            <Lozenge tone="warn">pending</Lozenge>
             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (

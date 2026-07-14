@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Kpi, Card, SectionLabel, Empty } from "@/components/ui";
+import { Lozenge } from "@/components/Lozenge";
 
 type QueueRow = { state: string; count: number };
 type SignalRollup = {
@@ -516,7 +517,7 @@ export default function ConsolidationPage() {
                         </span>
                       )}
                       {(sc.bg_signals ?? 0) > 0 && (
-                        <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90" title="result:/failed:/needs input: markers">
+                        <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)]" title="result:/failed:/needs input: markers">
                           {sc.bg_signals} bg
                         </span>
                       )}
@@ -543,10 +544,10 @@ export default function ConsolidationPage() {
                     <span className="text-xs opacity-60 w-24 text-right">retries {b.retry_count ?? 0}</span>
                     <span className="text-xs opacity-60 w-16 text-right">{ageH.toFixed(1)}h</span>
                     {reflectBusy === b.id ? (
-                      <span className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-sky-500/20 text-sky-200 shrink-0 inline-flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-sky-300 animate-pulse" />
+                      <Lozenge tone="info" className="shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent-teal-fg)] animate-pulse" />
                         reflecting {elapsed}s
-                      </span>
+                      </Lozenge>
                     ) : verdicts[b.id]?.error ? (
                       <button
                         onClick={() => runReflection(b.id)}
@@ -557,9 +558,9 @@ export default function ConsolidationPage() {
                         Retry
                       </button>
                     ) : verdicts[b.id] ? (
-                      <span className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] shrink-0 inline-flex items-center gap-1">
+                      <Lozenge tone="ok" className="shrink-0">
                         ✓ score {(verdicts[b.id].qualitative_score ?? 0).toFixed(2)} · {(verdicts[b.id].memories_stored ?? []).length} mem
-                      </span>
+                      </Lozenge>
                     ) : (
                       <button
                         onClick={() => runReflection(b.id)}

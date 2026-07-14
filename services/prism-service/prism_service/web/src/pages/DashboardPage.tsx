@@ -3,7 +3,7 @@ import * as Plot from "@observablehq/plot";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { Lozenge } from "@/components/Lozenge";
 import { PlotFigure, Sparkline, TONE, plotBase } from "@/components/Chart";
 import { fmtTokens } from "@/lib/format";
 
@@ -64,9 +64,7 @@ function Row({ label, v, bad }: { label: string; v: number; bad: boolean }) {
   return (
     <div className="flex items-center justify-between">
       <span className="opacity-80">{label}</span>
-      <span className={cn("font-mono text-xs px-2 py-0.5 rounded",
-        bad ? "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]" : "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]",
-      )}>{v}</span>
+      <Lozenge tone={bad ? "warn" : "ok"} className="tabular-nums">{v}</Lozenge>
     </div>
   );
 }
@@ -256,8 +254,7 @@ export default function DashboardPage() {
             <ul className="space-y-1.5">
               {q.recent.map((r, i) => (
                 <li key={i} className="flex items-center gap-2 text-sm">
-                  <span className="font-mono text-2xs px-1.5 py-0.5 rounded shrink-0"
-                    style={{ background: r.n_results ? "rgba(110,231,183,0.12)" : "rgba(249,168,212,0.14)", color: r.n_results ? TONE.emerald : TONE.rose }}>{r.n_results}</span>
+                  <Lozenge tone={r.n_results ? "ok" : "danger"} className="shrink-0 tabular-nums">{r.n_results}</Lozenge>
                   <span className="truncate text-[color:var(--text-secondary)]">{r.q}</span>
                   <span className="ml-auto shrink-0 text-2xs text-[color:var(--text-muted)]">{r.latency_ms} ms</span>
                 </li>
@@ -270,9 +267,9 @@ export default function DashboardPage() {
           <SectionLabel>Delivery flow</SectionLabel>
           <div className="flex gap-3 mb-3">
             <Stat label="gate pass-rate" value={gatePct != null ? `${gatePct}%` : "—"} tone={gatePct === 100 ? TONE.emerald : gatePct != null ? TONE.amber : undefined} />
-            <Stat label="cycle time" value={act?.flow.cycle_days != null ? `${act.flow.cycle_days} d` : "—"} />
-            <Stat label="shipped" value={nf(sum(act?.flow.completed ?? []))} />
-            <Stat label="active" value={nf(data?.kpis.tasks_active ?? 0)} />
+            <Stat label="cycle time" value={act?.flow?.cycle_days != null ? `${act.flow.cycle_days} d` : "—"} />
+            <Stat label="shipped" value={nf(sum(act?.flow?.completed ?? []))} />
+            <Stat label="active" value={nf(data?.kpis?.tasks_active ?? 0)} />
           </div>
           {flowChart && <PlotFigure options={flowChart} className="w-full mb-3" />}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-1">Workflow events by action</div>

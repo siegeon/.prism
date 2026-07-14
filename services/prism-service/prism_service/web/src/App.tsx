@@ -6,6 +6,7 @@ import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
+import LiveBar from "@/components/LiveBar";
 
 // Route-level code splitting (v6.3.40). Every page used to be a static import,
 // so the graph/Sigma, conductor animation, settings, and mermaid-adjacent code
@@ -47,6 +48,9 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0">
         <LiveStatusStrip />
         <PageHeader />
+        {/* Conductor pulse — persistent across navigation, honest idle state.
+            Distinct from LiveStatusStrip (the analyzer scan-queue strip). */}
+        <LiveBar />
         <div className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
           <Suspense

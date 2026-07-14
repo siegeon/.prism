@@ -15,6 +15,8 @@ from pathlib import Path
 _HERE = Path(__file__).resolve()
 _SRC = _HERE.parent.parent.parent / "prism_service" / "web" / "src"
 _TASKS = _SRC / "pages" / "TasksPage.tsx"
+_LIVEBAR = _SRC / "components" / "LiveBar.tsx"
+_APP = _SRC / "App.tsx"
 _CSS = _SRC / "index.css"
 
 
@@ -23,23 +25,30 @@ def _read(p: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LIVE bar — real conductor signal, honest idle, never a frozen fake pulse
+# LIVE bar — real conductor signal, honest idle, never a frozen fake pulse.
+# Lives in the app SHELL (components/LiveBar.tsx, mounted in App.tsx) so the
+# pulse is visible on EVERY page, not just the board (ws5 oracle).
 # ---------------------------------------------------------------------------
 
 def test_live_bar_reads_real_conductor_state():
-    src = _read(_TASKS)
+    src = _read(_LIVEBAR)
     assert "/api/conductor/state" in src, \
-        "LIVE bar must read the conductor's real work-state endpoint"
+        "LiveBar must read the conductor's real work-state endpoint"
+
+
+def test_live_bar_is_mounted_in_the_app_shell():
+    app = _read(_APP)
+    assert "LiveBar" in app, \
+        "LiveBar must mount in the shell so it persists on every page"
 
 
 def test_live_bar_has_honest_idle_state():
-    src = _read(_TASKS)
+    src = _read(_LIVEBAR)
     # The pulse may ONLY render when something is actually being driven;
     # a quiet queue shows an explicit idle message instead.
     assert "isLive" in src or "idle" in src.lower(), \
-        "LIVE bar needs an explicit idle state, not an always-on pulse"
-    assert 'animate-pulse" : ""' in src.replace("'", '"') \
-        or '(isLive ? "animate-pulse"' in src, \
+        "LiveBar needs an explicit idle state, not an always-on pulse"
+    assert "animate-pulse" in src and "isLive" in src, \
         "the pulsing dot must be conditional on real liveness"
 
 

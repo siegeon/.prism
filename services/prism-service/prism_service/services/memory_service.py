@@ -631,6 +631,71 @@ class MemoryService:
 
         return updated
 
+    # ------------------------------------------------------------------
+    # Recall attribution readers — the recall_log projected as connections
+    # ------------------------------------------------------------------
+
+    def concepts_recalled_by_task(self, task_id: str, limit: int = 50) -> list[dict]:
+        """Distinct memory entries a task recalled, most-recent first.
+
+        Backs the Task detail 'Knowledge · Understand' rail: the curated
+        concepts a task actually pulled in (recall_log.task_id -> entry_id),
+        each with how many times it was recalled on this task and the latest
+        recall timestamp. Tolerant — a missing/locked recall db yields []."""
+        if not task_id:
+            return []
+        try:
+            rows = self._recall_db.execute(
+                "SELECT entry_id, entry_domain, COUNT(*) AS recall_count, "
+                "MAX(recalled_at) AS last_recalled "
+                "FROM recall_log WHERE task_id = ? AND entry_id != '' "
+                "GROUP BY entry_id "
+                "ORDER BY last_recalled DESC LIMIT ?",
+                (task_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            return []
+        return [
+            {
+                "entry_id": r[0],
+                "entry_domain": r[1] or "",
+                "recall_count": int(r[2] or 0),
+                "last_recalled": r[3] or "",
+            }
+            for r in rows
+        ]
+
+    def tasks_that_recalled(self, entry_id: str, limit: int = 50) -> list[dict]:
+        """Distinct tasks that recalled a memory entry, most-recent first.
+
+        Backs the Understand 'Cited by' extension: which tasks pulled this
+        concept into their work (recall_log.entry_id -> task_id), with the
+        recorded outcome and recall count. Tolerant of a missing recall db.
+        Sessions are intentionally absent — recall_log records the asking
+        TASK, not a session."""
+        if not entry_id:
+            return []
+        try:
+            rows = self._recall_db.execute(
+                "SELECT task_id, COUNT(*) AS recall_count, "
+                "MAX(recalled_at) AS last_recalled, MAX(outcome) AS outcome "
+                "FROM recall_log WHERE entry_id = ? AND task_id != '' "
+                "GROUP BY task_id "
+                "ORDER BY last_recalled DESC LIMIT ?",
+                (entry_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            return []
+        return [
+            {
+                "task_id": r[0],
+                "recall_count": int(r[1] or 0),
+                "last_recalled": r[2] or "",
+                "outcome": r[3] or "",
+            }
+            for r in rows
+        ]
+
     def _recalculate_effectiveness(self, entry_id: str) -> None:
         """Recalculate effectiveness score for an entry from its recall_log.
 

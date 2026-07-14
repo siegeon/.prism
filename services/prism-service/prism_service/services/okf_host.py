@@ -256,6 +256,55 @@ class OkfHost:
             out.append({"id": e["source"], "title": title or e["source"]})
         return out
 
+    def task_concepts(self, task_id: str) -> list[dict]:
+        """Concepts (memory entries) a task recalled, resolved to graph nodes.
+
+        Joins the memory recall_log (entry_id <- task_id) to this bundle so the
+        Task detail 'Knowledge · Understand' rail lists the curated concepts a
+        task actually pulled in — each a real /understand?concept=<id> target.
+        Entries with no surviving concept (retired / superseded) are dropped."""
+        try:
+            recalls = self._memory_svc.concepts_recalled_by_task(task_id)
+        except Exception:
+            return []
+        if not recalls:
+            return []
+        id_to_path = self._id_to_path()
+        b = self.bundle()
+        out: list[dict] = []
+        for r in recalls:
+            path = id_to_path.get(r["entry_id"])
+            if not path:
+                continue
+            c = b.concepts[path]
+            tags = c.frontmatter.get("tags") or []
+            domain = str(tags[0]) if isinstance(tags, list) and tags else (
+                r.get("entry_domain") or ""
+            )
+            out.append({
+                "id": r["entry_id"],
+                "title": c.title or path.rsplit("/", 1)[-1],
+                "type": c.type,
+                "domain": domain,
+                "path": path,
+                "recall_count": r.get("recall_count", 0),
+                "last_recalled": r.get("last_recalled", ""),
+            })
+        return out
+
+    def concept_recallers(self, target_id: str) -> list[dict]:
+        """Tasks that recalled this concept — the Understand 'Cited by'
+        extension beyond memory backlinks. Read straight from the memory
+        recall_log (entry_id -> task_id). Sessions are not attributable here:
+        recall_log records the asking TASK, not a session, and the brain
+        `searches` table references code docs, not memory concepts."""
+        if not target_id:
+            return []
+        try:
+            return self._memory_svc.tasks_that_recalled(target_id)
+        except Exception:
+            return []
+
     def get(self, path: str) -> dict | None:
         if not path.startswith("/"):
             path = "/" + path
@@ -264,13 +313,17 @@ class OkfHost:
             return None
         from prism_service.okf.links import extract_links
 
+        cid = str(c.frontmatter.get("id", "") or "")
         return {
             "path": c.path,
             "type": c.type,
             "frontmatter": c.frontmatter,
             "body": c.body,
             "links": extract_links(c.body),
-            "backlinks": self.backlinks(str(c.frontmatter.get("id", "") or "")),
+            "backlinks": self.backlinks(cid),
+            # 'Cited by' beyond memory backlinks: tasks that recalled this
+            # concept. Empty list when nothing recalled it (guarded UI).
+            "recalled_by": self.concept_recallers(cid),
         }
 
     def raw(self, path: str) -> str | None:
