@@ -409,6 +409,38 @@ def _task_neighbors(p, task_id: str, task, out: list) -> None:
         out.append(_nb("gate", f"{step} · {gate_state}",
                        f"/tasks/{task_id}#gate", gate_state,
                        f"{task_id}#gate"))
+    # The FUSION edge: concepts this task recalled (recall_log attribution),
+    # the SAME source the Task detail 'Knowledge · Understand' rail reads. Each
+    # becomes a memory diamond in the mesh, so a task focus actually shows the
+    # curated knowledge it pulled in — and 2+ in one domain draw a dashed hull.
+    _task_concept_neighbors(p, task_id, out)
+
+
+def _task_concept_neighbors(p, task_id: str, out: list) -> None:
+    """Memory diamonds for the concepts a task recalled. Sourced from the
+    OKF host's task_concepts (recall_log entry_id <- task_id, resolved to live
+    concepts), so the mesh's task->concept edges match the rail exactly. Each
+    carries the concept's OKF `domain` + `type` (hull grouping + sub-caption)
+    and deep-links to /understand?concept=<id>. Fully guarded: a project with
+    no memory service — or a host that can't build — just adds no concepts."""
+    memory_svc = getattr(p, "memory_svc", None)
+    if memory_svc is None:
+        return
+    try:
+        from prism_service.services.okf_host import OkfHost
+        concepts = OkfHost(
+            memory_svc, getattr(p, "brain_svc", None)
+        ).task_concepts(task_id) or []
+    except Exception:
+        return
+    for c in concepts:
+        cid = c.get("id") if isinstance(c, dict) else None
+        if not cid:
+            continue
+        out.append(_nb("memory", c.get("title") or cid,
+                       f"/understand?concept={cid}", "recalled", cid,
+                       domain=c.get("domain"),
+                       concept_type=c.get("type")))
 
 
 def _session_neighbors(p, session_id: str, out: list) -> None:
@@ -563,9 +595,18 @@ def _gate_neighbors(p, token: str, out: list) -> None:
                        f"/tasks/{task_id}", "guards", task_id))
 
 
-def neighbors_for(token: str, p, limit: int = 24) -> dict:
-    """Build the typed 1-hop neighborhood for `token`. Pure orchestration over
-    the guarded per-kind gatherers -- unit-testable with fake services."""
+# hops=2 growth guards (artifact "2 hops"): each first-hop node contributes at
+# most HOP2_PER_NODE of ITS own neighbors, and the whole second ring is capped
+# at HOP2_TOTAL so a high-degree hub can't explode the mesh.
+HOP2_PER_NODE = 8
+HOP2_TOTAL = 60
+
+
+def _expand(token: str, p) -> tuple:
+    """Resolve `token` and gather its typed 1-hop neighbors via the guarded
+    per-kind gatherers. Returns (resolved_center, neighbors, center_domain,
+    center_type, kind) -- the single reusable hop the 1- and 2-hop builds share.
+    Pure; unit-testable with fake services."""
     center = resolve_token(
         token, p.memory_svc, p.brain_svc, getattr(p, "graph_svc", None),
         task_svc=getattr(p, "task_svc", None),
@@ -599,16 +640,34 @@ def neighbors_for(token: str, p, limit: int = 24) -> dict:
         _file_neighbors(p, center.get("label") or token, out)
     elif kind == "gate":
         _gate_neighbors(p, token, out)
+    return center, out, center_domain, center_type, kind
 
-    # Dedupe on (kind, href|label) preserving first-seen order, then cap.
+
+def _dedupe(neighbors: list) -> list:
+    """Dedupe on (kind, href|label), first-seen order preserved."""
     seen: set = set()
     deduped: list = []
-    for n in out:
+    for n in neighbors:
         key = (n["kind"], n.get("href") or n["label"])
         if key in seen:
             continue
         seen.add(key)
         deduped.append(n)
+    return deduped
+
+
+def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
+    """Build the typed neighborhood for `token`. hops=1 is the 1-hop ego net;
+    hops=2 additionally expands each first-hop node's OWN neighborhood onto an
+    outer ring (degree-capped, total-capped, deduped, no center/self repeats).
+    Every neighbor carries its `hop` (1|2); second-hop nodes also carry `via`,
+    the first-hop token they hang off, so the mesh draws the edge to the right
+    parent instead of the center."""
+    center, out, center_domain, center_type, kind = _expand(token, p)
+    hop1 = _dedupe(out)[: max(1, int(limit))]
+    for n in hop1:
+        n["hop"] = 1
+
     center_out = {
         "kind": _UI_KIND.get(kind, kind),
         "label": center.get("label") or token,
@@ -619,23 +678,57 @@ def neighbors_for(token: str, p, limit: int = 24) -> dict:
         center_out["domain"] = center_domain
     if center_type:
         center_out["concept_type"] = center_type
-    return {
-        "center": center_out,
-        "neighbors": deduped[: max(1, int(limit))],
-    }
+    # Last motion for a task center (Selected card). Best-effort off the task
+    # row's updated_at; omitted honestly when the row has no timestamp.
+    if kind == "task":
+        t = _task_lookup(getattr(p, "task_svc", None), token)
+        motion = (_field(t, "updated_at", "") if t is not None else "") or ""
+        if motion:
+            center_out["last_motion"] = motion
+
+    neighbors = list(hop1)
+    if int(hops) >= 2 and hop1:
+        # Seed the seen-set with the center + every first-hop node so the
+        # second ring never re-draws either.
+        seen = {(center_out["kind"],
+                 center_out.get("href") or center_out["label"] or token)}
+        for n in hop1:
+            seen.add((n["kind"], n.get("href") or n["label"]))
+        hop2: list = []
+        for parent in hop1:
+            if len(hop2) >= HOP2_TOTAL:
+                break
+            _, pout, _pd, _pt, _pk = _expand(parent["token"], p)
+            added = 0
+            for nb in pout:
+                if added >= HOP2_PER_NODE or len(hop2) >= HOP2_TOTAL:
+                    break
+                key = (nb["kind"], nb.get("href") or nb["label"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                nb["hop"] = 2
+                nb["via"] = parent["token"]
+                hop2.append(nb)
+                added += 1
+        neighbors.extend(hop2)
+
+    return {"center": center_out, "neighbors": neighbors}
 
 
 @router.get("/neighbors")
 def neighbors(
     token: str = Query(...), project: str = Query("prism"),
     limit: int = Query(24, ge=1, le=200),
+    hops: int = Query(1, ge=1, le=2),
 ) -> dict:
-    """The Explore mesh's ego network: {center, neighbors[]} for one entity."""
+    """The Explore mesh's ego network: {center, neighbors[]} for one entity.
+    hops=2 grows a degree-capped second ring (artifact's "2 hops" toggle)."""
     try:
         p = get_project(project)
     except Exception as exc:
         raise HTTPException(404, f"unknown project: {project}: {exc}")
-    return neighbors_for(token, p, limit=limit)
+    return neighbors_for(token, p, limit=limit, hops=hops)
 
 
 @router.post("/resolve_batch")

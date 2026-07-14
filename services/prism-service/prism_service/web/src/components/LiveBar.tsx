@@ -32,10 +32,23 @@ type ManagedTask = {
   workflow_step?: string;
   gate_state?: string;
   assigned_agent?: string;
+  updated_at?: string;
   activity?: Activity | null;
 };
 
 const shortId = (id?: string) => (id ?? "").slice(0, 8) || "—";
+
+// " · 5h" wait-duration suffix for a gated chip (artifact: AWAITING
+// GREEN_GATE · 5H). Empty when the stamp is missing/unparseable.
+function waitFor(ts?: string): string {
+  if (!ts) return "";
+  const ms = Date.now() - Date.parse(ts);
+  if (!Number.isFinite(ms) || ms < 60_000) return "";
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return ` · ${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 48 ? ` · ${h}h` : ` · ${Math.floor(h / 24)}d`;
+}
 
 export default function LiveBar() {
   const [project] = useProject();
@@ -109,7 +122,7 @@ export default function LiveBar() {
         <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
           <span className="h-4 w-px shrink-0" style={{ background: "var(--border-default)" }} />
           <EntityChip kind="task" label={shortId(m.id)} to={`/tasks/${m.id}`} />
-          <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}`}</Lozenge>
+          <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
         </span>
       ))}
 

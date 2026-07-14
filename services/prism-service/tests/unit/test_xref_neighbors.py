@@ -228,6 +228,150 @@ def test_non_memory_neighbors_omit_concept_metadata():
         assert "domain" not in n, n
 
 
+class _OkfHostTaskConcepts:
+    """Stands in for OkfHost.task_concepts(): the concepts a task recalled,
+    already resolved to graph-node shape (id/title/type/domain)."""
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def graph(self):
+        return {"nodes": [], "edges": []}
+
+    def task_concepts(self, task_id):
+        if task_id != TASK_ID:
+            return []
+        return [
+            {"id": CONCEPT_ID, "title": "Session-task live binding",
+             "type": "decision", "domain": "conductor",
+             "recall_count": 2, "last_recalled": "2026-07-12T00:00:00Z"},
+            {"id": LINKED_ID, "title": "Gate enforcement doctrine",
+             "type": "convention", "domain": "conductor",
+             "recall_count": 1, "last_recalled": "2026-07-11T00:00:00Z"},
+        ]
+
+
+def test_task_center_threads_recalled_concepts(monkeypatch):
+    """THE fusion edge: a task center emits its recalled concepts as memory
+    diamonds carrying OKF type+domain, deep-linking to /understand?concept."""
+    from prism_service.services import okf_host as okf_mod
+    monkeypatch.setattr(okf_mod, "OkfHost", _OkfHostTaskConcepts)
+
+    res = xref.neighbors_for(TASK_ID, _fake_project(), limit=24)
+    mem = [n for n in res["neighbors"] if n["kind"] == "memory"]
+    assert len(mem) == 2, res["neighbors"]
+    nb = mem[0]
+    assert nb["edge"] == "recalled"
+    assert nb["concept_type"] == "decision"
+    assert nb["domain"] == "conductor"
+    assert nb["href"] == f"/understand?concept={CONCEPT_ID}"
+    assert nb["token"] == CONCEPT_ID
+    # two concepts in one domain => the mesh can hull them together
+    assert {n["domain"] for n in mem} == {"conductor"}
+    # the task's non-concept threads (session/child/gate) still ride along
+    kinds = {n["kind"] for n in res["neighbors"]}
+    assert {"session", "task", "gate"} <= kinds, res["neighbors"]
+
+
+def test_task_center_last_motion_from_updated_at(monkeypatch):
+    """The Selected card's 'Last motion' rides on the task row's updated_at."""
+    from prism_service.services import okf_host as okf_mod
+    monkeypatch.setattr(okf_mod, "OkfHost", _OkfHostTaskConcepts)
+    p = _fake_project()
+    p.task_svc._center.updated_at = "2026-07-13T09:30:00Z"
+    res = xref.neighbors_for(TASK_ID, p, limit=24)
+    assert res["center"]["last_motion"] == "2026-07-13T09:30:00Z"
+
+
+def test_two_hops_expands_tags_and_dedupes(monkeypatch):
+    """hops=2 grows a second ring: nodes are tagged hop 1|2, second-hop nodes
+    carry a `via` parent token, the center never re-appears, and no dupes leak.
+    The session's touched code (a hop-2 reach) surfaces off the linked session."""
+    from prism_service.services import okf_host as okf_mod
+
+    class _Empty(_OkfHostTaskConcepts):
+        def task_concepts(self, task_id):
+            return []
+    monkeypatch.setattr(okf_mod, "OkfHost", _Empty)
+
+    # A session whose id the conductor actually knows, so it re-resolves on the
+    # second hop and threads to the code it touched.
+    p = _fake_project()
+    p.task_svc.sessions_for_task = lambda tid: (
+        [{"session_id": SESSION_ID, "tokens_used": 5000}] if tid == TASK_ID else [])
+
+    res = xref.neighbors_for(TASK_ID, p, limit=24, hops=2)
+    hops = {n.get("hop") for n in res["neighbors"]}
+    assert hops == {1, 2}, res["neighbors"]
+    assert any(n["kind"] == "code" and n.get("hop") == 2
+               for n in res["neighbors"]), res["neighbors"]
+    for n in res["neighbors"]:
+        if n.get("hop") == 2:
+            assert n.get("via"), n
+    keys = [(n["kind"], n.get("href") or n["label"]) for n in res["neighbors"]]
+    assert len(keys) == len(set(keys)), "duplicate neighbors leaked"
+    center_key = (res["center"]["kind"], res["center"]["href"])
+    assert center_key not in keys, "center re-drawn as its own neighbor"
+
+
+def test_two_hops_degree_and_total_caps(monkeypatch):
+    """Per-node (<=8) and total (<=60) second-hop caps both bind: 10 first-hop
+    concepts each linking 20 further concepts => 10 hop-1 + exactly 60 hop-2."""
+    from prism_service.services import okf_host as okf_mod
+
+    ids = [CONCEPT_ID] + [f"A{i}" for i in range(10)]
+    nodes = [{"id": CONCEPT_ID, "title": "center",
+              "type": "decision", "domain": "conductor"}]
+    edges = []
+    for i in range(10):
+        a = f"A{i}"
+        nodes.append({"id": a, "title": a, "type": "expertise",
+                      "domain": "conductor"})
+        edges.append({"source": CONCEPT_ID, "target": a})
+        for j in range(20):
+            b = f"B{i}_{j}"
+            ids.append(b)
+            nodes.append({"id": b, "title": b, "type": "note",
+                          "domain": "conductor"})
+            edges.append({"source": a, "target": b})
+    graph = {"nodes": nodes, "edges": edges}
+
+    class _BigGraphHost:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def graph(self):
+            return graph
+
+        def task_concepts(self, _t):
+            return []
+    monkeypatch.setattr(okf_mod, "OkfHost", _BigGraphHost)
+
+    class _GraphMemory:
+        def get_entry(self, token):
+            return SimpleNamespace(id=token, name=token) if token in set(ids) else None
+
+        def list_domains(self):
+            return []
+
+        def list_entries(self, _d):
+            return []
+
+    p = SimpleNamespace(
+        memory_svc=_GraphMemory(), brain_svc=_NoBrain(),
+        graph_svc=None, task_svc=None, conductor_svc=None,
+    )
+    res = xref.neighbors_for(CONCEPT_ID, p, limit=24, hops=2)
+    hop1 = [n for n in res["neighbors"] if n.get("hop") == 1]
+    hop2 = [n for n in res["neighbors"] if n.get("hop") == 2]
+    assert len(hop1) == 10, len(hop1)
+    assert len(hop2) == 60, len(hop2)  # total cap binds (10*8=80 -> 60)
+    per_parent: dict = {}
+    for n in hop2:
+        per_parent[n["via"]] = per_parent.get(n["via"], 0) + 1
+    assert max(per_parent.values()) <= 8, per_parent  # per-node cap binds
+
+
 def test_neighbors_endpoint_served_by_real_app(monkeypatch):
     """The REAL FastAPI route the SPA calls resolves a task to its mesh."""
     testclient_mod = pytest.importorskip("fastapi.testclient")

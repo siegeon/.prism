@@ -185,13 +185,16 @@ def test_post_conductor_advance_moves_task(tmp_path, monkeypatch):
     assert task_svc.get(t.id).workflow_step == "review_previous_notes"
 
 
-def test_managed_tasks_and_buckets_show_only_top_level(tmp_path, monkeypatch):
-    """Conductor swimlanes mirror the /tasks board: top-level tasks only.
+def test_managed_tasks_surface_engaged_children_only(tmp_path, monkeypatch):
+    """Conductor visibility follows ENGAGEMENT, not tree position.
 
-    A subtask (parent_id set) — even one actively at a workflow step — must
-    NOT appear as its own tile or inflate a step bucket; it lives under its
-    parent's detail page. Regression for the demo/verification subtasks that
-    were cluttering /conductor.
+    Re-pinned for the ui-redesign LIVE bar (owner 2026-07-14: 'I cannot see
+    the live task'): a child the conductor is actively engaged with (a live
+    workflow step or a gate awaiting decision) MUST surface in managed_tasks
+    — epic workstreams are children, and the LIVE bar's promise is 'who's
+    working now + what's stuck at a gate'. An IDLE child (no step, no gate)
+    still stays under its parent's detail page — the original clutter
+    regression stays covered.
     """
     _, task_svc, cond = _client(tmp_path, monkeypatch)
 
@@ -201,12 +204,17 @@ def test_managed_tasks_and_buckets_show_only_top_level(tmp_path, monkeypatch):
     child = task_svc.create(title="verify subtask", parent_id=parent.id)
     _drive_to_red_gate(task_svc, cond, child.id)
 
+    idle_child = task_svc.create(title="idle subtask", parent_id=parent.id)
+
     ids = {row["id"] for row in cond.managed_tasks()}
     assert parent.id in ids, "top-level task must show on /conductor"
-    assert child.id not in ids, "subtask must NOT show as a standalone tile"
+    assert child.id in ids, \
+        "an ENGAGED child (live step/gate) must surface — LIVE bar promise"
+    assert idle_child.id not in ids, \
+        "an idle child must NOT show as a standalone tile"
 
-    # step_buckets must agree: exactly one task at red_gate (the parent).
-    assert cond.step_buckets().get("red_gate") == 1, cond.step_buckets()
+    # step_buckets must agree: both engaged tasks count at red_gate.
+    assert cond.step_buckets().get("red_gate") == 2, cond.step_buckets()
 
 
 # =====================================================================

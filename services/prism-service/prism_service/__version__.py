@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.14"
+PRISM_VERSION = "7.0.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.0: THE V7 DIRECTION SHIPS — the full ui-redesign epic (16777a76, "
+    "direction artifact 1fab352f) lands as a major release. EXPLORE fuses "
+    "the code graph and Understand knowledge in one mesh: task->concept "
+    "edges from real recall attribution, 1-hop/2-hops toggle (2 default, "
+    "degree-capped concentric growth), concept-type captions + dashed "
+    "DOMAIN hulls, stats line, Degree/Last-motion on the Selected card, "
+    "'Show in mesh' from every concept page (two doors, one knowledge), "
+    "nav renamed Brain->Explore. LIVE bar now surfaces epic CHILDREN the "
+    "conductor is engaged with (managed_tasks includes gated/stepping "
+    "subtasks — fix the board, never the tree) and gated chips carry wait "
+    "duration. Everything since 6.9.7: 8-kind xref, /sessions/:id, "
+    "retrieval attribution, Radix dual-theme foundation + toggle, "
+    "Lozenge/EntityChip, board+table pages, Connections rail with "
+    "Knowledge group, Trace tab, Understand domain drill, -2,634 lines of "
+    "orphans. "
     "v6.9.14: REDESIGN DELTAS CLOSED — the conductor LIVE bar is a "
     "persistent app-shell strip on EVERY page (honest working/gated/idle, "
     "collapsible); every status chip app-wide routes through Lozenge; type "

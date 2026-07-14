@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useProject, useProjectsListChange } from "@/lib/project";
 
 const TITLES: Record<string, string> = {
-  "/": "Dashboard", "/brain": "Brain", "/graph": "Graph",
+  "/": "Dashboard", "/brain": "Explore", "/graph": "Graph",
   "/memory": "Memory", "/tasks": "Tasks", "/conductor": "Conductor",
   "/sessions": "Sessions", "/retrievals": "Retrievals",
   "/learning": "Learning", "/consolidation": "Consolidation",

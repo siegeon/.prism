@@ -50,7 +50,7 @@ const MAIN_SECTIONS: Section[] = [
       // + understanding as one OKF-style concept graph + read panel + links.
       // The old /memory and /okf entries fold into Understand (still
       // deep-linkable: /memory and /okf redirect, /memory/:id preselects).
-      { to: "/brain", label: "Brain", icon: Brain, staleKey: "brain" },
+      { to: "/brain", label: "Explore", icon: Brain, staleKey: "brain" },
       { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
     ],
   },

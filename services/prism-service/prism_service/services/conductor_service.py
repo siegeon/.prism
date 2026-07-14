@@ -2751,10 +2751,13 @@ class ConductorService:
             # audit trail but must not render as currently-managed tiles.
             if status in ("done", "cancelled"):
                 continue
-            # Conductor mirrors the /tasks board: only TOP-LEVEL tasks are
-            # tiles. Subtasks (parent_id set) belong under their parent's
-            # detail page, never as standalone swimlane cards.
-            if getattr(t, "parent_id", ""):
+            # Subtasks (parent_id set) belong under their parent's detail
+            # page while IDLE — but a child the conductor is actively
+            # engaged with (a live step or a gate awaiting decision) MUST
+            # surface: the LIVE bar's whole promise is "who's working now +
+            # what's stuck at a gate", and epic workstreams are children
+            # (ui-redesign 16777a76: fix the board, never the tree).
+            if getattr(t, "parent_id", "") and step == "" and gate == "none":
                 continue
             if step == "" and gate == "none":
                 # Claimed by a workflow but pre-first-advance (the Locate /
@@ -2828,9 +2831,12 @@ class ConductorService:
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
             status = getattr(t, "status", "") or ""
+            gate = getattr(t, "gate_state", "none") or "none"
             if status in ("done", "cancelled"):
                 continue
-            if getattr(t, "parent_id", ""):
+            # Mirror managed_tasks: an ENGAGED child (live step or gate)
+            # counts; an idle child stays under its parent.
+            if getattr(t, "parent_id", "") and not step and gate == "none":
                 continue
             if not step:
                 # Mirror managed_tasks: claimed-but-pre-step in_progress work

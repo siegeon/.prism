@@ -19,8 +19,15 @@ type MeshNode = {
   // concept_type sub-captions each diamond, the domain groups same-domain
   // diamonds under a dashed hull.
   domain?: string | null; concept_type?: string | null;
+  // hop = 1 (direct) or 2 (a neighbor's neighbor, drawn smaller/dimmer on the
+  // outer ring). `via` is the first-hop token a second-hop node hangs off, so
+  // the mesh draws its edge to the right parent instead of the center.
+  hop?: number; via?: string | null;
 };
-type MeshData = { center: MeshNode; neighbors: MeshNode[] };
+// The center additionally carries last_motion (task rows only) for the
+// Selected card; it never appears on neighbors.
+type MeshCenter = MeshNode & { last_motion?: string | null };
+type MeshData = { center: MeshCenter; neighbors: MeshNode[] };
 // The 6 canonical node shapes the mesh draws; anything else falls back to a
 // neutral dot. Mirrors EntityChip's EntityKind + the --et-* token set.
 const MESH_KINDS: EntityKind[] = ["code", "memory", "task", "test", "gate", "session"];
@@ -109,6 +116,9 @@ export default function ExplorePage() {
   // The focused entity's human label, reported up from the mesh once its
   // neighborhood loads — used to pre-seed the full-map search (delta 3).
   const [focusLabel, setFocusLabel] = useState<string | null>(null);
+  // Mesh reach: 1 hop (direct ego net) or 2 hops (each neighbor's own ring,
+  // smaller/dimmer). Defaults to 2 per the artifact header ("2 hops" primary).
+  const [hops, setHops] = useState<1 | 2>(2);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
@@ -341,25 +351,44 @@ export default function ExplorePage() {
       <Card className="!p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="px-5 pt-3 pb-2 flex items-center gap-2 shrink-0">
           <Network className="w-4 h-4 opacity-60" />
-          <SectionLabel>{focus ? "Mesh" : "Graph"}</SectionLabel>
+          <SectionLabel>{focus ? "Explore" : "Graph"}</SectionLabel>
           <span className="text-xs opacity-50 ml-1">
             {focus
-              ? "freeform ego network — click a node to wander, double-click to open it"
+              ? "Freeform mesh — knowledge links knowledge, code calls code, sessions touch gates. Click a node to wander, double-click to open it."
               : data?.mode === "focus"
               ? "highlighting your matches — scroll to explore, click empty space to clear"
               : "whole graph, colored by community — type a query to focus it"}
           </span>
           {focus && (
-            <button
-              onClick={openFullMap}
-              title="Open the full graph map, pre-filtered to this focus"
-              className="ml-auto inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-2xs uppercase tracking-wider">
-              <MapIcon className="w-3 h-3" /> Full map
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              {/* Reach toggle (artifact header actions): 2 hops is primary. */}
+              <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden">
+                {([1, 2] as const).map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => setHops(h)}
+                    title={h === 1 ? "Direct neighbors only" : "Neighbors and their neighbors"}
+                    className={cn(
+                      "px-2.5 py-1 text-2xs uppercase tracking-wider transition-colors",
+                      hops === h
+                        ? "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)]"
+                        : "bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] text-[color:var(--text-secondary)]",
+                    )}>
+                    {h} hop{h === 1 ? "" : "s"}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={openFullMap}
+                title="Open the full graph map, pre-filtered to this focus"
+                className="inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-2xs uppercase tracking-wider">
+                <MapIcon className="w-3 h-3" /> Full map
+              </button>
+            </div>
           )}
         </div>
         {focus ? (
-          <Mesh token={focus} project={project} onFocus={setFocus}
+          <Mesh token={focus} project={project} hops={hops} onFocus={setFocus}
             onOpen={(href) => navigate(href)} onCenter={setFocusLabel} />
         ) : viewerUrl ? (
           <iframe
@@ -644,33 +673,63 @@ function MeshShape({ kind, x, y, r }: { kind: string; x: number; y: number; r: n
   }
 }
 
-type Placed = MeshNode & { x: number; y: number };
+type Placed = MeshNode & { x: number; y: number; hop: number; r: number };
+type Layout = { placed: Placed[]; posByToken: Map<string, { x: number; y: number }> };
 
-// Deterministic radial layout: up to 12 neighbors on an inner ring, the rest
-// on a staggered outer ring — keeps labels legible without a physics sim.
-function layoutMesh(neighbors: MeshNode[]): Placed[] {
-  const n = neighbors.length;
-  const innerN = Math.min(n, 12);
-  return neighbors.map((nb, i) => {
-    const outer = i >= 12;
-    const count = outer ? n - 12 : innerN;
-    const idx = outer ? i - 12 : i;
-    const R = outer ? 258 : n <= 6 ? 160 : 188;
-    const stagger = outer ? Math.PI / Math.max(count, 1) : 0;
-    const theta = (idx / Math.max(count, 1)) * Math.PI * 2 - Math.PI / 2 + stagger;
-    return { ...nb, x: MESH_CX + Math.cos(theta) * R, y: MESH_CY + Math.sin(theta) * R };
+// Hop-aware radial layout: first-hop neighbors ring the center (r=12); each
+// second-hop node sits on an outer ring (r=8) in a small arc around ITS parent's
+// angle, so the two hops read as concentric growth rather than one flat blob.
+// Deterministic — no physics sim — so labels stay legible and stable.
+function layoutMesh(neighbors: MeshNode[]): Layout {
+  const hop1 = neighbors.filter((n) => (n.hop ?? 1) === 1);
+  const hop2 = neighbors.filter((n) => n.hop === 2);
+  const n1 = hop1.length;
+  const R1 = n1 <= 6 ? 152 : 182;
+  const angle1 = (i: number) => (i / Math.max(n1, 1)) * Math.PI * 2 - Math.PI / 2;
+  const placed1: Placed[] = hop1.map((nb, i) => {
+    const theta = angle1(i);
+    return { ...nb, x: MESH_CX + Math.cos(theta) * R1, y: MESH_CY + Math.sin(theta) * R1, hop: 1, r: 12 };
   });
+  const angleByToken = new Map<string, number>();
+  hop1.forEach((nb, i) => angleByToken.set(nb.token, angle1(i)));
+
+  const byParent = new Map<string, MeshNode[]>();
+  for (const nb of hop2) {
+    const v = nb.via ?? "";
+    const g = byParent.get(v) ?? []; g.push(nb); byParent.set(v, g);
+  }
+  const R2 = 250;
+  const placed2: Placed[] = [];
+  let orphan = 0;  // parents filtered out of view — fan these around the ring
+  for (const [via, kids] of byParent) {
+    const base = angleByToken.get(via);
+    kids.forEach((nb, j) => {
+      let theta: number;
+      if (base === undefined) {
+        theta = (orphan++ / Math.max(hop2.length, 1)) * Math.PI * 2 - Math.PI / 2;
+      } else {
+        const spread = Math.min(Math.PI / 2.6, kids.length * 0.17);
+        const off = kids.length === 1 ? 0 : (j / (kids.length - 1) - 0.5) * spread;
+        theta = base + off;
+      }
+      placed2.push({ ...nb, x: MESH_CX + Math.cos(theta) * R2, y: MESH_CY + Math.sin(theta) * R2, hop: 2, r: 8 });
+    });
+  }
+  const posByToken = new Map<string, { x: number; y: number }>();
+  placed1.forEach((p) => posByToken.set(p.token, { x: p.x, y: p.y }));
+  return { placed: [...placed1, ...placed2], posByToken };
 }
 
 type Hull = { domain: string; x: number; y: number; w: number; h: number };
 
-// A rounded bounding box per domain that has 2+ placed memory diamonds. Padded
-// enough to clear each diamond plus its label + type sub-caption; drawn behind
-// the edges so it reads as a backdrop, per the artifact's hull().
+// A rounded bounding box per domain that has 2+ FIRST-HOP memory diamonds.
+// Padded to clear each diamond plus its label + type sub-caption; drawn behind
+// the edges so it reads as a backdrop, per the artifact's hull(). Second-hop
+// diamonds are excluded — the hull is the inner ring's Understand grouping.
 function meshHulls(placed: Placed[]): Hull[] {
   const byDom = new Map<string, Placed[]>();
   for (const p of placed) {
-    if (p.kind !== "memory" || !p.domain) continue;
+    if (p.kind !== "memory" || p.hop !== 1 || !p.domain) continue;
     const g = byDom.get(p.domain) ?? [];
     g.push(p); byDom.set(p.domain, g);
   }
@@ -686,8 +745,21 @@ function meshHulls(placed: Placed[]): Hull[] {
   return out;
 }
 
-function Mesh({ token, project, onFocus, onOpen, onCenter }: {
-  token: string; project: string;
+// "2h ago" style relative time from an ISO timestamp — the Selected card's
+// Last motion. Returns null for a blank/unparseable stamp (omit honestly).
+function relTime(iso?: string | null): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
+  token: string; project: string; hops: 1 | 2;
   onFocus: (t: string) => void; onOpen: (href: string) => void;
   onCenter?: (label: string) => void;
 }) {
@@ -700,12 +772,15 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
   useEffect(() => {
     let alive = true;
     setLoading(true); setErr(null);
-    api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=48`)
+    // 1 hop takes a wider direct fan (limit 48); 2 hops keeps the inner ring
+    // tight (limit 24) so the outer ring has room to breathe.
+    const limit = hops === 2 ? 24 : 48;
+    api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=${limit}&hops=${hops}`)
       .then((d) => { if (alive) { setData(d); setHidden(new Set()); onCenter?.(d.center.label); } })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [token, project, onCenter]);
+  }, [token, project, hops, onCenter]);
 
   const visible = useMemo(
     () => (data?.neighbors ?? []).filter((n) => !hidden.has(n.kind)),
@@ -724,7 +799,7 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
     }
     return [...[...byDom.values()].flat(), ...rest];
   }, [visible]);
-  const placed = useMemo(() => layoutMesh(ordered), [ordered]);
+  const { placed, posByToken } = useMemo(() => layoutMesh(ordered), [ordered]);
   // A dashed rounded hull behind each domain that has 2+ memory diamonds in
   // view — the Understand wiki's grouping drawn into the mesh (artifact hull()).
   const hulls = useMemo(() => meshHulls(placed), [placed]);
@@ -733,6 +808,23 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
     (data?.neighbors ?? []).forEach((n) => s.add(n.kind));
     return MESH_KINDS.filter((k) => s.has(k));
   }, [data]);
+
+  // Stats line (artifact): counts live from the drawn mesh. nodes = center +
+  // every visible neighbor; edges = one per neighbor (to its parent/center);
+  // domains = distinct Understand domains among the visible memory diamonds
+  // (plus the center when it is itself a concept).
+  const domainCount = useMemo(() => {
+    const s = new Set<string>();
+    if (data?.center.kind === "memory" && data.center.domain) s.add(data.center.domain);
+    visible.forEach((n) => { if (n.kind === "memory" && n.domain) s.add(n.domain); });
+    return s.size;
+  }, [data, visible]);
+  // Degree for the Selected card: direct (hop 1) vs reached-at-2-hops.
+  const directCount = useMemo(
+    () => (data?.neighbors ?? []).filter((n) => (n.hop ?? 1) === 1).length, [data]);
+  const twoHopCount = useMemo(
+    () => (data?.neighbors ?? []).filter((n) => n.hop === 2).length, [data]);
+  const lastMotion = relTime(data?.center.last_motion);
 
   // Single click re-centers (wander the mesh); double click opens the page.
   // A short timer disambiguates the two without a jarring double-fire.
@@ -770,8 +862,9 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
               </button>
             );
           })}
-          <span className="ml-auto text-2xs opacity-50 tabular-nums">
-            {visible.length} shown · {data?.neighbors.length ?? 0} total
+          <span className="ml-auto text-2xs opacity-60 tabular-nums font-mono truncate max-w-[52%]">
+            {1 + visible.length} nodes · {visible.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}
+            {center ? <> · selected <span className="text-[color:var(--text-primary)]">{trunc(center.label, 22)}</span></> : null}
           </span>
         </div>
 
@@ -802,13 +895,25 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
                   </text>
                 </g>
               ))}
-              {/* edges first, under the nodes */}
+              {/* edges first, under the nodes. First-hop edges spring from the
+                  center and carry their relation label; second-hop edges spring
+                  from their `via` parent, drawn dimmer + label-free so the outer
+                  ring reads as growth off a node, not more spokes on the hub. */}
               {placed.map((nb, i) => {
-                const mx = MESH_CX + (nb.x - MESH_CX) * 0.62;
-                const my = MESH_CY + (nb.y - MESH_CY) * 0.62;
+                const src = nb.hop === 2
+                  ? (posByToken.get(nb.via ?? "") ?? { x: MESH_CX, y: MESH_CY })
+                  : { x: MESH_CX, y: MESH_CY };
+                if (nb.hop === 2) {
+                  return (
+                    <line key={`e${i}`} x1={src.x} y1={src.y} x2={nb.x} y2={nb.y}
+                      stroke="var(--border-default)" strokeWidth={0.9} opacity={0.5} />
+                  );
+                }
+                const mx = src.x + (nb.x - src.x) * 0.62;
+                const my = src.y + (nb.y - src.y) * 0.62;
                 return (
                   <g key={`e${i}`}>
-                    <line x1={MESH_CX} y1={MESH_CY} x2={nb.x} y2={nb.y}
+                    <line x1={src.x} y1={src.y} x2={nb.x} y2={nb.y}
                       stroke="var(--border-strong)" strokeWidth={1.1} />
                     <text x={mx} y={my - 3} textAnchor="middle" fontSize={11}
                       fill="var(--text-faint)">{nb.edge}</text>
@@ -830,25 +935,29 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
                     style={{ textTransform: "uppercase" }}>{center.concept_type}</text>
                 )}
               </g>
-              {/* neighbors */}
-              {placed.map((nb, i) => (
-                <g key={`n${i}`} style={{ cursor: "pointer" }}
-                  onClick={() => onNodeClick(nb)} onDoubleClick={() => onNodeDbl(nb)}>
-                  <title>{`${nb.label} — ${nb.edge} (click to center, double-click to open)`}</title>
-                  <MeshShape kind={nb.kind} x={nb.x} y={nb.y} r={12} />
-                  <text x={nb.x} y={nb.y + 26} textAnchor="middle" fontSize={11}
-                    fill="var(--text-secondary)">{trunc(nb.label, 16)}</text>
-                  {/* concept-type sub-caption under the diamond (decision/
-                      convention/expertise/anti-pattern/principle) */}
-                  {nb.kind === "memory" && nb.concept_type && (
-                    <text x={nb.x} y={nb.y + 37} textAnchor="middle" fontSize={8.5}
-                      letterSpacing="0.06em" fill={meshFill("memory")}
-                      style={{ textTransform: "uppercase" }}>
-                      {nb.concept_type}
-                    </text>
-                  )}
-                </g>
-              ))}
+              {/* neighbors. Second-hop nodes are smaller (r=8) and dimmed so the
+                  focus stays on the inner ring; both hops stay clickable. */}
+              {placed.map((nb, i) => {
+                const two = nb.hop === 2;
+                return (
+                  <g key={`n${i}`} style={{ cursor: "pointer" }} opacity={two ? 0.62 : 1}
+                    onClick={() => onNodeClick(nb)} onDoubleClick={() => onNodeDbl(nb)}>
+                    <title>{`${nb.label} — ${nb.edge}${two ? " (2 hops)" : ""} (click to center, double-click to open)`}</title>
+                    <MeshShape kind={nb.kind} x={nb.x} y={nb.y} r={nb.r} />
+                    <text x={nb.x} y={nb.y + (two ? 20 : 26)} textAnchor="middle" fontSize={two ? 9.5 : 11}
+                      fill="var(--text-secondary)">{trunc(nb.label, two ? 13 : 16)}</text>
+                    {/* concept-type sub-caption under the diamond (decision/
+                        convention/expertise/anti-pattern/principle) */}
+                    {nb.kind === "memory" && nb.concept_type && !two && (
+                      <text x={nb.x} y={nb.y + 37} textAnchor="middle" fontSize={8.5}
+                        letterSpacing="0.06em" fill={meshFill("memory")}
+                        style={{ textTransform: "uppercase" }}>
+                        {nb.concept_type}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
             </svg>
           )}
         </div>
@@ -873,15 +982,26 @@ function Mesh({ token, project, onFocus, onOpen, onCenter }: {
               <GlyphIcon kind={isMeshKind(center.kind) ? center.kind : "session"} />
               <span className="text-sm truncate">{center.label}</span>
             </div>
+            <div className="mt-3 space-y-1 text-2xs">
+              <div className="flex items-center gap-2">
+                <span className="opacity-50 uppercase tracking-wider w-[72px] shrink-0">Degree</span>
+                <span className="tabular-nums text-[color:var(--text-secondary)]">
+                  {directCount} direct{twoHopCount > 0 ? ` · ${twoHopCount} at 2 hops` : ""}
+                </span>
+              </div>
+              {lastMotion && (
+                <div className="flex items-center gap-2">
+                  <span className="opacity-50 uppercase tracking-wider w-[72px] shrink-0">Last motion</span>
+                  <span className="text-[color:var(--text-secondary)]">{lastMotion}</span>
+                </div>
+              )}
+            </div>
             {center.href && (
               <button onClick={() => onOpen(center.href!)}
                 className="mt-3 text-xs text-[color:var(--accent-teal-fg)] hover:underline">
                 Open detail →
               </button>
             )}
-            <div className="mt-2 text-2xs opacity-50 tabular-nums">
-              {data?.neighbors.length ?? 0} direct connections
-            </div>
           </Card>
         )}
         <Card className="!p-4 min-h-0">

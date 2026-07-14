@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Network } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty } from "@/components/ui";
@@ -410,6 +411,7 @@ function DetailPanel({
   onSelect: (id: string) => void;
   onMutate?: () => void;
 }) {
+  const navigate = useNavigate();
   const [concept, setConcept] = useState<Concept | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -469,6 +471,17 @@ function DetailPanel({
       <header className="space-y-2">
         <div className="flex items-start gap-2 flex-wrap">
           <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em] flex-1 min-w-0 break-words">{title}</h1>
+          {/* Two doors: the reading page jumps to this concept AS a mesh node
+              (/brain?focus=<id>); the mesh deep-links back here via ?concept=. */}
+          {id && (
+            <button
+              onClick={() => navigate(`/brain?focus=${encodeURIComponent(id)}`)}
+              title="Show this concept in the Explore mesh"
+              className="shrink-0 inline-flex items-center gap-1 text-2xs uppercase tracking-wider px-2 py-1 rounded
+                border border-[color:var(--accent-teal-ring)] text-[color:var(--accent-teal-fg)] hover:bg-[color:var(--surface-2)]">
+              <Network className="w-3 h-3" /> Show in mesh
+            </button>
+          )}
           <span className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded shrink-0"
             style={{ background: toneVar(tone, "bg"), color: toneVar(tone, "fg"), boxShadow: `inset 0 0 0 1px ${toneVar(tone, "ring")}` }}>
             {concept.type}
