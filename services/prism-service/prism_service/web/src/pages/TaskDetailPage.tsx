@@ -609,6 +609,24 @@ export default function TaskDetailPage() {
   // In-panel decision feedback: 'checking' while the machine check runs
   // (minutes), then the persistent result — never just a transient toast.
   const [gateResult, setGateResult] = useState<{ kind: "checking" | "ok" | "refused"; text: string } | null>(null);
+  // ONE authoritative verdict (owner design: the layout must be unable to
+  // contradict itself). verifierRefusal = the shell verifier's last recorded
+  // refusal, parsed for humans; verdict is READY only when the evidence
+  // receipt passes AND no verifier refusal stands.
+  const verifierRefusal = useMemo(() => {
+    const gr = task?.gate_reason || "";
+    if (!gr.includes("verifier rejected")) return null;
+    const m = /(\d+)\s*\/\s*(\d+)\s*pass(?:[,;]?\s*(\d+)\s*fail)?(?:[,;]?\s*(\d+)\s*skipped)?/.exec(gr);
+    if (m) {
+      return {
+        summary: `${m[1]} / ${m[2]} pass${m[3] ? ` · ${m[3]} fail` : ""}${m[4] ? ` · ${m[4]} skipped` : ""}`,
+        detail: `${m[3] ?? 0} assertion(s) failed, ${m[4] ?? 0} skipped`,
+      };
+    }
+    return { summary: "refused", detail: "" };
+  }, [task?.gate_reason]);
+  const gateVerdict: "ready" | "blocked" =
+    gateReadiness?.receipt_ok && !verifierRefusal ? "ready" : "blocked";
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -1074,160 +1092,190 @@ export default function TaskDetailPage() {
               }
             }}
             className="w-full text-left rounded-md px-4 py-3 text-[13px] leading-relaxed"
-            style={gateReadiness?.receipt_ok
+            style={gateVerdict === "ready"
               ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
-              : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+              : { background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
             aria-expanded={gatePanelOpen}
             title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
           >
             <span className="text-2xs uppercase tracking-wider font-semibold mr-2">
-              ⚖ action needed · {stepLabel(task.workflow_step ?? "gate")}{task.gate_state === "failed" ? " · last decision failed" : ""}
+              ● {gateVerdict === "ready" ? "READY" : "BLOCKED"}
+              {gateVerdict === "ready" ? " · evidence passing" : verifierRefusal ? " · verifier rejected current evidence" : " · evidence not on file"}
             </span>
-            {gateReadiness?.receipt_ok
-              ? "Live evidence check PASSES — approve this gate with a reason (no override needed)."
-              : gateReadiness
-                ? "Live evidence is not ready — re-run the oracle below, or release with override."
-                : "This task is parked at a gate awaiting your decision."}
+            {stepLabel(task.workflow_step ?? "gate")}
+            {gateVerdict === "ready"
+              ? " · approve with a reason"
+              : " · recover with override, or fix & re-run"}
             <span className="ml-2 opacity-80">{gatePanelOpen ? "▾ close" : "▸ act"}</span>
           </button>
 
           {gatePanelOpen && (
-            <div className="mt-2 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4 space-y-3">
-              {/* 1 · what you're approving = the task's ORACLE (the human
-                  acceptance contract this gate validates), evidenced by the
-                  pinned tests + the live receipt below. The drive's own
-                  machine-written report is a collapsed footnote — it's for
-                  audit, not for reading. */}
-              {task.oracle && (
-                <div className="text-[13px] leading-relaxed">
-                  <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>
-                    what you're approving — the task's acceptance contract (oracle)
-                  </div>
-                  <div className="text-[color:var(--text-primary)]">{task.oracle}</div>
-                </div>
-              )}
-              {pinTests.length > 0 && (() => {
-                const passing = pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length;
-                const allPass = passing === pinTests.length;
-                return (
-                  <button
-                    type="button"
-                    onClick={showTests}
-                    className="text-[12.5px] underline decoration-dotted underline-offset-2 hover:opacity-80 text-left"
-                    style={{ color: allPass ? "var(--accent-sage-fg)" : "var(--accent-amber-fg)" }}
-                    title="open the pinned tests — each shows its assertion source and latest real outcome"
-                  >
-                    proven by {pinTests.length} pinned tests · {passing}/{pinTests.length} passing on the latest real run → view them
-                  </button>
-                );
-              })()}
-              {(() => {
-                const lines = gateEvidenceLines(history);
-                return lines.length > 0 && (
-                  <details className="text-[12px]">
-                    <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-                      drive's machine report (audit detail)
-                    </summary>
-                    <ul className="space-y-1 mt-1.5">
-                      {lines.slice(0, 4).map((l, i) => (
-                        <li key={i} className="text-[color:var(--text-muted)] font-mono text-2xs leading-relaxed">• {l}</li>
-                      ))}
-                    </ul>
-                  </details>
-                );
-              })()}
-              {/* 2 · live evidence verdict + oracle re-run */}
-              <div
-                className="rounded-md p-3 text-[12.5px] leading-relaxed"
-                style={gateReadiness?.receipt_ok
-                  ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
-                  : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
-              >
-                <span className="text-2xs uppercase tracking-wider mr-2">evidence check · live</span>
-                {gateReadiness?.receipt_ok
-                  ? <>✓ Oracle evidence receipt is FRESH and PASSING{gateReadiness.receipt?.adapter ? ` (${gateReadiness.receipt.adapter} — a real run, not a claim)` : ""}.</>
-                  : <>{gateReadiness?.receipt_refusal || "no receipt on file"}{" "}
-                      <button
-                        type="button"
-                        onClick={mintEvidence}
-                        className="text-2xs uppercase tracking-wider px-2.5 py-1 rounded ml-1"
-                        style={{ background: "var(--accent-amber-fg)", color: "var(--accent-amber-bg)" }}
-                      >
-                        ↻ re-run oracle now
-                      </button>
-                    </>}
-                {/* The receipt's actual observation — what ran, when, what it
-                    saw — so the evidence is READABLE, not a colored claim. */}
-                {gateReadiness?.receipt && (
-                  <div className="mt-1.5 font-mono text-2xs leading-relaxed opacity-90 break-all">
-                    {gateReadiness.receipt.adapter} · {gateReadiness.receipt.status}
-                    {gateReadiness.receipt.ended_at ? ` · ${String(gateReadiness.receipt.ended_at).slice(0, 19).replace("T", " ")}` : ""}
-                    {gateReadiness.receipt.reason ? <><br />{gateReadiness.receipt.reason}</> : null}
+            <div className="mt-2 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)]">
+              {/* 1 · WHAT YOU'RE APPROVING — the contract, human-first */}
+              <div className="p-4 space-y-1.5">
+                <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>what you're approving</div>
+                <div className="text-[14px] font-medium text-[color:var(--text-primary)]">{task.title}</div>
+                {task.oracle && (
+                  <div className="text-[12.5px] leading-relaxed text-[color:var(--text-secondary)]">
+                    {(() => {
+                      const m = /(https?:\/\/\S+)/.exec(task.oracle!);
+                      if (!m) return task.oracle;
+                      const [pre, post] = [task.oracle!.slice(0, m.index), task.oracle!.slice(m.index + m[1].length)];
+                      return (<>{pre}<a href={m[1]} target="_blank" rel="noreferrer" className="underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>{m[1].replace(/^https?:\/\//, "")}</a>{post}</>);
+                    })()}
                   </div>
                 )}
               </div>
-              {/* 3 · last stored decision, clearly demoted — plus explicit
-                  guidance when the verifier is the thing that's broken */}
-              {task.gate_state === "failed" && task.gate_reason && (
-                <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
-                  last decision (stale snapshot): {task.gate_reason.slice(0, 180)}
-                </div>
-              )}
-              {gateReadiness?.receipt_ok && (task.gate_reason || "").includes("verifier rejected") && (
-                <div className="text-[12.5px] rounded-md p-2.5" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)", boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)" }}>
-                  The evidence passes but the machine verifier keeps refusing — that is a known
-                  engine defect (task 68e5c699), not a problem with this work. The working path is
-                  the audited manual release: override is pre-checked below; click Approve.
-                </div>
-              )}
-              {/* 4 · the decision itself */}
-              <textarea
-                value={gateReason}
-                onChange={(e) => setGateReason(e.target.value)}
-                required
-                placeholder="Reason (required) — why approve or reject this gate?"
-                rows={2}
-                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
-              />
-              <label className="flex items-center gap-2 text-[12px] opacity-80 cursor-pointer">
-                <input type="checkbox" checked={gateOverride} onChange={(e) => setGateOverride(e.target.checked)} />
-                override (bypass the verifier and release on manual judgment — audited)
-              </label>
-              {gateResult && (
-                <div
-                  className="rounded-md p-2.5 text-[12.5px] leading-relaxed"
-                  style={gateResult.kind === "ok"
-                    ? { background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }
-                    : gateResult.kind === "checking"
-                      ? { background: "var(--surface-2)", color: "var(--text-secondary)", boxShadow: "inset 0 0 0 1px var(--border-default)" }
-                      : { background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
-                  role="status"
-                >
-                  {gateResult.kind === "checking" && <span className="inline-block h-2 w-2 rounded-full animate-pulse mr-2" style={{ background: "var(--text-muted)" }} />}
-                  {gateResult.text}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={busy || !gateReason.trim()}
-                  onClick={() => gateDecide("approve")}
-                  className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
-                  style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
-                >
-                  {busy ? "checking…" : task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
-                </button>
-                {task.gate_state !== "failed" && (
+
+              {/* 2 · EVIDENCE — a table, two proof systems separated */}
+              <div className="p-4">
+                <div className="text-2xs uppercase tracking-wider mb-2" style={{ color: "var(--text-muted)" }}>evidence</div>
+                <table className="w-full text-[12.5px]">
+                  <thead>
+                    <tr className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                      <th className="text-left font-medium pb-1.5">check</th>
+                      <th className="text-left font-medium pb-1.5">result</th>
+                      <th className="text-right font-medium pb-1.5">freshness</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td className="py-1.5 pr-3">
+                        <span className="font-mono">oracle receipt · {gateReadiness?.receipt?.adapter || "trusted run"}</span>
+                        <div className="text-2xs" style={{ color: "var(--text-muted)" }}>the gate's evidence tooth</div>
+                      </td>
+                      <td className="py-1.5 pr-3">
+                        {gateReadiness?.receipt_ok
+                          ? <Lozenge tone="ok">passing</Lozenge>
+                          : <span className="inline-flex items-center gap-2"><Lozenge tone="danger">{gateReadiness?.receipt ? "stale / failed" : "missing"}</Lozenge>
+                              <button type="button" onClick={mintEvidence} className="text-2xs uppercase tracking-wider underline decoration-dotted">↻ re-run</button>
+                            </span>}
+                      </td>
+                      <td className="py-1.5 text-right font-mono text-2xs" style={{ color: gateReadiness?.receipt_ok ? "var(--accent-sage-fg)" : "var(--text-muted)" }}>
+                        {gateReadiness?.receipt?.ended_at ? `fresh · ${String(gateReadiness.receipt.ended_at).slice(11, 19)}` : "—"}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="py-1.5 pr-3">
+                        <span className="font-mono">shell verifier · green_full</span>
+                        <div className="text-2xs" style={{ color: "var(--text-muted)" }}>the release gate — runs on Approve</div>
+                      </td>
+                      <td className="py-1.5 pr-3">
+                        {verifierRefusal
+                          ? <Lozenge tone="danger">{verifierRefusal.summary}</Lozenge>
+                          : <Lozenge tone="neutral">not yet run</Lozenge>}
+                      </td>
+                      <td className="py-1.5 text-right font-mono text-2xs" style={{ color: "var(--text-muted)" }}>
+                        {verifierRefusal ? "last decision" : "—"}
+                      </td>
+                    </tr>
+                    {pinTests.length > 0 && (() => {
+                      const passing = pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length;
+                      return (
+                        <tr>
+                          <td className="py-1.5 pr-3">
+                            <button type="button" onClick={showTests} className="font-mono underline decoration-dotted underline-offset-2 text-left">pinned tests</button>
+                            <div className="text-2xs" style={{ color: "var(--text-muted)" }}>task's own suite — not the gate</div>
+                          </td>
+                          <td className="py-1.5 pr-3">
+                            <Lozenge tone={passing === pinTests.length ? "ok" : "warn"}>{passing} / {pinTests.length} passing</Lozenge>
+                          </td>
+                          <td className="py-1.5 text-right font-mono text-2xs" style={{ color: "var(--accent-sage-fg)" }}>latest run</td>
+                        </tr>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 3 · VERIFIER DECISION — plain language; machine text collapsed */}
+              <div className="p-4 space-y-2">
+                <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>verifier decision</div>
+                {verifierRefusal ? (
+                  <div className="rounded-md p-3 text-[12.5px] leading-relaxed" style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>
+                    <b>Refused.</b> The gate wants a pass; the last run was a fail
+                    {verifierRefusal.detail ? ` (${verifierRefusal.detail} — a skipped check counts as refused, not a pass)` : ""}.
+                    Pinned tests ({pinTests.length ? `${pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length}/${pinTests.length}` : "—"}) are the task's own suite and don't satisfy the gate.
+                    This verifier is a known engine defect (68e5c699) — override below is the audited recovery.
+                  </div>
+                ) : (
+                  <div className="text-[12.5px] text-[color:var(--text-secondary)]">
+                    Not decided yet — the machine check runs when you click Approve (takes up to a few minutes).
+                  </div>
+                )}
+                {(task.gate_reason || gateEvidenceLines(history).length > 0) && (
+                  <details className="text-[12px]">
+                    <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>audit detail (machine text)</summary>
+                    <div className="mt-1.5 space-y-1">
+                      {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                      {gateEvidenceLines(history).slice(0, 4).map((l, i) => (
+                        <div key={i} className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>• {l}</div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+
+              {/* 4 · YOUR DECISION — action last, controls match the state */}
+              <div className="p-4 space-y-2.5">
+                <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>your decision</div>
+                <textarea
+                  value={gateReason}
+                  onChange={(e) => setGateReason(e.target.value)}
+                  required
+                  placeholder="Reason (required) — why approve or reject this gate?"
+                  rows={2}
+                  className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
+                />
+                {gateVerdict !== "ready" && (
+                  <label className="flex items-center gap-2 text-[12px] cursor-pointer">
+                    <input type="checkbox" checked={gateOverride} onChange={(e) => setGateOverride(e.target.checked)} />
+                    <span><b style={{ color: "var(--accent-rose-fg)" }}>Override</b> — bypass the verifier and release on manual judgment. Audited.</span>
+                  </label>
+                )}
+                {gateResult && (
+                  <div
+                    className="rounded-md p-2.5 text-[12.5px] leading-relaxed"
+                    style={gateResult.kind === "ok"
+                      ? { background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }
+                      : gateResult.kind === "checking"
+                        ? { background: "var(--surface-2)", color: "var(--text-secondary)", boxShadow: "inset 0 0 0 1px var(--border-default)" }
+                        : { background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                    role="status"
+                  >
+                    {gateResult.kind === "checking" && <span className="inline-block h-2 w-2 rounded-full animate-pulse mr-2" style={{ background: "var(--text-muted)" }} />}
+                    {gateResult.text}
+                  </div>
+                )}
+                <div className="flex items-center gap-3 flex-wrap">
                   <button
                     type="button"
-                    disabled={busy || !gateReason.trim()}
-                    onClick={() => gateDecide("reject")}
+                    disabled={busy || !gateReason.trim() || (gateVerdict !== "ready" && !gateOverride)}
+                    onClick={() => gateDecide("approve")}
                     className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
-                    style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                    style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
                   >
-                    Reject
+                    {busy ? "checking…" : task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
                   </button>
-                )}
+                  {task.gate_state !== "failed" && (
+                    <button
+                      type="button"
+                      disabled={busy || !gateReason.trim()}
+                      onClick={() => gateDecide("reject")}
+                      className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
+                      style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                    >
+                      Reject
+                    </button>
+                  )}
+                  <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
+                    {gateVerdict === "ready"
+                      ? "Ready: Approve records your decision; the machine check runs first."
+                      : gateOverride
+                        ? "Override armed: Approve releases on your judgment (audited)."
+                        : "Blocked: tick override to recover, or fix the evidence and re-run."}
+                  </span>
+                </div>
               </div>
             </div>
           )}
