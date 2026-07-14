@@ -606,6 +606,9 @@ export default function TaskDetailPage() {
   // The top-level gate ACTION panel — opened by the notification banner;
   // holds everything needed to decide the gate in place.
   const [gatePanelOpen, setGatePanelOpen] = useState(false);
+  // In-panel decision feedback: 'checking' while the machine check runs
+  // (minutes), then the persistent result — never just a transient toast.
+  const [gateResult, setGateResult] = useState<{ kind: "checking" | "ok" | "refused"; text: string } | null>(null);
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -836,10 +839,16 @@ export default function TaskDetailPage() {
 
   const gateDecide = async (action: "approve" | "reject") => {
     if (!gateReason.trim()) {
-      setNotice("A reason is required to resolve the gate.");
+      setGateResult({ kind: "refused", text: "A reason is required to resolve the gate." });
       return;
     }
     setBusy(true);
+    setGateResult({
+      kind: "checking",
+      text: gateOverride
+        ? "recording your audited manual release…"
+        : "running the machine check — this takes up to a few minutes; stay on this page…",
+    });
     try {
       const r = await fetch(`/api/conductor/gate?project=${project}`, {
         method: "POST",
@@ -853,15 +862,21 @@ export default function TaskDetailPage() {
       });
       const body = await r.json().catch(() => ({}));
       if (body.ok === false) {
-        setNotice(`Gate ${action} refused: ${body.reason ?? "unknown"}`);
+        setGateResult({
+          kind: "refused",
+          text: `${action} refused: ${body.reason ?? "unknown"}`,
+        });
       } else {
-        setNotice(`Gate ${action}d. ${body.to_step ? `→ ${body.to_step}` : ""}`);
+        setGateResult({
+          kind: "ok",
+          text: `Gate ${action}d${body.to_step ? ` → ${body.to_step}` : ""}. ${action === "approve" ? "This task is released." : ""}`,
+        });
         setGateReason("");
         setGateOverride(false);
       }
       load();
     } catch (e) {
-      setNotice(`Gate ${action} failed: ${(e as Error).message ?? e}`);
+      setGateResult({ kind: "refused", text: `Gate ${action} failed: ${(e as Error).message ?? e}` });
     } finally {
       setBusy(false);
     }
@@ -1050,6 +1065,13 @@ export default function TaskDetailPage() {
                   ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
                   : "");
               }
+              // When the machine verifier already refused DESPITE passing
+              // evidence (the known blind-verifier defect 68e5c699), guide
+              // to the working path: pre-check the audited override.
+              if (gateReadiness?.receipt_ok
+                  && (task.gate_reason || "").includes("verifier rejected")) {
+                setGateOverride(true);
+              }
             }}
             className="w-full text-left rounded-md px-4 py-3 text-[13px] leading-relaxed"
             style={gateReadiness?.receipt_ok
@@ -1144,10 +1166,18 @@ export default function TaskDetailPage() {
                   </div>
                 )}
               </div>
-              {/* 3 · last stored decision, clearly demoted */}
+              {/* 3 · last stored decision, clearly demoted — plus explicit
+                  guidance when the verifier is the thing that's broken */}
               {task.gate_state === "failed" && task.gate_reason && (
                 <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
                   last decision (stale snapshot): {task.gate_reason.slice(0, 180)}
+                </div>
+              )}
+              {gateReadiness?.receipt_ok && (task.gate_reason || "").includes("verifier rejected") && (
+                <div className="text-[12.5px] rounded-md p-2.5" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)", boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)" }}>
+                  The evidence passes but the machine verifier keeps refusing — that is a known
+                  engine defect (task 68e5c699), not a problem with this work. The working path is
+                  the audited manual release: override is pre-checked below; click Approve.
                 </div>
               )}
               {/* 4 · the decision itself */}
@@ -1163,6 +1193,20 @@ export default function TaskDetailPage() {
                 <input type="checkbox" checked={gateOverride} onChange={(e) => setGateOverride(e.target.checked)} />
                 override (bypass the verifier and release on manual judgment — audited)
               </label>
+              {gateResult && (
+                <div
+                  className="rounded-md p-2.5 text-[12.5px] leading-relaxed"
+                  style={gateResult.kind === "ok"
+                    ? { background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }
+                    : gateResult.kind === "checking"
+                      ? { background: "var(--surface-2)", color: "var(--text-secondary)", boxShadow: "inset 0 0 0 1px var(--border-default)" }
+                      : { background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                  role="status"
+                >
+                  {gateResult.kind === "checking" && <span className="inline-block h-2 w-2 rounded-full animate-pulse mr-2" style={{ background: "var(--text-muted)" }} />}
+                  {gateResult.text}
+                </div>
+              )}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -1171,7 +1215,7 @@ export default function TaskDetailPage() {
                   className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
                 >
-                  {task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
+                  {busy ? "checking…" : task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
                 </button>
                 {task.gate_state !== "failed" && (
                   <button
