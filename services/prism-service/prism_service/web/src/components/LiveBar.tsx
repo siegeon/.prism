@@ -1,20 +1,20 @@
 /**
- * LiveBar — the conductor's realtime pulse as a persistent app-shell strip.
+ * LiveBar — the conductor's realtime pulse as a persistent app-shell card.
  *
- * Mounted ONCE in App.tsx between <PageHeader> and the routed content, so the
- * pulse follows the user across every page (ws5 oracle: "visible on every
- * page"). It reads the SAME honest work-state ConductorPage/TasksPage read —
- * /api/conductor/state activity.state is "working" ONLY when a task is being
- * driven right now — so it can NEVER paint a parked task green: when nothing is
- * moving it shows the quiet daemon-heartbeat state, not a frozen live dot.
+ * Mounted ONCE in App.tsx between <PageHeader> and the routed content, but
+ * scoped to ACTIVITY-context routes only (owner 2026-07-14: "the task live
+ * bar is showing on the understand view, that does not work for me, we are
+ * not in that context") — Dashboard, Tasks, Conductor. Knowledge and
+ * learning-loop surfaces stay free of task chrome. It reads the SAME honest
+ * work-state ConductorPage/TasksPage read — /api/conductor/state
+ * activity.state is "working" ONLY when a task is being driven right now —
+ * so it can NEVER paint a parked task green.
  *
- * This is the conductor pulse; it is DISTINCT from <LiveStatusStrip>, which is
- * the analyzer scan-queue strip. Both persist in the shell; they surface
- * different signals and neither replaces the other.
- *
- * Slim single row, collapsible to just the Live/Idle heartbeat line.
+ * This is the conductor pulse; it is DISTINCT from <LiveStatusStrip>, which
+ * is the analyzer scan-queue strip.
  */
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { stepLabel } from "@/lib/workflowChips";
@@ -50,8 +50,19 @@ function waitFor(ts?: string): string {
   return h < 48 ? ` · ${h}h` : ` · ${Math.floor(h / 24)}d`;
 }
 
+// Activity-context routes where the conductor pulse belongs. Everything
+// else (Explore/Understand/Sessions/Learning/Settings) renders no bar.
+const ACTIVITY_ROUTES = ["/", "/tasks", "/conductor"];
+
+function inActivityContext(pathname: string): boolean {
+  return ACTIVITY_ROUTES.some(
+    (r) => pathname === r || (r !== "/" && pathname.startsWith(r + "/")),
+  ) || pathname.startsWith("/tasks");
+}
+
 export default function LiveBar() {
   const [project] = useProject();
+  const { pathname } = useLocation();
   const [managed, setManaged] = useState<ManagedTask[]>([]);
   const [version, setVersion] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
@@ -98,6 +109,9 @@ export default function LiveBar() {
     const t = (m.title ?? "").trim();
     return t.length > 34 ? t.slice(0, 33) + "…" : t || shortId(m.id);
   };
+
+  // Task chrome only where tasks are the context.
+  if (!inActivityContext(pathname)) return null;
 
   // The artifact's .livebar is a padded rounded CARD inside the content
   // column, not an edge-to-edge strip.
