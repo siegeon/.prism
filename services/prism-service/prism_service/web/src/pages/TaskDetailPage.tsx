@@ -1417,14 +1417,23 @@ export default function TaskDetailPage() {
                   </div>}
             </div>
             {pinTests.length > 0 && (() => {
-              // One-line, highlight-free summary: "Pinning tests · 3 RED ·
-              // AC-1, AC-4, AC-2". Clicking opens the full readable list in the
-              // Tests tab of the work panel above (progressive disclosure).
+              // One-line summary from the REAL latest run (never a hardcoded
+              // red): "Pinning tests · 14/14 PASS" once the outcomes hold,
+              // "N RED" only while they genuinely fail, "not run" honestly
+              // when no run happened. Clicking opens the Tests tab.
               const acs = pinTests.map((t) => parseAc(t.doc).badge).filter(Boolean) as string[];
+              const failing = pinTests.filter((t) => ["failed", "error"].includes((t.status || "").toLowerCase())).length;
+              const passing = pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length;
+              const ran = pinTests.some((t) => t.status);
+              const view = failing > 0
+                ? { mark: "✗", tone: "var(--accent-rose-fg)", text: `Pinning tests · ${failing} RED of ${pinTests.length}`, label: "pinning tests — what currently proves it's NOT done" }
+                : ran && passing === pinTests.length
+                  ? { mark: "✓", tone: "var(--accent-sage-fg)", text: `Pinning tests · ${passing}/${pinTests.length} PASS`, label: "pinning tests — the acceptance criteria hold (latest real run)" }
+                  : { mark: "○", tone: "var(--text-muted)", text: `Pinning tests · ${pinTests.length} (latest outcomes unavailable)`, label: "pinning tests" };
               return (
                 <div className="pt-3" style={{ borderTop: "1px solid var(--surface-3)" }}>
                   <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">
-                    pinning tests — what currently proves it&apos;s NOT done
+                    {view.label}
                   </div>
                   <button
                     type="button"
@@ -1432,9 +1441,9 @@ export default function TaskDetailPage() {
                     className="flex items-center gap-2 text-left w-full group"
                     title="view the pinning tests, correlated to their acceptance criteria"
                   >
-                    <span className="shrink-0 text-[color:var(--accent-rose-fg)]" aria-hidden>✗</span>
+                    <span className="shrink-0" style={{ color: view.tone }} aria-hidden>{view.mark}</span>
                     <span className="leading-relaxed text-[color:var(--text-primary)]">
-                      Pinning tests · {pinTests.length} RED
+                      {view.text}
                       {acs.length > 0 && (
                         <span className="text-[color:var(--text-secondary)]"> · {acs.join(", ")}</span>
                       )}
