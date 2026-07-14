@@ -1071,18 +1071,47 @@ export default function TaskDetailPage() {
 
           {gatePanelOpen && (
             <div className="mt-2 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4 space-y-3">
-              {/* 1 · what you're approving — the drive's recorded evidence */}
+              {/* 1 · what you're approving = the task's ORACLE (the human
+                  acceptance contract this gate validates), evidenced by the
+                  pinned tests + the live receipt below. The drive's own
+                  machine-written report is a collapsed footnote — it's for
+                  audit, not for reading. */}
+              {task.oracle && (
+                <div className="text-[13px] leading-relaxed">
+                  <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>
+                    what you're approving — the task's acceptance contract (oracle)
+                  </div>
+                  <div className="text-[color:var(--text-primary)]">{task.oracle}</div>
+                </div>
+              )}
+              {pinTests.length > 0 && (() => {
+                const passing = pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length;
+                const allPass = passing === pinTests.length;
+                return (
+                  <button
+                    type="button"
+                    onClick={showTests}
+                    className="text-[12.5px] underline decoration-dotted underline-offset-2 hover:opacity-80 text-left"
+                    style={{ color: allPass ? "var(--accent-sage-fg)" : "var(--accent-amber-fg)" }}
+                    title="open the pinned tests — each shows its assertion source and latest real outcome"
+                  >
+                    proven by {pinTests.length} pinned tests · {passing}/{pinTests.length} passing on the latest real run → view them
+                  </button>
+                );
+              })()}
               {(() => {
                 const lines = gateEvidenceLines(history);
                 return lines.length > 0 && (
-                  <div className="text-[12.5px] leading-relaxed">
-                    <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>what you're approving</div>
-                    <ul className="space-y-1">
+                  <details className="text-[12px]">
+                    <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                      drive's machine report (audit detail)
+                    </summary>
+                    <ul className="space-y-1 mt-1.5">
                       {lines.slice(0, 4).map((l, i) => (
-                        <li key={i} className="text-[color:var(--text-secondary)]">• {l}</li>
+                        <li key={i} className="text-[color:var(--text-muted)] font-mono text-2xs leading-relaxed">• {l}</li>
                       ))}
                     </ul>
-                  </div>
+                  </details>
                 );
               })()}
               {/* 2 · live evidence verdict + oracle re-run */}
