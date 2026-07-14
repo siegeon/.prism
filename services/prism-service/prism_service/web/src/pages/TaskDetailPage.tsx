@@ -1041,7 +1041,16 @@ export default function TaskDetailPage() {
         <div>
           <button
             type="button"
-            onClick={() => setGatePanelOpen((v) => !v)}
+            onClick={() => {
+              setGatePanelOpen((v) => !v);
+              // Pre-fill a truthful suggested reason so Approve is clickable
+              // immediately — the owner edits or replaces at will.
+              if (!gateReason.trim()) {
+                setGateReason(gateReadiness?.receipt_ok
+                  ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
+                  : "");
+              }
+            }}
             className="w-full text-left rounded-md px-4 py-3 text-[13px] leading-relaxed"
             style={gateReadiness?.receipt_ok
               ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
@@ -1096,6 +1105,15 @@ export default function TaskDetailPage() {
                         ↻ re-run oracle now
                       </button>
                     </>}
+                {/* The receipt's actual observation — what ran, when, what it
+                    saw — so the evidence is READABLE, not a colored claim. */}
+                {gateReadiness?.receipt && (
+                  <div className="mt-1.5 font-mono text-2xs leading-relaxed opacity-90 break-all">
+                    {gateReadiness.receipt.adapter} · {gateReadiness.receipt.status}
+                    {gateReadiness.receipt.ended_at ? ` · ${String(gateReadiness.receipt.ended_at).slice(0, 19).replace("T", " ")}` : ""}
+                    {gateReadiness.receipt.reason ? <><br />{gateReadiness.receipt.reason}</> : null}
+                  </div>
+                )}
               </div>
               {/* 3 · last stored decision, clearly demoted */}
               {task.gate_state === "failed" && task.gate_reason && (
