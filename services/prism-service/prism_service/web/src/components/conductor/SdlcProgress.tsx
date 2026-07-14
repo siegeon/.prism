@@ -227,7 +227,7 @@ export default function SdlcProgress({
 
       {showCaption && curIdx >= 0 && (
         <>
-          <div className="mt-1 flex items-center justify-between text-[10px] font-mono text-[color:var(--text-muted)]">
+          <div className="mt-1 flex items-center justify-between text-2xs font-mono text-[color:var(--text-muted)]">
             <span className="uppercase tracking-wider truncate">
               {stepLabel(steps[curIdx].id)} · {liveLabel.toFixed(2)}%
               {basis === "children" && phase?.children_total ? ` · ${phase.children_done}/${phase.children_total}` : ""}

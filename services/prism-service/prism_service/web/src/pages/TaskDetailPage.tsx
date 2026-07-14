@@ -233,7 +233,7 @@ function turnSummary(action?: string, details?: string): string {
 function TonePill({ tone, children }: { tone: PillTone; children: React.ReactNode }) {
   return (
     <span
-      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+      className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
       style={{
         background: `var(--accent-${tone}-bg)`,
         color: `var(--accent-${tone}-fg)`,
@@ -248,7 +248,7 @@ function TonePill({ tone, children }: { tone: PillTone; children: React.ReactNod
 function StateChip({ children, tone }: { children: React.ReactNode; tone?: PillTone }) {
   return (
     <code
-      className="text-[11px] font-mono px-1.5 py-0.5 rounded"
+      className="text-2xs font-mono px-1.5 py-0.5 rounded"
       style={{
         background: tone ? `var(--accent-${tone}-bg)` : "var(--surface-2)",
         color: tone ? `var(--accent-${tone}-fg)` : "var(--text-secondary)",
@@ -284,14 +284,14 @@ function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRo
       <div className="flex items-baseline justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-[12px] opacity-80">{clockOf(row.timestamp)}</span>
-          {isFirst && <span className="font-mono text-[10px] opacity-40">{dayOf(row.timestamp)}</span>}
+          {isFirst && <span className="font-mono text-2xs opacity-40">{dayOf(row.timestamp)}</span>}
           <TonePill tone={tone}>{(row.action ?? "—").replace(/_/g, " ")}</TonePill>
-          {row.actor ? <span className="text-[11px] opacity-60 font-mono">{row.actor}</span> : null}
+          {row.actor ? <span className="text-2xs opacity-60 font-mono">{row.actor}</span> : null}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {tokens > 0 && (
             <span
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+              className="text-2xs font-mono px-1.5 py-0.5 rounded"
               style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}
               title="output tokens spent in this turn's window"
             >
@@ -299,7 +299,7 @@ function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRo
             </span>
           )}
           {Number.isFinite(gap) && !isFirst && (
-            <span className="text-[10px] font-mono opacity-40" title="time since previous turn">
+            <span className="text-2xs font-mono opacity-40" title="time since previous turn">
               +{fmtGap(gap)}
             </span>
           )}
@@ -308,8 +308,8 @@ function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRo
 
       {trans && (
         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-          {trans.field && <span className="text-[10px] uppercase tracking-wider opacity-40 mr-0.5">{trans.field}</span>}
-          {trans.from ? <StateChip>{trans.from}</StateChip> : <span className="text-[10px] opacity-40">start</span>}
+          {trans.field && <span className="text-2xs uppercase tracking-wider opacity-40 mr-0.5">{trans.field}</span>}
+          {trans.from ? <StateChip>{trans.from}</StateChip> : <span className="text-2xs opacity-40">start</span>}
           <span className="opacity-40 text-[12px]">→</span>
           {trans.to ? <StateChip tone={tone}>{trans.to}</StateChip> : <span className="opacity-40 text-[12px]">—</span>}
         </div>
@@ -323,7 +323,7 @@ function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRo
           className={`mt-1.5 text-left w-full text-[12px] leading-relaxed opacity-75 ${expandable ? "hover:opacity-100 cursor-pointer" : "cursor-default"}`}
         >
           {open ? full : oneLine(summary, 140)}
-          {expandable && <span className="ml-1.5 opacity-50 text-[10px] uppercase tracking-wider">{open ? "less" : "more"}</span>}
+          {expandable && <span className="ml-1.5 opacity-50 text-2xs uppercase tracking-wider">{open ? "less" : "more"}</span>}
         </button>
       )}
     </li>
@@ -340,7 +340,7 @@ function Timeline({ rows, tokens }: { rows: HistoryRow[]; tokens?: number }) {
   const headerTokens = attributed > 0 ? attributed : (typeof tokens === "number" ? tokens : 0);
   return (
     <div className="mt-2">
-      <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] opacity-50 mb-1">
+      <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-2xs opacity-50 mb-1">
         <span>{rows.length} turn{rows.length === 1 ? "" : "s"}</span>
         {Number.isFinite(span) && span > 0 && <span>· spanning {fmtGap(span)}</span>}
         {headerTokens > 0 && <span>· ~{fmtTokens(headerTokens)} tokens total</span>}
@@ -546,7 +546,7 @@ export default function TaskDetailPage() {
       <Page>
         <button
           onClick={() => navigate(from)}
-          className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100"
+          className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100"
         >
           ← {backLabel}
         </button>
@@ -580,7 +580,7 @@ export default function TaskDetailPage() {
     <Page>
       <button
         onClick={() => navigate(from)}
-        className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
+        className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
       >
         ← {backLabel}
       </button>
@@ -631,7 +631,7 @@ export default function TaskDetailPage() {
               initial={reduced ? false : { scale: 1 }}
               animate={reduced ? {} : { scale: [1, 1.12, 1] }}
               transition={{ duration: reduced ? 0 : DUR.chip, ease: EASE_OUT }}
-              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded inline-block"
+              className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded inline-block"
               style={{
                 background: `var(--accent-${statusTone}-bg)`,
                 color: `var(--accent-${statusTone}-fg)`,
@@ -642,7 +642,7 @@ export default function TaskDetailPage() {
             </motion.span>
             {typeof task.priority !== "undefined" && (
               <span
-                className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+                className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded"
                 style={{
                   background: `var(--accent-${pTone}-bg)`,
                   color: `var(--accent-${pTone}-fg)`,
@@ -654,7 +654,7 @@ export default function TaskDetailPage() {
             )}
             {task.assigned_agent && (
               <span
-                className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded"
+                className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded"
                 style={{
                   background: "var(--accent-violet-bg)",
                   color: "var(--accent-violet-fg)",
@@ -668,7 +668,7 @@ export default function TaskDetailPage() {
               return (
                 <span
                   key={tag}
-                  className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                  className="text-2xs font-mono px-1.5 py-0.5 rounded"
                   style={{
                     background: `var(--accent-${tTone}-bg)`,
                     color: `var(--accent-${tTone}-fg)`,
@@ -686,7 +686,7 @@ export default function TaskDetailPage() {
               key={target}
               disabled={busy}
               onClick={() => setStatus(target)}
-              className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+              className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
             >
               → {target}
             </button>
@@ -759,7 +759,7 @@ export default function TaskDetailPage() {
             <div className="flex items-start gap-2 flex-wrap">
               {task.proof_type && (
                 <span
-                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded shrink-0"
+                  className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded shrink-0"
                   style={{
                     background: "var(--accent-violet-bg)",
                     color: "var(--accent-violet-fg)",
@@ -773,7 +773,7 @@ export default function TaskDetailPage() {
               <span className="opacity-90 leading-relaxed">{task.oracle || <span className="opacity-50">— no oracle defined —</span>}</span>
             </div>
             <div>
-              <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">completion proof</div>
+              <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">completion proof</div>
               {task.completion_proof
                 ? <button
                     onClick={() => navigate(`/tasks/${id}/proof`, { state: { from: `/tasks/${id}` } })}
@@ -786,7 +786,7 @@ export default function TaskDetailPage() {
             </div>
             {task.likely_misfire && (
               <div>
-                <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">likely misfire — how this could pass-but-be-wrong</div>
+                <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">likely misfire — how this could pass-but-be-wrong</div>
                 <div className="flex items-start gap-1.5 text-[color:var(--accent-amber-fg)] leading-relaxed">
                   <span className="shrink-0">⚠</span>
                   <span className="opacity-90">{task.likely_misfire}</span>
@@ -794,7 +794,7 @@ export default function TaskDetailPage() {
               </div>
             )}
             <div>
-              <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">owner outcome — slice vs finished outcome</div>
+              <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">owner outcome — slice vs finished outcome</div>
               {task.full_outcome_complete
                 ? <div className="flex items-center gap-1.5 text-[color:var(--accent-emerald-fg)] leading-relaxed">
                     <span className="shrink-0">✓</span>
@@ -812,7 +812,7 @@ export default function TaskDetailPage() {
               const acs = pinTests.map((t) => parseAc(t.doc).badge).filter(Boolean) as string[];
               return (
                 <div className="pt-3" style={{ borderTop: "1px solid var(--surface-3)" }}>
-                  <div className="opacity-50 mb-1 text-[11px] uppercase tracking-wider">
+                  <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">
                     pinning tests — what currently proves it&apos;s NOT done
                   </div>
                   <button
@@ -828,7 +828,7 @@ export default function TaskDetailPage() {
                         <span className="text-[color:var(--text-secondary)]"> · {acs.join(", ")}</span>
                       )}
                     </span>
-                    <span className="ml-auto text-[11px] uppercase tracking-wider text-[color:var(--text-muted)] group-hover:text-[color:var(--text-secondary)] shrink-0">
+                    <span className="ml-auto text-2xs uppercase tracking-wider text-[color:var(--text-muted)] group-hover:text-[color:var(--text-secondary)] shrink-0">
                       view →
                     </span>
                   </button>
@@ -849,11 +849,11 @@ export default function TaskDetailPage() {
               ["stop_if", task.stop_if, "rose"],
             ].map(([label, items, tone]) => (
               <div key={label as string}>
-                <div className="opacity-50 mb-1 uppercase tracking-wider text-[11px]">{label as string}</div>
+                <div className="opacity-50 mb-1 uppercase tracking-wider text-2xs">{label as string}</div>
                 {((items as string[] | undefined)?.length ?? 0) > 0 ? (
                   <ul className="space-y-1">
                     {(items as string[]).map((it, i) => (
-                      <li key={i} className="font-mono text-[11px] px-1.5 py-0.5 rounded inline-block mr-1 mb-1"
+                      <li key={i} className="font-mono text-2xs px-1.5 py-0.5 rounded inline-block mr-1 mb-1"
                           style={{ background: `var(--accent-${tone as string}-bg)`, color: `var(--accent-${tone as string}-fg)` }}>
                         {it}
                       </li>
@@ -898,10 +898,10 @@ export default function TaskDetailPage() {
                   </span>
                   <span className="flex items-center gap-2 shrink-0">
                     {typeof c.priority !== "undefined" && (
-                      <span className="text-[10px] opacity-50 font-mono">p{c.priority}</span>
+                      <span className="text-2xs opacity-50 font-mono">p{c.priority}</span>
                     )}
                     <span
-                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                      className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded"
                       style={{
                         background: `var(--accent-${cTone}-bg)`,
                         color: `var(--accent-${cTone}-fg)`,
@@ -955,7 +955,7 @@ export default function TaskDetailPage() {
               <li key={s.session_id} className="py-3">
                 <div className="flex items-baseline justify-between gap-3 flex-wrap">
                   <span className="font-mono text-[12px] break-all">{s.session_id}</span>
-                  <span className="text-[11px] opacity-50">
+                  <span className="text-2xs opacity-50">
                     {s.started_at ? String(s.started_at).slice(0, 19) : "—"}
                     {s.ended_at ? ` → ${String(s.ended_at).slice(0, 19)}` : ""}
                   </span>
@@ -970,7 +970,7 @@ export default function TaskDetailPage() {
                   ].map(([label, value]) => (
                     <span
                       key={label}
-                      className="text-[11px] px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10"
+                      className="text-2xs px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10"
                     >
                       <span className="opacity-50">{label}</span>{" "}
                       <span className="font-mono">{value}</span>

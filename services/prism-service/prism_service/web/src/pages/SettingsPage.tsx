@@ -379,7 +379,7 @@ function UpdatesPanel() {
         <dd className="text-sm">
           {status.update_available ? (
             <span className="inline-flex items-center gap-2">
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
                 update available
               </span>
               <span className="text-[color:var(--text-secondary)]">
@@ -394,7 +394,7 @@ function UpdatesPanel() {
             </span>
           ) : status.last_check_ok ? (
             <span className="inline-flex items-center gap-2">
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]">
                 up to date
               </span>
               <span className="text-[color:var(--text-secondary)]">
@@ -560,7 +560,7 @@ function ClaudeSourceCard({ project }: { project: string }) {
         <span className="font-mono text-xs">{config.project}</span>
         <span
           className={
-            "ml-auto rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] " +
+            "ml-auto rounded-full px-2 py-0.5 text-2xs uppercase tracking-[0.14em] " +
             (isExplicit
               ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]"
               : "bg-[color:var(--midground-base)]/10 opacity-70")
@@ -576,7 +576,7 @@ function ClaudeSourceCard({ project }: { project: string }) {
         slug does not match.
       </p>
       <label className="block">
-        <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">
+        <span className="text-2xs uppercase tracking-[0.18em] opacity-60">
           claude_project_dir
         </span>
         <input
@@ -625,14 +625,14 @@ function ClaudeAuthCard() {
     return (
       <div className="space-y-2">
         <div className="inline-flex items-center gap-2 text-sm">
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-2xs uppercase tracking-wider">
             authenticated
           </span>
           <span className="opacity-70">
             Claude CLI is logged in. The drainer can run analyzers.
           </span>
         </div>
-        <div className="text-[11px] opacity-50 font-mono">
+        <div className="text-2xs opacity-50 font-mono">
           credentials → {status.credentials_path}
         </div>
       </div>
@@ -652,7 +652,7 @@ function ClaudeAuthCard() {
   return (
     <div className="space-y-3">
       <div className="inline-flex items-center gap-2 text-sm">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-[9px] uppercase tracking-wider">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-2xs uppercase tracking-wider">
           not authenticated
         </span>
         <span className="opacity-70">
@@ -666,12 +666,12 @@ function ClaudeAuthCard() {
         <button
           type="button"
           onClick={copy}
-          className="px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-[10px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+          className="px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
         >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <p className="text-[11px] opacity-60 leading-snug">
+      <p className="text-2xs opacity-60 leading-snug">
         {status.instructions} This panel polls every 5 seconds and will flip
         to <span className="font-mono">authenticated</span> automatically as
         soon as the OAuth flow completes.
@@ -788,14 +788,14 @@ function GithubAuthCard() {
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-[9px] uppercase tracking-wider">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-2xs uppercase tracking-wider">
                 connected
               </span>
               <span className="text-sm font-semibold">
                 {status.login || status.fingerprint || "GitHub"}
               </span>
             </div>
-            <div className="text-[11px] opacity-60 mt-0.5">
+            <div className="text-2xs opacity-60 mt-0.5">
               {status.scopes
                 ? <>scopes: <span className="font-mono">{status.scopes}</span></>
                 : status.fingerprint
@@ -813,7 +813,7 @@ function GithubAuthCard() {
           type="button"
           onClick={disconnect}
           disabled={submitting}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-[11px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
         >
           {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
           {submitting ? "Disconnecting…" : "Disconnect"}
@@ -829,7 +829,7 @@ function GithubAuthCard() {
   return (
     <div className="space-y-3">
       <div className="inline-flex items-center gap-2 text-sm">
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-[9px] uppercase tracking-wider">
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] text-2xs uppercase tracking-wider">
           not connected
         </span>
         <span className="opacity-70">
@@ -856,7 +856,7 @@ function GithubAuthCard() {
       )}
 
       {status.client_id_configured && !showClientIdSetup && (
-        <div className="text-[11px] opacity-50 flex items-center gap-2">
+        <div className="text-2xs opacity-50 flex items-center gap-2">
           <span>OAuth App ID: <span className="font-mono">{status.client_id_preview}</span></span>
           <button
             type="button"
@@ -879,7 +879,7 @@ function GithubAuthCard() {
         onToggle={(e) => setShowPat((e.target as HTMLDetailsElement).open)}
         className="pt-2 border-t border-[color:var(--midground-base)]/10"
       >
-        <summary className="text-[11px] uppercase tracking-wider opacity-60 cursor-pointer hover:opacity-100 list-none">
+        <summary className="text-2xs uppercase tracking-wider opacity-60 cursor-pointer hover:opacity-100 list-none">
           Or paste a Personal Access Token instead →
         </summary>
         <PatFallback onConnected={(next) => { setStatus(next); }} />
@@ -928,7 +928,7 @@ function ClientIdSetup({
       onSubmit={save}
       className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] p-4 space-y-3"
     >
-      <div className="text-[10px] uppercase tracking-[0.18em] opacity-60">
+      <div className="text-2xs uppercase tracking-[0.18em] opacity-60">
         First-time setup
       </div>
       <ol className="text-xs leading-relaxed opacity-85 list-decimal pl-5 space-y-1.5 marker:opacity-50">
@@ -968,7 +968,7 @@ function ClientIdSetup({
             type="button"
             onClick={onCancel}
             disabled={submitting}
-            className="text-[11px] uppercase tracking-wider opacity-70 hover:opacity-100"
+            className="text-2xs uppercase tracking-wider opacity-70 hover:opacity-100"
           >
             Cancel
           </button>
@@ -1057,7 +1057,7 @@ function DeviceFlowModal({
           <button
             type="button"
             onClick={copy}
-            className="px-3 py-3 rounded-md border border-[color:var(--midground-base)]/30 text-[10px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+            className="px-3 py-3 rounded-md border border-[color:var(--midground-base)]/30 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
           >
             {copied ? "Copied" : "Copy"}
           </button>
@@ -1102,7 +1102,7 @@ function DeviceFlowFooter({ poll, onClose }: { poll: DevicePoll; onClose: () => 
         <button
           type="button"
           onClick={onClose}
-          className="text-[11px] uppercase tracking-wider underline hover:no-underline"
+          className="text-2xs uppercase tracking-wider underline hover:no-underline"
         >
           Close
         </button>
@@ -1164,7 +1164,7 @@ function PatFallback({ onConnected }: { onConnected: (s: GithubAuthStatus) => vo
         <button
           type="submit"
           disabled={submitting || !token.trim()}
-          className="px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-[11px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-30"
+          className="px-3 py-2 rounded-md border border-[color:var(--midground-base)]/30 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-30"
         >
           {submitting && <Loader2 className="w-3 h-3 animate-spin inline mr-1" />}
           {submitting ? "Connecting…" : "Use token"}
@@ -1175,7 +1175,7 @@ function PatFallback({ onConnected }: { onConnected: (s: GithubAuthStatus) => vo
           {error}
         </div>
       )}
-      <p className="text-[11px] opacity-50 leading-snug">
+      <p className="text-2xs opacity-50 leading-snug">
         Create a fine-grained PAT at{" "}
         <a
           href="https://github.com/settings/personal-access-tokens/new"
@@ -1278,16 +1278,16 @@ function RepoPickerModal({
                 <div className="flex items-center gap-2 text-sm">
                   <span className="font-mono">{r.full_name}</span>
                   {r.private && (
-                    <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/15 opacity-80">
+                    <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/15 opacity-80">
                       private
                     </span>
                   )}
-                  <span className="ml-auto text-[11px] opacity-50 font-mono">
+                  <span className="ml-auto text-2xs opacity-50 font-mono">
                     {r.default_branch}
                   </span>
                 </div>
                 {r.description && (
-                  <div className="text-[11px] opacity-60 mt-0.5 truncate">{r.description}</div>
+                  <div className="text-2xs opacity-60 mt-0.5 truncate">{r.description}</div>
                 )}
               </button>
             </li>
@@ -1304,12 +1304,12 @@ function RepoPickerModal({
               type="button"
               onClick={loadMore}
               disabled={loading}
-              className="px-3 py-1.5 rounded-md border border-[color:var(--midground-base)]/20 text-[11px] uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
+              className="px-3 py-1.5 rounded-md border border-[color:var(--midground-base)]/20 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-40"
             >
               {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : "Load more"}
             </button>
           )}
-          <span className="text-[11px] opacity-50 ml-auto">
+          <span className="text-2xs opacity-50 ml-auto">
             {repos.length} repo{repos.length === 1 ? "" : "s"}
             {loading && <Loader2 className="w-3 h-3 animate-spin inline ml-2" />}
           </span>
@@ -1410,21 +1410,21 @@ function JobsPanel() {
   return (
     <>
       <div className="flex items-center gap-3 mb-3">
-        <span className="text-[11px] opacity-60 font-mono">
+        <span className="text-2xs opacity-60 font-mono">
           {jobs.length} job{jobs.length === 1 ? "" : "s"} · {inFlight} in flight
         </span>
-        <span className="text-[11px] opacity-40 font-mono ml-auto">{ageLabel}</span>
+        <span className="text-2xs opacity-40 font-mono ml-auto">{ageLabel}</span>
         <button
           onClick={load}
           disabled={refreshing}
-          className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+          className="text-2xs uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
         >
           {refreshing ? "refreshing…" : "Refresh now"}
         </button>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap mb-3">
-        <span className="text-[10px] uppercase tracking-wider opacity-50">filter:</span>
+        <span className="text-2xs uppercase tracking-wider opacity-50">filter:</span>
         {JOB_STATES.map((s) => {
           const isActive = filter === s;
           return (
@@ -1433,7 +1433,7 @@ function JobsPanel() {
               type="button"
               onClick={() => setFilter(s)}
               className={
-                "px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider border " +
+                "px-2 py-0.5 rounded-full text-2xs uppercase tracking-wider border " +
                 (isActive
                   ? "bg-[color:var(--midground-base)]/15 border-[color:var(--midground-base)]/30"
                   : "border-[color:var(--midground-base)]/15 opacity-60 hover:opacity-100")
@@ -1482,13 +1482,13 @@ function JobRow({ job }: { job: Job }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{meta.title}</span>
-            <span className="text-[10px] opacity-50 font-mono">{stateLabel}</span>
+            <span className="text-2xs opacity-50 font-mono">{stateLabel}</span>
             {job.attempts > 1 && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
                 retried {job.attempts}×
               </span>
             )}
-            <span className="text-[10px] opacity-40 font-mono ml-auto">
+            <span className="text-2xs opacity-40 font-mono ml-auto">
               {open ? "hide ▴" : "show prompt ▾"}
             </span>
           </div>
@@ -1504,7 +1504,7 @@ function JobRow({ job }: { job: Job }) {
         <div className="mt-2 ml-5 space-y-2">
           {open && (
             <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 text-[12px] leading-relaxed">
-              <div className="text-[10px] uppercase tracking-wider opacity-50 mb-2 font-mono">
+              <div className="text-2xs uppercase tracking-wider opacity-50 mb-2 font-mono">
                 analyzer prompt — assembled at run time
               </div>
               <p className="opacity-80">
@@ -1515,7 +1515,7 @@ function JobRow({ job }: { job: Job }) {
                 Persisting the rendered prompt on each AnalysisJob so it
                 renders here verbatim is on the v6.2 roadmap.
               </p>
-              <div className="mt-2 text-[10px] opacity-50 font-mono">
+              <div className="mt-2 text-2xs opacity-50 font-mono">
                 job id <span className="opacity-80">{job.id}</span>
                 {job.result_path && (
                   <> · result <span className="opacity-80">{job.result_path}</span></>
@@ -1524,7 +1524,7 @@ function JobRow({ job }: { job: Job }) {
             </div>
           )}
           {failureOpen && (
-            <pre className="text-[11px] whitespace-pre-wrap font-mono bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] rounded-md p-3 text-[color:var(--accent-rose-fg)] max-h-[200px] overflow-y-auto">
+            <pre className="text-2xs whitespace-pre-wrap font-mono bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] rounded-md p-3 text-[color:var(--accent-rose-fg)] max-h-[200px] overflow-y-auto">
               {job.error}
             </pre>
           )}
@@ -1740,18 +1740,18 @@ function WatchdogPanel() {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">Deadlock watchdog</span>
-            <span className="text-[10px] opacity-50 font-mono">
+            <span className="text-2xs opacity-50 font-mono">
               probe {st.interval_s}s · timeout {st.timeout_s}s
             </span>
             {st.kill_enabled && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]">
                 self-heal armed
               </span>
             )}
           </div>
           <div className="text-[12px] opacity-70 mt-0.5">{summary}</div>
         </div>
-        <span className="text-[10px] opacity-40 mt-1">{open ? "▾" : "▸"}</span>
+        <span className="text-2xs opacity-40 mt-1">{open ? "▾" : "▸"}</span>
       </button>
       {open && (
         <dl className="mt-3 ml-5 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12px]">
@@ -1823,14 +1823,14 @@ function BackgroundWorkersPanel() {
   return (
     <>
       <div className="flex items-center gap-3 mb-3">
-        <span className="text-[11px] opacity-60 font-mono">
+        <span className="text-2xs opacity-60 font-mono">
           {workers.length} worker{workers.length === 1 ? "" : "s"} · {running} running
         </span>
-        <span className="text-[11px] opacity-40 font-mono ml-auto">{ageLabel}</span>
+        <span className="text-2xs opacity-40 font-mono ml-auto">{ageLabel}</span>
         <button
           onClick={load}
           disabled={refreshing}
-          className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+          className="text-2xs uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
         >
           {refreshing ? "refreshing…" : "Refresh now"}
         </button>
@@ -1886,20 +1886,20 @@ function WorkerRow({ worker }: { worker: Worker }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{worker.label}</span>
             {worker.cadence_s > 0 && (
-              <span className="text-[10px] opacity-50 font-mono">
+              <span className="text-2xs opacity-50 font-mono">
                 every {worker.cadence_s < 60
                   ? `${worker.cadence_s}s`
                   : `${Math.round(worker.cadence_s / 60)}m`}
               </span>
             )}
             {!worker.running && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
                 not running
               </span>
             )}
             <PromptKindBadge kind={kind} />
             {canExpand && (
-              <span className="text-[10px] opacity-40 font-mono ml-auto">
+              <span className="text-2xs opacity-40 font-mono ml-auto">
                 {open ? "hide prompt ▴" : "show prompt ▾"}
               </span>
             )}
@@ -1909,7 +1909,7 @@ function WorkerRow({ worker }: { worker: Worker }) {
       </button>
       {canExpand && open && (
         <div className="mt-2 ml-5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-3 text-[12px] leading-relaxed">
-          <div className="text-[10px] uppercase tracking-wider opacity-50 mb-2 font-mono">
+          <div className="text-2xs uppercase tracking-wider opacity-50 mb-2 font-mono">
             {kind === "static" && "claude prompt — sent verbatim each cycle (with name/description substituted)"}
             {kind === "dynamic" && "prompt construction — assembled per-run"}
             {kind === "per_job" && "per-job prompts — see individual job rows below"}
@@ -1941,7 +1941,7 @@ function Readout({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex flex-col">
       <span className="text-[16px] font-mono leading-none">{value}</span>
-      <span className="text-[10px] uppercase tracking-wider opacity-50 mt-1">{label}</span>
+      <span className="text-2xs uppercase tracking-wider opacity-50 mt-1">{label}</span>
     </div>
   );
 }
@@ -1978,11 +1978,11 @@ function PipelineRow({ worker, now }: { worker: Worker; now: number }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{worker.label}</span>
-            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90">
+            <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90">
               pipeline
             </span>
             {!worker.running && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
                 not running
               </span>
             )}
@@ -2002,9 +2002,9 @@ function PipelineRow({ worker, now }: { worker: Worker; now: number }) {
             className="mt-3 w-full text-left flex items-center gap-2 text-[12px] rounded-md -mx-2 px-2 py-1 hover:bg-[color:var(--midground-base)]/[0.03] cursor-pointer"
             aria-expanded={open}
           >
-            <span className="text-[10px] uppercase tracking-wider opacity-50">last consolidation</span>
+            <span className="text-2xs uppercase tracking-wider opacity-50">last consolidation</span>
             <span className="font-mono opacity-80 truncate">{summary}</span>
-            <span className="text-[10px] opacity-40 font-mono ml-auto">
+            <span className="text-2xs opacity-40 font-mono ml-auto">
               {open ? "hide ▴" : "detail ▾"}
             </span>
           </button>
@@ -2015,7 +2015,7 @@ function PipelineRow({ worker, now }: { worker: Worker; now: number }) {
               <Readout label="superseded" value={r.superseded} />
               <Readout label="retired" value={r.retired} />
               {r.at && (
-                <div className="col-span-4 text-[11px] opacity-50 font-mono">
+                <div className="col-span-4 text-2xs opacity-50 font-mono">
                   ran {agoLabel(Date.parse(r.at) / 1000, now)}
                 </div>
               )}
@@ -2044,11 +2044,11 @@ function ClockRow({ worker, now }: { worker: Worker; now: number }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{worker.label}</span>
-            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)]">
+            <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)]">
               clock
             </span>
             {!worker.running && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
+              <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
                 not running
               </span>
             )}
@@ -2078,7 +2078,7 @@ function PromptKindBadge({ kind }: { kind: NonNullable<Worker["prompt_kind"]> })
     per_job: "claude · per-job prompt",
   };
   return (
-    <span className={"text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded " + styles[kind]}>
+    <span className={"text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded " + styles[kind]}>
       {labels[kind]}
     </span>
   );
@@ -2153,7 +2153,7 @@ function ServiceInfoPanel() {
           code in backticks. Each version becomes its own block. */}
       {info.notes && (
         <div className="space-y-5 max-w-[840px]">
-          <div className="text-[10px] uppercase tracking-[0.18em] opacity-50">
+          <div className="text-2xs uppercase tracking-[0.18em] opacity-50">
             Release notes
           </div>
           <ReleaseNotes notes={info.notes} latest={info.version} />
@@ -2339,7 +2339,7 @@ function ClaudeRunsPanel() {
               <div className="flex items-center gap-3 flex-wrap text-xs">
                 <span
                   className={
-                    "inline-flex items-center px-2 py-0.5 rounded-full uppercase tracking-wider text-[9px] " +
+                    "inline-flex items-center px-2 py-0.5 rounded-full uppercase tracking-wider text-2xs " +
                     (ok
                       ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]"
                       : "bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]")
@@ -2360,7 +2360,7 @@ function ClaudeRunsPanel() {
                 <span className="opacity-60">
                   {r.tokens_used.toLocaleString()} tok
                 </span>
-                <span className="opacity-50 ml-auto text-[11px]">
+                <span className="opacity-50 ml-auto text-2xs">
                   {new Date(r.ts_end * 1000).toLocaleString()}
                 </span>
               </div>
@@ -2368,25 +2368,25 @@ function ClaudeRunsPanel() {
             {isExpanded && (
               <div className="mt-2 ml-2 space-y-2">
                 {r.final_text ? (
-                  <pre className="text-[11px] whitespace-pre-wrap font-mono bg-[color:var(--midground-base)]/[0.04] border border-[color:var(--midground-base)]/10 rounded-md p-3 max-h-[400px] overflow-y-auto">
+                  <pre className="text-2xs whitespace-pre-wrap font-mono bg-[color:var(--midground-base)]/[0.04] border border-[color:var(--midground-base)]/10 rounded-md p-3 max-h-[400px] overflow-y-auto">
                     {r.final_text}
                   </pre>
                 ) : (
-                  <div className="text-[11px] opacity-60">
+                  <div className="text-2xs opacity-60">
                     No assistant text captured.
                   </div>
                 )}
                 {r.stderr_excerpt && (
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1">
+                    <div className="text-2xs uppercase tracking-wider opacity-60 mb-1">
                       stderr
                     </div>
-                    <pre className="text-[11px] whitespace-pre-wrap font-mono bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] rounded-md p-3 max-h-[200px] overflow-y-auto text-[color:var(--accent-rose-fg)]">
+                    <pre className="text-2xs whitespace-pre-wrap font-mono bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] rounded-md p-3 max-h-[200px] overflow-y-auto text-[color:var(--accent-rose-fg)]">
                       {r.stderr_excerpt}
                     </pre>
                   </div>
                 )}
-                <div className="text-[10px] opacity-60">
+                <div className="text-2xs opacity-60">
                   run_id <span className="font-mono">{r.run_id}</span>
                   {" · "}
                   <a
@@ -2440,11 +2440,11 @@ function NewProjectRow({ onCreated }: { onCreated: (name: string) => void | Prom
       <button
         type="submit"
         disabled={submitting || !name.trim()}
-        className="px-3 py-1.5 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-[11px] uppercase tracking-wider disabled:opacity-30"
+        className="px-3 py-1.5 rounded-md bg-[color:var(--midground-base)] text-[color:var(--background-base)] text-2xs uppercase tracking-wider disabled:opacity-30"
       >
         {submitting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Add"}
       </button>
-      {error && <span className="text-[11px] text-[color:var(--accent-rose-fg)]">{error}</span>}
+      {error && <span className="text-2xs text-[color:var(--accent-rose-fg)]">{error}</span>}
     </form>
   );
 }
@@ -2490,21 +2490,21 @@ function ProjectCard({
               {name}
             </span>
             {isActive && (
-              <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--midground-base)]/15">
+              <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--midground-base)]/15">
                 active
               </span>
             )}
             <QueueBadge queue={info?.queue} />
             {drifted && !busy && (
               <span
-                className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
+                className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
                 title="The tracked ref has advanced past last_analyzed_sha — click to re-run analyzers."
               >
                 drift
               </span>
             )}
           </div>
-          <div className="text-[11px] opacity-60 mt-1 flex flex-wrap gap-x-4 gap-y-1">
+          <div className="text-2xs opacity-60 mt-1 flex flex-wrap gap-x-4 gap-y-1">
             {info?.mode === "folder" && info.source_path ? (
               <span className="inline-flex items-center gap-1 truncate max-w-[480px]">
                 <FolderTree className="w-3 h-3" />
@@ -2614,7 +2614,7 @@ function ScanProgress({
         <button
           type="button"
           onClick={onDismiss}
-          className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+          className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
         >
           dismiss
         </button>
@@ -2638,7 +2638,7 @@ function ScanProgress({
         <button
           type="button"
           onClick={onDismiss}
-          className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+          className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
         >
           dismiss
         </button>
@@ -2656,7 +2656,7 @@ function ScanProgress({
         <button
           type="button"
           onClick={onDismiss}
-          className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+          className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
         >
           dismiss
         </button>
@@ -2668,12 +2668,12 @@ function ScanProgress({
         />
       </div>
       {inProgressNames && (
-        <div className="text-[11px] opacity-75 font-mono">
+        <div className="text-2xs opacity-75 font-mono">
           running: {inProgressNames}
         </div>
       )}
       {counts.failed > 0 && (
-        <div className="text-[11px] text-[color:var(--accent-rose-fg)]">
+        <div className="text-2xs text-[color:var(--accent-rose-fg)]">
           {counts.failed} failed so far — see Jobs tab.
         </div>
       )}
@@ -2686,7 +2686,7 @@ function QueueBadge({ queue }: { queue: QueueCounts | undefined }) {
   if (!queue) return null;
   if (queue.in_progress > 0) {
     return (
-      <span className="inline-flex items-center gap-1 text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-200">
+      <span className="inline-flex items-center gap-1 text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-200">
         <Loader2 className="w-2.5 h-2.5 animate-spin" />
         analyzing {queue.in_progress}
       </span>
@@ -2694,14 +2694,14 @@ function QueueBadge({ queue }: { queue: QueueCounts | undefined }) {
   }
   if (queue.pending > 0) {
     return (
-      <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-200">
+      <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-200">
         {queue.pending} queued
       </span>
     );
   }
   if (queue.failed > 0) {
     return (
-      <span className="text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
+      <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded-full bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]">
         {queue.failed} failed
       </span>
     );
@@ -2852,7 +2852,7 @@ function ProjectEditor({
       className="mt-3 ml-7 rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] p-4 space-y-3"
     >
       {/* Source mode toggle — folder is the v5.2.0 primary path. */}
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80">
+      <div className="flex items-center gap-1 text-2xs uppercase tracking-wider opacity-80">
         <span className="opacity-60 mr-2">Source</span>
         <button
           type="button"
@@ -2890,7 +2890,7 @@ function ProjectEditor({
       {mode === "folder" ? (
         <div className="space-y-2">
           <label className="flex flex-col gap-1 min-w-0">
-            <span className="text-[10px] uppercase tracking-wider opacity-60">
+            <span className="text-2xs uppercase tracking-wider opacity-60">
               {runtime === "docker" ? "Container path" : "Folder path"}
             </span>
             <div className="flex gap-2 min-w-0">
@@ -2931,7 +2931,7 @@ function ProjectEditor({
               )}
             </div>
           </label>
-          <p className="text-[11px] opacity-60 leading-snug">
+          <p className="text-2xs opacity-60 leading-snug">
             {runtime === "docker" ? (
               <>
                 This path lives <em>inside the container</em>. Bind-mount
@@ -2956,13 +2956,13 @@ function ProjectEditor({
         <div className="space-y-3">
           <div className="grid grid-cols-[1fr_180px] gap-3">
             <label className="flex flex-col gap-1 min-w-0">
-              <span className="text-[10px] uppercase tracking-wider opacity-60 flex items-center gap-2">
+              <span className="text-2xs uppercase tracking-wider opacity-60 flex items-center gap-2">
                 Git URL
                 {ghAuthed && (
                   <button
                     type="button"
                     onClick={() => setPicking(true)}
-                    className="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80 hover:opacity-100"
+                    className="ml-auto inline-flex items-center gap-1 text-2xs uppercase tracking-wider opacity-80 hover:opacity-100"
                   >
                     <Github className="w-3 h-3" /> Browse my repos
                   </button>
@@ -2976,7 +2976,7 @@ function ProjectEditor({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] uppercase tracking-wider opacity-60">
+              <span className="text-2xs uppercase tracking-wider opacity-60">
                 Tracked ref
               </span>
               <input
@@ -2991,7 +2991,7 @@ function ProjectEditor({
               folder mode, they never see this. */}
           {!ghAuthed && (
             <details className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.02]">
-              <summary className="px-3 py-2 text-[11px] cursor-pointer flex items-center gap-2 hover:bg-[color:var(--midground-base)]/[0.04]">
+              <summary className="px-3 py-2 text-2xs cursor-pointer flex items-center gap-2 hover:bg-[color:var(--midground-base)]/[0.04]">
                 <Github className="w-3.5 h-3.5 opacity-70" />
                 <span className="opacity-80">
                   Optional: connect GitHub for private-repo clones + a repo picker
@@ -3005,7 +3005,7 @@ function ProjectEditor({
         </div>
       )}
       {mode === "url" && info?.remote_url && info.remote_url !== remote.trim() && (
-        <div className="text-[11px] opacity-60">
+        <div className="text-2xs opacity-60">
           Changing the URL is refused server-side once a clone exists — to
           re-point, delete the project's source/ dir first.
         </div>
@@ -3026,7 +3026,7 @@ function ProjectEditor({
         <button
           type="button"
           onClick={onActivate}
-          className="text-[11px] uppercase tracking-wider opacity-70 hover:opacity-100"
+          className="text-2xs uppercase tracking-wider opacity-70 hover:opacity-100"
         >
           Make active
         </button>
@@ -3062,13 +3062,13 @@ function ProjectEditor({
             <button
               type="button"
               onClick={() => { setConfirming(true); setError(null); }}
-              className="text-[11px] uppercase tracking-wider text-[color:var(--accent-rose-fg)] hover:text-[color:var(--accent-rose-fg)]"
+              className="text-2xs uppercase tracking-wider text-[color:var(--accent-rose-fg)] hover:text-[color:var(--accent-rose-fg)]"
             >
               Delete project + all data
             </button>
           ) : (
             <div className="space-y-2">
-              <div className="text-[11px] text-[color:var(--accent-rose-fg)]">
+              <div className="text-2xs text-[color:var(--accent-rose-fg)]">
                 This wipes <span className="font-mono">data/projects/{name}</span>:
                 brain, graph, tasks, scores, source clone, queue, all artifacts.
                 Type <span className="font-mono">{name}</span> to confirm.
@@ -3094,7 +3094,7 @@ function ProjectEditor({
                   type="button"
                   onClick={() => { setConfirming(false); setConfirmText(""); }}
                   disabled={deleting}
-                  className="text-[11px] uppercase tracking-wider opacity-70 hover:opacity-100"
+                  className="text-2xs uppercase tracking-wider opacity-70 hover:opacity-100"
                 >
                   Cancel
                 </button>

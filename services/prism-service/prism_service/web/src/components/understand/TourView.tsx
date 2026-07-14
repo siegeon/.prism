@@ -42,7 +42,7 @@ export default function TourView({ data }: { data: Tour }) {
         ))}
       </ol>
       {data.continuation_hint && (
-        <div className="text-[11px] opacity-60 italic">
+        <div className="text-2xs opacity-60 italic">
           continuation: {data.continuation_hint}
         </div>
       )}
@@ -67,7 +67,7 @@ function StepCard({ step, fallbackOrdinal }: { step: Step; fallbackOrdinal: numb
             {step.narration}
           </p>
         )}
-        <div className="flex flex-wrap items-center gap-2 mt-3 text-[11px]">
+        <div className="flex flex-wrap items-center gap-2 mt-3 text-2xs">
           {step.anchor_file && (
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded font-mono bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] ring-1 ring-inset ring-[color:var(--accent-teal-ring)]">
               <FileCode className="w-3 h-3" />

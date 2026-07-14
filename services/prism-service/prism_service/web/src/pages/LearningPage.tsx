@@ -139,7 +139,7 @@ function ScoreReceipt({ raw }: { raw?: string | null }) {
   }, [raw]);
   if (!parsed) {
     return (
-      <div className="text-[11px] opacity-40 pl-2">
+      <div className="text-2xs opacity-40 pl-2">
         no components recorded for this score
       </div>
     );
@@ -147,7 +147,7 @@ function ScoreReceipt({ raw }: { raw?: string | null }) {
   return (
     <div className="pl-2 space-y-0.5">
       {Object.entries(parsed).map(([k, v]) => (
-        <div key={k} className="flex justify-between text-[11px] font-mono">
+        <div key={k} className="flex justify-between text-2xs font-mono">
           <span className="opacity-70">{k}</span>
           <span className="opacity-90">{String(v)}</span>
         </div>
@@ -260,7 +260,7 @@ export default function LearningPage() {
       <Card raised>
         <div className="flex items-baseline justify-between mb-3">
           <SectionLabel>Recent reflections · task → memories minted</SectionLabel>
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
             the hero signal · from consolidation_runs
           </div>
         </div>
@@ -285,22 +285,22 @@ export default function LearningPage() {
                 <div key={r.id ?? r.candidate_id} className="py-3 space-y-1">
                   <div className="flex items-center gap-3 text-sm">
                     <ScorePill value={r.qualitative_score} />
-                    <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] w-14">
+                    <span className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] w-14">
                       {subjectKind}
                     </span>
                     <span className="font-mono opacity-80 flex-1 truncate" title={subjectId}>
                       {subjectId.length > 24 ? `${subjectId.slice(0, 24)}…` : subjectId}
                     </span>
                     {(r.memories_minted ?? 0) > 0 ? (
-                      <span className="text-[10px] uppercase tracking-wider text-[color:var(--accent-emerald-fg)]">
+                      <span className="text-2xs uppercase tracking-wider text-[color:var(--accent-emerald-fg)]">
                         +{r.memories_minted} mem
                       </span>
                     ) : (
-                      <span className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+                      <span className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
                         no memory minted
                       </span>
                     )}
-                    <span className="text-[10px] text-[color:var(--text-muted)] w-44 text-right">
+                    <span className="text-2xs text-[color:var(--text-muted)] w-44 text-right">
                       {r.run_at ?? ""}
                     </span>
                   </div>
@@ -321,13 +321,13 @@ export default function LearningPage() {
       <Card raised>
         <div className="flex items-baseline justify-between mb-3">
           <SectionLabel>Adaptive policy</SectionLabel>
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
             Tier-3 · knobs self-tuned from recall→outcome · per-op verdict accuracy
           </div>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div className="rounded border border-[color:var(--border-default)]/40 p-2">
-            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+            <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
               Tuned knobs (editable)
             </div>
             {([
@@ -351,7 +351,7 @@ export default function LearningPage() {
                 type="button"
                 disabled={knobBusy}
                 onClick={() => saveKnobs("set")}
-                className="text-[10px] uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
+                className="text-2xs uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
                 style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
               >
                 Save
@@ -360,15 +360,15 @@ export default function LearningPage() {
                 type="button"
                 disabled={knobBusy}
                 onClick={() => saveKnobs("revert")}
-                className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 disabled:opacity-40"
+                className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 disabled:opacity-40"
               >
                 Revert
               </button>
-              {knobNote && <span className="text-[10px] opacity-60 self-center">{knobNote}</span>}
+              {knobNote && <span className="text-2xs opacity-60 self-center">{knobNote}</span>}
             </div>
           </div>
           <div className="rounded border border-[color:var(--border-default)]/40 p-2">
-            <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+            <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
               Per-op verdict accuracy
             </div>
             {opAccuracy.length === 0 ? (
@@ -390,12 +390,12 @@ export default function LearningPage() {
             never the raw wall of identical no-op ticks. */}
         <div className="mt-3 pt-2 border-t border-[color:var(--border-default)]/30">
           {history.length === 0 ? (
-            <div className="text-[11px] opacity-50">
+            <div className="text-2xs opacity-50">
               No tunings yet — knobs show defaults until the adaptive loop runs.
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between text-[11px] gap-2">
+              <div className="flex items-center justify-between text-2xs gap-2">
                 <span className="text-[color:var(--text-secondary)] min-w-0 truncate">
                   {lastMove ? (
                     <>
@@ -414,7 +414,7 @@ export default function LearningPage() {
                 <button
                   type="button"
                   onClick={() => setShowHistory((s) => !s)}
-                  className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 flex-none"
+                  className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 flex-none"
                 >
                   {showHistory ? "hide" : `history · ${history.length} ticks`}
                 </button>
@@ -425,7 +425,7 @@ export default function LearningPage() {
                     g.moved ? (
                       <div
                         key={gi}
-                        className="text-[11px] rounded border px-2 py-1 border-[color:var(--accent-violet-ring)] bg-[color:var(--accent-violet-bg)]"
+                        className="text-2xs rounded border px-2 py-1 border-[color:var(--accent-violet-ring)] bg-[color:var(--accent-violet-bg)]"
                       >
                         <span className="uppercase tracking-wider text-[color:var(--accent-violet-fg)]">
                           knob moved
@@ -434,7 +434,7 @@ export default function LearningPage() {
                         <div className="opacity-80 mt-0.5">{g.rationale}</div>
                       </div>
                     ) : (
-                      <div key={gi} className="text-[11px] opacity-50">
+                      <div key={gi} className="text-2xs opacity-50">
                         steady since {g.rows[0]?.tuned_at} · {g.rows.length} identical
                         tick{g.rows.length > 1 ? "s" : ""}
                       </div>
@@ -452,7 +452,7 @@ export default function LearningPage() {
       <Card>
         <div className="flex items-baseline justify-between mb-3">
           <SectionLabel>Scored tasks</SectionLabel>
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
             qualitative headline · cuped/quality adjusted · click a row for the receipt
           </div>
         </div>
@@ -487,7 +487,7 @@ export default function LearningPage() {
                   </div>
                   {open && (
                     <div className="mt-2 rounded border border-[color:var(--border-default)]/40 p-2">
-                      <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+                      <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
                         components_json — what moved the score
                       </div>
                       <ScoreReceipt raw={r.components_json} />
@@ -508,7 +508,7 @@ export default function LearningPage() {
         ) : (
           <>
             {lowN && (
-              <div className="mb-3 text-[11px] uppercase tracking-wider text-[color:var(--accent-amber-fg)]">
+              <div className="mb-3 text-2xs uppercase tracking-wider text-[color:var(--accent-amber-fg)]">
                 Correlational only — every variant has n &lt; 20.
               </div>
             )}
@@ -520,7 +520,7 @@ export default function LearningPage() {
                     {v.persona && <span className="opacity-50 text-xs"> · {v.persona}</span>}
                   </span>
                   {v.correlational && (
-                    <span className="text-[10px] uppercase tracking-wider text-[color:var(--accent-amber-fg)]">
+                    <span className="text-2xs uppercase tracking-wider text-[color:var(--accent-amber-fg)]">
                       correlational · n&lt;20
                     </span>
                   )}
@@ -542,7 +542,7 @@ export default function LearningPage() {
       <Card raised>
         <div className="flex items-baseline justify-between mb-3">
           <SectionLabel>Agent-run aggregates</SectionLabel>
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)]">
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
             per-step / override-rate / per-role · aggregates only
           </div>
         </div>
@@ -555,7 +555,7 @@ export default function LearningPage() {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             <div className="rounded border border-[color:var(--border-default)]/40 p-2">
-              <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
                 Runs per step
               </div>
               {(agentAgg.per_step ?? []).length === 0 ? (
@@ -572,21 +572,21 @@ export default function LearningPage() {
               )}
             </div>
             <div className="rounded border border-[color:var(--border-default)]/40 p-2">
-              <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
                 Override rate
               </div>
               <div className="text-2xl font-mono text-[color:var(--accent-amber-fg)]">{overridePct}%</div>
-              <div className="text-[11px] opacity-50">
+              <div className="text-2xs opacity-50">
                 {agentAgg.total_runs ?? 0} runs · blind-verifier override signal
               </div>
             </div>
             <div className="rounded border border-[color:var(--border-default)]/40 p-2">
-              <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
+              <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">
                 Token cost per role
               </div>
               {/* Wargame economics: frontier tier plans & signs the gates
                   (Steward), fast tier does the bulk execution (Builder). */}
-              <div className="text-[10px] text-[color:var(--text-muted)] mb-1.5 leading-snug">
+              <div className="text-2xs text-[color:var(--text-muted)] mb-1.5 leading-snug">
                 Frontier plans &amp; gates, fast executes — spend should skew to the
                 cheap tier.
               </div>
@@ -608,7 +608,7 @@ export default function LearningPage() {
                         {tier && (
                           <span
                             className={
-                              "px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wider font-mono flex-none " +
+                              "px-1.5 py-0.5 rounded text-2xs uppercase tracking-wider font-mono flex-none " +
                               toneClass(domainTone("tier", tier) ?? "slate")
                             }
                             title={meta?.tier_desc}
@@ -617,7 +617,7 @@ export default function LearningPage() {
                           </span>
                         )}
                         {meta?.effort && (
-                          <span className="text-[9px] uppercase tracking-wider font-mono text-[color:var(--text-muted)] flex-none">
+                          <span className="text-2xs uppercase tracking-wider font-mono text-[color:var(--text-muted)] flex-none">
                             {meta.effort}
                           </span>
                         )}

@@ -82,7 +82,7 @@ export default function DomainsView({ data }: { data: Domains }) {
       </div>
 
       {data.uncategorized && data.uncategorized.length > 0 && (
-        <div className="text-[11px] opacity-60">
+        <div className="text-2xs opacity-60">
           {data.uncategorized.length} entit{data.uncategorized.length === 1 ? "y was" : "ies were"} not categorized.
         </div>
       )}
@@ -101,7 +101,7 @@ function DrillCrumb({
     >
       <button
         onClick={onBack}
-        className="uppercase tracking-wider text-[11px] opacity-70 hover:opacity-100"
+        className="uppercase tracking-wider text-2xs opacity-70 hover:opacity-100"
       >
         ← Overview
       </button>
@@ -150,7 +150,7 @@ function DomainsOverviewPanel({
         </ul>
       </div>
       {uncategorized && uncategorized.length > 0 && (
-        <div className="text-[11px] opacity-50">
+        <div className="text-2xs opacity-50">
           {uncategorized.length} entit{uncategorized.length === 1 ? "y" : "ies"} not assigned.
         </div>
       )}
@@ -176,12 +176,12 @@ function DomainDetail({
     >
       <button
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider opacity-70 hover:opacity-100"
+        className="inline-flex items-center gap-1.5 text-2xs uppercase tracking-wider opacity-70 hover:opacity-100"
       >
         ← Back to overview
       </button>
       <div>
-        <div className="text-[10px] uppercase tracking-[0.18em] opacity-60">
+        <div className="text-2xs uppercase tracking-[0.18em] opacity-60">
           Domain
         </div>
         <h2 className="font-serif text-xl tracking-tight">{domain.id ?? "—"}</h2>

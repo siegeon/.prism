@@ -17,7 +17,7 @@ function renderInline(s: string): ReactNode[] {
     i % 2 === 1 ? (
       <code
         key={`c${i}`}
-        className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--accent-teal-fg)] break-all"
+        className="font-mono text-2xs px-1.5 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--accent-teal-fg)] break-all"
       >
         {p}
       </code>

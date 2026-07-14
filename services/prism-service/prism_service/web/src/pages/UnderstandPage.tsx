@@ -83,7 +83,7 @@ function ConceptNode({ data }: { data: ConceptNodeData }) {
         }}
       />
       <div
-        className="absolute left-1/2 top-full mt-1 -translate-x-1/2 text-[10px] leading-tight text-center max-w-[140px] truncate font-medium pointer-events-none"
+        className="absolute left-1/2 top-full mt-1 -translate-x-1/2 text-2xs leading-tight text-center max-w-[140px] truncate font-medium pointer-events-none"
         style={{ color: data.selected ? "var(--text-primary)" : "var(--text-secondary)" }}
       >
         {data.title}
@@ -314,16 +314,16 @@ function DomainOverview({
               className="text-left rounded-xl border-2 px-5 py-4 transition-all hover:brightness-110"
               style={{ borderColor: c.border, background: c.bg }}
             >
-              <div className="text-[9px] uppercase tracking-[0.18em] opacity-60 mb-1">Domain</div>
+              <div className="text-2xs uppercase tracking-[0.18em] opacity-60 mb-1">Domain</div>
               <div className="font-serif text-base tracking-tight capitalize">{d.id}</div>
               <div className="mt-3 flex flex-wrap gap-1">
                 {d.samples.map((s) => (
-                  <span key={s} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40 truncate max-w-[180px]">
+                  <span key={s} className="text-2xs font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40 truncate max-w-[180px]">
                     {s}
                   </span>
                 ))}
               </div>
-              <div className="text-[10px] opacity-60 mt-3 inline-flex items-center gap-1">
+              <div className="text-2xs opacity-60 mt-3 inline-flex items-center gap-1">
                 <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: c.dot }} />
                 {d.count} concept{d.count === 1 ? "" : "s"}
               </div>
@@ -352,7 +352,7 @@ function SearchResults({
                 className="w-full text-left px-3 py-2 rounded-md hover:bg-[color:var(--surface-2)] flex items-center justify-between gap-3"
               >
                 <span className="truncate">{n.title}</span>
-                <span className="text-[10px] opacity-60 font-mono shrink-0">{(n.domain || DOMAIN_FALLBACK)} · {n.type}</span>
+                <span className="text-2xs opacity-60 font-mono shrink-0">{(n.domain || DOMAIN_FALLBACK)} · {n.type}</span>
               </button>
             </li>
           ))}
@@ -371,7 +371,7 @@ function DrillCrumb({
       className="flex items-center gap-3 text-[12px] px-3 py-2 rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/15"
       style={{ borderLeftWidth: 3, borderLeftColor: color }}
     >
-      <button onClick={onBack} className="uppercase tracking-wider text-[11px] opacity-70 hover:opacity-100">
+      <button onClick={onBack} className="uppercase tracking-wider text-2xs opacity-70 hover:opacity-100">
         ← Domains
       </button>
       <span className="opacity-40">/</span>
@@ -548,7 +548,7 @@ function DetailPanel({
       <header className="space-y-2">
         <div className="flex items-start gap-2 flex-wrap">
           <h1 className="font-serif text-2xl tracking-tight flex-1 min-w-0 break-words">{title}</h1>
-          <span className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded shrink-0"
+          <span className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded shrink-0"
             style={{ background: toneVar(tone, "bg"), color: toneVar(tone, "fg"), boxShadow: `inset 0 0 0 1px ${toneVar(tone, "ring")}` }}>
             {concept.type}
           </span>
@@ -556,7 +556,7 @@ function DetailPanel({
         {tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {tags.map((t) => (
-              <span key={t} className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-2)] text-[color:var(--text-muted)]">{t}</span>
+              <span key={t} className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-2)] text-[color:var(--text-muted)]">{t}</span>
             ))}
           </div>
         )}
@@ -565,16 +565,16 @@ function DetailPanel({
       <div className="flex items-center gap-2">
         {!editing && (
           <button disabled={actionBusy} onClick={() => { setDraft(concept.body); setEditing(true); }}
-            className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40">Edit</button>
+            className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40">Edit</button>
         )}
         <button disabled={actionBusy} onClick={() => doAction("retire")}
-          className="text-[10px] uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
+          className="text-2xs uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
           style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)" }}>Retire</button>
         <a href={`/api/okf/raw/${path.replace(/^\//, "")}?project=${encodeURIComponent(project)}`}
           target="_blank" rel="noreferrer"
-          className="text-[10px] uppercase tracking-wider px-2 py-1 rounded ml-auto opacity-60 hover:opacity-100">raw .md</a>
+          className="text-2xs uppercase tracking-wider px-2 py-1 rounded ml-auto opacity-60 hover:opacity-100">raw .md</a>
       </div>
-      {note && <div className="text-[11px] opacity-70">{note}</div>}
+      {note && <div className="text-2xs opacity-70">{note}</div>}
 
       {editing ? (
         <div className="space-y-2">
@@ -582,14 +582,14 @@ function DetailPanel({
             className="w-full text-[13px] rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)] p-3 leading-relaxed resize-y font-sans" />
           <div className="flex gap-2">
             <button disabled={actionBusy} onClick={() => doAction("edit", { description: draft })}
-              className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+              className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
               style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}>Save edit</button>
             <button disabled={actionBusy} onClick={() => doAction("supersede", { description: draft })}
-              className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+              className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
               style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}
               title="store a new generation under the same name (archives this one)">Supersede</button>
             <button onClick={() => setEditing(false)}
-              className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15">Cancel</button>
+              className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15">Cancel</button>
           </div>
         </div>
       ) : (
@@ -597,7 +597,7 @@ function DetailPanel({
       )}
 
       <div className="border-t border-[color:var(--border-default)] pt-3">
-        <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-2">
+        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">
           Cited by ({concept.backlinks.length})
         </div>
         {concept.backlinks.length === 0 ? (

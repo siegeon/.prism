@@ -49,7 +49,7 @@ export default function TaskTextPage() {
     <Page>
       <button
         onClick={() => navigate(back)}
-        className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
+        className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
       >
         ← back to task
       </button>

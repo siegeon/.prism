@@ -37,12 +37,12 @@ function PrismFileNode({ data, selected }: NodeProps<PrismFileFlowNode>) {
               className="!w-1 !h-1" style={{ background: data.layerColor }} />
       <Handle type="source" position={Position.Right}
               className="!w-1 !h-1" style={{ background: data.layerColor }} />
-      <div className="text-[11px] opacity-50 truncate">{data.dirName || "/"}</div>
+      <div className="text-2xs opacity-50 truncate">{data.dirName || "/"}</div>
       <div className={`text-[12px] font-mono mt-0.5 truncate ${data.isHub ? "font-semibold" : ""}`}>
         {data.fileName}
       </div>
       {data.isHub && (
-        <div className="text-[9px] uppercase tracking-wider opacity-60 mt-1">
+        <div className="text-2xs uppercase tracking-wider opacity-60 mt-1">
           hub
         </div>
       )}

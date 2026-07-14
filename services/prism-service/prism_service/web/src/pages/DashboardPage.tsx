@@ -38,12 +38,12 @@ function TrendKpi({ label, series, color, fmt }: { label: string; series: number
   const up = today >= prev;
   return (
     <div className="flex-1 min-w-[170px] rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4">
-      <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
+      <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
       <div className="flex items-end justify-between gap-2">
         <div className="text-2xl font-semibold leading-none text-[color:var(--text-primary)]">{(fmt ?? nf)(total)}</div>
         <Sparkline data={series} color={color} />
       </div>
-      <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mt-2">
+      <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-2">
         <span style={{ color }}>{up ? "▲" : "▼"} {nf(today)}</span> today
       </div>
     </div>
@@ -55,7 +55,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   return (
     <div className="flex-1 min-w-[88px]">
       <div className="text-lg font-semibold leading-none" style={{ color: tone ?? "var(--text-primary)" }}>{value}</div>
-      <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mt-1">{label}</div>
+      <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-1">{label}</div>
     </div>
   );
 }
@@ -117,7 +117,7 @@ function StalenessCard({ project }: { project: string }) {
           type="button"
           disabled={busy}
           onClick={resync}
-          className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+          className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
           style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)" }}
         >
           {busy ? "Re-syncing…" : "Re-sync"}
@@ -128,7 +128,7 @@ function StalenessCard({ project }: { project: string }) {
         <Row label="graph" v={drift.graph ? 1 : 0} bad={Boolean(drift.graph)} />
         <Row label="brain" v={drift.brain ? 1 : 0} bad={Boolean(drift.brain)} />
       </div>
-      <div className="text-[11px] opacity-60 mt-2">
+      <div className="text-2xs opacity-60 mt-2">
         {note ?? (anyStale ? "Some indexes are behind the pinned SHA — re-sync to rebuild." : "All indexes current.")}
       </div>
     </Card>
@@ -251,15 +251,15 @@ export default function DashboardPage() {
             <Stat label="zero-result" value={`${zeroPct}%`} tone={zeroPct > 50 ? TONE.rose : undefined} />
           </div>
           {qChart && <PlotFigure options={qChart} className="w-full mb-3" />}
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-2">Recent queries</div>
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">Recent queries</div>
           {q?.recent.length ? (
             <ul className="space-y-1.5">
               {q.recent.map((r, i) => (
                 <li key={i} className="flex items-center gap-2 text-sm">
-                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  <span className="font-mono text-2xs px-1.5 py-0.5 rounded shrink-0"
                     style={{ background: r.n_results ? "rgba(110,231,183,0.12)" : "rgba(249,168,212,0.14)", color: r.n_results ? TONE.emerald : TONE.rose }}>{r.n_results}</span>
                   <span className="truncate text-[color:var(--text-secondary)]">{r.q}</span>
-                  <span className="ml-auto shrink-0 text-[10px] text-[color:var(--text-muted)]">{r.latency_ms} ms</span>
+                  <span className="ml-auto shrink-0 text-2xs text-[color:var(--text-muted)]">{r.latency_ms} ms</span>
                 </li>
               ))}
             </ul>
@@ -275,7 +275,7 @@ export default function DashboardPage() {
             <Stat label="active" value={nf(data?.kpis.tasks_active ?? 0)} />
           </div>
           {flowChart && <PlotFigure options={flowChart} className="w-full mb-3" />}
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-1">Workflow events by action</div>
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-1">Workflow events by action</div>
           {eventsChart ? <PlotFigure options={eventsChart} className="w-full" /> : <Empty>No events.</Empty>}
         </Card>
       </div>
@@ -291,7 +291,7 @@ export default function DashboardPage() {
             <Stat label="last 14 days" value={compact(act?.tokens.window_total ?? 0)} />
           </div>
           {tokenChart ? <PlotFigure options={tokenChart} className="w-full" /> : <Empty>No token data yet.</Empty>}
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mt-2">Tracked per session — PRISM does not record tokens per individual task.</div>
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-2">Tracked per session — PRISM does not record tokens per individual task.</div>
         </Card>
 
         <Card>
@@ -303,7 +303,7 @@ export default function DashboardPage() {
               <Row label="Stale brain docs" v={health.stale_brain_docs} bad={health.stale_brain_docs > 0} />
               <Row label="Domains near cap" v={health.domains_near_cap.length} bad={health.domains_near_cap.length > 0} />
               {health.last_governance_run && (
-                <div className="text-[10px] uppercase tracking-wider opacity-50 pt-2">Last run: {health.last_governance_run}</div>
+                <div className="text-2xs uppercase tracking-wider opacity-50 pt-2">Last run: {health.last_governance_run}</div>
               )}
             </div>
           ) : <Empty>—</Empty>}

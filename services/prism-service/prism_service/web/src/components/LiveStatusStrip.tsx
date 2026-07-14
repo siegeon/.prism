@@ -30,7 +30,7 @@ export default function LiveStatusStrip() {
     <div className="border-b border-sky-500/30 bg-sky-500/[0.08] text-sky-100">
       <div className="px-6 py-2 flex items-center gap-3 text-xs">
         <Activity className="w-3.5 h-3.5 animate-pulse text-sky-300 shrink-0" />
-        <span className="uppercase tracking-wider text-[10px] opacity-80">
+        <span className="uppercase tracking-wider text-2xs opacity-80">
           Scanning
         </span>
         <div className="flex items-center gap-4 flex-wrap min-w-0">

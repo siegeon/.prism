@@ -112,8 +112,8 @@ export default function OkfPage() {
         grouped.map((g) => (
           <Card key={g.section}>
             <div className="flex items-baseline gap-3 mb-3">
-              <span className="text-[11px] uppercase tracking-wider font-mono opacity-80">{g.section}</span>
-              <span className="text-[11px] opacity-50 font-mono">
+              <span className="text-2xs uppercase tracking-wider font-mono opacity-80">{g.section}</span>
+              <span className="text-2xs opacity-50 font-mono">
                 {g.items.length} concept{g.items.length === 1 ? "" : "s"}
               </span>
             </div>
@@ -175,7 +175,7 @@ function ConceptCard({
           </span>
           {meta.type && (
             <span
-              className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1 shrink-0"
+              className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1 shrink-0"
               style={{
                 background: `var(--accent-${tone}-bg)`,
                 color: `var(--accent-${tone}-fg)`,
@@ -193,7 +193,7 @@ function ConceptCard({
         )}
       </button>
 
-      <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider font-mono">
+      <div className="flex items-center gap-3 text-2xs uppercase tracking-wider font-mono">
         <button onClick={togglePeek} className="opacity-60 hover:opacity-100">
           {open ? "hide" : "peek"}
         </button>

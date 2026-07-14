@@ -56,7 +56,7 @@ function Sparkline({
   const area = `0,${height} ${points} ${viewW},${height}`;
   return (
     <div className="rounded-md border border-[color:var(--midground-base)]/10 bg-[color:var(--background-base)]/30 p-2.5 flex flex-col gap-1.5">
-      <div className="text-[10px] uppercase tracking-wider opacity-60">{label}</div>
+      <div className="text-2xs uppercase tracking-wider opacity-60">{label}</div>
       <svg
         viewBox={`0 0 ${viewW} ${height}`}
         preserveAspectRatio="none"
@@ -66,7 +66,7 @@ function Sparkline({
         <polygon points={area} fill={color} opacity="0.18" />
         <polyline points={points} fill="none" stroke={color} strokeWidth="1.2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>
-      <div className="flex items-baseline justify-between text-[11px] font-mono tabular-nums">
+      <div className="flex items-baseline justify-between text-2xs font-mono tabular-nums">
         <span className="opacity-85">Σ {total.toLocaleString()}</span>
         <span className="opacity-40">peak {max.toLocaleString()}</span>
       </div>
@@ -125,15 +125,15 @@ function normalizeQueue(q: unknown): QueueRow[] {
 // as readable mono values, never a JSON dump.
 function ScopeTree({ value, depth = 0 }: { value: unknown; depth?: number }): React.ReactElement {
   if (value === null || value === undefined) {
-    return <span className="opacity-40 text-[11px] font-mono">—</span>;
+    return <span className="opacity-40 text-2xs font-mono">—</span>;
   }
   if (Array.isArray(value)) {
-    if (value.length === 0) return <span className="opacity-40 text-[11px] font-mono">[]</span>;
+    if (value.length === 0) return <span className="opacity-40 text-2xs font-mono">[]</span>;
     return (
       <ul className="space-y-0.5">
         {value.map((v, i) => (
           <li key={i} className="flex gap-2">
-            <span className="opacity-30 text-[11px] font-mono select-none">–</span>
+            <span className="opacity-30 text-2xs font-mono select-none">–</span>
             <ScopeTree value={v} depth={depth + 1} />
           </li>
         ))}
@@ -145,14 +145,14 @@ function ScopeTree({ value, depth = 0 }: { value: unknown; depth?: number }): Re
       <div className={depth > 0 ? "pl-3 border-l border-[color:var(--midground-base)]/10" : ""}>
         {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
           <div key={k} className="flex gap-2 items-baseline flex-wrap py-0.5">
-            <span className="text-[11px] font-mono opacity-50 shrink-0">{k}:</span>
+            <span className="text-2xs font-mono opacity-50 shrink-0">{k}:</span>
             <ScopeTree value={v} depth={depth + 1} />
           </div>
         ))}
       </div>
     );
   }
-  return <span className="text-[11px] font-mono opacity-85 break-words">{String(value)}</span>;
+  return <span className="text-2xs font-mono opacity-85 break-words">{String(value)}</span>;
 }
 
 export default function ConsolidationPage() {
@@ -329,7 +329,7 @@ export default function ConsolidationPage() {
               </ul>
               <div className="text-xs opacity-60 pt-1">Typical run: 30-90s. Each click spends real claude tokens on your subscription.</div>
             </div>
-            <button onClick={() => setShowHelp(false)} className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0">close</button>
+            <button onClick={() => setShowHelp(false)} className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0">close</button>
           </div>
         </Card>
       )}
@@ -339,7 +339,7 @@ export default function ConsolidationPage() {
           <span className="flex-1 opacity-90 leading-relaxed">{notice}</span>
           <button
             onClick={() => setNotice(null)}
-            className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+            className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
           >
             dismiss
           </button>
@@ -396,7 +396,7 @@ export default function ConsolidationPage() {
             <Sparkline label="Memory writes" values={trends.days.map((d) => trends.series[d]?.memory_writes ?? 0)} color="rgb(110 231 183)" />
             <Sparkline label="Reflections"   values={trends.days.map((d) => trends.series[d]?.reflections ?? 0)}   color="rgb(192 132 252)" />
           </div>
-          <p className="text-[10px] opacity-40 mt-2 font-mono">
+          <p className="text-2xs opacity-40 mt-2 font-mono">
             {trends.days[0]} → {trends.days[trends.days.length - 1]}
           </p>
         </Card>
@@ -415,7 +415,7 @@ export default function ConsolidationPage() {
           <button
             onClick={previewNext}
             disabled={previewBusy}
-            className="text-[10px] uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
+            className="text-2xs uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
           >
             {previewBusy ? "loading…" : "Preview next brief"}
           </button>
@@ -426,7 +426,7 @@ export default function ConsolidationPage() {
             <div className="flex items-center justify-end mb-2">
               <button
                 onClick={() => setPreview(null)}
-                className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100"
+                className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100"
               >
                 close
               </button>
@@ -446,7 +446,7 @@ export default function ConsolidationPage() {
                       <span className="opacity-50">MCPs the agent would have:</span>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {preview.mcps_available.map((m) => (
-                          <span key={m} className="text-[10px] font-mono opacity-70 px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/10">
+                          <span key={m} className="text-2xs font-mono opacity-70 px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/10">
                             {m}
                           </span>
                         ))}
@@ -506,31 +506,31 @@ export default function ConsolidationPage() {
                     </button>
                     <span className="flex gap-1 shrink-0">
                       {(sc.pushbacks ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]" title="user pushbacks">
+                        <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]" title="user pushbacks">
                           {sc.pushbacks} push
                         </span>
                       )}
                       {(sc.tool_failures ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]" title="tool failures">
+                        <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)]" title="tool failures">
                           {sc.tool_failures} fail
                         </span>
                       )}
                       {(sc.bg_signals ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90" title="result:/failed:/needs input: markers">
+                        <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300/90" title="result:/failed:/needs input: markers">
                           {sc.bg_signals} bg
                         </span>
                       )}
                       {(sc.memory_writes ?? 0) > 0 && (
-                        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]" title="memory_store call sites">
+                        <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]" title="memory_store call sites">
                           {sc.memory_writes} mem
                         </span>
                       )}
                       {totalSignals === 0 && !b.skip_reason && (
-                        <span className="text-[10px] uppercase tracking-wider opacity-40">no signals</span>
+                        <span className="text-2xs uppercase tracking-wider opacity-40">no signals</span>
                       )}
                       {b.skip_reason && (
                         <span
-                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
+                          className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
                           title={`${b.skip_reason}. Use “Prune noise” to clear these — nothing for reflection to learn.`}
                         >
                           noise
@@ -543,7 +543,7 @@ export default function ConsolidationPage() {
                     <span className="text-xs opacity-60 w-24 text-right">retries {b.retry_count ?? 0}</span>
                     <span className="text-xs opacity-60 w-16 text-right">{ageH.toFixed(1)}h</span>
                     {reflectBusy === b.id ? (
-                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-sky-500/20 text-sky-200 shrink-0 inline-flex items-center gap-1.5">
+                      <span className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-sky-500/20 text-sky-200 shrink-0 inline-flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-sky-300 animate-pulse" />
                         reflecting {elapsed}s
                       </span>
@@ -551,20 +551,20 @@ export default function ConsolidationPage() {
                       <button
                         onClick={() => runReflection(b.id)}
                         disabled={reflectBusy !== null}
-                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] hover:bg-[color:var(--accent-rose-bg)] disabled:opacity-40 shrink-0"
+                        className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-rose-bg)] text-[color:var(--accent-rose-fg)] hover:bg-[color:var(--accent-rose-bg)] disabled:opacity-40 shrink-0"
                         title={verdicts[b.id]?.error}
                       >
                         Retry
                       </button>
                     ) : verdicts[b.id] ? (
-                      <span className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] shrink-0 inline-flex items-center gap-1">
+                      <span className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] shrink-0 inline-flex items-center gap-1">
                         ✓ score {(verdicts[b.id].qualitative_score ?? 0).toFixed(2)} · {(verdicts[b.id].memories_stored ?? []).length} mem
                       </span>
                     ) : (
                       <button
                         onClick={() => runReflection(b.id)}
                         disabled={reflectBusy !== null}
-                        className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
+                        className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40 shrink-0"
                         title="Spawn claude -p headless against PRISM source tree (Read/Glob/Grep, max_turns=15) to score this brief and extract memories"
                       >
                         Reflect
@@ -572,7 +572,7 @@ export default function ConsolidationPage() {
                     )}
                   </div>
                   {reflectBusy === b.id && (
-                    <div className="ml-7 mt-2 p-2 rounded-md bg-sky-500/10 border border-sky-500/20 text-[11px] flex items-center gap-3">
+                    <div className="ml-7 mt-2 p-2 rounded-md bg-sky-500/10 border border-sky-500/20 text-2xs flex items-center gap-3">
                       <svg className="animate-spin w-3 h-3 text-sky-300" viewBox="0 0 24 24" fill="none">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4zm2 5.3A8 8 0 014 12H0c0 3 1.1 5.8 3 7.9l3-2.6z" />
@@ -584,7 +584,7 @@ export default function ConsolidationPage() {
                   )}
                   {verdicts[b.id] && !verdicts[b.id].error && !reflectBusy && (
                     <div className="ml-7 mt-2 p-3 rounded-md bg-[color:var(--accent-emerald-bg)] border border-[color:var(--accent-emerald-ring)] space-y-2 text-[12px]">
-                      <div className="flex items-baseline gap-4 text-[11px]">
+                      <div className="flex items-baseline gap-4 text-2xs">
                         <span><span className="opacity-60">score:</span> <span className="font-mono">{(verdicts[b.id].qualitative_score ?? 0).toFixed(2)}</span></span>
                         <span><span className="opacity-60">confidence:</span> <span className="font-mono">{(verdicts[b.id].confidence ?? 0).toFixed(2)}</span></span>
                         <span><span className="opacity-60">duration:</span> <span className="font-mono">{verdicts[b.id].duration_s}s</span></span>
@@ -593,7 +593,7 @@ export default function ConsolidationPage() {
                         <div className="text-[12px] leading-relaxed opacity-90">{verdicts[b.id].narrative}</div>
                       )}
                       {(verdicts[b.id].memories_stored ?? []).length > 0 && (
-                        <div className="text-[11px]">
+                        <div className="text-2xs">
                           <div className="opacity-60 uppercase tracking-wider mb-1">memories stored ({verdicts[b.id].memories_stored?.length})</div>
                           <ul className="space-y-0.5">
                             {verdicts[b.id].memories_stored?.map((m) => (
@@ -608,12 +608,12 @@ export default function ConsolidationPage() {
                     </div>
                   )}
                   {verdicts[b.id]?.error && !reflectBusy && (
-                    <div className="ml-7 mt-2 p-2 rounded-md bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] text-[11px] text-[color:var(--accent-rose-fg)]">
+                    <div className="ml-7 mt-2 p-2 rounded-md bg-[color:var(--accent-rose-bg)] border border-[color:var(--accent-rose-ring)] text-2xs text-[color:var(--accent-rose-fg)]">
                       {verdicts[b.id].error}
                     </div>
                   )}
                   {isOpen && hasExcerpt && (
-                    <div className="mt-2 ml-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 text-[11px] leading-relaxed whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto">
+                    <div className="mt-2 ml-4 p-3 rounded-md bg-[color:var(--midground-base)]/5 border border-[color:var(--midground-base)]/10 text-2xs leading-relaxed whitespace-pre-wrap font-mono opacity-80 max-h-96 overflow-auto">
                       {b.transcript_excerpt}
                     </div>
                   )}

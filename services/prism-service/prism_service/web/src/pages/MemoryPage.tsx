@@ -270,7 +270,7 @@ export default function MemoryPage() {
           <span className="flex-1 opacity-90 leading-relaxed">{notice}</span>
           <button
             onClick={() => setNotice(null)}
-            className="text-[10px] uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
+            className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 shrink-0"
           >
             dismiss
           </button>
@@ -330,7 +330,7 @@ export default function MemoryPage() {
           <Card key={g.id}>
             <div className="flex items-baseline gap-3 flex-wrap mb-3">
               <span
-                className="text-[11px] uppercase tracking-wider font-mono px-2 py-0.5 rounded ring-1"
+                className="text-2xs uppercase tracking-wider font-mono px-2 py-0.5 rounded ring-1"
                 style={{
                   background: `var(--accent-${g.tone ?? "slate"}-bg)`,
                   color: `var(--accent-${g.tone ?? "slate"}-fg)`,
@@ -339,11 +339,11 @@ export default function MemoryPage() {
               >
                 {g.label}
               </span>
-              <span className="text-[11px] opacity-60 font-mono">
+              <span className="text-2xs opacity-60 font-mono">
                 {g.items.length} entr{g.items.length === 1 ? "y" : "ies"}
               </span>
               {g.blurb && (
-                <span className="text-[11px] opacity-50 flex-1 min-w-0">{g.blurb}</span>
+                <span className="text-2xs opacity-50 flex-1 min-w-0">{g.blurb}</span>
               )}
             </div>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
@@ -403,7 +403,7 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
         </div>
         {generation > 1 && (
           <span
-            className="text-[10px] font-mono px-1 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)] shrink-0"
+            className="text-2xs font-mono px-1 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-muted)] shrink-0"
             title={`generation ${generation} — superseded ${generation - 1} earlier version${generation === 2 ? "" : "s"}`}
           >
             gen {generation}
@@ -425,7 +425,7 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
           <TileBadge tone={statusTone}>{status}</TileBadge>
         )}
       </div>
-      <div className="flex items-center gap-2 text-[11px] font-mono text-[color:var(--text-muted)]">
+      <div className="flex items-center gap-2 text-2xs font-mono text-[color:var(--text-muted)]">
         {activation !== undefined && (
           <span
             className={
@@ -489,7 +489,7 @@ function MemoryTile({ entry, onClick }: { entry: Entry; onClick: () => void }) {
 function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
   return (
     <span
-      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+      className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
       style={{
         background: `var(--accent-${tone}-bg)`,
         color: `var(--accent-${tone}-fg)`,

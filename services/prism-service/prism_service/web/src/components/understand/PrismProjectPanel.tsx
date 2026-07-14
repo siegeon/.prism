@@ -84,7 +84,7 @@ export default function PrismProjectPanel({
               </li>
             ))}
             {total_file_types > 0 && (
-              <li className="flex items-center justify-between text-[11px] opacity-50 pt-1 border-t border-[color:var(--midground-base)]/10 mt-2">
+              <li className="flex items-center justify-between text-2xs opacity-50 pt-1 border-t border-[color:var(--midground-base)]/10 mt-2">
                 <span className="uppercase tracking-wider">Total</span>
                 <span className="font-mono">{total_file_types}</span>
               </li>
@@ -98,7 +98,7 @@ export default function PrismProjectPanel({
           <SectionLabel>Languages</SectionLabel>
           <div className="flex flex-wrap gap-1.5 mt-2">
             {languages.map((l) => (
-              <span key={l} className="text-[11px] px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10">
+              <span key={l} className="text-2xs px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10">
                 {l}
               </span>
             ))}
@@ -111,7 +111,7 @@ export default function PrismProjectPanel({
           <SectionLabel>Frameworks</SectionLabel>
           <div className="flex flex-wrap gap-1.5 mt-2">
             {frameworks.map((f) => (
-              <span key={f} className="text-[11px] px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10">
+              <span key={f} className="text-2xs px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10">
                 {f}
               </span>
             ))}
@@ -126,7 +126,7 @@ export default function PrismProjectPanel({
 function KpiBox({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--background-base)]/40 px-3 py-2.5">
-      <div className="text-[9px] uppercase tracking-wider opacity-60 mb-1">
+      <div className="text-2xs uppercase tracking-wider opacity-60 mb-1">
         {label}
       </div>
       <div className="text-2xl font-semibold leading-none">{value}</div>

@@ -75,7 +75,7 @@ export default function TaskActivityGantt({
         {ticks.map((t, i) => (
           <span
             key={i}
-            className="absolute -translate-x-1/2 text-[9px] font-mono text-[color:var(--text-muted)] opacity-60"
+            className="absolute -translate-x-1/2 text-2xs font-mono text-[color:var(--text-muted)] opacity-60"
             style={{ left: `${pct(t)}%` }}
           >
             {i === ticks.length - 1 ? "now" : clockHM(t)}
@@ -91,7 +91,7 @@ export default function TaskActivityGantt({
           <div key={l.session_id} className="flex items-center h-11 gap-2">
             <button
               onClick={() => setOpen(open === l.session_id ? null : l.session_id)}
-              className="w-[112px] shrink-0 text-right font-mono text-[10px] text-[color:var(--text-secondary)] truncate hover:opacity-100 opacity-80"
+              className="w-[112px] shrink-0 text-right font-mono text-2xs text-[color:var(--text-secondary)] truncate hover:opacity-100 opacity-80"
               title={l.session_id}
             >
               {shortId(l.session_id)}
@@ -115,7 +115,7 @@ export default function TaskActivityGantt({
                   ? { duration: 1.4, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
             </div>
-            <span className="w-[64px] shrink-0 text-[10px] font-mono text-[color:var(--text-muted)] tabular-nums">
+            <span className="w-[64px] shrink-0 text-2xs font-mono text-[color:var(--text-muted)] tabular-nums">
               {fmtDur(l.duration_s)}{l.skills ? ` · ${l.skills}sk` : ""}
             </span>
           </div>
@@ -124,7 +124,7 @@ export default function TaskActivityGantt({
 
       {/* gate marker lane */}
       <div className="flex items-center h-11 gap-2 mt-1">
-        <span className="w-[112px] shrink-0 text-right font-mono text-[10px] text-[color:var(--text-muted)] uppercase tracking-wider">
+        <span className="w-[112px] shrink-0 text-right font-mono text-2xs text-[color:var(--text-muted)] uppercase tracking-wider">
           gates
         </span>
         <div className="relative flex-1 h-7">
@@ -144,7 +144,7 @@ export default function TaskActivityGantt({
                   style={{ background: color, boxShadow: `0 0 5px ${color}` }}
                 />
                 <span
-                  className="absolute -bottom-3 text-[8px] font-mono uppercase"
+                  className="absolute -bottom-3 text-2xs font-mono uppercase"
                   style={{ color }}
                 >
                   {g.gate}{g.override ? "!" : "✓"}
@@ -161,7 +161,7 @@ export default function TaskActivityGantt({
         const g = timeline.gates[Number(open.slice(1))];
         if (!g) return null;
         return (
-          <div className="ml-[120px] mt-4 text-[11px] leading-snug rounded bg-[color:var(--surface-2)]/50 p-2 border border-[color:var(--border-default)]/40">
+          <div className="ml-[120px] mt-4 text-2xs leading-snug rounded bg-[color:var(--surface-2)]/50 p-2 border border-[color:var(--border-default)]/40">
             <span className="font-mono uppercase tracking-wider text-[color:var(--text-secondary)]">
               {g.gate}_gate · {g.override ? "⚠ override" : "✓ verified"}
             </span>
@@ -172,7 +172,7 @@ export default function TaskActivityGantt({
       })()}
 
       {/* legend */}
-      <div className="ml-[120px] mt-5 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-mono text-[color:var(--text-muted)] opacity-70">
+      <div className="ml-[120px] mt-5 flex flex-wrap gap-x-4 gap-y-1 text-2xs font-mono text-[color:var(--text-muted)] opacity-70">
         <span><span className="inline-block h-2 w-3 align-middle rounded-sm" style={{ background: "var(--accent-amber-bg)" }} /> work session</span>
         <span><span className="inline-block h-2 w-2 align-middle rotate-45" style={{ background: "var(--accent-amber-fg)" }} /> gate ! override</span>
         <span><span className="inline-block h-2 w-2 align-middle rotate-45" style={{ background: "var(--accent-emerald-fg, #34d399)" }} /> gate ✓ verified</span>

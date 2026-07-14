@@ -107,7 +107,7 @@ export default function ConductorPage() {
       )}
       <Card>
         <SectionLabel>Under conductor</SectionLabel>
-        <p className="text-[11px] opacity-60 mt-1 mb-3">
+        <p className="text-2xs opacity-60 mt-1 mb-3">
           Workflow-claimed tasks moving through the SDLC. Each tile leads with a completion ring and a
           labeled phase timeline (the task's current phase shown top-right) that advance automatically as the
           conductor drives it. Tasks worked without conductor (status flips only) don't appear here. Click a tile to open it.
@@ -186,10 +186,10 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[17px] font-semibold leading-snug text-[color:var(--text-primary)] line-clamp-1">{task.title}</div>
-          <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
+          <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
         </div>
         <span
-          className="shrink-0 text-[11px] uppercase tracking-wider px-2.5 py-1 rounded-full font-mono whitespace-nowrap"
+          className="shrink-0 text-2xs uppercase tracking-wider px-2.5 py-1 rounded-full font-mono whitespace-nowrap"
           style={{ background: `var(--accent-${actTone}-bg)`, color: `var(--accent-${actTone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${actTone}-ring)` }}
         >
           {actLabel}
@@ -201,7 +201,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
       {/* HANDOFF strip — which worker is on deck for the current step. */}
       <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
+        <span className="font-mono text-2xs uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
         <span className="font-mono text-[12.5px] truncate" style={{ color: showGate ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)" }}>{handoff}</span>
       </div>
       {/* QUEUE strip — the count of sub-tasks queued under this item. The card
@@ -209,11 +209,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
           listed (child-task checklist). Only shown for epics with children. */}
       {qTotal > 0 && (
         <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Queue</span>
+          <span className="font-mono text-2xs uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Queue</span>
           <span className="font-mono text-[12.5px] truncate" style={{ color: qPending > 0 ? "var(--accent-teal-fg)" : "var(--accent-emerald-fg)" }}>
             {qPending > 0 ? `${qPending} task${qPending > 1 ? "s" : ""} pending` : "all queued tasks done"}
           </span>
-          <span className="ml-auto font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
+          <span className="ml-auto font-mono text-2xs text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
         </div>
       )}
       {/* worked by + heartbeat. HONEST: the emerald "live Ns" tick renders ONLY
@@ -225,22 +225,22 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
         <span className="text-[color:var(--text-muted)]">{actWorking ? "worked by:" : "last worked by:"}</span>
         <span className="font-mono text-[12px] px-2 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-secondary)] border border-[color:var(--border-default)]">{worker}</span>
         {actWorking ? (
-          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums" title="work is live — recent conductor transition on this task">
+          <span className="ml-auto inline-flex items-center gap-1 text-2xs font-mono text-[color:var(--text-muted)] tabular-nums" title="work is live — recent conductor transition on this task">
             <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-emerald-fg)" }}
               animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }} transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }} />
             live {Math.floor(sinceFetchS)}s
           </span>
         ) : (
-          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] opacity-60 tabular-nums" title="board poll only — the task is idle, not being worked">
+          <span className="ml-auto inline-flex items-center gap-1 text-2xs font-mono text-[color:var(--text-muted)] opacity-60 tabular-nums" title="board poll only — the task is idle, not being worked">
             <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--text-muted)" }} />
             board {Math.floor(sinceFetchS)}s
           </span>
         )}
       </div>
-      <div className="text-[11px] text-[color:var(--text-muted)] font-mono">one MCP loop verb · conductor_work (call until done)</div>
+      <div className="text-2xs text-[color:var(--text-muted)] font-mono">one MCP loop verb · conductor_work (call until done)</div>
       {gateReason && (
-        <div className="text-[11px] text-[color:var(--text-muted)]">
-          <button type="button" onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }} className="font-mono uppercase tracking-wider text-[10px] opacity-70 hover:opacity-100 transition-opacity">
+        <div className="text-2xs text-[color:var(--text-muted)]">
+          <button type="button" onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }} className="font-mono uppercase tracking-wider text-2xs opacity-70 hover:opacity-100 transition-opacity">
             {showReason ? "▾" : "▸"} gate reason
           </button>
           {showReason && (
@@ -256,7 +256,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
 function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
   return (
     <span
-      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+      className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
       style={{
         background: `var(--accent-${tone}-bg)`,
         color: `var(--accent-${tone}-fg)`,
@@ -315,7 +315,7 @@ function TileHero({ task }: { task: ManagedTask }) {
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
           <span className="text-[22px] font-semibold tabular-nums text-[color:var(--text-primary)]">{done}</span>
-          <span className="text-[9px] text-[color:var(--text-muted)] mt-0.5">of {total}</span>
+          <span className="text-2xs text-[color:var(--text-muted)] mt-0.5">of {total}</span>
         </div>
       </div>
       <div className="flex-1 min-w-0">
@@ -346,7 +346,7 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
   const last = steps.length - 1;
   return (
     <div className="mt-2 pt-3 border-t border-[color:var(--border-default)]">
-      <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">SDLC steps · gates pause for a distinct reviewer</div>
+      <div className="text-2xs uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">SDLC steps · gates pause for a distinct reviewer</div>
       <div
         className="flex items-start"
         role="img"
@@ -376,7 +376,7 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
                     animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
                     transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
                   >
-                    <span className="text-[8px] font-bold leading-none" style={{ transform: isGate ? "rotate(-45deg)" : "none", color: isGate ? "#3a2a04" : "#06281c" }}>
+                    <span className="text-2xs font-bold leading-none" style={{ transform: isGate ? "rotate(-45deg)" : "none", color: isGate ? "#3a2a04" : "#06281c" }}>
                       {isGate ? "G" : (done ? "✓" : "")}
                     </span>
                   </motion.span>
@@ -385,12 +385,12 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
                 <div className="h-[2px] flex-1 rounded-full" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
               </div>
               <span
-                className="text-[9px] leading-tight text-center w-full px-0.5 mt-2 line-clamp-2"
+                className="text-2xs leading-tight text-center w-full px-0.5 mt-2 line-clamp-2"
                 style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
               >
                 {s.label}
               </span>
-              <span className="text-[7.5px] uppercase tracking-wide text-center w-full truncate mt-0.5 text-[color:var(--text-muted)]">
+              <span className="text-2xs uppercase tracking-wide text-center w-full truncate mt-0.5 text-[color:var(--text-muted)]">
                 {s.role}
               </span>
             </div>

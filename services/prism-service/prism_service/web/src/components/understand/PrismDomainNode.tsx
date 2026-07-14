@@ -48,14 +48,14 @@ function PrismDomainNode({ data, selected }: NodeProps<PrismDomainFlowNode>) {
       <Handle type="source" position={Position.Right}
               className="!w-1.5 !h-1.5" style={{ background: color.border }} />
 
-      <div className="text-[9px] uppercase tracking-[0.18em] opacity-60 mb-1">
+      <div className="text-2xs uppercase tracking-[0.18em] opacity-60 mb-1">
         Domain
       </div>
       <div className="font-serif text-base tracking-tight">
         {data.domainId}
       </div>
       {data.description && (
-        <p className="text-[11px] opacity-70 mt-1 leading-snug line-clamp-2">
+        <p className="text-2xs opacity-70 mt-1 leading-snug line-clamp-2">
           {data.description}
         </p>
       )}
@@ -63,18 +63,18 @@ function PrismDomainNode({ data, selected }: NodeProps<PrismDomainFlowNode>) {
         {data.entityPreview.slice(0, 4).map((e) => (
           <span
             key={e}
-            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40"
+            className="text-2xs font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40"
           >
             {e}
           </span>
         ))}
         {data.entityCount > 4 && (
-          <span className="text-[10px] opacity-60 px-1 py-0.5">
+          <span className="text-2xs opacity-60 px-1 py-0.5">
             +{data.entityCount - 4}
           </span>
         )}
       </div>
-      <div className="text-[10px] opacity-60 mt-2 inline-flex items-center gap-1">
+      <div className="text-2xs opacity-60 mt-2 inline-flex items-center gap-1">
         <span className="inline-block w-1.5 h-1.5 rounded-full"
               style={{ background: color.dot }} />
         {data.entityCount} entit{data.entityCount === 1 ? "y" : "ies"}

@@ -70,26 +70,26 @@ export default function PrismFileDetail({
     >
       <button
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider opacity-70 hover:opacity-100"
+        className="inline-flex items-center gap-1.5 text-2xs uppercase tracking-wider opacity-70 hover:opacity-100"
       >
         <ArrowLeft className="w-3 h-3" /> Back to layer
       </button>
 
       <div>
-        <div className="text-[10px] uppercase tracking-[0.18em] opacity-60 flex items-center gap-2">
+        <div className="text-2xs uppercase tracking-[0.18em] opacity-60 flex items-center gap-2">
           File
           {isHub && (
-            <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/15">
+            <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/15">
               hub
             </span>
           )}
         </div>
-        <div className="text-[11px] opacity-50 mt-1 truncate">{dirName || "/"}</div>
+        <div className="text-2xs opacity-50 mt-1 truncate">{dirName || "/"}</div>
         <h2 className="font-mono text-base mt-0.5 break-all">{fileName}</h2>
       </div>
 
       {error && (
-        <div className="text-[11px] text-[color:var(--accent-rose-fg)] opacity-80">{error}</div>
+        <div className="text-2xs text-[color:var(--accent-rose-fg)] opacity-80">{error}</div>
       )}
 
       <div className="grid grid-cols-3 gap-2">
@@ -108,19 +108,19 @@ export default function PrismFileDetail({
               <li key={`${e.name}-${i}`} className="text-[12px] flex items-baseline gap-2">
                 <span className="font-mono">{e.name}</span>
                 {e.kind && (
-                  <span className="text-[9px] uppercase tracking-wider opacity-50">
+                  <span className="text-2xs uppercase tracking-wider opacity-50">
                     {e.kind}
                   </span>
                 )}
                 {e.line && (
-                  <span className="text-[10px] font-mono opacity-40 ml-auto">
+                  <span className="text-2xs font-mono opacity-40 ml-auto">
                     L{e.line}
                   </span>
                 )}
               </li>
             ))}
             {entities.length > 40 && (
-              <li className="text-[10px] opacity-50">
+              <li className="text-2xs opacity-50">
                 +{entities.length - 40} more
               </li>
             )}
@@ -131,7 +131,7 @@ export default function PrismFileDetail({
       {(inbound.length > 0 || outbound.length > 0) && (
         <div>
           <SectionLabel>Referenced from / to</SectionLabel>
-          <ul className="mt-2 space-y-1 text-[11px]">
+          <ul className="mt-2 space-y-1 text-2xs">
             {inbound.slice(0, 6).map((e, i) => (
               <li key={`in${i}`} className="font-mono opacity-80 flex items-baseline gap-2">
                 <GitBranch className="w-3 h-3 opacity-50 shrink-0" />
@@ -164,7 +164,7 @@ function shortPath(p: string): string {
 function KpiTiny({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--background-base)]/40 px-2 py-2 text-center">
-      <div className="text-[9px] uppercase tracking-wider opacity-60">{label}</div>
+      <div className="text-2xs uppercase tracking-wider opacity-60">{label}</div>
       <div className="text-lg font-semibold leading-none mt-1">{value}</div>
     </div>
   );

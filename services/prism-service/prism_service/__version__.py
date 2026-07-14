@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.6"
+PRISM_VERSION = "6.9.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.8: RADIX COLOR TOKENS — LEGIBLE IN BOTH THEMES. The seven "
+    "--accent-{tone}-{bg,ring,fg} chips now alias @radix-ui/colors dual-theme "
+    "scales (slate/blue/green/amber/red/violet) wired through the Tailwind v4 "
+    "@theme block; every lozenge text/bg pair holds WCAG AA >= 4.5:1 in light "
+    "AND dark (npm run check-contrast vs the live daemon is the oracle). "
+    "Amber solids take dark text. New --et-* categorical OKLCH entity-type "
+    "ramp (L52 light / L72 dark) mirrored byte-identically into palette.ts "
+    "ET_HEX + graph_static.py ET_COLORS. All inline text-[<=11px] sizes swept "
+    "onto a 5-step type scale with an 11px floor (text-2xs). "
     "v6.9.6: DONE TASKS DROP THE MID-FLIGHT PHASE HEADER. A done task's "
     "Implementation tab still led with 'PLAN GATE · 54.27%' + a half-filled "
     "bar + greyed steps — which reads 'stopped halfway' even beside the DONE "

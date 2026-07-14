@@ -79,7 +79,7 @@ export default function TasksPage() {
           style={{ backgroundImage: "linear-gradient(180deg, var(--accent-emerald-bg), transparent)" }}
         >
           <span className="absolute top-3 right-4 text-[color:var(--accent-emerald-fg)] text-sm">→</span>
-          <div className="text-[10px] uppercase tracking-wider text-[color:var(--accent-emerald-fg)] mb-2">Completed</div>
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--accent-emerald-fg)] mb-2">Completed</div>
           <div className="text-2xl font-semibold leading-none text-[color:var(--accent-emerald-fg)] tabular-nums">
             {roots.filter((t) => (t.status ?? "") === "done").length}
           </div>
@@ -109,7 +109,7 @@ export default function TasksPage() {
             <Card key={col.key} className="!p-4">
               <div className="flex items-center justify-between mb-3">
                 <span
-                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ring-1 ring-inset"
+                  className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded ring-1 ring-inset"
                   style={{
                     background: `var(--accent-${colTone}-bg)`,
                     color: `var(--accent-${colTone}-fg)`,
@@ -162,7 +162,7 @@ export default function TasksPage() {
                           {(childCount.get(t.id ?? "") ?? 0) > 0 && (
                             <span
                               title={`${childCount.get(t.id ?? "")} child task(s) — open to view`}
-                              className="shrink-0 text-[10px] font-mono leading-none px-1.5 py-1 rounded-full ring-1 ring-inset"
+                              className="shrink-0 text-2xs font-mono leading-none px-1.5 py-1 rounded-full ring-1 ring-inset"
                               style={{
                                 background: "var(--accent-violet-bg)",
                                 color: "var(--accent-violet-fg)",
@@ -223,7 +223,7 @@ export default function TasksPage() {
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                           {typeof t.priority !== "undefined" && (
                             <span
-                              className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                              className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded"
                               style={{
                                 background: `var(--accent-${pTone}-bg)`,
                                 color: `var(--accent-${pTone}-fg)`,
@@ -235,14 +235,14 @@ export default function TasksPage() {
                             </span>
                           )}
                           {t.assigned_agent && (
-                            <span className="text-[10px] opacity-60 font-mono">{t.assigned_agent}</span>
+                            <span className="text-2xs opacity-60 font-mono">{t.assigned_agent}</span>
                           )}
                           {(t.tags ?? []).slice(0, 3).map((tag) => {
                             const tTone = toneFromLabel(tag);
                             return (
                               <span
                                 key={tag}
-                                className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+                                className="text-2xs font-mono px-1.5 py-0.5 rounded"
                                 style={{
                                   background: `var(--accent-${tTone}-bg)`,
                                   color: `var(--accent-${tTone}-fg)`,

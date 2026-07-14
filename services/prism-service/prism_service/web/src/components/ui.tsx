@@ -42,16 +42,16 @@ export const Card = ({
 };
 
 export const SectionLabel = ({ children }: { children: ReactNode }) => (
-  <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-3">
+  <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-3">
     {children}
   </div>
 );
 
 export const Kpi = ({ label, value, hint }: { label: string; value: ReactNode; hint?: ReactNode }) => (
   <div className="flex-1 min-w-[150px] rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4">
-    <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
+    <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
     <div className="text-2xl font-semibold leading-none text-[color:var(--text-primary)]">{value}</div>
-    {hint && <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mt-2">{hint}</div>}
+    {hint && <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-2">{hint}</div>}
   </div>
 );
 
@@ -104,7 +104,7 @@ export const Pill = ({
   <button
     onClick={onClick}
     className={cn(
-      "px-3 py-1 rounded-full text-[11px] uppercase tracking-wider transition-colors",
+      "px-3 py-1 rounded-full text-2xs uppercase tracking-wider transition-colors",
       active
         ? tone
           ? PILL_TONE_ACTIVE[tone]

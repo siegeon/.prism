@@ -135,7 +135,7 @@ function GateEvidence({ step, turns }: { step?: string; turns: StepTurn[] }) {
       <div className="flex items-center gap-2 mb-2">
         <span className="text-[13px]" style={{ color: "var(--accent-amber-fg)" }}>⚖</span>
         <span
-          className="text-[11px] uppercase tracking-wider font-medium"
+          className="text-2xs uppercase tracking-wider font-medium"
           style={{ color: "var(--accent-amber-fg)" }}
         >
           What you're approving{label ? ` — ${label}` : ""}
@@ -226,7 +226,7 @@ export default function PlanView({
             key={t.key}
             onClick={() => setActive(t.key)}
             className={
-              "px-3 py-2 text-[11px] uppercase tracking-wider -mb-px border-b-2 transition-colors " +
+              "px-3 py-2 text-2xs uppercase tracking-wider -mb-px border-b-2 transition-colors " +
               (cur === t.key
                 ? "border-[color:var(--accent-teal-fg)] text-[color:var(--accent-teal-fg)]"
                 : "border-transparent text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)]")
@@ -240,7 +240,7 @@ export default function PlanView({
             href={prototypeSrc}
             target="_blank"
             rel="noreferrer"
-            className="ml-auto px-2 text-[11px] uppercase tracking-wider text-[color:var(--accent-teal-fg)] hover:opacity-80"
+            className="ml-auto px-2 text-2xs uppercase tracking-wider text-[color:var(--accent-teal-fg)] hover:opacity-80"
           >
             open full screen ↗
           </a>
@@ -284,7 +284,7 @@ export default function PlanView({
                   <div className="flex items-center gap-2 flex-wrap">
                     {badge && (
                       <span
-                        className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
                         style={{
                           background: "var(--accent-violet-bg)",
                           color: "var(--accent-violet-fg)",
@@ -299,7 +299,7 @@ export default function PlanView({
                       {t.name}
                     </span>
                     <span
-                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                      className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
                       style={{
                         color: "var(--accent-rose-fg)",
                         boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
@@ -315,7 +315,7 @@ export default function PlanView({
                     </div>
                   )}
                   {t.file && (
-                    <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-1.5 truncate">
+                    <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-1.5 truncate">
                       {t.file}
                     </div>
                   )}
@@ -373,7 +373,7 @@ export default function PlanView({
               onClick={onValidation}
               className="mt-3 flex items-center gap-1.5 text-left group"
             >
-              <span className="text-[11px] uppercase tracking-wider text-[color:var(--text-muted)]">
+              <span className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
                 {c.gateState === "failed" ? "failure reason" : "validation"}
               </span>
               <span className="text-[12px] leading-snug opacity-80 group-hover:opacity-100 truncate max-w-[520px]">{c.gateReason}</span>
@@ -388,7 +388,7 @@ export default function PlanView({
               <GateEvidence step={c.step} turns={c.turns ?? []} />
               {tests.length > 0 && (
                 <div className="mt-4">
-                  <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--accent-rose-fg)" }}>
+                  <div className="text-2xs uppercase tracking-wider mb-2" style={{ color: "var(--accent-rose-fg)" }}>
                     {tests.length} failing test{tests.length > 1 ? "s" : ""} you're approving — each must go green to finish
                   </div>
                   <div className="flex flex-col gap-2">
@@ -402,10 +402,10 @@ export default function PlanView({
                         <div key={`${t.file}:${t.name}`} className="rounded-md p-2.5 border border-[color:var(--border-default)] bg-[color:var(--surface-2)]">
                           <div className="flex items-center gap-2 flex-wrap">
                             {badge && (
-                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{badge}</span>
+                              <span className="text-2xs font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{badge}</span>
                             )}
                             <span className="font-mono text-[12px] break-all bg-transparent text-[color:var(--text-primary)]">{t.name}</span>
-                            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>✗ red</span>
+                            <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>✗ red</span>
                           </div>
                           <div className="text-[12px] leading-snug mt-1 text-[color:var(--text-secondary)]">{rest}</div>
                         </div>
@@ -419,14 +419,14 @@ export default function PlanView({
                   className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
                   style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
                 >
-                  <span className="uppercase tracking-wider text-[11px] mr-2">gate failed</span>
+                  <span className="uppercase tracking-wider text-2xs mr-2">gate failed</span>
                   {c.gateReason || "no reason recorded"}
                   <div className="opacity-80 mt-1">
                     Fix the evidence, then Approve — the gate re-runs its machine check and releases on merit. Check override only to force past a failing check (audited).
                   </div>
                 </div>
               )}
-              <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">
+              <div className="opacity-50 mb-2 mt-4 text-2xs uppercase tracking-wider">
                 {c.gateState === "failed" ? "Recover gate" : "Resolve gate"}
               </div>
               <textarea
@@ -446,7 +446,7 @@ export default function PlanView({
                   type="button"
                   disabled={gate.busy || !gate.reason.trim()}
                   onClick={() => gate.decide("approve")}
-                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
                   title={c.gateState === "failed" ? "re-runs the machine check on current evidence; override forces past a failing check" : undefined}
                 >
@@ -457,7 +457,7 @@ export default function PlanView({
                   type="button"
                   disabled={gate.busy || !gate.reason.trim()}
                   onClick={() => gate.decide("reject")}
-                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
                 >
                   Reject
@@ -465,7 +465,7 @@ export default function PlanView({
                 )}
               </div>
               {!gate.reason.trim() && (
-                <div className="text-[11px] mt-1.5 text-[color:var(--text-muted)]">
+                <div className="text-2xs mt-1.5 text-[color:var(--text-muted)]">
                   type a reason above to enable the button{c.gateState === "failed" ? "" : "s"}
                 </div>
               )}

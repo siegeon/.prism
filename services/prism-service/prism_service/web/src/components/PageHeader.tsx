@@ -47,7 +47,7 @@ export default function PageHeader() {
         {title}
       </h1>
       {projects.length > 0 && (
-        <label className="relative inline-flex items-center gap-2 text-[11px] uppercase tracking-wider opacity-70">
+        <label className="relative inline-flex items-center gap-2 text-2xs uppercase tracking-wider opacity-70">
           Project
           <div className="relative">
             <select

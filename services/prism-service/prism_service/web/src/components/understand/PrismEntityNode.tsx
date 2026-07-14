@@ -38,13 +38,13 @@ function PrismEntityNode({ data, selected }: NodeProps<PrismEntityFlowNode>) {
           {data.name}
         </span>
         {data.kind && (
-          <span className="text-[9px] uppercase tracking-wider opacity-60 shrink-0">
+          <span className="text-2xs uppercase tracking-wider opacity-60 shrink-0">
             {data.kind}
           </span>
         )}
       </div>
       {data.defined_in && (
-        <div className="text-[10px] font-mono opacity-50 mt-0.5 truncate">
+        <div className="text-2xs font-mono opacity-50 mt-0.5 truncate">
           {data.defined_in}
         </div>
       )}
@@ -53,7 +53,7 @@ function PrismEntityNode({ data, selected }: NodeProps<PrismEntityFlowNode>) {
           {data.actions.slice(0, 4).map((a) => (
             <span
               key={a}
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40"
+              className="text-2xs font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40"
             >
               {a}
             </span>

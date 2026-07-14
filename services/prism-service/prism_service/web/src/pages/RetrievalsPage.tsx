@@ -63,10 +63,10 @@ export default function RetrievalsPage() {
                     <span className="flex-1 truncate font-medium">{r.query}</span>
                     <span className="text-xs opacity-60 font-mono whitespace-nowrap">{r.n_results ?? 0} hits</span>
                     <span className="text-xs opacity-60 font-mono whitespace-nowrap">{r.latency_ms ?? 0}ms</span>
-                    {r.mode && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{r.mode}</span>}
-                    {r.rerank && r.rerank !== "off" && <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">rerank: {r.rerank}</span>}
+                    {r.mode && <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{r.mode}</span>}
+                    {r.rerank && r.rerank !== "off" && <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">rerank: {r.rerank}</span>}
                   </div>
-                  {r.ts && <div className="text-[10px] uppercase tracking-wider opacity-40 mt-1 font-mono">{r.ts}</div>}
+                  {r.ts && <div className="text-2xs uppercase tracking-wider opacity-40 mt-1 font-mono">{r.ts}</div>}
                   {hits.length > 0 && (
                     <div className="mt-2 pl-4 space-y-1">
                       {hits.slice(0, 3).map((h, i) => (

@@ -240,7 +240,7 @@ export default function ExplorePage() {
         {resultsOpen && data && data.ranked.length > 0 && (
           <div className="absolute z-30 left-0 right-0 mt-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] shadow-2xl flex flex-col max-h-[55vh]">
             <div className="flex items-center justify-between px-3 py-2 border-b border-[color:var(--border-default)]">
-              <span className="text-[11px] uppercase tracking-wider opacity-70">
+              <span className="text-2xs uppercase tracking-wider opacity-70">
                 {data.mode === "focus" ? "Ranked matches" : "Top hubs by PageRank"} · {data.ranked.length}
               </span>
               <button onClick={() => setResultsOpen(false)} title="Close" className="opacity-50 hover:opacity-90">
@@ -258,7 +258,7 @@ export default function ExplorePage() {
           comments, expertise) + maintenance controls folded from the old
           Brain/Graph pages. */}
       <div className="flex flex-wrap items-center gap-2 shrink-0">
-        <span className="text-[10px] uppercase tracking-wider opacity-40 mr-1">domain</span>
+        <span className="text-2xs uppercase tracking-wider opacity-40 mr-1">domain</span>
         {DOMAINS.map((d) => (
           <Pill key={d} active={domain === d} tone={toneFromLabel(d)}
             onClick={() => { setDomain(d); run(input.trim(), d); }}>{d}</Pill>
@@ -399,13 +399,13 @@ function ChipGroup({ label, total, nodes, selected, onSelect }: {
   const beyondLoaded = total - sorted.length;  // capped on the backend (canvas has them)
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">
+      <div className="text-2xs uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">
         {label} · {total}{total > nodes.length ? ` (top ${nodes.length} hubs)` : ""}
       </div>
       <div className={cn("flex flex-wrap gap-1.5", open && "max-h-52 overflow-y-auto pr-1")}>
         {shown.map((n) => <ChipNode key={n.id} n={n} selected={selected} onSelect={onSelect} />)}
       </div>
-      <div className="mt-1.5 flex items-center gap-3 text-[11px]">
+      <div className="mt-1.5 flex items-center gap-3 text-2xs">
         {hiddenLoaded > 0 && !open && (
           <button onClick={() => setOpen(true)} className="opacity-70 hover:opacity-100 underline-offset-2 hover:underline">
             +{hiddenLoaded} more
@@ -512,7 +512,7 @@ function ContextRail({ sel, selected, mode }: { sel?: Ctx; selected: string | nu
                         </Pill>
                       </div>
                       <p className="text-xs leading-relaxed opacity-80">{a.purpose}</p>
-                      <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-wider opacity-40">
+                      <div className="mt-1 flex items-center gap-2 text-2xs uppercase tracking-wider opacity-40">
                         <span>{a.scope_kind}</span>
                         {a.updated_at ? <span>{a.updated_at.slice(0, 10)}</span> : null}
                       </div>
@@ -530,7 +530,7 @@ function ContextRail({ sel, selected, mode }: { sel?: Ctx; selected: string | nu
 
 const Ctl = ({ label, running, onClick }: { label: string; running: boolean; onClick: () => void }) => (
   <button onClick={onClick} disabled={running}
-    className="inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-[11px] uppercase tracking-wider disabled:opacity-50">
+    className="inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-2xs uppercase tracking-wider disabled:opacity-50">
     <RefreshCw className={cn("w-3 h-3", running && "animate-spin")} />
     {running ? "…" : label}
   </button>
@@ -538,15 +538,15 @@ const Ctl = ({ label, running, onClick }: { label: string; running: boolean; onC
 const Stat = ({ label, v }: { label: string; v?: number }) => (
   <span className="flex items-baseline gap-1">
     <span className="font-mono tabular-nums text-[color:var(--text-primary)]">{v ?? "—"}</span>
-    <span className="opacity-50 uppercase tracking-wider text-[10px]">{label}</span>
+    <span className="opacity-50 uppercase tracking-wider text-2xs">{label}</span>
   </span>
 );
 const Label = ({ children }: { children: React.ReactNode }) => (
-  <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">{children}</div>
+  <div className="text-2xs uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5">{children}</div>
 );
 const Section = ({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) => (
   <div>
-    <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5 flex items-center gap-1">{icon}{label}</div>
+    <div className="text-2xs uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5 flex items-center gap-1">{icon}{label}</div>
     {children}
   </div>
 );

@@ -63,11 +63,11 @@ function PrismLayerNode({ data, selected }: NodeProps<PrismLayerFlowNode>) {
               style={{ background: color.border }} />
 
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[9px] uppercase tracking-[0.18em] opacity-60">
+        <span className="text-2xs uppercase tracking-[0.18em] opacity-60">
           Layer
         </span>
         {data.complexity && (
-          <span className="text-[9px] uppercase tracking-wider opacity-60">
+          <span className="text-2xs uppercase tracking-wider opacity-60">
             {COMPLEXITY_LABEL[data.complexity] ?? data.complexity}
           </span>
         )}
@@ -76,11 +76,11 @@ function PrismLayerNode({ data, selected }: NodeProps<PrismLayerFlowNode>) {
         {data.name}
       </div>
       {data.description && (
-        <p className="text-[11px] opacity-70 mt-1 leading-snug line-clamp-2">
+        <p className="text-2xs opacity-70 mt-1 leading-snug line-clamp-2">
           {data.description}
         </p>
       )}
-      <div className="text-[10px] opacity-60 mt-2 inline-flex items-center gap-1">
+      <div className="text-2xs opacity-60 mt-2 inline-flex items-center gap-1">
         <span className="inline-block w-1.5 h-1.5 rounded-full"
               style={{ background: color.dot }} />
         {data.file_count ?? 0} file{data.file_count === 1 ? "" : "s"}

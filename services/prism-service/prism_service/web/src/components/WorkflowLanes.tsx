@@ -70,11 +70,11 @@ export default function WorkflowLanes({ steps, workflow }: { steps: Step[]; work
     <div className="space-y-4">
       {workflow?.active && currentStep ? (
         <div className="rounded-md border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] px-4 py-3">
-          <div className="text-[10px] uppercase tracking-wider opacity-70 mb-1">Now running</div>
+          <div className="text-2xs uppercase tracking-wider opacity-70 mb-1">Now running</div>
           <div className="flex flex-wrap items-baseline gap-3 text-sm">
             <span className="font-medium capitalize">{humanize(currentStep.id)}</span>
             {currentStep.agent && (
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{currentStep.agent}</span>
+              <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{currentStep.agent}</span>
             )}
             {workflow.model && <span className="text-xs opacity-60 font-mono">{workflow.model}</span>}
             {workflow.total_tokens > 0 && (
@@ -84,7 +84,7 @@ export default function WorkflowLanes({ steps, workflow }: { steps: Step[]; work
           <div className="mt-2.5 h-1 rounded-full bg-[color:var(--midground-base)]/10 overflow-hidden">
             <div className="h-full bg-[color:var(--accent-teal-fg)] transition-[width]" style={{ width: `${steps.length ? (completed / steps.length) * 100 : 0}%` }} />
           </div>
-          <div className="text-[10px] uppercase tracking-wider opacity-50 mt-1.5">
+          <div className="text-2xs uppercase tracking-wider opacity-50 mt-1.5">
             {completed} of {steps.length} steps complete
           </div>
         </div>
@@ -97,10 +97,10 @@ export default function WorkflowLanes({ steps, workflow }: { steps: Step[]; work
       <div className="grid grid-cols-4 gap-3">
         {grouped.map((lane) => (
           <div key={lane.key}>
-            <div className="text-[10px] uppercase tracking-wider opacity-50 mb-2 pb-2 border-b border-[color:var(--midground-base)]/10">{lane.label}</div>
+            <div className="text-2xs uppercase tracking-wider opacity-50 mb-2 pb-2 border-b border-[color:var(--midground-base)]/10">{lane.label}</div>
             <div className="space-y-1.5">
               {lane.steps.length === 0
-                ? <div className="text-[11px] opacity-30 italic px-2">empty</div>
+                ? <div className="text-2xs opacity-30 italic px-2">empty</div>
                 : lane.steps.map((s) => <StepCard key={s.id} step={s} isCurrent={s.id === currentId} />)}
             </div>
           </div>

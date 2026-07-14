@@ -147,7 +147,7 @@ export default function Sidebar() {
             )}
           >
             {section.label && (
-              <div className="px-5 mb-1 text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)]">
+              <div className="px-5 mb-1 text-2xs uppercase tracking-[0.18em] text-[color:var(--text-label)]">
                 {section.label}
               </div>
             )}
@@ -238,13 +238,13 @@ export default function Sidebar() {
           </NavLink>
         )}
         <div
-          className="px-5 py-3 text-[10px] uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)] flex items-center gap-2"
+          className="px-5 py-3 text-2xs uppercase tracking-wider text-[color:var(--text-label)] border-t border-[color:var(--border-default)] flex items-center gap-2"
           title={version?.notes ?? ""}
         >
           <span>Slate Blue · v{version?.version ?? "…"}</span>
           {version?.dev_mode && (
             <span
-              className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[9px] font-bold tracking-widest bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] border border-[color:var(--accent-amber-ring)]"
+              className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-2xs font-bold tracking-widest bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] border border-[color:var(--accent-amber-ring)]"
               title="Source-run instance (PRISM_DEV_MODE=1)"
             >
               DEV

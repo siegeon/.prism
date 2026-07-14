@@ -42,20 +42,20 @@ export default function PrismLayerDetail({
     >
       <button
         onClick={onBack}
-        className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider opacity-70 hover:opacity-100"
+        className="inline-flex items-center gap-1.5 text-2xs uppercase tracking-wider opacity-70 hover:opacity-100"
       >
         <ArrowLeft className="w-3 h-3" /> Back to overview
       </button>
 
       <div>
-        <div className="text-[10px] uppercase tracking-[0.18em] opacity-60">
+        <div className="text-2xs uppercase tracking-[0.18em] opacity-60">
           Layer
         </div>
         <h2 className="font-serif text-xl tracking-tight">
           {layer.name ?? layer.id ?? "—"}
         </h2>
         {layer.complexity && (
-          <span className="inline-block text-[10px] uppercase tracking-wider opacity-60 mt-1">
+          <span className="inline-block text-2xs uppercase tracking-wider opacity-60 mt-1">
             {layer.complexity}
           </span>
         )}
@@ -78,7 +78,7 @@ export default function PrismLayerDetail({
           <SectionLabel>Hub symbols</SectionLabel>
           <div className="flex flex-wrap gap-1 mt-2">
             {hubs.map((s) => (
-              <span key={s} className="text-[11px] font-mono px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10">
+              <span key={s} className="text-2xs font-mono px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10">
                 {s}
               </span>
             ))}
@@ -129,7 +129,7 @@ export default function PrismLayerDetail({
 function KpiTiny({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--background-base)]/40 px-2 py-2 text-center">
-      <div className="text-[9px] uppercase tracking-wider opacity-60">
+      <div className="text-2xs uppercase tracking-wider opacity-60">
         {label}
       </div>
       <div className="text-lg font-semibold leading-none mt-1">{value}</div>

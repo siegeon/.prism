@@ -175,7 +175,7 @@ export default function MemoryDetailPage() {
                 type="button"
                 disabled={actionBusy}
                 onClick={() => { setDraft(entry.description ?? ""); setEditing(true); }}
-                className="text-[10px] uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+                className="text-2xs uppercase tracking-wider px-2 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
               >
                 Edit
               </button>
@@ -184,14 +184,14 @@ export default function MemoryDetailPage() {
               type="button"
               disabled={actionBusy || status === "retired"}
               onClick={() => doAction("retire")}
-              className="text-[10px] uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
+              className="text-2xs uppercase tracking-wider px-2 py-1 rounded disabled:opacity-40"
               style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)" }}
             >
               Retire
             </button>
           </div>
         </div>
-        {actionNote && <div className="text-[11px] opacity-70 mt-1">{actionNote}</div>}
+        {actionNote && <div className="text-2xs opacity-70 mt-1">{actionNote}</div>}
         {editing ? (
           <div className="mt-2 space-y-2">
             <textarea
@@ -205,7 +205,7 @@ export default function MemoryDetailPage() {
                 type="button"
                 disabled={actionBusy}
                 onClick={() => doAction("edit", { description: draft })}
-                className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                 style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
               >
                 Save edit
@@ -214,7 +214,7 @@ export default function MemoryDetailPage() {
                 type="button"
                 disabled={actionBusy}
                 onClick={() => doAction("supersede", { description: draft })}
-                className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                 style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}
                 title="store a new generation under the same name (archives this one)"
               >
@@ -223,7 +223,7 @@ export default function MemoryDetailPage() {
               <button
                 type="button"
                 onClick={() => setEditing(false)}
-                className="text-[10px] uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15"
+                className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15"
               >
                 Cancel
               </button>
@@ -304,14 +304,14 @@ export default function MemoryDetailPage() {
                   }
                 >
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-[11px] opacity-70">gen {c.generation ?? 1}</span>
+                    <span className="font-mono text-2xs opacity-70">gen {c.generation ?? 1}</span>
                     {isLive ? (
                       <Badge tone="emerald">active</Badge>
                     ) : (
                       <Badge tone="slate">archived</Badge>
                     )}
                     {isMe && <Badge tone="amber">viewing</Badge>}
-                    <span className="ml-auto text-[11px] opacity-50 font-mono">
+                    <span className="ml-auto text-2xs opacity-50 font-mono">
                       {shortDate(c.valid_at)}
                     </span>
                   </div>
@@ -337,7 +337,7 @@ function BackLink({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100"
+      className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100"
     >
       ← back to memory
     </button>
@@ -347,7 +347,7 @@ function BackLink({ onClick }: { onClick: () => void }) {
 function Badge({ tone, children }: { tone: PillTone; children: React.ReactNode }) {
   return (
     <span
-      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
+      className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
       style={{
         background: `var(--accent-${tone}-bg)`,
         color: `var(--accent-${tone}-fg)`,

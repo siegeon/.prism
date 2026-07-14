@@ -120,7 +120,7 @@ export default function LayersView({ data }: { data: Layers }) {
       </div>
 
       <details className="rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--background-base)]/30">
-        <summary className="px-4 py-2 text-[11px] uppercase tracking-wider opacity-70 cursor-pointer">
+        <summary className="px-4 py-2 text-2xs uppercase tracking-wider opacity-70 cursor-pointer">
           Layer detail · {layers.length} layer{layers.length === 1 ? "" : "s"}
         </summary>
         <ul className="px-4 py-3 space-y-3">
@@ -131,7 +131,7 @@ export default function LayersView({ data }: { data: Layers }) {
       </details>
 
       {data.unindexed && data.unindexed.length > 0 && (
-        <div className="text-[11px] opacity-60">
+        <div className="text-2xs opacity-60">
           {data.unindexed.length} file(s) had no Brain outline (skipped).
         </div>
       )}
@@ -142,7 +142,7 @@ export default function LayersView({ data }: { data: Layers }) {
 
 function LayerLegend({ layers }: { layers: Layer[] }) {
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-2 mt-3 text-[11px]">
+    <div className="flex flex-wrap gap-x-4 gap-y-2 mt-3 text-2xs">
       {layers.map((layer, i) => {
         const c = prismLayerColor(i);
         return (
@@ -172,7 +172,7 @@ function LayerDetailRow({ layer, colorIdx }: { layer: Layer; colorIdx: number })
         <div className="font-serif text-base tracking-tight">
           {layer.name ?? layer.id ?? "—"}
         </div>
-        <div className="text-[11px] opacity-50">
+        <div className="text-2xs opacity-50">
           {layer.file_count ?? 0} file{layer.file_count === 1 ? "" : "s"}
           {layer.complexity && (
             <span className="ml-2 opacity-60 uppercase tracking-wider">
@@ -191,7 +191,7 @@ function LayerDetailRow({ layer, colorIdx }: { layer: Layer; colorIdx: number })
           {layer.hub_symbols.slice(0, 6).map((s) => (
             <span
               key={s}
-              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]"
+              className="text-2xs font-mono px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]"
             >
               {s}
             </span>
@@ -199,7 +199,7 @@ function LayerDetailRow({ layer, colorIdx }: { layer: Layer; colorIdx: number })
         </div>
       )}
       {layer.files && layer.files.length > 0 && (
-        <ul className="mt-3 text-[11px] font-mono text-[color:var(--text-secondary)] space-y-0.5 max-h-32 overflow-auto">
+        <ul className="mt-3 text-2xs font-mono text-[color:var(--text-secondary)] space-y-0.5 max-h-32 overflow-auto">
           {layer.files.slice(0, 10).map((f) => (
             <li key={f} className="flex items-center gap-1.5 truncate">
               <FileCode className="w-3 h-3 opacity-50 shrink-0" />
@@ -229,7 +229,7 @@ function DrillCrumb({
     >
       <button
         onClick={onBack}
-        className="uppercase tracking-wider text-[11px] opacity-70 hover:opacity-100"
+        className="uppercase tracking-wider text-2xs opacity-70 hover:opacity-100"
       >
         ← Overview
       </button>

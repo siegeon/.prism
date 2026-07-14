@@ -215,6 +215,22 @@ _SIGMA_VIEWER_HTML = """<!DOCTYPE html>
     "#9ef0c9", // emerald lifted
     "#dde4eb", // slate lifted
   ];
+  // ET_COLORS — categorical entity-TYPE ramp (task/doc/search/session/
+  // code/memory). Byte-identical mirror of ET_HEX in
+  // web/src/lib/palette.ts (dark-canvas --et-* tokens in index.css,
+  // equi-L OKLCH L 0.72 C 0.12). Same hexes, same order — if you touch
+  // one list, touch both in the same commit.
+  const ET_COLORS = [
+    "#e6857e", // task
+    "#c79e41", // doc
+    "#72b875", // search
+    "#17bac8", // session
+    "#80a3f0", // code
+    "#ca8ace", // memory
+  ];
+  function colorForEntityType(idx) {
+    return ET_COLORS[Math.abs(Number(idx) || 0) % ET_COLORS.length];
+  }
   function colorFor(community) {
     if (community === undefined || community === null) return "#6b7280";
     const idx = Math.abs(Number(community) || 0) % COMMUNITY_COLORS.length;

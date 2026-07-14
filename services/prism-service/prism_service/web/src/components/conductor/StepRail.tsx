@@ -81,13 +81,13 @@ function StepMeta({ durMs, tokens, maxTokens, maxDur, hasTurns, open }: {
             boxShadow: `0 0 8px var(--accent-${useTokens ? "violet" : "teal"}-ring)`,
           }} />}
         </div>
-        <div className="flex items-center gap-2.5 text-[9px] font-mono tabular-nums leading-none text-[color:var(--text-muted)] justify-end">
+        <div className="flex items-center gap-2.5 text-2xs font-mono tabular-nums leading-none text-[color:var(--text-muted)] justify-end">
           {tokens > 0 && <span style={{ color: "var(--accent-violet-fg)" }}>{fmtTokens(tokens)} tok</span>}
           {durMs != null && durMs >= 1000 && <span>{fmtDur(durMs)}</span>}
           {!hasCaption && <span className="opacity-40">—</span>}
         </div>
       </div>
-      {hasTurns && <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none self-start mt-0.5" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>}
+      {hasTurns && <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none self-start mt-0.5" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>}
     </div>
   );
 }
@@ -121,19 +121,19 @@ function turnsByStep(turns: StepTurn[]): Record<string, StepTurn[]> {
 // Indented, smaller sub-step list under a drilled-open step (progressive
 // disclosure). Kept deliberately compact so the rail stays scannable.
 function TurnList({ rows }: { rows: StepTurn[] }) {
-  if (!rows.length) return <div className="ml-1 pl-3 text-[10px] text-[color:var(--text-muted)] py-1">no turns recorded on this step</div>;
+  if (!rows.length) return <div className="ml-1 pl-3 text-2xs text-[color:var(--text-muted)] py-1">no turns recorded on this step</div>;
   return (
     <div className="mt-1.5 mb-1 ml-1 pl-3 border-l border-[color:var(--border-default)] space-y-1">
       {rows.map((r, i) => {
         const tone = domainTone("action", r.action ?? "") ?? "slate";
         return (
-          <div key={i} className="flex items-baseline gap-2 text-[10.5px] leading-snug">
+          <div key={i} className="flex items-baseline gap-2 text-2xs leading-snug">
             <span className="font-mono tabular-nums text-[color:var(--text-muted)] flex-none">{clockISO(r.timestamp)}</span>
-            <span className="uppercase tracking-wide text-[8.5px] px-1 py-0.5 rounded flex-none"
+            <span className="uppercase tracking-wide text-2xs px-1 py-0.5 rounded flex-none"
               style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}>
               {(r.action ?? "—").replace(/_/g, " ")}
             </span>
-            {r.actor && <span className="text-[9px] font-mono text-[color:var(--text-muted)] flex-none opacity-70">{r.actor}</span>}
+            {r.actor && <span className="text-2xs font-mono text-[color:var(--text-muted)] flex-none opacity-70">{r.actor}</span>}
             <span className="text-[color:var(--text-secondary)] truncate">{shortDetail(r.details)}</span>
           </div>
         );
@@ -218,7 +218,7 @@ export default function StepRail({
       <div className="flex items-center justify-end mb-1">
         <button
           onClick={() => setCollapseDone((v) => !v)}
-          className="text-[10px] uppercase tracking-wider font-mono px-2.5 py-1 rounded border border-[color:var(--border-default)] text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
+          className="text-2xs uppercase tracking-wider font-mono px-2.5 py-1 rounded border border-[color:var(--border-default)] text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
         >
           {collapseDone ? "⊞ Expand done" : "⊟ Collapse done"}
         </button>
@@ -233,7 +233,7 @@ export default function StepRail({
               <div className="flex-1 py-1">
                 <button
                   onClick={() => setCollapseDone(false)}
-                  className="text-[10.5px] font-mono text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] border border-dashed border-[color:var(--border-default)] rounded-md px-2.5 py-1.5 inline-flex items-center gap-2"
+                  className="text-2xs font-mono text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)] border border-dashed border-[color:var(--border-default)] rounded-md px-2.5 py-1.5 inline-flex items-center gap-2"
                 >
                   <span style={{ color: "var(--accent-emerald-fg)" }}>✓</span>
                   <span className="text-[color:var(--text-secondary)]">{it.names.length}</span>
@@ -281,7 +281,7 @@ export default function StepRail({
                         <div className="ml-auto flex items-center gap-2 min-w-0">
                           {cur && !isGate && verifierPersona && <VerifiedBy persona={verifierPersona} />}
                           {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
-                            <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
+                            <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
                               title="ephemeral sub-agents dispatched vs returned for this step">
                               <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
                               <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
@@ -293,7 +293,7 @@ export default function StepRail({
                             </span>
                           )}
                           {cur && !isGate && (
-                            <span className="text-[10px] font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
+                            <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
                               <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
                                 animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
                                 transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
@@ -302,7 +302,7 @@ export default function StepRail({
                           )}
                           {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens(stepTurns)} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
                           {cur && hasTurns && (
-                            <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
+                            <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
                           )}
                         </div>
                       </div>
@@ -355,13 +355,13 @@ function Node({ isGate, gi, done, cur, live, reduced }: {
       return <span className="mt-2 h-3 w-3 rotate-45 rounded-[2px] border-2" style={{ borderColor: "var(--accent-slate-ring)" }} />;
     }
     return (
-      <motion.span className="mt-2 h-3.5 w-3.5 rotate-45 rounded-[3px] grid place-items-center text-[8px] font-bold"
+      <motion.span className="mt-2 h-3.5 w-3.5 rotate-45 rounded-[3px] grid place-items-center text-2xs font-bold"
         style={{ background: m.bg, color: m.fg }} {...(gi.state === "pending" ? pulse : {})}>
         <span className="-rotate-45">{m.g}</span>
       </motion.span>
     );
   }
-  if (done) return <span className="mt-2 h-3 w-3 rounded-full grid place-items-center text-[8px] font-bold" style={{ background: "var(--accent-emerald-fg)", color: "#06281c" }}>✓</span>;
+  if (done) return <span className="mt-2 h-3 w-3 rounded-full grid place-items-center text-2xs font-bold" style={{ background: "var(--accent-emerald-fg)", color: "#06281c" }}>✓</span>;
   if (cur) return <motion.span className="mt-2 h-3 w-3 rounded-full" style={{ background: "var(--accent-teal-fg)" }} {...pulse} />;
   return <span className="mt-2 h-3 w-3 rounded-full border-2" style={{ borderColor: "var(--accent-slate-ring)" }} />;
 }
@@ -377,7 +377,7 @@ function Persona({ persona, isGate }: { persona: string; isGate: boolean }) {
   return (
     <span
       title={title}
-      className="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
+      className="text-2xs font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
       style={{ background: `var(--accent-${tone}-bg)`, color: `var(--accent-${tone}-fg)` }}>
       {isGate && persona && <span aria-hidden>◇</span>}
       {label}
@@ -394,7 +394,7 @@ function VerifiedBy({ persona }: { persona: string }) {
   return (
     <span
       title={`${personaLabel(persona)} verifies the next gate`}
-      className="text-[9px] font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
+      className="text-2xs font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
       style={{ color: `var(--accent-${tone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)` }}>
       <span aria-hidden>◇</span>
       verified by {personaLabel(persona)}
@@ -418,8 +418,8 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
             useful stage metric instead; the receipt lives in the panel below. */}
         {gi.state === "pending" ? (
           <span className="ml-auto flex items-center gap-2 flex-none">
-            <span className="text-[9px] font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ background: "var(--accent-amber-fg)", color: "#3a2a04" }}>pending</span>
-            <span className="text-[10px] font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
+            <span className="text-2xs font-mono font-bold uppercase tracking-wide px-1.5 py-0.5 rounded" style={{ background: "var(--accent-amber-fg)", color: "#3a2a04" }}>pending</span>
+            <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
           <StepMeta durMs={durMs} tokens={stepTokens(turns ?? [])} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
@@ -431,22 +431,22 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
             borderColor: override ? "var(--accent-amber-ring)" : "var(--accent-emerald-ring)",
             background: `linear-gradient(0deg, var(--accent-${override ? "amber" : "emerald"}-bg), transparent)`,
           }}>
-          <div className="flex items-center gap-2 flex-wrap text-[10.5px] font-mono text-[color:var(--text-secondary)]">
+          <div className="flex items-center gap-2 flex-wrap text-2xs font-mono text-[color:var(--text-secondary)]">
             <span className="font-bold" style={{ color: override ? "var(--accent-amber-fg)" : "var(--accent-emerald-fg)" }}>
               {override ? "! override" : "✓ verified"}
             </span>
             <span>{g.actor || "—"}</span>
-            {g.proof && <span className="px-1.5 py-0.5 rounded text-[9px] uppercase" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{g.proof}</span>}
+            {g.proof && <span className="px-1.5 py-0.5 rounded text-2xs uppercase" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{g.proof}</span>}
             <span className="ml-auto text-[color:var(--text-muted)]">{clockHM(g.ts)}</span>
           </div>
           <div className="mt-2 text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed">{g.reason}</div>
           {g.reason && g.reason.length > 120 && (
             <>
               {receipt && (
-                <div className="mt-2 border-l-2 pl-2.5 font-mono text-[11px] text-[color:var(--text-muted)] whitespace-pre-wrap leading-relaxed"
+                <div className="mt-2 border-l-2 pl-2.5 font-mono text-2xs text-[color:var(--text-muted)] whitespace-pre-wrap leading-relaxed"
                   style={{ borderColor: "var(--border-strong)" }}>{g.reason}</div>
               )}
-              <button onClick={() => setReceipt((v) => !v)} className="mt-1.5 text-[10px] font-mono" style={{ color: "var(--accent-teal-fg)" }}>
+              <button onClick={() => setReceipt((v) => !v)} className="mt-1.5 text-2xs font-mono" style={{ color: "var(--accent-teal-fg)" }}>
                 {receipt ? "▾ hide receipt" : "▸ full receipt"}
               </button>
             </>

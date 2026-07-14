@@ -65,7 +65,7 @@ export default function ViolationsView({ data }: { data: Violations }) {
                 <span className="font-mono">{v.from ?? "—"}</span>
                 <span className="opacity-50">→</span>
                 <span className="font-mono">{v.to ?? "—"}</span>
-                <span className="ml-auto text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]">
+                <span className="ml-auto text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] ring-1 ring-inset ring-[color:var(--accent-amber-ring)]">
                   {v.principle ?? "principle"}
                 </span>
               </li>
