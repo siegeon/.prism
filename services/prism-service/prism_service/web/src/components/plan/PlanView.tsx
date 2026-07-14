@@ -43,10 +43,13 @@ export type GateControls = {
 // One committed RED test that pins the task's oracle: its function name, its
 // docstring (whose lead "AC-N / FR-N —" correlates it to an acceptance
 // criterion), and the file it lives in. Sourced from GET /api/tasks/:id/tests.
+// `status` is the latest ACTUAL pytest outcome (?run=true) — absent when the
+// run couldn't happen.
 export type PinTest = {
   name: string;
   doc?: string;
   file?: string;
+  status?: string;
 };
 
 // Pull the leading acceptance-criterion id(s) out of a test's docstring.
@@ -269,13 +272,25 @@ export default function PlanView({
       {cur === "tests" && hasTests && (
         <div className="space-y-3">
           <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
-            The committed tests whose failure currently proves this task is{" "}
-            <span className="font-medium">not done</span> — each pins an
-            acceptance criterion. They turn green only when the outcome is met.
+            The committed tests that pin this task's acceptance criteria.
+            Badges show each test's <span className="font-medium">latest
+            actual run</span> — red while the outcome is unmet, green once it
+            holds.
           </div>
           <ul className="space-y-3">
             {[...tests].sort((a, b) => acOrder(a) - acOrder(b)).map((t) => {
               const { badge, rest } = parseAc(t.doc);
+              // Honest per-test badge from the REAL run (api ?run=true).
+              // No status = the run couldn't happen: say "not run", never
+              // paint a phase-colored guess.
+              const st = (t.status || "").toLowerCase();
+              const chip = st === "passed"
+                ? { label: "✓ pass", fg: "var(--accent-sage-fg)", ring: "var(--accent-sage-ring)", title: "this test currently PASSES" }
+                : st === "failed" || st === "error"
+                  ? { label: "✗ red", fg: "var(--accent-rose-fg)", ring: "var(--accent-rose-ring)", title: "this test is currently RED" }
+                  : st === "skipped"
+                    ? { label: "skipped", fg: "var(--accent-amber-fg)", ring: "var(--accent-amber-ring)", title: "this test was skipped in the last run" }
+                    : { label: "not run", fg: "var(--text-muted)", ring: "var(--border-default)", title: "no recorded run for this test yet" };
               return (
                 <li
                   key={`${t.file}:${t.name}`}
@@ -300,13 +315,10 @@ export default function PlanView({
                     </span>
                     <span
                       className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                      style={{
-                        color: "var(--accent-rose-fg)",
-                        boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
-                      }}
-                      title="this test is currently RED"
+                      style={{ color: chip.fg, boxShadow: `inset 0 0 0 1px ${chip.ring}` }}
+                      title={chip.title}
                     >
-                      ✗ red
+                      {chip.label}
                     </span>
                   </div>
                   {rest && (

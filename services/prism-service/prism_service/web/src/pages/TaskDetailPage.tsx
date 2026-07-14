@@ -58,6 +58,7 @@ type PinTest = {
   name: string;
   doc?: string;
   file?: string;
+  status?: string;
 };
 
 // GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
@@ -640,7 +641,9 @@ export default function TaskDetailPage() {
       // Pinning/RED tests: the committed test file(s) whose failure proves this
       // task is NOT done. Best-effort — a task with no test file yields [].
       try {
-        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests`);
+        // run=true: the server EXECUTES the pinned tests so each row carries
+        // its real current outcome — never an eternal red-phase badge.
+        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests?run=true`);
         setPinTests(tr.tests ?? []);
       } catch {
         setPinTests([]);

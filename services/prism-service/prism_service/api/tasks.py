@@ -390,16 +390,21 @@ def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
 
 
 @router.get("/{task_id}/tests")
-def get_task_tests(task_id: str):
+def get_task_tests(task_id: str, run: bool = Query(False)):
     """Discover the test file(s) that PIN this task's oracle and return each
-    ``def test_*`` as ``{name, doc, file}`` so the detail page can show, next
-    to the oracle, exactly which tests currently prove the work is NOT done.
+    ``def test_*`` as ``{name, doc, file}`` so the detail page can show,
+    next to the oracle, exactly which tests pin the acceptance criteria.
 
     Discovery is content-based and read-only: scan ``tests/**/*.py`` for files
     that mention the task id (full or first 8 chars) — the red-test file names
     the task in its module docstring. Best-effort: any parse/read failure is
     swallowed and an empty list is returned. task_id is validated (same shape
-    as the prototype route) so a crafted id can't influence the scan."""
+    as the prototype route) so a crafted id can't influence the scan.
+
+    ``run=true`` additionally EXECUTES the discovered test files (pytest, in
+    the daemon's service checkout, bounded) and stamps each row with its REAL
+    current ``status`` (passed/failed/skipped/not-run) — the honest fix for
+    the tab painting every pin RED forever: red is a phase, not a badge."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
 
@@ -408,6 +413,7 @@ def get_task_tests(task_id: str):
     tests_root = Path(__file__).resolve().parents[2] / "tests"
     short = task_id[:8]
     results: list[dict] = []
+    files: list[str] = []
     if tests_root.is_dir():
         for p in sorted(tests_root.rglob("*.py")):
             try:
@@ -416,8 +422,39 @@ def get_task_tests(task_id: str):
                 continue
             if task_id in text or (len(short) >= 8 and short in text):
                 rel = p.relative_to(tests_root.parent).as_posix()
+                files.append(rel)
                 results.extend(_extract_tests_from_source(text, rel))
-    return {"tests": results}
+    ran = False
+    if run and files and results:
+        statuses = _run_pinned_tests(tests_root.parent, files)
+        if statuses is not None:
+            ran = True
+            for row in results:
+                row["status"] = statuses.get(row["name"], "not-run")
+    return {"tests": results, "ran": ran}
+
+
+def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
+    """Run the pinned test files (bounded) and map test name -> outcome via
+    pytest's line report. Returns None when the run itself could not happen
+    (missing interpreter, timeout) — callers then omit statuses honestly."""
+    import subprocess
+    import sys as _sys
+    try:
+        cmd = [_sys.executable, "-m", "pytest", "-v", "--no-header",
+               "-p", "no:cacheprovider", *files]
+        out = subprocess.run(
+            cmd, cwd=str(service_root), capture_output=True, text=True,
+            timeout=180)
+        statuses: dict[str, str] = {}
+        for line in (out.stdout or "").splitlines():
+            m = re.match(r".*::(\w+)(?:\[[^\]]*\])?\s+(PASSED|FAILED|ERROR|"
+                         r"SKIPPED|XFAIL|XPASS)", line)
+            if m:
+                statuses[m.group(1)] = m.group(2).lower()
+        return statuses
+    except Exception:
+        return None
 
 
 class TaskUpdate(BaseModel):
