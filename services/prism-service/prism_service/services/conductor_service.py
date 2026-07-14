@@ -1963,6 +1963,15 @@ class ConductorService:
                 recheck = self._verify_gate(
                     task, task.workflow_step,
                     getattr(task, "proof_type", None))
+                if (recheck.get("verified") is not True
+                        and task.workflow_step == "green_gate"):
+                    # ORACLE-RECEIPT PRECEDENCE on recovery too (68e5c699):
+                    # a fresh passing EvidenceReceipt releases the recheck
+                    # even when the env-fragile shell verifier disagrees.
+                    _rr, _rc = self._oracle_receipt_refusal(
+                        task, override=False, reason=reason or "")
+                    if not _rr and _rc is not None:
+                        recheck["verified"] = True
                 if recheck.get("verified") is not True:
                     return {
                         "ok": False,
@@ -2324,6 +2333,28 @@ class ConductorService:
             verifier_payload = outcome.get("verifier")
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
+            if outcome["verified"] is not True and gate_step_id == "green_gate":
+                # ORACLE-RECEIPT PRECEDENCE (68e5c699 interim): the trusted-
+                # runner EvidenceReceipt is the green gate's DESIGNED deciding
+                # authority (inverted-flow #2: 'the fresh-receipt tooth is'
+                # the decider; the in-daemon shell verifier is known
+                # env-fragile — false REDs from sanitized-env skips and
+                # empty diff scope). A FRESH PASSING receipt (tree+spec+
+                # policy-pin matched) therefore releases the gate on merit,
+                # with BOTH verdicts recorded for audit. The judge-tamper
+                # and proof-artifact teeth below still apply unchanged.
+                _r_refusal, _r_receipt = self._oracle_receipt_refusal(
+                    task, override=False, reason=reason or "")
+                if not _r_refusal and _r_receipt is not None:
+                    outcome["verified"] = True
+                    verifier_reason = (
+                        "released on the oracle-receipt tooth: fresh passing "
+                        f"EvidenceReceipt {str(getattr(_r_receipt, 'job_id', ''))[:8]} "
+                        f"({getattr(_r_receipt, 'adapter', '')}); shell verifier "
+                        f"disagreed ({verifier_reason[:160]}) — recorded, known "
+                        "env-fragile (68e5c699)")
+                    verifier_validation = (
+                        (verifier_validation or "green_full") + "+receipt")
             if outcome["verified"] is not True:
                 self._task_svc.update(
                     task_id,
