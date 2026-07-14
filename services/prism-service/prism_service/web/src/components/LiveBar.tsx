@@ -79,60 +79,79 @@ export default function LiveBar() {
   const working = managed.filter((m) => m.activity?.state === "working");
   const gated = managed.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
   const isLive = working.length > 0;
+  // Three honest states, in precedence order (artifact .livebar semantics):
+  // LIVE (something is actually moving) > AWAITING REVIEW (work parked at a
+  // gate — NOT "idle", a human owes a decision) > IDLE (queue truly quiet).
+  const state: "live" | "gated" | "idle" =
+    isLive ? "live" : gated.length > 0 ? "gated" : "idle";
+  const tint = {
+    live: { bg: "var(--accent-sage-bg)", ring: "var(--accent-sage-ring)", fg: "var(--accent-sage-fg)" },
+    gated: { bg: "var(--accent-amber-bg)", ring: "var(--accent-amber-ring)", fg: "var(--accent-amber-fg)" },
+    idle: { bg: "var(--surface-1)", ring: "var(--border-subtle)", fg: "var(--text-muted)" },
+  }[state];
+  const stateLabel = state === "live" ? "Live" : state === "gated" ? "Awaiting review" : "Idle";
   const heartbeat = `poll ${Math.floor(sinceFetchS)}s · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
 
+  // Legible chip: the task TITLE (truncated), never a bare uuid — the full
+  // id rides in the tooltip (owner: "it's hard to see what 401811b8 is").
+  const chipLabel = (m: ManagedTask) => {
+    const t = (m.title ?? "").trim();
+    return t.length > 34 ? t.slice(0, 33) + "…" : t || shortId(m.id);
+  };
+
+  // The artifact's .livebar is a padded rounded CARD inside the content
+  // column, not an edge-to-edge strip.
   return (
-    <div
-      className="flex items-center gap-3 flex-wrap border-b px-4 py-1.5 text-sm"
-      role="status"
-      style={{
-        borderColor: isLive ? "var(--accent-sage-ring)" : "var(--border-subtle)",
-        background: isLive ? "var(--accent-sage-bg)" : "var(--surface-1)",
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => setCollapsed((c) => !c)}
-        className="inline-flex items-center gap-2 shrink-0"
-        aria-label={collapsed ? "expand live bar" : "collapse live bar"}
-        aria-expanded={!collapsed}
+    <div className="px-6 pt-4 shrink-0">
+      <div
+        className="flex items-center gap-x-4 gap-y-1.5 flex-wrap rounded-lg border px-4 py-2.5 text-sm"
+        role="status"
+        style={{ borderColor: tint.ring, background: tint.bg }}
       >
-        <span
-          className={"h-2.5 w-2.5 rounded-full " + (isLive ? "animate-pulse" : "")}
-          style={{ background: isLive ? "var(--accent-sage-fg)" : "var(--text-muted)" }}
-        />
-        <b className="text-2xs uppercase tracking-wider" style={{ color: isLive ? "var(--accent-sage-fg)" : "var(--text-muted)" }}>
-          {isLive ? "Live" : "Idle"}
-        </b>
-      </button>
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="inline-flex items-center gap-2 shrink-0"
+          aria-label={collapsed ? "expand live bar" : "collapse live bar"}
+          aria-expanded={!collapsed}
+        >
+          <span
+            className={"h-2.5 w-2.5 rounded-full " + (state === "live" ? "animate-pulse" : "")}
+            style={{ background: tint.fg }}
+          />
+          <b className="text-2xs uppercase tracking-wider" style={{ color: tint.fg }}>
+            {stateLabel}
+          </b>
+        </button>
 
-      {!collapsed && working.map((m) => (
-        <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
-          <span className="h-4 w-px shrink-0" style={{ background: "var(--border-default)" }} />
-          <EntityChip kind="task" label={`${shortId(m.id)} ${m.title ?? ""}`.trim()} to={`/tasks/${m.id}`} />
-          {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
-          <Lozenge tone="ok">working</Lozenge>
-          <span className="text-2xs font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>
-            {m.assigned_agent || "claude-code"}
+        {!collapsed && working.map((m) => (
+          <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
+            <span className="h-4 w-px shrink-0" style={{ background: tint.ring }} />
+            <EntityChip kind="task" label={chipLabel(m)} to={`/tasks/${m.id}`} title={`${m.title ?? ""} · ${m.id}`} />
+            {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
+            <Lozenge tone="ok">working</Lozenge>
+            <span className="text-2xs font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>
+              {m.assigned_agent || "claude-code"}
+            </span>
           </span>
+        ))}
+
+        {!collapsed && gated.map((m) => (
+          <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
+            <span className="h-4 w-px shrink-0" style={{ background: tint.ring }} />
+            <EntityChip kind="task" label={chipLabel(m)} to={`/tasks/${m.id}`} title={`${m.title ?? ""} · ${m.id}`} />
+            <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
+          </span>
+        ))}
+
+        {!collapsed && state === "idle" && (
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>no task being driven — queue is quiet</span>
+        )}
+
+        <span className="ml-auto text-2xs font-mono tabular-nums shrink-0" style={{ color: tint.fg }}>
+          {heartbeat}
         </span>
-      ))}
-
-      {!collapsed && gated.map((m) => (
-        <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
-          <span className="h-4 w-px shrink-0" style={{ background: "var(--border-default)" }} />
-          <EntityChip kind="task" label={shortId(m.id)} to={`/tasks/${m.id}`} />
-          <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
-        </span>
-      ))}
-
-      {!collapsed && !isLive && gated.length === 0 && (
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>no task being driven — queue is quiet</span>
-      )}
-
-      <span className="ml-auto text-2xs font-mono tabular-nums shrink-0" style={{ color: isLive ? "var(--accent-sage-fg)" : "var(--text-muted)" }}>
-        {heartbeat}
-      </span>
+      </div>
     </div>
   );
 }

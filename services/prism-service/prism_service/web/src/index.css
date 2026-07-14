@@ -97,14 +97,14 @@
   --accent-weak:   #0d2847;
   --accent-border: #104d87;
 
-  /* Nav rail — a DISTINCT navy panel that does NOT flip with the theme
-   * (owner: "the one panel that doesn't flip"). Same navy in light and
-   * dark so the rail always sets itself off from the slate canvas. All
-   * nav tokens live here only; the light block does not override them. */
-  --nav-bg:          #1c2333;
-  --nav-text:        #aab6c9;
-  --nav-text-hi:     #e9eef6;
-  --nav-line:        rgba(237, 241, 247, 0.10);
+  /* Nav rail — a DISTINCT dark panel per the artifact's exact values:
+   * near-black #0d0e10 in DARK (neutral, never blue against the slate
+   * canvas), navy #1c2333 in LIGHT. The light block overrides bg/text/
+   * line; the active blue fills are shared. */
+  --nav-bg:          #0d0e10;
+  --nav-text:        #9ba1aa;
+  --nav-text-hi:     #edeef0;
+  --nav-line:        rgba(237, 241, 247, 0.08);
   --nav-hover:       rgba(255, 255, 255, 0.06);
   --nav-active-bg:   rgba(0, 144, 255, 0.16);
   --nav-active-text: #8ec8ff;
@@ -214,7 +214,12 @@
   --accent-solid:  #0090ff;
   --accent-weak:   #e6f4fe;
   --accent-border: #acd8fc;
-  /* nav rail tokens are theme-invariant navy — defined once in :root. */
+  /* Nav rail, light-tuned per the artifact: navy panel on the white
+   * canvas (dark theme keeps the neutral near-black from :root). */
+  --nav-bg:      #1c2333;
+  --nav-text:    #aab6c9;
+  --nav-text-hi: #e9eef6;
+  --nav-line:    rgba(237, 241, 247, 0.10);
 
   --accent-teal-fg:    var(--blue-12);
   --accent-sage-fg:    var(--green-12);
