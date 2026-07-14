@@ -457,7 +457,7 @@ def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
     import sys as _sys
     try:
         cmd = [_sys.executable, "-m", "pytest", "-v", "--no-header",
-               "-p", "no:cacheprovider", *files]
+               "--color=no", "-p", "no:cacheprovider", *files]
         out = subprocess.run(
             cmd, cwd=str(service_root), capture_output=True, text=True,
             timeout=180)
