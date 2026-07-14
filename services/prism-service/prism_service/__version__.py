@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.9"
+PRISM_VERSION = "6.9.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.10: THE VISIBLE REDESIGN — the app starts reading like the "
+    "direction artifact (ui-redesign workstreams 2/3/5/6 first cut). NEW "
+    "Lozenge + EntityChip primitives (shape-glyph per entity type, radix "
+    "tones); /tasks is the artifact's Board: honest LIVE bar (real "
+    "conductor work-state, quiet when idle) over a Jira-style grouped "
+    "table with the epic tree expandable inline; /tasks/:id is the "
+    "artifact's issue screen: breadcrumb header, lozenge chips, doc "
+    "column (all conductor cards intact) + 300px Connections rail "
+    "(Details fields; Sessions / Code-touched / Gate / Children groups, "
+    "real data via the workstream-0 plumbing). "
     "v6.9.9: UI-REDESIGN INTEGRATION — workstreams 0+1 unified on "
     "feat/ui-redesign (traceability plumbing + radix tokens serve together). "
     "v6.9.8: RADIX COLOR TOKENS — LEGIBLE IN BOTH THEMES. The seven "

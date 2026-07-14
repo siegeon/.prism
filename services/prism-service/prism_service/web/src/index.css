@@ -157,6 +157,11 @@
   --et-session: oklch(0.72 0.12 205);
   --et-code:    oklch(0.72 0.12 265);
   --et-memory:  oklch(0.72 0.12 325);
+  /* test/gate: chip-only entity kinds (no canvas node yet, so no ET_HEX
+   * mirror). Hues 150/75 per the UI-direction-v2 artifact — test reads
+   * green (pass), gate reads gold (checkpoint). */
+  --et-test:    oklch(0.72 0.12 150);
+  --et-gate:    oklch(0.72 0.12 75);
 }
 
 /* Light theme — activated by <html class="light light-theme"
@@ -179,6 +184,8 @@
   --et-session: oklch(0.52 0.12 205);
   --et-code:    oklch(0.52 0.12 265);
   --et-memory:  oklch(0.52 0.12 325);
+  --et-test:    oklch(0.52 0.12 150);
+  --et-gate:    oklch(0.52 0.12 75);
   color-scheme: light;
 }
 :root[data-theme="dark"] { color-scheme: dark; }

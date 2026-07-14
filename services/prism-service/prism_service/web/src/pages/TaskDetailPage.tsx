@@ -1,10 +1,12 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty, toneFromLabel, type PillTone } from "@/components/ui";
-import { domainTone, priorityTone } from "@/lib/domainTone";
+import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
+import { Lozenge, type LozengeTone } from "@/components/Lozenge";
+import { EntityChip } from "@/components/EntityChip";
+import { domainTone } from "@/lib/domainTone";
 import PlanView, { parseAc } from "@/components/plan/PlanView";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
@@ -154,6 +156,13 @@ function Checkbox({ done, reduced }: { done: boolean; reduced: boolean | null })
 function oneLine(s: string, n = 96): string {
   const f = s.replace(/\s+/g, " ").trim();
   return f.length > n ? f.slice(0, n) + "…" : f;
+}
+
+// EntityChip is single-line (no truncation), so a repo path is shortened to
+// its last two segments for the 300px rail; the full path rides in `title`.
+function shortPath(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  return parts.length > 2 ? "…/" + parts.slice(-2).join("/") : p;
 }
 
 // ── Timeline (task turns) ──────────────────────────────────────────────
@@ -361,6 +370,65 @@ const STATUS_CYCLE: Record<string, string[]> = {
   done: ["pending"],
 };
 
+// ── Lozenge tone mappers ───────────────────────────────────────────────
+// The header + Details rail speak the six-tone Lozenge vocabulary
+// (neutral/info/ok/warn/danger/new), so task lifecycle values map here
+// rather than through domainTone's seven Hermes hues.
+function statusLoz(s: string): LozengeTone {
+  return s === "done" ? "ok" : s === "in_progress" ? "info" : s === "blocked" ? "danger" : "warn";
+}
+function gateLoz(g: string): LozengeTone {
+  return g === "passed" ? "ok" : g === "failed" ? "danger" : g === "pending" ? "warn" : "neutral";
+}
+function priorityLoz(p: number | string | undefined): LozengeTone {
+  const n = typeof p === "number" ? p : Number(p);
+  if (!Number.isFinite(n)) return "neutral";
+  return n <= 1 ? "danger" : n === 2 ? "warn" : n === 3 ? "info" : "neutral";
+}
+
+// ── Rail primitives (artifact .railcard / .rt / .field / .relrow) ───────
+// Bordered panel on the right column; a header strip, 88px-label field
+// rows, and typed group subheaders above EntityChip rows.
+function RailCard({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-1)] overflow-hidden">
+      <div className="flex items-center gap-2 px-3.5 pt-3 pb-1 text-2xs font-semibold uppercase tracking-[0.1em] text-[color:var(--text-label)]">
+        {title}
+        {typeof count === "number" && <span className="ml-auto font-mono text-[color:var(--text-muted)] normal-case tracking-normal">{count}</span>}
+      </div>
+      <div className="pb-1.5">{children}</div>
+    </div>
+  );
+}
+
+function Field({ k, children }: { k: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2.5 px-3.5 py-1.5">
+      <span className="w-[88px] shrink-0 text-xs text-[color:var(--text-muted)]">{k}</span>
+      <span className="min-w-0 flex items-center gap-1.5 text-[13px] text-[color:var(--text-primary)]">{children}</span>
+    </div>
+  );
+}
+
+// Typed-relation group: a small subheader then one padded row per chip.
+function RelGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <>
+      <div className="px-3.5 pt-2.5 pb-1 text-2xs font-semibold uppercase tracking-[0.08em] text-[color:var(--text-muted)] opacity-80">{label}</div>
+      {children}
+    </>
+  );
+}
+
+function RelRow({ children, why }: { children: React.ReactNode; why?: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3.5 py-1 min-w-0 hover:bg-[color:var(--surface-2)]">
+      <span className="min-w-0">{children}</span>
+      {why && <span className="ml-auto shrink-0 text-2xs text-[color:var(--text-muted)]">{why}</span>}
+    </div>
+  );
+}
+
 export default function TaskDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -459,6 +527,41 @@ export default function TaskDetailPage() {
     const t = setTimeout(() => setNotice(null), 4000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Only transcript-backed (UUID) sessions are real work sessions. Synthetic
+  // gate-actor labels (qa-red-gate-*, *-verifier-*) surface as gate markers
+  // elsewhere, never as bare session rows.
+  const realSessions = useMemo(
+    () => sessions.filter((s) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.session_id)),
+    [sessions],
+  );
+
+  // "Code touched" rail group: union of files_modified_paths across the linked
+  // sessions' detail endpoint. Fetched once per session-id set, 404-tolerant,
+  // repo-relative paths only (absolute C:\ / POSIX roots are dropped).
+  const [codePaths, setCodePaths] = useState<string[]>([]);
+  const [codeExpanded, setCodeExpanded] = useState(false);
+  const sessionIdsKey = realSessions.map((s) => s.session_id).join(",");
+  useEffect(() => {
+    const ids = sessionIdsKey ? sessionIdsKey.split(",") : [];
+    if (ids.length === 0) { setCodePaths([]); return; }
+    let cancelled = false;
+    (async () => {
+      const acc = new Set<string>();
+      for (const sid of ids) {
+        try {
+          const d = await api.get<{ files_modified_paths?: string[] }>(`/api/sessions/${sid}?project=${project}`);
+          for (const p of d.files_modified_paths ?? []) {
+            if (!p || /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("/")) continue;
+            acc.add(p);
+          }
+        } catch { /* tolerate 404 / missing detail */ }
+      }
+      if (!cancelled) setCodePaths([...acc].sort());
+    })();
+    return () => { cancelled = true; };
+  }, [sessionIdsKey, project]);
 
   const setStatus = async (status: string) => {
     setBusy(true);
@@ -567,23 +670,29 @@ export default function TaskDetailPage() {
 
   const transitions = STATUS_CYCLE[task.status ?? "pending"] ?? [];
   const taskStatus = task.status ?? "pending";
-  const statusTone = domainTone("taskStatus", taskStatus) ?? "slate";
-  const pTone = priorityTone(task.priority);
   const conductorOn = (task.workflow_step ?? "") !== "" || (task.gate_state ?? "none") !== "none";
-  // Only transcript-backed (UUID) sessions are real work sessions. Synthetic
-  // gate-actor labels (qa-red-gate-*, *-verifier-*) surface as gate markers in
-  // the Activity Gantt, never as bare session rows.
-  const realSessions = sessions.filter((s) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.session_id));
+  const shortId = String(task.id ?? id).slice(0, 8);
+  const gateActive = (task.gate_state ?? "none") !== "none";
+  const gateStep = /_gate$/.test(task.workflow_step ?? "");
+  // Repo-relative code paths capped at 8 rows with a "N more" expander.
+  const CODE_CAP = 8;
+  const codeShown = codeExpanded ? codePaths : codePaths.slice(0, CODE_CAP);
+  const codeHidden = codePaths.length - codeShown.length;
+  const connectionCount =
+    realSessions.length + codePaths.length + (gateActive || gateStep ? 1 : 0) + children.length;
+  const hasConnections = connectionCount > 0;
 
   return (
     <Page>
-      <button
-        onClick={() => navigate(from)}
-        className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
-      >
-        ← {backLabel}
-      </button>
+      {/* Breadcrumb — "Tasks / <short-id>"; the crumb root carries the
+          context-aware back navigation the old ← button did. */}
+      <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
+        <button onClick={() => navigate(from)} className="hover:text-[color:var(--text-secondary)]" title={backLabel}>
+          {from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
+        </button>
+        <span className="opacity-50">/</span>
+        <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+      </div>
 
       <AnimatePresence>
         {notice && (
@@ -631,62 +740,26 @@ export default function TaskDetailPage() {
               initial={reduced ? false : { scale: 1 }}
               animate={reduced ? {} : { scale: [1, 1.12, 1] }}
               transition={{ duration: reduced ? 0 : DUR.chip, ease: EASE_OUT }}
-              className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded inline-block"
-              style={{
-                background: `var(--accent-${statusTone}-bg)`,
-                color: `var(--accent-${statusTone}-fg)`,
-                boxShadow: `inset 0 0 0 1px var(--accent-${statusTone}-ring)`,
-              }}
+              className="inline-block"
             >
-              {taskStatus}
+              <Lozenge tone={statusLoz(taskStatus)}>{taskStatus.replace(/_/g, " ")}</Lozenge>
             </motion.span>
             {typeof task.priority !== "undefined" && (
-              <span
-                className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded"
-                style={{
-                  background: `var(--accent-${pTone}-bg)`,
-                  color: `var(--accent-${pTone}-fg)`,
-                  boxShadow: `inset 0 0 0 1px var(--accent-${pTone}-ring)`,
-                }}
-              >
-                priority {task.priority}
-              </span>
+              <Lozenge tone={priorityLoz(task.priority)}>priority {task.priority}</Lozenge>
             )}
-            {task.assigned_agent && (
-              <span
-                className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded"
-                style={{
-                  background: "var(--accent-violet-bg)",
-                  color: "var(--accent-violet-fg)",
-                }}
-              >
-                {task.assigned_agent}
-              </span>
-            )}
-            {(task.tags ?? []).map((tag) => {
-              const tTone = toneFromLabel(tag);
-              return (
-                <span
-                  key={tag}
-                  className="text-2xs font-mono px-1.5 py-0.5 rounded"
-                  style={{
-                    background: `var(--accent-${tTone}-bg)`,
-                    color: `var(--accent-${tTone}-fg)`,
-                  }}
-                >
-                  #{tag}
-                </span>
-              );
-            })}
+            {task.assigned_agent && <Lozenge tone="new">{task.assigned_agent}</Lozenge>}
+            {(task.tags ?? []).map((tag) => (
+              <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
+            ))}
           </div>
         </div>
-        <div className="flex flex-wrap gap-1 shrink-0">
+        <div className="flex flex-wrap gap-2 shrink-0">
           {transitions.map((target) => (
             <button
               key={target}
               disabled={busy}
               onClick={() => setStatus(target)}
-              className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
+              className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)] disabled:opacity-40"
             >
               → {target}
             </button>
@@ -700,6 +773,12 @@ export default function TaskDetailPage() {
           <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1">{task.blocked_reason}</div>
         </Card>
       )}
+
+      {/* Two-column issue layout (artifact .issue: 1fr / 300px, stacks
+          below 900px). LEFT = the document column (plan/oracle/contract/…
+          intact); RIGHT = the Details + Connections rail. */}
+      <div className="grid grid-cols-1 min-[900px]:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+      <div className="space-y-6 min-w-0">
 
       {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype || pinTests.length > 0) && (
         <Stagger i={0} reduced={reduced}>
@@ -998,6 +1077,73 @@ export default function TaskDetailPage() {
           <Timeline rows={history} tokens={task.phase_progress?.tokens_since_step} />
         </Card>
       )}
+
+      </div>{/* end left doc column */}
+
+      <aside className="space-y-3.5 min-w-0 min-[900px]:sticky min-[900px]:top-6">
+        <RailCard title="Details">
+          <Field k="Status"><Lozenge tone={statusLoz(taskStatus)}>{taskStatus.replace(/_/g, " ")}</Lozenge></Field>
+          {task.workflow_step && <Field k="Step"><Lozenge tone="neutral">{task.workflow_step}</Lozenge></Field>}
+          {gateActive && <Field k="Gate"><Lozenge tone={gateLoz(task.gate_state ?? "none")}>{task.gate_state}</Lozenge></Field>}
+          {typeof task.priority !== "undefined" && <Field k="Priority">p{task.priority}</Field>}
+          {task.proof_type && <Field k="Proof"><span className="font-mono text-xs">{task.proof_type}</span></Field>}
+          {task.updated_at && <Field k="Updated"><span className="text-[color:var(--text-secondary)]">{String(task.updated_at).slice(0, 10)}</span></Field>}
+        </RailCard>
+
+        <RailCard title="Connections" count={connectionCount || undefined}>
+          {!hasConnections && (
+            <div className="px-3.5 py-2 text-xs text-[color:var(--text-muted)]">No connections yet.</div>
+          )}
+          {realSessions.length > 0 && (
+            <RelGroup label="Sessions">
+              {realSessions.map((s) => (
+                <RelRow key={s.session_id}>
+                  <EntityChip
+                    kind="session"
+                    label={`${s.session_id.slice(0, 8)} · ${s.started_at ? String(s.started_at).slice(0, 10) : "—"}`}
+                    to={`/sessions/${s.session_id}`}
+                  />
+                </RelRow>
+              ))}
+            </RelGroup>
+          )}
+          {codePaths.length > 0 && (
+            <RelGroup label="Code touched">
+              {codeShown.map((p) => (
+                <RelRow key={p}>
+                  <EntityChip kind="code" label={shortPath(p)} title={p} to={`/artifact?focus=${encodeURIComponent(p)}`} />
+                </RelRow>
+              ))}
+              {codeHidden > 0 && (
+                <button
+                  onClick={() => setCodeExpanded(true)}
+                  className="px-3.5 py-1 text-xs text-[color:var(--accent-teal-fg)] hover:underline"
+                >
+                  {codeHidden} more
+                </button>
+              )}
+            </RelGroup>
+          )}
+          {(gateActive || gateStep) && (
+            <RelGroup label="Gate">
+              <RelRow>
+                <EntityChip kind="gate" label={`${task.workflow_step ?? "gate"} · ${task.gate_state ?? "none"}`} />
+              </RelRow>
+            </RelGroup>
+          )}
+          {children.length > 0 && (
+            <RelGroup label="Children">
+              {children.map((c) => (
+                <RelRow key={c.id} why={c.status}>
+                  <EntityChip kind="task" label={oneLine(c.title ?? String(c.id).slice(0, 8), 26)} title={c.title} to={`/tasks/${c.id}`} />
+                </RelRow>
+              ))}
+            </RelGroup>
+          )}
+        </RailCard>
+      </aside>
+
+      </div>{/* end .issue grid */}
     </Page>
   );
 }
