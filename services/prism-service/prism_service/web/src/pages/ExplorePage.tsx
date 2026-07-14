@@ -766,50 +766,80 @@ function MeshShape({ kind, x, y, r }: { kind: string; x: number; y: number; r: n
 }
 
 type Placed = MeshNode & { x: number; y: number; hop: number; r: number };
-type Layout = { placed: Placed[]; posByToken: Map<string, { x: number; y: number }> };
+type Layout = { placed: Placed[]; posByToken: Map<string, { x: number; y: number }>; centerPos: { x: number; y: number } };
 
-// Hop-aware radial layout: first-hop neighbors ring the center (r=12); each
-// second-hop node sits on an outer ring (r=8) in a small arc around ITS parent's
-// angle, so the two hops read as concentric growth rather than one flat blob.
-// Deterministic — no physics sim — so labels stay legible and stable.
-function layoutMesh(neighbors: MeshNode[]): Layout {
-  const hop1 = neighbors.filter((n) => (n.hop ?? 1) === 1);
-  const hop2 = neighbors.filter((n) => n.hop === 2);
-  const n1 = hop1.length;
-  const R1 = n1 <= 6 ? 152 : 182;
-  const angle1 = (i: number) => (i / Math.max(n1, 1)) * Math.PI * 2 - Math.PI / 2;
-  const placed1: Placed[] = hop1.map((nb, i) => {
-    const theta = angle1(i);
-    return { ...nb, x: MESH_CX + Math.cos(theta) * R1, y: MESH_CY + Math.sin(theta) * R1, hop: 1, r: 12 };
+// Deterministic 0..1 hash - seeds the initial scatter so the layout is
+// reproducible (same neighborhood, same picture) without any RNG.
+function hash01(str: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 100000) / 100000;
+}
+
+// ORGANIC force-directed layout (the artifact's look): seeded scatter relaxed
+// through ~160 iterations of pairwise repulsion, edge springs (the TRUE mesh
+// edges - code pulls toward what it calls, concepts toward what they link),
+// same-domain concept cohesion (pools the diamonds for their hull), and mild
+// centering. Deterministic and bounded; the selected node floats IN the
+// fabric near the middle - a doorway, never a pinned hub.
+function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): Layout {
+  type P = { n?: MeshNode; token: string; x: number; y: number; r: number; hop: number };
+  const pts: P[] = [{ token: centerToken, x: MESH_CX - 30, y: MESH_CY + 6, r: 13, hop: 0 }];
+  const idx = new Map<string, number>([[centerToken, 0]]);
+  nodes.forEach((n) => {
+    const a = hash01(n.token) * Math.PI * 2;
+    const rad = 110 + hash01(n.token + "r") * 150 + (n.hop === 2 ? 55 : 0);
+    pts.push({ n, token: n.token, x: MESH_CX + Math.cos(a) * rad, y: MESH_CY + Math.sin(a) * rad, r: n.hop === 2 ? 8 : 12, hop: n.hop ?? 1 });
+    idx.set(n.token, pts.length - 1);
   });
-  const angleByToken = new Map<string, number>();
-  hop1.forEach((nb, i) => angleByToken.set(nb.token, angle1(i)));
-
-  const byParent = new Map<string, MeshNode[]>();
-  for (const nb of hop2) {
-    const v = nb.via ?? "";
-    const g = byParent.get(v) ?? []; g.push(nb); byParent.set(v, g);
+  const springs: [number, number][] = [];
+  for (const e of edges) {
+    const a = idx.get(e.from), b = idx.get(e.to);
+    if (a !== undefined && b !== undefined && a !== b) springs.push([a, b]);
   }
-  const R2 = 250;
-  const placed2: Placed[] = [];
-  let orphan = 0;  // parents filtered out of view — fan these around the ring
-  for (const [via, kids] of byParent) {
-    const base = angleByToken.get(via);
-    kids.forEach((nb, j) => {
-      let theta: number;
-      if (base === undefined) {
-        theta = (orphan++ / Math.max(hop2.length, 1)) * Math.PI * 2 - Math.PI / 2;
-      } else {
-        const spread = Math.min(Math.PI / 2.6, kids.length * 0.17);
-        const off = kids.length === 1 ? 0 : (j / (kids.length - 1) - 0.5) * spread;
-        theta = base + off;
-      }
-      placed2.push({ ...nb, x: MESH_CX + Math.cos(theta) * R2, y: MESH_CY + Math.sin(theta) * R2, hop: 2, r: 8 });
-    });
+  const domGroups = new Map<string, number[]>();
+  pts.forEach((p, i) => {
+    const d = p.n?.kind === "memory" ? p.n.domain : null;
+    if (d) { const g = domGroups.get(d) ?? []; g.push(i); domGroups.set(d, g); }
+  });
+  const PAD_X = 66, PAD_TOP = 44, PAD_BOTTOM = 56;
+  for (let it = 0; it < 160; it++) {
+    const cool = 1 - it / 160;
+    const fx = new Array(pts.length).fill(0), fy = new Array(pts.length).fill(0);
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+      let dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) { dx = hash01(pts[i].token) - 0.5; dy = hash01(pts[j].token) - 0.5; d2 = 1; }
+      const d = Math.sqrt(d2), fr = 9800 / d2;
+      fx[i] += (dx / d) * fr; fy[i] += (dy / d) * fr;
+      fx[j] -= (dx / d) * fr; fy[j] -= (dy / d) * fr;
+    }
+    for (const [a, b] of springs) {
+      const rest = pts[a].hop === 0 || pts[b].hop === 0 ? 175 : 125;
+      const dx = pts[b].x - pts[a].x, dy = pts[b].y - pts[a].y;
+      const d = Math.max(Math.hypot(dx, dy), 1);
+      const fs = (d - rest) * 0.045;
+      fx[a] += (dx / d) * fs; fy[a] += (dy / d) * fs;
+      fx[b] -= (dx / d) * fs; fy[b] -= (dy / d) * fs;
+    }
+    for (const g of domGroups.values()) {
+      if (g.length < 2) continue;
+      const cx = g.reduce((acc, i) => acc + pts[i].x, 0) / g.length;
+      const cy = g.reduce((acc, i) => acc + pts[i].y, 0) / g.length;
+      for (const i of g) { fx[i] += (cx - pts[i].x) * 0.035; fy[i] += (cy - pts[i].y) * 0.035; }
+    }
+    for (let i = 0; i < pts.length; i++) {
+      fx[i] += (MESH_CX - pts[i].x) * 0.0042; fy[i] += (MESH_CY - pts[i].y) * 0.0042;
+      const mag = Math.hypot(fx[i], fy[i]) || 1;
+      const step = Math.min(mag, 14 * cool + 2) / mag;
+      pts[i].x = Math.min(MESH_W - PAD_X, Math.max(PAD_X, pts[i].x + fx[i] * step));
+      pts[i].y = Math.min(MESH_H - PAD_BOTTOM, Math.max(PAD_TOP, pts[i].y + fy[i] * step));
+    }
   }
+  const placed: Placed[] = pts.slice(1).map((p) => ({ ...(p.n as MeshNode), x: p.x, y: p.y, hop: p.hop, r: p.r }));
   const posByToken = new Map<string, { x: number; y: number }>();
-  placed1.forEach((p) => posByToken.set(p.token, { x: p.x, y: p.y }));
-  return { placed: [...placed1, ...placed2], posByToken };
+  placed.forEach((p) => posByToken.set(p.token, { x: p.x, y: p.y }));
+  return { placed, posByToken, centerPos: { x: pts[0].x, y: pts[0].y } };
 }
 
 type Hull = { domain: string; x: number; y: number; w: number; h: number };
@@ -821,7 +851,7 @@ type Hull = { domain: string; x: number; y: number; w: number; h: number };
 function meshHulls(placed: Placed[]): Hull[] {
   const byDom = new Map<string, Placed[]>();
   for (const p of placed) {
-    if (p.kind !== "memory" || p.hop !== 1 || !p.domain) continue;
+    if (p.kind !== "memory" || !p.domain) continue;
     const g = byDom.get(p.domain) ?? [];
     g.push(p); byDom.set(p.domain, g);
   }
@@ -866,7 +896,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     setLoading(true); setErr(null);
     // 1 hop takes a wider direct fan (limit 48); 2 hops keeps the inner ring
     // tight (limit 24) so the outer ring has room to breathe.
-    const limit = hops === 2 ? 24 : 48;
+    const limit = hops === 2 ? 16 : 40;
     api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=${limit}&hops=${hops}`)
       .then((d) => { if (alive) { setData(d); setHidden(new Set()); onCenter?.(d.center.label); } })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); })
@@ -883,9 +913,15 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   // (a prerequisite for a tight domain hull). Memory nodes lead, clustered by
   // domain; every other kind keeps its order behind them.
   const ordered = useMemo(() => {
+    // Curate like the artifact: every direct neighbor draws; second-hop is
+    // capped at 8 drawn (deterministic first-N) so the canvas breathes —
+    // the true two-hop degree stays in the Selected card and the stats line.
+    const hop2Cap = 8;
+    let hop2Seen = 0;
+    const curated = visible.filter((n) => (n.hop ?? 1) === 1 || ++hop2Seen <= hop2Cap);
     const byDom = new Map<string, MeshNode[]>();
     const rest: MeshNode[] = [];
-    for (const n of visible) {
+    for (const n of curated) {
       if (n.kind === "memory" && n.domain) {
         const g = byDom.get(n.domain) ?? [];
         g.push(n); byDom.set(n.domain, g);
@@ -893,7 +929,8 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     }
     return [...[...byDom.values()].flat(), ...rest];
   }, [visible]);
-  const { placed } = useMemo(() => layoutMesh(ordered), [ordered]);
+  const { placed, centerPos } = useMemo(
+    () => layoutMesh(token, ordered, data?.edges ?? []), [token, ordered, data]);
   // A dashed rounded hull behind each domain that has 2+ memory diamonds in
   // view — the Understand wiki's grouping drawn into the mesh (artifact hull()).
   const hulls = useMemo(() => meshHulls(placed), [placed]);
@@ -909,10 +946,10 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   // from `placed`, so their edges naturally drop out below.
   const renderPos = useMemo(() => {
     const m = new Map<string, { x: number; y: number }>();
-    if (center) m.set(center.token, { x: MESH_CX, y: MESH_CY });
+    if (center) m.set(center.token, centerPos);
     placed.forEach((p) => m.set(p.token, { x: p.x, y: p.y }));
     return m;
-  }, [placed, center]);
+  }, [placed, center, centerPos]);
   // The TRUE mesh edge list — spokes AND neighbor-to-neighbor links — pruned
   // to only the ones whose both endpoints are currently placed on the canvas.
   const renderEdges = useMemo(
@@ -973,7 +1010,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             );
           })}
           <span className="ml-auto text-2xs opacity-60 tabular-nums font-mono truncate max-w-[52%]">
-            {1 + visible.length} nodes · {renderEdges.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}
+            {1 + placed.length} nodes · {renderEdges.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}{visible.length > placed.length ? ` · +${visible.length - placed.length} undrawn` : ""}
             {center ? <> · selected <span className="text-[color:var(--text-primary)]">{trunc(center.label, 22)}</span></> : null}
           </span>
         </div>
@@ -1026,16 +1063,16 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                 );
               })}
               {/* center — dashed halo marks selection; a doorway, not a hub */}
-              <circle cx={MESH_CX} cy={MESH_CY} r={23} fill="none"
+              <circle cx={centerPos.x} cy={centerPos.y} r={23} fill="none"
                 stroke={meshFill(center.kind)} strokeWidth={1.5}
                 strokeDasharray="3 3" opacity={0.8} />
               <g style={{ cursor: center.href ? "pointer" : "default" }}
                 onDoubleClick={() => center.href && onOpen(center.href)}>
-                <MeshShape kind={center.kind} x={MESH_CX} y={MESH_CY} r={16} />
-                <text x={MESH_CX} y={MESH_CY + 34} textAnchor="middle" fontSize={12}
+                <MeshShape kind={center.kind} x={centerPos.x} y={centerPos.y} r={16} />
+                <text x={centerPos.x} y={centerPos.y + 34} textAnchor="middle" fontSize={12}
                   fontWeight={650} fill="var(--text-primary)">{trunc(center.label)}</text>
                 {center.kind === "memory" && center.concept_type && (
-                  <text x={MESH_CX} y={MESH_CY + 47} textAnchor="middle" fontSize={9}
+                  <text x={centerPos.x} y={centerPos.y + 47} textAnchor="middle" fontSize={9}
                     letterSpacing="0.06em" fill={meshFill("memory")}
                     style={{ textTransform: "uppercase" }}>{center.concept_type}</text>
                 )}
@@ -1081,7 +1118,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
       {/* rail */}
       <div className="hidden lg:flex flex-col gap-3 min-h-0 overflow-y-auto">
         {center && (
-          <Card className="!p-4">
+          <Card className="!p-4 shrink-0">
             <SectionLabel>Selected</SectionLabel>
             <div className="mt-2 flex items-center gap-2">
               <GlyphIcon kind={isMeshKind(center.kind) ? center.kind : "session"} />
@@ -1109,9 +1146,9 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             )}
           </Card>
         )}
-        <Card className="!p-4 min-h-0">
+        <Card className="!p-4 shrink-0">
           <SectionLabel>Connections · {visible.length}</SectionLabel>
-          <div className="mt-2 flex flex-col gap-1.5">
+          <div className="mt-2 flex flex-col gap-1.5 max-h-64 overflow-y-auto pr-1">
             {visible.length === 0 ? (
               <Faint>No connections in view.</Faint>
             ) : visible.map((nb, i) => (
@@ -1125,6 +1162,25 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
               </div>
             ))}
           </div>
+        </Card>
+        <Card className="!p-4 shrink-0">
+          <SectionLabel>Why this beats the hairball</SectionLabel>
+          <p className="mt-2 text-xs leading-relaxed text-[color:var(--text-secondary)]">
+            The old view drew 500 code-only nodes in 4 blobs. Here every entity
+            type shares one mesh: memories cite memories, code calls code, a
+            session threads through the gate it recorded, and it grows only
+            where you click. A task is one doorway in; so is a memory, a file,
+            or a session.
+          </p>
+        </Card>
+        <Card className="!p-4 shrink-0">
+          <SectionLabel>Understand stays the reading room</SectionLabel>
+          <p className="mt-2 text-xs leading-relaxed text-[color:var(--text-secondary)]">
+            The mesh never replaces the wiki. Double-click a concept diamond and
+            its Understand page opens: structured, readable, with backlinks.
+            Every concept page carries a show-in-mesh button back. Two doors,
+            one knowledge.
+          </p>
         </Card>
       </div>
     </div>
