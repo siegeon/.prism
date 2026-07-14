@@ -428,54 +428,6 @@ export default function PlanView({
               {/* Show the evidence FIRST — what the reviewer is approving —
                   then the approve/reject control directly beneath it. */}
               <GateEvidence step={c.step} turns={c.turns ?? []} />
-              {tests.length > 0 && (() => {
-                // HONEST headline: count the pins' REAL latest outcomes
-                // (?run=true statuses) — never assume red. All green means
-                // the reviewer is approving satisfied criteria.
-                const failing = tests.filter((t) => ["failed", "error"].includes((t.status || "").toLowerCase()));
-                const passing = tests.filter((t) => (t.status || "").toLowerCase() === "passed");
-                const headline = failing.length > 0
-                  ? { text: `${failing.length} of ${tests.length} pinned tests still failing — each must go green to finish`, color: "var(--accent-rose-fg)" }
-                  : passing.length === tests.length
-                    ? { text: `${tests.length} pinned tests — all passing (latest real run)`, color: "var(--accent-sage-fg)" }
-                    : { text: `${tests.length} pinned tests — latest run incomplete (${passing.length} passing)`, color: "var(--accent-amber-fg)" };
-                return (
-                <div className="mt-4">
-                  <div className="text-2xs uppercase tracking-wider mb-2" style={{ color: headline.color }}>
-                    {headline.text}
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {[...tests].sort((a, b) => {
-                      const na = parseInt((parseAc(a.doc).badge || "").replace(/\D/g, "") || "999", 10);
-                      const nb = parseInt((parseAc(b.doc).badge || "").replace(/\D/g, "") || "999", 10);
-                      return na - nb;
-                    }).map((t) => {
-                      const { badge, rest } = parseAc(t.doc);
-                      const st = (t.status || "").toLowerCase();
-                      const chip = st === "passed"
-                        ? { label: "✓ pass", fg: "var(--accent-sage-fg)", ring: "var(--accent-sage-ring)" }
-                        : st === "failed" || st === "error"
-                          ? { label: "✗ red", fg: "var(--accent-rose-fg)", ring: "var(--accent-rose-ring)" }
-                          : st === "skipped"
-                            ? { label: "skipped", fg: "var(--accent-amber-fg)", ring: "var(--accent-amber-ring)" }
-                            : { label: "not run", fg: "var(--text-muted)", ring: "var(--border-default)" };
-                      return (
-                        <div key={`${t.file}:${t.name}`} className="rounded-md p-2.5 border border-[color:var(--border-default)] bg-[color:var(--surface-2)]">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {badge && (
-                              <span className="text-2xs font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{badge}</span>
-                            )}
-                            <span className="font-mono text-[12px] break-all bg-transparent text-[color:var(--text-primary)]">{t.name}</span>
-                            <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0" style={{ color: chip.fg, boxShadow: `inset 0 0 0 1px ${chip.ring}` }}>{chip.label}</span>
-                          </div>
-                          <div className="text-[12px] leading-snug mt-1 text-[color:var(--text-secondary)]">{rest}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-                );
-              })()}
               {c.gateState === "failed" && (
                 <div
                   className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
