@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
@@ -50,6 +51,8 @@ export type PinTest = {
   doc?: string;
   file?: string;
   status?: string;
+  line?: number;
+  snippet?: string;
 };
 
 // Pull the leading acceptance-criterion id(s) out of a test's docstring.
@@ -217,6 +220,10 @@ export default function PlanView({
     if (tabRequest?.tab) setActive(tabRequest.tab);
   }, [tabRequest?.n, tabRequest?.tab]);
 
+  // Tests tab: which pin is expanded to show its actual assertion source —
+  // a reviewer must be able to EVALUATE a pin, not just read its name.
+  const [openTest, setOpenTest] = useState<string | null>(null);
+
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
   const c = conductor;
@@ -291,12 +298,23 @@ export default function PlanView({
                   : st === "skipped"
                     ? { label: "skipped", fg: "var(--accent-amber-fg)", ring: "var(--accent-amber-ring)", title: "this test was skipped in the last run" }
                     : { label: "not run", fg: "var(--text-muted)", ring: "var(--border-default)", title: "no recorded run for this test yet" };
+              const key = `${t.file}:${t.name}`;
+              const isOpen = openTest === key;
               return (
                 <li
-                  key={`${t.file}:${t.name}`}
+                  key={key}
                   className="rounded-md p-3 border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
                 >
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setOpenTest(isOpen ? null : key)}
+                    className="flex items-center gap-2 flex-wrap w-full text-left"
+                    aria-expanded={isOpen}
+                    title={isOpen ? "collapse" : "show what this test asserts"}
+                  >
+                    <span className="text-2xs w-3 shrink-0" style={{ color: "var(--text-muted)" }}>
+                      {isOpen ? "▾" : "▸"}
+                    </span>
                     {badge && (
                       <span
                         className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
@@ -320,15 +338,27 @@ export default function PlanView({
                     >
                       {chip.label}
                     </span>
-                  </div>
+                  </button>
                   {rest && (
-                    <div className="text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed mt-1.5">
+                    <div className="text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed mt-1.5 pl-5">
                       {rest}
                     </div>
                   )}
+                  {isOpen && t.snippet && (
+                    <pre className="mt-2 ml-5 p-2.5 rounded text-[12px] font-mono leading-relaxed overflow-x-auto whitespace-pre bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] border border-[color:var(--border-subtle)]">
+                      {t.snippet}
+                    </pre>
+                  )}
                   {t.file && (
-                    <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-1.5 truncate">
-                      {t.file}
+                    <div className="text-2xs font-mono mt-1.5 pl-5 truncate">
+                      <Link
+                        to={`/artifact?focus=${encodeURIComponent(t.file)}`}
+                        className="underline decoration-dotted underline-offset-2 hover:opacity-80"
+                        style={{ color: "var(--text-muted)" }}
+                        title="open the full test file"
+                      >
+                        {t.file}{t.line ? ` · L${t.line}` : ""} →
+                      </Link>
                     </div>
                   )}
                 </li>

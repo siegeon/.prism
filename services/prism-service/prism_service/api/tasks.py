@@ -369,21 +369,36 @@ def _clean_doc(doc: str) -> str:
 
 def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
     """AST-parse a test module and return one record per ``def test_*`` with
-    its (cleaned) docstring. Never raises — a syntax error yields []."""
+    its (cleaned) docstring, the test BODY source (so a reviewer can read
+    what it actually asserts, not just its name), and its line number.
+    Never raises — a syntax error yields []."""
     import ast
 
     out: list[dict] = []
+    lines = source.splitlines()
     try:
         tree = ast.parse(source)
     except Exception:
         return out
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            # The function's own source, docstring stripped, capped — enough
+            # to EVALUATE the pin (its asserts), not a wall of text.
+            body_start = (node.body[0].end_lineno
+                          if (node.body and isinstance(node.body[0], ast.Expr)
+                              and isinstance(getattr(node.body[0], "value", None), ast.Constant)
+                              and isinstance(node.body[0].value.value, str))
+                          else node.body[0].lineno - 1 if node.body else node.lineno)
+            snippet = "\n".join(
+                lines[body_start:(node.end_lineno or body_start)][:24]
+            ).strip("\n")
             out.append(
                 {
                     "name": node.name,
                     "doc": _clean_doc(ast.get_docstring(node) or ""),
                     "file": rel_file,
+                    "line": node.lineno,
+                    "snippet": snippet,
                 }
             )
     return out
