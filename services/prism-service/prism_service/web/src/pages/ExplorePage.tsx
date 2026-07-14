@@ -247,24 +247,40 @@ export default function ExplorePage() {
     setResolvingDefault(true);
     (async () => {
       try {
+        // Candidate list, then a RICHNESS PROBE: the front door must open on
+        // a connected mesh, not a lonely node — probe each candidate's 1-hop
+        // neighborhood (cheap) and take the first with >= 3 connections.
+        const candidates: string[] = [];
         const stored = window.localStorage.getItem(MESH_FOCUS_KEY);
-        if (stored) { setFocus(stored, { replace: true }); return; }
+        if (stored) candidates.push(stored);
         try {
-          const { tasks } = await api.get<{ tasks: { id: string; status?: string; updated_at?: string }[] }>(
+          const { tasks } = await api.get<{ tasks: { id: string; status?: string; updated_at?: string; parent_id?: string }[] }>(
             `/api/tasks?project=${project}`);
           const open = (tasks ?? []).filter((t) => t.id && (t.status ?? "").toLowerCase() !== "done");
-          if (open.length) {
-            const best = open.reduce((a, b) => ((b.updated_at ?? "") > (a.updated_at ?? "") ? b : a));
-            setFocus(best.id, { replace: true });
-            return;
-          }
-        } catch { /* fall through to sessions */ }
+          const newest = (pool: typeof open) => pool.length
+            ? pool.reduce((a, b) => ((b.updated_at ?? "") > (a.updated_at ?? "") ? b : a)).id : null;
+          const root = newest(open.filter((t) => !t.parent_id));
+          const any = newest(open);
+          if (root) candidates.push(root);
+          if (any && any !== root) candidates.push(any);
+        } catch { /* task rungs unavailable */ }
         try {
           const { outcomes } = await api.get<{ outcomes: { session_id?: string }[] }>(
             `/api/sessions?project=${project}&limit=1`);
           const sid = outcomes?.[0]?.session_id;
-          if (sid) { setFocus(sid, { replace: true }); return; }
-        } catch { /* no sessions either — fall through to the empty state */ }
+          if (sid) candidates.push(sid);
+        } catch { /* no sessions */ }
+        let fallback: string | null = null;
+        for (const c of candidates) {
+          if (!alive) return;
+          fallback = fallback ?? c;
+          try {
+            const probe = await api.get<{ neighbors?: unknown[] }>(
+              `/api/xref/neighbors?token=${encodeURIComponent(c)}&project=${project}&hops=1&limit=8`);
+            if ((probe.neighbors?.length ?? 0) >= 3) { setFocus(c, { replace: true }); return; }
+          } catch { /* probe failed — keep walking the ladder */ }
+        }
+        if (fallback) { setFocus(fallback, { replace: true }); return; }
       } finally {
         if (alive) setResolvingDefault(false);
       }
