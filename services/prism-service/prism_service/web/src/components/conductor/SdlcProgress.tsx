@@ -143,7 +143,16 @@ export default function SdlcProgress({
   // Overall task progress toward DONE: completed steps + current phase fraction.
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
   const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
-  const [liveInStep, setLiveInStep] = useState(phase?.in_step_s ?? 0);
+  // The step clock measures EXECUTION time, not wall time (owner 2026-07-14:
+  // 'when the ball is in our court it shouldn't be running'). While the task
+  // is actually being WORKED the clock ticks live; in any parked state
+  // (awaiting review / adrift / stalled) it FREEZES at the last conductor
+  // motion: in_step_s minus task_motion_s (both server-truth).
+  const counting = state === "working";
+  const frozenInStep = Math.max(
+    0, (phase?.in_step_s ?? 0) - (activity?.task_motion_s ?? 0));
+  const [liveInStep, setLiveInStep] = useState(
+    counting ? (phase?.in_step_s ?? 0) : frozenInStep);
   // current-SEGMENT fill (within the active step) drives just that segment.
   // The animation frame writes the raw live fraction to `segFill`; a spring
   // tweens the DISPLAYED value smoothly between the 5s poll snapshots instead
@@ -164,6 +173,18 @@ export default function SdlcProgress({
   const lastClockAt = useRef(0);
   useAnimationFrame((t) => {
     if (!phase || curIdx < 0) return;
+    // Parked (not working): the execution clock and the segment fill hold
+    // at the last conductor motion — never creep on wall time.
+    if (!counting) {
+      const wf = liveFraction(phase, 0);
+      segFill.set(wf);
+      if (t - lastClockAt.current > 500) {
+        lastClockAt.current = t;
+        setLiveInStep(frozenInStep);
+        setLiveLabel(((curIdx + wf) / steps.length) * 100);
+      }
+      return;
+    }
     const elapsedS = (performance.now() - anchor.current.t0) / 1000;
     const wf = liveFraction(phase, elapsedS);
     segFill.set(wf);
