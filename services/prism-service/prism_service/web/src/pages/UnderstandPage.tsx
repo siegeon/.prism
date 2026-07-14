@@ -1,36 +1,27 @@
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import {
-  Background, BackgroundVariant, Controls, Handle, MiniMap, Position,
-  ReactFlow, ReactFlowProvider, useEdgesState, useNodesState,
-  type Edge as RfEdge, type Node as RfNode,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
-import {
-  forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY,
-} from "d3-force";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty } from "@/components/ui";
-import { typeToneHashed, toneVar } from "@/lib/domainTone";
-import { prismDomainColor } from "@/components/understand/PrismDomainNode";
+import { typeToneHashed, toneVar, type Tone } from "@/lib/domainTone";
+import { Lozenge, type LozengeTone } from "@/components/Lozenge";
+import { GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
 
-// Unified Understand wiki (task 89a1ddef) — PRISM's knowledge as ONE
-// interconnected wiki: memory + OKF + understanding, graph + read + links.
-// Follows the existing Understand DRILL-DOWN UX (see DomainsView/LayersView):
-//   LEVEL 1 — concepts grouped by DOMAIN, rendered as Hermes cluster cards
-//             (each shows its concept count). A global search jumps to any
-//             matching concept. No type-filter pills.
-//   LEVEL 2 — click a domain to drill into THAT domain's force-directed
-//             concept graph (visible cross-link edges, degree-sized colored
-//             dots, ≤~20 readable nodes) with a breadcrumb (Domains / <domain>)
-//             to go back. Clicking a node opens the detail panel (right) that
-//             reads the selected concept, rewires internal [[/memory/<id>]]
-//             links to SELECT a node in-place, shows 'Cited by' backlinks, and
-//             folds in memory edit/retire/supersede. Following a link to a
-//             concept in another domain drills into that domain too.
-// Read-only projection over /api/okf/* — never writes brain.db/graph.db.
+// Understand — the domain-first knowledge drill (owner doctrine): Understand
+// starts at the DOMAIN layer and drills DOWN. It never opens on a concept.
+//   LEVEL 1 — a grid of domain cards: each shows its concept count and a thin
+//             stacked mix bar colored by concept TYPE (the OKF type tones, one
+//             source of truth in domainTone). This is the front door.
+//   LEVEL 2 — click a domain → that domain's concepts as a scannable table
+//             (type Lozenge · concept name · how many concepts cite it).
+//   LEVEL 3 — click a concept → the RETAINED reading page (DetailPanel): body
+//             markdown with live [[wikilinks]], backlinks, edit/retire/supersede.
+// A breadcrumb (Understand / <domain> / <concept>) walks back up every level.
+// Deep links keep working: an inbound ?concept=<id> resolves the concept's
+// domain and opens the reading page directly — "never open on a concept" is the
+// DEFAULT landing rule, not a ban on inbound links.
+// Read-only projection over /api/okf/* — never writes brain.db / graph.db.
 
 type GraphNode = {
   id: string; title: string; type: string;
@@ -46,102 +37,23 @@ type Concept = {
   backlinks: { id: string; title: string }[];
 };
 
-
-// Concept node — a memory concept rendered as a compact dot colored by type and
-// sized by connectivity (hubs read bigger). Clicking selects it; the selected
-// node gets a bright ring and a dimmed (non-neighbor) flag so the panel<->graph
-// stay visually linked. Hidden handles, centered on the dot, let edges anchor
-// dot-center to dot-center.
-type ConceptNodeData = {
-  title: string; type: string; selected: boolean; dim: boolean; size: number;
-};
-const HANDLE_STYLE: CSSProperties = {
-  top: "50%", left: "50%", transform: "translate(-50%, -50%)",
-  width: 1, height: 1, minWidth: 0, minHeight: 0,
-  opacity: 0, border: "none", background: "transparent", pointerEvents: "none",
-};
-function ConceptNode({ data }: { data: ConceptNodeData }) {
-  const tone = typeToneHashed(data.type);
-  const s = data.size;
-  return (
-    <div
-      className="relative cursor-pointer transition-opacity"
-      style={{ width: s, height: s, opacity: data.dim ? 0.3 : 1 }}
-      title={`${data.title} · ${data.type}`}
-    >
-      <Handle type="target" position={Position.Top} style={HANDLE_STYLE} isConnectable={false} />
-      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} isConnectable={false} />
-      <div
-        className="rounded-full w-full h-full border transition-all"
-        style={{
-          background: toneVar(tone, "fg"),
-          borderColor: data.selected ? "var(--text-primary)" : toneVar(tone, "ring"),
-          borderWidth: data.selected ? 3 : 1.5,
-          boxShadow: data.selected
-            ? "0 0 0 4px var(--text-primary)"
-            : `0 0 0 1px ${toneVar(tone, "bg")}`,
-        }}
-      />
-      <div
-        className="absolute left-1/2 top-full mt-1 -translate-x-1/2 text-2xs leading-tight text-center max-w-[140px] truncate font-medium pointer-events-none"
-        style={{ color: data.selected ? "var(--text-primary)" : "var(--text-secondary)" }}
-      >
-        {data.title}
-      </div>
-    </div>
-  );
-}
-const NODE_TYPES = { concept: ConceptNode };
-
-type Layout = {
-  pos: Map<string, { x: number; y: number }>;
-  degree: Map<string, number>;
-  maxDegree: number;
-};
-
-// Force-directed layout (d3-force): repulsion + edge springs + collision so the
-// 86 authored cross-links pull related concepts together and hubs separate from
-// the periphery. Computed once over the FULL graph (~113 nodes, 350 ticks ≈ a
-// few ms) so positions stay stable when the user searches/filters.
-function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): Layout {
-  const ids = new Set(nodes.map((n) => n.id));
-  const degree = new Map<string, number>();
-  for (const id of ids) degree.set(id, 0);
-  type SimNode = { id: string; x?: number; y?: number };
-  type SimLink = { source: string; target: string };
-  const links: SimLink[] = [];
-  for (const e of edges) {
-    if (!ids.has(e.source) || !ids.has(e.target)) continue;
-    links.push({ source: e.source, target: e.target });
-    degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
-    degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
-  }
-  let maxDegree = 1;
-  for (const d of degree.values()) if (d > maxDegree) maxDegree = d;
-  const simNodes: SimNode[] = nodes.map((n) => ({ id: n.id }));
-  const sim = forceSimulation<SimNode>(simNodes)
-    .force("charge", forceManyBody<SimNode>().strength(-260))
-    .force("link", forceLink<SimNode, SimLink>(links).id((d) => d.id).distance(95).strength(0.6))
-    .force("center", forceCenter(0, 0))
-    .force("collide", forceCollide<SimNode>().radius(34))
-    .force("x", forceX(0).strength(0.04))
-    .force("y", forceY(0).strength(0.04))
-    .stop();
-  for (let i = 0; i < 350; i++) sim.tick();
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const n of simNodes) pos.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 });
-  return { pos, degree, maxDegree };
-}
-
-// Degree-sized dot radius: hubs read larger, leaves stay compact (16px..44px).
-function nodeSize(deg: number, maxDeg: number): number {
-  const t = Math.sqrt(deg) / Math.sqrt(Math.max(1, maxDeg));
-  return Math.round(16 + t * 28);
-}
-
-type DomainGroup = { id: string; count: number; samples: string[] };
-
 const DOMAIN_FALLBACK = "general";
+
+// Concept type → Lozenge tone, routed through the canonical type→Tone map so
+// there is ONE source of type color. typeToneHashed yields a Hermes Tone; this
+// translates it to the Lozenge vocabulary (the two share the same accent
+// families — neutral↔slate, info↔teal, ok↔sage, warn↔amber, danger↔rose,
+// new↔violet), so a type's lozenge and its mix-bar segment read the same hue.
+const TONE_LZ: Record<Tone, LozengeTone> = {
+  slate: "neutral", teal: "info", sage: "ok",
+  amber: "warn", rose: "danger", violet: "new", emerald: "ok",
+};
+function typeLozengeTone(type: string): LozengeTone {
+  return TONE_LZ[typeToneHashed(type)];
+}
+
+type TypeSlice = { type: string; count: number; tone: Tone };
+type DomainCard = { id: string; count: number; mix: TypeSlice[] };
 
 export default function UnderstandPage() {
   const [project] = useProject();
@@ -149,8 +61,9 @@ export default function UnderstandPage() {
   const [graph, setGraph] = useState<OkfGraph | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
-  // Two-level drill: selectedDomain === null is the LEVEL 1 domain overview;
-  // a domain id drills into LEVEL 2 (that domain's concept graph + detail).
+  // Drill state: selectedId (a concept) is LEVEL 3; else selectedDomain is
+  // LEVEL 2; else the domain grid is LEVEL 1. selectedId seeds from ?concept=
+  // so an inbound deep link opens the reading page.
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(params.get("concept"));
   const [bump, setBump] = useState(0);
@@ -176,7 +89,7 @@ export default function UnderstandPage() {
     return m;
   }, [graph]);
 
-  // Concepts grouped by domain — the LEVEL 1 entry point.
+  // Concepts grouped by domain — the LEVEL 1 spine.
   const domainGroups = useMemo(() => {
     const m = new Map<string, GraphNode[]>();
     for (const n of graph?.nodes ?? []) {
@@ -188,30 +101,47 @@ export default function UnderstandPage() {
     return m;
   }, [graph]);
 
-  const domains = useMemo<DomainGroup[]>(
+  // Domain cards: count + a type histogram (sorted desc) for the mix bar.
+  const domains = useMemo<DomainCard[]>(
     () => Array.from(domainGroups.entries())
-      .map(([id, ns]) => ({ id, count: ns.length, samples: ns.slice(0, 4).map((n) => n.title) }))
+      .map(([id, ns]) => {
+        const counts = new Map<string, number>();
+        for (const n of ns) counts.set(n.type, (counts.get(n.type) ?? 0) + 1);
+        const mix: TypeSlice[] = Array.from(counts.entries())
+          .map(([type, count]) => ({ type, count, tone: typeToneHashed(type) }))
+          .sort((a, b) => b.count - a.count);
+        return { id, count: ns.length, mix };
+      })
       .sort((a, b) => b.count - a.count),
     [domainGroups],
   );
 
-  // Drill into the domain that owns a concept, then select it. Used by node
-  // clicks, [[link]] / backlink follows (even cross-domain), and search picks.
+  // "Cited by" = inbound cross-link count (edges whose target is this concept).
+  const citedBy = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of graph?.edges ?? []) m.set(e.target, (m.get(e.target) ?? 0) + 1);
+    return m;
+  }, [graph]);
+
+  // Drill into the domain that owns a concept, then select it. Used by table
+  // rows, [[link]] / backlink follows (even cross-domain), and search picks.
   const goToConcept = (id: string | null) => {
-    if (!id) { setSelectedDomain(null); select(null); return; }
+    if (!id) { select(null); return; }
     const n = byId.get(id);
     if (n) setSelectedDomain(n.domain || DOMAIN_FALLBACK);
     select(id);
   };
 
-  // ?concept= deep-link: once the graph loads, resolve its domain and drill in.
+  // ?concept= deep-link: once the graph loads, resolve its domain so the
+  // breadcrumb can walk back into the right domain table.
   useEffect(() => {
-    if (!graph || !selectedId || selectedDomain) return;
+    if (!graph || !selectedId) return;
     const n = byId.get(selectedId);
-    if (n) setSelectedDomain(n.domain || DOMAIN_FALLBACK);
+    if (n && !selectedDomain) setSelectedDomain(n.domain || DOMAIN_FALLBACK);
   }, [graph, selectedId, selectedDomain, byId]);
 
-  // Global search jumps to matching concepts regardless of the current drill.
+  // Global search — an alternate door into the same knowledge, offered on the
+  // browsing levels (never on the reading page).
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [] as GraphNode[];
@@ -222,20 +152,38 @@ export default function UnderstandPage() {
     ).slice(0, 40);
   }, [graph, query]);
 
-  const selectedPath = selectedId ? byId.get(selectedId)?.path ?? null : null;
-  const drillNodes = selectedDomain ? domainGroups.get(selectedDomain) ?? [] : [];
-
-  // Per-domain force layout: ≤~20 nodes pack tightly so the drilled graph is
-  // readable. computeLayout keeps only edges among the present nodes.
-  const drillLayout = useMemo(
-    () => computeLayout(drillNodes, graph?.edges ?? []),
-    [drillNodes, graph],
-  );
-
-  const selectedDomainIdx = domains.findIndex((d) => d.id === selectedDomain);
-  const drillColor = prismDomainColor(selectedDomainIdx >= 0 ? selectedDomainIdx : 0);
+  const selectedNode = selectedId ? byId.get(selectedId) : undefined;
+  const selectedPath = selectedNode?.path ?? null;
+  const breadcrumbDomain = selectedNode?.domain || selectedDomain || DOMAIN_FALLBACK;
+  const domainNodes = selectedDomain ? domainGroups.get(selectedDomain) ?? [] : [];
 
   const onPickSearch = (id: string) => { setQuery(""); goToConcept(id); };
+  const toDomains = () => { setSelectedDomain(null); select(null); };
+  const toDomain = () => select(null);
+
+  // LEVEL 3 — the reading page. Retained wiki surface; only the shell around it
+  // (breadcrumb) changed. Deep links land here directly.
+  if (selectedId) {
+    return (
+      <div className="p-6 h-full flex flex-col gap-4 min-w-[720px]">
+        <Breadcrumb
+          items={[
+            { label: "Understand", onClick: toDomains },
+            { label: breadcrumbDomain, onClick: toDomain },
+            { label: selectedNode?.title ?? selectedId },
+          ]}
+        />
+        <Card className="flex-1 min-h-0 overflow-y-auto max-w-[860px]">
+          <DetailPanel
+            path={selectedPath}
+            project={project}
+            onSelect={goToConcept}
+            onMutate={() => setBump((b) => b + 1)}
+          />
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 h-full flex flex-col gap-4 min-w-[720px]">
@@ -251,48 +199,49 @@ export default function UnderstandPage() {
       ) : !selectedDomain ? (
         <DomainOverview domains={domains} loaded={loaded} onSelect={setSelectedDomain} />
       ) : (
-        <div className="flex-1 min-h-[520px] flex flex-col gap-3">
-          <DrillCrumb
-            domain={selectedDomain}
-            count={drillNodes.length}
-            color={drillColor.border}
-            onBack={() => goToConcept(null)}
-          />
-          <div className="flex-1 grid grid-cols-[3fr_2fr] gap-4 min-h-0">
-            <Card className="p-0 overflow-hidden relative">
-              <ReactFlowProvider>
-                <GraphView
-                  nodes={drillNodes}
-                  allEdges={graph?.edges ?? []}
-                  pos={drillLayout.pos}
-                  degree={drillLayout.degree}
-                  maxDegree={drillLayout.maxDegree}
-                  selectedId={selectedId}
-                  onSelect={goToConcept}
-                />
-              </ReactFlowProvider>
-            </Card>
-
-            <Card className="overflow-y-auto">
-              <DetailPanel
-                path={selectedPath}
-                project={project}
-                onSelect={goToConcept}
-                onMutate={() => setBump((b) => b + 1)}
-              />
-            </Card>
-          </div>
-        </div>
+        <DomainTable
+          domain={selectedDomain}
+          nodes={domainNodes}
+          citedBy={citedBy}
+          onBack={toDomains}
+          onOpen={goToConcept}
+        />
       )}
     </div>
   );
 }
 
-// LEVEL 1 — domains as Hermes cluster cards (mirrors PrismDomainNode's look and
-// the DomainsView overview), each showing its concept count. Click to drill in.
+// Breadcrumb — Understand / <domain> / <concept>. Every segment except the last
+// is a button that walks back up a level.
+function Breadcrumb({
+  items,
+}: { items: { label: string; onClick?: () => void }[] }) {
+  return (
+    <div className="flex items-center gap-2 text-[12px] text-[color:var(--text-muted)]">
+      {items.map((it, i) => (
+        <span key={i} className="flex items-center gap-2 min-w-0">
+          {i > 0 && <span className="opacity-40">/</span>}
+          {it.onClick ? (
+            <button onClick={it.onClick} className="capitalize hover:text-[color:var(--text-primary)]">
+              {it.label}
+            </button>
+          ) : (
+            <span className="capitalize text-[color:var(--text-secondary)] truncate max-w-[320px]">
+              {it.label}
+            </span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// LEVEL 1 — domain cards. Each card: a DOMAIN kicker, the domain name, its
+// concept count, and a thin stacked bar whose segments are the domain's concept
+// TYPES (colored by the canonical type tone). Click to drill into the domain.
 function DomainOverview({
   domains, loaded, onSelect,
-}: { domains: DomainGroup[]; loaded: boolean; onSelect: (id: string) => void }) {
+}: { domains: DomainCard[]; loaded: boolean; onSelect: (id: string) => void }) {
   if (!loaded) return <Card className="p-6"><Empty>Loading concepts…</Empty></Card>;
   if (domains.length === 0) {
     return <Card className="p-6"><Empty>No memory concepts projected for this project yet.</Empty></Card>;
@@ -302,40 +251,119 @@ function DomainOverview({
     <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
       <div className="text-[12px] text-[color:var(--text-secondary)]">
         {domains.length} domain{domains.length === 1 ? "" : "s"} · {total} concept{total === 1 ? "" : "s"}.
-        {" "}Click a domain to explore its concept graph.
+        {" "}Start at a domain; the bar shows its mix of concept types.
       </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
-        {domains.map((d, i) => {
-          const c = prismDomainColor(i);
-          return (
-            <button
-              key={d.id}
-              onClick={() => onSelect(d.id)}
-              className="text-left rounded-xl border-2 px-5 py-4 transition-all hover:brightness-110"
-              style={{ borderColor: c.border, background: c.bg }}
-            >
-              <div className="text-2xs uppercase tracking-[0.18em] opacity-60 mb-1">Domain</div>
-              <div className="font-serif text-base tracking-tight capitalize">{d.id}</div>
-              <div className="mt-3 flex flex-wrap gap-1">
-                {d.samples.map((s) => (
-                  <span key={s} className="text-2xs font-mono px-1.5 py-0.5 rounded bg-[color:var(--background-base)]/40 truncate max-w-[180px]">
-                    {s}
-                  </span>
-                ))}
-              </div>
-              <div className="text-2xs opacity-60 mt-3 inline-flex items-center gap-1">
-                <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: c.dot }} />
-                {d.count} concept{d.count === 1 ? "" : "s"}
-              </div>
-            </button>
-          );
-        })}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
+        {domains.map((d) => (
+          <button
+            key={d.id}
+            onClick={() => onSelect(d.id)}
+            className="text-left rounded-lg border px-4 py-3.5 transition-colors
+              bg-[color:var(--surface-1)] border-[color:var(--border-default)]
+              hover:border-[color:var(--accent-teal-ring)] hover:bg-[color:var(--surface-2)]"
+          >
+            <div className="text-2xs uppercase tracking-[0.16em] text-[color:var(--text-muted)]">Domain</div>
+            <div className="font-serif text-[15px] tracking-tight capitalize mt-0.5 text-[color:var(--text-primary)]">
+              {d.id}
+            </div>
+            <div className="text-[12px] text-[color:var(--text-muted)] mt-0.5">
+              {d.count} concept{d.count === 1 ? "" : "s"}
+            </div>
+            <MixBar mix={d.mix} total={d.count} />
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-// Global search results — picking one jumps into its domain and selects it.
+// The type-mix bar — one segment per concept type, width proportional to count,
+// filled with the type's canonical tone (fg = the saturated step, reads solid).
+function MixBar({ mix, total }: { mix: TypeSlice[]; total: number }) {
+  return (
+    <div className="mt-2.5 flex h-[5px] overflow-hidden rounded-[3px] bg-[color:var(--surface-3)]">
+      {mix.map((s) => (
+        <div
+          key={s.type}
+          title={`${s.type} · ${s.count}`}
+          style={{ width: `${(s.count / Math.max(1, total)) * 100}%`, background: toneVar(s.tone, "fg") }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// LEVEL 2 — one domain's concepts as a scannable table. Type as a Lozenge, the
+// concept name as a summary link (memory glyph + title), and how many concepts
+// cite it. Rows sort by citation count so hubs rise. Click a row to read it.
+function DomainTable({
+  domain, nodes, citedBy, onBack, onOpen,
+}: {
+  domain: string;
+  nodes: GraphNode[];
+  citedBy: Map<string, number>;
+  onBack: () => void;
+  onOpen: (id: string) => void;
+}) {
+  const rows = useMemo(
+    () => [...nodes].sort(
+      (a, b) => (citedBy.get(b.id) ?? 0) - (citedBy.get(a.id) ?? 0) || a.title.localeCompare(b.title),
+    ),
+    [nodes, citedBy],
+  );
+  return (
+    <div className="flex-1 min-h-0 flex flex-col gap-3">
+      <Breadcrumb items={[{ label: "Understand", onClick: onBack }, { label: domain }]} />
+      <div className="text-[12px] text-[color:var(--text-secondary)]">
+        {rows.length} concept{rows.length === 1 ? "" : "s"}. Click one to read it.
+      </div>
+      <Card className="flex-1 min-h-0 overflow-y-auto p-0">
+        <table className="w-full text-[13.5px] border-collapse">
+          <thead>
+            <tr>
+              <Th className="w-[130px]">Type</Th>
+              <Th>Concept</Th>
+              <Th className="w-[92px] text-right">Cited by</Th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[color:var(--border-default)]">
+            {rows.map((n) => (
+              <tr
+                key={n.id}
+                onClick={() => onOpen(n.id)}
+                className="cursor-pointer hover:bg-[color:var(--surface-2)]"
+              >
+                <td className="px-3 py-2 align-middle">
+                  <Lozenge tone={typeLozengeTone(n.type)}>{n.type}</Lozenge>
+                </td>
+                <td className="px-3 py-2 align-middle">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <GlyphIcon kind="memory" />
+                    <span className="truncate font-medium text-[color:var(--text-primary)]">{n.title}</span>
+                  </div>
+                </td>
+                <td className="px-3 py-2 align-middle text-right tabular-nums text-[color:var(--text-muted)]">
+                  {citedBy.get(n.id) ?? 0}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+function Th({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <th className={`text-left text-[11px] uppercase tracking-wide font-semibold px-3 py-2
+      text-[color:var(--text-label)] border-b border-[color:var(--border-default)] ${className ?? ""}`}>
+      {children}
+    </th>
+  );
+}
+
+// Global search results — picking one jumps into its domain and opens it.
 function SearchResults({
   matches, onPick,
 }: { matches: GraphNode[]; onPick: (id: string) => void }) {
@@ -351,7 +379,10 @@ function SearchResults({
                 onClick={() => onPick(n.id)}
                 className="w-full text-left px-3 py-2 rounded-md hover:bg-[color:var(--surface-2)] flex items-center justify-between gap-3"
               >
-                <span className="truncate">{n.title}</span>
+                <span className="flex items-center gap-2 min-w-0">
+                  <GlyphIcon kind="memory" />
+                  <span className="truncate">{n.title}</span>
+                </span>
                 <span className="text-2xs opacity-60 font-mono shrink-0">{(n.domain || DOMAIN_FALLBACK)} · {n.type}</span>
               </button>
             </li>
@@ -362,125 +393,9 @@ function SearchResults({
   );
 }
 
-// Breadcrumb (Domains / <domain>) — mirrors DomainsView/LayersView DrillCrumb.
-function DrillCrumb({
-  domain, count, color, onBack,
-}: { domain: string; count: number; color: string; onBack: () => void }) {
-  return (
-    <div
-      className="flex items-center gap-3 text-[12px] px-3 py-2 rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/15"
-      style={{ borderLeftWidth: 3, borderLeftColor: color }}
-    >
-      <button onClick={onBack} className="uppercase tracking-wider text-2xs opacity-70 hover:opacity-100">
-        ← Domains
-      </button>
-      <span className="opacity-40">/</span>
-      <span className="font-medium capitalize">{domain}</span>
-      <span className="opacity-50">— {count} concept{count === 1 ? "" : "s"}</span>
-    </div>
-  );
-}
-
-function GraphView({
-  nodes, allEdges, pos, degree, maxDegree, selectedId, onSelect,
-}: {
-  nodes: GraphNode[];
-  allEdges: GraphEdge[];
-  pos: Map<string, { x: number; y: number }>;
-  degree: Map<string, number>;
-  maxDegree: number;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<RfNode<ConceptNodeData>>([]);
-  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<RfEdge>([]);
-
-  // Neighborhood of the selected node — used to highlight its edges and dim the
-  // rest so the selection's local structure pops.
-  const neighbors = useMemo(() => {
-    const s = new Set<string>();
-    if (selectedId) {
-      s.add(selectedId);
-      for (const e of allEdges) {
-        if (e.source === selectedId) s.add(e.target);
-        else if (e.target === selectedId) s.add(e.source);
-      }
-    }
-    return s;
-  }, [allEdges, selectedId]);
-
-  useEffect(() => {
-    setRfNodes(
-      nodes.map((n) => {
-        const p = pos.get(n.id) ?? { x: 0, y: 0 };
-        return {
-          id: n.id,
-          type: "concept",
-          position: { x: p.x, y: p.y },
-          data: {
-            title: n.title,
-            type: n.type,
-            selected: n.id === selectedId,
-            dim: !!selectedId && !neighbors.has(n.id),
-            size: nodeSize(degree.get(n.id) ?? 0, maxDegree),
-          },
-        };
-      }),
-    );
-  }, [nodes, pos, degree, maxDegree, selectedId, neighbors, setRfNodes]);
-
-  useEffect(() => {
-    const present = new Set(nodes.map((n) => n.id));
-    setRfEdges(
-      allEdges
-        .filter((e) => present.has(e.source) && present.has(e.target))
-        .map((e) => {
-          const incident = !!selectedId && (e.source === selectedId || e.target === selectedId);
-          return {
-            id: `${e.source}->${e.target}`,
-            source: e.source,
-            target: e.target,
-            type: "straight",
-            zIndex: incident ? 10 : 0,
-            style: {
-              stroke: incident ? "var(--text-primary)" : "var(--border-strong)",
-              strokeWidth: incident ? 2 : 1,
-              opacity: selectedId ? (incident ? 0.9 : 0.08) : 0.3,
-            },
-          };
-        }),
-    );
-  }, [allEdges, nodes, selectedId, setRfEdges]);
-
-  return (
-    <div className="h-full w-full min-h-[520px]">
-      <ReactFlow
-        nodes={rfNodes}
-        edges={rfEdges}
-        nodeTypes={NODE_TYPES}
-        nodeOrigin={[0.5, 0.5]}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={(_, n) => onSelect(n.id)}
-        nodesDraggable
-        nodesConnectable={false}
-        fitView
-        fitViewOptions={{ padding: 0.15 }}
-        proOptions={{ hideAttribution: true }}
-        minZoom={0.1}
-        maxZoom={2.5}
-      >
-        <Background variant={BackgroundVariant.Dots} color="rgba(200,180,140,0.10)" gap={24} size={1} />
-        <Controls showInteractive={false} position="bottom-left"
-          style={{ background: "rgba(0,0,0,0.65)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 6 }} />
-        <MiniMap pannable zoomable
-          nodeColor={(n) => `var(--accent-${typeToneHashed((n.data as ConceptNodeData)?.type || "note")}-fg)`}
-          style={{ background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6 }} />
-      </ReactFlow>
-    </div>
-  );
-}
-
+// LEVEL 3 detail — the RETAINED reading surface (unchanged in role): reads the
+// selected concept, rewires internal [[/memory/<id>]] links to drill in-place,
+// shows 'Cited by' backlinks, and folds in memory edit/retire/supersede.
 function DetailPanel({
   path, project, onSelect, onMutate,
 }: {
@@ -507,7 +422,7 @@ function DetailPanel({
   }, [path, project]);
 
   if (!path) {
-    return <Empty>Select a concept in the graph to read it, follow its links, and edit it.</Empty>;
+    return <Empty>Select a concept to read it, follow its links, and edit it.</Empty>;
   }
   if (busy && !concept) return <Empty>Loading concept…</Empty>;
   if (!concept) return <Empty>Failed to load concept.</Empty>;

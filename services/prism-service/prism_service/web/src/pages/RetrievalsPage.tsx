@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
 import { ThumbsUp, ThumbsDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+import { Page, SectionLabel, Empty } from "@/components/ui";
+import { Lozenge } from "@/components/Lozenge";
+import { EntityChip } from "@/components/EntityChip";
 import XrefLink from "@/components/XrefLink";
 
 type Hit = {
@@ -34,6 +35,8 @@ function parseHits(raw: string | undefined): Hit[] {
   try { return JSON.parse(raw) as Hit[]; } catch { return []; }
 }
 
+const shortId = (id?: string | null) => (id ?? "").slice(0, 8);
+
 export default function RetrievalsPage() {
   const [project] = useProject();
   const [rows, setRows] = useState<SearchRow[]>([]);
@@ -55,62 +58,66 @@ export default function RetrievalsPage() {
 
   return (
     <Page>
-      <Card>
+      <div>
         <SectionLabel>Recent retrievals</SectionLabel>
         {rows.length === 0 ? (
           <Empty>No retrievals recorded yet.</Empty>
         ) : (
-          <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {rows.map((r) => {
-              const hits = parseHits(r.final_top);
-              return (
-                <div key={r.id} className="py-3">
-                  <div className="flex items-start gap-4 text-sm">
-                    <span className="flex-1 truncate font-medium">{r.query}</span>
-                    <span className="text-xs opacity-60 font-mono whitespace-nowrap">{r.n_results ?? 0} hits</span>
-                    <span className="text-xs opacity-60 font-mono whitespace-nowrap">{r.latency_ms ?? 0}ms</span>
-                    {r.mode && <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">{r.mode}</span>}
-                    {r.rerank && r.rerank !== "off" && <span className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded bg-[color:var(--midground-base)]/10 opacity-70">rerank: {r.rerank}</span>}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 mt-1 text-2xs uppercase tracking-wider font-mono">
-                    {r.ts && <span className="opacity-40">{r.ts}</span>}
-                    {r.session_id && (
-                      <Link
-                        to={`/sessions/${r.session_id}`}
-                        className="opacity-70 underline decoration-dotted underline-offset-2 hover:opacity-100"
-                        title={`asking session ${r.session_id}`}
-                      >
-                        session {String(r.session_id).slice(0, 8)}
-                      </Link>
-                    )}
-                    {r.task_id && (
-                      <Link
-                        to={`/tasks/${r.task_id}`}
-                        className="opacity-70 underline decoration-dotted underline-offset-2 hover:opacity-100"
-                        title={`asking task ${r.task_id}`}
-                      >
-                        task {String(r.task_id).slice(0, 8)}
-                      </Link>
-                    )}
-                  </div>
-                  {hits.length > 0 && (
-                    <div className="mt-2 pl-4 space-y-1">
-                      {hits.slice(0, 3).map((h, i) => (
-                        <div key={`${r.id}-${i}-${h.doc_id}`} className="flex items-center gap-3 text-xs">
-                          <span className="flex-1 min-w-0 truncate"><XrefLink token={h.doc_id} /></span>
-                          <span className="opacity-60 w-12 text-right">{h.rrf_score?.toFixed?.(3) ?? ""}</span>
-                          <button onClick={() => rate(r.id, h.doc_id, "up")} className="p-1 rounded hover:bg-[color:var(--midground-base)]/10" title="Mark as useful"><ThumbsUp className="w-3 h-3" /></button>
-                          <button onClick={() => rate(r.id, h.doc_id, "down")} className="p-1 rounded hover:bg-[color:var(--midground-base)]/10" title="Mark as not useful"><ThumbsDown className="w-3 h-3" /></button>
+          <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left text-2xs uppercase tracking-wider font-semibold px-3 py-2 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Query</th>
+                  <th className="text-left text-2xs uppercase tracking-wider font-semibold px-3 py-2 w-32 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Mode</th>
+                  <th className="text-right text-2xs uppercase tracking-wider font-semibold px-3 py-2 w-16 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Hits</th>
+                  <th className="text-right text-2xs uppercase tracking-wider font-semibold px-3 py-2 w-20 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Latency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const hits = parseHits(r.final_top);
+                  return (
+                    <tr key={r.id} className="hover:bg-[color:var(--surface-2)] transition-colors border-b border-[color:var(--border-subtle)] align-top">
+                      <td className="px-3 py-2 min-w-0">
+                        <div className="font-medium truncate" style={{ color: "var(--text-primary)" }} title={r.query}>{r.query}</div>
+                        {/* Attribution + timestamp: session / task as chips, no longer bare underlined links. */}
+                        {(r.ts || r.session_id || r.task_id) && (
+                          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                            {r.ts && <span className="text-2xs font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>{r.ts}</span>}
+                            {r.session_id && <EntityChip kind="session" label={shortId(r.session_id)} to={`/sessions/${r.session_id}`} title={`asking session ${r.session_id}`} />}
+                            {r.task_id && <EntityChip kind="task" label={shortId(r.task_id)} to={`/tasks/${r.task_id}`} title={`asking task ${r.task_id}`} />}
+                          </div>
+                        )}
+                        {/* Doc hits keep XrefLink; thumbs feedback stays wired. */}
+                        {hits.length > 0 && (
+                          <div className="mt-2 space-y-1">
+                            {hits.slice(0, 3).map((h, i) => (
+                              <div key={`${r.id}-${i}-${h.doc_id}`} className="flex items-center gap-3 text-xs">
+                                <span className="flex-1 min-w-0 truncate"><XrefLink token={h.doc_id} /></span>
+                                <span className="font-mono text-2xs tabular-nums w-12 text-right" style={{ color: "var(--text-muted)" }}>{h.rrf_score?.toFixed?.(3) ?? ""}</span>
+                                <button onClick={() => rate(r.id, h.doc_id, "up")} className="p-1 rounded hover:bg-[color:var(--surface-2)]" title="Mark as useful"><ThumbsUp className="w-3 h-3" /></button>
+                                <button onClick={() => rate(r.id, h.doc_id, "down")} className="p-1 rounded hover:bg-[color:var(--surface-2)]" title="Mark as not useful"><ThumbsDown className="w-3 h-3" /></button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {r.mode && <Lozenge tone="neutral">{r.mode}</Lozenge>}
+                          {r.rerank && r.rerank !== "off" && <Lozenge tone="info">rerank</Lozenge>}
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{r.n_results ?? 0}</td>
+                      <td className="px-3 py-2 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }}>{r.latency_ms ?? 0}ms</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
-      </Card>
+      </div>
     </Page>
   );
 }

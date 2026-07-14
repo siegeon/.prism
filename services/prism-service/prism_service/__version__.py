@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "6.9.12"
+PRISM_VERSION = "6.9.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v6.9.13: THE CONNECTED SCREENS — four redesign surfaces land at once. "
+    "EXPLORE MESH v1 (/brain?focus=<entity>): typed ego-network over a new "
+    "GET /api/xref/neighbors (task/session/code/memory/gate edges from the "
+    "tables PRISM already keeps), shape-coded nodes, click re-centers, "
+    "double-click navigates, filter chips + legend — selected is a doorway, "
+    "never a hub. TRACE TAB on task detail: GET /api/tasks/{id}/trace joins "
+    "agent_runs into session -> step rows with per-row tokens + KPI tiles. "
+    "UNDERSTAND opens at the DOMAIN layer: domain cards with concept-type "
+    "mix bars -> concept table (cited-by ranked) -> the retained reading "
+    "page; 2,634 lines of verified-orphan understand/* + MemoryPage/OkfPage "
+    "deleted. SESSIONS + RETRIEVALS get the artifact table treatment; "
+    "shared Button primitive. Stale UI contracts re-pinned to the new "
+    "design (board liveness, orphan absence). "
     "v6.9.11: FOUNDATION CUTOVER — the canvas matches the direction "
     "artifact's Foundation tab. Surfaces/borders/text re-valued to Radix "
     "slate (both themes; light is first-class), nav rail navy #1c2333 and "

@@ -2638,6 +2638,51 @@ class ConductorService:
                 break
         return out
 
+    def session_file_paths(self, session_id: str) -> dict:
+        """The code files a session touched: {"read": [...], "modified": [...]}.
+
+        Reads the files_read_paths / files_modified_paths JSON columns the
+        transcript importer persists (task 961f273b). Guarded: a scores.db
+        predating path capture (columns absent) or an unknown session yields
+        empty lists — the caller just omits those session->code edges. Feeds
+        the Explore mesh's session<->code neighborhood.
+        """
+        empty = {"read": [], "modified": []}
+        if not (session_id or "").strip():
+            return empty
+        try:
+            conn = self._scores_conn()
+        except Exception:
+            return empty
+        try:
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(session_outcomes)").fetchall()}
+            if not ({"files_read_paths", "files_modified_paths"} & cols):
+                return empty
+            row = conn.execute(
+                "SELECT files_read_paths, files_modified_paths "
+                "FROM session_outcomes WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except Exception:
+            return empty
+        finally:
+            conn.close()
+        if row is None:
+            return empty
+
+        def _decode(raw) -> list:
+            if not raw:
+                return []
+            try:
+                val = json.loads(raw)
+            except (TypeError, ValueError):
+                return []
+            return [str(p) for p in val if p] if isinstance(val, list) else []
+
+        return {"read": _decode(row["files_read_paths"]),
+                "modified": _decode(row["files_modified_paths"])}
+
     def get_skill_usage(self, session_id: Optional[str] = None) -> list[dict]:
         """Query skill_usage from scores.db."""
         try:

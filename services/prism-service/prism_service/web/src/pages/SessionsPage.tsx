@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, Kpi, SectionLabel, Empty } from "@/components/ui";
+import { Page, Kpi, SectionLabel, Empty } from "@/components/ui";
+import { EntityChip } from "@/components/EntityChip";
 import { fmtTokens } from "@/lib/format";
 
 // Mirrors what conductor_service.get_session_outcomes() returns. The
@@ -41,6 +41,18 @@ function p95(xs: number[]) {
   return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))];
 }
 
+const shortId = (id?: string) => (id ?? "").slice(0, 8) || "—";
+
+// Header cell — 11px uppercase faint label, matching TasksPage's table idiom.
+const Th = ({ children, className }: { children?: ReactNode; className?: string }) => (
+  <th
+    className={`text-2xs uppercase tracking-wider font-semibold px-3 py-2 border-b border-[color:var(--border-default)] ${className ?? "text-left"}`}
+    style={{ color: "var(--text-muted)" }}
+  >
+    {children}
+  </th>
+);
+
 export default function SessionsPage() {
   const [project] = useProject();
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
@@ -76,7 +88,7 @@ export default function SessionsPage() {
   const totalFiles = files.reduce((a, b) => a + b, 0) || 1;
   const totalTokens = tokens.reduce((a, b) => a + b, 0);
   const fmtTs = (s?: string) =>
-    s ? s.replace("T", " ").replace(/\.\d+/, "").slice(0, 19) : "";
+    s ? s.replace("T", " ").replace(/\.\d+/, "").slice(0, 19) : "—";
 
   return (
     <Page>
@@ -88,67 +100,97 @@ export default function SessionsPage() {
         <Kpi label="Median duration" value={`${Math.round(median(durSec))}s`} />
       </section>
 
-      <Card>
-        <SectionLabel>Skill usage</SectionLabel>
-        {skills.length === 0 ? (
-          <Empty>No skills invoked yet in scored sessions.</Empty>
-        ) : (
-          <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {skills.map((s) => (
-              <div key={s.skill} className="py-2 flex items-center gap-4 text-sm">
-                <span className="flex-1 font-mono opacity-80">{s.skill}</span>
-                <span className="font-mono opacity-70">{s.count}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <Card>
+      {/* Recent sessions — the artifact table: session chip, started, and the
+          per-session cost columns (tabular numerals, right-aligned). */}
+      <div>
         <SectionLabel>Recent sessions</SectionLabel>
         {outcomes.length === 0 ? (
           <Empty>No session outcomes yet.</Empty>
         ) : (
-          <div className="divide-y divide-[color:var(--midground-base)]/10">
-            {outcomes.map((o, i) => {
-              const tk = o.tokens ?? o.tokens_used ?? 0;
-              const d = o.duration ?? o.duration_s ?? 0;
-              const fm = o.files_modified ?? 0;
-              const fr = o.files_read ?? 0;
-              return (
-                <div key={o.session_id ?? i} className="py-2 flex items-center gap-4 text-sm">
-                  <span className="font-mono opacity-70 w-40 text-xs truncate" title={o.timestamp ?? o.recorded_at ?? ""}>
-                    {fmtTs(o.timestamp ?? o.recorded_at)}
-                  </span>
-                  {o.session_id ? (
-                    <Link
-                      to={`/sessions/${o.session_id}`}
-                      className="font-mono opacity-80 flex-1 truncate underline decoration-dotted underline-offset-2 hover:opacity-100"
-                      title={o.session_id}
+          <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <Th>Session</Th>
+                  <Th className="text-left w-52">Started</Th>
+                  <Th className="text-right w-20">Duration</Th>
+                  <Th className="text-right w-24">Tokens</Th>
+                  <Th className="text-right w-28">Files r/w</Th>
+                  <Th className="text-right w-20">Skills</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {outcomes.map((o, i) => {
+                  const tk = o.tokens ?? o.tokens_used ?? 0;
+                  const d = o.duration ?? o.duration_s ?? 0;
+                  const fm = o.files_modified ?? 0;
+                  const fr = o.files_read ?? 0;
+                  const sk = o.skills_invoked ?? 0;
+                  return (
+                    <tr
+                      key={o.session_id ?? i}
+                      className="h-10 hover:bg-[color:var(--surface-2)] transition-colors border-b border-[color:var(--border-subtle)]"
                     >
-                      {o.session_id}
-                    </Link>
-                  ) : (
-                    <span className="font-mono opacity-80 flex-1 truncate">—</span>
-                  )}
-                  <span className="text-xs opacity-60 w-20 text-right" title="tokens used">
-                    {fmtTokens(tk)}
-                  </span>
-                  <span className="text-xs opacity-60 w-16 text-right" title="duration (s)">
-                    {Math.round(d)}s
-                  </span>
-                  <span className="text-xs opacity-60 w-24 text-right" title="files read / modified">
-                    {fr}r · {fm}w
-                  </span>
-                  <span className="text-xs opacity-60 w-20 text-right" title="tokens / file modified">
-                    {o.tokens_per_file ? `${fmtTokens(o.tokens_per_file)}/file` : "—"}
-                  </span>
-                </div>
-              );
-            })}
+                      <td className="px-3 py-1.5">
+                        {o.session_id ? (
+                          <EntityChip kind="session" label={shortId(o.session_id)} to={`/sessions/${o.session_id}`} title={o.session_id} />
+                        ) : (
+                          <span className="text-2xs" style={{ color: "var(--text-disabled)" }}>—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }} title={o.timestamp ?? o.recorded_at ?? ""}>
+                        {fmtTs(o.timestamp ?? o.recorded_at)}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }}>
+                        {d ? `${Math.round(d)}s` : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-secondary)" }} title="tokens used">
+                        {tk ? fmtTokens(tk) : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }} title="files read / modified">
+                        {fr}r · {fm}w
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }} title="skills invoked">
+                        {sk || "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
-      </Card>
+      </div>
+
+      {/* Skill usage — same table language, restyled from the old divide-y list. */}
+      <div>
+        <SectionLabel>Skill usage</SectionLabel>
+        {skills.length === 0 ? (
+          <Empty>No skills invoked yet in scored sessions.</Empty>
+        ) : (
+          <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <Th>Skill</Th>
+                  <Th className="text-right w-24">Uses</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {skills.map((s) => (
+                  <tr
+                    key={s.skill}
+                    className="h-10 hover:bg-[color:var(--surface-2)] transition-colors border-b border-[color:var(--border-subtle)]"
+                  >
+                    <td className="px-3 py-1.5 font-mono text-xs" style={{ color: "var(--text-secondary)" }}>{s.skill}</td>
+                    <td className="px-3 py-1.5 text-right font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }}>{s.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </Page>
   );
 }

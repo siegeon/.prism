@@ -316,6 +316,286 @@ def resolve(token: str = Query(...), project: str = Query("prism")) -> dict:
     )
 
 
+# ---------------------------------------------------------------------------
+# Neighbors -- the typed ego network behind the Explore mesh (workstream 4).
+#
+# Given ANY entity token, return its 1-hop typed neighborhood so the SPA can
+# draw a freeform mesh: memories link memories, code calls code, sessions touch
+# gates, tasks thread into all of it. The center is a doorway, NEVER a hub --
+# every neighbor carries its own re-center `token` so a click re-runs this for
+# it. Every edge source is independently guarded: a project missing a service
+# or table just omits those edges instead of failing the whole neighborhood.
+# ---------------------------------------------------------------------------
+
+# The resolve ladder's 8 kinds collapse onto the 6 mesh node SHAPES the SPA
+# draws (square=code, diamond=memory, rounded=task, triangle=test, hexagon=
+# gate, circle=session). concept->memory, symbol/file->code; the rest map 1:1.
+_UI_KIND = {
+    "concept": "memory", "symbol": "code", "file": "code",
+    "task": "task", "session": "session", "gate": "gate",
+    "test": "test", "retrieval": "retrieval",
+}
+
+
+def _field(obj, name, default=None):
+    """Read a field off a task that may be a dataclass OR a dict (test fakes)."""
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _short(token: str, n: int = 8) -> str:
+    """A uuid-ish token shortened for a node label; left intact when short."""
+    t = str(token or "")
+    return (t[:n] + "…") if len(t) > n + 1 else t
+
+
+def _nb(kind: str, label: str, href: Optional[str], edge: str,
+        token: str) -> dict:
+    """One neighbor: its shape (kind), display label, click-through href, the
+    relation label drawn on the edge, and the token to re-center on."""
+    return {"kind": kind, "label": label, "href": href,
+            "edge": edge, "token": token}
+
+
+def _task_neighbors(p, task_id: str, task, out: list) -> None:
+    """Task threads: linked sessions, parent/children epics, dependencies, and
+    the task's own gate. Never a hub -- these are peers reachable in one hop."""
+    task_svc = getattr(p, "task_svc", None)
+    if task_svc is not None:
+        try:
+            for s in (task_svc.sessions_for_task(task_id) or []):
+                sid = s.get("session_id") if isinstance(s, dict) else None
+                if sid:
+                    tok = int(s.get("tokens_used") or 0)
+                    lbl = _short(sid) + (f" · {tok // 1000}k" if tok else "")
+                    out.append(_nb("session", lbl, f"/sessions/{sid}",
+                                   "driven in", sid))
+        except Exception:
+            pass
+        parent = (_field(task, "parent_id", "") or "").strip()
+        if parent:
+            pt = _task_lookup(task_svc, parent)
+            if pt:
+                out.append(_nb("task", _task_title(pt) or parent,
+                               f"/tasks/{parent}", "child of", parent))
+        try:
+            for c in (task_svc.list(parent_id=task_id) or []):
+                cid = _field(c, "id", "")
+                if cid:
+                    out.append(_nb("task", _task_title(c) or cid,
+                                   f"/tasks/{cid}", "parent of", cid))
+        except Exception:
+            pass
+    for dep in (_field(task, "dependencies", []) or []):
+        dep = str(dep).strip()
+        if not dep:
+            continue
+        dt = _task_lookup(task_svc, dep) if task_svc is not None else None
+        out.append(_nb("task", (_task_title(dt) if dt else dep) or dep,
+                       f"/tasks/{dep}", "depends on", dep))
+    step = (_field(task, "workflow_step", "") or "").strip()
+    gate_state = (_field(task, "gate_state", "none") or "none").strip()
+    if step and gate_state and gate_state != "none":
+        out.append(_nb("gate", f"{step} · {gate_state}",
+                       f"/tasks/{task_id}#gate", gate_state,
+                       f"{task_id}#gate"))
+
+
+def _session_neighbors(p, session_id: str, out: list) -> None:
+    """Session threads: the task it drove, the code it touched, the retrievals
+    it ran (each retrieval attributes back to its asking task)."""
+    task_svc = getattr(p, "task_svc", None)
+    if task_svc is not None:
+        try:
+            tid = task_svc.task_for_session(session_id)
+        except Exception:
+            tid = ""
+        if tid:
+            t = _task_lookup(task_svc, tid)
+            out.append(_nb("task", (_task_title(t) if t else tid) or tid,
+                           f"/tasks/{tid}", "drove", tid))
+    conductor_svc = getattr(p, "conductor_svc", None)
+    getter = getattr(conductor_svc, "session_file_paths", None)
+    if getter is not None:
+        try:
+            paths = getter(session_id) or {}
+        except Exception:
+            paths = {}
+        for rel, files in (("modified", paths.get("modified") or []),
+                           ("read", paths.get("read") or [])):
+            for f in files:
+                out.append(_nb("code", f.replace("\\", "/").split("/")[-1],
+                               f"/artifact?focus={f}", rel, f))
+    _searches_for(p, out, session_id=session_id)
+
+
+def _searches_for(p, out: list, session_id: str = "",
+                  task_id: str = "") -> None:
+    """Retrieval edges: rows in the brain searches table attributed to this
+    session or task tie the two together (searched-during). The retrieval is
+    the RELATION, surfaced as its counterpart session/task node."""
+    brain_svc = getattr(p, "brain_svc", None)
+    getter = getattr(brain_svc, "get_recent_searches", None)
+    if getter is None:
+        return
+    try:
+        rows = getter(limit=200) or []
+    except Exception:
+        return
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rsid = str(r.get("session_id") or "")
+        rtid = str(r.get("task_id") or "")
+        if session_id and rsid == session_id and rtid:
+            out.append(_nb("task", _short(rtid, 12), f"/tasks/{rtid}",
+                           "searched under", rtid))
+        elif task_id and rtid == task_id and rsid:
+            out.append(_nb("session", _short(rsid), f"/sessions/{rsid}",
+                           "searched here", rsid))
+
+
+def _memory_neighbors(p, concept_id: str, out: list) -> None:
+    """Concept<->concept: the OKF wikilink graph. Outbound [[links]] and
+    inbound backlinks are peers -- knowledge citing knowledge."""
+    memory_svc = getattr(p, "memory_svc", None)
+    if memory_svc is None:
+        return
+    try:
+        from prism_service.services.okf_host import OkfHost
+        host = OkfHost(memory_svc, getattr(p, "brain_svc", None))
+        g = host.graph()
+    except Exception:
+        return
+    label_by_id = {n["id"]: n.get("title") or n["id"] for n in g.get("nodes", [])}
+    for e in g.get("edges", []):
+        src, tgt = e.get("source"), e.get("target")
+        if src == concept_id and tgt:
+            out.append(_nb("memory", label_by_id.get(tgt, tgt),
+                           f"/understand?concept={tgt}", "links", tgt))
+        elif tgt == concept_id and src:
+            out.append(_nb("memory", label_by_id.get(src, src),
+                           f"/understand?concept={src}", "cited by", src))
+
+
+def _code_neighbors(p, sym: dict, out: list) -> None:
+    """Code<->code: callers (find_references) and callees (call_chain, hop 1)
+    of the focused symbol. Each is a peer file in the call graph."""
+    brain_svc = getattr(p, "brain_svc", None)
+    if brain_svc is None or not sym.get("name"):
+        return
+    name = sym["name"]
+    try:
+        for r in (brain_svc.find_references(name, limit=12) or []):
+            cn = r.get("name") or r.get("caller_name")
+            cf = r.get("file") or r.get("source_file") or ""
+            if cn:
+                href = f"/artifact?focus={cf}&symbol={cn}" if cf else None
+                out.append(_nb("code", cn, href, "called by", cn))
+    except Exception:
+        pass
+    try:
+        edges = brain_svc.call_chain(name, depth=1, limit=12,
+                                     direction="callees") or []
+    except Exception:
+        edges = []
+    for e in edges:
+        to = e.get("to")
+        if to and to != name:
+            out.append(_nb("code", to, f"/artifact?focus={to}", "calls", to))
+
+
+def _file_neighbors(p, file: str, out: list) -> None:
+    """Code file -> the symbols it defines (edge "defines"), each re-centerable
+    to its own callers/callees. Cheap (one outline read) and always available,
+    so a file dropped in via a deep-link still opens a live neighborhood."""
+    brain_svc = getattr(p, "brain_svc", None)
+    if brain_svc is None or not file:
+        return
+    try:
+        syms = brain_svc.outline(file) or []
+    except Exception:
+        syms = []
+    for s in syms:
+        nm = s.get("name") if isinstance(s, dict) else None
+        if nm:
+            out.append(_nb("code", nm, f"/artifact?focus={file}&symbol={nm}",
+                           "defines", nm))
+
+
+def _gate_neighbors(p, token: str, out: list) -> None:
+    """A gate's one thread home: the task it guards."""
+    task_id = token.split("#", 1)[0].strip()
+    task_svc = getattr(p, "task_svc", None)
+    if not task_id or task_svc is None:
+        return
+    t = _task_lookup(task_svc, task_id)
+    if t:
+        out.append(_nb("task", _task_title(t) or task_id,
+                       f"/tasks/{task_id}", "guards", task_id))
+
+
+def neighbors_for(token: str, p, limit: int = 24) -> dict:
+    """Build the typed 1-hop neighborhood for `token`. Pure orchestration over
+    the guarded per-kind gatherers -- unit-testable with fake services."""
+    center = resolve_token(
+        token, p.memory_svc, p.brain_svc, getattr(p, "graph_svc", None),
+        task_svc=getattr(p, "task_svc", None),
+        conductor_svc=getattr(p, "conductor_svc", None),
+    )
+    kind = center.get("kind", "unresolved")
+    out: list = []
+    if kind == "task":
+        task = _task_lookup(getattr(p, "task_svc", None), token)
+        if task is not None:
+            _task_neighbors(p, token, task, out)
+            _searches_for(p, out, task_id=token)
+    elif kind == "session":
+        _session_neighbors(p, token, out)
+    elif kind == "concept":
+        cid = (_resolve_concept(p.memory_svc, token) or {}).get("id", token)
+        _memory_neighbors(p, cid, out)
+    elif kind == "symbol":
+        _code_neighbors(p, _resolve_symbol(p.brain_svc, token) or {}, out)
+    elif kind == "file":
+        _file_neighbors(p, center.get("label") or token, out)
+    elif kind == "gate":
+        _gate_neighbors(p, token, out)
+
+    # Dedupe on (kind, href|label) preserving first-seen order, then cap.
+    seen: set = set()
+    deduped: list = []
+    for n in out:
+        key = (n["kind"], n.get("href") or n["label"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(n)
+    return {
+        "center": {
+            "kind": _UI_KIND.get(kind, kind),
+            "label": center.get("label") or token,
+            "href": center.get("href"),
+            "token": token,
+        },
+        "neighbors": deduped[: max(1, int(limit))],
+    }
+
+
+@router.get("/neighbors")
+def neighbors(
+    token: str = Query(...), project: str = Query("prism"),
+    limit: int = Query(24, ge=1, le=200),
+) -> dict:
+    """The Explore mesh's ego network: {center, neighbors[]} for one entity."""
+    try:
+        p = get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    return neighbors_for(token, p, limit=limit)
+
+
 @router.post("/resolve_batch")
 def resolve_batch(payload: dict = Body(default={})) -> dict:
     """Resolve many tokens in ONE call so a rendered doc fires a single request

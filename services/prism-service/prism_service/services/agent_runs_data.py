@@ -120,6 +120,63 @@ def get_task_agent_rollup(scores_db: str, task_id: str) -> dict:
     }
 
 
+def build_task_trace(scores_db: str, task_id: str) -> dict:
+    """Drive-scoped token trace for the task-detail Trace tab: the task's
+    agent_runs grouped session -> SDLC step, token counts on every row.
+
+    Shape: ``{"sessions": [{session_id, tokens_total,
+    steps: [{step, role, model, tokens, gate_state, ts}]}],
+    "totals": {tokens, steps, sessions}}``. Sessions appear in first-activity
+    order; steps within a session stay time-ordered. Zero rows returns empty
+    arrays so the tab renders an honest empty state (cross-task totals live on
+    the Sessions page, not here)."""
+    empty = {"sessions": [], "totals": {"tokens": 0, "steps": 0, "sessions": 0}}
+    if not Path(scores_db).exists():
+        return empty
+    conn = _connect(scores_db)
+    try:
+        rows = conn.execute(
+            "SELECT session_id, step, role, model, tokens, gate_state, "
+            "       started_at, recorded_at "
+            "FROM agent_runs WHERE task_id = ? "
+            "ORDER BY started_at ASC, recorded_at ASC",
+            (task_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return empty
+    sessions: list[dict] = []
+    by_sid: dict[str, dict] = {}
+    total_tokens = 0
+    for r in rows:
+        sid = r["session_id"] or ""
+        tok = int(r["tokens"] or 0)
+        total_tokens += tok
+        sess = by_sid.get(sid)
+        if sess is None:
+            sess = {"session_id": sid, "tokens_total": 0, "steps": []}
+            by_sid[sid] = sess
+            sessions.append(sess)
+        sess["tokens_total"] += tok
+        sess["steps"].append({
+            "step": r["step"],
+            "role": r["role"],
+            "model": r["model"],
+            "tokens": tok,
+            "gate_state": r["gate_state"],
+            "ts": r["started_at"] or r["recorded_at"],
+        })
+    return {
+        "sessions": sessions,
+        "totals": {
+            "tokens": total_tokens,
+            "steps": len(rows),
+            "sessions": len(sessions),
+        },
+    }
+
+
 def get_agent_run_aggregates(scores_db: str) -> dict:
     """Cross-run aggregates for the /learning panel: avg duration per step,
     override rate (gate steps that ended override/blind), token cost per

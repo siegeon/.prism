@@ -22,6 +22,13 @@ def _svc(project: str):
         raise HTTPException(404, f"unknown project: {project}: {exc}")
 
 
+def _scores_db(project: str) -> str:
+    """scores.db path for the project — same resolution api/agent_runs.py uses
+    (ctx._data_dir / 'scores.db'), so the Trace tab reads the agent_runs spine
+    the telemetry channel writes."""
+    return str(get_project(project)._data_dir / "scores.db")
+
+
 def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
     """Best-effort: stamp each history turn with `turn_tokens` = the
     output_tokens spent in the window (previous_turn, this_turn], summed across
@@ -321,6 +328,21 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     except Exception:
         out["has_prototype"] = False
     return out
+
+
+@router.get("/{task_id}/trace")
+def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
+    """Drive-scoped token trace for the task-detail Trace tab.
+
+    Groups this task's agent_runs (the per-agent/step telemetry spine) by
+    session then SDLC step, with token counts on every row —
+    ``{"sessions": [{session_id, tokens_total, steps: [...]}],
+    "totals": {tokens, steps, sessions}}``. A task with no runs returns empty
+    arrays so the tab shows an honest empty state rather than 404. Cross-task
+    totals belong on the Sessions page; this stays scoped to the one drive."""
+    from prism_service.services.agent_runs_data import build_task_trace
+
+    return build_task_trace(_scores_db(project), task_id)
 
 
 @router.get("/{task_id}/prototype")

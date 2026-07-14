@@ -57,7 +57,7 @@ export default function App() {
             {/* Brain = the one place to explore the knowledge. /graph and
                 the old /explore redirect here so nothing breaks. */}
             <Route path="/brain" element={<ExplorePage />} />
-            <Route path="/explore" element={<Navigate to="/brain" replace />} />
+            <Route path="/explore" element={<Navigate to={{ pathname: "/brain", search: location.search }} replace />} />
             <Route path="/graph" element={<Navigate to="/brain" replace />} />
             {/* Knowledge collapsed to TWO surfaces (task 89a1ddef): Brain
                 (Sigma graphvis) + the unified Understand wiki. /memory and

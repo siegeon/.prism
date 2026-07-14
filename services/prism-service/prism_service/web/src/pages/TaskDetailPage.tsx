@@ -97,6 +97,26 @@ type SessionRow = {
   skills_invoked?: number;
 };
 
+// GET /api/tasks/:id/trace — the drive-scoped token trace backing the Trace
+// tab: agent_runs grouped session → SDLC step, tokens on every row.
+type TraceStep = {
+  step: string;
+  role?: string | null;
+  model?: string | null;
+  tokens: number;
+  gate_state?: string | null;
+  ts?: string | null;
+};
+type TraceSession = {
+  session_id: string;
+  tokens_total: number;
+  steps: TraceStep[];
+};
+type TaskTrace = {
+  sessions: TraceSession[];
+  totals: { tokens: number; steps: number; sessions: number };
+};
+
 // Staggered Card-stack wrapper: each card fades + rises into place with a
 // capped per-index delay, so the detail page assembles top-to-bottom on mount
 // instead of snapping in all at once. Collapses to opacity-only when reduced.
@@ -429,6 +449,91 @@ function RelRow({ children, why }: { children: React.ReactNode; why?: string }) 
   );
 }
 
+// ── Trace tab (artifact traceBody / .trace-kpis / .kpi / .trow / .tokbar) ──
+// SDLC role → the friendly actor name + Lozenge tone the artifact's KPI tiles
+// speak (Steward/Verifier/Builder). Unknown roles fall through to neutral.
+function roleName(r?: string | null): string {
+  return r === "sm" ? "Steward" : r === "qa" ? "Verifier" : r === "dev" ? "Builder" : (r || "—");
+}
+function roleLoz(r?: string | null): LozengeTone {
+  return r === "sm" ? "new" : r === "qa" ? "warn" : r === "dev" ? "info" : "neutral";
+}
+
+// One KPI tile (.kpi): tiny label, big tabular value, faint hint.
+function TraceKpi({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-1)] px-3.5 py-3">
+      <div className="text-2xs font-semibold uppercase tracking-[0.08em] text-[color:var(--text-label)]">{label}</div>
+      <div className="text-xl font-[650] tabular-nums mt-0.5 text-[color:var(--text-primary)]">{value}</div>
+      {hint && <div className="text-2xs text-[color:var(--text-muted)] mt-0.5">{hint}</div>}
+    </div>
+  );
+}
+
+// One indented step row (.trow.lvl1): step name, role Lozenge, model, an
+// optional gate Lozenge, then a token bar sized to the SESSION's max step +
+// the tabular count. `max` is that session's largest step-token value.
+function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
+  const w = Math.max(6, Math.round((86 * (step.tokens || 0)) / Math.max(1, max)));
+  const gate = step.gate_state && step.gate_state !== "none" ? step.gate_state : "";
+  return (
+    <div className="flex items-center gap-2.5 pl-6 py-1 min-w-0 hover:bg-[color:var(--surface-2)]">
+      <span className="min-w-0 truncate text-[13px] text-[color:var(--text-primary)]">{step.step}</span>
+      <Lozenge tone={roleLoz(step.role)}>{roleName(step.role)}</Lozenge>
+      {step.model && (
+        <span className="font-mono text-2xs text-[color:var(--text-muted)] truncate max-w-[140px] shrink-0" title={step.model}>{step.model}</span>
+      )}
+      {gate && <Lozenge tone={gateLoz(gate)}>{gate}</Lozenge>}
+      <span className="ml-auto flex items-center gap-2 shrink-0">
+        <span className="h-[5px] rounded-[3px]" style={{ width: `${w}px`, background: "var(--accent-teal-fg)", opacity: 0.75 }} />
+        <span className="font-mono text-2xs tabular-nums text-[color:var(--text-muted)] w-[52px] text-right">{fmtTokens(step.tokens || 0)}</span>
+      </span>
+    </div>
+  );
+}
+
+// The Trace tab body: 4 KPI tiles + a per-session tree (session header row →
+// indented step rows). Honest empty state when the task has no agent_runs.
+function TraceView({ trace, loading }: { trace: TaskTrace | null; loading: boolean }) {
+  if (loading && !trace) return <Card><Empty>Loading trace…</Empty></Card>;
+  if (!trace || trace.sessions.length === 0) {
+    return <Card><Empty>No trace yet — this task has no recorded agent runs.</Empty></Card>;
+  }
+  const t = trace.totals;
+  const perStep = t.steps > 0 ? Math.round(t.tokens / t.steps) : 0;
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
+        <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
+        <TraceKpi label="Steps" value={String(t.steps)} />
+        <TraceKpi label="Sessions" value={String(t.sessions)} />
+        <TraceKpi label="Tokens / step" value={fmtTokens(perStep)} />
+      </div>
+      <Card>
+        <div className="divide-y divide-[color:var(--border-default)]">
+          {trace.sessions.map((s) => {
+            const max = Math.max(1, ...s.steps.map((st) => st.tokens || 0));
+            return (
+              <div key={s.session_id} className="py-1.5 first:pt-0 last:pb-0">
+                <div className="flex items-center gap-2 py-1.5">
+                  <EntityChip kind="session" label={`${s.session_id.slice(0, 8)} · drive`} to={`/sessions/${s.session_id}`} />
+                  <span className="ml-auto font-mono text-xs text-[color:var(--text-muted)] tabular-nums">{fmtTokens(s.tokens_total)} tok</span>
+                </div>
+                {s.steps.map((st, i) => (
+                  <TraceStepRow key={`${st.step}-${i}`} step={st} max={max} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+      <p className="text-2xs text-[color:var(--text-muted)] leading-relaxed">
+        Drive-scoped: session → SDLC step, joined from the agent_runs telemetry spine. Every row carries its token cost; cross-task totals live on Sessions.
+      </p>
+    </div>
+  );
+}
+
 export default function TaskDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -445,6 +550,12 @@ export default function TaskDetailPage() {
       : "back to tasks";
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
+  // Doc-column tab (artifact .itabs): Overview = the existing content, Trace =
+  // the drive-scoped token trace. The rail (Details + Connections) persists
+  // across both. Trace is fetched lazily the first time its tab is opened.
+  const [docTab, setDocTab] = useState<"overview" | "trace">("overview");
+  const [trace, setTrace] = useState<TaskTrace | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
@@ -521,6 +632,30 @@ export default function TaskDetailPage() {
   // Poll every 5s so the SDLC progress bar, child checklist, and token-effort
   // label update in real-time as the conductor advances the task.
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+
+  // Navigating task → task (the route reuses this component) resets the tab
+  // back to Overview and drops the previous task's trace so it re-fetches.
+  useEffect(() => { setDocTab("overview"); setTrace(null); }, [id]);
+
+  // Lazy trace fetch: only when the Trace tab is first opened for this task.
+  // `trace` in the deps gates it to a single fetch (a failure caches an empty
+  // trace so the tab shows the honest empty state instead of a spinner loop).
+  useEffect(() => {
+    if (docTab !== "trace" || trace !== null || !id) return;
+    let cancelled = false;
+    setTraceLoading(true);
+    (async () => {
+      try {
+        const d = await api.get<TaskTrace>(`/api/tasks/${id}/trace?project=${project}`);
+        if (!cancelled) setTrace(d);
+      } catch {
+        if (!cancelled) setTrace({ sessions: [], totals: { tokens: 0, steps: 0, sessions: 0 } });
+      } finally {
+        if (!cancelled) setTraceLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [docTab, trace, id, project]);
 
   useEffect(() => {
     if (!notice) return;
@@ -779,6 +914,30 @@ export default function TaskDetailPage() {
           intact); RIGHT = the Details + Connections rail. */}
       <div className="grid grid-cols-1 min-[900px]:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
       <div className="space-y-6 min-w-0">
+
+      {/* Doc-column tab strip (artifact .itabs): Overview / Trace. The Trace
+          label carries the drive-total once the trace has been fetched. */}
+      <div className="flex gap-0.5 border-b border-[color:var(--border-default)]" role="tablist">
+        {([["overview", "Overview"], ["trace", `Trace${trace ? ` · ${fmtTokens(trace.totals.tokens)} tok` : ""}`]] as const).map(([val, label]) => (
+          <button
+            key={val}
+            role="tab"
+            aria-selected={docTab === val}
+            onClick={() => setDocTab(val)}
+            className={`-mb-px border-b-2 px-3.5 py-2 text-[13px] font-medium ${
+              docTab === val
+                ? "border-[color:var(--accent-teal-fg)] text-[color:var(--accent-teal-fg)]"
+                : "border-transparent text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} />}
+
+      {docTab === "overview" && (<>
 
       {(conductorOn || task.plan_doc || task.plan_diagram || task.has_prototype || pinTests.length > 0) && (
         <Stagger i={0} reduced={reduced}>
@@ -1077,6 +1236,8 @@ export default function TaskDetailPage() {
           <Timeline rows={history} tokens={task.phase_progress?.tokens_since_step} />
         </Card>
       )}
+
+      </>)}{/* end Overview tab */}
 
       </div>{/* end left doc column */}
 

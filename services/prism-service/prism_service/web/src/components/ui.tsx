@@ -9,7 +9,7 @@
  * their parent (surface-1 → surface-2), and every text tier is WCAG
  * AA on both surfaces.
  */
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { Tone } from "@/lib/domainTone";
 import { toneFromLabel } from "@/lib/domainTone";
@@ -113,6 +113,28 @@ export const Pill = ({
           ? PILL_TONE_INACTIVE[tone]
           : "bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:bg-[color:var(--surface-3)] hover:text-[color:var(--text-primary)]",
     )}
+  >{children}</button>
+);
+
+/** Button — the artifact's `.btn` / `.btn.pri`. Two variants:
+ *  - "primary": solid --accent-solid fill, white text (the page's one CTA).
+ *  - "default": bordered --border-default on the subtle surface (secondary).
+ *  13px / 550 weight, 6px radius. Standard <button> props pass through. */
+export const Button = ({
+  variant = "default", className, children, ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "default";
+}) => (
+  <button
+    className={cn(
+      "inline-flex items-center gap-1.5 rounded-md px-[13px] py-[6px] text-[13px] font-[550]",
+      "transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+      variant === "primary"
+        ? "bg-[color:var(--accent-solid)] text-white border border-[color:var(--accent-solid)] hover:opacity-90"
+        : "bg-[color:var(--surface-1)] text-[color:var(--text-secondary)] border border-[color:var(--border-default)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)]",
+      className,
+    )}
+    {...rest}
   >{children}</button>
 );
 

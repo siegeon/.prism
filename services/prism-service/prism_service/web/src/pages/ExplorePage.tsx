@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X, RefreshCw } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X, RefreshCw, Map as MapIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty, ErrorBanner, Pill, SectionLabel, toneFromLabel } from "@/components/ui";
+import { GlyphIcon, EntityChip, type EntityKind } from "@/components/EntityChip";
 import { communityColor, hexToRgba } from "@/lib/palette";
 import { cn } from "@/lib/utils";
+
+// --- Explore mesh (UI redesign workstream 4) --------------------------------
+// A freeform typed ego network: the focused entity centered (dashed halo, never
+// a hub), its 1-hop neighbors on a radial ring, typed by SHAPE + --et-<kind>
+// color. Backed by GET /api/xref/neighbors. Any node is a doorway — single
+// click re-centers (push ?focus=), double click opens the entity's page.
+type MeshNode = {
+  kind: string; label: string; href: string | null; edge: string; token: string;
+};
+type MeshData = { center: MeshNode; neighbors: MeshNode[] };
+// The 6 canonical node shapes the mesh draws; anything else falls back to a
+// neutral dot. Mirrors EntityChip's EntityKind + the --et-* token set.
+const MESH_KINDS: EntityKind[] = ["code", "memory", "task", "test", "gate", "session"];
+const isMeshKind = (k: string): k is EntityKind => (MESH_KINDS as string[]).includes(k);
 
 // The brain holds more than code: docs, comments, expertise/domain notes.
 // The domain filter slices the search to those — "expertise"/"md" reach the
@@ -73,6 +89,19 @@ export default function ExplorePage() {
   const [inView, setInView] = useState<{ level: number; levelName: string; items: ClusterItem[] } | null>(null);
   const [domain, setDomain] = useState("all");
   const [busy, setBusy] = useState<string | null>(null);  // which control is running
+
+  // Mesh focus lives in the URL (?focus=<token>) so it's shareable + back-
+  // navigable. When set, the mesh is the centerpiece; empty = the Sigma map.
+  const navigate = useNavigate();
+  const [sp, setSp] = useSearchParams();
+  const focus = sp.get("focus");
+  const setFocus = useCallback((token: string | null) => {
+    setSp((prev) => {
+      const n = new URLSearchParams(prev);
+      if (token) n.set("focus", token); else n.delete("focus");
+      return n;
+    });
+  }, [setSp]);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const filesRef = useRef<string[]>([]);
@@ -198,6 +227,7 @@ export default function ExplorePage() {
     setResultsOpen(false);
     symbolRef.current = null;  // manual pick supersedes any deep-link symbol
     postToViewer([file]);
+    setFocus(file);  // a search/subgraph pick focuses the mesh on that entity
   };
 
   // Quick-filter from a "domains in view" chip: drill the canvas to that
@@ -292,14 +322,26 @@ export default function ExplorePage() {
       <Card className="!p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="px-5 pt-3 pb-2 flex items-center gap-2 shrink-0">
           <Network className="w-4 h-4 opacity-60" />
-          <SectionLabel>Graph</SectionLabel>
+          <SectionLabel>{focus ? "Mesh" : "Graph"}</SectionLabel>
           <span className="text-xs opacity-50 ml-1">
-            {data?.mode === "focus"
+            {focus
+              ? "freeform ego network — click a node to wander, double-click to open it"
+              : data?.mode === "focus"
               ? "highlighting your matches — scroll to explore, click empty space to clear"
               : "whole graph, colored by community — type a query to focus it"}
           </span>
+          {focus && (
+            <button
+              onClick={() => setFocus(null)}
+              className="ml-auto inline-flex items-center gap-1 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] px-2 py-1 text-2xs uppercase tracking-wider">
+              <MapIcon className="w-3 h-3" /> Full map
+            </button>
+          )}
         </div>
-        {viewerUrl ? (
+        {focus ? (
+          <Mesh token={focus} project={project} onFocus={setFocus}
+            onOpen={(href) => navigate(href)} />
+        ) : viewerUrl ? (
           <iframe
             ref={iframeRef}
             src={viewerUrl}
@@ -557,3 +599,217 @@ const Edge = ({ file, w }: { file: string; w: number }) => (
     <span className="opacity-40 tabular-nums">×{w}</span>
   </div>
 );
+
+// ===========================================================================
+// Mesh — the freeform typed ego network. Center + 1-hop radial neighbors,
+// shapes/colors per --et-<kind>. Single click = re-center (wander); double
+// click = open the entity. Filter chips toggle kinds; legend maps shape→type.
+// ===========================================================================
+const MESH_W = 880, MESH_H = 520, MESH_CX = MESH_W / 2, MESH_CY = MESH_H / 2;
+
+const meshFill = (kind: string) => (isMeshKind(kind) ? `var(--et-${kind})` : "var(--text-faint)");
+const trunc = (s: string, n = 20) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+// One typed node drawn at (x,y). Shapes mirror the design artifact's node()
+// draws exactly so a mesh node and an EntityChip glyph read as the same type.
+function MeshShape({ kind, x, y, r }: { kind: string; x: number; y: number; r: number }) {
+  const f = meshFill(kind);
+  switch (kind) {
+    case "code": return <rect x={x - r} y={y - r} width={2 * r} height={2 * r} rx={3} fill={f} />;
+    case "memory": return <path d={`M${x} ${y - r - 2} L${x + r + 2} ${y} L${x} ${y + r + 2} L${x - r - 2} ${y} Z`} fill={f} />;
+    case "task": return <rect x={x - r - 3} y={y - r + 2} width={2 * r + 6} height={2 * r - 4} rx={6} fill={f} />;
+    case "test": return <path d={`M${x} ${y - r - 1} L${x + r + 1} ${y + r} L${x - r - 1} ${y + r} Z`} fill={f} />;
+    case "gate": return <path d={`M${x} ${y - r - 1} L${x + r} ${y - r / 2} L${x + r} ${y + r / 2} L${x} ${y + r + 1} L${x - r} ${y + r / 2} L${x - r} ${y - r / 2} Z`} fill={f} />;
+    default: return <circle cx={x} cy={y} r={r} fill={f} />;  // session + fallback
+  }
+}
+
+type Placed = MeshNode & { x: number; y: number };
+
+// Deterministic radial layout: up to 12 neighbors on an inner ring, the rest
+// on a staggered outer ring — keeps labels legible without a physics sim.
+function layoutMesh(neighbors: MeshNode[]): Placed[] {
+  const n = neighbors.length;
+  const innerN = Math.min(n, 12);
+  return neighbors.map((nb, i) => {
+    const outer = i >= 12;
+    const count = outer ? n - 12 : innerN;
+    const idx = outer ? i - 12 : i;
+    const R = outer ? 258 : n <= 6 ? 160 : 188;
+    const stagger = outer ? Math.PI / Math.max(count, 1) : 0;
+    const theta = (idx / Math.max(count, 1)) * Math.PI * 2 - Math.PI / 2 + stagger;
+    return { ...nb, x: MESH_CX + Math.cos(theta) * R, y: MESH_CY + Math.sin(theta) * R };
+  });
+}
+
+function Mesh({ token, project, onFocus, onOpen }: {
+  token: string; project: string;
+  onFocus: (t: string) => void; onOpen: (href: string) => void;
+}) {
+  const [data, setData] = useState<MeshData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const clickTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setErr(null);
+    api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=48`)
+      .then((d) => { if (alive) { setData(d); setHidden(new Set()); } })
+      .catch((e) => { if (alive) setErr(String(e?.message || e)); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [token, project]);
+
+  const visible = useMemo(
+    () => (data?.neighbors ?? []).filter((n) => !hidden.has(n.kind)),
+    [data, hidden]);
+  const placed = useMemo(() => layoutMesh(visible), [visible]);
+  const kindsPresent = useMemo(() => {
+    const s = new Set<string>();
+    (data?.neighbors ?? []).forEach((n) => s.add(n.kind));
+    return MESH_KINDS.filter((k) => s.has(k));
+  }, [data]);
+
+  // Single click re-centers (wander the mesh); double click opens the page.
+  // A short timer disambiguates the two without a jarring double-fire.
+  const onNodeClick = (nb: MeshNode) => {
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
+    clickTimer.current = window.setTimeout(() => onFocus(nb.token), 200);
+  };
+  const onNodeDbl = (nb: MeshNode) => {
+    if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
+    if (nb.href) onOpen(nb.href);
+  };
+  const toggleKind = (k: string) =>
+    setHidden((prev) => {
+      const n = new Set(prev);
+      if (n.has(k)) n.delete(k); else n.add(k);
+      return n;
+    });
+
+  const center = data?.center;
+
+  return (
+    <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-3 px-5 pb-4 overflow-hidden">
+      {/* canvas */}
+      <div className="flex flex-col rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-2)] overflow-hidden min-h-0">
+        {/* filter chips */}
+        <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-[color:var(--border-default)]">
+          {kindsPresent.map((k) => {
+            const on = !hidden.has(k);
+            return (
+              <button key={k} onClick={() => toggleKind(k)}
+                className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-2xs font-medium capitalize transition-colors",
+                  on ? "border-[color:var(--border-strong)] bg-[color:var(--surface-1)] text-[color:var(--text-primary)]"
+                     : "border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] opacity-50")}>
+                <GlyphIcon kind={k} size={10} /> {k}
+              </button>
+            );
+          })}
+          <span className="ml-auto text-2xs opacity-50 tabular-nums">
+            {visible.length} shown · {data?.neighbors.length ?? 0} total
+          </span>
+        </div>
+
+        <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden p-2">
+          {loading && !data ? (
+            <div className="p-6 text-xs opacity-60">Loading neighborhood…</div>
+          ) : err ? (
+            <div className="p-4"><ErrorBanner>{err}</ErrorBanner></div>
+          ) : !center ? (
+            <div className="p-6"><Empty>Nothing to center on.</Empty></div>
+          ) : (
+            <svg viewBox={`0 0 ${MESH_W} ${MESH_H}`} preserveAspectRatio="xMidYMid meet"
+              className="w-full h-full" role="img"
+              aria-label={`Mesh around ${center.label}`}>
+              {/* edges first, under the nodes */}
+              {placed.map((nb, i) => {
+                const mx = MESH_CX + (nb.x - MESH_CX) * 0.62;
+                const my = MESH_CY + (nb.y - MESH_CY) * 0.62;
+                return (
+                  <g key={`e${i}`}>
+                    <line x1={MESH_CX} y1={MESH_CY} x2={nb.x} y2={nb.y}
+                      stroke="var(--border-strong)" strokeWidth={1.1} />
+                    <text x={mx} y={my - 3} textAnchor="middle" fontSize={11}
+                      fill="var(--text-faint)">{nb.edge}</text>
+                  </g>
+                );
+              })}
+              {/* center — dashed halo marks selection; a doorway, not a hub */}
+              <circle cx={MESH_CX} cy={MESH_CY} r={23} fill="none"
+                stroke={meshFill(center.kind)} strokeWidth={1.5}
+                strokeDasharray="3 3" opacity={0.8} />
+              <g style={{ cursor: center.href ? "pointer" : "default" }}
+                onDoubleClick={() => center.href && onOpen(center.href)}>
+                <MeshShape kind={center.kind} x={MESH_CX} y={MESH_CY} r={16} />
+                <text x={MESH_CX} y={MESH_CY + 34} textAnchor="middle" fontSize={12}
+                  fontWeight={650} fill="var(--text-primary)">{trunc(center.label)}</text>
+              </g>
+              {/* neighbors */}
+              {placed.map((nb, i) => (
+                <g key={`n${i}`} style={{ cursor: "pointer" }}
+                  onClick={() => onNodeClick(nb)} onDoubleClick={() => onNodeDbl(nb)}>
+                  <title>{`${nb.label} — ${nb.edge} (click to center, double-click to open)`}</title>
+                  <MeshShape kind={nb.kind} x={nb.x} y={nb.y} r={12} />
+                  <text x={nb.x} y={nb.y + 26} textAnchor="middle" fontSize={11}
+                    fill="var(--text-secondary)">{trunc(nb.label, 16)}</text>
+                </g>
+              ))}
+            </svg>
+          )}
+        </div>
+
+        {/* legend */}
+        <div className="flex flex-wrap gap-3 px-3 py-2 border-t border-[color:var(--border-default)] text-2xs text-[color:var(--text-faint)]">
+          {MESH_KINDS.map((k) => (
+            <span key={k} className="inline-flex items-center gap-1 capitalize">
+              <GlyphIcon kind={k} size={10} /> {k}
+            </span>
+          ))}
+          <span className="ml-auto">dashed halo = selected · click a node to re-center</span>
+        </div>
+      </div>
+
+      {/* rail */}
+      <div className="hidden lg:flex flex-col gap-3 min-h-0 overflow-y-auto">
+        {center && (
+          <Card className="!p-4">
+            <SectionLabel>Selected</SectionLabel>
+            <div className="mt-2 flex items-center gap-2">
+              <GlyphIcon kind={isMeshKind(center.kind) ? center.kind : "session"} />
+              <span className="text-sm truncate">{center.label}</span>
+            </div>
+            {center.href && (
+              <button onClick={() => onOpen(center.href!)}
+                className="mt-3 text-xs text-[color:var(--accent-teal-fg)] hover:underline">
+                Open detail →
+              </button>
+            )}
+            <div className="mt-2 text-2xs opacity-50 tabular-nums">
+              {data?.neighbors.length ?? 0} direct connections
+            </div>
+          </Card>
+        )}
+        <Card className="!p-4 min-h-0">
+          <SectionLabel>Connections · {visible.length}</SectionLabel>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {visible.length === 0 ? (
+              <Faint>No connections in view.</Faint>
+            ) : visible.map((nb, i) => (
+              <div key={i} className="flex items-center gap-2 min-w-0">
+                <button onClick={() => onFocus(nb.token)} title="Re-center on this"
+                  className="min-w-0 flex-1 text-left">
+                  <EntityChip kind={isMeshKind(nb.kind) ? nb.kind : "session"}
+                    label={trunc(nb.label, 22)} className="max-w-full" />
+                </button>
+                <span className="shrink-0 text-2xs opacity-40 lowercase">{nb.edge}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
