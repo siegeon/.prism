@@ -98,7 +98,7 @@ function advanceValidation(t: StepTurn): string {
 // recorded SINCE the last resolved gate (that's the work this gate reviews).
 // Falls back to the single most-recent advance validation if no prior gate
 // boundary exists. Each note is split into distinct, deduped, readable lines.
-function gateEvidenceLines(turns: StepTurn[]): string[] {
+export function gateEvidenceLines(turns: StepTurn[]): string[] {
   const rows = turns ?? [];
   let start = 0;
   for (let i = rows.length - 1; i >= 0; i--) {

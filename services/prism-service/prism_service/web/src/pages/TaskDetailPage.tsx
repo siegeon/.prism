@@ -7,7 +7,7 @@ import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui"
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip } from "@/components/EntityChip";
 import { domainTone } from "@/lib/domainTone";
-import PlanView, { parseAc } from "@/components/plan/PlanView";
+import PlanView, { parseAc, gateEvidenceLines } from "@/components/plan/PlanView";
 import { stepLabel } from "@/lib/workflowChips";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
@@ -603,6 +603,9 @@ export default function TaskDetailPage() {
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
+  // The top-level gate ACTION panel — opened by the notification banner;
+  // holds everything needed to decide the gate in place.
+  const [gatePanelOpen, setGatePanelOpen] = useState(false);
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -815,6 +818,22 @@ export default function TaskDetailPage() {
   // Approve / Reject a pending gate. action='approve' releases the gate (and
   // auto-advances); 'reject' flips gate_state to 'failed' and stores the
   // reason on task.gate_reason. Reason is REQUIRED for both.
+  // Re-run the oracle INSIDE the daemon and mint a fresh EvidenceReceipt
+  // (POST /api/conductor/gate/mint) — the gate panel's evidence action.
+  const mintEvidence = async () => {
+    setNotice("re-running the oracle inside the daemon…");
+    try {
+      const r = await api.post<{ ok: boolean; receipt_ok: boolean; receipt_refusal?: string }>(
+        `/api/conductor/gate/mint?project=${project}`, { task_id: id });
+      setNotice(r.receipt_ok
+        ? "fresh evidence receipt minted — Approve will pass the evidence check"
+        : `oracle ran but evidence still not ready: ${r.receipt_refusal || r.ok}`);
+    } catch (e) {
+      setNotice(`oracle re-run failed: ${(e as Error).message}`);
+    }
+    load();
+  };
+
   const gateDecide = async (action: "approve" | "reject") => {
     if (!gateReason.trim()) {
       setNotice("A reason is required to resolve the gate.");
@@ -1019,28 +1038,109 @@ export default function TaskDetailPage() {
           task, not just the implementation"). Each is clickable and jumps to
           the view where the action lives (the gate form in Implementation). */}
       {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") && (
-        <button
-          type="button"
-          onClick={() => {
-            setTabRequest({ tab: "implementation", n: (tabRequest?.n ?? 0) + 1 });
-            planRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
-          className="w-full text-left rounded-md px-4 py-3 text-[13px] leading-relaxed"
-          style={gateReadiness?.receipt_ok
-            ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
-            : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
-          title="go to the gate decision form"
-        >
-          <span className="text-2xs uppercase tracking-wider font-semibold mr-2">
-            ⚖ action needed · {stepLabel(task.workflow_step ?? "gate")}{task.gate_state === "failed" ? " · last decision failed" : ""}
-          </span>
-          {gateReadiness?.receipt_ok
-            ? "Live evidence check PASSES — approve this gate with a reason (no override needed)."
-            : gateReadiness
-              ? "Live evidence is not ready — open the gate to re-run the oracle or release with override."
-              : "This task is parked at a gate awaiting your decision."}
-          <span className="ml-2 opacity-80">→ act</span>
-        </button>
+        <div>
+          <button
+            type="button"
+            onClick={() => setGatePanelOpen((v) => !v)}
+            className="w-full text-left rounded-md px-4 py-3 text-[13px] leading-relaxed"
+            style={gateReadiness?.receipt_ok
+              ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
+              : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+            aria-expanded={gatePanelOpen}
+            title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
+          >
+            <span className="text-2xs uppercase tracking-wider font-semibold mr-2">
+              ⚖ action needed · {stepLabel(task.workflow_step ?? "gate")}{task.gate_state === "failed" ? " · last decision failed" : ""}
+            </span>
+            {gateReadiness?.receipt_ok
+              ? "Live evidence check PASSES — approve this gate with a reason (no override needed)."
+              : gateReadiness
+                ? "Live evidence is not ready — re-run the oracle below, or release with override."
+                : "This task is parked at a gate awaiting your decision."}
+            <span className="ml-2 opacity-80">{gatePanelOpen ? "▾ close" : "▸ act"}</span>
+          </button>
+
+          {gatePanelOpen && (
+            <div className="mt-2 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4 space-y-3">
+              {/* 1 · what you're approving — the drive's recorded evidence */}
+              {(() => {
+                const lines = gateEvidenceLines(history);
+                return lines.length > 0 && (
+                  <div className="text-[12.5px] leading-relaxed">
+                    <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>what you're approving</div>
+                    <ul className="space-y-1">
+                      {lines.slice(0, 4).map((l, i) => (
+                        <li key={i} className="text-[color:var(--text-secondary)]">• {l}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
+              {/* 2 · live evidence verdict + oracle re-run */}
+              <div
+                className="rounded-md p-3 text-[12.5px] leading-relaxed"
+                style={gateReadiness?.receipt_ok
+                  ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
+                  : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+              >
+                <span className="text-2xs uppercase tracking-wider mr-2">evidence check · live</span>
+                {gateReadiness?.receipt_ok
+                  ? <>✓ Oracle evidence receipt is FRESH and PASSING{gateReadiness.receipt?.adapter ? ` (${gateReadiness.receipt.adapter} — a real run, not a claim)` : ""}.</>
+                  : <>{gateReadiness?.receipt_refusal || "no receipt on file"}{" "}
+                      <button
+                        type="button"
+                        onClick={mintEvidence}
+                        className="text-2xs uppercase tracking-wider px-2.5 py-1 rounded ml-1"
+                        style={{ background: "var(--accent-amber-fg)", color: "var(--accent-amber-bg)" }}
+                      >
+                        ↻ re-run oracle now
+                      </button>
+                    </>}
+              </div>
+              {/* 3 · last stored decision, clearly demoted */}
+              {task.gate_state === "failed" && task.gate_reason && (
+                <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
+                  last decision (stale snapshot): {task.gate_reason.slice(0, 180)}
+                </div>
+              )}
+              {/* 4 · the decision itself */}
+              <textarea
+                value={gateReason}
+                onChange={(e) => setGateReason(e.target.value)}
+                required
+                placeholder="Reason (required) — why approve or reject this gate?"
+                rows={2}
+                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
+              />
+              <label className="flex items-center gap-2 text-[12px] opacity-80 cursor-pointer">
+                <input type="checkbox" checked={gateOverride} onChange={(e) => setGateOverride(e.target.checked)} />
+                override (bypass the verifier and release on manual judgment — audited)
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy || !gateReason.trim()}
+                  onClick={() => gateDecide("approve")}
+                  className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
+                  style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }}
+                >
+                  {task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
+                </button>
+                {task.gate_state !== "failed" && (
+                  <button
+                    type="button"
+                    disabled={busy || !gateReason.trim()}
+                    onClick={() => gateDecide("reject")}
+                    className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
+                    style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                  >
+                    Reject
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
       {task.status === "blocked" && task.blocked_reason && (
         <div
@@ -1063,19 +1163,7 @@ export default function TaskDetailPage() {
             reduced={reduced}
             pinTests={pinTests}
             gateReadiness={gateReadiness}
-            onMintEvidence={async () => {
-              setNotice("re-running the oracle inside the daemon…");
-              try {
-                const r = await api.post<{ ok: boolean; receipt_ok: boolean; receipt_refusal?: string }>(
-                  `/api/conductor/gate/mint?project=${project}`, { task_id: id });
-                setNotice(r.receipt_ok
-                  ? "fresh evidence receipt minted — Approve will pass the evidence check"
-                  : `oracle ran but evidence still not ready: ${r.receipt_refusal || r.ok}`);
-              } catch (e) {
-                setNotice(`oracle re-run failed: ${(e as Error).message}`);
-              }
-              load();
-            }}
+            onMintEvidence={mintEvidence}
             tabRequest={tabRequest}
             conductor={conductorOn ? {
               step: task.workflow_step,
@@ -1087,14 +1175,9 @@ export default function TaskDetailPage() {
               timeline,
               turns: history,
             } : null}
-            gate={{
-              reason: gateReason,
-              setReason: setGateReason,
-              override: gateOverride,
-              setOverride: setGateOverride,
-              decide: gateDecide,
-              busy,
-            }}
+            gate={null /* the gate DECISION lives in the top-level action
+              panel on Overview now (owner: notifications must be top-level
+              and actionable in place) — Implementation keeps the rail */}
             onValidation={() => navigate(`/tasks/${id}/validation`, { state: { from: `/tasks/${id}` } })}
           />
         </Card>
