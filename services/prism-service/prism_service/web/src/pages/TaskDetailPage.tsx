@@ -625,8 +625,11 @@ export default function TaskDetailPage() {
     }
     return { summary: "refused", detail: "" };
   }, [task?.gate_reason]);
+  // READY follows the LIVE evidence alone — the engine's receipt tooth now
+  // decides first (v7.0.18), so a stale verifier refusal from a previous
+  // decision must not lock the button (it is shown as history below).
   const gateVerdict: "ready" | "blocked" =
-    gateReadiness?.receipt_ok && !verifierRefusal ? "ready" : "blocked";
+    gateReadiness?.receipt_ok ? "ready" : "blocked";
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -680,30 +683,6 @@ export default function TaskDetailPage() {
       } catch {
         setChildren([]);
       }
-      // Pinning/RED tests: the committed test file(s) whose failure proves this
-      // task is NOT done. Best-effort — a task with no test file yields [].
-      try {
-        // run=true: the server EXECUTES the pinned tests so each row carries
-        // its real current outcome — never an eternal red-phase badge.
-        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests?run=true`);
-        setPinTests(tr.tests ?? []);
-      } catch {
-        setPinTests([]);
-      }
-      // Live gate readiness: what a plain Approve would consult RIGHT NOW —
-      // fixes the stale-snapshot card that contradicted itself.
-      try {
-        const g = d.task?.gate_state;
-        if (g === "pending" || g === "failed") {
-          const gr = await api.get<GateReadiness>(
-            `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
-          setGateReadiness(gr);
-        } else {
-          setGateReadiness(null);
-        }
-      } catch {
-        setGateReadiness(null);
-      }
     } catch (e) {
       setError((e as Error).message ?? "task not found");
     }
@@ -712,6 +691,26 @@ export default function TaskDetailPage() {
   // Poll every 5s so the SDLC progress bar, child checklist, and token-effort
   // label update in real-time as the conductor advances the task.
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+
+  // ONE-SHOT per task: run the pinned tests + the readiness git-walk. Both
+  // are heavy server work — never in the 5s poll (a tests?run=true in the
+  // poll loop spawned a full pytest run every 5 seconds and starved the
+  // daemon; found during the owner's approve hang).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests?run=true`);
+        if (!cancelled) setPinTests(tr.tests ?? []);
+      } catch { if (!cancelled) setPinTests([]); }
+      try {
+        const gr = await api.get<GateReadiness>(
+          `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
+        if (!cancelled) setGateReadiness(gr);
+      } catch { if (!cancelled) setGateReadiness(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [id, project]);
 
   // Navigating task → task (the route reuses this component) resets the tab
   // back to Overview and drops the previous task's trace so it re-fetches.

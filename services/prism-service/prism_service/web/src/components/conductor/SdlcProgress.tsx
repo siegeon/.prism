@@ -263,7 +263,13 @@ export default function SdlcProgress({
                 animate={!reduced && live ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
                 transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
-              <span>{fmtClock(liveInStep)}</span>
+              {/* The clock is an EXECUTION metric (owner: for observing and
+                  refining LLM process time). We have no per-step llm-active
+                  duration recorded yet (agent_runs carries tokens only), so
+                  when the task is parked the clock is HIDDEN rather than
+                  showing wall time — tokens are the honest effort figure.
+                  Waiting time lives on the LiveBar chip (· 3H) explicitly. */}
+              {counting && <span>{fmtClock(liveInStep)}</span>}
               {live && (phase?.eta_s ?? 0) > 5 && (
                 <span
                   className="opacity-70"
