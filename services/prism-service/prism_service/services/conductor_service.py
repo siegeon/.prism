@@ -1664,7 +1664,10 @@ class ConductorService:
             # different pinned policy_hash is stale, like a spec edit. Resolved
             # best-effort; "" (unpinnable) keeps the tree+spec behavior.
             from prism_service.services import control_plane as _cp
-            _pin = _cp.pinned_policy(getattr(task, "id", ""))
+            # ONE resolution path (task 68e5c699): the check resolves the
+            # SAME workspace-anchored pin the mint stamped — see
+            # control_plane.task_pin.
+            _pin = _cp.task_pin(getattr(task, "id", ""))
             _policy_hash = _pin.get("policy_hash", "")
             fresh = osp.fresh_passing_receipt(
                 project, getattr(task, "id", ""), tree_sha, spec.spec_hash(),

@@ -161,7 +161,7 @@ def test_receipt_minted_now_is_fresh_now(pinned_world, tmp_path, monkeypatch):
     spec = osp.OracleSpec.from_task(task)
     assert spec.adapter == osp.ADAPTER_PYTEST  # needs the AC-3 rung
     receipt = osp.run_oracle(
-        task, spec, ctx={"project": "testproj", "workspace": str(repo)})
+        spec, task, ctx={"project": "testproj", "workspace": str(repo)})
     assert receipt.passed is True
     assert receipt.policy_hash.startswith("sha256:")
 
