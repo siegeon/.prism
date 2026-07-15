@@ -305,6 +305,18 @@ class OkfHost:
         except Exception:
             return []
 
+    def concept_recalling_sessions(self, target_id: str) -> list[dict]:
+        """Sessions that recalled this concept (task fc258f15) — read from
+        the memory recall_log's session_id column, stamped by memory_recall
+        via the real transcript-session resolver. Guarded: [] on error or
+        legacy schema."""
+        if not target_id:
+            return []
+        try:
+            return self._memory_svc.sessions_that_recalled(target_id)
+        except Exception:
+            return []
+
     def get(self, path: str) -> dict | None:
         if not path.startswith("/"):
             path = "/" + path
@@ -321,9 +333,11 @@ class OkfHost:
             "body": c.body,
             "links": extract_links(c.body),
             "backlinks": self.backlinks(cid),
-            # 'Cited by' beyond memory backlinks: tasks that recalled this
-            # concept. Empty list when nothing recalled it (guarded UI).
+            # 'Cited by' beyond memory backlinks: tasks AND sessions that
+            # recalled this concept. Empty lists when nothing has (guarded
+            # UI). Sessions became attributable in task fc258f15.
             "recalled_by": self.concept_recallers(cid),
+            "recalled_by_sessions": self.concept_recalling_sessions(cid),
         }
 
     def raw(self, path: str) -> str | None:

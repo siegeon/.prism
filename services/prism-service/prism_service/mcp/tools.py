@@ -3895,10 +3895,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                                 text=_json(ctx.graph_annotate_svc.status()))]
 
         if name == "memory_recall":
+            # SESSION ATTRIBUTION (task fc258f15): stamp the REAL transcript
+            # session onto the recall_log rows — an explicit session_id arg
+            # wins; else the linked-session resolver (the same one
+            # conductor_work trusts). Never a fabricated per-request id.
+            _recall_sid = (str(arguments.get("session_id") or "").strip()
+                           or _resolve_link_session_id())
             results = memory_svc.recall(
                 query=arguments["query"],
                 domain=arguments.get("domain"),
                 limit=arguments.get("limit", 5),
+                session_id=_recall_sid,
             )
             return [TextContent(type="text", text=_json(results))]
 
