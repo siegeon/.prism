@@ -256,13 +256,18 @@ export default function ExplorePage() {
         try {
           const { tasks } = await api.get<{ tasks: { id: string; status?: string; updated_at?: string; parent_id?: string }[] }>(
             `/api/tasks?project=${project}`);
-          const open = (tasks ?? []).filter((t) => t.id && (t.status ?? "").toLowerCase() !== "done");
-          const newest = (pool: typeof open) => pool.length
+          const all = (tasks ?? []).filter((t) => t.id);
+          const open = all.filter((t) => (t.status ?? "").toLowerCase() !== "done");
+          const newest = (pool: typeof all) => pool.length
             ? pool.reduce((a, b) => ((b.updated_at ?? "") > (a.updated_at ?? "") ? b : a)).id : null;
-          const root = newest(open.filter((t) => !t.parent_id));
-          const any = newest(open);
-          if (root) candidates.push(root);
-          if (any && any !== root) candidates.push(any);
+          // Tasks BEFORE sessions, and recently-finished work before falling
+          // through: a task is a meaningful doorway (title, gates, code,
+          // knowledge); a raw session UUID is the last resort, not the
+          // default center of the graph.
+          for (const c of [newest(open.filter((t) => !t.parent_id)), newest(open),
+                           newest(all.filter((t) => !t.parent_id)), newest(all)]) {
+            if (c && !candidates.includes(c)) candidates.push(c);
+          }
         } catch { /* task rungs unavailable */ }
         try {
           const { outcomes } = await api.get<{ outcomes: { session_id?: string }[] }>(
@@ -751,8 +756,14 @@ const Edge = ({ file, w }: { file: string; w: number }) => (
 // ===========================================================================
 const MESH_W = 1060, MESH_H = 600, MESH_CX = MESH_W / 2, MESH_CY = MESH_H / 2;
 
-const meshFill = (kind: string) => (isMeshKind(kind) ? `var(--et-${kind})` : "var(--text-faint)");
+const meshFill = (kind: string) => (isMeshKind(kind) ? `var(--et-${kind})` : "var(--text-label)");
 const trunc = (s: string, n = 20) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+// Text halo — a surface-colored stroke painted UNDER the glyphs so every
+// label stays readable where it crosses edges, hulls, or another label.
+const HALO = {
+  paintOrder: "stroke", stroke: "var(--surface-2)",
+  strokeWidth: 3, strokeLinejoin: "round",
+} as const;
 
 // One typed node drawn at (x,y). Shapes mirror the design artifact's node()
 // draws exactly so a mesh node and an EntityChip glyph read as the same type.
@@ -787,7 +798,9 @@ function hash01(str: string): number {
 // fabric near the middle - a doorway, never a pinned hub.
 function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): Layout {
   type P = { n?: MeshNode; token: string; x: number; y: number; r: number; hop: number };
-  const pts: P[] = [{ token: centerToken, x: MESH_CX - 30, y: MESH_CY + 6, r: 13, hop: 0 }];
+  // The focused entity is PINNED to the true canvas center — it is the one
+  // fixed point the fabric forms around (the user reads "selected = middle").
+  const pts: P[] = [{ token: centerToken, x: MESH_CX, y: MESH_CY, r: 13, hop: 0 }];
   const idx = new Map<string, number>([[centerToken, 0]]);
   const dense = nodes.length > 55;
   nodes.forEach((n) => {
@@ -802,8 +815,10 @@ function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): 
   // instead of one clump — no curation, the layout absorbs the count.
   const k = Math.sqrt((MESH_W * MESH_H) / Math.max(pts.length, 1));
   const REP = 0.6 * k * k;
-  const restSpoke = Math.min(180, Math.max(80, 0.95 * k));
-  const restLink = Math.min(130, Math.max(60, 0.68 * k));
+  // Spoke floor stays generous: the hop-1 ring is where the reading happens,
+  // so even at 100+ nodes the center's neighborhood keeps label room.
+  const restSpoke = Math.min(180, Math.max(130, 0.95 * k));
+  const restLink = Math.min(130, Math.max(62, 0.68 * k));
   const springs: [number, number][] = [];
   for (const e of edges) {
     const a = idx.get(e.from), b = idx.get(e.to);
@@ -852,7 +867,7 @@ function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): 
       for (const i of centroids[a].g) { fx[i] += dx * push; fy[i] += dy * push; }
       for (const i of centroids[b].g) { fx[i] -= dx * push; fy[i] -= dy * push; }
     }
-    for (let i = 0; i < pts.length; i++) {
+    for (let i = 1; i < pts.length; i++) {  // i=0 is the pinned center
       fx[i] += (MESH_CX - pts[i].x) * 0.0018; fy[i] += (MESH_CY - pts[i].y) * 0.0018;
       const mag = Math.hypot(fx[i], fy[i]) || 1;
       const step = Math.min(mag, 14 * cool + 2) / mag;
@@ -860,19 +875,23 @@ function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): 
       pts[i].y = Math.min(MESH_H - PAD_BOTTOM, Math.max(PAD_TOP, pts[i].y + fy[i] * step));
     }
   }
-  // Fill pass: stretch the settled fabric to the padded canvas so a dense
-  // neighborhood uses the whole stage instead of huddling mid-canvas. Linear
-  // per-axis (deterministic), stretch-only and capped so a tiny 3-node mesh
-  // isn't blown apart.
+  // Fill pass: stretch the settled fabric OUTWARD FROM THE PINNED CENTER to
+  // the padded canvas — per-side, stretch-only, capped — so a dense
+  // neighborhood uses the whole stage while the selected entity stays dead
+  // center. Deterministic; a tiny 3-node mesh isn't blown apart.
   if (pts.length > 4) {
+    const cx = pts[0].x, cy = pts[0].y;
     const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const sx = Math.min(2.2, Math.max(1, (MESH_W - 2 * PAD_X) / Math.max(maxX - minX, 1)));
-    const sy = Math.min(2.2, Math.max(1, (MESH_H - PAD_TOP - PAD_BOTTOM) / Math.max(maxY - minY, 1)));
+    const cap = 2.2;
+    const sxL = Math.min(cap, Math.max(1, (cx - PAD_X) / Math.max(cx - minX, 1)));
+    const sxR = Math.min(cap, Math.max(1, (MESH_W - PAD_X - cx) / Math.max(maxX - cx, 1)));
+    const syT = Math.min(cap, Math.max(1, (cy - PAD_TOP) / Math.max(cy - minY, 1)));
+    const syB = Math.min(cap, Math.max(1, (MESH_H - PAD_BOTTOM - cy) / Math.max(maxY - cy, 1)));
     for (const p of pts) {
-      p.x = PAD_X + (p.x - minX) * sx + ((MESH_W - 2 * PAD_X) - (maxX - minX) * sx) / 2;
-      p.y = PAD_TOP + (p.y - minY) * sy + ((MESH_H - PAD_TOP - PAD_BOTTOM) - (maxY - minY) * sy) / 2;
+      p.x = cx + (p.x - cx) * (p.x < cx ? sxL : sxR);
+      p.y = cy + (p.y - cy) * (p.y < cy ? syT : syB);
     }
   }
   const placed: Placed[] = pts.slice(1).map((p) => ({ ...(p.n as MeshNode), x: p.x, y: p.y, hop: p.hop, r: p.r }));
@@ -1135,7 +1154,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             </div>
             <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
               preserveAspectRatio="xMidYMid meet"
-              className="w-full h-full touch-none"
+              className="w-full h-full touch-none select-none"
               style={{ cursor: panRef.current ? "grabbing" : "grab" }} role="img"
               onPointerDown={onPanDown} onPointerMove={onPanMove}
               onPointerUp={onPanUp} onPointerLeave={onPanUp}
@@ -1171,9 +1190,9 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                     <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
                       stroke={spoke ? "var(--border-strong)" : "var(--border-default)"}
                       strokeWidth={spoke ? 1.1 : 0.9} opacity={spoke ? 1 : 0.6} />
-                    {(spoke || !dense) && (
-                      <text x={mx} y={my - 3} textAnchor="middle" fontSize={spoke ? 11 : 9.5}
-                        fill="var(--text-faint)" opacity={spoke ? 1 : 0.8}>{e.label}</text>
+                    {(spoke || renderEdges.length <= 28) && (
+                      <text {...HALO} x={mx} y={my - 3} textAnchor="middle" fontSize={spoke ? 11 : 10}
+                        fill="var(--text-label)" opacity={spoke ? 1 : 0.85}>{e.label}</text>
                     )}
                   </g>
                 );
@@ -1185,10 +1204,10 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
               <g style={{ cursor: center.href ? "pointer" : "default" }}
                 onDoubleClick={() => center.href && onOpen(center.href)}>
                 <MeshShape kind={center.kind} x={centerPos.x} y={centerPos.y} r={16} />
-                <text x={centerPos.x} y={centerPos.y + 34} textAnchor="middle" fontSize={12}
-                  fontWeight={650} fill="var(--text-primary)">{trunc(center.label)}</text>
+                <text {...HALO} x={centerPos.x} y={centerPos.y + 34} textAnchor="middle" fontSize={13}
+                  fontWeight={650} fill="var(--text-primary)">{trunc(center.label, 26)}</text>
                 {center.kind === "memory" && center.concept_type && (
-                  <text x={centerPos.x} y={centerPos.y + 47} textAnchor="middle" fontSize={9}
+                  <text {...HALO} x={centerPos.x} y={centerPos.y + 48} textAnchor="middle" fontSize={9}
                     letterSpacing="0.06em" fill={meshFill("memory")}
                     style={{ textTransform: "uppercase" }}>{center.concept_type}</text>
                 )}
@@ -1202,13 +1221,13 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                     onClick={() => onNodeClick(nb)} onDoubleClick={() => onNodeDbl(nb)}>
                     <title>{`${nb.label} — ${nb.edge}${two ? " (2 hops)" : ""} (click to center, double-click to open)`}</title>
                     <MeshShape kind={nb.kind} x={nb.x} y={nb.y} r={nb.r} />
-                    <text x={nb.x} y={nb.y + (two ? (dense ? 16 : 20) : 26)} textAnchor="middle"
-                      fontSize={two ? (dense ? 8 : 9.5) : 11}
-                      fill="var(--text-secondary)">{trunc(nb.label, two ? (dense ? 11 : 13) : 16)}</text>
+                    <text {...HALO} x={nb.x} y={nb.y + (two ? (dense ? 17 : 21) : 26)} textAnchor="middle"
+                      fontSize={two ? (dense ? 9 : 10.5) : 12}
+                      fill="var(--text-secondary)">{trunc(nb.label, two ? (dense ? 14 : 18) : 22)}</text>
                     {/* concept-type sub-caption under the diamond (decision/
                         convention/expertise/anti-pattern/principle) */}
                     {nb.kind === "memory" && nb.concept_type && !two && (
-                      <text x={nb.x} y={nb.y + 37} textAnchor="middle" fontSize={8.5}
+                      <text {...HALO} x={nb.x} y={nb.y + 38} textAnchor="middle" fontSize={9}
                         letterSpacing="0.06em" fill={meshFill("memory")}
                         style={{ textTransform: "uppercase" }}>
                         {nb.concept_type}
@@ -1223,7 +1242,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
         </div>
 
         {/* legend */}
-        <div className="flex flex-wrap gap-3 px-3 py-2 border-t border-[color:var(--border-default)] text-2xs text-[color:var(--text-faint)]">
+        <div className="flex flex-wrap gap-3 px-3 py-2 border-t border-[color:var(--border-default)] text-2xs text-[color:var(--text-label)]">
           {MESH_KINDS.map((k) => (
             <span key={k} className="inline-flex items-center gap-1 capitalize">
               <GlyphIcon kind={k} size={10} /> {k}
