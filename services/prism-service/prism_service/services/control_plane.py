@@ -196,6 +196,19 @@ def pinned_policy(task_id: str = "", ctx: Optional[dict] = None) -> dict:
     }
 
 
+def task_pin(task_id: str = "") -> dict:
+    """THE canonical pin for a task's gate evidence — the ONE resolution path
+    shared by the MINT (oracle_spec.run_oracle's stamp fallback) and the CHECK
+    (_oracle_receipt_refusal), so a receipt minted under the current pin is
+    fresh by construction. Workspace-anchored: both sides resolve through
+    pinned_policy with the task's OWN workspace descriptor (baseline +
+    repo_root), never a caller-supplied ctx — the drift that made freshly
+    minted receipts read as stale (task 68e5c699)."""
+    ws = _workspace_for(task_id) or {}
+    ctx = {k: ws[k] for k in ("baseline", "repo_root") if ws.get(k)}
+    return pinned_policy(task_id, ctx)
+
+
 def candidate_policy_edits(task_id: str) -> list[str]:
     """The gate-policy files the task's WORKTREE has modified vs its baseline
     (committed OR working-tree edits). Empty when the task has no worktree or

@@ -148,6 +148,14 @@ class OracleSpec:
         ``derived=True`` so a caller knows it was inferred, not authored."""
         oracle = str(getattr(task, "oracle", "") or "")
         misfire = str(getattr(task, "likely_misfire", "") or "")
+        # PYTEST RUNG (task 68e5c699): a test-proofed task naming pytest
+        # material in verify[] derives a REAL pytest_ids spec — the adapter
+        # existed but nothing ever derived it, so test-proofed tasks could
+        # never be machine-evidenced and their green_gate was override-only.
+        proof_type = str(getattr(task, "proof_type", "") or "").strip().lower()
+        pytest_ids = _pytest_ids_from_task(task)
+        if pytest_ids and proof_type == "test":
+            return cls._pytest_spec(pytest_ids)
         m = _URL_RE.search(oracle)
         if m:
             url = m.group(0).rstrip(".,;)!?\"'")
@@ -168,10 +176,50 @@ class OracleSpec:
                        positive=tuple(positive), negative=tuple(negative),
                        thresholds={"max_ms": 10000, "max_payload_bytes":
                                    8_000_000}, timeout_s=10.0, derived=True)
+        if pytest_ids and proof_type != "demo":
+            # No URL to probe but real pytest material on file: machine
+            # evidence beats the manual floor (demo stays demo — it wants a
+            # UI artifact, not a test run).
+            return cls._pytest_spec(pytest_ids)
         return cls(adapter=ADAPTER_BROWSER, target=oracle.strip(),
                    positive=(Assertion("customer_observable_holds", "positive",
                                        "manual", True),),
                    derived=True)
+
+    @classmethod
+    def _pytest_spec(cls, ids: list) -> "OracleSpec":
+        return cls(adapter=ADAPTER_PYTEST, target=" ".join(ids),
+                   positive=(Assertion("pinned_tests_pass", "positive",
+                                       "pytest_pass", True),),
+                   thresholds={}, timeout_s=600.0, derived=True)
+
+
+def _pytest_ids_from_task(task: Any) -> list:
+    """Pytest node ids / test paths named by task.verify[] entries. An entry
+    contributes when it invokes pytest (a token is/ends with 'pytest') or IS a
+    bare test path / node id. Flags and interpreters are dropped; order kept,
+    deduped — the derivation must be deterministic (stable spec_hash)."""
+    out: list = []
+    seen: set = set()
+    for raw in (getattr(task, "verify", None) or []):
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        toks = s.split()
+        invoked = any(t == "pytest" or t.endswith("/pytest")
+                      or t.endswith("pytest.exe") for t in toks)
+        cands = toks if invoked else (
+            [s] if (".py" in s or "::" in s) and " " not in s else [])
+        for t in cands:
+            if (not t or t.startswith("-") or "=" in t.split("::", 1)[0]
+                    or t in ("pytest", "python", "python3", "-m")
+                    or t.endswith("python.exe") or t.endswith("pytest.exe")
+                    or t.endswith("/pytest")):
+                continue
+            if (".py" in t or "::" in t) and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return out
 
 
 _MISFIRE_TOKENS = ("blank", "white", "crash", "error", "500", "undefined")
@@ -520,9 +568,12 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
     if not control_ref or not pol_hash:
         try:
             from prism_service.services import control_plane as _cp
-            pin = _cp.pinned_policy(task_id, ctx={
-                k: ctx[k] for k in ("workspace", "baseline", "repo_root",
-                                    "control_ref") if k in ctx})
+            # ONE resolution path (task 68e5c699): the stamp falls back to
+            # the same workspace-anchored task_pin the gate check resolves,
+            # so mint-then-check agree by construction. An explicit
+            # ctx['control_ref']/['policy_hash'] from a runner still wins
+            # (handled above); only the FALLBACK is unified.
+            pin = _cp.task_pin(task_id)
             control_ref = control_ref or pin.get("control_ref", "")
             pol_hash = pol_hash or pin.get("policy_hash", "")
         except Exception:
