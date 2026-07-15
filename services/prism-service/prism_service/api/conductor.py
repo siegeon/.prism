@@ -136,6 +136,23 @@ def gate(project: str = Query("default"), body: dict = Body(...)) -> dict:
     )
 
 
+class RewindBody(BaseModel):
+    task_id: str
+    reason: str = ""
+    actor: str = "owner"
+
+
+@router.post("/rewind")
+def rewind(project: str = Query("default"),
+           body: RewindBody = Body(...)) -> dict:
+    """AUDITED one-step rewind for an overshot task — the owner/admin repair
+    lever for a double-advanced drive (task b07fd46e). Delegates to
+    ConductorService.rewind_task; a blank reason is refused there (the lever
+    is guarded, never a silent hand-drive)."""
+    s = _svc(project)
+    return s.rewind_task(body.task_id, reason=body.reason, actor=body.actor)
+
+
 class FanoutBody(BaseModel):
     task_id: str
     step: str
