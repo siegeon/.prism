@@ -282,10 +282,14 @@ export default function ExplorePage() {
           try {
             const probe = await api.get<{ neighbors?: unknown[] }>(
               `/api/xref/neighbors?token=${encodeURIComponent(c)}&project=${project}&hops=1&limit=8`);
+            // Re-check alive AFTER the await: if the user clicked a node while
+            // this probe was in flight, their focus wins — a late default
+            // write here used to clobber the wander click's URL.
+            if (!alive) return;
             if ((probe.neighbors?.length ?? 0) >= 3) { setFocus(c, { replace: true }); return; }
           } catch { /* probe failed — keep walking the ladder */ }
         }
-        if (fallback) { setFocus(fallback, { replace: true }); return; }
+        if (alive && fallback) { setFocus(fallback, { replace: true }); return; }
       } finally {
         if (alive) setResolvingDefault(false);
       }
@@ -1085,16 +1089,22 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     if (nb.href) onOpen(nb.href);
   };
   const onPanDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    // NO pointer capture here: capturing on pointerdown retargets pointerup
+    // to the svg root and the browser then never delivers `click` to a node
+    // <g> — capture starts lazily below, once this is provably a DRAG.
     panRef.current = { cx: e.clientX, cy: e.clientY, vx: view.x, vy: view.y };
     movedRef.current = false;
-    e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPanMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const p = panRef.current;
     const el = svgRef.current;
     if (!p || !el) return;
     const dx = e.clientX - p.cx, dy = e.clientY - p.cy;
-    if (Math.abs(dx) + Math.abs(dy) > 4) movedRef.current = true;
+    if (!movedRef.current && Math.abs(dx) + Math.abs(dy) > 4) {
+      movedRef.current = true;
+      try { el.setPointerCapture(e.pointerId); } catch { /* capture is best-effort */ }
+    }
+    if (!movedRef.current) return;
     const r = el.getBoundingClientRect();
     const scale = Math.min(r.width / view.w, r.height / view.h) || 1;
     setView((v) => ({ ...v, x: p.vx - dx / scale, y: p.vy - dy / scale }));
