@@ -444,11 +444,13 @@ def _task_code_neighbors(p, session_ids: list, out: list,
         except Exception:
             continue
         for f in (paths.get("modified") or []):
-            if f in seen:
+            healed = _indexed_code_path(p, f)
+            if not healed or healed in seen:
                 continue
-            seen.add(f)
-            out.append(_nb("code", f.replace("\\", "/").split("/")[-1],
-                           f"/artifact?focus={f}", "implements in", f))
+            seen.add(healed)
+            out.append(_nb("code", healed.split("/")[-1],
+                           f"/artifact?focus={healed}", "implements in",
+                           healed))
             if len(seen) >= cap:
                 return
 
@@ -505,6 +507,19 @@ def _task_concept_neighbors(p, task_id: str, out: list) -> None:
                        concept_type=c.get("type")))
 
 
+def _indexed_code_path(p, path: str) -> Optional[str]:
+    """Session file logs hold RAW OS paths (absolute, either slash). Heal to
+    the brain's real indexed relative path — the ONE token shape the resolve
+    ladder, /artifact deep-links, and code<->code mesh edges agree on.
+    Returns None for files outside the indexed project (e.g. a user's global
+    memory files): a code square that can't open a live neighborhood is a
+    dead-end click, so it never enters the mesh at all."""
+    brain_svc = getattr(p, "brain_svc", None)
+    if brain_svc is None or not path:
+        return None
+    return _resolve_file(brain_svc, str(path).replace("\\", "/"))
+
+
 def _session_neighbors(p, session_id: str, out: list) -> None:
     """Session threads: the task it drove, the code it touched, the retrievals
     it ran (each retrieval attributes back to its asking task)."""
@@ -528,8 +543,11 @@ def _session_neighbors(p, session_id: str, out: list) -> None:
         for rel, files in (("modified", paths.get("modified") or []),
                            ("read", paths.get("read") or [])):
             for f in files:
-                out.append(_nb("code", f.replace("\\", "/").split("/")[-1],
-                               f"/artifact?focus={f}", rel, f))
+                healed = _indexed_code_path(p, f)
+                if not healed:
+                    continue
+                out.append(_nb("code", healed.split("/")[-1],
+                               f"/artifact?focus={healed}", rel, healed))
     _searches_for(p, out, session_id=session_id)
 
 
@@ -639,7 +657,9 @@ def _file_neighbors(p, file: str, out: list) -> None:
     except Exception:
         syms = []
     for s in syms:
-        nm = s.get("name") if isinstance(s, dict) else None
+        # BrainService.outline rows key the symbol as `entity_name`;
+        # tolerate `name` for older/fake shapes.
+        nm = (s.get("entity_name") or s.get("name")) if isinstance(s, dict) else None
         if nm:
             out.append(_nb("code", nm, f"/artifact?focus={file}&symbol={nm}",
                            "defines", nm))
@@ -764,8 +784,9 @@ def _session_code_mesh_edges(p, session_tokens: set, code_tokens: set) -> list:
             continue
         touched = set(paths.get("modified") or []) | set(paths.get("read") or [])
         for f in touched:
-            if f in code_tokens:
-                out.append({"from": sid, "to": f, "label": "edited"})
+            healed = _indexed_code_path(p, f)
+            if healed and healed in code_tokens:
+                out.append({"from": sid, "to": healed, "label": "edited"})
     return out
 
 

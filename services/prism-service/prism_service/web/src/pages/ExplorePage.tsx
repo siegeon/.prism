@@ -494,8 +494,10 @@ export default function ExplorePage() {
         )}
       </Card>
 
-      {/* Panels in a bounded strip that scrolls internally — keeps the
-          whole page on one screen. Clickable values left, context right. */}
+      {/* Panels in a bounded strip that scrolls internally — the FULL-MAP /
+          search workflow's drill-down surface. The mesh view owns its own
+          rail, so when a focus is set this strip stays out of the way. */}
+      {!focus && (
       <div className="shrink-0 overflow-y-auto grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start"
            style={{ maxHeight: "32vh" }}>
         <div className="space-y-4 min-w-0">
@@ -529,6 +531,7 @@ export default function ExplorePage() {
           <ContextRail sel={sel} selected={selected} mode={data?.mode} />
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -926,6 +929,47 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   const [err, setErr] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const clickTimer = useRef<number | null>(null);
+  // Zoom/pan: the SVG viewBox is the camera. Wheel zooms at the cursor,
+  // drag pans, buttons step-zoom; a re-center resets the camera.
+  const [view, setView] = useState({ x: 0, y: 0, w: MESH_W, h: MESH_H });
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const panRef = useRef<{ cx: number; cy: number; vx: number; vy: number } | null>(null);
+  const movedRef = useRef(false);
+
+  const zoomAt = useCallback((factor: number, fx?: number, fy?: number) => {
+    setView((v) => {
+      const w = Math.min(MESH_W * 1.5, Math.max(MESH_W / 10, v.w * factor));
+      const h = w * (MESH_H / MESH_W);
+      const px = fx === undefined ? v.x + v.w / 2 : fx;
+      const py = fy === undefined ? v.y + v.h / 2 : fy;
+      return { x: px - ((px - v.x) / v.w) * w, y: py - ((py - v.y) / v.h) * h, w, h };
+    });
+  }, []);
+  // Client px -> viewBox units (preserveAspectRatio meet: uniform scale, centered).
+  const toViewPoint = useCallback((clientX: number, clientY: number) => {
+    const el = svgRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const v = viewRef.current;
+    const scale = Math.min(r.width / v.w, r.height / v.h);
+    const ox = (r.width - v.w * scale) / 2, oy = (r.height - v.h * scale) / 2;
+    return { x: v.x + (clientX - r.left - ox) / scale, y: v.y + (clientY - r.top - oy) / scale, scale };
+  }, []);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  // Native non-passive wheel listener (React roots register wheel passive,
+  // which would let the page scroll under the zoom).
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const pt = toViewPoint(e.clientX, e.clientY);
+      zoomAt(e.deltaY > 0 ? 1.18 : 1 / 1.18, pt?.x, pt?.y);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [toViewPoint, zoomAt, data]);
 
   useEffect(() => {
     let alive = true;
@@ -935,7 +979,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     // server's own degree caps (HOP2_PER_NODE/HOP2_TOTAL) are the guardrail.
     const limit = hops === 2 ? 48 : 64;
     api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=${limit}&hops=${hops}`)
-      .then((d) => { if (alive) { setData(d); setHidden(new Set()); onCenter?.(d.center.label); } })
+      .then((d) => { if (alive) { setData(d); setHidden(new Set()); setView({ x: 0, y: 0, w: MESH_W, h: MESH_H }); onCenter?.(d.center.label); } })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -1010,8 +1054,10 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   const lastMotion = relTime(data?.center.last_motion);
 
   // Single click re-centers (wander the mesh); double click opens the page.
-  // A short timer disambiguates the two without a jarring double-fire.
+  // A short timer disambiguates the two without a jarring double-fire. A
+  // click at the end of a pan drag is NOT a click — movedRef gates it.
   const onNodeClick = (nb: MeshNode) => {
+    if (movedRef.current) return;
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => onFocus(nb.token), 200);
   };
@@ -1019,6 +1065,22 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
     if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
     if (nb.href) onOpen(nb.href);
   };
+  const onPanDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    panRef.current = { cx: e.clientX, cy: e.clientY, vx: view.x, vy: view.y };
+    movedRef.current = false;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPanMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const p = panRef.current;
+    const el = svgRef.current;
+    if (!p || !el) return;
+    const dx = e.clientX - p.cx, dy = e.clientY - p.cy;
+    if (Math.abs(dx) + Math.abs(dy) > 4) movedRef.current = true;
+    const r = el.getBoundingClientRect();
+    const scale = Math.min(r.width / view.w, r.height / view.h) || 1;
+    setView((v) => ({ ...v, x: p.vx - dx / scale, y: p.vy - dy / scale }));
+  };
+  const onPanUp = () => { panRef.current = null; };
   const toggleKind = (k: string) =>
     setHidden((prev) => {
       const n = new Set(prev);
@@ -1052,7 +1114,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
           </span>
         </div>
 
-        <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden p-2">
+        <div className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden p-2">
           {loading && !data ? (
             <div className="p-6 text-xs opacity-60">Loading neighborhood…</div>
           ) : err ? (
@@ -1060,8 +1122,23 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
           ) : !center ? (
             <div className="p-6"><Empty>Nothing to center on.</Empty></div>
           ) : (
-            <svg viewBox={`0 0 ${MESH_W} ${MESH_H}`} preserveAspectRatio="xMidYMid meet"
-              className="w-full h-full" role="img"
+            <>
+            <div className="absolute right-3 top-3 z-10 flex flex-col gap-1">
+              {([["+", () => zoomAt(1 / 1.35)], ["−", () => zoomAt(1.35)],
+                 ["⟲", () => setView({ x: 0, y: 0, w: MESH_W, h: MESH_H })]] as const
+              ).map(([lbl, fn]) => (
+                <button key={lbl} onClick={fn} aria-label={lbl === "⟲" ? "reset zoom" : lbl === "+" ? "zoom in" : "zoom out"}
+                  className="w-7 h-7 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] text-sm leading-none text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)] hover:border-[color:var(--border-strong)] transition-colors">
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+              preserveAspectRatio="xMidYMid meet"
+              className="w-full h-full touch-none"
+              style={{ cursor: panRef.current ? "grabbing" : "grab" }} role="img"
+              onPointerDown={onPanDown} onPointerMove={onPanMove}
+              onPointerUp={onPanUp} onPointerLeave={onPanUp}
               aria-label={`Mesh around ${center.label}`}>
               {/* domain hulls behind everything — the Understand grouping,
                   --et-memory at low opacity with a dashed stroke */}
@@ -1141,6 +1218,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                 );
               })}
             </svg>
+            </>
           )}
         </div>
 
@@ -1151,7 +1229,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
               <GlyphIcon kind={k} size={10} /> {k}
             </span>
           ))}
-          <span className="ml-auto">dashed halo = selected · click a node to re-center</span>
+          <span className="ml-auto">scroll = zoom · drag = pan · click a node to re-center · double-click opens it</span>
         </div>
       </div>
 

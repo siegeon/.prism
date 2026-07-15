@@ -42,7 +42,13 @@ class _NoBrain:
         return []
 
     def resolve_indexed_file(self, token):
-        return None
+        # Echo path-shaped tokens (posix-normalized) = "every project FILE is
+        # indexed". Session/task code neighbors are HEALED through this rung
+        # now — None would mean "outside the project" and drop them all. Only
+        # path shapes echo: the resolve ladder tries this rung BEFORE task/
+        # session ids, which must stay unresolved here.
+        t = str(token or "").replace("\\", "/")
+        return t if "/" in t or t.endswith((".py", ".md", ".ts")) else None
 
     def get_recent_searches(self, limit=200):
         return []
