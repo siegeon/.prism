@@ -1743,6 +1743,48 @@ class ConductorService:
                     f"{type(exc).__name__}: {exc}"}
         return {"ok": report.get("verdict") == "pass", "lanes": report}
 
+    def rewind_task(self, task_id: str, reason: str = "",
+                    actor: str = "owner") -> dict:
+        """AUDITED one-step rewind for an overshot task (task b07fd46e).
+
+        The repair lever for a double-advance (mx-f8ed3f): moves the task
+        back EXACTLY one step in WORKFLOW_STEPS, resets the gate state for
+        the target step ('pending' on a gate, 'none' otherwise), clears
+        gate_reason, and records a task_history row carrying the mandatory
+        reason + actor. Refuses a blank reason and refuses to rewind off
+        the first step — a guarded lever, never a silent hand-drive."""
+        if self._task_svc is None:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "no TaskService attached"}
+        if not (reason and reason.strip()):
+            return {"ok": False, "task_id": task_id,
+                    "reason": "rewind requires a reason (audited lever)"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "task_id": task_id, "reason": "unknown task"}
+        from prism_service.models.workflow import WORKFLOW_STEPS
+        ids = [s["id"] for s in WORKFLOW_STEPS]
+        cur = getattr(task, "workflow_step", "") or ""
+        if cur not in ids:
+            return {"ok": False, "task_id": task_id,
+                    "reason": f"task is not on a workflow step ({cur!r})"}
+        i = ids.index(cur)
+        if i == 0:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "already on the first workflow step; "
+                              "cannot rewind further"}
+        target = WORKFLOW_STEPS[i - 1]
+        self._task_svc.update(
+            task_id, workflow_step=target["id"],
+            gate_state="pending" if target.get("type") == "gate" else "none",
+            gate_reason="")
+        self._task_svc.record_history(
+            task_id, action="rewind_task",
+            details=f"{cur} -> {target['id']}; reason={reason.strip()}",
+            actor=actor or "owner")
+        return {"ok": True, "task_id": task_id, "from_step": cur,
+                "to_step": target["id"]}
+
     def _verify_rubric_gate(self, task, validation: str) -> dict:
         """Score a rubric validation kind (story_complete/plan_coverage)
         as a PURE function of the task's own evidence + the YAML rubric
@@ -2536,6 +2578,31 @@ class ConductorService:
             detail_bits.append(
                 f"policy_hash={_pin['policy_hash'][:19]}; "
                 f"control_ref={(_pin.get('control_ref') or '')[:12]}")
+        # IDEMPOTENT DECISION (task b07fd46e): the verifier consult above can
+        # take minutes; a timed-out client's retry may have decided this gate
+        # while we were inside it. Re-fetch and require the task is STILL on
+        # THIS gate with the gate in the SAME state we entered on — a lost
+        # race is a RECORDED no-op naming the true step, never a second
+        # 'passed' write or advance (mx-f8ed3f: red_gate overshot two steps).
+        _live = self._task_svc.get(task_id)
+        _live_step = getattr(_live, "workflow_step", "")
+        _live_state = getattr(_live, "gate_state", "")
+        if _live_step != gate_step_id or _live_state != task.gate_state:
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; no-op: "
+                         f"decision raced — task now at {_live_step}/"
+                         f"{_live_state}"),
+                actor=actor)
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": _live_state,
+                "reason": (f"decision raced: this gate was already decided — "
+                           f"the task is now at {_live_step} "
+                           f"(gate_state={_live_state}); no second advance"),
+            }
         self._task_svc.update(
             task_id,
             gate_state="passed",
