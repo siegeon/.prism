@@ -365,11 +365,13 @@ def test_two_hops_degree_and_total_caps(monkeypatch):
     hop1 = [n for n in res["neighbors"] if n.get("hop") == 1]
     hop2 = [n for n in res["neighbors"] if n.get("hop") == 2]
     assert len(hop1) == 10, len(hop1)
-    assert len(hop2) == 60, len(hop2)  # total cap binds (10*8=80 -> 60)
+    # per-node cap binds first here: 10 parents x HOP2_PER_NODE(12) = 120,
+    # under HOP2_TOTAL(140) — the mesh draws the graph's real richness now.
+    assert len(hop2) == 120, len(hop2)
     per_parent: dict = {}
     for n in hop2:
         per_parent[n["via"]] = per_parent.get(n["via"], 0) + 1
-    assert max(per_parent.values()) <= 8, per_parent  # per-node cap binds
+    assert max(per_parent.values()) <= xref.HOP2_PER_NODE, per_parent
 
 
 def test_memory_mesh_edges_between_two_neighbors(monkeypatch):

@@ -24,6 +24,7 @@ for now (both are optional in the frozen contract).
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import PurePosixPath
 from typing import Optional
 
@@ -371,11 +372,13 @@ def _task_neighbors(p, task_id: str, task, out: list) -> None:
     """Task threads: linked sessions, parent/children epics, dependencies, and
     the task's own gate. Never a hub -- these are peers reachable in one hop."""
     task_svc = getattr(p, "task_svc", None)
+    sids: list = []
     if task_svc is not None:
         try:
             for s in (task_svc.sessions_for_task(task_id) or []):
                 sid = s.get("session_id") if isinstance(s, dict) else None
                 if sid:
+                    sids.append(sid)
                     tok = int(s.get("tokens_used") or 0)
                     lbl = _short(sid) + (f" · {tok // 1000}k" if tok else "")
                     out.append(_nb("session", lbl, f"/sessions/{sid}",
@@ -414,6 +417,65 @@ def _task_neighbors(p, task_id: str, task, out: list) -> None:
     # becomes a memory diamond in the mesh, so a task focus actually shows the
     # curated knowledge it pulled in — and 2+ in one domain draw a dashed hull.
     _task_concept_neighbors(p, task_id, out)
+    # Code the task's sessions actually modified — DIRECT neighbors, so a task
+    # focus shows the files it landed in without a hop through the session.
+    _task_code_neighbors(p, sids, out)
+    # Test files that pin this task's oracle (same content-based discovery as
+    # the detail page's Tests tab) — the covers edge from the design artifact.
+    for rel in _pinned_test_files(task_id):
+        out.append(_nb("test", rel.rsplit("/", 1)[-1],
+                       f"/artifact?focus={rel}", "covers", rel))
+
+
+def _task_code_neighbors(p, session_ids: list, out: list,
+                         cap: int = 12) -> None:
+    """Code squares for the files this task's sessions MODIFIED (read files
+    stay a session-focus detail — a task's direct code ring is what it shipped
+    into). Deduped across sessions, capped so a long drive can't flood the
+    ring. Guarded: no conductor service or no file log just adds nothing."""
+    conductor_svc = getattr(p, "conductor_svc", None)
+    getter = getattr(conductor_svc, "session_file_paths", None)
+    if getter is None or not session_ids:
+        return
+    seen: set = set()
+    for sid in session_ids:
+        try:
+            paths = getter(sid) or {}
+        except Exception:
+            continue
+        for f in (paths.get("modified") or []):
+            if f in seen:
+                continue
+            seen.add(f)
+            out.append(_nb("code", f.replace("\\", "/").split("/")[-1],
+                           f"/artifact?focus={f}", "implements in", f))
+            if len(seen) >= cap:
+                return
+
+
+@lru_cache(maxsize=256)
+def _pinned_test_files(task_id: str) -> tuple:
+    """Test files that PIN this task's oracle — the same content-based
+    discovery as api.tasks.get_task_tests (the red-test file names the task id
+    in its module docstring). Cached per task id because a 2-hop mesh expands
+    MANY task nodes per request and the scan reads every tests/**/*.py; the
+    dev daemon bounces on every change, which clears the cache."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        return ()
+    from pathlib import Path
+    tests_root = Path(__file__).resolve().parents[2] / "tests"
+    if not tests_root.is_dir():
+        return ()
+    short = task_id[:8]
+    found: list = []
+    for f in sorted(tests_root.rglob("*.py")):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if task_id in text or (len(short) >= 8 and short in text):
+            found.append(f.relative_to(tests_root.parent).as_posix())
+    return tuple(found)
 
 
 def _task_concept_neighbors(p, task_id: str, out: list) -> None:
@@ -604,7 +666,7 @@ def _gate_neighbors(p, token: str, out: list) -> None:
 # and does ONE pass per node (never per pair), fully getattr/try-guarded.
 # ---------------------------------------------------------------------------
 
-MESH_EDGE_CAP = 80
+MESH_EDGE_CAP = 320
 
 
 def _dedupe_edges(edges: list) -> list:
@@ -739,8 +801,8 @@ def _build_mesh_edges(p, center_out: dict, neighbors: list) -> list:
 # hops=2 growth guards (artifact "2 hops"): each first-hop node contributes at
 # most HOP2_PER_NODE of ITS own neighbors, and the whole second ring is capped
 # at HOP2_TOTAL so a high-degree hub can't explode the mesh.
-HOP2_PER_NODE = 8
-HOP2_TOTAL = 60
+HOP2_PER_NODE = 12
+HOP2_TOTAL = 140
 
 
 def _expand(token: str, p) -> tuple:

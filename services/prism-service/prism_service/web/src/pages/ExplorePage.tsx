@@ -746,7 +746,7 @@ const Edge = ({ file, w }: { file: string; w: number }) => (
 // shapes/colors per --et-<kind>. Single click = re-center (wander); double
 // click = open the entity. Filter chips toggle kinds; legend maps shape→type.
 // ===========================================================================
-const MESH_W = 880, MESH_H = 520, MESH_CX = MESH_W / 2, MESH_CY = MESH_H / 2;
+const MESH_W = 1060, MESH_H = 600, MESH_CX = MESH_W / 2, MESH_CY = MESH_H / 2;
 
 const meshFill = (kind: string) => (isMeshKind(kind) ? `var(--et-${kind})` : "var(--text-faint)");
 const trunc = (s: string, n = 20) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -786,12 +786,21 @@ function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): 
   type P = { n?: MeshNode; token: string; x: number; y: number; r: number; hop: number };
   const pts: P[] = [{ token: centerToken, x: MESH_CX - 30, y: MESH_CY + 6, r: 13, hop: 0 }];
   const idx = new Map<string, number>([[centerToken, 0]]);
+  const dense = nodes.length > 55;
   nodes.forEach((n) => {
     const a = hash01(n.token) * Math.PI * 2;
     const rad = 110 + hash01(n.token + "r") * 150 + (n.hop === 2 ? 55 : 0);
-    pts.push({ n, token: n.token, x: MESH_CX + Math.cos(a) * rad, y: MESH_CY + Math.sin(a) * rad, r: n.hop === 2 ? 8 : 12, hop: n.hop ?? 1 });
+    pts.push({ n, token: n.token, x: MESH_CX + Math.cos(a) * rad, y: MESH_CY + Math.sin(a) * rad, r: n.hop === 2 ? (dense ? 6.5 : 8) : 12, hop: n.hop ?? 1 });
     idx.set(n.token, pts.length - 1);
   });
+  // Adaptive spacing (Fruchterman–Reingold's k): the ideal per-node spacing
+  // for THIS count on THIS canvas. Repulsion and spring rests scale off it,
+  // so 15 nodes spread wide and 120 settle into a dense-but-legible fabric
+  // instead of one clump — no curation, the layout absorbs the count.
+  const k = Math.sqrt((MESH_W * MESH_H) / Math.max(pts.length, 1));
+  const REP = 0.6 * k * k;
+  const restSpoke = Math.min(180, Math.max(80, 0.95 * k));
+  const restLink = Math.min(130, Math.max(60, 0.68 * k));
   const springs: [number, number][] = [];
   for (const e of edges) {
     const a = idx.get(e.from), b = idx.get(e.to);
@@ -810,30 +819,57 @@ function layoutMesh(centerToken: string, nodes: MeshNode[], edges: MeshEdge[]): 
       let dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
       let d2 = dx * dx + dy * dy;
       if (d2 < 1) { dx = hash01(pts[i].token) - 0.5; dy = hash01(pts[j].token) - 0.5; d2 = 1; }
-      const d = Math.sqrt(d2), fr = 9800 / d2;
+      const d = Math.sqrt(d2), fr = REP / d2;
       fx[i] += (dx / d) * fr; fy[i] += (dy / d) * fr;
       fx[j] -= (dx / d) * fr; fy[j] -= (dy / d) * fr;
     }
     for (const [a, b] of springs) {
-      const rest = pts[a].hop === 0 || pts[b].hop === 0 ? 175 : 125;
+      const rest = pts[a].hop === 0 || pts[b].hop === 0 ? restSpoke : restLink;
       const dx = pts[b].x - pts[a].x, dy = pts[b].y - pts[a].y;
       const d = Math.max(Math.hypot(dx, dy), 1);
       const fs = (d - rest) * 0.045;
       fx[a] += (dx / d) * fs; fy[a] += (dy / d) * fs;
       fx[b] -= (dx / d) * fs; fy[b] -= (dy / d) * fs;
     }
+    const centroids: { x: number; y: number; g: number[] }[] = [];
     for (const g of domGroups.values()) {
       if (g.length < 2) continue;
       const cx = g.reduce((acc, i) => acc + pts[i].x, 0) / g.length;
       const cy = g.reduce((acc, i) => acc + pts[i].y, 0) / g.length;
-      for (const i of g) { fx[i] += (cx - pts[i].x) * 0.035; fy[i] += (cy - pts[i].y) * 0.035; }
+      for (const i of g) { fx[i] += (cx - pts[i].x) * 0.07; fy[i] += (cy - pts[i].y) * 0.07; }
+      centroids.push({ x: cx, y: cy, g });
+    }
+    // Domains repel each other as WHOLE groups so two hulls never merge into
+    // one mega-blob with colliding captions.
+    for (let a = 0; a < centroids.length; a++) for (let b = a + 1; b < centroids.length; b++) {
+      const dx = centroids[a].x - centroids[b].x, dy = centroids[a].y - centroids[b].y;
+      const d = Math.max(Math.hypot(dx, dy), 1);
+      if (d > 240) continue;
+      const push = ((240 - d) / d) * 0.12;
+      for (const i of centroids[a].g) { fx[i] += dx * push; fy[i] += dy * push; }
+      for (const i of centroids[b].g) { fx[i] -= dx * push; fy[i] -= dy * push; }
     }
     for (let i = 0; i < pts.length; i++) {
-      fx[i] += (MESH_CX - pts[i].x) * 0.0042; fy[i] += (MESH_CY - pts[i].y) * 0.0042;
+      fx[i] += (MESH_CX - pts[i].x) * 0.0018; fy[i] += (MESH_CY - pts[i].y) * 0.0018;
       const mag = Math.hypot(fx[i], fy[i]) || 1;
       const step = Math.min(mag, 14 * cool + 2) / mag;
       pts[i].x = Math.min(MESH_W - PAD_X, Math.max(PAD_X, pts[i].x + fx[i] * step));
       pts[i].y = Math.min(MESH_H - PAD_BOTTOM, Math.max(PAD_TOP, pts[i].y + fy[i] * step));
+    }
+  }
+  // Fill pass: stretch the settled fabric to the padded canvas so a dense
+  // neighborhood uses the whole stage instead of huddling mid-canvas. Linear
+  // per-axis (deterministic), stretch-only and capped so a tiny 3-node mesh
+  // isn't blown apart.
+  if (pts.length > 4) {
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const sx = Math.min(2.2, Math.max(1, (MESH_W - 2 * PAD_X) / Math.max(maxX - minX, 1)));
+    const sy = Math.min(2.2, Math.max(1, (MESH_H - PAD_TOP - PAD_BOTTOM) / Math.max(maxY - minY, 1)));
+    for (const p of pts) {
+      p.x = PAD_X + (p.x - minX) * sx + ((MESH_W - 2 * PAD_X) - (maxX - minX) * sx) / 2;
+      p.y = PAD_TOP + (p.y - minY) * sy + ((MESH_H - PAD_TOP - PAD_BOTTOM) - (maxY - minY) * sy) / 2;
     }
   }
   const placed: Placed[] = pts.slice(1).map((p) => ({ ...(p.n as MeshNode), x: p.x, y: p.y, hop: p.hop, r: p.r }));
@@ -894,9 +930,10 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   useEffect(() => {
     let alive = true;
     setLoading(true); setErr(null);
-    // 1 hop takes a wider direct fan (limit 48); 2 hops keeps the inner ring
-    // tight (limit 24) so the outer ring has room to breathe.
-    const limit = hops === 2 ? 16 : 40;
+    // Take the FULL fan the API offers — the graph holds thousands of nodes
+    // and starving the mesh was the old hairball's mistake in reverse. The
+    // server's own degree caps (HOP2_PER_NODE/HOP2_TOTAL) are the guardrail.
+    const limit = hops === 2 ? 48 : 64;
     api.get<MeshData>(`/api/xref/neighbors?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}&limit=${limit}&hops=${hops}`)
       .then((d) => { if (alive) { setData(d); setHidden(new Set()); onCenter?.(d.center.label); } })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); })
@@ -913,15 +950,12 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   // (a prerequisite for a tight domain hull). Memory nodes lead, clustered by
   // domain; every other kind keeps its order behind them.
   const ordered = useMemo(() => {
-    // Curate like the artifact: every direct neighbor draws; second-hop is
-    // capped at 8 drawn (deterministic first-N) so the canvas breathes —
-    // the true two-hop degree stays in the Selected card and the stats line.
-    const hop2Cap = 8;
-    let hop2Seen = 0;
-    const curated = visible.filter((n) => (n.hop ?? 1) === 1 || ++hop2Seen <= hop2Cap);
+    // EVERY fetched node draws — the mesh's promise is the graph's real
+    // richness; the layout adapts its spacing to the count instead of the
+    // count being curated down to fit a fixed layout.
     const byDom = new Map<string, MeshNode[]>();
     const rest: MeshNode[] = [];
-    for (const n of curated) {
+    for (const n of visible) {
       if (n.kind === "memory" && n.domain) {
         const g = byDom.get(n.domain) ?? [];
         g.push(n); byDom.set(n.domain, g);
@@ -991,6 +1025,9 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
       if (n.has(k)) n.delete(k); else n.add(k);
       return n;
     });
+  // Dense fabric (2-hop on a rich focus): edge labels stay on the spokes
+  // only and hop-2 captions shrink, so 100+ nodes read as texture, not soup.
+  const dense = placed.length > 55;
 
   return (
     <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-3 px-5 pb-4 overflow-hidden">
@@ -1010,7 +1047,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             );
           })}
           <span className="ml-auto text-2xs opacity-60 tabular-nums font-mono truncate max-w-[52%]">
-            {1 + placed.length} nodes · {renderEdges.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}{visible.length > placed.length ? ` · +${visible.length - placed.length} undrawn` : ""}
+            {1 + placed.length} nodes · {renderEdges.length} edges · {domainCount} domain{domainCount === 1 ? "" : "s"}
             {center ? <> · selected <span className="text-[color:var(--text-primary)]">{trunc(center.label, 22)}</span></> : null}
           </span>
         </div>
@@ -1057,8 +1094,10 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                     <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
                       stroke={spoke ? "var(--border-strong)" : "var(--border-default)"}
                       strokeWidth={spoke ? 1.1 : 0.9} opacity={spoke ? 1 : 0.6} />
-                    <text x={mx} y={my - 3} textAnchor="middle" fontSize={spoke ? 11 : 9.5}
-                      fill="var(--text-faint)" opacity={spoke ? 1 : 0.8}>{e.label}</text>
+                    {(spoke || !dense) && (
+                      <text x={mx} y={my - 3} textAnchor="middle" fontSize={spoke ? 11 : 9.5}
+                        fill="var(--text-faint)" opacity={spoke ? 1 : 0.8}>{e.label}</text>
+                    )}
                   </g>
                 );
               })}
@@ -1086,8 +1125,9 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                     onClick={() => onNodeClick(nb)} onDoubleClick={() => onNodeDbl(nb)}>
                     <title>{`${nb.label} — ${nb.edge}${two ? " (2 hops)" : ""} (click to center, double-click to open)`}</title>
                     <MeshShape kind={nb.kind} x={nb.x} y={nb.y} r={nb.r} />
-                    <text x={nb.x} y={nb.y + (two ? 20 : 26)} textAnchor="middle" fontSize={two ? 9.5 : 11}
-                      fill="var(--text-secondary)">{trunc(nb.label, two ? 13 : 16)}</text>
+                    <text x={nb.x} y={nb.y + (two ? (dense ? 16 : 20) : 26)} textAnchor="middle"
+                      fontSize={two ? (dense ? 8 : 9.5) : 11}
+                      fill="var(--text-secondary)">{trunc(nb.label, two ? (dense ? 11 : 13) : 16)}</text>
                     {/* concept-type sub-caption under the diamond (decision/
                         convention/expertise/anti-pattern/principle) */}
                     {nb.kind === "memory" && nb.concept_type && !two && (
