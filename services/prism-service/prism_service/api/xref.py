@@ -207,13 +207,32 @@ def _resolve_gate(task_svc, token: str) -> Optional[dict]:
     return {"id": task_id, "label": f"{title or task_id} · gate"}
 
 
+_TEST_TOKEN_RE = re.compile(
+    r"^(?P<file>[^:\s]+\.py)(?:::(?P<rest>[\w\.\[\]\-:]+))?$")
+
+
 def _resolve_test(brain_svc, token: str) -> Optional[dict]:
-    """Step 7 -- reserved for a test entity (a test node keyed by its pytest
-    nodeid, e.g. ``tests/unit/foo.py::test_bar``). No test entity is indexed
-    yet, so this rung returns None today; the KIND is declared so the SPA
-    renderer and gate rubric can key off it now, and this becomes the single
-    place to wire the lookup once a test node lands in the graph."""
-    return None
+    """Step 7 -- a test entity keyed by its pytest node id
+    (``tests/unit/foo.py::test_bar``) or a bare test-file path (task
+    b8703343). The FILE part heals through the SAME indexed-file rung code
+    paths use (stale prefixes / absolute paths resolve to the real indexed
+    path; out-of-repo returns None -> honest unresolved). The node name
+    (last ``::`` segment, params stripped) becomes the artifact deep-link's
+    symbol so the row lands ON the test."""
+    m = _TEST_TOKEN_RE.match((token or "").strip().replace("\\", "/"))
+    if not m:
+        return None
+    file, rest = m.group("file"), m.group("rest") or ""
+    base = file.rsplit("/", 1)[-1]
+    if not (rest or base.startswith("test_") or base.endswith("_test.py")):
+        return None
+    healed = _resolve_file(brain_svc, file)
+    if not healed:
+        return None
+    name = rest.split("::")[-1].split("[")[0] if rest else ""
+    label = healed.rsplit("/", 1)[-1] + (f"::{name}" if name else "")
+    href = f"/artifact?focus={healed}" + (f"&symbol={name}" if name else "")
+    return {"label": label, "href": href}
 
 
 def _resolve_retrieval(brain_svc, token: str) -> Optional[dict]:

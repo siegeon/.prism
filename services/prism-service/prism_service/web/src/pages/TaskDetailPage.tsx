@@ -74,6 +74,14 @@ type GateReadiness = {
     ended_at?: string;
     reason?: string;
   };
+  // Receipt-backed test rows (task b8703343): one per pytest id in the
+  // task's derived oracle — the tests that DECIDE this gate. passed=null
+  // means listed-but-unevidenced (no matching receipt yet).
+  tests?: {
+    id: string; label: string; href: string;
+    passed: boolean | null; status: string;
+    ended_at: string; receipt_job_id: string;
+  }[];
 };
 
 // GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
@@ -1175,6 +1183,28 @@ export default function TaskDetailPage() {
                         {gateReadiness?.receipt?.ended_at ? `fresh · ${String(gateReadiness.receipt.ended_at).slice(11, 19)}` : "—"}
                       </td>
                     </tr>
+                    {(gateReadiness?.tests ?? []).map((tr) => (
+                      <tr key={tr.id}>
+                        <td className="py-1.5 pr-3 pl-4">
+                          <button type="button" onClick={() => navigate(tr.href)}
+                            className="font-mono underline decoration-dotted underline-offset-2 text-left"
+                            title={tr.id}>
+                            △ {tr.label}
+                          </button>
+                          <div className="text-2xs" style={{ color: "var(--text-muted)" }}>decides this gate · receipt-backed</div>
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          {tr.passed === true
+                            ? <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }}>passed</span>
+                            : tr.passed === false
+                              ? <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>failed</span>
+                              : <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--text-muted)", boxShadow: "inset 0 0 0 1px var(--border-default)" }}>not run</span>}
+                        </td>
+                        <td className="py-1.5 text-right font-mono text-2xs" style={{ color: "var(--text-muted)" }}>
+                          {tr.ended_at ? `${String(tr.ended_at).slice(11, 19)} · ${tr.receipt_job_id.slice(0, 8)}` : "—"}
+                        </td>
+                      </tr>
+                    ))}
                     <tr>
                       <td className="py-1.5 pr-3">
                         <span className="font-mono">shell verifier · green_full</span>

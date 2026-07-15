@@ -108,6 +108,39 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                 }
         except Exception:
             pass
+    # TEST ROWS (task b8703343): one row per pytest id in the task's derived
+    # OracleSpec -- the tests that DECIDE this gate -- each carrying the
+    # latest matching receipt's provenance. A pure VIEW over
+    # OracleSpec.from_task + receipts.jsonl: no new persistence; ids without
+    # a matching receipt are listed with passed=None (honestly unevidenced).
+    try:
+        import re as _re
+        from prism_service.services import oracle_spec as osp
+        spec = osp.OracleSpec.from_task(task)
+        if spec.adapter == osp.ADAPTER_PYTEST and spec.target.strip():
+            latest = osp.latest_receipt(project, task_id)
+            match = (latest is not None
+                     and latest.spec_hash == spec.spec_hash())
+            rows = []
+            for tid_ in [i for i in _re.split(r"[\s,]+", spec.target) if i]:
+                file_, _, rest_ = tid_.partition("::")
+                name_ = rest_.split("::")[-1].split("[")[0] if rest_ else ""
+                href_ = (f"/artifact?focus={file_}"
+                         + (f"&symbol={name_}" if name_ else ""))
+                rows.append({
+                    "id": tid_,
+                    "label": (file_.rsplit("/", 1)[-1]
+                              + (f"::{name_}" if name_ else "")),
+                    "href": href_,
+                    "passed": bool(latest.passed) if match else None,
+                    "status": latest.status if match else "not-run",
+                    "ended_at": latest.ended_at if match else "",
+                    "receipt_job_id": latest.job_id if match else "",
+                })
+            if rows:
+                out["tests"] = rows
+    except Exception:
+        pass
     return out
 
 
