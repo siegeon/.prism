@@ -33,8 +33,9 @@ type OkfGraph = { nodes: GraphNode[]; edges: GraphEdge[] };
 
 // Tasks that recalled this concept (from the memory recall_log) — the "Cited
 // by" extension beyond concept-to-concept backlinks. Sessions are not
-// attributable: recall_log records the asking task, not a session.
+// Sessions became attributable in task fc258f15 (recall_log.session_id).
 type Recaller = { task_id: string; recall_count?: number; last_recalled?: string; outcome?: string };
+type SessionRecaller = { session_id: string; recall_count?: number; last_recalled?: string };
 
 type Concept = {
   path: string; type: string;
@@ -42,6 +43,7 @@ type Concept = {
   body: string; links: string[];
   backlinks: { id: string; title: string }[];
   recalled_by?: Recaller[];
+  recalled_by_sessions?: SessionRecaller[];
 };
 
 const DOMAIN_FALLBACK = "general";
@@ -550,8 +552,9 @@ function DetailPanel({
         )}
       </div>
 
-      {/* "Cited by" beyond concepts: tasks that recalled this concept, from
-          the memory recall_log. Guarded — hidden entirely when nothing has. */}
+      {/* "Cited by" beyond concepts: tasks AND sessions that recalled this
+          concept, from the memory recall_log (sessions since fc258f15).
+          Guarded — hidden entirely when nothing has. */}
       {(concept.recalled_by?.length ?? 0) > 0 && (
         <div className="border-t border-[color:var(--border-default)] pt-3">
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">
@@ -563,6 +566,24 @@ function DetailPanel({
                 <EntityChip kind="task" label={t.task_id.slice(0, 8)} to={`/tasks/${t.task_id}`} title={t.task_id} />
                 {t.outcome ? (
                   <span className="text-2xs text-[color:var(--text-muted)] capitalize">{t.outcome}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {(concept.recalled_by_sessions?.length ?? 0) > 0 && (
+        <div className="border-t border-[color:var(--border-default)] pt-3">
+          <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">
+            Recalled in sessions ({concept.recalled_by_sessions!.length})
+          </div>
+          <ul className="space-y-1.5">
+            {concept.recalled_by_sessions!.map((sr) => (
+              <li key={sr.session_id} className="flex items-center gap-2 min-w-0">
+                <EntityChip kind="session" label={sr.session_id.slice(0, 8)} to={`/sessions/${sr.session_id}`} title={sr.session_id} />
+                {(sr.recall_count ?? 0) > 1 ? (
+                  <span className="text-2xs text-[color:var(--text-muted)]">× {sr.recall_count}</span>
                 ) : null}
               </li>
             ))}
