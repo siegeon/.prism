@@ -508,22 +508,32 @@ function TraceKpi({ label, value, hint }: { label: string; value: string; hint?:
 }
 
 // One indented step row (.trow.lvl1): step name, role Lozenge, model, an
-// optional gate Lozenge, then a token bar sized to the SESSION's max step +
-// the tabular count. `max` is that session's largest step-token value.
+// optional gate Lozenge, then a FULL-WIDTH token track whose fill is the
+// step's share of the session's max step (owner 2026-07-16: "the blue bars
+// should be proportional and much longer"). `max` is that session's largest
+// step-token value. A genuinely token-less row renders "—" and no bar —
+// never a dishonest "0 tok" stub.
 function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
-  const w = Math.max(6, Math.round((86 * (step.tokens || 0)) / Math.max(1, max)));
+  const tokens = step.tokens || 0;
+  const pct = Math.min(100, Math.max(tokens > 0 ? 1.5 : 0, (100 * tokens) / Math.max(1, max)));
   const gate = step.gate_state && step.gate_state !== "none" ? step.gate_state : "";
   return (
     <div className="flex items-center gap-2.5 pl-6 py-1 min-w-0 hover:bg-[color:var(--surface-2)]">
-      <span className="min-w-0 truncate text-[13px] text-[color:var(--text-primary)]">{step.step}</span>
+      <span className="truncate text-[13px] text-[color:var(--text-primary)] shrink-0 max-w-[220px]">{step.step}</span>
       <Lozenge tone={roleLoz(step.role)}>{roleName(step.role)}</Lozenge>
       {step.model && (
         <span className="font-mono text-2xs text-[color:var(--text-muted)] truncate max-w-[140px] shrink-0" title={step.model}>{step.model}</span>
       )}
       {gate && <Lozenge tone={gateLoz(gate)}>{gate}</Lozenge>}
-      <span className="ml-auto flex items-center gap-2 shrink-0">
-        <span className="h-[5px] rounded-[3px]" style={{ width: `${w}px`, background: "var(--accent-teal-fg)", opacity: 0.75 }} />
-        <span className="font-mono text-2xs tabular-nums text-[color:var(--text-muted)] w-[52px] text-right">{fmtTokens(step.tokens || 0)}</span>
+      <span className="flex items-center gap-2 flex-1 min-w-[110px]">
+        <span className="h-[5px] flex-1 rounded-[3px]" style={{ background: tokens > 0 ? "var(--surface-3)" : "transparent" }}>
+          {tokens > 0 && (
+            <span className="block h-full rounded-[3px]" style={{ width: `${pct}%`, background: "var(--accent-teal-fg)", opacity: 0.75 }} />
+          )}
+        </span>
+        <span className="font-mono text-2xs tabular-nums text-[color:var(--text-muted)] w-[56px] text-right shrink-0">
+          {tokens > 0 ? fmtTokens(tokens) : "—"}
+        </span>
       </span>
     </div>
   );
@@ -659,7 +669,11 @@ function TraceView({ trace, loading }: { trace: TaskTrace | null; loading: boole
                   {s.session_id && s.session_id.trim()
                     ? <EntityChip kind="session" label={`${s.session_id.slice(0, 8)} · drive`} to={`/sessions/${s.session_id}`} />
                     : <Lozenge tone="neutral">conductor · machine</Lozenge>}
-                  <span className="ml-auto font-mono text-xs text-[color:var(--text-muted)] tabular-nums">{fmtTokens(s.tokens_total)} tok</span>
+                  {/* Honest zero: a session with no attributable tokens says
+                      "—", never "0 tok" (there was no transcript to read). */}
+                  <span className="ml-auto font-mono text-xs text-[color:var(--text-muted)] tabular-nums">
+                    {s.tokens_total > 0 ? `${fmtTokens(s.tokens_total)} tok` : "—"}
+                  </span>
                 </div>
                 {s.steps.map((st, i) => (
                   <TraceStepRow key={`${st.step}-${i}`} step={st} max={max} />

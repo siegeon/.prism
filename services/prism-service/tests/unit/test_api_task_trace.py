@@ -136,3 +136,111 @@ def test_trace_scoped_to_one_task(tmp_path, monkeypatch):
                       params={"project": "prism"}).json()
     assert body["totals"]["tokens"] == 500, body
     assert {s["session_id"] for s in body["sessions"]} == {"S-1"}
+
+
+# ── Backfill: zero-token UUID sessions re-attribute from the transcript ─────
+# (task 61261201 — _record_agent_run stamped tokens=0 when the transcript
+# wasn't readable at write time; the read path repairs it honestly.)
+
+_SID = "8750fa11-6890-4c5e-aa94-cae329e268dc"
+
+
+def _write_transcript(dirpath: Path, sid: str, events: list[tuple[float, int]]) -> None:
+    """Minimal transcript JSONL the production reader parses: one assistant
+    turn per (epoch, tokens) with a usage dict routed through sum_usage."""
+    import json
+    from datetime import datetime, timezone
+    lines = [
+        json.dumps({
+            "timestamp": datetime.fromtimestamp(ep, tz=timezone.utc).isoformat(),
+            "message": {"usage": {"output_tokens": tok}},
+        })
+        for ep, tok in events
+    ]
+    # Trailing newline matters: the incremental reader only folds COMPLETE
+    # lines, holding back a partial tail — a real transcript always ends \n.
+    (dirpath / f"{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_trace_backfills_zero_token_uuid_session(tmp_path, monkeypatch):
+    """AC-1: a UUID session whose DB rows are all tokens=0 but whose
+    transcript has real usage gets non-zero per-step tokens (bucketed into
+    each row's time window), the session total equals their sum, the trace
+    totals still equal the sum across sessions, and the repair PERSISTS —
+    a second read without the transcript still shows the numbers."""
+    from prism_service.services.agent_runs_data import build_task_trace
+    scores_db = str(tmp_path / "scores.db")
+    _seed_schema(scores_db)
+    base = 1_783_400_000.0
+    _seed(scores_db, [
+        _run(session_id=_SID, agent_id="a1", step="implement_tasks", tokens=0,
+             started_at=str(base + 0), ended_at=str(base + 100)),
+        _run(session_id=_SID, agent_id="a2", step="verify_green_state", tokens=0,
+             started_at=str(base + 100), ended_at=str(base + 200)),
+        _run(session_id=_SID, agent_id="a3", step="green_gate", tokens=0,
+             started_at=str(base + 200), ended_at=str(base + 300)),
+    ])
+    _write_transcript(tmp_path, _SID, [
+        (base + 50, 111), (base + 150, 222), (base + 250, 333),
+    ])
+    body = build_task_trace(scores_db, "T-trace", override_dir=str(tmp_path))
+    sess = {s["session_id"]: s for s in body["sessions"]}[_SID]
+    assert [st["tokens"] for st in sess["steps"]] == [111, 222, 333], sess
+    assert sess["tokens_total"] == 666
+    assert body["totals"]["tokens"] == sum(
+        s["tokens_total"] for s in body["sessions"])
+    # Durable repair: read again with NO transcript source at all.
+    (tmp_path / f"{_SID}.jsonl").unlink()
+    again = build_task_trace(scores_db, "T-trace")
+    sess2 = {s["session_id"]: s for s in again["sessions"]}[_SID]
+    assert sess2["tokens_total"] == 666, "backfill must persist to agent_runs"
+
+
+def test_trace_backfill_aligns_tz_skewed_stamps(tmp_path, monkeypatch):
+    """agent_runs rows have shipped with whole-hour tz skew vs the
+    transcript's UTC timestamps. The backfill finds the hour-aligned shift
+    whose windows claim the events — and still only counts in-window spend
+    (a 4-day transcript must never dump its lifetime total on one drive)."""
+    from prism_service.services.agent_runs_data import build_task_trace
+    scores_db = str(tmp_path / "scores.db")
+    _seed_schema(scores_db)
+    base = 1_783_400_000.0
+    skew = 5 * 3600  # stamps written 5h behind the transcript's UTC epochs
+    _seed(scores_db, [
+        _run(session_id=_SID, agent_id="a1", step="implement_tasks", tokens=0,
+             started_at=str(base + 0), ended_at=str(base + 100)),
+        _run(session_id=_SID, agent_id="a2", step="green_gate", tokens=0,
+             started_at=str(base + 100), ended_at=str(base + 200)),
+    ])
+    _write_transcript(tmp_path, _SID, [
+        (base + skew + 50, 111),        # implement window (shifted)
+        (base + skew + 150, 222),       # green window (shifted)
+        (base + skew + 90_000, 9_999_999),  # a day later — other work, NEVER counted
+    ])
+    body = build_task_trace(scores_db, "T-trace", override_dir=str(tmp_path))
+    sess = {s["session_id"]: s for s in body["sessions"]}[_SID]
+    assert [st["tokens"] for st in sess["steps"]] == [111, 222], sess
+    assert sess["tokens_total"] == 333
+    assert body["totals"]["tokens"] == 333
+
+
+def test_trace_never_fabricates_for_synthetic_or_absent(tmp_path, monkeypatch):
+    """AC-2: synthetic/empty session ids and UUID sessions with NO transcript
+    stay at 0 — nothing is invented — and totals still sum exactly."""
+    from prism_service.services.agent_runs_data import build_task_trace
+    scores_db = str(tmp_path / "scores.db")
+    _seed_schema(scores_db)
+    _seed(scores_db, [
+        _run(session_id="", agent_id="m1", step="story_gate", tokens=0),
+        _run(session_id="drive-rev-abc-3", agent_id="d1", step="plan_gate", tokens=0),
+        _run(session_id=_SID, agent_id="a1", step="implement_tasks", tokens=0,
+             started_at="1783400000.0", ended_at="1783400100.0"),
+        _run(session_id="S-real", agent_id="r1", step="draft_story", tokens=400),
+    ])
+    body = build_task_trace(scores_db, "T-trace", override_dir=str(tmp_path))
+    sess = {s["session_id"]: s for s in body["sessions"]}
+    assert sess[""]["tokens_total"] == 0
+    assert sess["drive-rev-abc-3"]["tokens_total"] == 0
+    assert sess[_SID]["tokens_total"] == 0  # no transcript on disk → honest 0
+    assert sess["S-real"]["tokens_total"] == 400
+    assert body["totals"]["tokens"] == 400

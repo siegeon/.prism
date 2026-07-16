@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.44"
+PRISM_VERSION = "7.0.45"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.45: TRACE TAB SHOWS REAL TOKENS PER SESSION (task 61261201). "
+    "build_task_trace re-attributes a zero-token UUID session from its live "
+    "transcript (bucketed into each row's time window, persisted to "
+    "agent_runs so the repair is durable; whole-transcript total on the "
+    "session header when no window claims); totals recomputed AFTER "
+    "backfill so sum(sessions)==totals always. Synthetic/machine sessions "
+    "and rows render an honest em-dash, never '0 tok' + stub bar. Step "
+    "bars are a full-width proportional track. "
     "v7.0.44: THE APP SAYS WHAT EACH IMAGE PROVES (owner 2026-07-16: 'i "
     "want the application to tell me that'). Evidence captions render as a "
     "labeled PROVES line under each thumbnail and beneath the lightbox "

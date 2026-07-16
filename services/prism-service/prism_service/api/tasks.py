@@ -339,10 +339,27 @@ def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     ``{"sessions": [{session_id, tokens_total, steps: [...]}],
     "totals": {tokens, steps, sessions}}``. A task with no runs returns empty
     arrays so the tab shows an honest empty state rather than 404. Cross-task
-    totals belong on the Sessions page; this stays scoped to the one drive."""
+    totals belong on the Sessions page; this stays scoped to the one drive.
+
+    source_path/override_dir resolve exactly the way _attach_turn_tokens
+    resolves them, so a zero-token UUID session gets re-attributed from its
+    transcript instead of rendering a dishonest 0."""
     from prism_service.services.agent_runs_data import build_task_trace
 
-    return build_task_trace(_scores_db(project), task_id)
+    src, override = "", ""
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        src = _project_source_path(project) or ""
+    except Exception:
+        pass
+    try:
+        from prism_service.services import claude_memory
+        override = claude_memory.configured_project_dir(project) or ""
+    except Exception:
+        pass
+    return build_task_trace(
+        _scores_db(project), task_id, source_path=src, override_dir=override
+    )
 
 
 @router.get("/{task_id}/prototype")
