@@ -611,6 +611,10 @@ export default function TaskDetailPage() {
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
+  // Last ↻ re-run outcome, rendered INLINE in the evidence table (owner
+  // 2026-07-16: a silent corner toast reads as "the button does not work" —
+  // the result must appear where the click happened).
+  const [mintResult, setMintResult] = useState<string>("");
   // The top-level gate ACTION panel — opened by the notification banner;
   // holds everything needed to decide the gate in place.
   const [gatePanelOpen, setGatePanelOpen] = useState(false);
@@ -722,7 +726,7 @@ export default function TaskDetailPage() {
 
   // Navigating task → task (the route reuses this component) resets the tab
   // back to Overview and drops the previous task's trace so it re-fetches.
-  useEffect(() => { setDocTab("overview"); setTrace(null); }, [id]);
+  useEffect(() => { setDocTab("overview"); setTrace(null); setMintResult(""); }, [id]);
 
   // Lazy trace fetch: only when the Trace tab is first opened for this task.
   // `trace` in the deps gates it to a single fetch (a failure caches an empty
@@ -850,15 +854,28 @@ export default function TaskDetailPage() {
   // (POST /api/conductor/gate/mint) — the gate panel's evidence action.
   const mintEvidence = async () => {
     setNotice("re-running the oracle inside the daemon…");
+    setMintResult("running the oracle inside the daemon…");
     try {
       const r = await api.post<{ ok: boolean; receipt_ok: boolean; receipt_refusal?: string }>(
         `/api/conductor/gate/mint?project=${project}`, { task_id: id });
-      setNotice(r.receipt_ok
+      const msg = r.receipt_ok
         ? "fresh evidence receipt minted — Approve will pass the evidence check"
-        : `oracle ran but evidence still not ready: ${r.receipt_refusal || r.ok}`);
+        : `oracle ran but evidence still not ready: ${r.receipt_refusal || "no receipt minted"}`;
+      setNotice(msg);
+      setMintResult(msg);
     } catch (e) {
-      setNotice(`oracle re-run failed: ${(e as Error).message}`);
+      const msg = `oracle re-run failed: ${(e as Error).message}`;
+      setNotice(msg);
+      setMintResult(msg);
     }
+    // The readiness fetch is one-shot per task (heavy git-walk, kept out of
+    // the 5s poll) — so a mint MUST re-pull it or the result chip stays
+    // "missing" forever and the button reads as broken.
+    try {
+      const gr = await api.get<GateReadiness>(
+        `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
+      setGateReadiness(gr);
+    } catch { /* keep the last known readiness */ }
     load();
   };
 
@@ -1178,6 +1195,11 @@ export default function TaskDetailPage() {
                               <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>{gateReadiness?.receipt ? "stale / failed" : "missing"}</span>
                               <button type="button" onClick={mintEvidence} className="text-2xs uppercase tracking-wider underline decoration-dotted">↻ re-run</button>
                             </span>}
+                        {mintResult && (
+                          <div className="text-2xs mt-1 leading-relaxed max-w-[360px]" style={{ color: "var(--text-muted)" }}>
+                            {mintResult}
+                          </div>
+                        )}
                       </td>
                       <td className="py-1.5 text-right font-mono text-2xs" style={{ color: gateReadiness?.receipt_ok ? "var(--accent-sage-fg)" : "var(--text-muted)" }}>
                         {gateReadiness?.receipt?.ended_at ? `fresh · ${String(gateReadiness.receipt.ended_at).slice(11, 19)}` : "—"}

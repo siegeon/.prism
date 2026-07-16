@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.37"
+PRISM_VERSION = "7.0.38"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.38: GATE RE-RUN SHOWS ITS RESULT (owner 2026-07-16: 'when i click "
+    "re-run it does not work... why are you not showing the missing "
+    "results'). The readiness fetch is one-shot per task, so the mint action "
+    "now re-pulls readiness after running the oracle (the result chip "
+    "updates missing->passing instead of appearing dead) and the re-run "
+    "outcome renders inline in the evidence table where the click happened, "
+    "not only as a transient corner toast. "
     "v7.0.37: EVIDENCE SCREENSHOTS VIEWABLE IN PRISM (owner 2026-07-16: 'if "
     "you have evidence it needs to be in prism so i can see it'). New per-task "
     "evidence store (data_dir.evidence_dir) served by GET /api/tasks/{id}/"
