@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.45"
+PRISM_VERSION = "7.0.46"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.46: DELIVERY PIPELINE ON THE TASK PAGE (owner 2026-07-16: 'done "
+    "is done, eg shipped and validated on main' / 'we need a way to "
+    "visually represent where you are and what still needs to be done'). "
+    "GET /api/tasks/{id}/delivery finds the task's [task:<id>]-tagged "
+    "commits in git and reports verified->committed->pushed->merged-to-"
+    "main->released stages from git facts; TaskDetailPage renders the "
+    "pipeline with a 'you are here' marker, per-commit ship state, and an "
+    "honest 'not yet delivered' note until a release contains the work. "
     "v7.0.45: TRACE TAB SHOWS REAL TOKENS PER SESSION (task 61261201). "
     "build_task_trace re-attributes a zero-token UUID session from its live "
     "transcript (bucketed into each row's time window, persisted to "

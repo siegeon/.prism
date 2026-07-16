@@ -729,6 +729,17 @@ export default function TaskDetailPage() {
   // 2026-07-16: a silent corner toast reads as "the button does not work" —
   // the result must appear where the click happened).
   const [mintResult, setMintResult] = useState<string>("");
+  // Delivery pipeline — WHERE the work lives and what's left to ship (owner
+  // 2026-07-16: done means SHIPPED; the app must visually show where you are
+  // and what still needs to be done). GET /api/tasks/:id/delivery.
+  type DeliveryStage = { key: string; label: string; state: "done" | "next" | "pending"; detail: string };
+  type Delivery = {
+    branch: string;
+    commits: { sha: string; subject: string; pushed: boolean; merged_to_main: boolean; released_in: string }[];
+    stages: DeliveryStage[];
+    delivered: boolean;
+  };
+  const [delivery, setDelivery] = useState<Delivery | null>(null);
   // The top-level gate ACTION panel — opened by the notification banner;
   // holds everything needed to decide the gate in place.
   const [gatePanelOpen, setGatePanelOpen] = useState(false);
@@ -834,6 +845,11 @@ export default function TaskDetailPage() {
           `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
         if (!cancelled) setGateReadiness(gr);
       } catch { if (!cancelled) setGateReadiness(null); }
+      try {
+        const dv = await api.get<Delivery>(
+          `/api/tasks/${id}/delivery?project=${project}`);
+        if (!cancelled) setDelivery(dv);
+      } catch { if (!cancelled) setDelivery(null); }
     })();
     return () => { cancelled = true; };
   }, [id, project]);
@@ -1528,6 +1544,61 @@ export default function TaskDetailPage() {
           )}
         </Card>
         </Stagger>
+      )}
+
+      {/* DELIVERY — where the work IS and what's left before it's truly done
+          (owner 2026-07-16: done means SHIPPED, merged + validated on main).
+          Only rendered once the task has something to deliver. */}
+      {delivery && (delivery.commits.length > 0 || task.status === "done") && (
+        <Card>
+          <SectionLabel>Delivery — where this work is</SectionLabel>
+          <div className="mt-3 flex items-center gap-0 flex-wrap">
+            {delivery.stages.map((st, i) => (
+              <div key={st.key} className="flex items-center min-w-0">
+                {i > 0 && (
+                  <span className="h-px w-6 min-[720px]:w-10 mx-1 shrink-0" style={{
+                    background: st.state === "done" ? "var(--accent-sage-fg)" : "var(--border-default)",
+                    opacity: st.state === "done" ? 0.6 : 1,
+                  }} />
+                )}
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-2xs uppercase tracking-wider font-semibold shrink-0"
+                  title={st.detail}
+                  style={st.state === "done"
+                    ? { color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)", background: "var(--accent-sage-bg)" }
+                    : st.state === "next"
+                      ? { color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)", background: "var(--accent-amber-bg)" }
+                      : { color: "var(--text-muted)", boxShadow: "inset 0 0 0 1px var(--border-default)" }}
+                >
+                  {st.state === "done" ? "✓" : st.state === "next" ? "●" : "○"} {st.label}
+                </span>
+              </div>
+            ))}
+            {!delivery.delivered && (
+              <span className="ml-3 text-2xs" style={{ color: "var(--accent-amber-fg)" }}>
+                not yet delivered — {delivery.stages.find((s) => s.state === "next")?.detail}
+              </span>
+            )}
+            {delivery.delivered && (
+              <span className="ml-3 text-2xs" style={{ color: "var(--accent-sage-fg)" }}>
+                delivered{delivery.commits[0]?.released_in ? ` in ${delivery.commits[0].released_in}` : ""}
+              </span>
+            )}
+          </div>
+          {delivery.commits.length > 0 && (
+            <div className="mt-2.5 space-y-1">
+              {delivery.commits.map((c) => (
+                <div key={c.sha} className="flex items-center gap-2 text-[12.5px] min-w-0">
+                  <span className="font-mono text-2xs shrink-0" style={{ color: "var(--text-muted)" }}>{c.sha}</span>
+                  <span className="truncate" style={{ color: "var(--text-secondary)" }}>{c.subject}</span>
+                  <span className="ml-auto font-mono text-2xs shrink-0" style={{ color: "var(--text-muted)" }}>
+                    {c.released_in ? `released · ${c.released_in}` : c.merged_to_main ? "on main" : c.pushed ? "pushed" : `local · ${delivery.branch}`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       )}
 
       {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined || pinTests.length > 0) && (

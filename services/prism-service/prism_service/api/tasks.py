@@ -362,6 +362,98 @@ def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     )
 
 
+def _git(repo: str, *args: str) -> tuple[int, str]:
+    """Run one git command in `repo`, no shell, short timeout. (rc, stdout)."""
+    import subprocess
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True, text=True, timeout=10,
+        )
+        return p.returncode, (p.stdout or "").strip()
+    except Exception:
+        return 1, ""
+
+
+@router.get("/{task_id}/delivery")
+def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
+    """WHERE the task's work lives and what's left to ship (owner 2026-07-16:
+    done means SHIPPED — merged and validated on main; the app must visually
+    show where you are and what still needs to be done).
+
+    Finds the task's commits by the [task:<id-prefix>] trailer convention in
+    the project's git repo, then reports an honest stage pipeline:
+    verified (green_gate passed) → committed → pushed (on any remote ref) →
+    merged to main (ancestor of origin/main) → released (reachable from a
+    tag). Every stage is computed from git facts, never inferred from the
+    gate; no repo / no tagged commits yields honest empty stages."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    t = _svc(project).get(task_id)
+    if t is None:
+        raise HTTPException(404, "task not found")
+    verified = (getattr(t, "gate_state", "") == "passed"
+                and getattr(t, "workflow_step", "") == "green_gate") \
+        or getattr(t, "status", "") == "done"
+
+    repo = ""
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        repo = _project_source_path(project) or ""
+    except Exception:
+        pass
+
+    commits: list[dict] = []
+    branch = ""
+    if repo:
+        _, branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        rc, log = _git(repo, "log", "--grep", f"task:{task_id[:8]}",
+                       "--format=%h%x09%s", "-n", "20", "HEAD")
+        if rc == 0 and log:
+            main_ref = "origin/main"
+            if _git(repo, "rev-parse", "--verify", "-q", main_ref)[0] != 0:
+                main_ref = "main"
+            for line in log.splitlines():
+                sha, _, subject = line.partition("\t")
+                sha = sha.strip()
+                if not sha:
+                    continue
+                pushed = bool(_git(repo, "branch", "-r", "--contains", sha)[1])
+                merged = _git(repo, "merge-base", "--is-ancestor", sha, main_ref)[0] == 0
+                tags = _git(repo, "tag", "--contains", sha)[1]
+                commits.append({
+                    "sha": sha, "subject": subject.strip(),
+                    "pushed": pushed, "merged_to_main": merged,
+                    "released_in": tags.splitlines()[0] if tags else "",
+                })
+
+    def _all(flag: str) -> bool:
+        return bool(commits) and all(c[flag] for c in commits)
+
+    stage_states = [
+        ("verified", "verified", verified,
+         "green gate passed on live evidence" if verified else "gate not passed yet"),
+        ("committed", "committed", bool(commits),
+         f"{len(commits)} commit(s) on {branch or 'local'}" if commits
+         else "no [task:…]-tagged commits found"),
+        ("pushed", "pushed", _all("pushed"),
+         "on a remote ref" if _all("pushed") else "branch not pushed"),
+        ("merged", "merged to main", _all("merged_to_main"),
+         "reachable from main" if _all("merged_to_main") else "no PR merged yet"),
+        ("released", "released", _all("released_in"),
+         (commits and commits[0].get("released_in")) or "no release tag contains this work"),
+    ]
+    stages, next_seen = [], False
+    for key, label, ok, detail in stage_states:
+        state = "done" if ok else ("next" if not next_seen else "pending")
+        if not ok:
+            next_seen = True
+        stages.append({"key": key, "label": label, "state": state,
+                       "detail": str(detail)})
+    return {"branch": branch, "commits": commits, "stages": stages,
+            "delivered": all(s["state"] == "done" for s in stages)}
+
+
 @router.get("/{task_id}/prototype")
 def get_task_prototype(task_id: str):
     """Serve the task's prototype HTML so the SPA can iframe it on the Plan
