@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.32"
+PRISM_VERSION = "7.0.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.33: DEMO TICKETS CLEAR RED GATE BY MACHINE (task 59ddfcbc, "
+    "owner-authorized 2026-07-16). In adjudicator-enabled environments "
+    "(PRISM_GATE_ADJUDICATOR_INTERVAL), a proof_type=demo ticket's "
+    "red_gate is decided by the conductor-adjudicator via the demo "
+    "rubric: no test suite by design, the red state is the absent "
+    "artifact, and the proof burden stays with green_gate's demo-"
+    "artifact teeth. Test-proofed tickets keep the full verifier path; "
+    "default (non-opted-in) environments unchanged. Both seats work by "
+    "doctrine: a human can always click, and an automated user can "
+    "complete the same gates. "
     "v7.0.32: THE MACHINE ADJUDICATOR SEAT, OFF BY DEFAULT (task "
     "1d3322a6, owner decision 2026-07-15). New opt-in seat: with "
     "PRISM_GATE_ADJUDICATOR_INTERVAL=<seconds> set, the conductor decides "

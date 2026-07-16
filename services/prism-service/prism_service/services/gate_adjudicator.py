@@ -68,17 +68,24 @@ def sweep_once() -> list[dict]:
             gate = t.get("gate_state") if isinstance(t, dict) \
                 else getattr(t, "gate_state", "")
             tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
-            if step != "green_gate" or gate != "pending" or not tid:
+            if gate != "pending" or not tid:
+                continue
+            if step not in ("green_gate", "red_gate"):
                 continue
             try:
-                res = svc.adjudicate_green_gate(tid)
+                if step == "green_gate":
+                    res = svc.adjudicate_green_gate(tid)
+                else:
+                    # red_gate: demo-proof tickets only (task 59ddfcbc);
+                    # the method itself refuses everything else.
+                    res = svc.adjudicate_demo_red_gate(tid)
             except Exception as exc:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
                 continue
             if res and res.get("ok"):
                 approved.append({"project": pid, "task_id": tid, **res})
-                _log(f"{pid}/{tid[:8]}: green_gate approved on fresh "
-                     f"receipt -> {res.get('to_step', 'advanced')}")
+                _log(f"{pid}/{tid[:8]}: {step} approved on machine "
+                     f"evidence -> {res.get('to_step', 'advanced')}")
     return approved
 
 

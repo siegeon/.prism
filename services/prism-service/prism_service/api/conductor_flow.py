@@ -157,6 +157,12 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
         if gate_adjudicator.is_enabled():
             return svc.adjudicate_green_gate(task_id)
         return None
+    if step["id"] == "red_gate":
+        # Demo-proof tickets only (task 59ddfcbc) — same opt-in switch.
+        from prism_service.services import gate_adjudicator
+        if gate_adjudicator.is_enabled():
+            return svc.adjudicate_demo_red_gate(task_id)
+        return None
     if step["id"] not in _AUTOCLEAR_GATES:
         return None
     check = svc._verify_gate(task, step["id"],

@@ -1836,6 +1836,43 @@ class ConductorService:
                                actor=ADJUDICATOR_SEAT, model="machine")
         return res if res and res.get("ok") else None
 
+    def adjudicate_demo_red_gate(self, task_id: str) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING red_gate on a
+        proof_type=demo ticket (task 59ddfcbc). A demo ticket has no test
+        suite by design, so the red_with_trace expectation can never be
+        met by evidence — the demo rubric in _verify_gate confirms
+        instead, and the real proof burden stays with green_gate's
+        demo-artifact teeth. Approves as ``conductor-adjudicator``; only
+        opted-in environments call this (see gate_adjudicator.is_enabled).
+        Test-proofed tickets are untouched. Returns the gate_decide result
+        on approve, else None (never flips pending->failed)."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        if (task is None
+                or getattr(task, "workflow_step", "") != "red_gate"
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt != "demo":
+            return None
+        check = self._verify_gate(task, "red_gate", pt)
+        if check.get("verified") is not True:
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        res = self.gate_decide(
+            task_id, "approve",
+            reason=("machine adjudication (demo rubric): "
+                    + str(check.get("reason", ""))),
+            session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
+            model="machine")
+        return res if res and res.get("ok") else None
+
     def rewind_task(self, task_id: str, reason: str = "",
                     actor: str = "owner") -> dict:
         """AUDITED one-step rewind for an overshot task (task b07fd46e).
@@ -1942,6 +1979,22 @@ class ConductorService:
         # override on every gate. Skip the test-shaped consult for those; the
         # proof_type artifact tooth (gate_artifact_reason) is the real check.
         pt = str(proof_type or "").strip().lower()
+        # DEMO-PROOF RED GATE (task 59ddfcbc): a demo ticket has no test
+        # suite BY DESIGN, so tier0's red_with_trace expectation can never
+        # be met and every demo ticket parked at red_gate forever. The
+        # honest red state for a demo is the ABSENT artifact; the proof
+        # burden lives at green_gate (ui-artifact + oracle-receipt teeth).
+        # Confirm on that basis instead of consulting the test-shaped
+        # verifier. green_full for demo is NOT relaxed here.
+        if pt == "demo" and gate_step_id == "red_gate":
+            return {
+                "verified": True,
+                "reason": ("demo-proof ticket: no test suite by design — "
+                           "red state is the absent artifact; proof burden "
+                           "carried by green_gate's demo-artifact teeth"),
+                "verifier": None,
+                "validation": validation,
+            }
         if pt and pt not in ("test", "demo"):
             return {
                 "verified": True,

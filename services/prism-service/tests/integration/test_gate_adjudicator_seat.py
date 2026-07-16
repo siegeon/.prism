@@ -170,6 +170,40 @@ def test_failed_receipt_is_not_retried(pinned_world, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# task 59ddfcbc — demo-proof red_gate: machine rubric approves; test-proof
+# red_gate stays with the verifier path untouched
+# ---------------------------------------------------------------------------
+
+
+def test_demo_red_gate_is_approved_by_adjudicator(pinned_world, tmp_path):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="demo ticket", oracle="the page shows X",
+                        proof_type="demo")
+    task_svc.update(t.id, workflow_step="red_gate", gate_state="pending")
+    cond = _conductor(tmp_path, task_svc)
+    res = cond.adjudicate_demo_red_gate(t.id)
+    assert res is not None and res.get("ok") is True, res
+    after = task_svc.get(t.id)
+    # mid-flow gate: approve auto-advances to the next (non-gate) step,
+    # which resets gate_state to 'none' — the advance IS the pass signal.
+    assert after.workflow_step != "red_gate"
+    assert after.gate_state != "failed"
+
+
+def test_test_proof_red_gate_is_not_touched(pinned_world, tmp_path):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="test ticket", oracle="pinned tests red",
+                        proof_type="test")
+    task_svc.update(t.id, workflow_step="red_gate", gate_state="pending")
+    cond = _conductor(tmp_path, task_svc)
+    res = cond.adjudicate_demo_red_gate(t.id)
+    assert res is None
+    assert task_svc.get(t.id).gate_state == "pending"
+
+
 def test_unevidenced_oracle_is_minted_then_approved(pinned_world, tmp_path,
                                                     monkeypatch):
     from prism_service.services import oracle_spec as osp
