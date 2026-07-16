@@ -13,10 +13,13 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.39"
+PRISM_VERSION = "7.0.40"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.40: PROOF SCREENSHOTS SIDE BY SIDE (owner 2026-07-16). ProofShots "
+    "renders cited evidence images in a 2-column grid (single column under "
+    "720px) instead of stacked. "
     "v7.0.39: PROOF SCREENSHOTS ON THE TASK PAGE (owner 2026-07-16: 'i "
     "still dont see the screenshot on the task'). Evidence images cited in "
     "completion_proof (![alt](src)) now render as inline thumbnails in the "

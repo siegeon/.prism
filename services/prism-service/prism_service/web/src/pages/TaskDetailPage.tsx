@@ -536,16 +536,17 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
 function ProofShots({ text, className }: { text?: string; className?: string }) {
   const shots = [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)];
   if (shots.length === 0) return null;
+  // Side-by-side grid (owner 2026-07-16), one column only on narrow screens.
   return (
-    <div className={className ?? "mt-3 space-y-2"}>
+    <div className={`grid grid-cols-1 min-[720px]:grid-cols-2 gap-3 items-start ${className ?? "mt-3"}`}>
       {shots.map(([, alt, src], i) => (
-        <a key={i} href={src} target="_blank" rel="noreferrer" className="block"
+        <a key={i} href={src} target="_blank" rel="noreferrer" className="block min-w-0"
            title={`${alt || "evidence screenshot"} — open full size`}>
           <img
             src={src}
             alt={alt || "evidence screenshot"}
             loading="lazy"
-            className="max-w-full max-h-[420px] rounded-md border border-[color:var(--border-default)]"
+            className="w-full max-h-[380px] object-contain object-left-top rounded-md border border-[color:var(--border-default)]"
           />
           {alt && <div className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>{alt}</div>}
         </a>
@@ -1472,7 +1473,7 @@ export default function TaskDetailPage() {
                       <span className="leading-relaxed opacity-80 group-hover:opacity-100 truncate">{oneLine(task.completion_proof)}</span>
                       <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
                     </button>
-                    <ProofShots text={task.completion_proof} className="mt-2 space-y-2" />
+                    <ProofShots text={task.completion_proof} className="mt-2" />
                   </>
                 : <div className="text-[color:var(--accent-amber-fg)] text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
             </div>
