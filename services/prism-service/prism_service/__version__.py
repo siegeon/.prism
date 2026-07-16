@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.38"
+PRISM_VERSION = "7.0.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.39: PROOF SCREENSHOTS ON THE TASK PAGE (owner 2026-07-16: 'i "
+    "still dont see the screenshot on the task'). Evidence images cited in "
+    "completion_proof (![alt](src)) now render as inline thumbnails in the "
+    "gate panel's EVIDENCE section and under the Oracle card's completion-"
+    "proof line - not only behind the /proof click-through. "
     "v7.0.38: GATE RE-RUN SHOWS ITS RESULT (owner 2026-07-16: 'when i click "
     "re-run it does not work... why are you not showing the missing "
     "results'). The readiness fetch is one-shot per task, so the mint action "

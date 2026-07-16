@@ -529,6 +529,31 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
   );
 }
 
+// Evidence screenshots cited in the completion proof (![alt](src) markdown) —
+// rendered wherever the proof is judged, so the approver SEES what the proof
+// cites right on the task page (owner 2026-07-16: "i still dont see the
+// screenshot on the task"). Click opens the full-size image.
+function ProofShots({ text, className }: { text?: string; className?: string }) {
+  const shots = [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)];
+  if (shots.length === 0) return null;
+  return (
+    <div className={className ?? "mt-3 space-y-2"}>
+      {shots.map(([, alt, src], i) => (
+        <a key={i} href={src} target="_blank" rel="noreferrer" className="block"
+           title={`${alt || "evidence screenshot"} — open full size`}>
+          <img
+            src={src}
+            alt={alt || "evidence screenshot"}
+            loading="lazy"
+            className="max-w-full max-h-[420px] rounded-md border border-[color:var(--border-default)]"
+          />
+          {alt && <div className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>{alt}</div>}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 // The Trace tab body: 4 KPI tiles + a per-session tree (session header row →
 // indented step rows). Honest empty state when the task has no agent_runs.
 function TraceView({ trace, loading }: { trace: TaskTrace | null; loading: boolean }) {
@@ -1258,6 +1283,7 @@ export default function TaskDetailPage() {
                     })()}
                   </tbody>
                 </table>
+                <ProofShots text={task.completion_proof} />
               </div>
 
               {/* 3 · VERIFIER DECISION — plain language; machine text collapsed */}
@@ -1438,13 +1464,16 @@ export default function TaskDetailPage() {
             <div>
               <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">completion proof</div>
               {task.completion_proof
-                ? <button
-                    onClick={() => navigate(`/tasks/${id}/proof`, { state: { from: `/tasks/${id}` } })}
-                    className="flex items-center gap-1.5 text-left w-full group"
-                  >
-                    <span className="leading-relaxed opacity-80 group-hover:opacity-100 truncate">{oneLine(task.completion_proof)}</span>
-                    <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
-                  </button>
+                ? <>
+                    <button
+                      onClick={() => navigate(`/tasks/${id}/proof`, { state: { from: `/tasks/${id}` } })}
+                      className="flex items-center gap-1.5 text-left w-full group"
+                    >
+                      <span className="leading-relaxed opacity-80 group-hover:opacity-100 truncate">{oneLine(task.completion_proof)}</span>
+                      <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
+                    </button>
+                    <ProofShots text={task.completion_proof} className="mt-2 space-y-2" />
+                  </>
                 : <div className="text-[color:var(--accent-amber-fg)] text-[12px]">⚠ not yet recorded — green_gate will flag this</div>}
             </div>
             {task.likely_misfire && (
