@@ -14,7 +14,7 @@
  * is the analyzer scan-queue strip.
  */
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { stepLabel } from "@/lib/workflowChips";
@@ -114,57 +114,82 @@ export default function LiveBar() {
   if (!inActivityContext(pathname)) return null;
 
   // The artifact's .livebar is a padded rounded CARD inside the content
-  // column, not an edge-to-edge strip.
+  // column, not an edge-to-edge strip. Header (state + heartbeat) is one row;
+  // each managed task stacks as its OWN row beneath it (owner 2026-07-16).
   return (
     <div className="px-6 pt-4 shrink-0">
       <div
-        className="flex items-center gap-x-4 gap-y-1.5 flex-wrap rounded-lg border px-4 py-2.5 text-sm"
+        className="rounded-lg border px-4 py-2.5 text-sm"
         role="status"
         style={{ borderColor: tint.ring, background: tint.bg }}
       >
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="inline-flex items-center gap-2 shrink-0"
-          aria-label={collapsed ? "expand live bar" : "collapse live bar"}
-          aria-expanded={!collapsed}
-        >
-          <span
-            className={"h-2.5 w-2.5 rounded-full " + (state === "live" ? "animate-pulse" : "")}
-            style={{ background: tint.fg }}
-          />
-          <b className="text-2xs uppercase tracking-wider" style={{ color: tint.fg }}>
-            {stateLabel}
-          </b>
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="inline-flex items-center gap-2 shrink-0"
+            aria-label={collapsed ? "expand live bar" : "collapse live bar"}
+            aria-expanded={!collapsed}
+          >
+            <span
+              className={"h-2.5 w-2.5 rounded-full " + (state === "live" ? "animate-pulse" : "")}
+              style={{ background: tint.fg }}
+            />
+            <b className="text-2xs uppercase tracking-wider" style={{ color: tint.fg }}>
+              {stateLabel}
+            </b>
+          </button>
 
+          <span className="ml-auto text-2xs font-mono tabular-nums shrink-0" style={{ color: tint.fg }}>
+            {heartbeat}
+          </span>
+        </div>
+
+        {/* Each row IS the task (owner 2026-07-16: "each one of the items on
+            the line is a task and needs to be able to be clicked through") —
+            the WHOLE row is one <Link> to the task page, so the inner chip
+            stays inert (no nested anchors). */}
         {!collapsed && working.map((m) => (
-          <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
-            <span className="h-4 w-px shrink-0" style={{ background: tint.ring }} />
-            <EntityChip kind="task" label={chipLabel(m)} to={`/tasks/${m.id}`} title={`${m.title ?? ""} · ${m.id}`} />
+          <Link
+            key={m.id}
+            to={`/tasks/${m.id}`}
+            title={`${m.title ?? ""} · ${m.id}`}
+            className="mt-1.5 flex items-center gap-2 min-w-0 border-t pt-1.5 group"
+            style={{ borderColor: tint.ring }}
+          >
+            <EntityChip kind="task" label={chipLabel(m)} />
             {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
             <Lozenge tone="ok">working</Lozenge>
             <span className="text-2xs font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>
               {m.assigned_agent || "claude-code"}
             </span>
-          </span>
+            <span className="ml-auto text-xs opacity-0 group-hover:opacity-100" style={{ color: "var(--text-muted)" }}>
+              open ›
+            </span>
+          </Link>
         ))}
 
         {!collapsed && gated.map((m) => (
-          <span key={m.id} className="inline-flex items-center gap-2 min-w-0">
-            <span className="h-4 w-px shrink-0" style={{ background: tint.ring }} />
-            <EntityChip kind="task" label={chipLabel(m)} to={`/tasks/${m.id}`} title={`${m.title ?? ""} · ${m.id}`} />
+          <Link
+            key={m.id}
+            to={`/tasks/${m.id}`}
+            title={`${m.title ?? ""} · ${m.id}`}
+            className="mt-1.5 flex items-center gap-2 min-w-0 border-t pt-1.5 group"
+            style={{ borderColor: tint.ring }}
+          >
+            <EntityChip kind="task" label={chipLabel(m)} />
             <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
-          </span>
+            <span className="ml-auto text-xs opacity-0 group-hover:opacity-100" style={{ color: "var(--text-muted)" }}>
+              open ›
+            </span>
+          </Link>
         ))}
 
         {!collapsed && state === "idle" && (
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>no task being driven — queue is quiet</span>
+          <div className="mt-1.5 border-t pt-1.5 text-xs" style={{ borderColor: tint.ring, color: "var(--text-muted)" }}>
+            no task being driven — queue is quiet
+          </div>
         )}
-
-        <span className="ml-auto text-2xs font-mono tabular-nums shrink-0" style={{ color: tint.fg }}>
-          {heartbeat}
-        </span>
       </div>
     </div>
   );

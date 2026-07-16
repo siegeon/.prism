@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.33"
+PRISM_VERSION = "7.0.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.35: LIVEBAR ROWS CLICK THROUGH TO THE TASK (owner 2026-07-16). "
+    "Each stacked live-bar row is one whole <Link> to /tasks/<id> with an "
+    "'open >' hover affordance; the inner task chip went inert so there "
+    "are no nested anchors. "
+    "v7.0.34: LIVEBAR STACKS ONE ITEM PER ROW (owner 2026-07-16). The "
+    "conductor live bar's header (state + heartbeat) is its own row and "
+    "every working/gated task renders as its own ruled row beneath it, "
+    "instead of all items wrapping inline on one line. "
     "v7.0.33: DEMO TICKETS CLEAR RED GATE BY MACHINE (task 59ddfcbc, "
     "owner-authorized 2026-07-16). In adjudicator-enabled environments "
     "(PRISM_GATE_ADJUDICATOR_INTERVAL), a proof_type=demo ticket's "
