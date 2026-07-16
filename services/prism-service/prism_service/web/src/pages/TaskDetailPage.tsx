@@ -1160,6 +1160,29 @@ export default function TaskDetailPage() {
             >
               <Lozenge tone={statusLoz(taskStatus)}>{taskStatus.replace(/_/g, " ")}</Lozenge>
             </motion.span>
+            {/* DONE alone is a lie until the work is shipped (owner
+                2026-07-16: "done is done, eg shipped and validated on
+                main") — qualify it RIGHT HERE, where the claim is made,
+                not below the fold. Click scrolls to the Delivery card. */}
+            {taskStatus === "done" && delivery && !delivery.delivered && (
+              <button
+                type="button"
+                onClick={() => document.getElementById("delivery-card")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-2xs uppercase tracking-wider font-semibold"
+                style={{ color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)", background: "var(--accent-amber-bg)" }}
+                title="verified, but the work has not shipped — click to see the delivery pipeline"
+              >
+                ● not delivered yet · {delivery.stages.find((s) => s.state === "next")?.detail || "unshipped"}
+              </button>
+            )}
+            {taskStatus === "done" && delivery?.delivered && (
+              <span
+                className="inline-flex items-center rounded-full px-2.5 py-0.5 text-2xs uppercase tracking-wider font-semibold"
+                style={{ color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)", background: "var(--accent-sage-bg)" }}
+              >
+                ✓ delivered{delivery.commits[0]?.released_in ? ` · ${delivery.commits[0].released_in}` : ""}
+              </span>
+            )}
             {typeof task.priority !== "undefined" && (
               <Lozenge tone={priorityLoz(task.priority)}>priority {task.priority}</Lozenge>
             )}
@@ -1550,6 +1573,7 @@ export default function TaskDetailPage() {
           (owner 2026-07-16: done means SHIPPED, merged + validated on main).
           Only rendered once the task has something to deliver. */}
       {delivery && (delivery.commits.length > 0 || task.status === "done") && (
+        <div id="delivery-card">
         <Card>
           <SectionLabel>Delivery — where this work is</SectionLabel>
           <div className="mt-3 flex items-center gap-0 flex-wrap">
@@ -1599,6 +1623,7 @@ export default function TaskDetailPage() {
             </div>
           )}
         </Card>
+        </div>
       )}
 
       {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined || pinTests.length > 0) && (

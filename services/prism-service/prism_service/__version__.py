@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.46"
+PRISM_VERSION = "7.0.47"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.47: DONE CHIP QUALIFIED AT THE TOP (owner 2026-07-16: 'USE IT "
+    "LIKE A USER WOULD... how could i tell its not done?'). A done task "
+    "whose work is unshipped shows an amber 'not delivered yet - <next "
+    "step>' pill RIGHT NEXT TO the DONE status chip (click scrolls to the "
+    "Delivery pipeline); a shipped one shows a sage 'delivered - vX.Y.Z'. "
+    "The truth now lives where the claim is made, not below the fold. "
     "v7.0.46: DELIVERY PIPELINE ON THE TASK PAGE (owner 2026-07-16: 'done "
     "is done, eg shipped and validated on main' / 'we need a way to "
     "visually represent where you are and what still needs to be done'). "
