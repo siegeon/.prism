@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.40"
+PRISM_VERSION = "7.0.41"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.41: IN-APP EVIDENCE IMAGE VIEWER (owner 2026-07-16: 'not "
+    "redirect to an image, its hard to get back on a desktop'). Clicking a "
+    "proof screenshot opens a lightbox overlay inside the app - Esc/click "
+    "closes, arrow keys step between shots - instead of navigating the "
+    "window to the raw image. "
     "v7.0.40: PROOF SCREENSHOTS SIDE BY SIDE (owner 2026-07-16). ProofShots "
     "renders cited evidence images in a 2-column grid (single column under "
     "720px) instead of stacked. "

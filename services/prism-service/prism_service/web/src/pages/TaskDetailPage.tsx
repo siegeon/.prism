@@ -534,14 +534,31 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
 // cites right on the task page (owner 2026-07-16: "i still dont see the
 // screenshot on the task"). Click opens the full-size image.
 function ProofShots({ text, className }: { text?: string; className?: string }) {
-  const shots = [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)];
+  const shots = useMemo(
+    () => [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)].map(([, alt, src]) => ({ alt, src })),
+    [text],
+  );
+  // In-app lightbox (owner 2026-07-16: "not redirect to an image, its hard
+  // to get back on a desktop") — Esc / click closes, ←/→ steps between shots.
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => {
+    if (open === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(null);
+      if (e.key === "ArrowRight") setOpen((v) => (v === null ? v : (v + 1) % shots.length));
+      if (e.key === "ArrowLeft") setOpen((v) => (v === null ? v : (v + shots.length - 1) % shots.length));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, shots.length]);
   if (shots.length === 0) return null;
+  const shown = open !== null ? shots[open] : null;
   // Side-by-side grid (owner 2026-07-16), one column only on narrow screens.
   return (
     <div className={`grid grid-cols-1 min-[720px]:grid-cols-2 gap-3 items-start ${className ?? "mt-3"}`}>
-      {shots.map(([, alt, src], i) => (
-        <a key={i} href={src} target="_blank" rel="noreferrer" className="block min-w-0"
-           title={`${alt || "evidence screenshot"} — open full size`}>
+      {shots.map(({ alt, src }, i) => (
+        <button key={i} type="button" onClick={() => setOpen(i)} className="block min-w-0 text-left"
+                title={`${alt || "evidence screenshot"} — click to view`}>
           <img
             src={src}
             alt={alt || "evidence screenshot"}
@@ -549,8 +566,29 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
             className="w-full max-h-[380px] object-contain object-left-top rounded-md border border-[color:var(--border-default)]"
           />
           {alt && <div className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>{alt}</div>}
-        </a>
+        </button>
       ))}
+      {shown && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 p-6"
+          style={{ background: "rgba(0,0,0,0.82)" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={shown.alt || "evidence screenshot"}
+          onClick={() => setOpen(null)}
+        >
+          <img
+            src={shown.src}
+            alt={shown.alt || "evidence screenshot"}
+            className="max-w-[94vw] max-h-[86vh] object-contain rounded-md border border-[color:var(--border-default)] shadow-2xl"
+          />
+          <div className="flex items-center gap-3 text-2xs" style={{ color: "rgba(255,255,255,0.75)" }}>
+            {shots.length > 1 && <span className="font-mono tabular-nums">{(open ?? 0) + 1} / {shots.length} · ← →</span>}
+            <span className="max-w-[70vw] truncate">{shown.alt}</span>
+            <span className="uppercase tracking-wider">esc / click to close</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
