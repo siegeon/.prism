@@ -18,6 +18,8 @@ All in-progress work is a PRISM task driven through the conductor — never bare
 - Implement a task through the conductor loop: `job = conductor_work()` → do exactly `job["instructions"]`, produce `job["expected_proof"]` → `conductor_work(id=..., outcome=..., proof=...)`. The server owns the step sequence; never hand-drive or hand-clear SDLC steps or gates.
 - Create work with `task_create` (title = human-friendly WHAT, ~4-9 words; mechanics in description; define the `oracle` + `likely_misfire` up front). Watchable tasks are root tasks (`parent_id=""`).
 - A gate is decided by a DISTINCT actor — the producing session cannot clear its own gate; a red test is always your fault, never "pre-existing".
+- The distinct actor need not be human, but machine adjudication is OPT-IN (owner decision 2026-07-15, "ship it OFF by default"): the conductor's `conductor-adjudicator` seat decides a green_gate on a FRESH PASSING EvidenceReceipt from its own trusted runner ONLY in environments that set `PRISM_GATE_ADJUDICATOR_INTERVAL=<seconds>`. Everywhere else, human clicks remain the norm. The human always keeps: visibility of every machine decision, reject/override, manual-evidence oracles, and failed gates.
+- The fundamental workflow: the MAIN chat thread spawns an async subagent to work a ticket through PRISM end-to-end (conductor loop, gates included); the MAIN thread then evaluates what it took — friction, visibility, cost — and refines the process. Anything that structurally prevents a subagent from completing a ticket is a product defect.
 
 ## Self-learning
 
@@ -27,6 +29,7 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 
 - Never clean up a planted/temporary line with `git checkout -- <file>` while the file holds uncommitted real work — it reverts EVERYTHING; remove the planted line with a targeted edit instead.
 - On a conductor_work drive, the story/plan rubrics read `task.plan_doc` — writing the story only as step `proof=` (→ completion_proof) auto-fails story_gate with "story_md is empty"; always `task_update(plan_doc=...)` alongside the draft_story/verify_plan report.
+- When writing doctrine/memory from an owner conversation, record the owner's ACTUAL intent, not my hardened absolutization of it — "human in the loop" means visibility + override, never "every gate is a human click"; an over-strict note I write becomes a wall every future session (and every supervisor) enforces against the owner's real goal.
 
 ## Key Conventions
 

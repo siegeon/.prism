@@ -471,6 +471,17 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.watchdog import start_watchdog
         start_watchdog()
 
+        # Task 1d3322a6 (owner 2026-07-15) — the machine adjudicator seat.
+        # Sweeps PENDING green_gates and approves on a fresh passing
+        # EvidenceReceipt as 'conductor-adjudicator'; runs the oracle itself
+        # when machine-runnable and unevidenced. Humans keep manual-evidence
+        # oracles, failed gates and overrides. Own thread (mints take
+        # minutes); PRISM_GATE_ADJUDICATOR_INTERVAL=0 disables.
+        from prism_service.services.gate_adjudicator import (
+            start_gate_adjudicator,
+        )
+        start_gate_adjudicator()
+
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.

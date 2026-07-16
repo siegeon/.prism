@@ -190,6 +190,13 @@ def _task_attr(task: object, name: str, default: str = "") -> object:
     return getattr(task, name, default)
 
 
+# The conductor's own gate-deciding identity (owner directive 2026-07-15:
+# customers cannot click our board — a green_gate whose oracle the server can
+# run itself must clear itself). Distinct from every producing session by
+# construction, same trust model as the story/plan 'conductor-autoclear' seat.
+ADJUDICATOR_SEAT = "conductor-adjudicator"
+
+
 def _is_low_value_completion(task: object) -> bool:
     """A done task is LOW-VALUE on reliable signals only (goalbuddy GAP-5).
 
@@ -1742,6 +1749,92 @@ class ConductorService:
             return {"ok": False, "reason": f"lanes errored: "
                     f"{type(exc).__name__}: {exc}"}
         return {"ok": report.get("verdict") == "pass", "lanes": report}
+
+    def adjudicate_green_gate(self, task_id: str,
+                              mint: bool = True) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING green_gate.
+
+        Decides the gate as ``conductor-adjudicator`` — the distinct actor
+        the flow's gate jobs ask for, filled by the server itself. Approves
+        ONLY on the oracle-receipt tooth (a FRESH PASSING EvidenceReceipt:
+        tree+spec+policy-pin matched). When the CURRENT tree+spec has no
+        receipt at all and the derived oracle is machine-runnable
+        (pytest_ids / http_probe), it exercises the oracle ONCE itself —
+        the gate card's Re-run action, machine-initiated — then re-checks.
+        One attempt per evidence state: a failing/tried oracle never loops
+        and stays with a human.
+
+        Never flips pending->failed: every other green_gate tooth
+        (ui-artifact, candidate-controls-judge) is pre-flighted and any
+        objection leaves the gate pending for a human. Epics (children),
+        oracle-less tasks, and manual_evidence_required oracles are all
+        left for a human too. Returns the gate_decide result on approve,
+        else None."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        if (task is None
+                or getattr(task, "workflow_step", "") != "green_gate"
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if not str(getattr(task, "oracle", "") or "").strip():
+            return None
+        # Epics stay with a human: their roll-up verdict reads children.
+        try:
+            if any(_task_attr(c, "parent_id", "") == task_id
+                   for c in self._task_svc.list()):
+                return None
+        except Exception:
+            return None
+        # Pre-flight the OTHER green_gate teeth — adjudication may only
+        # ever flip pending->passed, never pending->failed.
+        if ui_artifact_gate_reason(getattr(task, "tags", None),
+                                   getattr(task, "proof_type", ""),
+                                   getattr(task, "completion_proof", "")):
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        refusal, receipt = self._oracle_receipt_refusal(
+            task, override=False, reason="")
+        if refusal and mint:
+            try:
+                from prism_service.services import oracle_spec as osp
+                from prism_service.services import task_workspace
+                spec = osp.OracleSpec.from_task(task)
+                if spec.adapter not in (osp.ADAPTER_PYTEST,
+                                        osp.ADAPTER_HTTP):
+                    return None
+                ws = task_workspace.workspace_for(task_id)
+                tree = osp.current_tree_sha(
+                    (ws or {}).get("path") if ws else None)
+                tried = any(
+                    r.tree_sha == tree and r.spec_hash == spec.spec_hash()
+                    for r in osp.read_receipts(
+                        self._project_name or "default", task_id))
+            except Exception:
+                return None
+            if tried:
+                return None
+            self.mint_green_evidence(task_id, session_id=ADJUDICATOR_SEAT)
+            refusal, receipt = self._oracle_receipt_refusal(
+                task, override=False, reason="")
+        if refusal or receipt is None:
+            return None
+        _rsn = (
+            "machine adjudication: fresh passing EvidenceReceipt "
+            f"{getattr(receipt, 'job_id', '')} "
+            f"(adapter={getattr(receipt, 'adapter', '')}, "
+            f"tree={(getattr(receipt, 'tree_sha', '') or 'n/a')[:12]}) — "
+            "the server exercised the oracle and approves on the receipt "
+            "tooth; manual-evidence and failed cases stay with a human")
+        res = self.gate_decide(task_id, "approve", reason=_rsn,
+                               session_id=ADJUDICATOR_SEAT,
+                               actor=ADJUDICATOR_SEAT, model="machine")
+        return res if res and res.get("ok") else None
 
     def rewind_task(self, task_id: str, reason: str = "",
                     actor: str = "owner") -> dict:

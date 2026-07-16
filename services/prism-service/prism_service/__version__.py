@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.31"
+PRISM_VERSION = "7.0.32"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.32: THE MACHINE ADJUDICATOR SEAT, OFF BY DEFAULT (task "
+    "1d3322a6, owner decision 2026-07-15). New opt-in seat: with "
+    "PRISM_GATE_ADJUDICATOR_INTERVAL=<seconds> set, the conductor decides "
+    "a PENDING green_gate as 'conductor-adjudicator' on a FRESH PASSING "
+    "EvidenceReceipt (tree+spec+policy-pinned); when the current tree is "
+    "unevidenced and the derived oracle is machine-runnable (pytest_ids/"
+    "http_probe) the server exercises the oracle ONCE itself, then "
+    "decides. Wired on flow entry to green_gate AND as a sweep for "
+    "already-parked gates (services/gate_adjudicator.py). Never flips "
+    "pending->failed: ui-artifact and candidate-controls-judge teeth are "
+    "pre-flighted; epics, manual_evidence_required oracles, failed gates "
+    "and rejects stay with a human. DEFAULT UNCHANGED: without the env "
+    "opt-in, gates keep waiting for a human click exactly as before. "
+    "Enables the fundamental workflow where opted in: a subagent works a "
+    "ticket through PRISM to DONE; the main thread evaluates friction. "
     "v7.0.0: THE V7 DIRECTION SHIPS — the full ui-redesign epic (16777a76, "
     "direction artifact 1fab352f) lands as a major release. EXPLORE fuses "
     "the code graph and Understand knowledge in one mesh: task->concept "

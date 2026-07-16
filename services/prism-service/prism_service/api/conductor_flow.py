@@ -145,8 +145,19 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     if task is None or getattr(task, "gate_state", "") != "pending":
         return None
     step = ConductorService._step_by_id(task.workflow_step)
-    if step is None or step["type"] != "gate" \
-            or step["id"] not in _AUTOCLEAR_GATES:
+    if step is None or step["type"] != "gate":
+        return None
+    if step["id"] == "green_gate":
+        # MACHINE ADJUDICATOR SEAT (task 1d3322a6): the flow just minted at
+        # verify_green_state, so a fresh passing EvidenceReceipt can approve
+        # the gate in seconds. SHIPS OFF BY DEFAULT (owner 2026-07-15:
+        # human clicks stay the norm) — only environments that opted in via
+        # PRISM_GATE_ADJUDICATOR_INTERVAL adjudicate here.
+        from prism_service.services import gate_adjudicator
+        if gate_adjudicator.is_enabled():
+            return svc.adjudicate_green_gate(task_id)
+        return None
+    if step["id"] not in _AUTOCLEAR_GATES:
         return None
     check = svc._verify_gate(task, step["id"],
                              getattr(task, "proof_type", None))
