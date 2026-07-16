@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.36"
+PRISM_VERSION = "7.0.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.37: EVIDENCE SCREENSHOTS VIEWABLE IN PRISM (owner 2026-07-16: 'if "
+    "you have evidence it needs to be in prism so i can see it'). New per-task "
+    "evidence store (data_dir.evidence_dir) served by GET /api/tasks/{id}/"
+    "evidence/{file} (image whitelist, path-validated like prototypes), and "
+    "the shared Markdown renderer now renders block-level ![alt](src) images "
+    "- a proof that cites a screenshot shows the screenshot inline on the "
+    "task page, never an external host. "
     "v7.0.36: THE JUDGE IS NOT A PRODUCER (defects found by the worker-agent dogfood run, 2026-07-16). Machine seats (conductor-adjudicator/autoclear/gate-card-rerun) are never stamped into task_sessions and are filtered from the distinct-actor producer set - deciding red_gate no longer poisons the seat for green_gate. The sweep also re-presents a FAILED green_gate whose latest decision row was a refused APPROVE attempt (tooth refusal: control-plane/same-actor/receipt) - a human reject stays final. Adjudication skips cancelled/archived/done tasks. PATCH /api/tasks gains tags (the policy-change authorized route was unreachable over the API). "
     "v7.0.35: LIVEBAR ROWS CLICK THROUGH TO THE TASK (owner 2026-07-16). "
     "Each stacked live-bar row is one whole <Link> to /tasks/<id> with an "

@@ -55,8 +55,24 @@ export function parseMarkdown(text: string): ReactNode[] {
     const h2 = /^##\s+(.*)$/.exec(line);
     const h3 = /^###\s+(.*)$/.exec(line);
     const bul = /^[-*]\s+(.*)$/.exec(line);
+    // Block-level image: a line that is exactly ![alt](src). Evidence
+    // screenshots cited in proofs render INLINE where they're cited (owner
+    // 2026-07-16: what a gate approves must be visible in PRISM, never an
+    // external host). Relative /api/... sources stay same-origin.
+    const img = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(line);
 
-    if (h1) {
+    if (img) {
+      flushPara(); flushList();
+      blocks.push(
+        <img
+          key={`img${blocks.length}`}
+          src={img[2]}
+          alt={img[1]}
+          loading="lazy"
+          className="max-w-full rounded-md border border-[color:var(--border-default)]"
+        />,
+      );
+    } else if (h1) {
       flushPara(); flushList();
       blocks.push(
         <h1 key={`h${blocks.length}`} className="font-serif text-2xl tracking-tight">

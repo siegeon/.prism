@@ -86,6 +86,18 @@ def prototype_file(task_id: str) -> Path:
     return prototype_dir() / f"{task_id}.html"
 
 
+def evidence_dir(task_id: str) -> Path:
+    """Directory holding a task's evidence files — the screenshots/artifacts a
+    drive cites in its proof, served by PRISM and rendered inline on the task
+    detail page so the gate approver SEES what the proof cites (evidence
+    viewable IN PRISM, like prototypes — never an external host). Callers MUST
+    pass an already-validated task id (the API route restricts it to
+    [A-Za-z0-9_-]) so a crafted id can't traverse out of the evidence dir."""
+    p = resolve_data_dir() / "evidence" / task_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 5
 

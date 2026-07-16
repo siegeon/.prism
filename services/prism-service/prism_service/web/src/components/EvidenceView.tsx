@@ -28,6 +28,37 @@ function renderInline(s: string): ReactNode[] {
 }
 
 export default function EvidenceView({ text }: { text: string }) {
+  // Evidence images — proof text citing ![alt](src) renders the actual image
+  // as an inline figure (owner 2026-07-16: what a gate approves must be
+  // VISIBLE in PRISM, never described-but-elsewhere). Split image markdown
+  // out FIRST so the receipt-row sentence machinery below can't mangle it.
+  const parts = text.split(/(!\[[^\]]*\]\([^)\s]+\))/g);
+  if (parts.length > 1) {
+    return (
+      <div className="space-y-3">
+        {parts.map((part, i) => {
+          const img = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(part.trim());
+          if (img) {
+            return (
+              <img
+                key={`img${i}`}
+                src={img[2]}
+                alt={img[1]}
+                title={img[1]}
+                loading="lazy"
+                className="max-w-full rounded-md border border-[color:var(--border-default)]"
+              />
+            );
+          }
+          return part.trim() ? <EvidenceRows key={`rows${i}`} text={part} /> : null;
+        })}
+      </div>
+    );
+  }
+  return <EvidenceRows text={text} />;
+}
+
+function EvidenceRows({ text }: { text: string }) {
   // Mask `code` spans with a NUL-wrapped index so sentence-splitting never
   // breaks on dots inside code (e.g. `.dict()`, `api/tasks.py:80`).
   const masked: string[] = [];

@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from prism_service.data_dir import prototype_file
+from prism_service.data_dir import evidence_dir, prototype_file
 from prism_service.project_context import get_project
 from prism_service.services.task_service import SESSION_GATE_FIX
 
@@ -357,6 +357,37 @@ def get_task_prototype(task_id: str):
     if not path.exists():
         raise HTTPException(404, "no prototype for this task")
     return FileResponse(str(path), media_type="text/html")
+
+
+# Evidence images a drive cites in its proof — whitelisted image types only,
+# so this route can never serve executable content.
+_EVIDENCE_MEDIA = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+@router.get("/{task_id}/evidence/{filename}")
+def get_task_evidence(task_id: str, filename: str):
+    """Serve one of the task's evidence files (gate/audit screenshots) so the
+    SPA renders it inline where the proof cites it — evidence viewable IN
+    PRISM, never an external host (owner 2026-07-16). Both path pieces are
+    whitelisted so a crafted request can't traverse out of the evidence dir."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", filename) or ".." in filename:
+        raise HTTPException(400, "bad filename")
+    ext = filename[filename.rfind(".") :].lower() if "." in filename else ""
+    media = _EVIDENCE_MEDIA.get(ext)
+    if not media:
+        raise HTTPException(400, "unsupported evidence type")
+    path = evidence_dir(task_id) / filename
+    if not path.exists():
+        raise HTTPException(404, "no such evidence file")
+    return FileResponse(str(path), media_type=media)
 
 
 def _clean_doc(doc: str) -> str:
