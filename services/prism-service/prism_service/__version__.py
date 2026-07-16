@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.42"
+PRISM_VERSION = "7.0.43"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.43: NO DEAD SPACE IN EVIDENCE THUMBNAILS (owner 2026-07-16). "
+    "Thumbnails render at natural aspect (w-auto, never w-full) so the "
+    "border hugs the pixels instead of letterboxing tall shots into wide "
+    "cells; /evidence responses send Cache-Control: no-cache so a retaken "
+    "screenshot replaces the browser's stale copy (etag 304 when "
+    "unchanged). "
     "v7.0.42: LIGHTBOX FILLS THE SCREEN + CLICK-TO-ZOOM (owner 2026-07-16: "
     "'the images are much larger than the app... so much wasted space' / "
     "'when we are looking at the image we need to see it'). Fit view now "

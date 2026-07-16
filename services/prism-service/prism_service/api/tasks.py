@@ -387,7 +387,12 @@ def get_task_evidence(task_id: str, filename: str):
     path = evidence_dir(task_id) / filename
     if not path.exists():
         raise HTTPException(404, "no such evidence file")
-    return FileResponse(str(path), media_type=media)
+    # no-cache (NOT no-store): evidence files get retaken in place under the
+    # same name, so the browser must revalidate; the etag still yields a 304
+    # when the file is unchanged.
+    return FileResponse(
+        str(path), media_type=media, headers={"Cache-Control": "no-cache"}
+    )
 
 
 def _clean_doc(doc: str) -> str:

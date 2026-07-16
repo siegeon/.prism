@@ -564,11 +564,14 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
       {shots.map(({ alt, src }, i) => (
         <button key={i} type="button" onClick={() => setOpen(i)} className="block min-w-0 text-left"
                 title={`${alt || "evidence screenshot"} — click to view`}>
+          {/* Natural-size box (w-auto, never w-full): the border hugs the
+              actual pixels, so a tall image can't letterbox dead space into
+              a wide cell (owner 2026-07-16: "look at the dead space"). */}
           <img
             src={src}
             alt={alt || "evidence screenshot"}
             loading="lazy"
-            className="w-full max-h-[380px] object-contain object-left-top rounded-md border border-[color:var(--border-default)]"
+            className="max-w-full max-h-[380px] w-auto rounded-md border border-[color:var(--border-default)]"
           />
           {alt && <div className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>{alt}</div>}
         </button>
