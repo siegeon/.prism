@@ -573,7 +573,14 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
             loading="lazy"
             className="max-w-full max-h-[380px] w-auto rounded-md border border-[color:var(--border-default)]"
           />
-          {alt && <div className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>{alt}</div>}
+          {/* The caption is the proof's own claim — the APP says what the
+              image proves (owner 2026-07-16), the reader never has to guess. */}
+          {alt && (
+            <div className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              <span className="text-2xs uppercase tracking-wider mr-1.5 font-semibold" style={{ color: "var(--accent-teal-fg)" }}>proves</span>
+              {alt}
+            </div>
+          )}
         </button>
       ))}
       {shown && (
@@ -602,10 +609,17 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
                 className="max-w-[98vw] max-h-[92vh] object-contain rounded-sm shadow-2xl cursor-zoom-in"
                 onClick={(e) => { e.stopPropagation(); setZoom(true); }}
               />
-              <div className="flex items-center gap-3 text-2xs" style={{ color: "rgba(255,255,255,0.75)" }}>
-                {shots.length > 1 && <span className="font-mono tabular-nums">{(open ?? 0) + 1} / {shots.length} · ← →</span>}
-                <span className="max-w-[60vw] truncate">{shown.alt}</span>
-                <span className="uppercase tracking-wider shrink-0">click image to zoom · esc closes</span>
+              <div className="flex flex-col items-center gap-1 max-w-[80vw]">
+                {shown.alt && (
+                  <div className="text-[13px] leading-relaxed text-center" style={{ color: "rgba(255,255,255,0.92)" }}>
+                    <span className="text-2xs uppercase tracking-wider mr-1.5 font-semibold" style={{ color: "var(--accent-teal-fg)" }}>proves</span>
+                    {shown.alt}
+                  </div>
+                )}
+                <div className="flex items-center gap-3 text-2xs" style={{ color: "rgba(255,255,255,0.6)" }}>
+                  {shots.length > 1 && <span className="font-mono tabular-nums">{(open ?? 0) + 1} / {shots.length} · ← →</span>}
+                  <span className="uppercase tracking-wider shrink-0">click image to zoom · esc closes</span>
+                </div>
               </div>
             </div>
           )}

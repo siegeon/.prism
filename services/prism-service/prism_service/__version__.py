@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.43"
+PRISM_VERSION = "7.0.44"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.44: THE APP SAYS WHAT EACH IMAGE PROVES (owner 2026-07-16: 'i "
+    "want the application to tell me that'). Evidence captions render as a "
+    "labeled PROVES line under each thumbnail and beneath the lightbox "
+    "image; the caption is the ![alt] text of the proof citation, so proof "
+    "authors state the claim in plain language where the approver reads it. "
     "v7.0.43: NO DEAD SPACE IN EVIDENCE THUMBNAILS (owner 2026-07-16). "
     "Thumbnails render at natural aspect (w-auto, never w-full) so the "
     "border hugs the pixels instead of letterboxing tall shots into wide "
