@@ -30,6 +30,7 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 - Never clean up a planted/temporary line with `git checkout -- <file>` while the file holds uncommitted real work — it reverts EVERYTHING; remove the planted line with a targeted edit instead.
 - On a conductor_work drive, the story/plan rubrics read `task.plan_doc` — writing the story only as step `proof=` (→ completion_proof) auto-fails story_gate with "story_md is empty"; always `task_update(plan_doc=...)` alongside the draft_story/verify_plan report.
 - When writing doctrine/memory from an owner conversation, record the owner's ACTUAL intent, not my hardened absolutization of it — "human in the loop" means visibility + override, never "every gate is a human click"; an over-strict note I write becomes a wall every future session (and every supervisor) enforces against the owner's real goal.
+- Evidence for PRISM work (screenshots, audit reports) goes INTO PRISM — the task evidence store + /tasks/:id/proof — never claude.ai artifacts or any external host; the owner reviews evidence where the gate is.
 
 ## Key Conventions
 
