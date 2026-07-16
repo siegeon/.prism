@@ -541,6 +541,11 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
   // In-app lightbox (owner 2026-07-16: "not redirect to an image, its hard
   // to get back on a desktop") — Esc / click closes, ←/→ steps between shots.
   const [open, setOpen] = useState<number | null>(null);
+  // Fit ↔ 100% zoom toggle (owner: "when we are looking at the image we need
+  // to see it") — fit fills the viewport; clicking the image shows it at
+  // natural size with scrolling.
+  const [zoom, setZoom] = useState(false);
+  useEffect(() => { setZoom(false); }, [open]);
   useEffect(() => {
     if (open === null) return;
     const onKey = (e: KeyboardEvent) => {
@@ -570,23 +575,37 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
       ))}
       {shown && (
         <div
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 p-6"
-          style={{ background: "rgba(0,0,0,0.82)" }}
+          className="fixed inset-0 z-50"
+          style={{ background: "rgba(0,0,0,0.88)" }}
           role="dialog"
           aria-modal="true"
           aria-label={shown.alt || "evidence screenshot"}
           onClick={() => setOpen(null)}
         >
-          <img
-            src={shown.src}
-            alt={shown.alt || "evidence screenshot"}
-            className="max-w-[94vw] max-h-[86vh] object-contain rounded-md border border-[color:var(--border-default)] shadow-2xl"
-          />
-          <div className="flex items-center gap-3 text-2xs" style={{ color: "rgba(255,255,255,0.75)" }}>
-            {shots.length > 1 && <span className="font-mono tabular-nums">{(open ?? 0) + 1} / {shots.length} · ← →</span>}
-            <span className="max-w-[70vw] truncate">{shown.alt}</span>
-            <span className="uppercase tracking-wider">esc / click to close</span>
-          </div>
+          {zoom ? (
+            <div className="absolute inset-0 overflow-auto">
+              <img
+                src={shown.src}
+                alt={shown.alt || "evidence screenshot"}
+                className="block mx-auto my-4 cursor-zoom-out max-w-none"
+                onClick={(e) => { e.stopPropagation(); setZoom(false); }}
+              />
+            </div>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-2">
+              <img
+                src={shown.src}
+                alt={shown.alt || "evidence screenshot"}
+                className="max-w-[98vw] max-h-[92vh] object-contain rounded-sm shadow-2xl cursor-zoom-in"
+                onClick={(e) => { e.stopPropagation(); setZoom(true); }}
+              />
+              <div className="flex items-center gap-3 text-2xs" style={{ color: "rgba(255,255,255,0.75)" }}>
+                {shots.length > 1 && <span className="font-mono tabular-nums">{(open ?? 0) + 1} / {shots.length} · ← →</span>}
+                <span className="max-w-[60vw] truncate">{shown.alt}</span>
+                <span className="uppercase tracking-wider shrink-0">click image to zoom · esc closes</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

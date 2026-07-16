@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.41"
+PRISM_VERSION = "7.0.42"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.42: LIGHTBOX FILLS THE SCREEN + CLICK-TO-ZOOM (owner 2026-07-16: "
+    "'the images are much larger than the app... so much wasted space' / "
+    "'when we are looking at the image we need to see it'). Fit view now "
+    "uses 98vw/92vh with minimal padding; clicking the image toggles 100% "
+    "natural size with scrolling; clicking the backdrop still closes. "
     "v7.0.41: IN-APP EVIDENCE IMAGE VIEWER (owner 2026-07-16: 'not "
     "redirect to an image, its hard to get back on a desktop'). Clicking a "
     "proof screenshot opens a lightbox overlay inside the app - Esc/click "
