@@ -261,8 +261,10 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
         # who produced any prior step of this task may not clear its gate.
         producers = []
         try:
+            from prism_service.services.conductor_service import MACHINE_SEATS
             producers = [s.get("session_id")
-                         for s in svc._task_svc.sessions_for_task(body.task_id)]
+                         for s in svc._task_svc.sessions_for_task(body.task_id)
+                         if s.get("session_id") not in MACHINE_SEATS]
         except Exception:
             producers = []
         if body.session_id in producers:

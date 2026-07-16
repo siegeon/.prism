@@ -204,6 +204,79 @@ def test_test_proof_red_gate_is_not_touched(pinned_world, tmp_path):
     assert task_svc.get(t.id).gate_state == "pending"
 
 
+# ---------------------------------------------------------------------------
+# 2026-07-16 defect pins — the judge seat is not a producer, and a machine
+# refusal artifact is re-presentable while a human reject is final
+# ---------------------------------------------------------------------------
+
+
+def test_machine_seat_is_never_stamped_as_producer(pinned_world, tmp_path):
+    from prism_service.services.conductor_service import ADJUDICATOR_SEAT
+    task_svc, task = _gated_task(
+        tmp_path, oracle="the page shows X", proof_type="demo", verify=[])
+    task_svc.update(task.id, workflow_step="red_gate", gate_state="pending")
+    cond = _conductor(tmp_path, task_svc)
+    res = cond.adjudicate_demo_red_gate(task.id)
+    assert res is not None and res.get("ok") is True, res
+    stamped = [s.get("session_id")
+               for s in task_svc.sessions_for_task(task.id)]
+    assert ADJUDICATOR_SEAT not in stamped, stamped
+
+
+def test_refused_approve_failure_is_re_presented(pinned_world, tmp_path,
+                                                 monkeypatch):
+    from prism_service.services import oracle_spec as osp
+    repo, _ = pinned_world
+    _stub_pytest_pass(monkeypatch)
+    task_svc, task = _gated_task(
+        tmp_path, oracle="pinned tests green", proof_type="test",
+        verify=["pytest tests/unit/test_ok.py::test_ok"])
+    spec = osp.OracleSpec.from_task(task)
+    osp.run_oracle(spec, task,
+                   ctx={"project": "testproj", "workspace": str(repo)})
+    task_svc.update(task.id, gate_state="failed",
+                    gate_reason="same-actor artifact")
+    task_svc.record_history(
+        task.id, action="gate_decide",
+        details="gate=green_gate; action=approve; same-actor=rejected; "
+                "actor=conductor-adjudicator", actor="conductor")
+    cond = _conductor(tmp_path, task_svc)
+    res = cond.adjudicate_green_gate(task.id)
+    assert res is not None and res.get("ok") is True, res
+    assert task_svc.get(task.id).gate_state == "passed"
+
+
+def test_human_reject_is_final_for_the_seat(pinned_world, tmp_path,
+                                            monkeypatch):
+    from prism_service.services import oracle_spec as osp
+    repo, _ = pinned_world
+    _stub_pytest_pass(monkeypatch)
+    task_svc, task = _gated_task(
+        tmp_path, oracle="pinned tests green", proof_type="test",
+        verify=["pytest tests/unit/test_ok.py::test_ok"])
+    spec = osp.OracleSpec.from_task(task)
+    osp.run_oracle(spec, task,
+                   ctx={"project": "testproj", "workspace": str(repo)})
+    task_svc.update(task.id, gate_state="failed",
+                    gate_reason="not good enough")
+    task_svc.record_history(
+        task.id, action="gate_decide",
+        details="gate=green_gate; action=reject; reason=not good enough",
+        actor="conductor")
+    cond = _conductor(tmp_path, task_svc)
+    assert cond.adjudicate_green_gate(task.id) is None
+    assert task_svc.get(task.id).gate_state == "failed"
+
+
+def test_cancelled_task_is_never_adjudicated(pinned_world, tmp_path):
+    task_svc, task = _gated_task(
+        tmp_path, oracle="the page shows X", proof_type="demo", verify=[])
+    task_svc.update(task.id, workflow_step="red_gate",
+                    gate_state="pending", status="cancelled")
+    cond = _conductor(tmp_path, task_svc)
+    assert cond.adjudicate_demo_red_gate(task.id) is None
+
+
 def test_unevidenced_oracle_is_minted_then_approved(pinned_world, tmp_path,
                                                     monkeypatch):
     from prism_service.services import oracle_spec as osp

@@ -196,6 +196,15 @@ def _task_attr(task: object, name: str, default: str = "") -> object:
 # construction, same trust model as the story/plan 'conductor-autoclear' seat.
 ADJUDICATOR_SEAT = "conductor-adjudicator"
 
+# Machine JUDGE seats are never work PRODUCERS (defect found 2026-07-16 on
+# d09bee0b: the adjudicator's red_gate decision stamped it into the task's
+# sessions, so its green_gate approval was refused as self-review and the
+# gate flipped failed). Seats in this set are excluded from session stamping
+# and from the distinct-actor producer set — a judge deciding two gates on
+# one task is not reviewing its own work.
+MACHINE_SEATS = frozenset(
+    {ADJUDICATOR_SEAT, "conductor-autoclear", "gate-card-rerun"})
+
 
 def _is_low_value_completion(task: object) -> bool:
     """A done task is LOW-VALUE on reliable signals only (goalbuddy GAP-5).
@@ -1432,8 +1441,11 @@ class ConductorService:
     ) -> None:
         """Best-effort upsert of a task_sessions row via the single
         TaskService writer. No-op when no session is carried or the
-        writer is unavailable — must never break a transition."""
-        if not session_id:
+        writer is unavailable — must never break a transition. Machine
+        JUDGE seats are never stamped: a gate decision is not work on the
+        task, and stamping one poisons the distinct-actor producer set
+        for every later gate (d09bee0b, 2026-07-16)."""
+        if not session_id or session_id in MACHINE_SEATS:
             return
         link = getattr(self._task_svc, "link_session", None)
         if not callable(link):
@@ -1773,9 +1785,21 @@ class ConductorService:
         if self._task_svc is None:
             return None
         task = self._task_svc.get(task_id)
-        if (task is None
-                or getattr(task, "workflow_step", "") != "green_gate"
-                or getattr(task, "gate_state", "") != "pending"):
+        if task is None \
+                or getattr(task, "workflow_step", "") != "green_gate":
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        gate_state = getattr(task, "gate_state", "")
+        if gate_state == "failed":
+            # Re-present ONLY a machine refusal artifact (a refused APPROVE
+            # attempt — control-plane / same-actor / receipt tooth), never a
+            # decision: an explicit human reject is final for this seat.
+            if not self._failed_gate_is_refused_approve(task_id,
+                                                        "green_gate"):
+                return None
+        elif gate_state != "pending":
             return None
         if not str(getattr(task, "oracle", "") or "").strip():
             return None
@@ -1836,6 +1860,25 @@ class ConductorService:
                                actor=ADJUDICATOR_SEAT, model="machine")
         return res if res and res.get("ok") else None
 
+    def _failed_gate_is_refused_approve(self, task_id: str,
+                                        gate_step_id: str) -> bool:
+        """True when the LATEST gate_decide history row for this gate
+        records a refused APPROVE attempt (a tooth refusal: control-plane,
+        same-actor, oracle-receipt) rather than an explicit reject. A
+        reject is a decision the machine seat must never re-litigate; a
+        tooth refusal is 'not yet' — re-presentable once the evidence or
+        authorization is cured (d09bee0b/b07fd46e, 2026-07-16)."""
+        try:
+            rows = self._task_svc.history(task_id) or []
+        except Exception:
+            return False
+        for row in reversed(list(rows)):
+            s = str(row)
+            if "gate_decide" not in s or f"gate={gate_step_id}" not in s:
+                continue
+            return "action=reject" not in s
+        return False
+
     def adjudicate_demo_red_gate(self, task_id: str) -> Optional[dict]:
         """MACHINE ADJUDICATOR SEAT for a PENDING red_gate on a
         proof_type=demo ticket (task 59ddfcbc). A demo ticket has no test
@@ -1852,6 +1895,9 @@ class ConductorService:
         if (task is None
                 or getattr(task, "workflow_step", "") != "red_gate"
                 or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
             return None
         pt = str(getattr(task, "proof_type", "") or "").strip().lower()
         if pt != "demo":
@@ -2120,8 +2166,12 @@ class ConductorService:
         # work-producer and wrongly blocked from overriding.
         prior_work_actors: list[str] = []
         try:
-            prior_work_actors = [s.get("session_id")
-                                 for s in self._task_svc.sessions_for_task(task_id)]
+            # Machine JUDGE seats are excluded — rows stamped before the
+            # MACHINE_SEATS exemption existed must not poison the set.
+            prior_work_actors = [
+                s.get("session_id")
+                for s in self._task_svc.sessions_for_task(task_id)
+                if s.get("session_id") not in MACHINE_SEATS]
         except Exception:
             prior_work_actors = []
 

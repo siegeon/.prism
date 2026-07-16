@@ -476,6 +476,10 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[int] = None
+    # tags were settable at create but never updatable over the API — the
+    # control-plane's 'policy-change' authorized route was unreachable for
+    # SPA/API users (2026-07-16).
+    tags: Optional[list[str]] = None
     assigned_agent: Optional[str] = None
     blocked_reason: Optional[str] = None
     parent_id: Optional[str] = None

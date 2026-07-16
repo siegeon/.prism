@@ -68,9 +68,15 @@ def sweep_once() -> list[dict]:
             gate = t.get("gate_state") if isinstance(t, dict) \
                 else getattr(t, "gate_state", "")
             tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
-            if gate != "pending" or not tid:
+            if not tid or step not in ("green_gate", "red_gate"):
                 continue
-            if step not in ("green_gate", "red_gate"):
+            # green_gate also sweeps 'failed' — adjudicate_green_gate
+            # re-presents ONLY machine refusal artifacts, never a human
+            # reject (it checks the history itself). red_gate: pending only.
+            if step == "green_gate":
+                if gate not in ("pending", "failed"):
+                    continue
+            elif gate != "pending":
                 continue
             try:
                 if step == "green_gate":
