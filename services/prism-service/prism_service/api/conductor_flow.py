@@ -16,6 +16,7 @@ so a producer can never clear its own gate.
 """
 from __future__ import annotations
 
+import subprocess
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -78,6 +79,16 @@ def _job(task) -> Optional[dict]:
         "doctrine": doctrine,
         "expected_proof": step.get("validation") or (
             "prior step's validation" if kind == "gate" else "n/a"),
+        # Worker contract (fb2846dc): the STRUCTURED allowed_files/verify/
+        # stop_if the task was given — a first-class job field the worker
+        # can read deterministically, not prose it is merely trusted to
+        # parse out of `instructions`. Always present (empty lists on a
+        # contract-less task) so callers never branch on key presence.
+        "contract": {
+            "allowed_files": list(getattr(task, "allowed_files", None) or []),
+            "verify": list(getattr(task, "verify", None) or []),
+            "stop_if": list(getattr(task, "stop_if", None) or []),
+        },
     }
 
 
@@ -97,6 +108,12 @@ class Ident(BaseModel):
     # artifact for red/green). override is an explicit, audited exception —
     # a genuine independent reviewer forcing a decision — never the default.
     override: bool = False
+    # Worker contract (fb2846dc): an audited escape hatch for the
+    # implement_tasks out-of-allowlist refusal below — names every offending
+    # path the worker knowingly touched outside allowed_files. Only consulted
+    # when a refusal would otherwise fire; recorded to task history, never a
+    # silent bypass.
+    acknowledged_out_of_contract: Optional[list[str]] = None
 
 
 # A worker's outcome only signals FAILURE when it is UNAMBIGUOUS — an
@@ -217,6 +234,117 @@ def flow_workspace(task_id: str) -> dict:
     return {"workspace": ws}
 
 
+# ---------------------------------------------------------------------------
+# Worker-contract enforcement at the implement_tasks report (fb2846dc).
+# allowed_files/verify/stop_if (models/task.py) were stored + displayed but
+# never checked — a dev-step report could silently touch anything. This
+# closes that: a non-empty allowed_files is checked against the REAL
+# workspace diff at report time, refusing on an out-of-contract change
+# unless the worker explicitly acknowledges it (audited, not a hard wall —
+# other tasks' uncommitted work can share this tree).
+# ---------------------------------------------------------------------------
+
+def _contract_workspace_root(task_id: str) -> Optional[str]:
+    """The SAME per-task workspace-root resolution the oracle receipt's
+    tree_sha uses (oracle_spec.current_tree_sha / ConductorService.
+    _verify_gate) — never the daemon cwd."""
+    try:
+        ws = task_workspace.workspace_for(task_id)
+    except Exception:
+        return None
+    return (ws or {}).get("path") or None
+
+
+def _contract_changed_paths(workspace: str) -> list[str]:
+    """Changed + untracked file paths, name-only, relative to `workspace` —
+    one `git status --porcelain` pass covers staged, unstaged, AND
+    untracked. Never raises: a git failure yields an empty list (the caller
+    then sees no offenders, which is the same fail-open behavior an empty
+    allowed_files already has — this helper never invents a refusal)."""
+    try:
+        r = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=workspace, capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return []
+    if r.returncode != 0:
+        return []
+    paths: list[str] = []
+    for line in r.stdout.splitlines():
+        if not line:
+            continue
+        rest = line[3:] if len(line) > 3 else line.strip()
+        if " -> " in rest:  # rename: "old -> new"
+            rest = rest.split(" -> ", 1)[1]
+        rest = rest.strip()
+        if rest.startswith('"') and rest.endswith('"'):
+            rest = rest[1:-1]
+        if rest:
+            paths.append(rest)
+    return paths
+
+
+def _contract_norm(path: str) -> str:
+    return str(path or "").replace("\\", "/").strip("/")
+
+
+def _contract_violations(paths: list[str], allowed: list[str]) -> list[str]:
+    """Paths not covered by `allowed` — exact match OR a directory-prefix
+    match (an allowlisted directory covers everything under it)."""
+    allow_norm = [_contract_norm(a) for a in (allowed or [])
+                  if str(a or "").strip()]
+    offenders = []
+    for p in paths:
+        pn = _contract_norm(p)
+        covered = any(pn == a or pn.startswith(a + "/") for a in allow_norm)
+        if not covered:
+            offenders.append(p)
+    return offenders
+
+
+def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
+    """implement_tasks PASS-report guard. Returns a refusal dict to hand
+    straight back to the caller, or None to let the report proceed
+    (recording an audited acknowledgment first when one covers every
+    offender)."""
+    allowed = list(getattr(task, "allowed_files", None) or [])
+    if not allowed:
+        return None  # unconstrained — today's behavior, untouched (AC-4)
+    root = _contract_workspace_root(task.id)
+    if not root:
+        # stop_if: never fall back to the daemon cwd — a structural gap is
+        # refused distinctly from an allowlist breach.
+        return {"ok": False, "step": "implement_tasks", "advanced": False,
+                "reason": "worker-contract check could not resolve this "
+                          "task's workspace root server-side — refusing "
+                          "rather than falling back to the daemon cwd",
+                "next_job": _job(task)}
+    offenders = _contract_violations(_contract_changed_paths(root), allowed)
+    if not offenders:
+        return None
+    acked = {_contract_norm(p)
+             for p in (body.acknowledged_out_of_contract or [])}
+    offenders_norm = {_contract_norm(p) for p in offenders}
+    if acked and offenders_norm <= acked:
+        try:
+            svc._task_svc.record_history(
+                task.id, action="worker_contract_ack",
+                details=("acknowledged out-of-contract files: "
+                          + ", ".join(sorted(offenders))),
+                actor=body.session_id or "")
+        except Exception:
+            pass
+        return None
+    return {"ok": False, "step": "implement_tasks", "advanced": False,
+            "reason": ("worker contract violated: file(s) outside "
+                       "allowed_files changed — " + ", ".join(sorted(offenders))
+                       + ". Re-send the report with "
+                         "acknowledged_out_of_contract=[...] naming these "
+                         "paths for an audited exception."),
+            "offending_files": sorted(offenders),
+            "next_job": _job(task)}
+
+
 @router.post("/report")
 def flow_report(body: Ident, project: str = Query("default")) -> dict:
     """Record the worker's outcome and let the SERVER advance the flow —
@@ -304,6 +432,13 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 "outcome is not step completion)",
                 "next_job": _job(task)}
     else:
+        # WORKER-CONTRACT ENFORCEMENT (fb2846dc): the implement_tasks PASS
+        # report only — never another agent step, never a gate — is checked
+        # against the task's own allowed_files (empty = unconstrained).
+        if step["id"] == "implement_tasks":
+            refusal = _contract_refusal(svc, task, body)
+            if refusal is not None:
+                return refusal
         # MINT GREEN EVIDENCE at verify_green (inverted-flow #5): a SUCCESS
         # report on the verify_green_state step runs the 3-lane honest signal
         # (oracle receipt + red->green continuity + baseline-diff regression)

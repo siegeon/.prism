@@ -452,23 +452,16 @@ def same_actor_override_reason(override_actor: object,
     return ""
 
 
-def overlapping_allowed_files(file_lists: list) -> set:
-    """Ported from goalbuddy scripts/parallel-plan.mjs: parallel workers are
-    safe ONLY when their allowed_files sets are provably disjoint. Returns the
-    set of files claimed by more than one worker (empty set == safe to run in
-    parallel)."""
-    seen: set = set()
-    clash: set = set()
-    for files in file_lists or []:
-        cur = set(files or [])
-        clash |= (cur & seen)
-        seen |= cur
-    return clash
-
-
-def can_run_parallel(file_lists: list) -> bool:
-    """True iff the given allowed_files sets are pairwise disjoint."""
-    return not overlapping_allowed_files(file_lists)
+# NOTE (fb2846dc): overlapping_allowed_files/can_run_parallel — a ported
+# goalbuddy parallel-safety check — were REMOVED here. A repo-wide audit
+# found zero production call sites: no server-side code path decides
+# multi-task parallel dispatch by allowed_files disjointness. job_queue.py's
+# sandbox fan-out stages are per-SINGLE-task job lists with no allowed_files
+# concept, and /api/conductor/fanout only records dispatched/returned
+# telemetry for the SPA — neither is a dispatch DECISION. Fan-out is
+# orchestrated by the calling agent (the Agent tool), outside the server.
+# A defined-but-never-called check is prose wearing a function signature;
+# if a real dispatch seam appears later, re-port from this task's history.
 
 
 class ConductorService:
