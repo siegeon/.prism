@@ -28,10 +28,14 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 ## Lessons
 
 - Never clean up a planted/temporary line with `git checkout -- <file>` while the file holds uncommitted real work — it reverts EVERYTHING; remove the planted line with a targeted edit instead.
-- On a conductor_work drive, the story/plan rubrics read `task.plan_doc` — writing the story only as step `proof=` (→ completion_proof) auto-fails story_gate with "story_md is empty"; always `task_update(plan_doc=...)` alongside the draft_story/verify_plan report.
+- On a conductor_work drive, the story/plan rubrics read `task.plan_doc`, and the draft_story/verify_plan `proof=` OVERWRITES plan_doc — so pass the FULL story/plan markdown as `proof=`; a `task_update(plan_doc=...)` made beforehand is clobbered by the very next report, and a one-shot rubric autoclear miss parks story_gate/plan_gate pending until the adjudicator's rubric re-sweep (v7.0.49) lifts it — keep the report compliant at the moment it lands anyway.
 - When writing doctrine/memory from an owner conversation, record the owner's ACTUAL intent, not my hardened absolutization of it — "human in the loop" means visibility + override, never "every gate is a human click"; an over-strict note I write becomes a wall every future session (and every supervisor) enforces against the owner's real goal.
 - Evidence for PRISM work (screenshots, audit reports) goes INTO PRISM — the task evidence store + /tasks/:id/proof — never claude.ai artifacts or any external host; the owner reviews evidence where the gate is.
 - DONE means SHIPPED — merged and validated on main (released), not drive-complete: a green_gate pass is "verified"; never report or display a task as done while its commits sit on an unpushed branch (owner 2026-07-16).
+- Bouncing the dev daemon from a sandboxed background shell ties it to that shell's Windows job — it dies silently (no traceback, mid-request logs) when the harness recycles the shell; launch with the sandbox disabled (or F5) so the daemon survives.
+- A lane must commit its failing tests as a TESTS-ONLY `[task:<id>]` commit at the red step, BEFORE any implementation commit — the red machine seat anchors to that commit; bundling tests+impl makes red undemonstrable and strands red_gate with a human.
+- Slice scoping must check control_plane.POLICY_FILES up front — a task whose allowed_files includes a gate-policy file will fail its own gates on the candidate-controls-judge tooth; put consumers of policy modules in a separate non-policy file, and never let a producer tag its own task policy-change mid-drive.
+- Long curl -d JSON bodies with unicode (em-dashes) silently fail through the shell — write the body to a file and use --data-binary @file.
 
 ## Key Conventions
 
