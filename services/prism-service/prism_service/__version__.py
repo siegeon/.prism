@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.51"
+PRISM_VERSION = "7.0.52"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.52: THE BOARD SHOWS LIVE WORK, NOT HISTORY (owner 2026-07-17: "
+    "'clean up the task board there are tons of subtasks in there?'). "
+    "Cancelled/deleted/archived tasks were falling through the status "
+    "bucketer into 'Up next' - and, with a stale gate_state, into 'At a "
+    "gate' - so weeks of dead planning epics, test probes and duplicate "
+    "drives padded the active board (52 rows where ~15 are real). "
+    "Terminal statuses now bucket to hidden, and cancelled/deleted "
+    "children stay out of the expansion tree (task pages keep full "
+    "history). Data was already clean - one true fix: f4cfd20b closed as "
+    "shipped (the v7.0.46 delivery pipeline). "
     "v7.0.51: THE TASK PAGE OPENS INSTANTLY AND THE LIVE BAR NEVER LIES "
     "(owner 2026-07-16: 'its not even running?' / 'no task being driven "
     "?? '). Root cause 1: opening a task page fired tests?run=true - a "

@@ -33,7 +33,13 @@ const GROUPS: { key: string; label: string }[] = [
 
 function bucketOf(t: Task): string {
   const status = (t.status ?? "pending").toLowerCase();
+  // Terminal / soft-deleted statuses NEVER reach an active bucket. They
+  // used to fall through to "Up next" — and, with a stale gate_state, even
+  // "At a gate" — so the board presented weeks of cancelled/deleted history
+  // as upcoming work (owner 2026-07-17: "tons of subtasks in there?").
   if (status === "done") return "done";
+  if (status === "cancelled" || status === "deleted" || status === "archived")
+    return "hidden";
   if (status === "blocked") return "blocked";
   const gate = t.gate_state ?? "none";
   if (gate === "pending" || gate === "failed") return "gate";
@@ -84,7 +90,10 @@ export default function TasksPage() {
   // group client-side.
   const childrenByParent = new Map<string, Task[]>();
   for (const t of tasks) {
-    if (t.parent_id) {
+    // Cancelled/deleted children stay off the board's expansion tree — the
+    // task detail page keeps the full history; the board shows live work.
+    const cst = (t.status ?? "").toLowerCase();
+    if (t.parent_id && cst !== "cancelled" && cst !== "deleted") {
       const arr = childrenByParent.get(t.parent_id) ?? [];
       arr.push(t);
       childrenByParent.set(t.parent_id, arr);
