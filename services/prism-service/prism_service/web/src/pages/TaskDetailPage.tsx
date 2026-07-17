@@ -1010,10 +1010,21 @@ export default function TaskDetailPage() {
   };
 
   const gateDecide = async (action: "approve" | "reject") => {
-    if (!gateReason.trim()) {
-      setGateResult({ kind: "refused", text: "A reason is required to resolve the gate." });
+    // A plain Approve is ONE CLICK (owner 2026-07-16: demanding a why here is
+    // friction) — the audit trail records a truthful default note. A reject or
+    // an override release still demands the owner's why: those are the levers
+    // that need justification.
+    const needsReason = action === "reject" || gateOverride;
+    if (needsReason && !gateReason.trim()) {
+      setGateResult({
+        kind: "refused",
+        text: action === "reject"
+          ? "A reason is required to reject the gate."
+          : "A reason is required for an override release.",
+      });
       return;
     }
+    const decisionReason = gateReason.trim() || "approved by owner (one-click from the task page)";
     setBusy(true);
     setGateResult({
       kind: "checking",
@@ -1028,7 +1039,7 @@ export default function TaskDetailPage() {
         body: JSON.stringify({
           task_id: id,
           action,
-          reason: gateReason.trim(),
+          reason: decisionReason,
           override: gateOverride,
         }),
       });
@@ -1450,8 +1461,7 @@ export default function TaskDetailPage() {
                 <textarea
                   value={gateReason}
                   onChange={(e) => setGateReason(e.target.value)}
-                  required
-                  placeholder="Reason (required) — why approve or reject this gate?"
+                  placeholder="Optional note — recorded on the gate's audit trail (required to reject or override)"
                   rows={2}
                   className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
                 />
@@ -1478,7 +1488,7 @@ export default function TaskDetailPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
                     type="button"
-                    disabled={busy || !gateReason.trim() || (gateVerdict !== "ready" && !gateOverride)}
+                    disabled={busy || (gateVerdict !== "ready" && !gateOverride) || (gateOverride && !gateReason.trim())}
                     onClick={() => gateDecide("approve")}
                     className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
                     style={gateVerdict === "ready" || gateOverride

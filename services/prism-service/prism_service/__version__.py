@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.47"
+PRISM_VERSION = "7.0.48"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.48: ONE-CLICK GATE APPROVE (owner 2026-07-16: 'i do not think we "
+    "need to tell the system why we approve the red gate here, this feels "
+    "like too much friction'). A plain Approve on a pending gate no longer "
+    "demands a typed reason - the audit trail records a truthful default "
+    "note ('approved by owner, one-click'). Reject and override-release "
+    "KEEP their required reason: those are the levers that need the why. "
     "v7.0.47: DONE CHIP QUALIFIED AT THE TOP (owner 2026-07-16: 'USE IT "
     "LIKE A USER WOULD... how could i tell its not done?'). A done task "
     "whose work is unshipped shows an amber 'not delivered yet - <next "
