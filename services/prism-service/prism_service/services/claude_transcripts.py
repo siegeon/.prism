@@ -129,6 +129,77 @@ def sum_usage(usage: dict | None) -> int:
     return sum(usage_components(usage).values())
 
 
+# v7.0.53 (task ff160371) — honest per-field, per-turn-model USD pricing.
+# sum_usage/usage_components above treat all four usage fields as equally
+# "tokens" — right for token-budget accounting, wrong for DOLLARS: a
+# cache_read token is ~0.1x the price of an input token, an output token is
+# ~5x an input token. PRICING prices each field at its OWN rate, sourced
+# from the claude-api skill's current per-model $/1M table (cached
+# 2026-06-24). Anthropic doesn't publish separate per-model cache sticker
+# prices — only the ratio (cache_read ~=0.1x input, cache_creation ~=1.25x
+# input at the default 5-minute ephemeral TTL) — so cache rates are derived
+# from that documented ratio, not invented.
+def _tier(input_per_mtok: float, output_per_mtok: float) -> dict[str, float]:
+    input_rate = input_per_mtok / 1_000_000
+    return {
+        "input_tokens": input_rate,
+        "output_tokens": output_per_mtok / 1_000_000,
+        "cache_read_input_tokens": input_rate * 0.1,
+        "cache_creation_input_tokens": input_rate * 1.25,
+    }
+
+
+PRICING: dict[str, dict[str, float]] = {
+    "claude-fable-5": _tier(10.00, 50.00),
+    "claude-mythos-5": _tier(10.00, 50.00),
+    "claude-opus-4-8": _tier(5.00, 25.00),
+    "claude-opus-4-8[1m]": _tier(5.00, 25.00),  # 1M-context id, same rate (no long-context premium)
+    "claude-opus-4-7": _tier(5.00, 25.00),
+    "claude-opus-4-6": _tier(5.00, 25.00),
+    "claude-sonnet-5": _tier(3.00, 15.00),      # standard sticker (2026-08-31 intro pricing not modeled)
+    "claude-sonnet-4-6": _tier(3.00, 15.00),
+    "claude-haiku-4-5": _tier(1.00, 5.00),
+    "claude-haiku-4-5-20251001": _tier(1.00, 5.00),
+}
+
+# Unrecognized model id (new release, dated snapshot, or a non-billing
+# pseudo-model like "<synthetic>"): priced at this clearly-labeled Opus-tier
+# default so the dollar figure isn't silently zero — but every turn priced
+# this way is also counted into `unpriced_tokens` (see live_spend_for_session)
+# so the UI can flag it. Never presented as a sourced rate by itself.
+PRICING_DEFAULT: dict[str, float] = _tier(5.00, 25.00)
+PRICING_DEFAULT_LABEL = "unpriced (default: Opus-tier rate)"
+
+
+def usd_cost(components: dict, model: str) -> float:
+    """STUB (red step, task ff160371) — real per-field pricing lands at the
+    implement step. Deliberately WRONG (flat/zero) so the pricing-honesty
+    tests fail BEHAVIOURALLY rather than at import."""
+    return 0.0
+
+
+def live_spend_for_session(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> dict:
+    """STUB (red step, task ff160371) — real main/background split lands at
+    the implement step. Deliberately WRONG (all-empty) so the split tests
+    fail BEHAVIOURALLY rather than at import."""
+    empty = {
+        "tokens": 0,
+        "components": {f: 0 for f in USAGE_TOKEN_FIELDS},
+        "usd": 0.0,
+        "unpriced_tokens": 0,
+        "priced": True,
+    }
+    return {
+        "main": dict(empty),
+        "background": dict(empty),
+        "total": dict(empty),
+        "priced": True,
+    }
+
+
 def is_machinery_turn(text: str) -> bool:
     """True when a turn is autonomous-loop MACHINERY (Stop-hook directive,
     loop-tick/ScheduleWakeup re-invocation, scheduler heartbeat), not genuine
