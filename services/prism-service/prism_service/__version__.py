@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.49"
+PRISM_VERSION = "7.0.50"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.50: THE ORACLE IS VALIDATED LIKE A COMPILER AT AUTHORING TIME "
+    "(task b78a193c, slice 1 of the Joshi DSL-validator epic cfa6300b). "
+    "task_create/task_update (MCP) and POST /api/tasks (REST - which "
+    "gains oracle/proof_type/verify/allowed_files/stop_if parity) derive "
+    "the OracleSpec when oracle fields are touched, return the adapter + "
+    "spec_hash on success, and REJECT the one hard contradiction - "
+    "proof_type=test with no runnable pytest ids in verify[] - with a "
+    "domain-level error naming exactly how to repair. Oracle-less and "
+    "manual-evidence tasks keep the honest fallback. Driven end-to-end "
+    "by a subagent through conductor gates that were ALL machine-decided "
+    "(rubric autoclears + RED receipt 6cee129c + green receipt fa618345). "
     "v7.0.49: RED GATES GET A MACHINE SEAT (owner 2026-07-16: 'this "
     "blocked with evidence not on file should be patched, its a no-op for "
     "me' / 'update the platform so that it handles this'). The trusted "
