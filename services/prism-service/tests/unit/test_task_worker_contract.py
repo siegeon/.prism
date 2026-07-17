@@ -39,13 +39,19 @@ def test_contract_fields_round_trip(tmp_path):
     assert svc.get(t.id).allowed_files == ["a.py", "b.py", "c.py"]
 
 
-# overlapping_allowed_files/can_run_parallel were REMOVED from
-# conductor_service.py (task fb2846dc): a repo-wide audit found zero
-# production call sites — no server-side code path decides parallel task
-# dispatch by allowed_files disjointness, so the two tests that used to live
-# here (test_disjoint_allowlists_are_parallel_safe /
-# test_overlapping_allowlists_are_not_parallel_safe) went with them. The
-# contract's actual enforcement (allowed_files checked against a real
-# workspace diff at the implement_tasks report) is covered by
-# tests/integration/test_worker_contract_enforced.py — this file keeps only
-# the storage round-trip coverage above.
+def test_disjoint_allowlists_are_parallel_safe():
+    from prism_service.services.conductor_service import (
+        can_run_parallel, overlapping_allowed_files,
+    )
+    safe = [["a.py", "b.py"], ["c.py"], ["d.py", "e.py"]]
+    assert can_run_parallel(safe) is True
+    assert overlapping_allowed_files(safe) == set()
+
+
+def test_overlapping_allowlists_are_not_parallel_safe():
+    from prism_service.services.conductor_service import (
+        can_run_parallel, overlapping_allowed_files,
+    )
+    clash = [["a.py", "shared.py"], ["c.py"], ["shared.py"]]
+    assert can_run_parallel(clash) is False
+    assert overlapping_allowed_files(clash) == {"shared.py"}
