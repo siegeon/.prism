@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.48"
+PRISM_VERSION = "7.0.49"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.49: RED GATES GET A MACHINE SEAT (owner 2026-07-16: 'this "
+    "blocked with evidence not on file should be patched, its a no-op for "
+    "me' / 'update the platform so that it handles this'). The trusted "
+    "runner now demonstrates RED for real - pinned tests observed FAILING "
+    "in a disposable worktree at the red-step commit - and mints a RED "
+    "EvidenceReceipt (passed=False always; structurally invisible to "
+    "green_gate). write_failing_tests reports mint it; the adjudicator "
+    "sweep decides test-proof red gates on it (adjudicate_test_red_gate, "
+    "backfilling parked tasks via the [task:<id8>] tests-only commit); "
+    "gate readiness judges RED evidence at red gates so the card offers "
+    "one-click Approve instead of 'evidence not on file'; and PENDING "
+    "story/plan rubric gates are re-swept (strand mx-2812f9) - a rubric-"
+    "FAILED gate or human reject stays decided. "
     "v7.0.48: ONE-CLICK GATE APPROVE (owner 2026-07-16: 'i do not think we "
     "need to tell the system why we approve the red gate here, this feels "
     "like too much friction'). A plain Approve on a pending gate no longer "

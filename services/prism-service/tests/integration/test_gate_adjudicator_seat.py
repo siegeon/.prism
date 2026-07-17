@@ -277,6 +277,162 @@ def test_cancelled_task_is_never_adjudicated(pinned_world, tmp_path):
     assert cond.adjudicate_demo_red_gate(task.id) is None
 
 
+# ---------------------------------------------------------------------------
+# task a5e8d877 — test-proof red_gate machine seat: approves ONLY on a fresh
+# RED receipt (pinned tests observed FAILING at the red-step commit); a pass
+# at the red commit stays with a human; red receipts never satisfy green.
+# ---------------------------------------------------------------------------
+
+
+def _stub_pytest_red(monkeypatch):
+    from prism_service.services import oracle_spec as osp
+    monkeypatch.setitem(
+        osp._ADAPTERS, osp.ADAPTER_PYTEST,
+        lambda spec, ctx: (
+            [{"name": "pytest_pass", "polarity": "positive",
+              "expected": "rc==0", "observed": 1, "passed": False}],
+            [], False, osp.ST_FAILED, "stub: 3 failed"))
+
+
+def _red_gated_task(tmp_path, repo_sha):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="red me", oracle="pinned tests red first",
+                        proof_type="test")
+    task_svc.update(t.id, verify=["pytest tests/unit/test_ok.py::test_ok"],
+                    workflow_step="red_gate", gate_state="pending")
+    task_svc.record_history(t.id, action="red_step_sha", details=repo_sha,
+                            actor="conductor")
+    return task_svc, task_svc.get(t.id)
+
+
+def test_red_receipt_never_satisfies_green(pinned_world, tmp_path,
+                                           monkeypatch):
+    from prism_service.services import oracle_spec as osp
+    repo, sha = pinned_world
+    _stub_pytest_red(monkeypatch)
+    task_svc, task = _red_gated_task(tmp_path, sha)
+    spec = osp.OracleSpec.from_task(task)
+    r = osp.run_red_oracle(spec, task, sha,
+                           ctx={"project": "testproj",
+                                "workspace": str(repo)})
+    assert r.status == osp.ST_RED and r.passed is False
+    assert osp.fresh_red_receipt("testproj", task.id, sha,
+                                 spec.spec_hash()) is not None
+    assert osp.fresh_passing_receipt("testproj", task.id, sha,
+                                     spec.spec_hash()) is None
+
+
+def test_test_red_gate_minted_then_approved(pinned_world, tmp_path,
+                                            monkeypatch):
+    repo, sha = pinned_world
+    _stub_pytest_red(monkeypatch)
+    task_svc, task = _red_gated_task(tmp_path, sha)
+    cond = _conductor(tmp_path, task_svc)
+    res = cond.adjudicate_test_red_gate(task.id)
+    assert res is not None and res.get("ok") is True, res
+    after = task_svc.get(task.id)
+    assert after.workflow_step != "red_gate"
+    assert after.gate_state != "failed"
+    hist = " ".join(str(h) for h in task_svc.history(task.id))
+    assert "RED demonstrated" in hist
+
+
+def test_red_gate_passing_tests_stay_with_a_human(pinned_world, tmp_path,
+                                                  monkeypatch):
+    repo, sha = pinned_world
+    _stub_pytest_pass(monkeypatch)
+    task_svc, task = _red_gated_task(tmp_path, sha)
+    cond = _conductor(tmp_path, task_svc)
+    assert cond.adjudicate_test_red_gate(task.id) is None
+    after = task_svc.get(task.id)
+    assert after.workflow_step == "red_gate"
+    assert after.gate_state == "pending"
+    # one-attempt guard: the failed demonstration is not re-run
+    assert cond.adjudicate_test_red_gate(task.id) is None
+
+
+def test_red_step_sha_backfills_from_task_trailer(pinned_world, tmp_path):
+    repo, _sha = pinned_world
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="legacy red", oracle="pinned tests red",
+                        proof_type="test")
+    tests_dir = repo / "tests" / "unit"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_red.py").write_text("def test_x():\n    assert 0\n",
+                                           encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", f"test(red): failing [task:{t.id[:8]}]")
+    red = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                         capture_output=True, text=True).stdout.strip()
+    cond = _conductor(tmp_path, task_svc)
+    assert cond._red_step_sha(t.id) == red
+
+
+# ---------------------------------------------------------------------------
+# task a5e8d877 gap 2 — story/plan PENDING rubric re-sweep (strand mx-2812f9)
+# ---------------------------------------------------------------------------
+
+
+def test_pending_rubric_gate_is_resweepable(pinned_world, tmp_path,
+                                            monkeypatch):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="stranded plan", oracle="oracle: tests pass",
+                        proof_type="test")
+    task_svc.update(t.id, workflow_step="plan_gate", gate_state="pending")
+    cond = _conductor(tmp_path, task_svc)
+    monkeypatch.setattr(
+        cond, "_verify_rubric_gate",
+        lambda task, validation: {"verified": True,
+                                  "reason": "stub rubric green",
+                                  "verifier": None,
+                                  "validation": validation})
+    res = cond.adjudicate_rubric_gate(t.id)
+    assert res is not None and res.get("ok") is True, res
+    assert task_svc.get(t.id).workflow_step != "plan_gate"
+
+
+def test_noncompliant_pending_rubric_gate_stays_pending(pinned_world,
+                                                        tmp_path,
+                                                        monkeypatch):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="still bad plan", oracle="oracle: tests pass",
+                        proof_type="test")
+    task_svc.update(t.id, workflow_step="plan_gate", gate_state="pending")
+    cond = _conductor(tmp_path, task_svc)
+    monkeypatch.setattr(
+        cond, "_verify_rubric_gate",
+        lambda task, validation: {"verified": False,
+                                  "reason": "missing sections",
+                                  "verifier": None,
+                                  "validation": validation})
+    assert cond.adjudicate_rubric_gate(t.id) is None
+    after = task_svc.get(t.id)
+    assert after.workflow_step == "plan_gate"
+    assert after.gate_state == "pending"
+
+
+def test_failed_rubric_gate_is_never_resweeped(pinned_world, tmp_path,
+                                               monkeypatch):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="rejected plan", oracle="oracle: tests pass",
+                        proof_type="test")
+    task_svc.update(t.id, workflow_step="plan_gate", gate_state="failed",
+                    blocked_reason="")
+    cond = _conductor(tmp_path, task_svc)
+    monkeypatch.setattr(
+        cond, "_verify_rubric_gate",
+        lambda task, validation: {"verified": True, "reason": "green now",
+                                  "verifier": None,
+                                  "validation": validation})
+    assert cond.adjudicate_rubric_gate(t.id) is None
+    assert task_svc.get(t.id).gate_state == "failed"
+
+
 def test_unevidenced_oracle_is_minted_then_approved(pinned_world, tmp_path,
                                                     monkeypatch):
     from prism_service.services import oracle_spec as osp

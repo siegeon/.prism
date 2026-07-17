@@ -80,6 +80,41 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
     if task is None:
         raise HTTPException(404, "unknown task")
+    # RED-GATE READINESS (task a5e8d877, owner 2026-07-16): a red gate was
+    # judged with the GREEN oracle tooth, so every test-proof red gate read
+    # 'evidence not on file' with no possible action — a dead-end. Judge RED
+    # evidence for red gates; green gates keep the receipt tooth below.
+    if getattr(task, "workflow_step", "") == "red_gate":
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt == "demo":
+            return {"receipt_ok": True, "receipt_refusal": "",
+                    "receipt": {"adapter": "demo-rubric", "passed": True,
+                                "status": "demo", "ended_at": "",
+                                "reason": ("demo ticket: red is the absent "
+                                           "artifact; the rubric decides "
+                                           "on Approve")}}
+        from prism_service.services import oracle_spec as osp
+        spec = osp.OracleSpec.from_task(task)
+        red_sha = s._red_step_sha(task_id)
+        fresh = (osp.fresh_red_receipt(project, task_id, red_sha,
+                                       spec.spec_hash())
+                 if red_sha else None)
+        if fresh is not None:
+            return {"receipt_ok": True, "receipt_refusal": "",
+                    "receipt": {"adapter": fresh.adapter, "passed": False,
+                                "status": fresh.status,
+                                "ended_at": fresh.ended_at,
+                                "reason": str(fresh.reason)[:300]}}
+        return {"receipt_ok": False,
+                "receipt_refusal": (
+                    ("no RED receipt yet — the machine seat will "
+                     "demonstrate the pinned tests failing at red-step "
+                     f"commit {red_sha[:12]} on its next sweep and decide "
+                     "this gate; no owner action needed")
+                    if red_sha else
+                    ("no red-step commit derivable — commit the failing "
+                     "tests with a [task:<id>] trailer, or decide the "
+                     "gate manually"))}
     refusal, receipt = s._oracle_receipt_refusal(
         task, override=False, reason="")
     out: dict = {

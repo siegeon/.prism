@@ -454,6 +454,18 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                                         model=body.model)
             except Exception:
                 pass
+        # MINT RED EVIDENCE at the red step (task a5e8d877): a SUCCESS report
+        # on write_failing_tests records the red-step commit and lets the
+        # trusted runner demonstrate the pinned tests FAILING there, so the
+        # red_gate that follows is machine-decidable on a receipt instead of
+        # stranding as 'evidence not on file'. Best-effort like the green
+        # mint: an error never blocks the advance.
+        if step["id"] == "write_failing_tests":
+            try:
+                svc.mint_red_evidence(body.task_id,
+                                      session_id=body.session_id)
+            except Exception:
+                pass
         res = svc.advance_task(body.task_id, session_id=body.session_id,
                               model=body.model)
 

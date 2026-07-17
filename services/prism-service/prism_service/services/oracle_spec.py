@@ -61,6 +61,11 @@ ST_PASSED = "passed"
 ST_FAILED = "failed"
 ST_MANUAL = "manual_evidence_required"
 ST_ERROR = "error"
+# RED demonstration (task a5e8d877): the trusted runner observed the task's
+# pinned tests FAILING at the red-step commit. Receipts with this status
+# always carry passed=False, so no red receipt can ever satisfy
+# fresh_passing_receipt / green_gate.
+ST_RED = "red_demonstrated"
 
 # Body tokens that, if present in an HTTP response, evidence a broken surface
 # (the polarity fix: a page that "crashed" no longer satisfies a URL citation).
@@ -363,6 +368,23 @@ def fresh_passing_receipt(project: str, task_id: str, tree_sha: str,
     return None
 
 
+def fresh_red_receipt(project: str, task_id: str, red_sha: str,
+                      spec_hash: str) -> Optional[EvidenceReceipt]:
+    """The most-recent receipt DEMONSTRATING RED for THIS ``red_sha`` AND
+    THIS ``spec_hash`` (task a5e8d877): the trusted runner executed the
+    spec's pytest ids in a disposable worktree at the red-step commit and
+    observed them FAILING. Red receipts always carry ``passed=False`` —
+    status ST_RED is the demonstration — so they are structurally invisible
+    to ``fresh_passing_receipt`` and can never soften green_gate."""
+    if not (red_sha and spec_hash):
+        return None
+    for r in reversed(read_receipts(project, task_id)):
+        if (r.status == ST_RED and r.tree_sha == red_sha
+                and r.spec_hash == spec_hash):
+            return r
+    return None
+
+
 # ---------------------------------------------------------------------------
 # tree_sha resolution
 # ---------------------------------------------------------------------------
@@ -584,6 +606,103 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
         status=status, control_ref=control_ref, policy_hash=pol_hash,
         env=_env_fingerprint(), started_at=started,
         ended_at=_now_iso(), observations=observations, artifacts=artifacts,
+        reason=reason, derived_spec=spec.derived)
+    if persist:
+        append_receipt(project, receipt)
+    return receipt
+
+
+def _red_worktree_run(spec: OracleSpec, workspace: str, red_sha: str,
+                      ctx: dict) -> tuple[list, str, str]:
+    """Check out ``red_sha`` in a throwaway worktree and run the spec's
+    pytest adapter there. Red is demonstrated iff the run yields pytest
+    rc==1 (tests ran and failed) — a pass, a timeout, a collection error or
+    an unrunnable environment is honestly NOT a demonstration."""
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="prism-red-")
+    wt = str(Path(tmp) / "wt")
+    try:
+        add = subprocess.run(
+            ["git", "worktree", "add", "--detach", wt, red_sha],
+            cwd=workspace, capture_output=True, text=True, timeout=120)
+        if add.returncode != 0:
+            return [], ST_ERROR, (
+                f"red oracle: could not check out red-step commit "
+                f"{red_sha[:12]} ({(add.stderr or '').strip()[:160]})")
+        runner = _ADAPTERS.get(ADAPTER_PYTEST)
+        obs, _arts, passed, _st, run_reason = runner(
+            spec, dict(ctx, workspace=wt))
+        rc = next((o.get("observed") for o in obs
+                   if o.get("name") == "pytest_pass"), None)
+        if rc == 1:
+            return obs, ST_RED, (
+                f"red demonstrated at {red_sha[:12]}: {run_reason}")
+        if passed:
+            return obs, ST_FAILED, (
+                f"NOT red: the spec's tests PASS at the red-step commit "
+                f"{red_sha[:12]} ({run_reason})")
+        return obs, ST_FAILED, (
+            f"red not demonstrated at {red_sha[:12]} (rc={rc!r}, wanted "
+            f"rc==1 test failures): {run_reason}")
+    except subprocess.TimeoutExpired:
+        return [], ST_ERROR, "red oracle: git worktree add timed out"
+    except (OSError, FileNotFoundError) as exc:
+        return [], ST_ERROR, f"red oracle: could not run ({exc})"
+    finally:
+        try:
+            subprocess.run(["git", "worktree", "remove", "--force", wt],
+                           cwd=workspace, capture_output=True, text=True,
+                           timeout=60)
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_red_oracle(spec: OracleSpec, task: Any, red_sha: str,
+                   ctx: Optional[dict] = None,
+                   persist: bool = True) -> EvidenceReceipt:
+    """Demonstrate RED for real (task a5e8d877): check out ``red_sha`` — the
+    red-step commit — in a DISPOSABLE git worktree and run the spec's pytest
+    ids there, expecting failure (pytest rc==1: tests ran and FAILED).
+
+    Anchored to the red-step commit because once the implementation lands in
+    the workspace a fresh-HEAD run passes and can no longer demonstrate red.
+    pytest_ids only — every other adapter refuses (a red demonstration is a
+    real failing run, never prose). The receipt carries tree_sha=red_sha and
+    status=ST_RED on a genuine demonstration; ``passed`` is ALWAYS False so
+    green_gate's fresh_passing_receipt can never match a red receipt."""
+    ctx = dict(ctx or {})
+    task_id = getattr(task, "id", "") or ctx.get("task_id", "")
+    project = ctx.get("project") or ""
+    workspace = ctx.get("workspace") or ""
+    started = _now_iso()
+    observations: list = []
+    status, reason = ST_ERROR, ""
+    if spec.adapter != ADAPTER_PYTEST:
+        reason = (f"red oracle needs a pytest_ids spec, got {spec.adapter!r}"
+                  " — a red demonstration is a real failing run, not prose")
+    elif not (workspace and red_sha):
+        reason = "red oracle needs a workspace and a red-step commit sha"
+    else:
+        observations, status, reason = _red_worktree_run(
+            spec, str(workspace), red_sha, ctx)
+    control_ref = str(ctx.get("control_ref") or "")
+    pol_hash = str(ctx.get("policy_hash") or "")
+    if not control_ref or not pol_hash:
+        try:
+            from prism_service.services import control_plane as _cp
+            pin = _cp.task_pin(task_id)
+            control_ref = control_ref or pin.get("control_ref", "")
+            pol_hash = pol_hash or pin.get("policy_hash", "")
+        except Exception:
+            pass
+    receipt = EvidenceReceipt(
+        task_id=task_id, job_id=str(uuid.uuid4()), spec_hash=spec.spec_hash(),
+        tree_sha=red_sha or "", adapter=spec.adapter, passed=False,
+        status=status, control_ref=control_ref, policy_hash=pol_hash,
+        env=_env_fingerprint(), started_at=started,
+        ended_at=_now_iso(), observations=observations, artifacts=[],
         reason=reason, derived_spec=spec.derived)
     if persist:
         append_receipt(project, receipt)

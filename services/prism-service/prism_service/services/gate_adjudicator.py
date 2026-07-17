@@ -68,11 +68,13 @@ def sweep_once() -> list[dict]:
             gate = t.get("gate_state") if isinstance(t, dict) \
                 else getattr(t, "gate_state", "")
             tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
-            if not tid or step not in ("green_gate", "red_gate"):
+            if not tid or step not in ("green_gate", "red_gate",
+                                       "story_gate", "plan_gate"):
                 continue
             # green_gate also sweeps 'failed' — adjudicate_green_gate
             # re-presents ONLY machine refusal artifacts, never a human
-            # reject (it checks the history itself). red_gate: pending only.
+            # reject (it checks the history itself). Every other gate:
+            # pending only — a decided gate stays decided.
             if step == "green_gate":
                 if gate not in ("pending", "failed"):
                     continue
@@ -81,10 +83,17 @@ def sweep_once() -> list[dict]:
             try:
                 if step == "green_gate":
                     res = svc.adjudicate_green_gate(tid)
+                elif step == "red_gate":
+                    # demo rubric first (task 59ddfcbc), then the
+                    # test-proof red seat on a fresh RED receipt (task
+                    # a5e8d877); each method refuses foreign shapes.
+                    res = (svc.adjudicate_demo_red_gate(tid)
+                           or svc.adjudicate_test_red_gate(tid))
                 else:
-                    # red_gate: demo-proof tickets only (task 59ddfcbc);
-                    # the method itself refuses everything else.
-                    res = svc.adjudicate_demo_red_gate(tid)
+                    # story/plan rubric RE-SWEEP (task a5e8d877 gap 2,
+                    # strand mx-2812f9): the entry-time autoclear ran
+                    # once; re-score now-compliant PENDING gates.
+                    res = svc.adjudicate_rubric_gate(tid)
             except Exception as exc:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
                 continue

@@ -1919,6 +1919,216 @@ class ConductorService:
             model="machine")
         return res if res and res.get("ok") else None
 
+    def mint_red_evidence(self, task_id: str,
+                          session_id: Optional[str] = None) -> dict:
+        """Mint the RED EvidenceReceipt at the write_failing_tests report
+        (task a5e8d877, owner 2026-07-16): record the red-step commit and
+        let the trusted runner demonstrate the task's own pinned tests
+        FAILING there, so the red_gate that follows can be machine-decided
+        on evidence instead of stranding every test-proof drive as
+        'evidence not on file'. Best-effort mirror of mint_green_evidence:
+        a mint error never blocks the advance — the gate simply stays with
+        a human until evidence exists."""
+        if self._task_svc is None:
+            return {"ok": False, "reason": "no TaskService attached"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "reason": "unknown task"}
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt != "test":
+            return {"ok": False, "reason": f"proof_type={pt!r}: red "
+                    "receipts are for test-proof tickets"}
+        from prism_service.services import oracle_spec as osp
+        spec = osp.OracleSpec.from_task(task)
+        if spec.adapter != osp.ADAPTER_PYTEST:
+            return {"ok": False,
+                    "reason": "derived oracle is not pytest-runnable"}
+        ws_path, red_sha = self._workspace_and_head(task_id)
+        if not (ws_path and red_sha):
+            return {"ok": False,
+                    "reason": "no workspace/commit to anchor red to"}
+        self._task_svc.record_history(
+            task_id, action="red_step_sha", details=red_sha,
+            actor=session_id or "conductor")
+        receipt = osp.run_red_oracle(
+            spec, task, red_sha,
+            ctx={"project": self._project_name or "default",
+                 "workspace": ws_path})
+        return {"ok": receipt.status == osp.ST_RED,
+                "reason": receipt.reason, "red_sha": red_sha}
+
+    def adjudicate_test_red_gate(self, task_id: str) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING red_gate on a
+        proof_type=test ticket (task a5e8d877, owner directive 2026-07-16:
+        test-proof red gates dead-ended as 'evidence not on file' with no
+        machine path — the sweep only knew the demo rubric). Approves ONLY
+        on a fresh RED EvidenceReceipt: the trusted runner observed the
+        task's own pinned tests FAILING at the recorded red-step commit.
+        Mints once when unevidenced (backfilling tasks parked before red
+        receipts existed); a run that PASSES at the red commit — or an
+        unresolvable red-step commit — stays with a human. Never flips
+        pending->failed."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        if (task is None
+                or getattr(task, "workflow_step", "") != "red_gate"
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt != "test":
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        from prism_service.services import oracle_spec as osp
+        spec = osp.OracleSpec.from_task(task)
+        if spec.adapter != osp.ADAPTER_PYTEST:
+            return None
+        red_sha = self._red_step_sha(task_id)
+        if not red_sha:
+            return None
+        project = self._project_name or "default"
+        fresh = osp.fresh_red_receipt(project, task_id, red_sha,
+                                      spec.spec_hash())
+        if fresh is None:
+            tried = any(
+                r.tree_sha == red_sha and r.spec_hash == spec.spec_hash()
+                for r in osp.read_receipts(project, task_id))
+            if tried:
+                return None
+            ws_path, _head = self._workspace_and_head(task_id)
+            if not ws_path:
+                return None
+            osp.run_red_oracle(spec, task, red_sha,
+                               ctx={"project": project,
+                                    "workspace": ws_path})
+            fresh = osp.fresh_red_receipt(project, task_id, red_sha,
+                                          spec.spec_hash())
+        if fresh is None:
+            return None
+        res = self.gate_decide(
+            task_id, "approve",
+            reason=("machine adjudication: RED demonstrated — trusted "
+                    "runner observed the pinned tests FAILING at red-step "
+                    f"commit {red_sha[:12]} (receipt {fresh.job_id}); a "
+                    "passing or unrunnable red stays with a human"),
+            session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
+            model="machine")
+        return res if res and res.get("ok") else None
+
+    def adjudicate_rubric_gate(self, task_id: str) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING story_gate/plan_gate
+        (task a5e8d877 gap 2, strand mx-2812f9): the rubric autoclear runs
+        exactly once at gate entry, so a near-miss cured moments later
+        (e.g. plan_diagram set right after the report) stranded pending
+        forever with no re-sweep. Re-scores the SAME rubric the entry-time
+        autoclear uses and approves a green score as the adjudicator seat.
+        PENDING only — a rubric-FAILED gate or a human reject stays
+        decided; never flips pending->failed."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        step = getattr(task, "workflow_step", "") if task else ""
+        if (task is None or step not in ("story_gate", "plan_gate")
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        validation = self._validation_for_gate(step)
+        rule = (self._VERIFIER_RULES.get(validation)
+                if validation else None)
+        if not (rule and rule.get("rubric")):
+            return None
+        check = self._verify_rubric_gate(task, validation)
+        if check.get("verified") is not True:
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        res = self.gate_decide(
+            task_id, "approve",
+            reason=("machine adjudication (rubric re-sweep): "
+                    + str(check.get("reason", ""))),
+            session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
+            model="machine")
+        return res if res and res.get("ok") else None
+
+    def _red_step_sha(self, task_id: str) -> str:
+        """The commit red is anchored to: the latest ``red_step_sha`` history
+        row (stamped by mint_red_evidence at the write_failing_tests report).
+        BACKFILL for tasks that parked at red_gate before red receipts
+        existed: the newest commit trailered ``[task:<id8>]`` whose diff
+        touches ONLY test files — the red-tests commit. '' when neither
+        resolves (the seat then leaves the gate with a human)."""
+        import re as _re
+        try:
+            rows = self._task_svc.history(task_id) or []
+        except Exception:
+            rows = []
+        for row in reversed(list(rows)):
+            s = str(row)
+            if "red_step_sha" not in s:
+                continue
+            m = _re.search(r"\b[0-9a-f]{40}\b", s)
+            if m:
+                return m.group(0)
+        ws_path, _head = self._workspace_and_head(task_id)
+        if not ws_path:
+            return ""
+        import subprocess as _sp
+        tag = f"[task:{task_id[:8]}"
+        try:
+            r = _sp.run(["git", "log", "--format=%H%x09%s", "-n", "50"],
+                        cwd=ws_path, capture_output=True, text=True,
+                        timeout=15)
+            if r.returncode != 0:
+                return ""
+            for line in r.stdout.splitlines():
+                sha, _, subj = line.partition("\t")
+                if tag not in subj:
+                    continue
+                f = _sp.run(["git", "diff-tree", "--no-commit-id",
+                             "--name-only", "-r", sha.strip()],
+                            cwd=ws_path, capture_output=True, text=True,
+                            timeout=15)
+                files = [p.strip() for p in f.stdout.splitlines()
+                         if p.strip()]
+                if files and all("tests/" in p.replace("\\", "/")
+                                 for p in files):
+                    return sha.strip()
+        except Exception:
+            return ""
+        return ""
+
+    def _workspace_and_head(self, task_id: str) -> tuple[str, str]:
+        """(workspace_path, HEAD sha) for a task — its own scratch workspace
+        when one exists, else the shared project checkout. ('', '') when
+        neither resolves; callers refuse rather than fall back to cwd."""
+        from prism_service.services import oracle_spec as osp
+        from prism_service.services import task_workspace
+        ws = None
+        try:
+            ws = task_workspace.workspace_for(task_id)
+        except Exception:
+            ws = None
+        ws_path = (ws or {}).get("path") or ""
+        if not ws_path and self._project_root:
+            ws_path = str(self._project_root)
+        if not ws_path:
+            return "", ""
+        return ws_path, osp.current_tree_sha(ws_path)
+
     def rewind_task(self, task_id: str, reason: str = "",
                     actor: str = "owner") -> dict:
         """AUDITED one-step rewind for an overshot task (task b07fd46e).
@@ -2041,6 +2251,33 @@ class ConductorService:
                 "verifier": None,
                 "validation": validation,
             }
+        # TEST-PROOF RED GATE (task a5e8d877): when the trusted runner has
+        # DEMONSTRATED red — this task's own pinned tests observed FAILING
+        # at the recorded red-step commit, receipt on file — that receipt
+        # IS the red_with_trace artifact, and it is stronger evidence than
+        # the tier0 diff heuristic (which reads the CURRENT workspace,
+        # where a committed implementation already turns the tests green
+        # and made every honest red drive override-only). Unevidenced red
+        # gates fall through to the tier0 consult unchanged.
+        if pt == "test" and gate_step_id == "red_gate":
+            try:
+                from prism_service.services import oracle_spec as osp
+                spec = osp.OracleSpec.from_task(task)
+                red_sha = self._red_step_sha(getattr(task, "id", ""))
+                fresh = (osp.fresh_red_receipt(
+                    self._project_name or "default",
+                    getattr(task, "id", ""), red_sha, spec.spec_hash())
+                    if red_sha else None)
+                if fresh is not None:
+                    return {
+                        "verified": True,
+                        "reason": ("red demonstrated by trusted runner at "
+                                   f"{red_sha[:12]}: {fresh.reason}"),
+                        "verifier": None,
+                        "validation": validation,
+                    }
+            except Exception:
+                pass
         if pt and pt not in ("test", "demo"):
             return {
                 "verified": True,
