@@ -172,31 +172,154 @@ PRICING_DEFAULT_LABEL = "unpriced (default: Opus-tier rate)"
 
 
 def usd_cost(components: dict, model: str) -> float:
-    """STUB (red step, task ff160371) — real per-field pricing lands at the
-    implement step. Deliberately WRONG (flat/zero) so the pricing-honesty
-    tests fail BEHAVIOURALLY rather than at import."""
-    return 0.0
+    """Dollar cost of one turn's usage, priced PER FIELD at `model`'s own
+    rate — cache_read (~0.1x input) and output (~5x input) are NOT the same
+    price, so summing them at one flat rate would misrepresent cost. Falls
+    back to PRICING_DEFAULT for an unrecognized `model` (see that constant's
+    docstring for why this is never treated as ground truth by itself)."""
+    rates = PRICING.get(model, PRICING_DEFAULT)
+    return sum(
+        int(components.get(f) or 0) * rates.get(f, 0.0)
+        for f in USAGE_TOKEN_FIELDS
+    )
 
 
-def live_spend_for_session(
-    session_id: str, project_path: str, claude_home: Path | None = None,
-    override_dir: str | None = None,
-) -> dict:
-    """STUB (red step, task ff160371) — real main/background split lands at
-    the implement step. Deliberately WRONG (all-empty) so the split tests
-    fail BEHAVIOURALLY rather than at import."""
-    empty = {
+def _empty_spend_section() -> dict:
+    return {
         "tokens": 0,
         "components": {f: 0 for f in USAGE_TOKEN_FIELDS},
         "usd": 0.0,
         "unpriced_tokens": 0,
         "priced": True,
     }
+
+
+# path -> (mtime, size, offset, section_dict). Same incremental discipline as
+# _TOKEN_CACHE (_sum_billable_tokens) — a growing transcript is re-priced
+# only from the last consumed byte offset; per-turn usd is additive so
+# incremental accumulation is exact, not an approximation.
+_SPEND_CACHE: dict[str, tuple[float, int, int, dict]] = {}
+
+
+def _spend_for_path(path: Path) -> dict:
+    """Per-file USD spend + 4-field token totals, priced PER TURN by that
+    turn's own message.model (a session can mix models mid-transcript)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return _empty_spend_section()
+    key = str(path)
+    cached = _SPEND_CACHE.get(key)
+    try:
+        lines, new_offset, mode = _read_new_lines(path, st, cached)
+    except OSError:
+        return cached[3] if cached else _empty_spend_section()
+    if mode == "hit":
+        return cached[3]  # type: ignore[index]
+    if mode == "grew" and cached:
+        section = {
+            "tokens": cached[3]["tokens"],
+            "components": dict(cached[3]["components"]),
+            "usd": cached[3]["usd"],
+            "unpriced_tokens": cached[3]["unpriced_tokens"],
+            "priced": cached[3]["priced"],
+        }
+    else:
+        section = _empty_spend_section()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = evt.get("message") or {}
+        usage = msg.get("usage") or {}
+        if not usage:
+            continue
+        comps = usage_components(usage)
+        tok = sum(comps.values())
+        if tok <= 0:
+            continue
+        model = str(msg.get("model") or "")
+        section["usd"] += usd_cost(comps, model)
+        section["tokens"] += tok
+        for f in USAGE_TOKEN_FIELDS:
+            section["components"][f] += comps[f]
+        if model not in PRICING:
+            section["unpriced_tokens"] += tok
+            section["priced"] = False
+    _SPEND_CACHE[key] = (st.st_mtime, st.st_size, new_offset, section)
+    return section
+
+
+def _merge_spend_sections(sections: list[dict]) -> dict:
+    out = _empty_spend_section()
+    for s in sections:
+        out["tokens"] += s["tokens"]
+        out["usd"] += s["usd"]
+        out["unpriced_tokens"] += s["unpriced_tokens"]
+        out["priced"] = out["priced"] and s["priced"]
+        for f in USAGE_TOKEN_FIELDS:
+            out["components"][f] += s["components"][f]
+    return out
+
+
+def live_spend_for_session(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> dict:
+    """Honest dollar spend for `session_id`, split MAIN (the <sid>.jsonl
+    transcript) vs BACKGROUND (nested <sid>/**/*.jsonl workflow-subagent
+    transcripts — same split point as live_tokens_for_session, never folded
+    together). Each of "main"/"background"/"total" carries tokens/
+    components/usd/unpriced_tokens; top-level "priced" is False if ANY turn
+    anywhere used the unrecognized-model default rate (see PRICING_DEFAULT)."""
+    if not session_id:
+        return {
+            "main": _empty_spend_section(),
+            "background": _empty_spend_section(),
+            "total": _empty_spend_section(),
+            "priced": True,
+        }
+    main_paths: list[Path] = []
+    bg_paths: list[Path] = []
+    if override_dir and override_dir.strip():
+        d = Path(override_dir.strip())
+        if d.is_dir():
+            main = d / f"{session_id}.jsonl"
+            if main.is_file():
+                main_paths.append(main)
+            sess_dir = d / session_id
+            if sess_dir.is_dir():
+                bg_paths.extend(sorted(sess_dir.rglob("*.jsonl")))
+    elif project_path:
+        claude_home = claude_home or resolve_claude_home()
+        projects_dir = claude_home / "projects"
+        if projects_dir.is_dir():
+            seen: set[Path] = set()
+            for sub in projects_dir.iterdir():
+                if not sub.is_dir() or not slug_matches(sub.name, project_path):
+                    continue
+                main = sub / f"{session_id}.jsonl"
+                if main.is_file() and main not in seen:
+                    main_paths.append(main)
+                    seen.add(main)
+                sess_dir = sub / session_id
+                if sess_dir.is_dir():
+                    for f in sess_dir.rglob("*.jsonl"):
+                        if f not in seen:
+                            bg_paths.append(f)
+                            seen.add(f)
+    main_section = _merge_spend_sections([_spend_for_path(p) for p in main_paths])
+    bg_section = _merge_spend_sections([_spend_for_path(p) for p in bg_paths])
+    total_section = _merge_spend_sections([main_section, bg_section])
     return {
-        "main": dict(empty),
-        "background": dict(empty),
-        "total": dict(empty),
-        "priced": True,
+        "main": main_section,
+        "background": bg_section,
+        "total": total_section,
+        "priced": total_section["priced"],
     }
 
 

@@ -15,6 +15,7 @@ import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
 import { fmtTokens } from "@/lib/format";
+import SpendPanel, { type SpendData } from "@/components/SpendPanel";
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -50,6 +51,9 @@ type Task = {
   // Honest work state — rides top-level on the detail response (see load()).
   activity?: Activity | null;
   has_prototype?: boolean;
+  // Honest per-field, per-turn-model dollar spend — rides top-level too
+  // (see load()). null/undefined = no linked-session transcript usage yet.
+  spend?: SpendData | null;
 };
 
 // One PINNING/RED test surfaced next to the oracle: the committed test whose
@@ -641,7 +645,7 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
 
 // The Trace tab body: 4 KPI tiles + a per-session tree (session header row →
 // indented step rows). Honest empty state when the task has no agent_runs.
-function TraceView({ trace, loading }: { trace: TaskTrace | null; loading: boolean }) {
+function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null }) {
   if (loading && !trace) return <Card><Empty>Loading trace…</Empty></Card>;
   if (!trace || trace.sessions.length === 0) {
     return <Card><Empty>No trace yet — this task has no recorded agent runs.</Empty></Card>;
@@ -650,6 +654,7 @@ function TraceView({ trace, loading }: { trace: TaskTrace | null; loading: boole
   const perStep = t.steps > 0 ? Math.round(t.tokens / t.steps) : 0;
   return (
     <div className="space-y-4">
+      <SpendPanel spend={spend} />
       <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
         <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
         <TraceKpi label="Steps" value={String(t.steps)} />
@@ -801,13 +806,14 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + activity + has_prototype ride at the TOP LEVEL of the
-      // response (not nested in task) — merge onto the task so the SDLC bar, the
-      // honest work-state pill, and the prototype iframe read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false } : d.task);
+      // phase_progress + activity + has_prototype + spend ride at the TOP
+      // LEVEL of the response (not nested in task) — merge onto the task so
+      // the SDLC bar, the honest work-state pill, the prototype iframe, and
+      // the Spend panel all read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
@@ -1276,7 +1282,7 @@ export default function TaskDetailPage() {
         ))}
       </div>
 
-      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} />}
+      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
 
       {docTab === "overview" && (<>
 

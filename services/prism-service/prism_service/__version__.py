@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.52"
+PRISM_VERSION = "7.0.53"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.53: BACKGROUND AI SPEND IS VISIBLE AND HONEST (task ff160371). "
+    "Background subagent transcripts (nested <sid>/**/*.jsonl) used to be "
+    "folded into the parent session's token total, and every $ surface was "
+    "really a flat token count (cache_read priced same as output, though "
+    "cache_read is ~0.1x input price and output is ~5x). New "
+    "claude_transcripts.PRICING (per-model, per-field $/token, sourced from "
+    "the claude-api skill) + usd_cost() (prices each usage field at its own "
+    "rate) + live_spend_for_session() (main-vs-background split, priced PER "
+    "TURN by that turn's own message.model — a session can mix models; "
+    "unrecognized models get a labeled default rate AND flip priced=False, "
+    "never a silent guess). api/tasks.py attaches a spend object to the "
+    "task-detail GET; new web/components/SpendPanel.tsx renders the $ "
+    "total, main-vs-background split, and 4-field token breakdown on the "
+    "task-detail Trace tab, labeled 'measured from transcript' — distinct "
+    "from TokenTurns' tok/s rate readout, no duplication. "
     "v7.0.52: THE BOARD SHOWS LIVE WORK, NOT HISTORY (owner 2026-07-17: "
     "'clean up the task board there are tons of subtasks in there?'). "
     "Cancelled/deleted/archived tasks were falling through the status "
