@@ -117,6 +117,15 @@ class TaskCreate(BaseModel):
     likely_misfire: str = ""
     full_outcome_complete: bool = False
     enter_conductor: bool = False
+    # REST parity with MCP task_create (task b78a193c): the oracle/proof
+    # contract was create-only on MCP — POST /api/tasks silently dropped
+    # these fields. Forwarded to task_svc.create() below and validated
+    # identically (validate_for_authoring) before the row is inserted.
+    oracle: str = ""
+    proof_type: str = ""
+    verify: Optional[list[str]] = None
+    allowed_files: Optional[list[str]] = None
+    stop_if: Optional[list[str]] = None
     # Conductor session gate (ef81fc15): optional driving session linked in
     # the same request right after create (two writes, not one transaction —
     # benign, because the gate re-checks on every transition) — REQUIRED when
@@ -142,6 +151,17 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     sid = (body.session_id or "").strip()
     if body.enter_conductor and not sid:
         raise HTTPException(422, SESSION_GATE_FIX)
+    # Authoring-time oracle validation (task b78a193c) — REST mirror of the
+    # MCP task_create check: reject the hard contradiction (proof_type=test
+    # with an oracle but no runnable pytest ids in verify[]) with the same
+    # domain-level message, BEFORE the row is inserted.
+    from prism_service.services.oracle_authoring import validate_for_authoring
+    spec_summary, domain_errors = validate_for_authoring(
+        oracle=body.oracle, proof_type=body.proof_type,
+        verify=body.verify, likely_misfire=body.likely_misfire,
+    )
+    if domain_errors:
+        raise HTTPException(422, domain_errors[0])
     ctx = get_project(project)
     task = ctx.task_svc.create(
         title=body.title.strip(),
@@ -150,8 +170,15 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         tags=body.tags or [],
         likely_misfire=body.likely_misfire or "",
         full_outcome_complete=bool(body.full_outcome_complete),
+        oracle=body.oracle or "",
+        proof_type=body.proof_type or "",
+        verify=body.verify,
+        allowed_files=body.allowed_files,
+        stop_if=body.stop_if,
     )
     out: dict = {"task": task, "advanced": None}
+    if spec_summary is not None:
+        out["oracle_spec"] = spec_summary
     if sid:
         ctx.task_svc.link_session(task.id, sid)
         out["sessions"] = ctx.task_svc.sessions_for_task(task.id)

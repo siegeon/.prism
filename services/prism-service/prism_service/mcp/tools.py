@@ -4026,6 +4026,24 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # Task tools
         # ------------------------------------------------------------------
         if name == "task_create":
+            # Authoring-time oracle validation (task b78a193c): "the oracle
+            # like a compiler" — derive the OracleSpec from the would-be
+            # task fields BEFORE the row exists and reject the one hard,
+            # unrepairable-later contradiction (proof_type=test with an
+            # oracle but no runnable pytest ids in verify[]) instead of
+            # letting it surface lazily at green_gate.
+            from prism_service.services.oracle_authoring import validate_for_authoring
+            _spec_summary, _domain_errors = validate_for_authoring(
+                oracle=arguments.get("oracle", ""),
+                proof_type=arguments.get("proof_type", ""),
+                verify=arguments.get("verify"),
+                likely_misfire=arguments.get("likely_misfire", ""),
+            )
+            if _domain_errors:
+                return [TextContent(type="text", text=_json({
+                    "error": "oracle_validation_failed",
+                    "domain_errors": _domain_errors,
+                }))]
             task = task_svc.create(
                 title=arguments["title"],
                 description=arguments.get("description", ""),
@@ -4046,6 +4064,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 plan_doc=arguments.get("plan_doc", ""),
                 plan_diagram=arguments.get("plan_diagram", ""),
             )
+            if _spec_summary is not None:
+                _out = _serialise(task)
+                _out["oracle_spec"] = _spec_summary
+                return [TextContent(type="text", text=_json(_out))]
             return [TextContent(type="text", text=_json(task))]
 
         if name == "task_list":
@@ -4098,6 +4120,30 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
+            # Authoring-time oracle validation (task b78a193c): only when
+            # this update actually TOUCHES oracle/proof_type/verify (R7) —
+            # an update to an unrelated field on a task with a pre-existing
+            # stale/contradictory oracle shape is NOT retroactively
+            # rejected. Merges against the task's CURRENT values for any of
+            # the three fields this call does not itself touch.
+            _spec_summary = None
+            if any(k in arguments for k in ("oracle", "proof_type", "verify")):
+                from prism_service.services.oracle_authoring import validate_for_authoring
+                _existing = task_svc.get(arguments["id"])
+                if _existing is None:
+                    return [TextContent(type="text", text=_json({"error": f"Task {arguments['id']} not found"}))]
+                _spec_summary, _domain_errors = validate_for_authoring(
+                    oracle=arguments.get("oracle", getattr(_existing, "oracle", "")),
+                    proof_type=arguments.get("proof_type", getattr(_existing, "proof_type", "")),
+                    verify=arguments.get("verify", getattr(_existing, "verify", None)),
+                    likely_misfire=arguments.get(
+                        "likely_misfire", getattr(_existing, "likely_misfire", "")),
+                )
+                if _domain_errors:
+                    return [TextContent(type="text", text=_json({
+                        "error": "oracle_validation_failed",
+                        "domain_errors": _domain_errors,
+                    }))]
             # Conductor session gate (ef81fc15): flipping to in_progress
             # hands the task to the conductor — a sessionless tile is
             # frozen (no transcript, no tokens). AUTO-LINK the caller's
@@ -4157,6 +4203,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     except Exception:
                         pass  # best-effort — never break task updates
 
+            if _spec_summary is not None:
+                _out = _serialise(task)
+                _out["oracle_spec"] = _spec_summary
+                return [TextContent(type="text", text=_json(_out))]
             return [TextContent(type="text", text=_json(task))]
 
         if name == "task_link_session":
