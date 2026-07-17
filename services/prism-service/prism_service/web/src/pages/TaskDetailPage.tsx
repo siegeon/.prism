@@ -829,22 +829,28 @@ export default function TaskDetailPage() {
   // label update in real-time as the conductor advances the task.
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
 
-  // ONE-SHOT per task: run the pinned tests + the readiness git-walk. Both
-  // are heavy server work — never in the 5s poll (a tests?run=true in the
-  // poll loop spawned a full pytest run every 5 seconds and starved the
-  // daemon; found during the owner's approve hang).
+  // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
+  // (run=false — AST scan only), readiness, delivery. The old shape awaited
+  // tests?run=true FIRST, so every page open ran a real pytest suite and
+  // readiness/delivery queued behind it — with the browser's 6-connection
+  // limit + SSE + the 5s poll, the page sat on "Loading…" for 30-60s
+  // (owner 2026-07-16: "it's not even running?").
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests?run=true`);
+        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests`);
         if (!cancelled) setPinTests(tr.tests ?? []);
       } catch { if (!cancelled) setPinTests([]); }
+    })();
+    (async () => {
       try {
         const gr = await api.get<GateReadiness>(
           `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
         if (!cancelled) setGateReadiness(gr);
       } catch { if (!cancelled) setGateReadiness(null); }
+    })();
+    (async () => {
       try {
         const dv = await api.get<Delivery>(
           `/api/tasks/${id}/delivery?project=${project}`);
@@ -853,6 +859,26 @@ export default function TaskDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [id, project]);
+
+  // HEAVY, deferred: actually EXECUTE the pinned tests (one pytest run,
+  // one-shot per task) only when the task is parked AT a gate — that is
+  // when live statuses inform a decision. Done/idle tasks read their
+  // receipts; casual browsing never spawns a test run.
+  const ranPinTestsFor = useRef<string>("");
+  useEffect(() => {
+    const step = task?.workflow_step || "";
+    if (!id || !task || ranPinTestsFor.current === id) return;
+    if (!step.endsWith("_gate") || task.status === "done") return;
+    ranPinTestsFor.current = id;
+    let cancelled = false;
+    (async () => {
+      try {
+        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests?run=true`);
+        if (!cancelled) setPinTests(tr.tests ?? []);
+      } catch { /* keep the discovery rows — statuses stay honestly not-run */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, task?.workflow_step, task?.status]);
 
   // Navigating task → task (the route reuses this component) resets the tab
   // back to Overview and drops the previous task's trace so it re-fetches.

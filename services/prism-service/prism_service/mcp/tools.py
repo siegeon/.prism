@@ -4417,12 +4417,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "note": "task had not entered the flow; started it"}))]
             if _proof and str(_proof).strip():
                 try:
-                    # draft_story's artifact IS the story — the story/plan
-                    # rubrics read task.plan_doc (conductor_service reads
-                    # story_md from plan_doc), so a story left only in
-                    # completion_proof auto-fails story_gate with
-                    # "story_md is empty". Route it to BOTH homes.
-                    if _cur["id"] == "draft_story":
+                    # draft_story's artifact IS the story and verify_plan's
+                    # IS the plan — the story/plan rubrics read
+                    # task.plan_doc (conductor_service reads story_md from
+                    # plan_doc), so an artifact left only in
+                    # completion_proof auto-fails its gate with
+                    # "story_md is empty" / empty plan. Route BOTH steps'
+                    # proofs to BOTH homes (verify_plan strand: 2 live
+                    # drives parked at plan_gate on 2026-07-16 because
+                    # only draft_story routed).
+                    if _cur["id"] in ("draft_story", "verify_plan"):
                         task_svc.update(_task_id, plan_doc=str(_proof),
                                         completion_proof=str(_proof))
                     else:

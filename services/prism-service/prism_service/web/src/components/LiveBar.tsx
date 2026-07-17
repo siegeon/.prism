@@ -89,18 +89,30 @@ export default function LiveBar() {
 
   const working = managed.filter((m) => m.activity?.state === "working");
   const gated = managed.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
+  // Managed, mid-flow, but neither moving nor at a gate (between reports,
+  // adrift, stalled). The bar used to DROP these and claim "queue is quiet"
+  // while a drive was literally in progress (owner 2026-07-16: "it says no
+  // task being driven ??" during a live fleet drive). Never green — honest
+  // activity doctrine paints work only on real motion — but never invisible.
+  const inflow = managed.filter(
+    (m) => (m.workflow_step ?? "") !== ""
+      && !working.some((w) => w.id === m.id)
+      && !gated.some((g) => g.id === m.id));
   const isLive = working.length > 0;
-  // Three honest states, in precedence order (artifact .livebar semantics):
-  // LIVE (something is actually moving) > AWAITING REVIEW (work parked at a
-  // gate — NOT "idle", a human owes a decision) > IDLE (queue truly quiet).
-  const state: "live" | "gated" | "idle" =
-    isLive ? "live" : gated.length > 0 ? "gated" : "idle";
+  // Honest states, in precedence order: LIVE (something is actually moving)
+  // > AWAITING REVIEW (parked at a gate — a human/machine owes a decision)
+  // > IN FLOW (managed work between reports) > IDLE (queue truly quiet).
+  const state: "live" | "gated" | "inflow" | "idle" =
+    isLive ? "live" : gated.length > 0 ? "gated"
+      : inflow.length > 0 ? "inflow" : "idle";
   const tint = {
     live: { bg: "var(--accent-sage-bg)", ring: "var(--accent-sage-ring)", fg: "var(--accent-sage-fg)" },
     gated: { bg: "var(--accent-amber-bg)", ring: "var(--accent-amber-ring)", fg: "var(--accent-amber-fg)" },
+    inflow: { bg: "var(--surface-1)", ring: "var(--border-default)", fg: "var(--text-secondary)" },
     idle: { bg: "var(--surface-1)", ring: "var(--border-subtle)", fg: "var(--text-muted)" },
   }[state];
-  const stateLabel = state === "live" ? "Live" : state === "gated" ? "Awaiting review" : "Idle";
+  const stateLabel = state === "live" ? "Live" : state === "gated" ? "Awaiting review"
+    : state === "inflow" ? "In flow" : "Idle";
   const heartbeat = `poll ${Math.floor(sinceFetchS)}s · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
 
   // Legible chip: the task TITLE (truncated), never a bare uuid — the full
@@ -179,6 +191,25 @@ export default function LiveBar() {
           >
             <EntityChip kind="task" label={chipLabel(m)} />
             <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
+            <span className="ml-auto text-xs opacity-0 group-hover:opacity-100" style={{ color: "var(--text-muted)" }}>
+              open ›
+            </span>
+          </Link>
+        ))}
+
+        {!collapsed && inflow.map((m) => (
+          <Link
+            key={m.id}
+            to={`/tasks/${m.id}`}
+            title={`${m.title ?? ""} · ${m.id}`}
+            className="mt-1.5 flex items-center gap-2 min-w-0 border-t pt-1.5 group"
+            style={{ borderColor: tint.ring }}
+          >
+            <EntityChip kind="task" label={chipLabel(m)} />
+            {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
+            <span className="text-2xs font-mono" style={{ color: "var(--text-muted)" }}>
+              {m.activity?.state || "between reports"}
+            </span>
             <span className="ml-auto text-xs opacity-0 group-hover:opacity-100" style={{ color: "var(--text-muted)" }}>
               open ›
             </span>

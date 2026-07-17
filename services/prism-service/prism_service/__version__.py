@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.0.50"
+PRISM_VERSION = "7.0.51"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.0.51: THE TASK PAGE OPENS INSTANTLY AND THE LIVE BAR NEVER LIES "
+    "(owner 2026-07-16: 'its not even running?' / 'no task being driven "
+    "?? '). Root cause 1: opening a task page fired tests?run=true - a "
+    "REAL pytest run - and awaited it BEFORE readiness/delivery; with the "
+    "browser's 6-connection limit + SSE + the 5s poll the page sat on "
+    "'Loading...' for 30-60s. Now: mount fetches are cheap (run=false "
+    "discovery) and parallel; the pytest run happens once, deferred, and "
+    "ONLY when the task is parked at a gate. Root cause 2: LiveBar "
+    "dropped managed tasks that were mid-flow but between reports and "
+    "claimed 'queue is quiet' during live drives - new IN FLOW state "
+    "lists them (neutral tone, never fake-green). Also: verify_plan's "
+    "proof= now routes to plan_doc like draft_story's (the plan IS the "
+    "artifact) - the strand that parked two drives at plan_gate. "
     "v7.0.50: THE ORACLE IS VALIDATED LIKE A COMPILER AT AUTHORING TIME "
     "(task b78a193c, slice 1 of the Joshi DSL-validator epic cfa6300b). "
     "task_create/task_update (MCP) and POST /api/tasks (REST - which "
