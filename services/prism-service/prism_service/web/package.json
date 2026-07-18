@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "check-contrast": "node scripts/check-contrast.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "workshop": "ladle serve",
+    "workshop:build": "ladle build"
   },
   "dependencies": {
     "@nous-research/ui": "^0.16.0",
@@ -36,6 +38,7 @@
     "unicode-animations": "^1.0.3"
   },
   "devDependencies": {
+    "@ladle/react": "^5.1.1",
     "@types/d3-force": "^3.0.10",
     "@types/node": "^24.12.0",
     "@types/react": "^19.2.14",

@@ -34,6 +34,15 @@
 
 @source '../node_modules/@nous-research/ui/dist';
 
+/* Ladle (task d30c9a75) sets Vite's `root` to its OWN internal app
+ * folder, not this project — so Tailwind's automatic content scan never
+ * walks web/src and every component utility class (bg-[color:var(...)],
+ * text-2xs, rounded-[3px], ...) silently drops out of the workshop's
+ * build. `@source '.'` resolves relative to THIS file (src/index.css),
+ * so it explicitly re-adds src/ as a scan root — a no-op for the real
+ * app (already inside Vite's normal root) and the fix for Ladle. */
+@source '.';
+
 /* Slate Blue palette as PRISM's default (LENS_0).
  *
  * Two-layer token system per the 2026 design-system playbook:
