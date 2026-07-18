@@ -330,6 +330,12 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
     # (prev, this] wall-clock window) onto the history rows. Best-effort.
     _attach_turn_tokens(out["history"], out["sessions"], project)
+    # Honest per-field, per-turn-model dollar spend, split main-vs-background
+    # (SpendPanel on the task-detail page). Best-effort.
+    try:
+        _attach_spend(out, out["sessions"], project)
+    except Exception:
+        pass
     # Way 1 — typed activity Gantt (real session lanes + gate markers).
     out["timeline"] = _build_timeline(out["history"], out["sessions"])
     # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
@@ -387,6 +393,56 @@ def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     return build_task_trace(
         _scores_db(project), task_id, source_path=src, override_dir=override
     )
+
+
+def _attach_spend(out: dict, sessions: list, project: str) -> None:
+    """Best-effort: attach `spend` = honest per-field, per-turn-model dollar
+    cost summed across the task's linked sessions, split MAIN vs BACKGROUND
+    (claude_transcripts.live_spend_for_session — never folded together, and
+    each usage field priced at its OWN rate, not a flat blend). Mirrors the
+    src/override_dir resolution _attach_turn_tokens uses so both surfaces
+    agree on which transcripts belong to this task. Never raises — a
+    missing transcript / folder-mode-off project leaves spend at the honest
+    zero shape (UI renders "no measured spend", never a fabricated figure)."""
+    from prism_service.services.claude_transcripts import (
+        _project_source_path,
+        _merge_spend_sections,
+        live_spend_for_session,
+    )
+    try:
+        src = _project_source_path(project) or ""
+    except Exception:
+        src = ""
+    override = ""
+    try:
+        from prism_service.services import claude_memory
+        override = claude_memory.configured_project_dir(project) or ""
+    except Exception:
+        pass
+
+    sections = []
+    for s in sessions or []:
+        sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
+        if not sid:
+            continue
+        try:
+            if override:
+                sections.append(live_spend_for_session(sid, "", override_dir=override))
+            elif src:
+                sections.append(live_spend_for_session(sid, src))
+        except Exception:
+            continue
+
+    if not sections:
+        out["spend"] = live_spend_for_session("", "")
+        return
+    main = _merge_spend_sections([sec["main"] for sec in sections])
+    background = _merge_spend_sections([sec["background"] for sec in sections])
+    total = _merge_spend_sections([main, background])
+    out["spend"] = {
+        "main": main, "background": background, "total": total,
+        "priced": total["priced"],
+    }
 
 
 def _git(repo: str, *args: str) -> tuple[int, str]:
