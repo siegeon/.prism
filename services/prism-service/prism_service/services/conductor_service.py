@@ -3289,9 +3289,11 @@ class ConductorService:
             gate = getattr(t, "gate_state", "none") or "none"
             status = getattr(t, "status", "") or ""
             # Terminal statuses leave the conductor view: done is shipped,
-            # cancelled is abandoned. Both keep their workflow_step in the
-            # audit trail but must not render as currently-managed tiles.
-            if status in ("done", "cancelled"):
+            # cancelled is abandoned, deleted is removed. All keep their
+            # workflow_step in the audit trail but must not render as
+            # currently-managed tiles or feed the AWAITING REVIEW bar — a
+            # deleted task parked at a pending gate is NOT awaiting review.
+            if status in ("done", "cancelled", "deleted"):
                 continue
             # Subtasks (parent_id set) belong under their parent's detail
             # page while IDLE — but a child the conductor is actively
@@ -3374,7 +3376,7 @@ class ConductorService:
             step = getattr(t, "workflow_step", "") or ""
             status = getattr(t, "status", "") or ""
             gate = getattr(t, "gate_state", "none") or "none"
-            if status in ("done", "cancelled"):
+            if status in ("done", "cancelled", "deleted"):
                 continue
             # Mirror managed_tasks: an ENGAGED child (live step or gate)
             # counts; an idle child stays under its parent.
