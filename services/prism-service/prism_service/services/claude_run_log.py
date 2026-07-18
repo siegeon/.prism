@@ -52,6 +52,12 @@ from prism_service.config import DATA_DIR
 _RUNS_DIR = DATA_DIR / "claude_runs"
 _MANIFEST = _RUNS_DIR / "manifest.jsonl"
 
+# Bumped when the manifest accounting changes shape. "v2" (task 45e04fad) =
+# usage taken ONCE from the result event, all four token fields + real
+# cost_usd + model. Rows without this marker are pre-fix (over-counted,
+# cache-blind) and must be reported separately, never summed with v2 rows.
+ACCOUNTING_VERSION = "v2"
+
 # Bound on how many runs we keep. Operator-tunable via env.
 RUN_LOG_LIMIT = int(os.environ.get("PRISM_CLAUDE_RUN_LOG_LIMIT", "500"))
 _FINAL_TEXT_MAX = 4096
@@ -138,6 +144,12 @@ def record_run(
                            + int(usage.get("output_tokens", 0)),
             "input_tokens": int(usage.get("input_tokens", 0)),
             "output_tokens": int(usage.get("output_tokens", 0)),
+            # task 45e04fad — the four fields counted once + real cost + model.
+            "cache_read_input_tokens": int(usage.get("cache_read_input_tokens", 0)),
+            "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens", 0)),
+            "cost_usd": float(usage.get("cost_usd", 0.0) or 0.0),
+            "model": str(usage.get("model", "") or ""),
+            "accounting_version": ACCOUNTING_VERSION,
             "final_text": _extract_final_text(stream_path),
             "stderr_excerpt": _truncate(stderr_text or "", _STDERR_MAX),
             "stream_path": str(stream_path),
@@ -232,3 +244,48 @@ def stream_path_for(run_id: str) -> Optional[Path]:
         return None
     p = _RUNS_DIR / f"{run_id}.jsonl"
     return p if p.exists() else None
+
+
+_SUMMARY_FIELDS = ("input_tokens", "output_tokens",
+                   "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _day_of(ts_start) -> str:
+    """UTC calendar day (YYYY-MM-DD) for a manifest row's ts_start epoch."""
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromtimestamp(float(ts_start or 0.0),
+                                      timezone.utc).strftime("%Y-%m-%d")
+    except (ValueError, OSError, OverflowError):
+        return "unknown"
+
+
+def summarize(group_by: str = "purpose", project: Optional[str] = None) -> dict:
+    """TRUE background-inference spend from the manifest, bucketed by
+    ``purpose`` or ``day`` (task 45e04fad). Each bucket carries all four token
+    fields + ``cost_usd`` + ``runs`` (failed runs INCLUDED — a failed call
+    still burned tokens). Pre-fix rows (no ``accounting_version``) are counted
+    once under the ``_prefix_runs`` key and NEVER summed into the corrected
+    buckets, so old over-counted numbers are not silently mixed with new
+    ones."""
+    rows = list_recent(limit=10 ** 9, project=project)
+    buckets: dict = {}
+    prefix_runs = 0
+    for r in rows:
+        if not r.get("accounting_version"):
+            prefix_runs += 1
+            continue
+        key = _day_of(r.get("ts_start")) if group_by == "day" \
+            else (r.get("purpose") or "")
+        b = buckets.get(key)
+        if b is None:
+            b = {f: 0 for f in _SUMMARY_FIELDS}
+            b["cost_usd"] = 0.0
+            b["runs"] = 0
+            buckets[key] = b
+        for f in _SUMMARY_FIELDS:
+            b[f] += int(r.get(f) or 0)
+        b["cost_usd"] += float(r.get("cost_usd") or 0.0)
+        b["runs"] += 1
+    buckets["_prefix_runs"] = prefix_runs
+    return buckets

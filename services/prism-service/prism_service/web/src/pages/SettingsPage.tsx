@@ -1331,11 +1331,36 @@ type ClaudeRun = {
   tokens_used: number;
   input_tokens: number;
   output_tokens: number;
+  // task 45e04fad — the four fields counted once + real cost + model.
+  // Optional: pre-fix manifest rows lack them (flagged in the UI).
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cost_usd?: number;
+  model?: string;
+  accounting_version?: string;
   final_text: string;
   stderr_excerpt: string;
   stream_path: string;
   stream_bytes: number;
 };
+
+// task 45e04fad — /api/claude-runs/summary shape.
+type SpendBucket = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  cost_usd: number;
+  runs: number;
+};
+type SpendSummary = {
+  group_by: string;
+  buckets: Record<string, SpendBucket>;
+  prefix_runs: number;
+};
+
+const _fmtUsd = (n?: number) =>
+  "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 type Job = {
   id: string;
@@ -2288,13 +2313,18 @@ function renderInlineNotes(text: string): ReactNode {
 
 function ClaudeRunsPanel() {
   const [runs, setRuns] = useState<ClaudeRun[]>([]);
+  const [summary, setSummary] = useState<SpendSummary | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get<{ runs: ClaudeRun[] }>("/api/claude-runs?limit=20");
+      const [r, s] = await Promise.all([
+        api.get<{ runs: ClaudeRun[] }>("/api/claude-runs?limit=20"),
+        api.get<SpendSummary>("/api/claude-runs/summary?group_by=purpose").catch(() => null),
+      ]);
       setRuns(r.runs);
+      setSummary(s);
     } catch {
       setRuns([]);
     } finally {
@@ -2324,7 +2354,41 @@ function ClaudeRunsPanel() {
     );
   }
 
+  const buckets = summary ? Object.entries(summary.buckets) : [];
+  buckets.sort((a, b) => b[1].cost_usd - a[1].cost_usd);
+
   return (
+    <div className="space-y-4">
+      {buckets.length > 0 && (
+        <div className="rounded-md border border-[color:var(--midground-base)]/10 p-3">
+          <div className="flex items-baseline justify-between mb-2">
+            <div className="text-2xs uppercase tracking-wider opacity-60">
+              True spend by purpose
+            </div>
+            <div className="text-2xs opacity-50">measured from result-event usage</div>
+          </div>
+          <ul className="space-y-1 text-xs font-mono tabular-nums">
+            {buckets.map(([purpose, b]) => (
+              <li key={purpose} className="flex items-center gap-3">
+                <span className="opacity-80 min-w-[10rem]">{purpose || "—"}</span>
+                <span className="text-[color:var(--accent-emerald-fg)]">{_fmtUsd(b.cost_usd)}</span>
+                <span className="opacity-50">{b.runs} run{b.runs === 1 ? "" : "s"}</span>
+                <span className="opacity-50 ml-auto">
+                  in {b.input_tokens.toLocaleString()} · out {b.output_tokens.toLocaleString()} · cache-r{" "}
+                  {b.cache_read_input_tokens.toLocaleString()} · cache-w{" "}
+                  {b.cache_creation_input_tokens.toLocaleString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {summary && summary.prefix_runs > 0 && (
+            <div className="text-2xs opacity-50 mt-2">
+              {summary.prefix_runs} pre-fix run{summary.prefix_runs === 1 ? "" : "s"} excluded
+              (recorded before the accounting fix — over-counted &amp; cache-blind, not mixed in).
+            </div>
+          )}
+        </div>
+      )}
     <ul className="divide-y divide-[color:var(--midground-base)]/10 -mx-2">
       {runs.map((r) => {
         const isExpanded = expandedId === r.run_id;
@@ -2360,6 +2424,19 @@ function ClaudeRunsPanel() {
                 <span className="opacity-60">
                   {r.tokens_used.toLocaleString()} tok
                 </span>
+                {typeof r.cost_usd === "number" && (
+                  <span className="text-[color:var(--accent-emerald-fg)]" title="real per-run cost from the result event">
+                    {_fmtUsd(r.cost_usd)}
+                  </span>
+                )}
+                {!r.accounting_version && (
+                  <span
+                    className="text-2xs px-1.5 py-0.5 rounded bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]"
+                    title="recorded before the accounting fix — token/cost figures over-counted and cache-blind"
+                  >
+                    pre-fix
+                  </span>
+                )}
                 <span className="opacity-50 ml-auto text-2xs">
                   {new Date(r.ts_end * 1000).toLocaleString()}
                 </span>
@@ -2386,6 +2463,16 @@ function ClaudeRunsPanel() {
                     </pre>
                   </div>
                 )}
+                <div className="text-2xs font-mono tabular-nums opacity-70 grid grid-cols-2 gap-x-4 gap-y-0.5 max-w-md">
+                  <span>input <span className="opacity-100">{(r.input_tokens || 0).toLocaleString()}</span></span>
+                  <span>output <span className="opacity-100">{(r.output_tokens || 0).toLocaleString()}</span></span>
+                  <span>cache read <span className="opacity-100">{(r.cache_read_input_tokens || 0).toLocaleString()}</span></span>
+                  <span>cache write <span className="opacity-100">{(r.cache_creation_input_tokens || 0).toLocaleString()}</span></span>
+                  {typeof r.cost_usd === "number" && (
+                    <span>cost <span className="text-[color:var(--accent-emerald-fg)]">{_fmtUsd(r.cost_usd)}</span></span>
+                  )}
+                  {r.model && <span>model <span className="opacity-100">{r.model}</span></span>}
+                </div>
                 <div className="text-2xs opacity-60">
                   run_id <span className="font-mono">{r.run_id}</span>
                   {" · "}
@@ -2402,6 +2489,7 @@ function ClaudeRunsPanel() {
         );
       })}
     </ul>
+    </div>
   );
 }
 
