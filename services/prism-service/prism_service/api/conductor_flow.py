@@ -75,6 +75,11 @@ def _job(task) -> Optional[dict]:
         "role": role,
         "role_label": _ROLE.get(role, "-"),
         "gate_state": task.gate_state,
+        # task 8f48f9bb — surface WHY a pending gate parked directly on the job
+        # the driver loops on, so a driving agent self-diagnoses (e.g. "story_
+        # complete: no acceptance criteria with AC-<n> ids found") without a
+        # second fetch. Empty until the adjudicator sweep stamps it.
+        "gate_reason": getattr(task, "gate_reason", "") or "",
         "instructions": instructions,
         "doctrine": doctrine,
         "expected_proof": step.get("validation") or (
