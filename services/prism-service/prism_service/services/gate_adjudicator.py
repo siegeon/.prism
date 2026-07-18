@@ -51,10 +51,13 @@ def is_enabled() -> bool:
 
 def _pending_decline_reason(svc, task, step, project) -> str:
     """Why a PENDING gate could not auto-clear this sweep — for the driving
-    agent to self-diagnose (task 8f48f9bb). story/plan -> the rubric verdict's
-    reason; red -> the latest non-passing EvidenceReceipt's reason. Returns ""
-    when there is no actionable reason (the gate would actually approve, or
-    nothing is on file). Best-effort — never raises into the sweep."""
+    agent (or the reviewing human) to self-diagnose (task 8f48f9bb). story/plan
+    -> the rubric verdict's reason; red -> the latest non-passing
+    EvidenceReceipt's reason; green -> the oracle receipt-refusal (e.g. a
+    browser/manual_evidence_required oracle that no machine runner can pass, so
+    it correctly awaits a human — surfaced so it reads as "why", not empty).
+    Returns "" when there is no actionable reason. Best-effort — never raises
+    into the sweep."""
     try:
         if step in ("story_gate", "plan_gate"):
             validation = svc._validation_for_gate(step)
@@ -69,6 +72,10 @@ def _pending_decline_reason(svc, task, step, project) -> str:
             rc = osp.latest_receipt(project, getattr(task, "id", "") or "")
             if rc is not None and not getattr(rc, "passed", False):
                 return str(getattr(rc, "reason", "") or "")
+        if step == "green_gate":
+            refusal, _rc = svc._oracle_receipt_refusal(
+                task, override=False, reason="")
+            return str(refusal or "")
     except Exception:
         return ""
     return ""
