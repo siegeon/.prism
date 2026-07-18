@@ -49,6 +49,48 @@ def is_enabled() -> bool:
     return _interval_s() > 0
 
 
+def _pending_decline_reason(svc, task, step, project) -> str:
+    """Why a PENDING gate could not auto-clear this sweep — for the driving
+    agent to self-diagnose (task 8f48f9bb). story/plan -> the rubric verdict's
+    reason; red -> the latest non-passing EvidenceReceipt's reason. Returns ""
+    when there is no actionable reason (the gate would actually approve, or
+    nothing is on file). Best-effort — never raises into the sweep."""
+    try:
+        if step in ("story_gate", "plan_gate"):
+            validation = svc._validation_for_gate(step)
+            if not validation:
+                return ""
+            check = svc._verify_rubric_gate(task, validation)
+            if check.get("verified") is True:
+                return ""
+            return str(check.get("reason") or "")
+        if step == "red_gate":
+            from prism_service.services import oracle_spec as osp
+            rc = osp.latest_receipt(project, getattr(task, "id", "") or "")
+            if rc is not None and not getattr(rc, "passed", False):
+                return str(getattr(rc, "reason", "") or "")
+    except Exception:
+        return ""
+    return ""
+
+
+def _write_pending_reason(ctx, task, reason) -> None:
+    """Stamp a PENDING gate's decline reason onto task.gate_reason so a driving
+    agent reads WHY it parked, instead of an empty string it can't act on.
+    No-op unless the gate is pending and the reason is new; NEVER advances
+    gate_state, NEVER re-stamps a gate already decided (passed/failed)."""
+    if not reason:
+        return
+    if getattr(task, "gate_state", "") != "pending":
+        return
+    if (getattr(task, "gate_reason", "") or "") == reason:
+        return
+    try:
+        ctx.task_svc.update(getattr(task, "id", "") or "", gate_reason=reason)
+    except Exception:
+        pass
+
+
 def sweep_once() -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
     Returns the list of approvals made (empty when nothing was decidable)."""
@@ -101,6 +143,20 @@ def sweep_once() -> list[dict]:
                 approved.append({"project": pid, "task_id": tid, **res})
                 _log(f"{pid}/{tid[:8]}: {step} approved on machine "
                      f"evidence -> {res.get('to_step', 'advanced')}")
+            else:
+                # task 8f48f9bb — the gate did NOT auto-clear this pass. The
+                # adjudicator already computed WHY (rubric verdict / red
+                # receipt) and threw it away; surface it on task.gate_reason so
+                # a driving agent self-diagnoses instead of stalling to ping a
+                # human. Never advances gate_state (stays pending).
+                try:
+                    task = ctx.task_svc.get(tid)
+                    if task is not None:
+                        _write_pending_reason(
+                            ctx, task,
+                            _pending_decline_reason(svc, task, step, pid))
+                except Exception as exc:
+                    _log(f"{pid}/{tid[:8]}: reason-surface skipped ({exc})")
     return approved
 
 
