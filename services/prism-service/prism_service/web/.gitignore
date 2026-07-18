@@ -5,3 +5,6 @@ dist/
 *.tsbuildinfo
 .env.local
 .DS_Store
+
+# /prototype mock stories — disposable, per-feature scratch
+src/prototypes/

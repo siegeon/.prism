@@ -101,7 +101,8 @@ const MOCK_SCHEMA = {
   type: 'object',
   required: ['path', 'views', 'notes'],
   properties: {
-    path: { type: 'string', description: 'absolute path to the written self-contained HTML prototype' },
+    path: { type: 'string', description: 'absolute path to the written prototype CSF story (src/prototypes/<slug>.stories.tsx), composed from PRISM\'s REAL components' },
+    url: { type: 'string', description: 'workshop deep-link to open the prototype (run `npm run workshop` in web/, then this Ladle story URL)' },
     views: { type: 'array', items: { type: 'string' }, description: 'the clickable views/journeys implemented' },
     notes: { type: 'string', description: 'what is mocked + how the journey was verified' },
   },
@@ -192,19 +193,19 @@ const plan = await agent(
 // tokens so it reads native, and attach its path to the plan.
 phase('Mock')
 const mock = await agent(
-  `Build a SINGLE self-contained, clickable HTML prototype that demonstrates the core user journey of this plan on 100% MOCK data. HARD RULES:\n`
-  + `- ZERO backend / ZERO real data: no fetch to a live endpoint, no DB, nothing touching the PRISM daemon or real PRISM stores. Bake mock JSON inline. This is so it CANNOT break real data.\n`
-  + `- Reskin to the REAL PRISM look and feel: Read services/prism-service/prism_service/web/src/index.css and copy the EXACT CSS custom properties (e.g. --background-base #0d1726, --surface-1/2/3, --text-primary/secondary, --border-default, --accent-*-bg/ring/fg). It must read as a native PRISM page, not a foreign UI.\n`
-  + `- Visible banner stating it is a MOCK-DATA prototype that touches nothing real.\n`
-  + `- Implement the plan's primary journeys as REAL click-throughs across multiple views with navigation between them. Inline vanilla JS only, no build step.\n`
-  + `- GOTCHA (verified): never name an inline-onclick handler 'click' -- on an <a> the bare identifier 'click' binds to HTMLElement.click() and recurses/freezes. Use a distinct name (e.g. xnav).\n`
-  + `- Write the file to a SCRATCH location (the OS temp dir or a gitignored path), NOT into tracked source, then RETURN its absolute path, the views implemented, and how you verified the journey.\n\nPLAN:\n`
+  `Build a clickable MOCK-DATA prototype of this plan's core journey as a **Ladle story composed from PRISM's REAL components** — NOT hand-rolled HTML. PRISM has a component workshop (Ladle: services/prism-service/prism_service/web, stories at src/**/*.stories.tsx) that renders the real @nous-research/ui + Hermes-themed components in isolation. A prototype is now a STORY in that workshop, so what the owner clicks IS the shipping UI with fake data (design review becomes trustworthy, not indicative). HARD RULES:\n`
+  + `- Write ONE CSF story file to services/prism-service/prism_service/web/src/prototypes/<kebab-feature>.stories.tsx (this dir is gitignored — mock/scratch). Default-export { title: "Prototypes / <feature>" }; export the journey component as a named story.\n`
+  + `- COMPOSE FROM REAL COMPONENTS — this is the whole point: import the actual components the app uses (from @/components/* and @nous-research/ui — e.g. Card, Lozenge, EntityChip). READ the existing src/components/*.stories.tsx and the Conductor/Plan/Task pages (StepRail/PlanView/TaskDetailPage/TasksPage) first to see what components + props exist. Do NOT hand-roll markup or copy CSS custom properties — the theme (Tailwind v4 + Hermes) comes from the workshop's .ladle/components.tsx automatically, so the story renders in the REAL theme with zero token-copying.\n`
+  + `- ZERO backend / ZERO real data: bake mock JSON inline in the story. Nothing touches the daemon or real PRISM stores. This is so it CANNOT break real data.\n`
+  + `- Multi-view click-through: a single React component with useState-driven view switching across the plan's primary views, each rendered from the real components + mock data.\n`
+  + `- Visible MOCK banner (use a real component, e.g. a Lozenge or a Card) stating it is a MOCK-DATA prototype that touches nothing real.\n`
+  + `- RETURN: the story file absolute path; the workshop deep-link \`url\` to open it (run \`npm run workshop\` in web/, then the story is a Ladle URL like http://localhost:61000/?story=prototypes--<slug>--<story-name> — fetch the Ladle sidebar to confirm the exact story id, the slugs are non-obvious); the views implemented; and how you verified the journey (the story renders in the workshop with the real theme).\n\nPLAN:\n`
   + JSON.stringify(plan, null, 2),
   { label: 'mock:prototype', phase: 'Mock', schema: MOCK_SCHEMA })
 if (mock && mock.path) {
   plan.plan_doc = String(plan.plan_doc || '')
-    + '\n\n## Mock prototype\n\nClickable MOCK-data prototype (PRISM-skinned, no real data touched): '
-    + mock.path + '\nViews: ' + (mock.views || []).join(', ')
+    + '\n\n## Mock prototype\n\nClickable MOCK-data prototype composed from PRISM\'s REAL components (Ladle workshop, no real data touched): '
+    + mock.path + (mock.url ? '\nOpen: ' + mock.url : '') + '\nViews: ' + (mock.views || []).join(', ')
 }
 
 // -- Phase-merge gate doctrine (stacked-epic stranding fix, task 56458db1) --
