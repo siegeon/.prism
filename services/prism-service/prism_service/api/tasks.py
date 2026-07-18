@@ -105,8 +105,17 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
 
 
 @router.get("")
-def list_tasks(project: str = Query("default")) -> dict:
-    return {"tasks": _svc(project).list()}
+def list_tasks(project: str = Query("default"),
+              include_deleted: bool = Query(False)) -> dict:
+    # Soft-deleted tasks stay in the store for audit but must NOT surface on
+    # the board / task list — a deleted task is removed, not active work (it
+    # was still feeding the AWAITING-REVIEW bar and the kanban). Opt in with
+    # ?include_deleted=true for an admin/audit view.
+    tasks = _svc(project).list()
+    if not include_deleted:
+        tasks = [t for t in tasks
+                 if str(getattr(t, "status", "") or "") != "deleted"]
+    return {"tasks": tasks}
 
 
 class TaskCreate(BaseModel):
@@ -559,7 +568,50 @@ _EVIDENCE_MEDIA = {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
 }
+
+
+@router.get("/{task_id}/evidence")
+def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
+    """Enumerate a task's evidence store so the SPA can SHOW every captured
+    artifact — not only the ones a proof string happens to cite by name. Until
+    this existed the store was write-only from the UI's side: files landed in
+    ``data_dir/evidence/<task_id>/`` but nothing listed them, so an approver
+    could not see evidence that wasn't hand-linked in completion_proof. Returns
+    each servable image/video with its /evidence/<name> url, byte size and mtime
+    (newest first). ``cited`` marks files the task's completion_proof references,
+    so the UI can tie a row to the specific piece it produced."""
+    from datetime import datetime, timezone
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    d = evidence_dir(task_id)  # mkdirs; empty dir → empty list, not a 404
+    # Which filenames the proof cites, so the caller can link row → artifact.
+    cited: set[str] = set()
+    try:
+        task = _svc(project).get(task_id)
+        proof = (getattr(task, "completion_proof", "") or "") if task else ""
+        for m in re.finditer(r"/evidence/([A-Za-z0-9][A-Za-z0-9._-]{0,127})", proof):
+            cited.add(m.group(1))
+    except Exception:
+        pass
+    files = []
+    for p in sorted(d.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        ext = p.suffix.lower()
+        if not p.is_file() or ext not in _EVIDENCE_MEDIA:
+            continue
+        st = p.stat()
+        files.append({
+            "name": p.name,
+            "url": f"/api/tasks/{task_id}/evidence/{p.name}",
+            "media_type": _EVIDENCE_MEDIA[ext],
+            "kind": "video" if _EVIDENCE_MEDIA[ext].startswith("video/") else "image",
+            "size_bytes": st.st_size,
+            "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            "cited": p.name in cited,
+        })
+    return {"files": files}
 
 
 @router.get("/{task_id}/evidence/{filename}")
@@ -633,7 +685,8 @@ def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
 
 
 @router.get("/{task_id}/tests")
-def get_task_tests(task_id: str, run: bool = Query(False)):
+def get_task_tests(task_id: str, run: bool = Query(False),
+                   project: str = Query("default")):
     """Discover the test file(s) that PIN this task's oracle and return each
     ``def test_*`` as ``{name, doc, file}`` so the detail page can show,
     next to the oracle, exactly which tests pin the acceptance criteria.
@@ -652,12 +705,30 @@ def get_task_tests(task_id: str, run: bool = Query(False)):
         raise HTTPException(400, "bad task id")
 
     from pathlib import Path
+    from prism_service.services.task_workspace import workspace_for
 
-    tests_root = Path(__file__).resolve().parents[2] / "tests"
     short = task_id[:8]
     results: list[dict] = []
     files: list[str] = []
-    if tests_root.is_dir():
+    seen_rel: set[str] = set()
+
+    # Scan TWO roots: the service checkout's tests/ (tests already merged to
+    # main) AND the task's own git worktree tests/ (work that still lives only
+    # in the task workspace — the common case for a just-finished, unmerged
+    # task like this one). Without the workspace root the gate's test evidence
+    # is invisible for every unmerged task, which reads as "no evidence".
+    checkout_root = Path(__file__).resolve().parents[2] / "tests"
+    roots: list[Path] = [checkout_root]
+    run_root = checkout_root.parent
+    ws = workspace_for(task_id)
+    if ws:
+        ws_tests = Path(ws["path"]) / "services" / "prism-service" / "tests"
+        roots.append(ws_tests)
+        run_root = ws_tests.parent  # the pinned tests live here — run them here
+
+    for tests_root in roots:
+        if not tests_root.is_dir():
+            continue
         for p in sorted(tests_root.rglob("*.py")):
             try:
                 text = p.read_text(encoding="utf-8")
@@ -665,16 +736,51 @@ def get_task_tests(task_id: str, run: bool = Query(False)):
                 continue
             if task_id in text or (len(short) >= 8 and short in text):
                 rel = p.relative_to(tests_root.parent).as_posix()
+                if rel in seen_rel:
+                    continue
+                seen_rel.add(rel)
                 files.append(rel)
                 results.extend(_extract_tests_from_source(text, rel))
     ran = False
     if run and files and results:
-        statuses = _run_pinned_tests(tests_root.parent, files)
+        statuses = _run_pinned_tests(run_root, files)
         if statuses is not None:
             ran = True
             for row in results:
                 row["status"] = statuses.get(row["name"], "not-run")
-    return {"tests": results, "ran": ran}
+    # HONEST OBSERVATION (trust fix, task 45e04fad follow-up): when we did NOT
+    # re-run live, reflect the gate's own trusted-runner EvidenceReceipt so a
+    # done/green-gated task shows the TRUE result the gate already observed —
+    # never a false "not-run" on tests the trusted runner proved pass. The
+    # receipt is the source of truth and is cited so the claim is checkable.
+    receipt_info = None
+    try:
+        from prism_service.services import oracle_spec as _osp
+        rc = _osp.latest_receipt(project, task_id)
+    except Exception:
+        rc = None
+    if rc is not None:
+        # Always surface the gate's receipt as provenance (even on a live
+        # re-run) so the tab can cite what the trusted runner observed.
+        receipt_info = {
+            "job_id": rc.job_id, "tree_sha": rc.tree_sha,
+            "passed": bool(rc.passed), "status": rc.status,
+            "ended_at": rc.ended_at, "runner": rc.runner_version,
+            "reason": (rc.reason or "")[:400],
+        }
+        # Only DERIVE row status from the receipt when we did NOT run live —
+        # a live run's real statuses win. The receipt runs the task's PINNED
+        # oracle file; its reason names that path, so rc==0 means every pinned
+        # test passed under the trusted runner (distinct actor).
+        if not ran:
+            reason = rc.reason or ""
+            for row in results:
+                f = row.get("file") or ""
+                if f and f in reason:
+                    row["status"] = "passed" if rc.passed else "failed"
+                    row["passed"] = bool(rc.passed)
+                    row["verified_by"] = "gate-receipt"
+    return {"tests": results, "ran": ran, "receipt": receipt_info}
 
 
 def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:

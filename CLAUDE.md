@@ -36,6 +36,7 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 - A lane must commit its failing tests as a TESTS-ONLY `[task:<id>]` commit at the red step, BEFORE any implementation commit — the red machine seat anchors to that commit; bundling tests+impl makes red undemonstrable and strands red_gate with a human.
 - Slice scoping must check control_plane.POLICY_FILES up front — a task whose allowed_files includes a gate-policy file will fail its own gates on the candidate-controls-judge tooth; put consumers of policy modules in a separate non-policy file, and never let a producer tag its own task policy-change mid-drive.
 - Long curl -d JSON bodies with unicode (em-dashes) silently fail through the shell — write the body to a file and use --data-binary @file.
+- A machine-adjudicated rubric/red gate that parks PENDING writes NO gate_reason to the task — a driving subagent can't self-diagnose and pings a human at every gate; the real reason is computed (story needs `AC-<n>` not `AC1`; plan_gate reads the plan_diagram FIELD not a ```mermaid fence in plan_doc; red wants rc==1 and gets rc=4 "no tests ran" when task.verify isn't workspace-root-relative). Read the rubric/receipt to unblock; set `task.verify` to a workspace-root-relative path (`services/prism-service/tests/...`, not `cd services/prism-service && pytest tests/...`) at creation. Fix tracked in task 8f48f9bb.
 
 ## Key Conventions
 

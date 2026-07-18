@@ -69,11 +69,42 @@ function gateTone(gate: string): "warn" | "danger" | "ok" | null {
   return null;
 }
 
+// Column sorting. The board stays grouped by status bucket; sorting reorders
+// rows WITHIN each group (and each expanded child list), so the reading order
+// of the buckets is never lost. `null` sort = incoming API order (the default).
+type SortKey = "summary" | "who" | "prio" | "updated";
+type SortDir = "asc" | "desc";
+type Sort = { key: SortKey; dir: SortDir };
+
+function cmpTasks(a: Task, b: Task, key: SortKey): number {
+  switch (key) {
+    case "summary":
+      return (a.title ?? "").localeCompare(b.title ?? "");
+    case "who":
+      // Unassigned rows sort after assigned ones (ascending).
+      return (a.assigned_agent ?? "").localeCompare(b.assigned_agent ?? "");
+    case "prio": {
+      const pa = Number(a.priority ?? 0);
+      const pb = Number(b.priority ?? 0);
+      return (Number.isNaN(pa) ? 0 : pa) - (Number.isNaN(pb) ? 0 : pb);
+    }
+    case "updated":
+      return (Date.parse(a.updated_at ?? "") || 0) - (Date.parse(b.updated_at ?? "") || 0);
+  }
+}
+
+// Text columns default to A→Z; numeric/time columns default to high→recent
+// first, matching how a queue reads. Re-clicking the active column flips it.
+function defaultDir(key: SortKey): SortDir {
+  return key === "summary" || key === "who" ? "asc" : "desc";
+}
+
 export default function TasksPage() {
   const [project] = useProject();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [next, setNext] = useState<Task | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<Sort | null>(null);
 
   const load = useCallback(() => {
     api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}`)
@@ -109,6 +140,23 @@ export default function TasksPage() {
     return nn;
   });
 
+  // Clicking a header: activate that column (with its natural default
+  // direction) or, if already active, flip the direction.
+  const clickSort = (key: SortKey) => setSort((prev) =>
+    prev && prev.key === key
+      ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+      : { key, dir: defaultDir(key) });
+
+  const sorter = useCallback((list: Task[]): Task[] => {
+    if (!sort) return list;
+    const arr = [...list];
+    arr.sort((a, b) => {
+      const c = cmpTasks(a, b, sort.key);
+      return sort.dir === "asc" ? c : -c;
+    });
+    return arr;
+  }, [sort]);
+
   return (
     <Page>
       {/* The conductor pulse (LIVE bar) now lives in the app shell (App.tsx →
@@ -122,15 +170,15 @@ export default function TasksPage() {
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr>
-              <th className="text-left text-2xs uppercase tracking-wider font-semibold px-3 py-2 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Summary</th>
-              <th className="text-left text-2xs uppercase tracking-wider font-semibold px-3 py-2 w-32 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Who</th>
-              <th className="text-right text-2xs uppercase tracking-wider font-semibold px-3 py-2 w-16 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Prio</th>
-              <th className="text-right text-2xs uppercase tracking-wider font-semibold px-3 py-2 w-20 border-b border-[color:var(--border-default)]" style={{ color: "var(--text-muted)" }}>Updated</th>
+              <SortHeader label="Summary" col="summary" sort={sort} onSort={clickSort} align="left" />
+              <SortHeader label="Who" col="who" sort={sort} onSort={clickSort} align="left" width="w-32" />
+              <SortHeader label="Prio" col="prio" sort={sort} onSort={clickSort} align="right" width="w-16" />
+              <SortHeader label="Updated" col="updated" sort={sort} onSort={clickSort} align="right" width="w-20" />
             </tr>
           </thead>
           <tbody>
             {GROUPS.map((g) => {
-              const items = roots.filter((t) => bucketOf(t) === g.key);
+              const items = sorter(roots.filter((t) => bucketOf(t) === g.key));
               if (items.length === 0) return null;
               return (
                 <GroupBlock
@@ -141,6 +189,7 @@ export default function TasksPage() {
                   expanded={expanded}
                   toggle={toggle}
                   nextId={nextId}
+                  sorter={sorter}
                 />
               );
             })}
@@ -165,7 +214,7 @@ export default function TasksPage() {
 }
 
 function GroupBlock({
-  label, items, childrenByParent, expanded, toggle, nextId,
+  label, items, childrenByParent, expanded, toggle, nextId, sorter,
 }: {
   label: string;
   items: Task[];
@@ -173,6 +222,7 @@ function GroupBlock({
   expanded: Set<string>;
   toggle: (id: string) => void;
   nextId?: string;
+  sorter: (list: Task[]) => Task[];
 }) {
   return (
     <>
@@ -183,7 +233,7 @@ function GroupBlock({
         </td>
       </tr>
       {items.map((t) => {
-        const kids = childrenByParent.get(t.id ?? "") ?? [];
+        const kids = sorter(childrenByParent.get(t.id ?? "") ?? []);
         const isOpen = expanded.has(t.id ?? "");
         return (
           <TaskRows
@@ -264,5 +314,33 @@ function TaskRow({ task, depth, hasChildren, isOpen, toggle, isNext }: {
         {relTime(task.updated_at)}
       </td>
     </tr>
+  );
+}
+
+// Clickable column header. Shows a caret on the active sort column; the whole
+// header is the hit target. Alignment/width match the original static headers.
+function SortHeader({ label, col, sort, onSort, align, width }: {
+  label: string;
+  col: SortKey;
+  sort: Sort | null;
+  onSort: (key: SortKey) => void;
+  align: "left" | "right";
+  width?: string;
+}) {
+  const active = sort?.key === col;
+  const caret = active ? (sort!.dir === "asc" ? "▲" : "▼") : "";
+  const alignClass = align === "right" ? "text-right" : "text-left";
+  return (
+    <th
+      className={`${alignClass} text-2xs uppercase tracking-wider font-semibold px-3 py-2 border-b border-[color:var(--border-default)] cursor-pointer select-none${width ? ` ${width}` : ""}`}
+      style={{ color: active ? "var(--text-secondary)" : "var(--text-muted)" }}
+      onClick={() => onSort(col)}
+      aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <span className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+        <span className="hover:underline decoration-dotted underline-offset-2">{label}</span>
+        <span className="text-[9px] w-2 leading-none" style={{ color: "var(--accent-teal-fg)" }}>{caret}</span>
+      </span>
+    </th>
   );
 }

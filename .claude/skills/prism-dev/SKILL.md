@@ -69,6 +69,11 @@ $env:PRISM_GATE_ADJUDICATOR_INTERVAL = "20"  # machine gate seat: adjudicate gre
 # survives the launching shell/job teardown. A raw Start-Process child dies
 # with the tool session that started it (killed the dev daemon twice on
 # 2026-07-13). Writes a pidfile under the data dir; logs via `prism logs`.
+# SANDBOX TRAP: a sandboxed harness shell (Claude Code Bash/PowerShell tool)
+# blocks CREATE_BREAKAWAY_FROM_JOB, so even the CLI daemon dies silently when
+# the shell's Windows job is recycled (mid-request logs, no traceback —
+# happened again 2026-07-17). Run the launch command with the sandbox
+# DISABLED, or launch via F5.
 Set-Location E:\.prism
 & "E:\.prism\.venvs\dev\Scripts\prism.exe" start --daemon
 Start-Sleep 6

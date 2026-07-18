@@ -64,7 +64,22 @@ type PinTest = {
   doc?: string;
   file?: string;
   status?: string;
+  passed?: boolean;
+  verified_by?: string;
 };
+
+// GET /api/tasks/:id/tests → `receipt`: the gate's trusted-runner
+// EvidenceReceipt that the pin statuses reflect (task 45e04fad trust fix) —
+// so the Tests tab shows the SAME result the gate observed, and cites it.
+type TestReceipt = {
+  job_id: string;
+  tree_sha: string;
+  passed: boolean;
+  status: string;
+  ended_at: string;
+  runner: string;
+  reason: string;
+} | null;
 
 // GET /api/conductor/gate/readiness — the evidence tooth evaluated LIVE, so
 // the gate card never contradicts itself with a stale stored decision.
@@ -727,6 +742,7 @@ export default function TaskDetailPage() {
   // The RED tests that pin this task's oracle (empty unless a committed test
   // file names the task) — rendered beneath the oracle panel.
   const [pinTests, setPinTests] = useState<PinTest[]>([]);
+  const [testReceipt, setTestReceipt] = useState<TestReceipt>(null);
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
@@ -845,8 +861,8 @@ export default function TaskDetailPage() {
     let cancelled = false;
     (async () => {
       try {
-        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests`);
-        if (!cancelled) setPinTests(tr.tests ?? []);
+        const tr = await api.get<{ tests: PinTest[]; receipt?: TestReceipt | null }>(`/api/tasks/${id}/tests?project=${project}`);
+        if (!cancelled) { setPinTests(tr.tests ?? []); setTestReceipt(tr.receipt ?? null); }
       } catch { if (!cancelled) setPinTests([]); }
     })();
     (async () => {
@@ -874,17 +890,25 @@ export default function TaskDetailPage() {
   useEffect(() => {
     const step = task?.workflow_step || "";
     if (!id || !task || ranPinTestsFor.current === id) return;
-    if (!step.endsWith("_gate") || task.status === "done") return;
+    // Run live when parked AT a gate (statuses inform the decision), OR when a
+    // DONE task still has discovered tests the gate's receipt did NOT cover —
+    // so no badge stays a non-observation ("not run") on finished work. The
+    // receipt already stamps the pinned-oracle rows instantly; this fills the
+    // rest with their real pass/fail (one-shot per task).
+    const atGate = step.endsWith("_gate") && task.status !== "done";
+    const hasUnverified = pinTests.some((t) => !(t.status && t.status.toLowerCase() !== "not-run"));
+    const doneWithGaps = task.status === "done" && pinTests.length > 0 && hasUnverified;
+    if (!atGate && !doneWithGaps) return;
     ranPinTestsFor.current = id;
     let cancelled = false;
     (async () => {
       try {
-        const tr = await api.get<{ tests: PinTest[] }>(`/api/tasks/${id}/tests?run=true`);
-        if (!cancelled) setPinTests(tr.tests ?? []);
+        const tr = await api.get<{ tests: PinTest[]; receipt?: TestReceipt | null }>(`/api/tasks/${id}/tests?run=true&project=${project}`);
+        if (!cancelled) { setPinTests(tr.tests ?? []); setTestReceipt(tr.receipt ?? null); }
       } catch { /* keep the discovery rows — statuses stay honestly not-run */ }
     })();
     return () => { cancelled = true; };
-  }, [id, task?.workflow_step, task?.status]);
+  }, [id, task?.workflow_step, task?.status, pinTests]);
 
   // Navigating task → task (the route reuses this component) resets the tab
   // back to Overview and drops the previous task's trace so it re-fetches.
@@ -1438,17 +1462,22 @@ export default function TaskDetailPage() {
                       </td>
                     </tr>
                     {pinTests.length > 0 && (() => {
-                      const passing = pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length;
+                      // When a gate receipt exists, the authoritative "pinned"
+                      // set is the tests the receipt actually decided (the
+                      // oracle) — not every file that merely names the task.
+                      const gateVerified = pinTests.filter((t) => t.verified_by === "gate-receipt");
+                      const scope = (testReceipt && gateVerified.length > 0) ? gateVerified : pinTests;
+                      const passing = scope.filter((t) => (t.status || "").toLowerCase() === "passed").length;
                       return (
                         <tr>
                           <td className="py-1.5 pr-3">
                             <button type="button" onClick={showTests} className="font-mono underline decoration-dotted underline-offset-2 text-left">pinned tests</button>
-                            <div className="text-2xs" style={{ color: "var(--text-muted)" }}>task's own suite — not the gate</div>
+                            <div className="text-2xs" style={{ color: "var(--text-muted)" }}>{testReceipt ? "reflects the gate's trusted-runner result" : "task's own suite — not the gate"}</div>
                           </td>
                           <td className="py-1.5 pr-3">
-                            <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={passing === pinTests.length ? { color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" } : { color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}>{passing} / {pinTests.length} passing</span>
+                            <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={passing === scope.length ? { color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" } : { color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}>{passing} / {scope.length} passing</span>
                           </td>
-                          <td className="py-1.5 text-right font-mono text-2xs" style={{ color: "var(--accent-sage-fg)" }}>latest run</td>
+                          <td className="py-1.5 text-right font-mono text-2xs" style={{ color: testReceipt?.passed ? "var(--accent-sage-fg)" : "var(--text-muted)" }} title={testReceipt ? testReceipt.reason : ""}>{testReceipt ? `receipt ${testReceipt.job_id.slice(0, 8)} · ${testReceipt.tree_sha.slice(0, 7)}` : "latest run"}</td>
                         </tr>
                       );
                     })()}
@@ -1576,6 +1605,13 @@ export default function TaskDetailPage() {
             gateReadiness={gateReadiness}
             onMintEvidence={mintEvidence}
             tabRequest={tabRequest}
+            taskId={id}
+            project={project}
+            proofType={task.proof_type}
+            oracle={task.oracle}
+            completionProof={task.completion_proof}
+            likelyMisfire={task.likely_misfire}
+            fullOutcomeComplete={task.full_outcome_complete}
             conductor={conductorOn ? {
               step: task.workflow_step,
               gateState: task.gate_state,
@@ -1668,12 +1704,19 @@ export default function TaskDetailPage() {
         </div>
       )}
 
-      {(task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined || pinTests.length > 0) && (
+      {/* When the task is in the conductor, the oracle lives in the Tests tab
+          and completion proof & risk lives in the gate's evidence area — so
+          this standalone card is only the fallback for non-pipeline tasks. */}
+      {!conductorOn && (task.oracle || task.proof_type || task.completion_proof || task.likely_misfire || task.full_outcome_complete !== undefined || pinTests.length > 0) && (
         <Card>
-          <SectionLabel>Oracle — observable completion signal</SectionLabel>
+          {/* The oracle itself moved to the Tests tab (oracle + tests belong
+              together, tied to the proposed change's ACs). This panel keeps the
+              completion PROOF and the risk (misfire / owner-outcome). */}
+          <SectionLabel>Completion — proof &amp; risk</SectionLabel>
           <div className="mt-2 space-y-3 text-[13px]">
-            <div className="flex items-start gap-2 flex-wrap">
-              {task.proof_type && (
+            {task.proof_type && (
+              <div className="flex items-center gap-2">
+                <span className="opacity-50 text-2xs uppercase tracking-wider">proof type</span>
                 <span
                   className="text-2xs uppercase tracking-wider px-2 py-0.5 rounded shrink-0"
                   style={{
@@ -1685,9 +1728,8 @@ export default function TaskDetailPage() {
                 >
                   {task.proof_type}
                 </span>
-              )}
-              <span className="opacity-90 leading-relaxed">{task.oracle || <span className="opacity-50">— no oracle defined —</span>}</span>
-            </div>
+              </div>
+            )}
             <div>
               <div className="opacity-50 mb-1 text-2xs uppercase tracking-wider">completion proof</div>
               {task.completion_proof

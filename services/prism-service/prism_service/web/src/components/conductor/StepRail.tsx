@@ -7,11 +7,13 @@
 // nothing per-step is fabricated. Companion to SdlcProgress (minimap) and
 // TaskActivityGantt (the wall-clock Timeline sub-view).
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { motion } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { domainTone } from "@/lib/domainTone";
 import { fmtTokens } from "@/lib/format";
 import { Lozenge } from "@/components/Lozenge";
+import { EvidenceGallery, citedEvidence, type EvidenceItem } from "@/components/EvidenceGallery";
 import type { PhaseProgress, Activity } from "./SdlcProgress";
 import type { GanttGate } from "./TaskActivityGantt";
 
@@ -27,6 +29,16 @@ function clockHM(ts: number): string {
 // reveals the turns that fired WHILE it was current — the implementation view
 // and the timeline are the same thing, disclosed hierarchically.
 export type StepTurn = { actor?: string; action?: string; details?: string; timestamp?: string; turn_tokens?: number };
+
+// Completion proof & risk, rendered in the completion gate's evidence area so
+// the proof lives WITH the pipeline (not a duplicate overview card).
+export type GateCompletion = {
+  proofType?: string;
+  proof?: string;
+  misfire?: string;
+  fullOutcome?: boolean;
+  taskId?: string;
+};
 
 function fmtDur(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -146,7 +158,7 @@ function TurnList({ rows }: { rows: StepTurn[] }) {
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, turns, reduced,
+  step, gateState, phase, status, activity, gates, turns, reduced, evidence, proofType, completion,
 }: {
   step?: string;
   gateState?: string;
@@ -157,6 +169,14 @@ export default function StepRail({
   gates: GanttGate[];
   turns?: StepTurn[];
   reduced?: boolean | null;
+  // The task's evidence store — VISUAL artifacts (screenshots/video) a gate
+  // row shows when expanded. Tests + oracle live in the Tests tab, not here.
+  evidence?: EvidenceItem[];
+  // Proof type (test / demo / ui) — tailors the completion gate's empty
+  // evidence message when nothing was captured.
+  proofType?: string;
+  // Completion proof & risk — rendered in the completion gate's evidence area.
+  completion?: GateCompletion;
 }) {
   const steps = WORKFLOW_STEPS_ORDERED;
   const byStep = turnsByStep(turns ?? []);
@@ -173,7 +193,11 @@ export default function StepRail({
   // Pulse ONLY when genuinely being driven now (a real recent conductor
   // transition on THIS task), never merely because status is in_progress.
   const live = (activity?.state ?? status ?? "").toLowerCase() === "working";
-  const [open, setOpen] = useState<string | null>(null);
+  // Auto-expand the completion gate on a DONE task so its evidence is visible
+  // immediately — otherwise the gate reads as empty until you happen to click
+  // the exact row, and the evidence looks like it isn't there at all.
+  const [open, setOpen] = useState<string | null>(
+    (status ?? "").toLowerCase() === "done" ? "green_gate" : null);
   // Default to EXPANDED so the per-stage bars + drill-downs are visible up
   // front; the toggle folds all completed agent steps into one pill.
   const [collapseDone, setCollapseDone] = useState(false);
@@ -264,7 +288,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} maxTokens={maxTokens} maxDur={maxDur} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} maxTokens={maxTokens} maxDur={maxDur} evidence={evidence} proofType={proofType} completion={completion} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -403,17 +427,81 @@ function VerifiedBy({ persona }: { persona: string }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; maxTokens: number; maxDur: number;
+// Completion proof & risk, shown in the completion gate's evidence area:
+// proof type, the recorded completion proof (link to the full proof page),
+// the likely-misfire risk, and slice-vs-finished outcome. One home for what
+// used to be a separate overview card.
+function GateCompletionBlock({ c }: { c: GateCompletion }) {
+  const proofLine = (c.proof ?? "").replace(/\s+/g, " ").trim();
+  const short = proofLine.length > 160 ? proofLine.slice(0, 160) + "…" : proofLine;
+  return (
+    <div className="rounded-md border border-[color:var(--border-default)] p-2.5 space-y-2 text-[12px]" style={{ background: "var(--surface-1)" }}>
+      <div className="flex items-center gap-2">
+        <span className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>completion proof</span>
+        {c.proofType && (
+          <span className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded"
+            style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{c.proofType}</span>
+        )}
+      </div>
+      {proofLine
+        ? (c.taskId
+            ? <Link to={`/tasks/${c.taskId}/proof`} className="flex items-start gap-1.5 group" style={{ color: "var(--text-secondary)" }}>
+                <span className="leading-relaxed group-hover:opacity-100 opacity-90">{short}</span>
+                <span className="opacity-50 group-hover:opacity-100 shrink-0">→</span>
+              </Link>
+            : <span className="leading-relaxed" style={{ color: "var(--text-secondary)" }}>{short}</span>)
+        : <span className="text-[color:var(--accent-amber-fg)] text-2xs">⚠ not yet recorded</span>}
+      {c.misfire && (
+        <div>
+          <div className="text-2xs uppercase tracking-wider mb-0.5" style={{ color: "var(--text-muted)" }}>likely misfire — how this could pass-but-be-wrong</div>
+          <div className="flex items-start gap-1.5 leading-relaxed" style={{ color: "var(--accent-amber-fg)" }}>
+            <span className="shrink-0">⚠</span><span className="opacity-90">{c.misfire}</span>
+          </div>
+        </div>
+      )}
+      <div className="flex items-start gap-1.5 leading-relaxed" style={{ color: c.fullOutcome ? "var(--accent-emerald-fg)" : "var(--accent-amber-fg)" }}>
+        <span className="shrink-0">{c.fullOutcome ? "✓" : "◐"}</span>
+        <span className="opacity-90">{c.fullOutcome
+          ? "Owner outcome: complete — the full outcome is mapped (slice green, no open children, strong proof)"
+          : "Owner outcome: slice-only — a green slice is not yet proof the full owner outcome is met"}</span>
+      </div>
+    </div>
+  );
+}
+
+// The artifacts that passed THIS gate. Precise when the receipt text cites
+// /evidence/ urls; otherwise the completion (green) gate owns the task's demo
+// screenshots/videos — that is the gate the completion proof is judged at.
+function evidenceForGate(g: GanttGate | undefined, taskEvidence?: EvidenceItem[]): EvidenceItem[] {
+  const cited = citedEvidence(g?.reason);
+  if (cited.length) return cited;
+  const isCompletion = g?.gate === "green" || /green/i.test(g?.gate ?? "");
+  return isCompletion ? (taskEvidence ?? []) : [];
+}
+
+function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur, evidence, proofType, completion }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; maxTokens: number; maxDur: number; evidence?: EvidenceItem[]; proofType?: string; completion?: GateCompletion;
 }) {
   const [receipt, setReceipt] = useState(false);
   const g = gi.g;
   const override = gi.state === "override";
+  const gateEvidence = evidenceForGate(g, evidence);
+  const isCompletionGate = g?.gate === "green" || /green/i.test(g?.gate ?? "");
   return (
     <div>
       <button onClick={onToggle} className="w-full flex items-center gap-2 min-h-[22px] text-left rounded-md px-1.5 -mx-1.5 hover:bg-[color:var(--surface-2)] transition-colors">
         <Persona persona={s.persona ?? ""} isGate />
         <span className="text-[13px] text-[color:var(--text-primary)] whitespace-nowrap">{stepLabel(s.id)}</span>
+        {/* Evidence indicator — makes it obvious a gate HAS a visual artifact
+            to see, so it isn't hidden behind a click. */}
+        {gateEvidence.length > 0 && (
+          <span className="flex items-center gap-1 text-2xs px-1.5 py-0.5 rounded flex-none"
+            style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)" }}
+            title="this gate has evidence — click to view">
+            <span aria-hidden>{gateEvidence.some((e) => e.kind === "video") ? "▶" : "▣"}</span>
+            {`${gateEvidence.length} ${gateEvidence.length === 1 ? "artifact" : "artifacts"}`}
+          </span>
+        )}
         {/* A resolved gate needs no "passed" pill or receipt line here — the
             spine node is already a green ✓ (amber ! on override). Show the
             useful stage metric instead; the receipt lives in the panel below. */}
@@ -441,6 +529,32 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur }: {
             <span className="ml-auto text-[color:var(--text-muted)]">{clockHM(g.ts)}</span>
           </div>
           <div className="mt-2 text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed">{g.reason}</div>
+          {/* The evidence that passed this gate, right here in the timeline —
+              expand the gate and see the artifacts it was approved on. The
+              completion (green) gate always shows the section, with an honest
+              message when nothing visual was captured, so an empty store never
+              looks like a missing feature. */}
+          {(gateEvidence.length > 0 || isCompletionGate) && (
+            <div className="mt-2.5 space-y-2.5">
+              <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                evidence{gateEvidence.length > 0 ? ` · ${gateEvidence.length}` : ""}
+              </div>
+              {/* The gate holds the VISUAL evidence — screenshots / video of the
+                  feature. The oracle + tests live in the Tests tab. */}
+              {gateEvidence.length > 0 ? (
+                <EvidenceGallery items={gateEvidence} thumb="md" />
+              ) : (
+                <div className="text-2xs rounded-md border border-dashed border-[color:var(--border-default)] px-2.5 py-2 leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                  {/^test$/i.test(proofType ?? "")
+                    ? "No screenshot captured — this is a test-proof task; its oracle and tests are in the Tests tab."
+                    : "No screenshot or video was captured for this gate. Visual proof captured at receipt time would appear here."}
+                </div>
+              )}
+              {/* Completion proof & risk lives here with the pipeline, not in a
+                  duplicate overview card. */}
+              {isCompletionGate && completion && <GateCompletionBlock c={completion} />}
+            </div>
+          )}
           {g.reason && g.reason.length > 120 && (
             <>
               {receipt && (

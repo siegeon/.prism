@@ -7,6 +7,7 @@ import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/co
 import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { stepLabel } from "@/lib/workflowChips";
+import { useTaskEvidence } from "@/components/EvidenceGallery";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -76,6 +77,23 @@ function acOrder(t: PinTest): number {
   const b = parseAc(t.doc).badge;
   const n = b ? parseInt(b.replace(/\D+/g, ""), 10) : NaN;
   return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+// Pull the acceptance-criteria lines out of the proposed change (plan_doc) so
+// the Tests tab can show the oracle tied to the ACs it covers. A plan lists
+// them as bullet lines that name an AC id ("AC-1, AC-2 -> assertion_source_for
+// …"); we take those, stripped of markdown bullets, in document order.
+function parseAcLines(planDoc?: string): string[] {
+  if (!planDoc) return [];
+  const out: string[] = [];
+  for (const raw of planDoc.split("\n")) {
+    // Only the mapping lines — a bullet that STARTS with an AC id, e.g.
+    // "- AC-1, AC-2 -> assertion_source_for (...)". Prose that merely mentions
+    // "Covers AC-3" is not an AC definition and must not be swept in.
+    const line = raw.trim().replace(/^[-*+]\s*/, "").replace(/`/g, "").trim();
+    if (/^AC-\d/.test(line)) out.push(line);
+  }
+  return out;
 }
 
 // ── Gate evidence ("what you're approving") ─────────────────────────────
@@ -184,6 +202,13 @@ export default function PlanView({
   gateReadiness,
   onMintEvidence,
   tabRequest,
+  taskId,
+  project,
+  proofType,
+  oracle,
+  completionProof,
+  likelyMisfire,
+  fullOutcomeComplete,
 }: {
   diagram?: string;
   doc?: string;
@@ -207,6 +232,21 @@ export default function PlanView({
   // External tab drive: the oracle card's "view tests" summary bumps `n` to
   // switch this panel to the Tests tab. The nonce lets a repeat click re-fire.
   tabRequest?: { tab: string; n: number } | null;
+  // Task id + project — used to fetch the evidence store so a gate row can show
+  // the artifacts that passed it. Omitted → no evidence fetch.
+  taskId?: string;
+  project?: string;
+  // The task's proof_type (test / demo / ui / …) — tailors a gate's empty
+  // evidence message (a test-proof gate points at the Tests tab, not a photo).
+  proofType?: string;
+  // The task's oracle — the plain-language acceptance criterion. Shown with
+  // the tests in the Tests tab.
+  oracle?: string;
+  // Completion proof & risk — rendered in the gate's evidence area (not a
+  // separate overview card), so the proof lives with the pipeline.
+  completionProof?: string;
+  likelyMisfire?: string;
+  fullOutcomeComplete?: boolean;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
@@ -235,6 +275,13 @@ export default function PlanView({
   // Tests tab: which pin is expanded to show its actual assertion source —
   // a reviewer must be able to EVALUATE a pin, not just read its name.
   const [openTest, setOpenTest] = useState<string | null>(null);
+
+  // The task's evidence store — handed to the rail so a gate row, when
+  // expanded, shows the VISUAL artifacts that passed it (screenshots/video).
+  const evidence = useTaskEvidence(taskId, project);
+  // Acceptance criteria parsed from the proposed change — shown with the
+  // oracle in the Tests tab, tying the oracle to what it must satisfy.
+  const acLines = parseAcLines(doc);
 
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
@@ -290,6 +337,34 @@ export default function PlanView({
 
       {cur === "tests" && hasTests && (
         <div className="space-y-3">
+          {/* The oracle lives WITH the tests — the observable completion signal
+              and the acceptance criteria (from the proposed change) that the
+              tests below prove. Visual evidence is separate: it's at the gate
+              in the Implementation tab. */}
+          {(oracle || acLines.length > 0) && (
+            <div className="rounded-md px-3 py-2.5 leading-relaxed"
+              style={{ background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}>
+              <div className="text-2xs uppercase tracking-wider mb-1 font-semibold" style={{ color: "var(--accent-teal-fg)" }}>
+                oracle — observable completion signal
+              </div>
+              {oracle && <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)" }}>{oracle}</div>}
+              {acLines.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: "var(--accent-teal-fg)" }}>
+                    acceptance criteria · from the proposed change
+                  </div>
+                  <ul className="space-y-0.5">
+                    {acLines.map((l, i) => (
+                      <li key={i} className="text-[12px] leading-relaxed flex gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                        <span className="shrink-0" style={{ color: "var(--accent-teal-fg)" }}>›</span>
+                        <span>{l}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
             The committed tests that pin this task's acceptance criteria.
             Badges show each test's <span className="font-medium">latest
@@ -412,6 +487,9 @@ export default function PlanView({
             gates={c.timeline?.gates ?? []}
             turns={c.turns ?? []}
             reduced={reduced}
+            evidence={evidence}
+            proofType={proofType}
+            completion={{ proofType, proof: completionProof, misfire: likelyMisfire, fullOutcome: fullOutcomeComplete, taskId }}
           />
 
           {c.status === "done" && (c.gateState === "pending" || c.gateState === "failed") && (
