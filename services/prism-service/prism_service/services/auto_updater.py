@@ -79,6 +79,42 @@ _POLL_INTERVAL_S = int(os.environ.get("PRISM_AUTO_UPDATE_INTERVAL", "1800"))
 _AUTO_APPLY = os.environ.get("PRISM_AUTO_UPDATE", "on").lower() in (
     "on", "true", "1", "yes",
 )
+# WORKABILITY GUARD (owner 2026-07-18, task e5fbec61): never auto-update a
+# customer onto a build whose core workflow they cannot actually complete. A
+# release is eligible to be APPLIED only if it carries the workability marker
+# that release CI attaches AFTER the workflow self-check passes (a synthetic
+# ticket driven the full conductor loop to an HONEST green with the human
+# sign-off intact — no false-green). DEFAULT ON: an unmarked or failing
+# release is refused and the client stays on its current version. Set
+# PRISM_UPDATE_REQUIRE_WORKABLE=off to bypass (internal / emergency only).
+WORKABLE_MARKER = "PRISM-WORKABLE"
+
+
+def _require_workable() -> bool:
+    """True unless the operator explicitly opted out of the workability guard.
+    Read at call time so it stays testable and overridable per-process."""
+    return os.environ.get("PRISM_UPDATE_REQUIRE_WORKABLE", "on").strip().lower() \
+        in ("on", "true", "1", "yes")
+
+
+def _release_is_workable(release: dict) -> tuple[bool, str]:
+    """A release is workable iff it is a real (non-draft, non-prerelease)
+    release carrying the workability marker: the WORKABLE_MARKER token in the
+    release body, or an asset named 'WORKABLE' / 'prism-workable*'. Release CI
+    emits the marker ONLY after the workflow self-check passes, so a hand-cut
+    or pre-workability release is refused BY DEFAULT."""
+    if release.get("draft"):
+        return False, "release is a draft"
+    if release.get("prerelease"):
+        return False, "release is a prerelease"
+    if WORKABLE_MARKER.lower() in (release.get("body") or "").lower():
+        return True, "workability marker in release body"
+    for asset in release.get("assets", []) or []:
+        name = (asset.get("name") or "").lower()
+        if name == "workable" or name.startswith("prism-workable"):
+            return True, "workability marker asset attached"
+    return False, ("no workability marker — release CI attaches it only after "
+                   "the workflow self-check passes")
 # Issue #66: NEVER os.execvp/os.execv from THIS daemon thread. The old
 # _self_restart() did exactly that, replacing the process image in place
 # (same PID, no traceback, sockets dropped) — the silent-death signature.
@@ -267,6 +303,10 @@ class UpdateStatus:
     restart_required: bool = False
     asset_url: Optional[str] = None
     poll_interval_s: int = _POLL_INTERVAL_S
+    # Workability guard (task e5fbec61): whether the latest release carries the
+    # marker that release CI attaches only after the workflow self-check passes.
+    latest_workable: bool = False
+    workable_reason: str = ""
 
 
 _state = UpdateStatus(in_docker=_running_in_docker())
@@ -329,12 +369,15 @@ def check_for_update() -> UpdateStatus:
     published = release.get("published_at")
     asset = _wheel_asset_url(release)
     available = bool(tag) and _is_newer_semver(tag, PRISM_VERSION)
+    workable, workable_reason = _release_is_workable(release)
 
     with _state_lock:
         _state.latest_version = tag
         _state.latest_published_at = published
         _state.update_available = available
         _state.asset_url = asset if available else None
+        _state.latest_workable = workable
+        _state.workable_reason = workable_reason
         _state.last_check_ok = True
         _state.last_error = ""
     return _state
@@ -375,6 +418,15 @@ def apply_update() -> dict:
             return {"ok": False, "reason": "no update available; run check first"}
         if not _state.asset_url:
             return {"ok": False, "reason": "latest release has no .whl asset"}
+        if _require_workable() and not _state.latest_workable:
+            # HARD GUARD: refuse to install a release that is not marked
+            # workable. Stay on the current version rather than ship a build
+            # the customer cannot drive through the workflow.
+            return {"ok": False, "reason": (
+                f"release {_state.latest_version} not marked workable "
+                f"({_state.workable_reason or 'no marker'}) — refusing to "
+                f"apply; staying on {PRISM_VERSION}. Override with "
+                "PRISM_UPDATE_REQUIRE_WORKABLE=off.")}
         asset = _state.asset_url
         target = _state.latest_version
 
@@ -518,6 +570,19 @@ def _maybe_apply() -> None:
         if _state.restart_required:
             return  # already applied, just waiting for restart
         target = _state.latest_version
+        workable = _state.latest_workable
+        workable_reason = _state.workable_reason
+    if _require_workable() and not workable:
+        # HARD GUARD: an available update that is NOT marked workable is
+        # refused here, before apply_update() — the client stays on its
+        # current version until a workable release is published.
+        print(
+            f"[auto_updater] {target} available but NOT marked workable "
+            f"({workable_reason or 'no marker'}) — refusing auto-update; "
+            f"staying on {PRISM_VERSION}",
+            file=sys.stderr, flush=True,
+        )
+        return
     print(
         f"[auto_updater] new version {target} available — applying",
         file=sys.stderr, flush=True,

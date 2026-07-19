@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.5"
+PRISM_VERSION = "7.1.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.6: AUTO-UPDATE WORKABILITY GUARD [task:e5fbec61]. The auto-updater now "
+    "REFUSES to cut a customer over to a release unless it carries the "
+    "PRISM-WORKABLE marker that release CI attaches only after the workflow "
+    "self-check passes (a synthetic ticket driven the full conductor loop to an "
+    "honest green with the human sign-off intact). Default ON (set "
+    "PRISM_UPDATE_REQUIRE_WORKABLE=off to bypass); enforced at BOTH _maybe_apply "
+    "and apply_update, so no release ships to customers until it is proven "
+    "workable. Since nothing is marked workable yet, all auto-updates are held - "
+    "by design (owner: don't ship until customers can actually work it). The "
+    "marker-earning path (prism selfcheck + release.yml gate) is coupled to the "
+    "human-judgment-gate fix [task:eaafdf75] and the owner's objective-vs-judgment rule. "
     "v7.1.5: DECISION PACKET NOW ACTUALLY RENDERS [task:a1e4120f fix]. v7.1.4 wired "
     "the DecisionPacket into PlanView's gate block, but TaskDetailPage passes "
     "gate={null} there (the gate DECISION lives in the top-level action), so the "
