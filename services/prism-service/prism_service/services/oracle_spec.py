@@ -552,6 +552,16 @@ def _run_browser(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, st
     ``manual_evidence_required`` (passed=False) — an honest boundary, NOT a
     silent pass."""
     runner = ctx.get("browser_runner")
+    if not callable(runner):
+        # WIRED BY DEFAULT (task d30c9a75): a browser oracle now EARNS its
+        # receipt via a real headless Playwright run instead of falling back
+        # to manual_evidence_required (which forced a human override). An
+        # explicit ctx['browser_runner'] still wins (tests inject a fake).
+        try:
+            from prism_service.services import browser_oracle_runner as _bor
+            runner = _bor.run
+        except Exception:
+            runner = None
     if callable(runner):
         res = runner(spec, ctx) or {}
         obs = res.get("observations", [])
@@ -591,6 +601,7 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
     receipt is APPENDED to the task's receipts.jsonl unless ``persist=False``."""
     ctx = dict(ctx or {})
     task_id = getattr(task, "id", "") or ctx.get("task_id", "")
+    ctx["task_id"] = task_id  # available to adapters (browser runner -> evidence path)
     project = ctx.get("project") or ""
     tree_sha = ctx.get("tree_sha")
     if tree_sha is None:
