@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.16"
+PRISM_VERSION = "7.1.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.17: RAIL TOKEN BARS ARE HONEST [owner 2026-07-19]. The StepRail rendered "
+    "a full-width grey track for EVERY step, so a gate that spent zero tokens "
+    "showed a 'massive grey line'. Now the bar renders ONLY when the step actually "
+    "spent something; token-less gates get no line, and the bars that show stay "
+    "proportional to the heaviest step. "
     "v7.1.16: NARROW THE NO-STRAND CHANGE + FIX BARE-TASK JUDGMENT (CI green). "
     "The broad 'refused approve -> pending' from v7.1.12 broke 12 unit tests and "
     "advance-past-failed test helpers; narrowed it to the ui-artifact tooth (the "
