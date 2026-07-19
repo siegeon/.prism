@@ -430,6 +430,62 @@ def cmd_principles_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+# The tests that PROVE the workflow is workable — a release earns the
+# PRISM-WORKABLE marker only when these pass (tasks e5fbec61 + eaafdf75):
+#   - the human sign-off is not machine-eaten (objective vs visual split)
+#   - the conductor loop reaches an honest green end-to-end
+#   - the auto-update workability guard holds
+WORKABILITY_TESTS = (
+    "unit/test_human_judgment_oracle.py",
+    "integration/test_gate_adjudicator_seat.py",
+    "integration/test_conductor_work_honest_green.py",
+    "integration/test_conductor_work_terminal.py",
+    "unit/test_autoupdate_guard.py",
+)
+
+
+def cmd_selfcheck(_args: argparse.Namespace) -> int:
+    """Workflow WORKABILITY self-check (task e5fbec61). Runs the tests that
+    prove a customer can actually drive a ticket through the conductor to an
+    HONEST green with the human sign-off intact. Release CI gates the
+    ``PRISM-WORKABLE`` marker on this passing; the auto-updater refuses any
+    release without it. Exit 0 = workable (prints the marker token on stdout);
+    non-zero = NOT workable (the safe default — no marker, no auto-update)."""
+    from pathlib import Path
+    import prism_service
+    from prism_service.__version__ import PRISM_VERSION
+
+    svc_root = Path(prism_service.__file__).resolve().parent.parent
+    tests_dir = svc_root / "tests"
+    paths = [str(tests_dir / t) for t in WORKABILITY_TESTS]
+    missing = [p for p in paths if not Path(p).exists()]
+    if not tests_dir.exists() or missing:
+        print("[selfcheck] workability tests are not present in this install "
+              "-> CANNOT verify; treating as NOT workable (the safe default).",
+              file=sys.stderr)
+        for p in missing:
+            print(f"[selfcheck]   missing: {p}", file=sys.stderr)
+        return 2
+    print(f"[selfcheck] prism-service {PRISM_VERSION}: running workability "
+          f"suite ({len(paths)} files)...", file=sys.stderr)
+    rc = subprocess.run(
+        [sys.executable, "-m", "pytest", *paths, "-q", "-p",
+         "no:cacheprovider"],
+        cwd=str(svc_root), check=False,
+    ).returncode
+    if rc == 0:
+        # The token release CI attaches to the GitHub Release body so the
+        # auto-updater will apply it (auto_updater.WORKABLE_MARKER).
+        print("PRISM-WORKABLE")
+        print(f"[selfcheck] WORKABLE — {PRISM_VERSION} may be released.",
+              file=sys.stderr)
+    else:
+        print(f"[selfcheck] NOT WORKABLE (pytest rc={rc}) — do not release; "
+              "the auto-update guard holds clients on their current version.",
+              file=sys.stderr)
+    return rc
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="prism", description="PRISM service CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -455,6 +511,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("version", help="Print version + notes")
     s.set_defaults(func=cmd_version)
+
+    s = sub.add_parser(
+        "selfcheck",
+        help="Run the workflow workability self-check (gates release + auto-update)")
+    s.set_defaults(func=cmd_selfcheck)
 
     s = sub.add_parser(
         "principles", help="Architecture-principles governance (issue #171)")

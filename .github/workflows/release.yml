@@ -107,6 +107,20 @@ jobs:
           # Guard (#66): never publish a wheel that is missing the SPA.
           python -c "import zipfile, glob; w = glob.glob('dist/*.whl')[0]; names = zipfile.ZipFile(w).namelist(); assert any(n.endswith('web_dist/index.html') for n in names), 'wheel %s is missing web_dist/index.html' % w; print('OK: SPA present in', w)"
 
+      # WORKABILITY GATE (tasks e5fbec61 + eaafdf75). A release only earns the
+      # PRISM-WORKABLE marker — which the in-product auto-updater REQUIRES before
+      # it will apply an update — when the workflow self-check passes: a ticket
+      # can be driven through the conductor to an HONEST green with the single
+      # human sign-off intact (visual/demo gates stay with the person; only
+      # objective oracles auto-adjudicate). A non-zero exit hard-fails this job,
+      # so no GitHub Release is created and clients stay on their current build.
+      - name: Workability self-check (gates the release)
+        run: |
+          cd services/prism-service
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+          python -m prism_service.cli.prism_cli selfcheck
+
       - name: Create / update GitHub Release with wheel
         # softprops/action-gh-release creates the release for the tag
         # (or updates it if a release already exists) and attaches the
@@ -117,6 +131,15 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: ${{ github.event.inputs.tag || github.ref_name }}
           generate_release_notes: true
+          # This step is reached only AFTER the workability self-check passed
+          # (a failing check hard-fails the job above), so stamping the marker
+          # here is sound: its presence == the workflow is proven workable. The
+          # auto-updater greps the release body for this token before applying.
+          append_body: true
+          body: |
+
+            <!-- workability-gated: prism selfcheck passed for this build -->
+            PRISM-WORKABLE
           files: |
             services/prism-service/dist/*.whl
             services/prism-service/dist/*.tar.gz

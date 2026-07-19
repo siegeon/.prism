@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.7"
+PRISM_VERSION = "7.1.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.8: RELEASES EARN THE WORKABLE MARKER [task:e5fbec61]. New `prism "
+    "selfcheck` runs the workability suite (the human sign-off is not "
+    "machine-eaten, the conductor loop reaches honest green, the auto-update "
+    "guard holds) and prints PRISM-WORKABLE on pass. release.yml now runs it "
+    "as a hard gate BEFORE creating the GitHub Release and stamps the marker "
+    "into the release body — so a release only ships (and the auto-updater only "
+    "applies it) once the workflow is proven workable. Closes the loop with the "
+    "v7.1.6 guard: no marker, no auto-update. "
     "v7.1.7: THE SINGLE HUMAN SIGN-OFF IS BACK [task:eaafdf75]. The machine "
     "adjudicator seat may now sign off a green_gate ONLY when the oracle is "
     "OBJECTIVE-OBSERVABLE (a test suite passes / an http probe returns ok). "
