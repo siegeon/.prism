@@ -83,7 +83,7 @@ export function EvidenceGallery({ items, thumb = "md", className }: {
                 className={`w-full ${tileH} object-cover`} />
             )}
             {it.cited && (
-              <span className="absolute top-1 left-1 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded font-semibold"
+              <span className="absolute top-1 left-1 text-[11px] uppercase tracking-wider px-1 py-0.5 rounded font-semibold"
                 style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)" }}
                 title="referenced by this task's completion proof">cited</span>
             )}

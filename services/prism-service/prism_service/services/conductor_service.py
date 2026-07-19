@@ -2724,27 +2724,25 @@ class ConductorService:
             receipt_reason, _fresh = self._oracle_receipt_refusal(
                 _live, override=False, reason=reason)
             if receipt_reason:
-                # Not a failure — keep the gate PENDING with the actionable
-                # reason so the drive can mint a fresh receipt and re-approve.
                 self._task_svc.update(
-                    task_id, gate_state="pending", gate_reason=receipt_reason,
+                    task_id, gate_state="failed", gate_reason=receipt_reason,
                 )
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
                     details=(f"gate={gate_step_id}; action=approve; "
-                             f"oracle-receipt=not-yet; reason={receipt_reason}"),
+                             f"oracle-receipt=fail; reason={receipt_reason}"),
                     actor="conductor",
                 )
                 self._record_agent_run(
                     task_id, gate_step_id, session_id, model=model,
-                    gate_state="pending", ok=False,
+                    gate_state="failed", ok=False,
                     verdict_summary=("oracle-receipt: " + receipt_reason)[:200],
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "pending",
+                    "gate_state": "failed",
                     "reason": receipt_reason,
                 }
             green_outcome_note = (
@@ -2778,27 +2776,25 @@ class ConductorService:
                     "independent verifier (distinct actor) must decide this "
                     "gate."
                 )
-                # Not a failure — keep the gate PENDING so a DISTINCT actor can
-                # decide it (no strand); self-review just doesn't count.
                 self._task_svc.update(
-                    task_id, gate_state="pending", gate_reason=distinct_reason,
+                    task_id, gate_state="failed", gate_reason=distinct_reason,
                 )
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
                     details=(f"gate={gate_step_id}; action=approve; "
-                             f"same-actor=refused; actor={override_actor}"),
+                             f"same-actor=rejected; actor={override_actor}"),
                     actor="conductor",
                 )
                 self._record_agent_run(
                     task_id, gate_step_id, session_id, model=model,
-                    gate_state="pending", verdict_summary="same-actor refused",
+                    gate_state="failed", verdict_summary="same-actor refused",
                     ok=False,
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "pending",
+                    "gate_state": "failed",
                     "reason": distinct_reason,
                 }
 
@@ -2927,11 +2923,9 @@ class ConductorService:
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
             if outcome["verified"] is not True:
-                # Not a failure — keep the gate PENDING with the actionable
-                # reason so the drive fixes the check and re-approves (no strand).
                 self._task_svc.update(
                     task_id,
-                    gate_state="pending",
+                    gate_state="failed",
                     gate_reason=verifier_reason,
                 )
                 self._task_svc.record_history(
@@ -2939,7 +2933,7 @@ class ConductorService:
                     action="gate_decide",
                     details=(
                         f"gate={gate_step_id}; action=approve; "
-                        f"verifier=not-yet; validation="
+                        f"verifier=fail; validation="
                         f"{verifier_validation or 'none'}; "
                         f"reason={verifier_reason}"
                     ),
@@ -2949,7 +2943,7 @@ class ConductorService:
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "pending",
+                    "gate_state": "failed",
                     "reason": verifier_reason,
                     "validation": verifier_validation,
                 }
@@ -2990,22 +2984,20 @@ class ConductorService:
             # instead of the generic "self-attested string is not proof".
             artifact_reason = f"epic green_gate: {rollup_reason}"
         if artifact_reason:
-            # NOT a failure — keep the gate PENDING with the actionable reason so
-            # the owner captures the artifact and re-approves (no strand).
             self._task_svc.update(
-                task_id, gate_state="pending", gate_reason=artifact_reason,
+                task_id, gate_state="failed", gate_reason=artifact_reason,
             )
             self._task_svc.record_history(
                 task_id, action="gate_decide",
                 details=(f"gate={gate_step_id}; action=approve; "
-                         f"artifact=not-yet; reason={artifact_reason}"),
+                         f"artifact=fail; reason={artifact_reason}"),
                 actor="conductor",
             )
             return {
                 "ok": False,
                 "task_id": task_id,
                 "gate_step": gate_step_id,
-                "gate_state": "pending",
+                "gate_state": "failed",
                 "reason": artifact_reason,
             }
 

@@ -339,7 +339,7 @@ function SortHeader({ label, col, sort, onSort, align, width }: {
     >
       <span className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
         <span className="hover:underline decoration-dotted underline-offset-2">{label}</span>
-        <span className="text-[9px] w-2 leading-none" style={{ color: "var(--accent-teal-fg)" }}>{caret}</span>
+        <span className="text-[11px] w-2 leading-none" style={{ color: "var(--accent-teal-fg)" }}>{caret}</span>
       </span>
     </th>
   );

@@ -85,6 +85,11 @@ def is_human_judgment(spec) -> bool:
     browser/render check (a render receipt proves the pixels exist, NOT that
     the owner approves the direction) or any positive assertion of kind
     ``manual``. Returns True iff the oracle is subjective (human-only)."""
+    # A spec with NO target (the task declared no oracle) is NOT human-judgment:
+    # a bare task defaults to a browser/manual shape but has nothing for a
+    # person to judge, so it takes the normal (verifier) path, not the sign-off.
+    if not str(getattr(spec, "target", "") or "").strip():
+        return False
     if getattr(spec, "adapter", "") == ADAPTER_BROWSER:
         return True
     for a in getattr(spec, "positive", ()) or ():

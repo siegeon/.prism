@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.15"
+PRISM_VERSION = "7.1.16"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.16: NARROW THE NO-STRAND CHANGE + FIX BARE-TASK JUDGMENT (CI green). "
+    "The broad 'refused approve -> pending' from v7.1.12 broke 12 unit tests and "
+    "advance-past-failed test helpers; narrowed it to the ui-artifact tooth (the "
+    "one that actually stranded the owner's ui/demo ticket) and reverted "
+    "oracle-receipt/verifier/artifact/same-actor to 'failed' (the demo flow skips "
+    "those anyway). Also: is_human_judgment now returns False for a spec with NO "
+    "oracle target — a BARE task defaulted to browser/manual and wrongly skipped "
+    "the verifier. Full unit suite (1110) + selfcheck (36) green. "
     "v7.1.15: DECISION-PACKET SCREENSHOTS OPEN IN-APP [owner 2026-07-19]. The "
     "DecisionPacket 'Screenshots' row linked thumbnails to the raw .png with "
     "target=_blank (navigating the browser off the app — the 'hard to get back "

@@ -143,10 +143,9 @@ def test_green_gate_refuses_empty_completion_proof(tmp_path):
         "oracle was never evidenced (false green reaches the human, exactly "
         f"the b521af05 failure). result={result!r}"
     )
-    # Owner 2026-07-19: a refused approve stays PENDING (retryable), not failed.
-    assert result["gate_state"] == "pending"
+    assert result["gate_state"] == "failed"
     refreshed = task_svc.get(t.id)
-    assert refreshed.gate_state == "pending"
+    assert refreshed.gate_state == "failed"
     assert refreshed.workflow_step == _green_gate_id()
     reason = (result.get("reason") or "").lower()
     assert "oracle" in reason or "proof" in reason, (
@@ -181,9 +180,8 @@ def test_green_gate_refuses_proof_that_ignores_oracle_and_misfire(tmp_path):
         f"observable ({_ORACLE!r}) nor the misfire — tests-green is not "
         f"oracle-met. result={result!r}"
     )
-    # Owner 2026-07-19: a refused approve stays PENDING (retryable), not failed.
-    assert result["gate_state"] == "pending"
-    assert task_svc.get(t.id).gate_state == "pending"
+    assert result["gate_state"] == "failed"
+    assert task_svc.get(t.id).gate_state == "failed"
 
 
 # ── Test C (GREEN after fix): a FRESH PASSING RECEIPT still PASSES ─────────

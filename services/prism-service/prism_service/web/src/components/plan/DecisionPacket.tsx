@@ -37,7 +37,7 @@ function Row({ icon, title, summary, empty, children }: {
         className="w-full flex items-center gap-2.5 py-2 text-left"
         style={{ cursor: empty ? "default" : "pointer" }}
       >
-        <span className="text-[color:var(--text-muted)] text-[10px] w-2.5 shrink-0" style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+        <span className="text-[color:var(--text-muted)] text-[11px] w-2.5 shrink-0" style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
         <span className="w-4 text-center shrink-0 text-[12px]">{icon}</span>
         <span className="text-[12.5px] font-medium">{title}</span>
         <span className="ml-auto text-[12px] text-[color:var(--text-secondary)]">{empty ? "none" : summary}</span>

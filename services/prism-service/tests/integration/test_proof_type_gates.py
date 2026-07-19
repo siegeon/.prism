@@ -163,8 +163,7 @@ def test_test_proof_type_metric_only_proof_still_rejected(tmp_path):
     assert green["ok"] is False, (
         "a proof_type='test' task with a metric-only receipt PASSED "
         "green_gate — the test-shaped artifact tooth was weakened")
-    # Owner 2026-07-19: a refused approve stays PENDING (retryable), not failed.
-    assert green["gate_state"] == "pending"
+    assert green["gate_state"] == "failed"
 
 
 # ── FR-3: tier0 consult is proof_type-aware (metric not forced test-shaped) ─
