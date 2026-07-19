@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.8"
+PRISM_VERSION = "7.1.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.9: THE HUMAN CAN ACTUALLY SIGN OFF [task:eaafdf75 follow-up]. A "
+    "demo/visual green_gate presented a FAILED browser oracle + a refusing shell "
+    "verifier, so Approve was disabled and the owner could only 'recover with "
+    "override' — the single sign-off was unclickable. Now a human-judgment gate "
+    "(proof_type demo/review or oracle_spec.is_human_judgment) treats the "
+    "person's Approve AS the evidence: gate/readiness presents it as READY (your "
+    "review), and gate_decide skips BOTH the oracle-receipt tooth and the "
+    "test-shaped shell verifier for it — a plain distinct-actor Approve signs "
+    "off, no override. Objective gates (pytest/http) unchanged. Also: fixed a "
+    "red-on-red legibility bug in the verifier-decision chips (readable neutral "
+    "chips now). "
     "v7.1.8: RELEASES EARN THE WORKABLE MARKER [task:e5fbec61]. New `prism "
     "selfcheck` runs the workability suite (the human sign-off is not "
     "machine-eaten, the conductor loop reaches honest green, the auto-update "

@@ -438,6 +438,7 @@ def cmd_principles_seed(args: argparse.Namespace) -> int:
 WORKABILITY_TESTS = (
     "unit/test_human_judgment_oracle.py",
     "integration/test_gate_adjudicator_seat.py",
+    "integration/test_human_judgment_signoff.py",
     "integration/test_conductor_work_honest_green.py",
     "integration/test_conductor_work_terminal.py",
     "unit/test_autoupdate_guard.py",

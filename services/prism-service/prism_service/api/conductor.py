@@ -130,6 +130,41 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                     ("no red-step commit derivable — commit the failing "
                      "tests with a [task:<id>] trailer, or decide the "
                      "gate manually"))}
+    # HUMAN-JUDGMENT gate (owner 2026-07-19): a demo/visual/manual oracle has no
+    # machine tooth — the person's review IS the sign-off. Present it as READY to
+    # approve (a clean, enabled Approve — no override, no failed-machine-receipt),
+    # not a failed browser receipt. gate_decide accepts the plain distinct-actor
+    # approve for these (see conductor_service green_gate human-judgment branch).
+    try:
+        from prism_service.services import oracle_spec as _osp
+        from prism_service.services.conductor_service import (
+            green_gate_artifact_reason, ui_artifact_gate_reason)
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt in ("demo", "review") or _osp.is_human_judgment(
+                _osp.OracleSpec.from_task(task)):
+            # Your review IS the sign-off — but a visual/demo gate still needs
+            # its VISUAL EVIDENCE captured (owner: default to visual evidence).
+            # Reflect the artifact tooth HONESTLY so the card never says READY
+            # and then refuses the approve: READY only when the evidence is on
+            # file, else an actionable 'attach a screenshot' (not a machine fail).
+            cp = getattr(task, "completion_proof", "")
+            art = (green_gate_artifact_reason(cp, "", pt)
+                   or ui_artifact_gate_reason(getattr(task, "tags", None),
+                                              pt, cp))
+            if art:
+                return {"receipt_ok": False, "manual_review": True,
+                        "receipt_refusal": art,
+                        "receipt": {"adapter": "human", "passed": False,
+                                    "status": "needs_visual_evidence",
+                                    "ended_at": "", "reason": art}}
+            return {"receipt_ok": True, "receipt_refusal": "",
+                    "manual_review": True,
+                    "receipt": {"adapter": "human", "passed": True,
+                                "status": "your_review", "ended_at": "",
+                                "reason": ("visual/demo gate — your review is "
+                                           "the sign-off; Approve to release")}}
+    except Exception:
+        pass
     refusal, receipt = s._oracle_receipt_refusal(
         task, override=False, reason="")
     out: dict = {

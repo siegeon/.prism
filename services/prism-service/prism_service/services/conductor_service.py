@@ -2302,6 +2302,29 @@ class ConductorService:
                 "verifier": None,
                 "validation": validation,
             }
+        # HUMAN-JUDGMENT GREEN GATE (owner 2026-07-19): a demo/visual/manual
+        # oracle has NO test suite — the person's Approve IS the sign-off. The
+        # shell verifier finds no claims (no diff in scope) and refuses, which
+        # forced an override on every visual gate (68e5c699). Skip the
+        # test-shaped verifier consult here; the proof burden is the human
+        # decision (distinct-actor) + the ui-artifact/oracle-receipt teeth.
+        if gate_step_id == "green_gate":
+            _hj = pt in ("demo", "review")
+            if not _hj:
+                try:
+                    from prism_service.services import oracle_spec as _osp
+                    _hj = _osp.is_human_judgment(_osp.OracleSpec.from_task(task))
+                except Exception:
+                    _hj = False
+            if _hj:
+                return {
+                    "verified": True,
+                    "reason": ("human-judgment gate: visual/demo sign-off "
+                               "carried by the person's decision — test-shaped "
+                               "verifier skipped (no suite by design)"),
+                    "verifier": None,
+                    "validation": validation,
+                }
         # gate_decide short-circuits when self._verifier_svc is None
         # (legacy trust-caller path). _verify_gate is only called when
         # a verifier is attached, so we don't need a None-check here.
@@ -2654,8 +2677,24 @@ class ConductorService:
         green_outcome_note = ""
         _live = self._task_svc.get(task_id)
         _has_oracle = bool(str(getattr(_live, "oracle", "") or "").strip())
+        # HUMAN-JUDGMENT gate (owner 2026-07-19): a demo/visual/manual oracle has
+        # NO machine tooth to satisfy — the person's approve IS the evidence, so
+        # a plain Approve by a DISTINCT actor signs off (no override ceremony, no
+        # failed-browser-receipt block). The distinct-actor + misfire teeth below
+        # still apply. Objective oracles (pytest/http) keep the fresh-receipt
+        # requirement. Pairs with the adjudicator guard (task eaafdf75).
+        _human_judgment = False
+        if gate_step_id == "green_gate" and _has_oracle:
+            try:
+                from prism_service.services import oracle_spec as _osp
+                _pt = str(getattr(_live, "proof_type", "") or "").strip().lower()
+                _human_judgment = _pt in ("demo", "review") or \
+                    _osp.is_human_judgment(_osp.OracleSpec.from_task(_live))
+            except Exception:
+                _human_judgment = False
         if (gate_step_id == "green_gate" and not override
-                and not rollup_has_children and _has_oracle):
+                and not rollup_has_children and _has_oracle
+                and not _human_judgment):
             receipt_reason, _fresh = self._oracle_receipt_refusal(
                 _live, override=False, reason=reason)
             if receipt_reason:

@@ -1516,7 +1516,7 @@ export default function TaskDetailPage() {
                 <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>verifier decision</div>
                 {verifierRefusal ? (
                   <div className="rounded-md p-3 text-[12.5px] leading-relaxed" style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>
-                    <b>Refused.</b> Gate expects <code className="font-mono text-2xs px-1 rounded" style={{ background: "transparent", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>verifier.status = pass</code>; current run is <code className="font-mono text-2xs px-1 rounded" style={{ background: "transparent", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>fail</code>.
+                    <b>Refused.</b> Gate expects <code className="font-mono text-2xs px-1 rounded" style={{ background: "var(--surface-1)", color: "var(--text-primary)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>verifier.status = pass</code>; current run is <code className="font-mono text-2xs px-1 rounded" style={{ background: "var(--surface-1)", color: "var(--text-primary)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>fail</code>.
                     <div className="mt-1.5">
                       {verifierRefusal.detail} — a skipped check is refused, not a pass. Pinned tests
                       ({pinTests.length ? `${pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length}/${pinTests.length}` : "—"}) are the task's own suite
