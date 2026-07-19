@@ -8,6 +8,7 @@ import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { stepLabel } from "@/lib/workflowChips";
 import { useTaskEvidence } from "@/components/EvidenceGallery";
+import DecisionPacket from "./DecisionPacket";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -148,6 +149,10 @@ export function gateEvidenceLines(turns: StepTurn[]): string[] {
 function GateEvidence({ step, turns }: { step?: string; turns: StepTurn[] }) {
   const lines = gateEvidenceLines(turns);
   const label = stepLabel(step ?? "");
+  // The server-assembled DecisionPacket now carries the evidence, so a step
+  // with no conductor validation note renders NOTHING here (task a1e4120f) —
+  // the bare "No recorded evidence for this step yet" box is gone.
+  if (lines.length === 0) return null;
   return (
     <div
       className="rounded-md p-3"
@@ -516,7 +521,11 @@ export default function PlanView({
           {c.status !== "done" && (c.gateState === "pending" || c.gateState === "failed") && gate && (
             <div className="mt-4 pt-4 border-t border-[color:var(--midground-base)]/15">
               {/* Show the evidence FIRST — what the reviewer is approving —
-                  then the approve/reject control directly beneath it. */}
+                  then the approve/reject control directly beneath it. The
+                  server-assembled DecisionPacket leads; the conductor's
+                  validation narrative (if any) follows. */}
+              <DecisionPacket taskId={taskId} project={project} state={c.gateState} step={c.step} />
+              <div className="mt-3" />
               <GateEvidence step={c.step} turns={c.turns ?? []} />
               {c.gateState === "failed" && (
                 <div

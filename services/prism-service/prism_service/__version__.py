@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.1"
+PRISM_VERSION = "7.1.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.4: SERVER-ASSEMBLED DECISION PACKET on the approval gate [task:a1e4120f, "
+    "build half of the single-sign-off epic]. GET /api/conductor/decision-packet "
+    "assembles an evidence packet from REAL worktree artifacts — diff stat vs "
+    "baseline, commits, the oracle EvidenceReceipt, and evidence screenshots "
+    "(prism_service/services/decision_packet.py, a read-only VIEW kept OUT of the "
+    "gate-POLICY set so a candidate never edits its own judge). The approval panel "
+    "(PlanView) now leads with a new DecisionPacket component (progressive "
+    "disclosure + an AC-4 state badge: pending/failed/recovered/waived/done) and "
+    "the bare 'No recorded evidence for this step yet' box is GONE. Gate-cadence "
+    "machine-clearing (slice 1) + close-with-evidence reconcile (slice 3) touch "
+    "gate-policy files and are split into a separate policy-change task. "
     "v7.1.0: HONEST SPEND + TRUE OBSERVATIONS RELEASE (2026-07-18). Consolidates "
     "the session's work: (1) background AGENT-session spend visible + honest on "
     "the task Trace tab (main vs background, per-field per-turn-model dollars) "

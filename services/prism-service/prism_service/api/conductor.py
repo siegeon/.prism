@@ -48,6 +48,21 @@ def _board_tasks(s) -> list:
         return []
 
 
+@router.get("/decision-packet")
+def decision_packet_route(task_id: str, project: str = Query("default")) -> dict:
+    """Server-assembled evidence packet for the approval panel (task a1e4120f).
+    A read-only VIEW over the task's REAL worktree artifacts (git diff/log vs
+    baseline, the oracle receipt, evidence screenshots) so a gate never has to
+    show a bare 'No recorded evidence' box. 404 only for an unknown task; an
+    artifact-less task still returns a well-formed (empty) packet, never a 500."""
+    from prism_service.services import decision_packet
+    s = _svc(project)
+    task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, "unknown task")
+    return decision_packet.assemble_packet(project, task_id, task)
+
+
 @router.post("/gate/mint")
 def gate_mint(task_id: str = Body(..., embed=True),
               project: str = Query("default")) -> dict:
