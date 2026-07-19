@@ -176,8 +176,23 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
         # human clicks stay the norm) — only environments that opted in via
         # PRISM_GATE_ADJUDICATOR_INTERVAL adjudicate here.
         from prism_service.services import gate_adjudicator
-        if gate_adjudicator.is_enabled():
-            return svc.adjudicate_green_gate(task_id)
+        res = (svc.adjudicate_green_gate(task_id)
+               if gate_adjudicator.is_enabled() else None)
+        if res:
+            return res
+        # Parked for the HUMAN sign-off — write an actionable reason so the
+        # field itself says WHAT to do (was blank; owner 2026-07-19). The
+        # readiness card already carries the prompt; this makes the raw task
+        # consistent for a driver reading gate_reason.
+        try:
+            _t = svc._task_svc.get(task_id)
+            if _t and getattr(_t, "gate_state", "") == "pending" \
+                    and not (getattr(_t, "gate_reason", "") or "").strip():
+                svc._task_svc.update(task_id, gate_reason=(
+                    "awaiting your sign-off — the evidence is ready; review it "
+                    "and Approve (the single human decision for this ticket)"))
+        except Exception:
+            pass
         return None
     if step["id"] == "red_gate":
         # Demo-proof tickets only (task 59ddfcbc) — same opt-in switch.

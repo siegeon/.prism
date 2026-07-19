@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.13"
+PRISM_VERSION = "7.1.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.14: TERMINAL GATE SAYS WHAT TO DO [owner 2026-07-19]. When a green_gate "
+    "parks for the human sign-off, gate_reason is now set to 'awaiting your "
+    "sign-off — review the evidence and Approve' instead of blank, so a driver "
+    "reading the field (not just the readiness card) knows why it stopped and "
+    "what to do. Completes the smooth cold-drive: create -> drive (self-describing "
+    "steps, gates auto-clear inline) -> capture a screenshot -> READY -> one Approve. "
     "v7.1.13: SMOOTH STORY/PLAN GATES [owner 2026-07-19, cold-drive findings]. "
     "(1) The story_complete rubric now accepts an AC written as a PLAIN line "
     "('AC-1: … Oracle: …'), not only a markdown bullet — a naive author no "
