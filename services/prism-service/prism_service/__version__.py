@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.10"
+PRISM_VERSION = "7.1.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.11: A REFUSED APPROVE NO LONGER STRANDS THE TICKET [owner 2026-07-19]. "
+    "A ui-tagged green_gate whose completion_proof lacks a UI artifact used to be "
+    "REFUSED into gate_state=failed — dead-ending the owner into 'recover with "
+    "override'. Now it stays PENDING with the actionable reason ('attach a "
+    "screenshot'), so the owner adds the evidence and re-approves with no "
+    "rewind/override. gate/readiness also folds the ui-artifact tooth into the "
+    "epic roll-up check, so READY is never a lie that then fails the approve. "
     "v7.1.10: EPIC ROLL-UP GATE IS SIGNABLE [issue #171 follow-up]. An epic whose "
     "children all rolled up cleanly passes green_gate on a plain distinct-actor "
     "approve (conductor_service:2842 rollup path — no verifier, no artifact), but "

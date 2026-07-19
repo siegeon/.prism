@@ -2622,21 +2622,26 @@ class ConductorService:
                 getattr(task, "completion_proof", ""),
             )
             if ui_reason:
+                # NOT a failure — the approve just can't go through YET (needs a
+                # UI artifact). Keep the gate PENDING with the actionable reason
+                # so the owner attaches the screenshot and re-approves WITHOUT a
+                # rewind/override (owner 2026-07-19: a refused click must never
+                # strand a ticket into 'failed').
                 self._task_svc.update(
-                    task_id, gate_state="failed", gate_reason=ui_reason,
+                    task_id, gate_state="pending", gate_reason=ui_reason,
                 )
                 self._task_svc.record_history(
                     task_id,
                     action="gate_decide",
                     details=(f"gate={gate_step_id}; action=approve; "
-                             f"ui-artifact=fail; reason={ui_reason}"),
+                             f"ui-artifact=not-yet; reason={ui_reason}"),
                     actor="conductor",
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "failed",
+                    "gate_state": "pending",
                     "reason": ui_reason,
                 }
         # EPIC GREEN_GATE ROLL-UP (issue #171): a parent whose children all

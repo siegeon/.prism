@@ -136,17 +136,25 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # verifier, no artifact). Present READY so the owner's single roll-up sign-off
     # is ENABLED; else surface the actionable roll-up reason (which child blocks).
     try:
-        from prism_service.services.conductor_service import epic_rollup_verdict
+        from prism_service.services.conductor_service import (
+            epic_rollup_verdict, ui_artifact_gate_reason)
         kids = [c for c in s._task_svc.list()
                 if str(getattr(c, "parent_id", "") or "") == task_id]
         if kids:
             ok_roll, why_roll = epic_rollup_verdict(kids)
-            return {"receipt_ok": bool(ok_roll), "manual_review": True,
-                    "receipt_refusal": "" if ok_roll else why_roll,
-                    "receipt": {"adapter": "epic-rollup", "passed": bool(ok_roll),
-                                "status": "rollup" if ok_roll
-                                else "rollup_incomplete",
-                                "ended_at": "", "reason": why_roll}}
+            # A clean roll-up still has to satisfy the ui-artifact tooth (owner:
+            # default to visual evidence) — reflect BOTH so READY is never a lie
+            # that then fails the approve.
+            ui = ui_artifact_gate_reason(getattr(task, "tags", None),
+                                         getattr(task, "proof_type", ""),
+                                         getattr(task, "completion_proof", ""))
+            ready = bool(ok_roll) and not ui
+            reason = why_roll if not ok_roll else (ui or why_roll)
+            return {"receipt_ok": ready, "manual_review": True,
+                    "receipt_refusal": "" if ready else reason,
+                    "receipt": {"adapter": "epic-rollup", "passed": ready,
+                                "status": "rollup" if ready else "rollup_blocked",
+                                "ended_at": "", "reason": reason}}
     except Exception:
         pass
     # HUMAN-JUDGMENT gate (owner 2026-07-19): a demo/visual/manual oracle has no
