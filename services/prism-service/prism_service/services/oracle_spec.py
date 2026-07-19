@@ -77,6 +77,22 @@ _ERROR_BODY_TOKENS = (
 _URL_RE = re.compile(r"https?://[^\s)\"'<>]+")
 
 
+def is_human_judgment(spec) -> bool:
+    """Owner rule (2026-07-18, task eaafdf75): a MACHINE seat may sign off a
+    gate only when its oracle signal is OBJECTIVE-OBSERVABLE — a test suite
+    passes (``pytest_ids``) or an http probe returns ok (``http_probe``). A
+    SUBJECTIVE HUMAN-JUDGMENT oracle stays pending for the human: a
+    browser/render check (a render receipt proves the pixels exist, NOT that
+    the owner approves the direction) or any positive assertion of kind
+    ``manual``. Returns True iff the oracle is subjective (human-only)."""
+    if getattr(spec, "adapter", "") == ADAPTER_BROWSER:
+        return True
+    for a in getattr(spec, "positive", ()) or ():
+        if str(getattr(a, "kind", "") or "").lower() == "manual":
+            return True
+    return False
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

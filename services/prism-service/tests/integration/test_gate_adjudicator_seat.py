@@ -137,6 +137,38 @@ def test_manual_evidence_oracle_stays_pending(pinned_world, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# AC-2b (task eaafdf75) — a PASSING browser/render receipt (e.g. minted by the
+# browser oracle runner) still does NOT let the machine seat sign off a
+# visual/demo gate. Anything validated VISUALLY is the human's judgment; a
+# render receipt proves the pixels exist, not that the owner approves them.
+# ---------------------------------------------------------------------------
+
+
+def test_passing_browser_receipt_still_stays_pending(pinned_world, tmp_path,
+                                                     monkeypatch):
+    task_svc, task = _gated_task(
+        tmp_path, oracle="the customer can read the page",
+        proof_type="demo", verify=[])
+    cond = _conductor(tmp_path, task_svc)
+
+    # Simulate a fully-satisfying passing receipt on file: were the human-
+    # judgment guard NOT ahead of the receipt tooth, this would auto-approve.
+    class _R:
+        adapter = "browser"
+        job_id = "browser-pass-1"
+        tree_sha = "deadbeefcafe"
+    monkeypatch.setattr(cond, "_oracle_receipt_refusal",
+                        lambda *a, **k: ("", _R()))
+
+    res = cond.adjudicate_green_gate(task.id)
+    assert res is None, ("a visual/demo gate must stay with the human even "
+                         "with a passing render receipt")
+    after = task_svc.get(task.id)
+    assert after.gate_state == "pending"
+    assert after.workflow_step == "green_gate"
+
+
+# ---------------------------------------------------------------------------
 # AC-3 — tried-and-FAILED evidence is never re-run (no mint loop)
 # ---------------------------------------------------------------------------
 

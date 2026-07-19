@@ -1822,6 +1822,22 @@ class ConductorService:
                 return None
         except Exception:
             return None
+        # Owner rule (2026-07-18, task eaafdf75): the machine seat signs off
+        # ONLY an OBJECTIVE-OBSERVABLE oracle — a test suite passes
+        # (pytest_ids) or an http probe returns ok (http_probe). Anything
+        # validated VISUALLY — screenshots, videos, prototype/demo components,
+        # "does this look right" — is a HUMAN judgment and stays PENDING for
+        # the person: a render receipt proves the pixels exist, not that the
+        # owner approves them. This is the single-sign-off the machine used to
+        # eat (both 7cc4f0cf and a1e4120f auto-passed, one a false-green).
+        try:
+            from prism_service.services import oracle_spec as _osp
+            _pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+            if _pt in ("demo", "review") \
+                    or _osp.is_human_judgment(_osp.OracleSpec.from_task(task)):
+                return None
+        except Exception:
+            return None
         refusal, receipt = self._oracle_receipt_refusal(
             task, override=False, reason="")
         if refusal and mint:

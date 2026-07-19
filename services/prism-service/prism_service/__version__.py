@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.6"
+PRISM_VERSION = "7.1.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.7: THE SINGLE HUMAN SIGN-OFF IS BACK [task:eaafdf75]. The machine "
+    "adjudicator seat may now sign off a green_gate ONLY when the oracle is "
+    "OBJECTIVE-OBSERVABLE (a test suite passes / an http probe returns ok). "
+    "Anything validated VISUALLY — screenshots, videos, prototype/demo "
+    "components, 'does this look right' — is a HUMAN judgment and stays PENDING "
+    "for the person; a render receipt proves the pixels exist, not that the "
+    "owner approves them. adjudicate_green_gate pre-flights proof_type in "
+    "(demo, review) OR oracle_spec.is_human_judgment(spec) (browser adapter / "
+    "manual tooth) and returns without deciding. Fixes the false-green + eaten "
+    "sign-off seen on 7cc4f0cf and a1e4120f. Objective auto-adjudication "
+    "(pytest/http) is unchanged. "
     "v7.1.6: AUTO-UPDATE WORKABILITY GUARD [task:e5fbec61]. The auto-updater now "
     "REFUSES to cut a customer over to a release unless it carries the "
     "PRISM-WORKABLE marker that release CI attaches only after the workflow "
