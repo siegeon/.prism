@@ -420,6 +420,22 @@ def green_gate_artifact_reason(completion_proof: object, reason: object,
             "string is not proof")
 
 
+def has_captured_evidence(task_id: object) -> bool:
+    """True iff the task has at least one captured evidence image on file
+    (data_dir/evidence/<id>/*). Owner 2026-07-19 ('implement to evidence'): a
+    captured screenshot/video in the task's evidence store SATISFIES the
+    demonstrable-UI requirement — the user (or the drive) captures it, and the
+    gate passes; no hand-cited path in completion_proof required."""
+    try:
+        from prism_service.data_dir import evidence_dir
+        d = evidence_dir(str(task_id or ""))
+        exts = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".webm")
+        return any(p.is_file() and p.suffix.lower() in exts
+                   for p in d.glob("*"))
+    except Exception:
+        return False
+
+
 def gate_artifact_reason(gate_step_id: str, completion_proof: object,
                          reason: object, proof_type: object = None) -> str:
     """Dispatch the proof-carrying artifact check by gate + proof_type. ""
@@ -2621,6 +2637,11 @@ class ConductorService:
                 getattr(task, "proof_type", ""),
                 getattr(task, "completion_proof", ""),
             )
+            # 'Implement to evidence': a captured screenshot in the task's
+            # evidence gallery satisfies the demonstrable-UI requirement, even
+            # if completion_proof doesn't hand-cite the path.
+            if ui_reason and has_captured_evidence(task_id):
+                ui_reason = ""
             if ui_reason:
                 # NOT a failure — the approve just can't go through YET (needs a
                 # UI artifact). Keep the gate PENDING with the actionable reason
@@ -2703,25 +2724,27 @@ class ConductorService:
             receipt_reason, _fresh = self._oracle_receipt_refusal(
                 _live, override=False, reason=reason)
             if receipt_reason:
+                # Not a failure — keep the gate PENDING with the actionable
+                # reason so the drive can mint a fresh receipt and re-approve.
                 self._task_svc.update(
-                    task_id, gate_state="failed", gate_reason=receipt_reason,
+                    task_id, gate_state="pending", gate_reason=receipt_reason,
                 )
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
                     details=(f"gate={gate_step_id}; action=approve; "
-                             f"oracle-receipt=fail; reason={receipt_reason}"),
+                             f"oracle-receipt=not-yet; reason={receipt_reason}"),
                     actor="conductor",
                 )
                 self._record_agent_run(
                     task_id, gate_step_id, session_id, model=model,
-                    gate_state="failed", ok=False,
+                    gate_state="pending", ok=False,
                     verdict_summary=("oracle-receipt: " + receipt_reason)[:200],
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "failed",
+                    "gate_state": "pending",
                     "reason": receipt_reason,
                 }
             green_outcome_note = (
@@ -2755,25 +2778,27 @@ class ConductorService:
                     "independent verifier (distinct actor) must decide this "
                     "gate."
                 )
+                # Not a failure — keep the gate PENDING so a DISTINCT actor can
+                # decide it (no strand); self-review just doesn't count.
                 self._task_svc.update(
-                    task_id, gate_state="failed", gate_reason=distinct_reason,
+                    task_id, gate_state="pending", gate_reason=distinct_reason,
                 )
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
                     details=(f"gate={gate_step_id}; action=approve; "
-                             f"same-actor=rejected; actor={override_actor}"),
+                             f"same-actor=refused; actor={override_actor}"),
                     actor="conductor",
                 )
                 self._record_agent_run(
                     task_id, gate_step_id, session_id, model=model,
-                    gate_state="failed", verdict_summary="same-actor refused",
+                    gate_state="pending", verdict_summary="same-actor refused",
                     ok=False,
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "failed",
+                    "gate_state": "pending",
                     "reason": distinct_reason,
                 }
 
@@ -2902,9 +2927,11 @@ class ConductorService:
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
             if outcome["verified"] is not True:
+                # Not a failure — keep the gate PENDING with the actionable
+                # reason so the drive fixes the check and re-approves (no strand).
                 self._task_svc.update(
                     task_id,
-                    gate_state="failed",
+                    gate_state="pending",
                     gate_reason=verifier_reason,
                 )
                 self._task_svc.record_history(
@@ -2912,7 +2939,7 @@ class ConductorService:
                     action="gate_decide",
                     details=(
                         f"gate={gate_step_id}; action=approve; "
-                        f"verifier=fail; validation="
+                        f"verifier=not-yet; validation="
                         f"{verifier_validation or 'none'}; "
                         f"reason={verifier_reason}"
                     ),
@@ -2922,7 +2949,7 @@ class ConductorService:
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "failed",
+                    "gate_state": "pending",
                     "reason": verifier_reason,
                     "validation": verifier_validation,
                 }
@@ -2953,26 +2980,32 @@ class ConductorService:
         if rollup_ok:
             # The children's proofs ARE the epic's artifact (issue #171).
             artifact_reason = ""
+        elif artifact_reason and has_captured_evidence(task_id):
+            # 'Implement to evidence': a captured screenshot/video in the task's
+            # evidence gallery IS the artifact (owner 2026-07-19).
+            artifact_reason = ""
         elif (artifact_reason and rollup_has_children and rollup_reason):
             # An epic with children that did NOT cleanly roll up AND no
             # artifact of its own: surface the actionable roll-up failure
             # instead of the generic "self-attested string is not proof".
             artifact_reason = f"epic green_gate: {rollup_reason}"
         if artifact_reason:
+            # NOT a failure — keep the gate PENDING with the actionable reason so
+            # the owner captures the artifact and re-approves (no strand).
             self._task_svc.update(
-                task_id, gate_state="failed", gate_reason=artifact_reason,
+                task_id, gate_state="pending", gate_reason=artifact_reason,
             )
             self._task_svc.record_history(
                 task_id, action="gate_decide",
                 details=(f"gate={gate_step_id}; action=approve; "
-                         f"artifact=fail; reason={artifact_reason}"),
+                         f"artifact=not-yet; reason={artifact_reason}"),
                 actor="conductor",
             )
             return {
                 "ok": False,
                 "task_id": task_id,
                 "gate_step": gate_step_id,
-                "gate_state": "failed",
+                "gate_state": "pending",
                 "reason": artifact_reason,
             }
 

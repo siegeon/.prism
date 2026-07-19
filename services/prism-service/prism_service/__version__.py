@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.11"
+PRISM_VERSION = "7.1.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.12: OBVIOUS, SMOOTH GATE FLOW [owner 2026-07-19]. Two changes so a "
+    "ticket goes to done without hand-holding: (1) IMPLEMENT-TO-EVIDENCE — a "
+    "captured screenshot/video in the task's evidence gallery "
+    "(has_captured_evidence) SATISFIES the demonstrable-UI + artifact teeth; no "
+    "hand-cited path in completion_proof. (2) NO STRAND — every evidence tooth "
+    "(ui-artifact, oracle-receipt, verifier, artifact) AND the distinct-actor "
+    "check now keep the gate PENDING with an actionable reason on a refused "
+    "approve, instead of slamming it to 'failed' (which forced recover-with-"
+    "override). readiness mirrors both, so READY is never a lie. Only an explicit "
+    "REJECT (and a candidate-controls-judge violation) fails the gate. "
     "v7.1.11: A REFUSED APPROVE NO LONGER STRANDS THE TICKET [owner 2026-07-19]. "
     "A ui-tagged green_gate whose completion_proof lacks a UI artifact used to be "
     "REFUSED into gate_state=failed — dead-ending the owner into 'recover with "

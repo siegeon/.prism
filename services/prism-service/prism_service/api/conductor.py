@@ -137,7 +137,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # is ENABLED; else surface the actionable roll-up reason (which child blocks).
     try:
         from prism_service.services.conductor_service import (
-            epic_rollup_verdict, ui_artifact_gate_reason)
+            epic_rollup_verdict, ui_artifact_gate_reason, has_captured_evidence)
         kids = [c for c in s._task_svc.list()
                 if str(getattr(c, "parent_id", "") or "") == task_id]
         if kids:
@@ -148,6 +148,8 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             ui = ui_artifact_gate_reason(getattr(task, "tags", None),
                                          getattr(task, "proof_type", ""),
                                          getattr(task, "completion_proof", ""))
+            if ui and has_captured_evidence(task_id):
+                ui = ""  # captured evidence satisfies the visual requirement
             ready = bool(ok_roll) and not ui
             reason = why_roll if not ok_roll else (ui or why_roll)
             return {"receipt_ok": ready, "manual_review": True,
@@ -165,7 +167,8 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     try:
         from prism_service.services import oracle_spec as _osp
         from prism_service.services.conductor_service import (
-            green_gate_artifact_reason, ui_artifact_gate_reason)
+            green_gate_artifact_reason, ui_artifact_gate_reason,
+            has_captured_evidence)
         pt = str(getattr(task, "proof_type", "") or "").strip().lower()
         if pt in ("demo", "review") or _osp.is_human_judgment(
                 _osp.OracleSpec.from_task(task)):
@@ -178,6 +181,8 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             art = (green_gate_artifact_reason(cp, "", pt)
                    or ui_artifact_gate_reason(getattr(task, "tags", None),
                                               pt, cp))
+            if art and has_captured_evidence(task_id):
+                art = ""  # a captured screenshot satisfies the requirement
             if art:
                 return {"receipt_ok": False, "manual_review": True,
                         "receipt_refusal": art,
