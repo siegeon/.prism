@@ -190,6 +190,16 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     check = svc._verify_gate(task, step["id"],
                              getattr(task, "proof_type", None))
     if check.get("verified") is not True:
+        # Park WITH the actionable reason NOW (owner 2026-07-19): a rubric gate
+        # must never sit pending with a BLANK gate_reason the driver can't act
+        # on. Previously the reason only appeared on the next ~20s adjudicator
+        # resweep, so the first poll saw 'pending' + '' and no signal.
+        _r = str(check.get("reason", "") or "")
+        if _r and _r != (getattr(task, "gate_reason", "") or ""):
+            try:
+                svc._task_svc.update(task_id, gate_reason=_r)
+            except Exception:
+                pass
         return None
     return svc.gate_decide(
         task_id, "approve",

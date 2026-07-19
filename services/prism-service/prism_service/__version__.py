@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.12"
+PRISM_VERSION = "7.1.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.13: SMOOTH STORY/PLAN GATES [owner 2026-07-19, cold-drive findings]. "
+    "(1) The story_complete rubric now accepts an AC written as a PLAIN line "
+    "('AC-1: … Oracle: …'), not only a markdown bullet — a naive author no "
+    "longer gets silently rejected for omitting the '-'. (2) A rubric gate that "
+    "parks pending now writes its ACTIONABLE reason IMMEDIATELY (was blank until "
+    "the next ~20s adjudicator resweep, leaving a driver with 'pending' + '' and "
+    "no signal). Compliant stories/plans already auto-clear synchronously at "
+    "report time. "
     "v7.1.12: OBVIOUS, SMOOTH GATE FLOW [owner 2026-07-19]. Two changes so a "
     "ticket goes to done without hand-holding: (1) IMPLEMENT-TO-EVIDENCE — a "
     "captured screenshot/video in the task's evidence gallery "
