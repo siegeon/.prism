@@ -8,6 +8,7 @@ import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip } from "@/components/EntityChip";
 import { domainTone } from "@/lib/domainTone";
 import PlanView, { parseAc, gateEvidenceLines } from "@/components/plan/PlanView";
+import DecisionPacket from "@/components/plan/DecisionPacket";
 import { stepLabel } from "@/lib/workflowChips";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
@@ -1394,6 +1395,22 @@ export default function TaskDetailPage() {
               {/* 2 · EVIDENCE — a table, two proof systems separated */}
               <div className="p-4">
                 <div className="text-2xs uppercase tracking-wider mb-2" style={{ color: "var(--text-muted)" }}>evidence</div>
+                {/* VISUAL EVIDENCE FIRST — for a UI/demo gate the screenshot/video IS
+                    the evidence; surface it at the TOP of the gate, not buried under
+                    the machine-receipt table (owner: "where is the visual validation?"). */}
+                {/!\[[^\]]*\]\(/.test(task.completion_proof || "") && (
+                  <div className="mb-4">
+                    <div className="text-2xs uppercase tracking-wider mb-2" style={{ color: "var(--accent-sage-fg)" }}>visual evidence</div>
+                    <ProofShots text={task.completion_proof} className="" />
+                  </div>
+                )}
+                {/* Server-assembled DECISION PACKET (task a1e4120f): diff vs
+                    baseline + commits + oracle receipt + screenshots, all read
+                    from real worktree artifacts. Leads the machine-receipt
+                    table so the reviewer sees the concrete change first. */}
+                <div className="mb-4">
+                  <DecisionPacket taskId={id} project={project} state={task.gate_state} step={task.workflow_step} />
+                </div>
                 <table className="w-full text-[12.5px]">
                   <thead>
                     <tr className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
@@ -1411,10 +1428,19 @@ export default function TaskDetailPage() {
                       <td className="py-1.5 pr-3">
                         {gateReadiness?.receipt_ok
                           ? <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }}>passing</span>
-                          : <span className="inline-flex items-center gap-2">
-                              <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>{gateReadiness?.receipt ? "stale / failed" : "missing"}</span>
-                              <button type="button" onClick={mintEvidence} className="text-2xs uppercase tracking-wider underline decoration-dotted">↻ re-run</button>
-                            </span>}
+                          : gateReadiness?.receipt?.status === "manual_evidence_required"
+                            // NOT a failure — the oracle (e.g. a browser/screenshot check) has no
+                            // machine runner wired, so it AWAITS your manual review. Painting this
+                            // "stale / failed" reads as a broken build; it isn't. Re-run is hidden
+                            // because there's nothing to re-run — approve with Override below.
+                            ? <span className="inline-flex items-center gap-2">
+                                <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }} title={gateReadiness?.receipt?.reason || ""}>manual · your review</span>
+                                <span className="text-2xs" style={{ color: "var(--text-muted)" }}>no auto-runner for this oracle — approve with Override below</span>
+                              </span>
+                            : <span className="inline-flex items-center gap-2">
+                                <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>{gateReadiness?.receipt ? "stale / failed" : "missing"}</span>
+                                <button type="button" onClick={mintEvidence} className="text-2xs uppercase tracking-wider underline decoration-dotted">↻ re-run</button>
+                              </span>}
                         {mintResult && (
                           <div className="text-2xs mt-1 leading-relaxed max-w-[360px]" style={{ color: "var(--text-muted)" }}>
                             {mintResult}
@@ -1483,7 +1509,6 @@ export default function TaskDetailPage() {
                     })()}
                   </tbody>
                 </table>
-                <ProofShots text={task.completion_proof} />
               </div>
 
               {/* 3 · VERIFIER DECISION — plain language; machine text collapsed */}

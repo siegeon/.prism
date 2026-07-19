@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.4"
+PRISM_VERSION = "7.1.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.5: DECISION PACKET NOW ACTUALLY RENDERS [task:a1e4120f fix]. v7.1.4 wired "
+    "the DecisionPacket into PlanView's gate block, but TaskDetailPage passes "
+    "gate={null} there (the gate DECISION lives in the top-level action), so the "
+    "panel never showed - a false-green caught during SEE-it verification. Moved the "
+    "<DecisionPacket> into the REAL gate decision card (TaskDetailPage section 2, "
+    "'evidence'), leading the machine-receipt table; reverted the dead PlanView wiring. "
+    "The endpoint + module + tests were correct all along. "
     "v7.1.4: SERVER-ASSEMBLED DECISION PACKET on the approval gate [task:a1e4120f, "
     "build half of the single-sign-off epic]. GET /api/conductor/decision-packet "
     "assembles an evidence packet from REAL worktree artifacts — diff stat vs "
