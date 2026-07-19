@@ -130,6 +130,25 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                     ("no red-step commit derivable — commit the failing "
                      "tests with a [task:<id>] trailer, or decide the "
                      "gate manually"))}
+    # EPIC ROLL-UP (issue #171, owner 2026-07-19): a parent whose children all
+    # rolled up cleanly is signable — the children's proofs ARE the epic's proof,
+    # and gate_decide's rollup path accepts a plain distinct-actor approve (no
+    # verifier, no artifact). Present READY so the owner's single roll-up sign-off
+    # is ENABLED; else surface the actionable roll-up reason (which child blocks).
+    try:
+        from prism_service.services.conductor_service import epic_rollup_verdict
+        kids = [c for c in s._task_svc.list()
+                if str(getattr(c, "parent_id", "") or "") == task_id]
+        if kids:
+            ok_roll, why_roll = epic_rollup_verdict(kids)
+            return {"receipt_ok": bool(ok_roll), "manual_review": True,
+                    "receipt_refusal": "" if ok_roll else why_roll,
+                    "receipt": {"adapter": "epic-rollup", "passed": bool(ok_roll),
+                                "status": "rollup" if ok_roll
+                                else "rollup_incomplete",
+                                "ended_at": "", "reason": why_roll}}
+    except Exception:
+        pass
     # HUMAN-JUDGMENT gate (owner 2026-07-19): a demo/visual/manual oracle has no
     # machine tooth — the person's review IS the sign-off. Present it as READY to
     # approve (a clean, enabled Approve — no override, no failed-machine-receipt),

@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.9"
+PRISM_VERSION = "7.1.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.10: EPIC ROLL-UP GATE IS SIGNABLE [issue #171 follow-up]. An epic whose "
+    "children all rolled up cleanly passes green_gate on a plain distinct-actor "
+    "approve (conductor_service:2842 rollup path — no verifier, no artifact), but "
+    "gate/readiness didn't know about roll-up and reported BLOCKED, disabling the "
+    "owner's Approve. Readiness now checks epic_rollup_verdict and reports READY "
+    "(adapter=epic-rollup) when the children are done with strong proof, else the "
+    "actionable roll-up reason (which child blocks) — so the owner's single "
+    "feature-level sign-off is actually clickable. "
     "v7.1.9: THE HUMAN CAN ACTUALLY SIGN OFF [task:eaafdf75 follow-up]. A "
     "demo/visual green_gate presented a FAILED browser oracle + a refusing shell "
     "verifier, so Approve was disabled and the owner could only 'recover with "
