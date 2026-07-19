@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.14"
+PRISM_VERSION = "7.1.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.15: DECISION-PACKET SCREENSHOTS OPEN IN-APP [owner 2026-07-19]. The "
+    "DecisionPacket 'Screenshots' row linked thumbnails to the raw .png with "
+    "target=_blank (navigating the browser off the app — the 'hard to get back "
+    "on a desktop' regression the owner flagged on 2026-07-16). Now it reuses the "
+    "shared EvidenceGallery lightbox (click opens in-app; Esc/click closes, "
+    "arrows step, zoom toggle), matching ProofShots. "
     "v7.1.14: TERMINAL GATE SAYS WHAT TO DO [owner 2026-07-19]. When a green_gate "
     "parks for the human sign-off, gate_reason is now set to 'awaiting your "
     "sign-off — review the evidence and Approve' instead of blank, so a driver "

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { EvidenceGallery } from "@/components/EvidenceGallery";
 
 // The server-assembled evidence packet (task a1e4120f, slices 2/4). Every field
 // is sourced from a REAL artifact by GET /api/conductor/decision-packet — the
@@ -125,13 +126,15 @@ export default function DecisionPacket({ taskId, project, state, step }: {
 
       <Row icon="▣" title="Screenshots" empty={pkt.screenshots.length === 0}
            summary={`${pkt.screenshots.length}`}>
-        <div className="flex gap-2 flex-wrap">
-          {pkt.screenshots.map((s) => (
-            <a key={s.name} href={s.url} target="_blank" rel="noreferrer" title={s.name}>
-              <img src={s.url} alt={s.name} className="h-16 rounded border border-[color:var(--midground-base)]/20" />
-            </a>
-          ))}
-        </div>
+        {/* Open evidence IN-APP (owner: a screenshot must open in the viewer,
+            not navigate the browser to the raw .png). Reuse the shared
+            EvidenceGallery lightbox. */}
+        <EvidenceGallery
+          thumb="sm"
+          items={pkt.screenshots.map((s) => ({
+            url: s.url, name: s.name, kind: "image" as const,
+          }))}
+        />
       </Row>
     </div>
   );
