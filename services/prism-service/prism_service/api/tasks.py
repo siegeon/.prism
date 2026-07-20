@@ -639,8 +639,24 @@ def get_task_evidence(
     whitelisted so a crafted request can't traverse out of the evidence dir."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    # A completion_proof image renders as a RAW <img src="/api/tasks/.../
+    # evidence/x.png"> that bypasses the SPA api-client, so it carries NO
+    # ?project= param and defaults to 'default' -> a 404 in any non-default
+    # project, showing BROKEN visual evidence (owner 2026-07-20). The evidence
+    # dir is keyed by the globally-unique task_id, not the project, so resolve
+    # the task across projects instead of hard-failing on the defaulted param.
     if _svc(project).get(task_id) is None:
-        raise HTTPException(404, "task not found")
+        resolved = False
+        try:
+            from prism_service import config as _cfg
+            for _proj in _cfg.list_projects():
+                if _proj != project and _svc(_proj).get(task_id) is not None:
+                    resolved = True
+                    break
+        except Exception:
+            resolved = False
+        if not resolved:
+            raise HTTPException(404, "task not found")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", filename) or ".." in filename:
         raise HTTPException(400, "bad filename")
     ext = filename[filename.rfind(".") :].lower() if "." in filename else ""

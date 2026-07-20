@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.18"
+PRISM_VERSION = "7.1.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.19: GATE CARDS RENDER THE CAPTURED EVIDENCE [task:25a25d84]. Slice 3 of the "
+    "single-sign-off evidence epic: a gate card now expands to the SYSTEM-CAPTURED "
+    "evidence — screenshot + walkthrough video (served from /api/tasks/<id>/evidence/) "
+    "+ verbatim pytest assertion source for test gates + a provenance line (who "
+    "captured, when, which build/tree). Sourced from a new /api/tasks/<id>/gate_evidence "
+    "route that reads the receipt's artifacts ONLY (never the agent's hand-attached "
+    "proof markdown), and a gate with none of the three modalities reads an explicit "
+    "'no captured evidence — not evidence-backed' state. FIX (owner 2026-07-20): a "
+    "completion_proof image rendered as a RAW <img> bypasses the SPA api-client and "
+    "carries no ?project= param, so evidence 404'd in dev's 'prism' project (BROKEN "
+    "visual evidence); the evidence route now resolves the task across projects (the "
+    "evidence dir is keyed by the global task_id, not the project). "
     "v7.1.18: RED-ANCHOR SELF-HEAL — no more stranded test drives [owner 2026-07-20]. "
     "A test-proof drive that committed its failing tests to the WORKING BRANCH (not "
     "the per-task scratch worktree) stranded red_gate forever: the anchor was stamped "
