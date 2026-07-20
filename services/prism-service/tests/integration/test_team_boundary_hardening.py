@@ -615,6 +615,119 @@ def test_mcp_tool_argument_cannot_override_the_authorized_connection_project(
     }
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("verifier_run", {"workspace": "C:/foreign-workspace"}),
+        (
+            "register_claude_source",
+            {"project": "project-a", "cwd": "C:/foreign-workspace"},
+        ),
+    ],
+)
+def test_team_mcp_denies_tools_with_unscoped_host_paths_before_dispatch(
+    real_team, monkeypatch, tool_name, arguments
+):
+    from prism_service.mcp import server as server_module
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.services.auth_service import AuthService
+
+    principal = AuthService(real_team.service, mode="team").resolve_principal(
+        f"Bearer {real_team.alice_token}"
+    )
+    dispatched: list[str] = []
+
+    async def dispatch(name: str, _arguments: dict, *, project_id: str):
+        dispatched.append(f"{project_id}:{name}")
+        raise AssertionError("unscoped host path reached MCP dispatch")
+
+    monkeypatch.setattr(server_module, "handle_tool", dispatch)
+    with use_request_context(
+        PrismRequestContext(
+            project_id="project-a", tool_profile="all", principal=principal
+        )
+    ):
+        result = asyncio.run(server_module.call_tool(tool_name, arguments))
+
+    assert result.isError is True
+    assert _mcp_payload(result) == {
+        "error": "tool is unavailable in team mode until its host path is scoped",
+        "status": 403,
+    }
+    assert dispatched == []
+
+
+def test_mcp_host_path_schemas_are_explicitly_classified_for_team_mode():
+    from prism_service.mcp.server import _TEAM_UNSCOPED_HOST_PATH_TOOLS
+    from prism_service.mcp.tools import TOOLS
+
+    discovered: set[tuple[str, str]] = set()
+    path_keys = {"cwd", "workspace"}
+    path_markers = ("host filesystem", "host project directory", "working directory")
+
+    def scan(tool_name: str, schema: dict, prefix: str = "") -> None:
+        for key, child in (schema.get("properties") or {}).items():
+            field = f"{prefix}.{key}" if prefix else key
+            description = str(child.get("description") or "").casefold()
+            if key.casefold() in path_keys or any(
+                marker in description for marker in path_markers
+            ):
+                discovered.add((tool_name, field))
+            if child.get("type") == "array" and isinstance(child.get("items"), dict):
+                scan(tool_name, child["items"], f"{field}[]")
+            else:
+                scan(tool_name, child, field)
+
+    for tool in TOOLS:
+        scan(tool.name, tool.inputSchema)
+
+    # project_onboard only records the supplied path as project-scoped text;
+    # it never dereferences the host filesystem. Every dereferencing path tool
+    # must be in the fail-closed team deny set until ownership can constrain it.
+    opaque_project_metadata = {("project_onboard", "sub_projects[].path")}
+    assert discovered == opaque_project_metadata | {
+        ("register_claude_source", "cwd"),
+        ("verifier_run", "workspace"),
+    }
+    assert {
+        tool_name for tool_name, _field in discovered - opaque_project_metadata
+    } == set(_TEAM_UNSCOPED_HOST_PATH_TOOLS)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("verifier_run", {"workspace": "C:/local-workspace"}),
+        (
+            "register_claude_source",
+            {"project": "project-a", "cwd": "C:/local-workspace"},
+        ),
+    ],
+)
+def test_local_mcp_keeps_host_path_tools_available(
+    real_team, monkeypatch, tool_name, arguments
+):
+    from mcp.types import TextContent
+
+    from prism_service.mcp import server as server_module
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+
+    dispatched: list[str] = []
+
+    async def dispatch(name: str, _arguments: dict, *, project_id: str):
+        dispatched.append(f"{project_id}:{name}")
+        return [TextContent(type="text", text=json.dumps({"ok": True}))]
+
+    monkeypatch.setattr(server_module, "handle_tool", dispatch)
+    with use_request_context(
+        PrismRequestContext(project_id="project-a", tool_profile="all")
+    ):
+        result = asyncio.run(server_module.call_tool(tool_name, arguments))
+
+    assert _mcp_payload(result) == {"ok": True}
+    assert dispatched == [f"project-a:{tool_name}"]
+
+
 def test_local_mode_keeps_production_routes_open(real_team, monkeypatch):
     monkeypatch.setenv("PRISM_AUTH_MODE", "local")
     assert real_team.client.get(
