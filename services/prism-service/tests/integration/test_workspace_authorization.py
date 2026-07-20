@@ -7,6 +7,7 @@ ASGI transport.  A query-string project remains a selector, never an ACL.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -267,14 +268,34 @@ def test_rest_and_mcp_resolve_the_same_principal(team, monkeypatch):
     assert mcp["principal"].user_id == rest.json()["user"]["id"] == team.alice_id
 
 
-def test_mcp_team_mode_fails_closed_before_dispatch(team, monkeypatch):
+def test_mcp_team_mode_authenticates_connection_then_authorizes_each_tool(
+    team, monkeypatch
+):
     missing = _drive_mcp(monkeypatch, "project-a", None)
     assert _response_status(missing) == 401
     assert "principal" not in missing
 
+    # The transport authenticates identity only.  Project authorization is
+    # intentionally deferred to call_tool so project_list and first-project
+    # creation work even when the URL's selected project is not yet bound.
     cross_workspace = _drive_mcp(monkeypatch, "project-b", team.alice_token)
-    assert _response_status(cross_workspace) == 403
-    assert "principal" not in cross_workspace
+    assert _response_status(cross_workspace) is None
+    assert cross_workspace["principal"].user_id == team.alice_id
+
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.server import call_tool
+
+    with use_request_context(
+        PrismRequestContext(
+            project_id="project-b",
+            tool_profile="all",
+            principal=cross_workspace["principal"],
+        )
+    ):
+        denied = asyncio.run(call_tool("task_list", {}))
+    payload = json.loads(denied.content[0].text)
+    assert denied.isError is True
+    assert payload == {"error": "project access denied", "status": 403}
 
 
 def test_raw_bearer_secret_is_not_returned_from_normal_endpoints(team):

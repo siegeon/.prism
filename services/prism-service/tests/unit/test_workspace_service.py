@@ -8,6 +8,8 @@ service can be selected.
 from __future__ import annotations
 
 import hashlib
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -125,4 +127,114 @@ def test_project_binding_cannot_be_silently_moved_between_workspaces(tmp_path):
 
     with pytest.raises(ProjectOwnershipConflict):
         service.bind_project("shared-name", second.id)
+
+
+def _identity_row_counts(service) -> dict[str, int]:
+    return {
+        table: service._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in ("users", "workspaces", "memberships", "auth_tokens")
+    }
+
+
+def test_bootstrap_owner_rolls_back_the_entire_identity_graph(tmp_path):
+    """A late token failure must not leave a user that bricks bootstrap."""
+    service = _new_service(tmp_path)
+    service._db.executescript(
+        """
+        CREATE TRIGGER force_bootstrap_token_failure
+        BEFORE INSERT ON auth_tokens
+        BEGIN
+            SELECT RAISE(ABORT, 'forced token failure');
+        END;
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced token failure"):
+        service.bootstrap_owner(
+            email="owner@example.test",
+            display_name="Owner",
+            workspace_name="Platform",
+            user_id="bootstrap-user",
+            workspace_id="bootstrap-workspace",
+            token_id="bootstrap-token",
+            token_hash="bootstrap-token-hash",
+            token_label="bootstrap",
+        )
+
+    assert _identity_row_counts(service) == {
+        "users": 0,
+        "workspaces": 0,
+        "memberships": 0,
+        "auth_tokens": 0,
+    }
+
+
+def test_concurrent_bootstrap_creates_exactly_one_complete_owner(tmp_path):
+    from prism_service.services.workspace_service import BootstrapAlreadyCompleted
+
+    service = _new_service(tmp_path)
+
+    def attempt(index: int) -> str:
+        try:
+            service.bootstrap_owner(
+                email=f"owner-{index}@example.test",
+                display_name=f"Owner {index}",
+                workspace_name=f"Workspace {index}",
+                user_id=f"user-{index}",
+                workspace_id=f"workspace-{index}",
+                token_id=f"token-{index}",
+                token_hash=f"hash-{index}",
+                token_label="bootstrap",
+            )
+            return "created"
+        except BootstrapAlreadyCompleted:
+            return "already-created"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(attempt, range(2)))
+
+    assert sorted(outcomes) == ["already-created", "created"]
+    assert _identity_row_counts(service) == {
+        "users": 1,
+        "workspaces": 1,
+        "memberships": 1,
+        "auth_tokens": 1,
+    }
+
+
+def test_project_reservation_is_canonical_and_has_one_cross_workspace_winner(tmp_path):
+    from prism_service.services.workspace_service import ProjectOwnershipConflict
+
+    service = _new_service(tmp_path)
+    owner = service.create_user("owner@example.test", user_id="owner")
+    first = service.create_workspace("First", owner.id, workspace_id="first")
+    second = service.create_workspace("Second", owner.id, workspace_id="second")
+
+    for hostile in (
+        ".",
+        "..",
+        "../victim",
+        "folder/victim",
+        r"folder\victim",
+        r"C:\victim",
+        "project.",
+        "Project-A",
+    ):
+        with pytest.raises(ValueError):
+            service.reserve_project(hostile, first.id)
+
+    def reserve(workspace_id: str) -> tuple[str, bool]:
+        try:
+            ownership, created = service.reserve_project("shared-project", workspace_id)
+            return ownership.workspace_id, created
+        except ProjectOwnershipConflict:
+            return "conflict", False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(reserve, (first.id, second.id)))
+
+    winners = [workspace_id for workspace_id, created in outcomes if created]
+    assert len(winners) == 1
+    assert outcomes.count(("conflict", False)) == 1
+    assert service.project_workspace("shared-project").id == winners[0]
 
