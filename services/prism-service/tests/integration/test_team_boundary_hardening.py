@@ -72,6 +72,7 @@ def real_team(tmp_path, monkeypatch):
     service.add_membership(workspace_empty.id, viewer.id, "viewer")
     service.bind_project("project-a", workspace_a.id)
     service.bind_project("project-b", workspace_b.id)
+    service.bind_project("prism", workspace_b.id)
     task_a = project_context.get_project("project-a").task_svc.create(title="A")
 
     auth = AuthService(service, mode="team")
@@ -181,6 +182,27 @@ def test_sse_project_stream_uses_the_same_team_boundary(real_team):
             [(b"authorization", f"Bearer {real_team.alice_token}".encode())],
         )
     ) == 403
+
+
+def test_body_and_query_project_selectors_cannot_disagree(real_team):
+    response = real_team.client.post(
+        "/api/brain/understand",
+        params={"project": "project-a"},
+        headers=real_team.bearer(real_team.alice_token),
+        json={"project": "project-b"},
+    )
+    assert response.status_code == 400
+
+
+def test_route_specific_default_is_authorized_not_a_generic_default(real_team):
+    # xref defaults to project='prism', not config.DEFAULT_PROJECT.  The guard
+    # must authorize what the handler will actually resolve.
+    response = real_team.client.get(
+        "/api/xref/resolve",
+        params={"token": "anything"},
+        headers=real_team.bearer(real_team.alice_token),
+    )
+    assert response.status_code == 403
 
 
 def test_team_mode_denies_process_global_mutations_before_handlers(
@@ -316,7 +338,9 @@ def test_workspace_binding_rejects_encoded_backslash_alias(real_team):
         headers=real_team.bearer(real_team.alice_token),
     )
     assert response.status_code == 400
-    assert real_team.service.project_workspace(r"folder\..\project-b") is None
+    assert r"folder\..\project-b" not in real_team.service.list_projects_for_user(
+        real_team.alice_id
+    )
 
 
 def test_project_ownership_is_reserved_before_any_directory_side_effect(

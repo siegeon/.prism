@@ -25,13 +25,17 @@ from prism_service.api.auth import (
     require_project_role,
     require_workspace_role,
 )
+from prism_service.api.security import canonical_project_id
 from prism_service.config import DEFAULT_PROJECT, PROJECTS_DIR, project_data_dir
 from prism_service.engines import understand_engine as ue
 from prism_service.models.workspace import Principal
 from prism_service.project_context import get_all_projects, release_project
 from prism_service.services import source_service as ss
 from prism_service.services import trash as trash_svc
-from prism_service.services.workspace_service import get_workspace_service
+from prism_service.services.workspace_service import (
+    ProjectOwnershipConflict,
+    get_workspace_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,16 +106,32 @@ def create_project(
     principal: Principal = Depends(current_principal),
 ) -> dict:
     principal = coerce_principal(principal)
-    name = (body.name or "").strip()
-    if not _NAME_RE.match(name):
+    if principal.mode == "team":
+        try:
+            name = canonical_project_id(body.name or "")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    else:
+        name = (body.name or "").strip()
+        if not _NAME_RE.match(name):
+            raise HTTPException(
+                400,
+                "name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63} "
+                "(no slashes, no spaces)",
+            )
+
+    source_path = (body.source_path or "").strip()
+    remote_url = (body.remote_url or "").strip()
+    if source_path and remote_url:
         raise HTTPException(
             400,
-            "name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63} "
-            "(no slashes, no spaces)",
+            "pass either source_path (folder mode) or remote_url (clone "
+            "mode), not both",
         )
 
     workspace_id = (body.workspace_id or "").strip()
     workspace_service = get_workspace_service()
+    reservation_created = False
     if principal.mode == "team":
         if not workspace_id:
             memberships = workspace_service.list_memberships_for_user(
@@ -123,7 +143,7 @@ def create_project(
                     "workspace_id is required when the caller has zero or multiple workspaces",
                 )
             workspace_id = memberships[0].workspace_id
-        require_workspace_role(principal, workspace_id, "member")
+        require_workspace_role(principal, workspace_id, "admin")
         owned = workspace_service.project_workspace(name)
         if owned is not None and owned.id != workspace_id:
             raise HTTPException(409, "project is owned by another workspace")
@@ -132,51 +152,49 @@ def create_project(
                 409,
                 "existing unowned project must be bound by a workspace admin",
             )
-
-    pdir = project_data_dir(name)  # seeds source/, graph/, state.json
-    head_sha: Optional[str] = None
-    bootstrap = "skipped"
-    mode = "empty"
-    source_path = (body.source_path or "").strip()
-    remote_url = (body.remote_url or "").strip()
-
-    if source_path and remote_url:
-        raise HTTPException(
-            400,
-            "pass either source_path (folder mode) or remote_url (clone "
-            "mode), not both",
-        )
-
-    if source_path:
-        # Folder mode — no clone. Just record the path and kick off
-        # bootstrap (ingest + analyzer-queue refresh) against the
-        # bind-mounted dir.
         try:
+            _, reservation_created = workspace_service.reserve_project(
+                name, workspace_id
+            )
+        except ProjectOwnershipConflict as exc:
+            raise HTTPException(409, str(exc))
+
+    try:
+        # Ownership is durable before this first filesystem mutation.
+        pdir = project_data_dir(name)  # seeds source/, graph/, state.json
+        head_sha: Optional[str] = None
+        bootstrap = "skipped"
+        mode = "empty"
+
+        if source_path:
+            # Folder mode — no clone. Just record the path and kick off
+            # bootstrap (ingest + analyzer-queue refresh) against the
+            # bind-mounted dir.
             resolved = ss.set_source_path(name, source_path)
-        except ss.SourceUnavailable as e:
-            raise HTTPException(400, str(e))
-        head_sha = resolved["head_sha"]
-        mode = "folder"
-        Thread(target=ss.bootstrap_after_clone, args=(name,), daemon=True).start()
-        bootstrap = "started"
-    elif remote_url:
-        # Clone mode — legacy v5.1 path.
-        try:
+            head_sha = resolved["head_sha"]
+            mode = "folder"
+            Thread(target=ss.bootstrap_after_clone, args=(name,), daemon=True).start()
+            bootstrap = "started"
+        elif remote_url:
+            # Clone mode — legacy v5.1 path.
             state = ss.ensure_cloned(name, remote_url, body.tracked_ref)
-        except ss.SourceUnavailable as e:
-            raise HTTPException(400, str(e))
-        head_sha = state.head_sha
-        s = ue._read_state(name)
-        s["remote_url"] = remote_url
-        s["tracked_ref"] = body.tracked_ref
-        s["mode"] = "clone"
-        ue._write_state(name, s)
-        Thread(target=ss.bootstrap_after_clone, args=(name,), daemon=True).start()
-        bootstrap = "started"
-        mode = "clone"
-
-    if principal.mode == "team":
-        workspace_service.bind_project(name, workspace_id)
+            head_sha = state.head_sha
+            s = ue._read_state(name)
+            s["remote_url"] = remote_url
+            s["tracked_ref"] = body.tracked_ref
+            s["mode"] = "clone"
+            ue._write_state(name, s)
+            Thread(target=ss.bootstrap_after_clone, args=(name,), daemon=True).start()
+            bootstrap = "started"
+            mode = "clone"
+    except ss.SourceUnavailable as exc:
+        if reservation_created:
+            workspace_service.release_project(name, workspace_id)
+        raise HTTPException(400, str(exc))
+    except Exception:
+        if reservation_created:
+            workspace_service.release_project(name, workspace_id)
+        raise
 
     return {
         "created": True,
@@ -214,9 +232,15 @@ def delete_project(
 ) -> dict:
     """Wipe a project's data dir + cached services. Refuses 'default'."""
     principal = coerce_principal(principal)
-    name = (name or "").strip()
-    if not _NAME_RE.match(name):
-        raise HTTPException(400, "invalid project name")
+    if principal.mode == "team":
+        try:
+            name = canonical_project_id(name or "")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    else:
+        name = (name or "").strip()
+        if not _NAME_RE.match(name):
+            raise HTTPException(400, "invalid project name")
     if name == DEFAULT_PROJECT:
         raise HTTPException(
             409,

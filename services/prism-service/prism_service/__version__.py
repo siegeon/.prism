@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.17"
+PRISM_VERSION = "7.1.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.18: TEAM BOUNDARIES FAIL CLOSED. The production REST, SSE, graph, "
+    "and MCP surfaces now share workspace authorization; first-owner setup is "
+    "secret-gated and atomic; canonical project ownership is reserved before "
+    "filesystem/network work; and every pytest truthy spelling requires a "
+    "member. Local single-user mode is unchanged. "
     "v7.1.17: RAIL TOKEN BARS ARE HONEST [owner 2026-07-19]. The StepRail rendered "
     "a full-width grey track for EVERY step, so a gate that spent zero tokens "
     "showed a 'massive grey line'. Now the bar renders ONLY when the step actually "

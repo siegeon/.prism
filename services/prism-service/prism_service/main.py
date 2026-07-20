@@ -33,7 +33,7 @@ from pathlib import Path
 from prism_service.thread_limits import apply_thread_limits
 apply_thread_limits()
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -541,7 +541,13 @@ async def lifespan(_app: FastAPI):
     _LOCK_FILE.unlink(missing_ok=True)
 
 
-app = FastAPI(title="PRISM Service", lifespan=lifespan)
+from prism_service.api.security import enforce_team_boundary
+
+app = FastAPI(
+    title="PRISM Service",
+    lifespan=lifespan,
+    dependencies=[Depends(enforce_team_boundary)],
+)
 
 # The standalone Tauri shell loads its splash from a tauri:// origin and
 # polls /api/version cross-origin. Without these headers the webview sends

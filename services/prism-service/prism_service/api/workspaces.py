@@ -11,6 +11,7 @@ from prism_service.api.auth import (
     current_principal,
     require_workspace_role,
 )
+from prism_service.api.security import canonical_project_id
 from prism_service.services.workspace_service import get_workspace_service
 
 
@@ -105,8 +106,15 @@ def bind_project(
 ) -> dict:
     principal = coerce_principal(principal)
     require_workspace_role(principal, workspace_id, "admin")
+    if principal.mode == "team":
+        try:
+            canonical = canonical_project_id(project_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    else:
+        canonical = (project_id or "").strip()
     try:
-        ownership = get_workspace_service().bind_project(project_id, workspace_id)
+        ownership = get_workspace_service().bind_project(canonical, workspace_id)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, str(exc))
     return {"ownership": ownership}

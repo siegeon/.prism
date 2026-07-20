@@ -30,6 +30,10 @@ class ProjectOwnershipConflict(RuntimeError):
     """Raised when code attempts to move an already-bound project."""
 
 
+class BootstrapAlreadyCompleted(RuntimeError):
+    """Raised when a caller tries to create a second initial team owner."""
+
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -171,6 +175,115 @@ class WorkspaceService:
     def has_users(self) -> bool:
         row = self._db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
         return row is not None
+
+    def bootstrap_owner(
+        self,
+        email: str,
+        display_name: str,
+        workspace_name: str,
+        user_id: str,
+        workspace_id: str,
+        token_id: str,
+        token_hash: str,
+        token_label: str,
+    ) -> tuple[User, Workspace, AuthToken]:
+        """Atomically create the initial owner, workspace, and API token.
+
+        ``BEGIN IMMEDIATE`` acquires SQLite's writer reservation before the
+        singleton check.  Concurrent bootstrap requests therefore serialize:
+        the winner commits the complete identity graph and the loser observes
+        that user while it still holds the same write lock.  Any late failure
+        (including token insertion) rolls every earlier insert back.
+        """
+
+        normalized_email = _required(email, "email").lower()
+        normalized_display_name = str(display_name or "").strip()
+        normalized_workspace_name = _required(workspace_name, "workspace_name")
+        resolved_user_id = _required(user_id, "user_id")
+        resolved_workspace_id = _required(workspace_id, "workspace_id")
+        resolved_token_id = _required(token_id, "token_id")
+        resolved_token_hash = _required(token_hash, "token_hash")
+        normalized_token_label = str(token_label or "").strip()
+        created_at = _now()
+
+        conn = self._db
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None:
+                raise BootstrapAlreadyCompleted(
+                    "team identity has already been bootstrapped"
+                )
+            conn.execute(
+                """
+                INSERT INTO users (id, email, display_name, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    resolved_user_id,
+                    normalized_email,
+                    normalized_display_name,
+                    created_at,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO workspaces (id, name, owner_user_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    resolved_workspace_id,
+                    normalized_workspace_name,
+                    resolved_user_id,
+                    created_at,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memberships (workspace_id, user_id, role, created_at)
+                VALUES (?, ?, 'owner', ?)
+                """,
+                (resolved_workspace_id, resolved_user_id, created_at),
+            )
+            conn.execute(
+                """
+                INSERT INTO auth_tokens
+                    (id, user_id, token_hash, label, created_at, revoked_at)
+                VALUES (?, ?, ?, ?, ?, '')
+                """,
+                (
+                    resolved_token_id,
+                    resolved_user_id,
+                    resolved_token_hash,
+                    normalized_token_label,
+                    created_at,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+        return (
+            User(
+                resolved_user_id,
+                normalized_email,
+                normalized_display_name,
+                created_at,
+            ),
+            Workspace(
+                resolved_workspace_id,
+                normalized_workspace_name,
+                resolved_user_id,
+                created_at,
+            ),
+            AuthToken(
+                resolved_token_id,
+                resolved_user_id,
+                normalized_token_label,
+                created_at,
+                "",
+            ),
+        )
 
     def create_user(
         self,
@@ -358,15 +471,32 @@ class WorkspaceService:
             )
         return membership
 
-    def bind_project(self, project_id: str, workspace_id: str) -> ProjectOwnership:
-        resolved_project_id = _required(project_id, "project_id")
+    @staticmethod
+    def _canonical_project_id(project_id: str) -> str:
+        # Lazy import avoids an api -> service -> api cycle.  The security
+        # module deliberately keeps its canonicalizer independent of services.
+        from prism_service.api.security import canonical_project_id
+
+        return canonical_project_id(project_id)
+
+    def reserve_project(
+        self, project_id: str, workspace_id: str
+    ) -> tuple[ProjectOwnership, bool]:
+        """Atomically reserve a canonical project ID for one workspace.
+
+        Returns ``(ownership, created)``.  A retry by the winning workspace is
+        idempotent; a competing workspace receives a conflict before it can
+        begin filesystem, clone, or worker side effects.
+        """
+
+        resolved_project_id = self._canonical_project_id(project_id)
         resolved_workspace_id = _required(workspace_id, "workspace_id")
         if self.get_workspace(resolved_workspace_id) is None:
             raise ValueError(f"unknown workspace: {resolved_workspace_id}")
 
         created_at = _now()
         with self._db:
-            self._db.execute(
+            cursor = self._db.execute(
                 """
                 INSERT OR IGNORE INTO project_ownership
                     (project_id, workspace_id, created_at)
@@ -374,14 +504,14 @@ class WorkspaceService:
                 """,
                 (resolved_project_id, resolved_workspace_id, created_at),
             )
-        row = self._db.execute(
-            """
-            SELECT project_id, workspace_id, created_at
-            FROM project_ownership
-            WHERE project_id = ?
-            """,
-            (resolved_project_id,),
-        ).fetchone()
+            row = self._db.execute(
+                """
+                SELECT project_id, workspace_id, created_at
+                FROM project_ownership
+                WHERE project_id = ?
+                """,
+                (resolved_project_id,),
+            ).fetchone()
         if row is None:
             raise RuntimeError("project binding write did not persist")
         ownership = self._ownership_from_row(row)
@@ -390,9 +520,33 @@ class WorkspaceService:
                 f"project {resolved_project_id!r} already belongs to workspace "
                 f"{ownership.workspace_id!r}"
             )
+        return ownership, cursor.rowcount > 0
+
+    def bind_project(self, project_id: str, workspace_id: str) -> ProjectOwnership:
+        ownership, _created = self.reserve_project(project_id, workspace_id)
         return ownership
 
+    def release_project(self, project_id: str, workspace_id: str) -> bool:
+        """Release only the reservation still owned by ``workspace_id``.
+
+        The compare-and-delete shape prevents cleanup for a failed creator
+        from ever removing another workspace's winning reservation.
+        """
+
+        resolved_project_id = self._canonical_project_id(project_id)
+        resolved_workspace_id = _required(workspace_id, "workspace_id")
+        with self._db:
+            cursor = self._db.execute(
+                """
+                DELETE FROM project_ownership
+                WHERE project_id = ? AND workspace_id = ?
+                """,
+                (resolved_project_id, resolved_workspace_id),
+            )
+        return cursor.rowcount > 0
+
     def project_workspace(self, project_id: str) -> Optional[Workspace]:
+        resolved_project_id = self._canonical_project_id(project_id)
         row = self._db.execute(
             """
             SELECT w.id, w.name, w.owner_user_id, w.created_at
@@ -400,7 +554,7 @@ class WorkspaceService:
             JOIN workspaces AS w ON w.id = p.workspace_id
             WHERE p.project_id = ?
             """,
-            (project_id,),
+            (resolved_project_id,),
         ).fetchone()
         return self._workspace_from_row(row) if row is not None else None
 
