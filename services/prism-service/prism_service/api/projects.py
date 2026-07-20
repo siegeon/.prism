@@ -131,7 +131,6 @@ def create_project(
 
     workspace_id = (body.workspace_id or "").strip()
     workspace_service = get_workspace_service()
-    reservation_created = False
     if principal.mode == "team":
         if not workspace_id:
             memberships = workspace_service.list_memberships_for_user(
@@ -153,9 +152,7 @@ def create_project(
                 "existing unowned project must be bound by a workspace admin",
             )
         try:
-            _, reservation_created = workspace_service.reserve_project(
-                name, workspace_id
-            )
+            workspace_service.reserve_project(name, workspace_id)
         except ProjectOwnershipConflict as exc:
             raise HTTPException(409, str(exc))
 
@@ -188,12 +185,8 @@ def create_project(
             bootstrap = "started"
             mode = "clone"
     except ss.SourceUnavailable as exc:
-        if reservation_created:
-            workspace_service.release_project(name, workspace_id)
         raise HTTPException(400, str(exc))
     except Exception:
-        if reservation_created:
-            workspace_service.release_project(name, workspace_id)
         raise
 
     return {

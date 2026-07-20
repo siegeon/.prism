@@ -192,7 +192,7 @@ async def call_tool(name: str, arguments: dict):
                 "existing unowned project must be bound by a workspace admin",
             )
         try:
-            _, reservation_created = service.reserve_project(pid, workspace_id)
+            service.reserve_project(pid, workspace_id)
         except ProjectOwnershipConflict:
             return _tool_error(409, "project is owned by another workspace")
         except ValueError as exc:
@@ -202,8 +202,6 @@ async def call_tool(name: str, arguments: dict):
         try:
             create_project(pid)
         except Exception:
-            if reservation_created:
-                service.release_project(pid, workspace_id)
             return _tool_error(500, "project creation failed")
         return CallToolResult(content=[TextContent(type="text", text=json.dumps({
             "created": pid,

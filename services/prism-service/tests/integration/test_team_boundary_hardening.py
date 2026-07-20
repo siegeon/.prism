@@ -194,6 +194,28 @@ def test_body_and_query_project_selectors_cannot_disagree(real_team):
     assert response.status_code == 400
 
 
+def test_query_driven_route_does_not_trust_an_ignored_body_project(real_team):
+    response = real_team.client.post(
+        "/api/agent-runs/ingest",
+        headers=real_team.bearer(real_team.alice_token),
+        json={"project": "project-a", "run_id": "must-not-write"},
+    )
+    # agent-runs selects Query(default='default'); body.project is row data.
+    # Alice has no access to default, so authorization must fail there.
+    assert response.status_code == 403
+
+
+def test_body_driven_route_authorizes_its_omitted_body_default(real_team):
+    response = real_team.client.post(
+        "/api/brain/ask",
+        params={"project": "project-a"},
+        headers=real_team.bearer(real_team.alice_token),
+        json={"question": "must not reach inference"},
+    )
+    # brain.ask ignores the query and defaults body.project to 'default'.
+    assert response.status_code == 400
+
+
 def test_route_specific_default_is_authorized_not_a_generic_default(real_team):
     # xref defaults to project='prism', not config.DEFAULT_PROJECT.  The guard
     # must authorize what the handler will actually resolve.
@@ -398,6 +420,50 @@ def test_project_ownership_is_reserved_before_any_directory_side_effect(
     assert real_team.service.project_workspace("race-project") is not None
 
 
+def test_failed_creator_cannot_release_a_same_workspace_success(
+    real_team, monkeypatch, tmp_path
+):
+    from prism_service.api import projects as projects_api
+
+    first_entered = threading.Event()
+    fail_first = threading.Event()
+    lock = threading.Lock()
+    call_count = 0
+
+    def project_data_dir(name: str):
+        nonlocal call_count
+        with lock:
+            call_count += 1
+            call_number = call_count
+        if call_number == 1:
+            first_entered.set()
+            fail_first.wait(timeout=3)
+            raise RuntimeError("first creator failed")
+        return tmp_path / name
+
+    monkeypatch.setattr(projects_api, "project_data_dir", project_data_dir)
+
+    def create():
+        return real_team.client.post(
+            "/api/projects",
+            headers=real_team.bearer(real_team.alice_token),
+            json={"name": "same-workspace-race", "workspace_id": "workspace-a"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(create)
+        assert first_entered.wait(timeout=2)
+        second = pool.submit(create)
+        second_response = second.result(timeout=2)
+        fail_first.set()
+        first_response = first.result(timeout=3)
+
+    assert [first_response.status_code, second_response.status_code] == [500, 200]
+    ownership = real_team.service.project_workspace("same-workspace-race")
+    assert ownership is not None
+    assert ownership.id == "workspace-a"
+
+
 @pytest.mark.parametrize("truthy", ["1", "true", "yes", "on", "t", "y"])
 def test_every_pydantic_truthy_run_spelling_requires_member(
     real_team, monkeypatch, truthy
@@ -453,6 +519,54 @@ def test_mcp_admin_can_list_and_create_the_first_project(real_team, monkeypatch)
     assert creation.isError is False
     assert created == ["first-project"]
     assert _mcp_payload(after)["projects"] == ["first-project"]
+
+
+def test_mcp_multi_workspace_admin_can_select_first_project_owner(
+    real_team, monkeypatch
+):
+    from prism_service import project_context
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.server import call_tool, list_tools
+    from prism_service.services.auth_service import AuthService
+
+    principal = AuthService(real_team.service, mode="team").resolve_principal(
+        f"Bearer {real_team.newcomer_token}"
+    )
+    real_team.service.create_workspace(
+        "Another Empty Workspace",
+        principal.user_id,
+        workspace_id="workspace-empty-2",
+    )
+    created: list[str] = []
+
+    def create_project(project_id: str):
+        ownership = real_team.service.project_workspace(project_id)
+        assert ownership is not None
+        assert ownership.id == real_team.empty_workspace_id
+        created.append(project_id)
+
+    monkeypatch.setattr(project_context, "create_project", create_project)
+    with use_request_context(
+        PrismRequestContext(
+            project_id="unbound-project", tool_profile="all", principal=principal
+        )
+    ):
+        advertised = asyncio.run(list_tools())
+        creation = asyncio.run(
+            call_tool(
+                "project_create",
+                {
+                    "project_id": "selected-first-project",
+                    "workspace_id": real_team.empty_workspace_id,
+                },
+            )
+        )
+
+    project_create = next(tool for tool in advertised if tool.name == "project_create")
+    assert "workspace_id" in project_create.inputSchema["properties"]
+    assert "workspace_id" not in project_create.inputSchema["required"]
+    assert creation.isError is False
+    assert created == ["selected-first-project"]
 
 
 def test_mcp_viewer_cannot_create_a_project(real_team):

@@ -93,10 +93,15 @@ _DENIED_PREFIXES = {
     # project relation.  They stay unavailable in team mode until scoped.
     "/api/conductor/jobs",
 }
+_BODY_PROJECT_DEFAULTS = {
+    "/api/brain/understand": "default",
+    "/api/brain/ask": "default",
+    "/api/xref/resolve_batch": "prism",
+}
 
 
 async def _request_project(request: Request) -> str:
-    path = request.url.path
+    path = request.url.path.rstrip("/") or "/"
     if _under(path, "/graphify-visual"):
         parts = path.split("/")
         if len(parts) < 3:
@@ -112,27 +117,32 @@ async def _request_project(request: Request) -> str:
     if len(query_values) > 1:
         raise ValueError("project must be supplied exactly once")
     query_project = query_values[0] if query_values else None
-    body_project = None
 
-    # A few POST endpoints carry their project selector in a Pydantic body.
-    # Starlette caches request.body(), so downstream body parsing sees the
-    # same bytes; no receive-channel replay is required.
-    if request.method not in {"GET", "HEAD"}:
+    # Only these handlers select a project from their JSON body.  Treating an
+    # arbitrary body.project as authoritative lets a caller authorize one
+    # project while a query-driven handler operates on another.  Starlette
+    # caches request.json(), so the actual handler still receives the body.
+    if path in _BODY_PROJECT_DEFAULTS:
+        body: object = None
         content_type = request.headers.get("content-type", "").casefold()
         if "json" in content_type:
             try:
                 body = await request.json()
             except (ValueError, UnicodeDecodeError):
                 body = None
-            if isinstance(body, dict) and body.get("project") is not None:
-                body_project = body["project"]
-    if (
-        query_project is not None
-        and body_project is not None
-        and query_project != body_project
-    ):
-        raise ValueError("conflicting project selectors")
-    project = body_project if body_project is not None else query_project
+        default = _BODY_PROJECT_DEFAULTS[path]
+        if isinstance(body, dict):
+            if path == "/api/xref/resolve_batch":
+                project = body.get("project") or default
+            else:
+                project = body.get("project", default)
+        else:
+            project = default
+        if query_project is not None and query_project != project:
+            raise ValueError("conflicting project selectors")
+        return canonical_project_id(project)
+
+    project = query_project
     if project is None and _under(path, "/api/xref"):
         project = "prism"  # xref's documented legacy default
     return canonical_project_id(DEFAULT_PROJECT if project is None else project)

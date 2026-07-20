@@ -526,25 +526,6 @@ class WorkspaceService:
         ownership, _created = self.reserve_project(project_id, workspace_id)
         return ownership
 
-    def release_project(self, project_id: str, workspace_id: str) -> bool:
-        """Release only the reservation still owned by ``workspace_id``.
-
-        The compare-and-delete shape prevents cleanup for a failed creator
-        from ever removing another workspace's winning reservation.
-        """
-
-        resolved_project_id = self._canonical_project_id(project_id)
-        resolved_workspace_id = _required(workspace_id, "workspace_id")
-        with self._db:
-            cursor = self._db.execute(
-                """
-                DELETE FROM project_ownership
-                WHERE project_id = ? AND workspace_id = ?
-                """,
-                (resolved_project_id, resolved_workspace_id),
-            )
-        return cursor.rowcount > 0
-
     def project_workspace(self, project_id: str) -> Optional[Workspace]:
         resolved_project_id = self._canonical_project_id(project_id)
         row = self._db.execute(
