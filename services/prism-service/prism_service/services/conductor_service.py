@@ -2001,8 +2001,15 @@ class ConductorService:
         if spec.adapter != osp.ADAPTER_PYTEST:
             return {"ok": False,
                     "reason": "derived oracle is not pytest-runnable"}
-        ws_path, red_sha = self._workspace_and_head(task_id)
-        if not (ws_path and red_sha):
+        # Anchor on the committed red-tests commit, NOT the scratch-worktree
+        # HEAD (mx-6decaa): when the failing tests were committed to the
+        # working branch, the worktree lags a commit and a HEAD anchor lands
+        # pre-tests -> 'no tests ran' -> permanent strand. Fall back to the
+        # worktree HEAD only when no tests-only [task:<id>] commit resolves.
+        red_sha, red_repo = self._red_tests_commit(task_id)
+        if not (red_sha and red_repo):
+            red_repo, red_sha = self._workspace_and_head(task_id)
+        if not (red_repo and red_sha):
             return {"ok": False,
                     "reason": "no workspace/commit to anchor red to"}
         self._task_svc.record_history(
@@ -2011,7 +2018,7 @@ class ConductorService:
         receipt = osp.run_red_oracle(
             spec, task, red_sha,
             ctx={"project": self._project_name or "default",
-                 "workspace": ws_path})
+                 "workspace": red_repo})
         return {"ok": receipt.status == osp.ST_RED,
                 "reason": receipt.reason, "red_sha": red_sha}
 
@@ -2061,7 +2068,8 @@ class ConductorService:
                 for r in osp.read_receipts(project, task_id))
             if tried:
                 return None
-            ws_path, _head = self._workspace_and_head(task_id)
+            _s, red_repo = self._red_tests_commit(task_id)
+            ws_path = red_repo or self._workspace_and_head(task_id)[0]
             if not ws_path:
                 return None
             osp.run_red_oracle(spec, task, red_sha,
@@ -2122,52 +2130,94 @@ class ConductorService:
             model="machine")
         return res if res and res.get("ok") else None
 
+    def _red_tests_commit(self, task_id: str) -> tuple[str, str]:
+        """(sha, repo_path) of the newest commit trailered ``[task:<id8>]``
+        whose diff touches ONLY test files — the red-tests commit — searched
+        in the task's own scratch worktree FIRST, then the shared project
+        checkout. The shared checkout is essential when a session commits the
+        failing tests to the WORKING BRANCH rather than the per-task scratch
+        worktree (mx-6decaa): the scratch worktree then lags by a commit, so a
+        HEAD-based anchor lands one commit early (pre-tests) and strands the
+        red_gate as 'no tests ran'. Anchoring on the committed tests instead of
+        a possibly-stale HEAD is robust to either convention. ('', '') when
+        none resolves."""
+        import subprocess as _sp
+        tag = f"[task:{task_id[:8]}"
+        repos: list[str] = []
+        ws_path, _head = self._workspace_and_head(task_id)
+        if ws_path:
+            repos.append(ws_path)
+        root = str(self._project_root or "")
+        if root and root not in repos:
+            repos.append(root)
+        for repo in repos:
+            try:
+                r = _sp.run(["git", "log", "--format=%H%x09%s", "-n", "80"],
+                            cwd=repo, capture_output=True, text=True,
+                            timeout=15)
+                if r.returncode != 0:
+                    continue
+                for line in r.stdout.splitlines():
+                    sha, _, subj = line.partition("\t")
+                    if tag not in subj:
+                        continue
+                    if self._commit_is_tests_only(repo, sha.strip()):
+                        return sha.strip(), repo
+            except Exception:
+                continue
+        return "", ""
+
+    def _commit_is_tests_only(self, repo: str, sha: str) -> bool:
+        """True when ``sha``'s diff in ``repo`` is non-empty and touches only
+        test files — the shape of a red-tests commit. Used both to find the
+        anchor and to reject a stale ``red_step_sha`` row that points one
+        commit early (at a pre-tests commit whose diff is not tests-only)."""
+        if not (repo and sha):
+            return False
+        import subprocess as _sp
+        try:
+            f = _sp.run(["git", "diff-tree", "--no-commit-id", "--name-only",
+                         "-r", sha], cwd=repo, capture_output=True, text=True,
+                        timeout=15)
+            files = [p.strip() for p in f.stdout.splitlines() if p.strip()]
+            return bool(files) and all("tests/" in p.replace("\\", "/")
+                                       for p in files)
+        except Exception:
+            return False
+
     def _red_step_sha(self, task_id: str) -> str:
-        """The commit red is anchored to: the latest ``red_step_sha`` history
-        row (stamped by mint_red_evidence at the write_failing_tests report).
-        BACKFILL for tasks that parked at red_gate before red receipts
-        existed: the newest commit trailered ``[task:<id8>]`` whose diff
-        touches ONLY test files — the red-tests commit. '' when neither
-        resolves (the seat then leaves the gate with a human)."""
+        """The commit red is anchored to. Prefer a recorded ``red_step_sha``
+        history row (stamped by mint_red_evidence at the write_failing_tests
+        report) — but ONLY when that commit genuinely carries the pinned tests.
+        A row stamped from a lagging scratch worktree points one commit early
+        (mx-6decaa) and must NOT shadow the real red-tests commit; in that case
+        fall through to ``_red_tests_commit``, which self-heals the anchor.
+        '' when neither resolves (the seat then leaves the gate with a human)."""
         import re as _re
         try:
             rows = self._task_svc.history(task_id) or []
         except Exception:
             rows = []
+        recorded = ""
         for row in reversed(list(rows)):
-            s = str(row)
-            if "red_step_sha" not in s:
+            if "red_step_sha" not in str(row):
                 continue
-            m = _re.search(r"\b[0-9a-f]{40}\b", s)
+            m = _re.search(r"\b[0-9a-f]{40}\b", str(row))
             if m:
-                return m.group(0)
-        ws_path, _head = self._workspace_and_head(task_id)
-        if not ws_path:
-            return ""
-        import subprocess as _sp
-        tag = f"[task:{task_id[:8]}"
-        try:
-            r = _sp.run(["git", "log", "--format=%H%x09%s", "-n", "50"],
-                        cwd=ws_path, capture_output=True, text=True,
-                        timeout=15)
-            if r.returncode != 0:
-                return ""
-            for line in r.stdout.splitlines():
-                sha, _, subj = line.partition("\t")
-                if tag not in subj:
-                    continue
-                f = _sp.run(["git", "diff-tree", "--no-commit-id",
-                             "--name-only", "-r", sha.strip()],
-                            cwd=ws_path, capture_output=True, text=True,
-                            timeout=15)
-                files = [p.strip() for p in f.stdout.splitlines()
-                         if p.strip()]
-                if files and all("tests/" in p.replace("\\", "/")
-                                 for p in files):
-                    return sha.strip()
-        except Exception:
-            return ""
-        return ""
+                recorded = m.group(0)
+                break
+        tests_sha, repo = self._red_tests_commit(task_id)
+        if recorded and recorded != tests_sha:
+            # Keep the recorded row only if it truly is a tests-only commit;
+            # a lagging-worktree mis-stamp (points pre-tests) yields to the
+            # real red-tests commit resolved above.
+            ws_path, _h = self._workspace_and_head(task_id)
+            for r in (repo, ws_path, str(self._project_root or "")):
+                if r and self._commit_is_tests_only(r, recorded):
+                    return recorded
+            if tests_sha:
+                return tests_sha
+        return recorded or tests_sha
 
     def _workspace_and_head(self, task_id: str) -> tuple[str, str]:
         """(workspace_path, HEAD sha) for a task — its own scratch workspace
@@ -2321,11 +2371,32 @@ class ConductorService:
             try:
                 from prism_service.services import oracle_spec as osp
                 spec = osp.OracleSpec.from_task(task)
-                red_sha = self._red_step_sha(getattr(task, "id", ""))
-                fresh = (osp.fresh_red_receipt(
-                    self._project_name or "default",
-                    getattr(task, "id", ""), red_sha, spec.spec_hash())
-                    if red_sha else None)
+                tid = getattr(task, "id", "")
+                proj = self._project_name or "default"
+                red_sha = self._red_step_sha(tid)
+                fresh = (osp.fresh_red_receipt(proj, tid, red_sha,
+                                               spec.spec_hash())
+                         if red_sha else None)
+                if fresh is None and red_sha:
+                    # Mint the red demonstration ON DEMAND (mx-6decaa): a
+                    # test-proof red_gate must not dead-end on 'no receipt
+                    # yet'. Demonstrate the pinned tests FAILING at the
+                    # anchored red-tests commit so this approve resolves on
+                    # merit. Guarded like the adjudicator: never re-run a
+                    # spec_hash already attempted at this sha (no mint loop).
+                    already = any(
+                        r.tree_sha == red_sha
+                        and r.spec_hash == spec.spec_hash()
+                        for r in osp.read_receipts(proj, tid))
+                    if not already:
+                        _s, red_repo = self._red_tests_commit(tid)
+                        ws_path = red_repo or self._workspace_and_head(tid)[0]
+                        if ws_path:
+                            osp.run_red_oracle(
+                                spec, task, red_sha,
+                                ctx={"project": proj, "workspace": ws_path})
+                            fresh = osp.fresh_red_receipt(
+                                proj, tid, red_sha, spec.spec_hash())
                 if fresh is not None:
                     return {
                         "verified": True,

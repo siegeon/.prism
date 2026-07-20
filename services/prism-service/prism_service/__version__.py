@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.17"
+PRISM_VERSION = "7.1.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.18: RED-ANCHOR SELF-HEAL — no more stranded test drives [owner 2026-07-20]. "
+    "A test-proof drive that committed its failing tests to the WORKING BRANCH (not "
+    "the per-task scratch worktree) stranded red_gate forever: the anchor was stamped "
+    "from the lagging worktree HEAD, landing one commit early (pre-tests), so the "
+    "machine seat ran pytest where the test file didn't exist -> rc=4 'no tests ran'. "
+    "Now the anchor is the committed tests-only [task:<id>] commit itself (robust to "
+    "either commit convention), a stale recorded anchor SELF-HEALS to it, and a "
+    "test-proof red_gate mints its red demonstration ON DEMAND at approval instead of "
+    "dead-ending on 'no receipt yet'. Also: a browser oracle that CAN'T capture (no "
+    "URL / no Playwright / surface unreachable) is now manual-evidence (a human "
+    "attaches the shot), never a hard fail. "
     "v7.1.17: RAIL TOKEN BARS ARE HONEST [owner 2026-07-19]. The StepRail rendered "
     "a full-width grey track for EVERY step, so a gate that spent zero tokens "
     "showed a 'massive grey line'. Now the bar renders ONLY when the step actually "

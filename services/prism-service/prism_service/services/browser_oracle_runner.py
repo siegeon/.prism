@@ -55,8 +55,13 @@ def run(spec, ctx) -> dict:
     ctx = ctx or {}
     url = _extract_url(spec)
     if not url:
-        return {"passed": False, "artifacts": [], "observations": [],
-                "reason": "browser: no loadable URL found in the oracle text"}
+        # INCONCLUSIVE, not a failure: with no loadable URL the runner cannot
+        # capture anything, so the honest boundary is manual evidence (a human
+        # attaches the screenshot), never a hard fail (mx-6decaa).
+        return {"passed": False, "inconclusive": True, "artifacts": [],
+                "observations": [],
+                "reason": "browser: no loadable URL found in the oracle text "
+                          "— manual evidence required"}
     want = _expected_token(spec)
     shot_path = ""
     task_id = str(ctx.get("task_id", "") or "")
@@ -73,21 +78,29 @@ def run(spec, ctx) -> dict:
              url, shot_path, want],
             capture_output=True, text=True, timeout=120)
     except Exception as exc:
-        return {"passed": False, "artifacts": [], "observations": [],
-                "reason": f"browser: runner subprocess failed ({exc})"}
+        # Could not even launch the capture subprocess -> inconclusive.
+        return {"passed": False, "inconclusive": True, "artifacts": [],
+                "observations": [],
+                "reason": f"browser: runner subprocess failed ({exc}) "
+                          "— manual evidence required"}
     line = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
     try:
         data = json.loads(line)
     except Exception:
-        return {"passed": False, "artifacts": [], "observations": [],
+        # No parseable verdict -> the capture never produced a judgment;
+        # inconclusive, fall back to manual evidence rather than fail.
+        return {"passed": False, "inconclusive": True, "artifacts": [],
+                "observations": [],
                 "reason": ("browser: runner produced no verdict "
-                           f"(rc={proc.returncode}): {(proc.stderr or '')[:160]}")}
+                           f"(rc={proc.returncode}): {(proc.stderr or '')[:160]}"
+                           " — manual evidence required")}
     passed = bool(data.get("passed"))
     obs = [{"name": "customer_observable_holds", "polarity": "positive",
             "expected": data.get("expected", "URL renders real content"),
             "observed": data.get("observed", ""), "passed": passed}]
     arts = [data["shot"]] if (passed and data.get("shot")) else []
-    return {"passed": passed, "observations": obs, "artifacts": arts,
+    return {"passed": passed, "inconclusive": bool(data.get("inconclusive")),
+            "observations": obs, "artifacts": arts,
             "reason": data.get("reason", "browser: ran")}
 
 
@@ -98,11 +111,16 @@ def _main(argv: list) -> int:
     url = argv[0] if argv else ""
     shot = argv[1] if len(argv) > 1 else ""
     want = argv[2] if len(argv) > 2 else ""
-    verdict = {"passed": False, "reason": "", "observed": "", "shot": ""}
+    verdict = {"passed": False, "inconclusive": False, "reason": "",
+               "observed": "", "shot": ""}
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
-        verdict["reason"] = f"browser: playwright unavailable ({exc})"
+        # No browser engine available here -> cannot capture -> inconclusive,
+        # so the adapter falls back to manual evidence instead of failing.
+        verdict["inconclusive"] = True
+        verdict["reason"] = (f"browser: playwright unavailable ({exc}) "
+                             "— manual evidence required")
         print(json.dumps(verdict))
         return 0
     status, body, err = 0, "", ""
@@ -123,7 +141,11 @@ def _main(argv: list) -> int:
     except Exception as exc:
         err = str(exc)
     if err:
-        verdict["reason"] = f"browser: {url} failed to load — {err[:160]}"
+        # The surface could not be reached to be judged (server down / nav
+        # error) -> inconclusive in an automated context; a human confirms.
+        verdict["inconclusive"] = True
+        verdict["reason"] = (f"browser: {url} failed to load — {err[:160]} "
+                             "— manual evidence required")
         verdict["observed"] = "load error"
         print(json.dumps(verdict))
         return 0

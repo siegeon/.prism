@@ -568,6 +568,17 @@ def _run_browser(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, st
         artifacts = []
         for p in res.get("artifacts", []) or []:
             artifacts.append({"path": p, "sha256": _sha256_file(p)})
+        # INCONCLUSIVE (runner could not capture: no URL, no browser engine,
+        # subprocess/verdict failure, surface unreachable) is NOT a failure —
+        # it is the honest manual-evidence boundary (a human attaches the
+        # screenshot), never a silent pass and never a hard fail.
+        if res.get("inconclusive"):
+            return (obs or [_obs("customer_observable_holds", "positive",
+                                 "human/agent-browser evidence",
+                                 "runner inconclusive", False)],
+                    artifacts, False, ST_MANUAL,
+                    res.get("reason", "browser: inconclusive — manual "
+                            "evidence required"))
         passed = bool(res.get("passed"))
         return (obs, artifacts, passed,
                 (ST_PASSED if passed else ST_FAILED),
