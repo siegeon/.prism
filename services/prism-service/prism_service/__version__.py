@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.19"
+PRISM_VERSION = "7.1.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.20: SECURITY — evidence cross-project resolution is LOCAL-MODE ONLY [owner "
+    "2026-07-20]. v7.1.19's fix (resolve a task across projects so a raw <img> without "
+    "?project= still loads) was a cross-workspace artifact bypass in TEAM mode: a "
+    "project-a member could fetch a project-b task's evidence. Now gated to local "
+    "(single-user) mode; team mode keeps the strict per-project 404 the workspace "
+    "boundary depends on (caught by task b0dad59b's sibling authorization test). "
     "v7.1.19: GATE CARDS RENDER THE CAPTURED EVIDENCE [task:25a25d84]. Slice 3 of the "
     "single-sign-off evidence epic: a gate card now expands to the SYSTEM-CAPTURED "
     "evidence — screenshot + walkthrough video (served from /api/tasks/<id>/evidence/) "

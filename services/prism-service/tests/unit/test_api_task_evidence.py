@@ -71,3 +71,21 @@ def test_unknown_task_still_404s(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     r = client.get("/api/tasks/nope123/evidence/browser_oracle.png")
     assert r.status_code == 404
+
+
+def test_cross_project_resolution_denied_in_team_mode(tmp_path, monkeypatch):
+    # SECURITY (task b0dad59b): the local-mode convenience of resolving a task
+    # across projects MUST be OFF in team mode, or a project-a member could
+    # fetch a project-b task's artifact. With team mode on, a task absent from
+    # the requested (defaulted) project stays 404 — never served from another.
+    monkeypatch.setenv("PRISM_AUTH_MODE", "team")
+    client = _client(tmp_path, monkeypatch)
+    r = client.get(f"/api/tasks/{_TID}/evidence/browser_oracle.png")
+    # DENIED, never served: team mode both requires auth (401 here, no token)
+    # and — with a valid but wrong-project token — 404s without crossing to the
+    # foreign project (that with-token case is pinned in
+    # test_workspace_authorization::test_authorized_project_cannot_be_used_
+    # to_fetch_another_projects_artifact). The one thing that must never happen
+    # is a 200 that serves the other workspace's file.
+    assert r.status_code in (401, 403, 404)
+    assert r.status_code != 200

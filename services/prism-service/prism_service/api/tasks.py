@@ -643,18 +643,28 @@ def get_task_evidence(
     # evidence/x.png"> that bypasses the SPA api-client, so it carries NO
     # ?project= param and defaults to 'default' -> a 404 in any non-default
     # project, showing BROKEN visual evidence (owner 2026-07-20). The evidence
-    # dir is keyed by the globally-unique task_id, not the project, so resolve
-    # the task across projects instead of hard-failing on the defaulted param.
+    # dir is keyed by the globally-unique task_id, not the project, so in
+    # LOCAL (single-user) mode resolve the task across projects.
+    # SECURITY (task b0dad59b): in TEAM mode this cross-project resolution is a
+    # cross-workspace artifact bypass — a project-a member could fetch a
+    # project-b task's evidence — so it is gated to local mode ONLY; team mode
+    # keeps the strict per-project 404 the workspace boundary depends on.
     if _svc(project).get(task_id) is None:
         resolved = False
         try:
-            from prism_service import config as _cfg
-            for _proj in _cfg.list_projects():
-                if _proj != project and _svc(_proj).get(task_id) is not None:
-                    resolved = True
-                    break
+            from prism_service.api.auth import _auth
+            _local_mode = _auth().mode != "team"
         except Exception:
-            resolved = False
+            _local_mode = False
+        if _local_mode:
+            try:
+                from prism_service import config as _cfg
+                for _proj in _cfg.list_projects():
+                    if _proj != project and _svc(_proj).get(task_id) is not None:
+                        resolved = True
+                        break
+            except Exception:
+                resolved = False
         if not resolved:
             raise HTTPException(404, "task not found")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", filename) or ".." in filename:
