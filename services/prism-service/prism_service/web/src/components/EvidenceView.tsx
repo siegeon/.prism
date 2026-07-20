@@ -3,8 +3,17 @@
 // "Label: detail" clauses. Splits into rows, renders `code` as teal mono chips,
 // tones the leading Label, and highlights pass/fail/green result tokens. Uses
 // the shared --accent-* / --text-* palette (same as /understand). No <pre>.
+//
+// Task 25a25d84: also accepts a `taskId` so the page can thread through the
+// RECEIPT-captured evidence (GET /api/tasks/:id/gate_evidence) — screenshot,
+// walkthrough video, verbatim assertion source, and provenance — via the
+// SAME GateEvidenceBlock the gate rail/live-bar chips expand into, so this
+// full-page view reads identically to the inline ones. The ![img](url)
+// legacy markdown path below stays for hand-authored proof text, extended to
+// render a real <video controls> when the cited file is a .mp4/.webm.
 import { type ReactNode } from "react";
 import { highlight } from "@/components/Markdown";
+import { GateEvidenceBlock } from "@/components/conductor/TaskActivityGantt";
 
 // NUL sentinel for masking code spans — cannot appear in real evidence text.
 const SENT = String.fromCharCode(0);
@@ -27,35 +36,67 @@ function renderInline(s: string): ReactNode[] {
   );
 }
 
-export default function EvidenceView({ text }: { text: string }) {
+function isVideoSrc(src: string): boolean {
+  return /\.(mp4|webm)(\?.*)?$/i.test(src);
+}
+
+export default function EvidenceView({ text, taskId, project, proofType }: {
+  text: string;
+  // Optional: renders the task's RECEIPT-captured evidence block (task
+  // 25a25d84) below the prose — omitted by callers with no task in scope.
+  taskId?: string;
+  project?: string;
+  proofType?: string;
+}) {
   // Evidence images — proof text citing ![alt](src) renders the actual image
-  // as an inline figure (owner 2026-07-16: what a gate approves must be
-  // VISIBLE in PRISM, never described-but-elsewhere). Split image markdown
-  // out FIRST so the receipt-row sentence machinery below can't mangle it.
+  // (or, when the cited file is a .mp4/.webm, a real <video controls>) as an
+  // inline figure (owner 2026-07-16: what a gate approves must be VISIBLE in
+  // PRISM, never described-but-elsewhere). Split image markdown out FIRST so
+  // the receipt-row sentence machinery below can't mangle it.
   const parts = text.split(/(!\[[^\]]*\]\([^)\s]+\))/g);
-  if (parts.length > 1) {
-    return (
-      <div className="space-y-3">
-        {parts.map((part, i) => {
-          const img = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(part.trim());
-          if (img) {
-            return (
-              <img
-                key={`img${i}`}
-                src={img[2]}
-                alt={img[1]}
-                title={img[1]}
-                loading="lazy"
-                className="max-w-full rounded-md border border-[color:var(--border-default)]"
-              />
-            );
-          }
-          return part.trim() ? <EvidenceRows key={`rows${i}`} text={part} /> : null;
-        })}
+  const body = parts.length > 1 ? (
+    <div className="space-y-3">
+      {parts.map((part, i) => {
+        const img = /^!\[([^\]]*)\]\(([^)\s]+)\)$/.exec(part.trim());
+        if (img) {
+          const [, alt, src] = img;
+          return isVideoSrc(src) ? (
+            <video
+              key={`vid${i}`}
+              src={src}
+              controls
+              className="max-w-full rounded-md border border-[color:var(--border-default)]"
+            />
+          ) : (
+            <img
+              key={`img${i}`}
+              src={src}
+              alt={alt}
+              title={alt}
+              loading="lazy"
+              className="max-w-full rounded-md border border-[color:var(--border-default)]"
+            />
+          );
+        }
+        return part.trim() ? <EvidenceRows key={`rows${i}`} text={part} /> : null;
+      })}
+    </div>
+  ) : (
+    <EvidenceRows text={text} />
+  );
+
+  if (!taskId) return body;
+  return (
+    <div className="space-y-4">
+      {body}
+      <div className="pt-3 border-t border-[color:var(--border-default)] space-y-2.5">
+        <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+          receipt-captured evidence
+        </div>
+        <GateEvidenceBlock taskId={taskId} project={project} proofType={proofType} />
       </div>
-    );
-  }
-  return <EvidenceRows text={text} />;
+    </div>
+  );
 }
 
 function EvidenceRows({ text }: { text: string }) {

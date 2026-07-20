@@ -17,6 +17,7 @@ type Task = {
   description?: string;
   workflow_step?: string;
   gate_state?: string;
+  proof_type?: string;
 };
 
 const SECTIONS: Record<string, { label: string; field: keyof Task }> = {
@@ -64,16 +65,19 @@ export default function TaskTextPage() {
           <Empty>Loading…</Empty>
         ) : !meta ? (
           <Empty>Unknown section.</Empty>
-        ) : text ? (
-          // The description is authored markdown → render structured blocks;
-          // gate validation / completion proof are receipt-style → EvidenceView.
-          section === "description" ? (
-            <Markdown text={text} />
-          ) : (
-            <EvidenceView text={text} />
-          )
+        ) : section === "description" ? (
+          // The description is authored markdown → render structured blocks.
+          text ? <Markdown text={text} /> : <Empty>Nothing recorded.</Empty>
         ) : (
-          <Empty>Nothing recorded.</Empty>
+          // Gate validation / completion proof are receipt-style →
+          // EvidenceView, threaded with the task id (task 25a25d84) so it
+          // ALWAYS renders the RECEIPT-captured evidence block (screenshot,
+          // video, verbatim assertion, provenance) underneath whatever prose
+          // exists — even when no prose was written, so a gate with a real
+          // receipt but no hand-typed proof text still shows what was
+          // actually captured, and one with neither reads honestly empty
+          // rather than looking like the page is broken.
+          <EvidenceView text={text ?? ""} taskId={id} project={project} proofType={task?.proof_type} />
         )}
       </Card>
     </Page>

@@ -22,6 +22,7 @@ import { useScanActivity } from "@/lib/scan-activity";
 import { type Activity } from "@/components/conductor/SdlcProgress";
 import { Lozenge } from "@/components/Lozenge";
 import { EntityChip } from "@/components/EntityChip";
+import { GateEvidenceBlock } from "@/components/conductor/TaskActivityGantt";
 
 // Conductor live-state (server: /api/conductor/state → managed_tasks). The bar
 // reads activity.state, never the raw task status, so a parked task can't fake
@@ -66,6 +67,9 @@ export default function LiveBar() {
   const [managed, setManaged] = useState<ManagedTask[]>([]);
   const [version, setVersion] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
+  // Task 25a25d84: the "awaiting gate" chip expands (click) into the gate's
+  // RECEIPT-captured evidence — one task open at a time keeps the bar compact.
+  const [expandedGate, setExpandedGate] = useState<string | null>(null);
   const scan = useScanActivity();
 
   // Heartbeat: the bar must VISIBLY tick or it's indistinguishable from frozen.
@@ -181,21 +185,46 @@ export default function LiveBar() {
           </Link>
         ))}
 
-        {!collapsed && gated.map((m) => (
-          <Link
-            key={m.id}
-            to={`/tasks/${m.id}`}
-            title={`${m.title ?? ""} · ${m.id}`}
-            className="mt-1.5 flex items-center gap-2 min-w-0 border-t pt-1.5 group"
-            style={{ borderColor: tint.ring }}
-          >
-            <EntityChip kind="task" label={chipLabel(m)} />
-            <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
-            <span className="ml-auto text-xs opacity-0 group-hover:opacity-100" style={{ color: "var(--text-muted)" }}>
-              open ›
-            </span>
-          </Link>
-        ))}
+        {!collapsed && gated.map((m) => {
+          const isOpen = expandedGate === m.id;
+          return (
+            <div key={m.id} className="mt-1.5 border-t pt-1.5" style={{ borderColor: tint.ring }}>
+              <div className="flex items-center gap-2 min-w-0 group">
+                <Link
+                  to={`/tasks/${m.id}`}
+                  title={`${m.title ?? ""} · ${m.id}`}
+                  className="flex items-center gap-2 min-w-0"
+                >
+                  <EntityChip kind="task" label={chipLabel(m)} />
+                </Link>
+                {/* The gate chip EXPANDS (click) to its captured-evidence
+                    block, in-place — never navigates away to see it. */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedGate(isOpen ? null : m.id)}
+                  className="flex items-center gap-1"
+                  aria-expanded={isOpen}
+                  title="click to view this gate's captured evidence"
+                >
+                  <Lozenge tone="warn">{`awaiting ${m.gate_state === "failed" ? "gate · failed" : (m.workflow_step || "gate")}${waitFor(m.updated_at)}`}</Lozenge>
+                  <span className="text-2xs font-mono" style={{ color: tint.fg }}>{isOpen ? "▾" : "▸"}</span>
+                </button>
+                <Link
+                  to={`/tasks/${m.id}`}
+                  className="ml-auto text-xs opacity-0 group-hover:opacity-100"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  open ›
+                </Link>
+              </div>
+              {isOpen && (
+                <div className="mt-2 pl-1">
+                  <GateEvidenceBlock taskId={m.id} project={project} />
+                </div>
+              )}
+            </div>
+          );
+        })}
 
         {!collapsed && inflow.map((m) => (
           <Link

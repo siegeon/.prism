@@ -4,8 +4,10 @@
 // decisions render as honesty markers (real-verifier vs override) on their own
 // lane. Synthetic gate-actor labels are NEVER drawn as bare session rows — they
 // ARE the gate markers. Same bar visual language as the TokenTurns burn graph.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
+import { api } from "@/lib/api";
+import { EvidenceGallery, type EvidenceItem } from "@/components/EvidenceGallery";
 
 export type GanttLane = {
   session_id: string;
@@ -15,6 +17,24 @@ export type GanttLane = {
   skills: number;
   live: boolean;
 };
+// One RECEIPT-captured artifact (task 25a25d84) — screenshot/video re-pointed
+// at the whitelisted /evidence/<file> route, or the verbatim source of a
+// pytest-pinned assertion. `path` is a servable URL for screenshot/video,
+// or the pytest node id for assertion_source.
+export type GateArtifact = { kind: string; path: string; provenance?: Record<string, unknown> };
+export type GateAssertion = { id: string; source: string };
+// GET /api/tasks/:id/gate_evidence — the newest EvidenceReceipt projected for
+// a gate card. Empty artifacts+assertions is an HONEST "nothing captured",
+// never inferred from the driving agent's hand-attached proof markdown.
+export type GateEvidence = {
+  artifacts: GateArtifact[];
+  captured_by?: string;
+  captured_at?: string;
+  build?: string;
+  tree_sha?: string;
+  assertions: GateAssertion[];
+};
+
 export type GanttGate = {
   gate: string; // "red" | "green" | "gate"
   ts: number;
@@ -23,6 +43,11 @@ export type GanttGate = {
   verified: boolean;
   proof: string;
   reason: string;
+  // The RECEIPT-captured evidence for this task's latest run (task 25a25d84)
+  // — populated client-side via useGateEvidence, not by the timeline API;
+  // optional so existing timeline payloads (no evidence fetched yet) still
+  // satisfy the type.
+  evidence?: GateEvidence | null;
 };
 export type Timeline = {
   window: { start: number; end: number };
@@ -48,9 +73,114 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
 
+// Fetch the task's newest EvidenceReceipt, projected for a gate card. Shared
+// by StepRail and LiveBar so "click a gate chip -> see the captured evidence"
+// reads off ONE fetch path (GET /api/tasks/:id/gate_evidence) everywhere.
+export function useGateEvidence(taskId?: string, project = "default"): {
+  data: GateEvidence | null; loading: boolean; error: boolean;
+} {
+  const [data, setData] = useState<GateEvidence | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    if (!taskId) { setData(null); setLoading(false); setError(false); return; }
+    let live = true;
+    setLoading(true);
+    setError(false);
+    api.get<GateEvidence>(`/api/tasks/${taskId}/gate_evidence?project=${project}`)
+      .then((d) => { if (live) { setData(d); setLoading(false); } })
+      .catch(() => { if (live) { setData(null); setError(true); setLoading(false); } });
+    return () => { live = false; };
+  }, [taskId, project]);
+  return { data, loading, error };
+}
+
+function fmtWhen(iso?: string): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString([], {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+// The evidence block a gate chip expands into (task 25a25d84): the RECEIPT's
+// own captured screenshot/video (existing EvidenceGallery lightbox — never a
+// bare <img>/<a> to the raw file), verbatim per-test assertion source for a
+// proof_type=test gate, and a provenance line. When none of the three
+// modalities exist this reads HONESTLY as uncaptured — never silently blank,
+// never borrowing the driving agent's hand-attached proof markdown as if it
+// were system-captured evidence.
+export function GateEvidenceBlock({ taskId, project = "default", proofType }: {
+  taskId?: string; project?: string; proofType?: string;
+}) {
+  const { data, loading, error } = useGateEvidence(taskId, project);
+  if (!taskId) return null;
+  const media: EvidenceItem[] = (data?.artifacts ?? [])
+    .filter((a) => a.kind === "screenshot" || a.kind === "video")
+    .map((a) => ({
+      url: a.path,
+      name: a.path.split("/").pop()?.split("?")[0] || a.kind,
+      kind: a.kind === "video" ? "video" : "image",
+      caption: a.kind === "video" ? "walkthrough" : "screenshot",
+    }));
+  const assertions = data?.assertions ?? [];
+  const hasProvenance = !!(data?.captured_by || data?.captured_at);
+  const nothingCaptured = !loading && !error && media.length === 0 && assertions.length === 0;
+
+  return (
+    <div className="space-y-2.5">
+      {loading && (
+        <div className="text-2xs opacity-60">loading captured evidence…</div>
+      )}
+      {error && (
+        <div className="text-2xs" style={{ color: "var(--accent-amber-fg)" }}>
+          could not load the receipt's captured evidence
+        </div>
+      )}
+      {media.length > 0 && <EvidenceGallery items={media} thumb="md" />}
+      {assertions.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+            verbatim assertion source
+          </div>
+          {assertions.map((a, i) => (
+            <div key={`${a.id}-${i}`} className="rounded-md border border-[color:var(--border-default)] p-2 overflow-x-auto">
+              <div className="font-mono text-2xs mb-1 break-all" style={{ color: "var(--accent-teal-fg)" }}>{a.id}</div>
+              <pre className="text-2xs whitespace-pre-wrap font-mono leading-relaxed" style={{ color: "var(--text-secondary)" }}>{a.source}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+      {hasProvenance && (
+        <div className="text-2xs font-mono" style={{ color: "var(--text-muted)" }}>
+          captured by {data?.captured_by || "—"}
+          {data?.captured_at ? ` · ${fmtWhen(data.captured_at)}` : ""}
+          {data?.build ? ` · build ${data.build}` : ""}
+          {data?.tree_sha ? ` · tree ${data.tree_sha.slice(0, 10)}` : ""}
+        </div>
+      )}
+      {nothingCaptured && (
+        <div className="text-2xs rounded-md border border-dashed border-[color:var(--border-default)] px-2.5 py-2 leading-relaxed" style={{ color: "var(--accent-amber-fg)" }}>
+          ⚠ no captured evidence — not evidence-backed
+          {/^test$/i.test(proofType ?? "") ? " (this is a test-proof gate — see the Tests tab for its oracle)" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TaskActivityGantt({
-  timeline, reduced,
-}: { timeline: Timeline; reduced?: boolean | null }) {
+  timeline, reduced, taskId, project,
+}: {
+  timeline: Timeline; reduced?: boolean | null;
+  // Optional: when given, a drilled-in gate marker also shows its RECEIPT's
+  // captured evidence (task 25a25d84). Omitted by callers that don't have a
+  // task in scope — the drill panel then keeps its prior receipt-only view.
+  taskId?: string; project?: string;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const { start, end } = timeline.window;
   const span = Math.max(1, end - start);
@@ -167,6 +297,11 @@ export default function TaskActivityGantt({
             </span>
             <div className="mt-1 opacity-70">actor: <span className="font-mono">{g.actor || "—"}</span>{g.proof ? ` · proof: ${g.proof}` : ""}</div>
             <div className="mt-1 opacity-50 break-words">{g.reason}</div>
+            {taskId && (
+              <div className="mt-2 pt-2 border-t border-[color:var(--border-default)]/40">
+                <GateEvidenceBlock taskId={taskId} project={project} />
+              </div>
+            )}
           </div>
         );
       })()}

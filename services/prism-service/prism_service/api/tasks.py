@@ -569,8 +569,9 @@ def get_task_prototype(
     return FileResponse(str(path), media_type="text/html")
 
 
-# Evidence images a drive cites in its proof — whitelisted image types only,
-# so this route can never serve executable content.
+# Evidence media a drive cites in its proof, or that the trusted-runner
+# receipt captured (screenshot + walkthrough video) — whitelisted image/video
+# types only, so this route can never serve executable content.
 _EVIDENCE_MEDIA = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -824,6 +825,126 @@ def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
         return statuses
     except Exception:
         return None
+
+
+def _discover_pinned_test_rows(task_id: str) -> list[dict]:
+    """Fallback assertion-source discovery for a proof_type=test gate whose
+    receipt predates (or whose adapter skips) the mint-time
+    ``assertion_source`` capture: scan the same two roots ``/tests`` uses
+    (service checkout + task workspace) for files that pin this task by id,
+    and hand every ``def test_*`` to ``_extract_tests_from_source`` for its
+    VERBATIM body — never a paraphrase. Best-effort; a missing workspace or
+    unparseable file yields fewer rows, never an error."""
+    from pathlib import Path
+    from prism_service.services.task_workspace import workspace_for
+
+    short = task_id[:8]
+    results: list[dict] = []
+    seen_rel: set[str] = set()
+    checkout_root = Path(__file__).resolve().parents[2] / "tests"
+    roots: list[Path] = [checkout_root]
+    ws = workspace_for(task_id)
+    if ws:
+        roots.append(Path(ws["path"]) / "services" / "prism-service" / "tests")
+    for tests_root in roots:
+        if not tests_root.is_dir():
+            continue
+        for p in sorted(tests_root.rglob("*.py")):
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if task_id in text or (len(short) >= 8 and short in text):
+                rel = p.relative_to(tests_root.parent).as_posix()
+                if rel in seen_rel:
+                    continue
+                seen_rel.add(rel)
+                results.extend(_extract_tests_from_source(text, rel))
+    return results
+
+
+@router.get("/{task_id}/gate_evidence")
+def get_task_gate_evidence(task_id: str, project: str = Query("default")) -> dict:
+    """Project the task's newest EvidenceReceipt into what a gate CARD needs
+    to show: captured screenshot(s)/video (re-pointed at the whitelisted
+    ``/evidence/<file>`` route), verbatim per-test assertion source, and the
+    capture provenance (who/when/build/tree).
+
+    CRITICAL (likely_misfire): this renders ONLY the RECEIPT's own
+    ``artifacts[]`` — what the trusted runner actually captured — never the
+    driving agent's hand-attached completion_proof markdown. A gate with none
+    of the three modalities (screenshot, video, assertion source) must come
+    back with all three lists empty, so the caller can render an honest
+    "no captured evidence — not evidence-backed" state instead of looking
+    evidence-backed on borrowed prose.
+    """
+    from pathlib import Path
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    task = _svc(project).get(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+
+    from prism_service.services import oracle_spec as _osp
+    try:
+        receipt = _osp.latest_receipt(project, task_id)
+    except Exception:
+        receipt = None
+
+    artifacts: list[dict] = []
+    assertions: list[dict] = []
+    captured_by = captured_at = build = ""
+    tree_sha = (receipt.tree_sha if receipt else "") or ""
+
+    if receipt is not None:
+        for art in receipt.artifacts or []:
+            if not isinstance(art, dict):
+                continue
+            kind = art.get("kind", "")
+            prov = art.get("provenance") or {}
+            if kind in ("screenshot", "video"):
+                raw_path = str(art.get("path") or "")
+                name = Path(raw_path).name if raw_path else ""
+                ext = name[name.rfind(".") :].lower() if "." in name else ""
+                # Never trust the receipt's raw path verbatim — only serve a
+                # name that resolves under this task's evidence dir with a
+                # whitelisted extension (same guard as get_task_evidence).
+                if name and ext in _EVIDENCE_MEDIA and (evidence_dir(task_id) / name).is_file():
+                    artifacts.append({
+                        "kind": kind,
+                        "path": (
+                            f"/api/tasks/{task_id}/evidence/{name}"
+                            f"?project={quote(project, safe='')}"
+                        ),
+                        "provenance": prov,
+                    })
+                    captured_by = captured_by or str(prov.get("captured_by", ""))
+                    captured_at = captured_at or str(prov.get("captured_at", ""))
+                    build = build or str(prov.get("build", ""))
+            elif kind == "assertion_source":
+                src = str(prov.get("source", "") or "")
+                if src:
+                    assertions.append({"id": art.get("path", ""), "source": src})
+
+    # Fallback for proof_type=test gates whose receipt predates (or whose
+    # adapter skips) mint-time assertion_source capture — reuse the SAME
+    # discovery + VERBATIM extraction the Tests tab uses (task 25a25d84: do
+    # not re-paraphrase what a test asserts).
+    if not assertions and str(getattr(task, "proof_type", "") or "").strip().lower() == "test":
+        for row in _discover_pinned_test_rows(task_id):
+            snippet = row.get("snippet") or ""
+            if snippet:
+                assertions.append({"id": row.get("name", ""), "source": snippet})
+
+    return {
+        "artifacts": artifacts,
+        "captured_by": captured_by,
+        "captured_at": captured_at,
+        "build": build,
+        "tree_sha": tree_sha,
+        "assertions": assertions,
+    }
 
 
 class TaskUpdate(BaseModel):
