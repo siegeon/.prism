@@ -10,10 +10,8 @@ from __future__ import annotations
 
 import contextlib
 import json
-import re
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import replace
 from urllib.parse import parse_qs
 
 import uvicorn
@@ -24,7 +22,8 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
-from prism_service.config import DEFAULT_PROJECT
+from prism_service.config import DEFAULT_PROJECT, PROJECTS_DIR
+from prism_service.api.security import canonical_project_id
 from prism_service.mcp.instructions import PRISM_INSTRUCTIONS
 from prism_service.mcp.request_context import (
     PrismRequestContext,
@@ -38,8 +37,10 @@ from prism_service.mcp.tools import (
     tools_for_profile,
 )
 from prism_service.services.auth_service import AuthenticationRequired, AuthService
+from prism_service.models.workspace import role_allows
 from prism_service.services.workspace_service import (
     AuthorizationDenied,
+    ProjectOwnershipConflict,
     get_workspace_service,
 )
 
@@ -67,7 +68,15 @@ _MCP_VIEWER_TOOLS = {
     "memory_recall",
     "prism_guide",
 }
-_PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# Team mode: tools whose schema takes an UNSCOPED host filesystem path
+# (register_claude_source.cwd, verifier_run.workspace) can dereference a path
+# outside any workspace, so they FAIL CLOSED in team mode until ownership can
+# constrain the path. Local single-user mode keeps them available. This set is
+# pinned to the schema scan by test_team_boundary_hardening::
+# test_mcp_host_path_schemas_are_explicitly_classified_for_team_mode — a new
+# host-path tool must be classified here (or its schema field removed) or that
+# test fails, so the deny set can never silently drift behind the tools.
+_TEAM_UNSCOPED_HOST_PATH_TOOLS = frozenset({"register_claude_source", "verifier_run"})
 
 
 def _tool_error(status: int, detail: str) -> CallToolResult:
@@ -84,15 +93,22 @@ def _authorize_tool(name: str, ctx: PrismRequestContext):
     """Return the caller's membership or a structured MCP error."""
     if ctx.principal.mode == "local":
         return None
+    # Discovery and creation are identity/workspace scoped.  Requiring a
+    # current project here would deadlock an empty workspace before either
+    # tool could run.
+    if name in {"project_list", "project_create"}:
+        return None
     minimum = (
-        "admin" if name == "project_create"
-        else "viewer" if name in _MCP_VIEWER_TOOLS
+        "viewer" if name in _MCP_VIEWER_TOOLS
         else "member"
     )
     try:
+        project_id = canonical_project_id(ctx.project_id)
         return get_workspace_service().require_project_role(
-            ctx.principal.user_id, ctx.project_id, minimum
+            ctx.principal.user_id, project_id, minimum
         )
+    except ValueError:
+        return _tool_error(400, "invalid project id")
     except AuthorizationDenied:
         return _tool_error(403, "project access denied")
 
@@ -133,6 +149,27 @@ async def call_tool(name: str, arguments: dict):
                 "hint": hint,
             }, indent=2))],
         )
+    if ctx.principal.mode == "team" and name not in {
+        "project_list",
+        "project_create",
+    }:
+        explicit_project = (arguments or {}).get("project")
+        if explicit_project:
+            try:
+                target_project = canonical_project_id(explicit_project)
+                selected_project = canonical_project_id(ctx.project_id)
+            except ValueError:
+                return _tool_error(400, "invalid project id")
+            if target_project != selected_project:
+                return _tool_error(403, "project selector does not match connection")
+    if ctx.principal.mode == "team" and name in _TEAM_UNSCOPED_HOST_PATH_TOOLS:
+        # Fail closed before dispatch — placed AFTER the project-selector check
+        # so a mismatched selector still reports the selector error — because
+        # the tool's host-path argument is not yet constrained to the caller's
+        # workspace. Local mode is unaffected (handled by the local short-
+        # circuit in _authorize_tool).
+        return _tool_error(
+            403, "tool is unavailable in team mode until its host path is scoped")
     if ctx.principal.mode == "team" and name == "project_list":
         visible = get_workspace_service().list_projects_for_user(
             ctx.principal.user_id
@@ -143,26 +180,60 @@ async def call_tool(name: str, arguments: dict):
         )])
 
     if ctx.principal.mode == "team" and name == "project_create":
-        pid = str((arguments or {}).get("project_id") or "").strip()
-        if not _PROJECT_ID_RE.fullmatch(pid):
+        args = arguments or {}
+        try:
+            pid = canonical_project_id(args.get("project_id"))
+        except ValueError:
             return _tool_error(400, "invalid project id")
         service = get_workspace_service()
-        current_workspace = service.project_workspace(ctx.project_id)
-        if current_workspace is None:
-            return _tool_error(403, "current project has no workspace owner")
+        requested_workspace = str(args.get("workspace_id") or "").strip()
+        eligible = [
+            membership
+            for membership in service.list_memberships_for_user(ctx.principal.user_id)
+            if role_allows(membership.role, "admin")
+            and (
+                not requested_workspace
+                or membership.workspace_id == requested_workspace
+            )
+        ]
+        if not eligible:
+            return _tool_error(403, "workspace admin access required")
+        if len(eligible) != 1:
+            return _tool_error(
+                422,
+                "workspace_id is required when the caller administers multiple workspaces",
+            )
+        workspace_id = eligible[0].workspace_id
         owned = service.project_workspace(pid)
-        if owned is not None and owned.id != current_workspace.id:
+        if owned is None and (PROJECTS_DIR / pid).is_dir():
+            return _tool_error(
+                409,
+                "existing unowned project must be bound by a workspace admin",
+            )
+        try:
+            service.reserve_project(pid, workspace_id)
+        except ProjectOwnershipConflict:
             return _tool_error(409, "project is owned by another workspace")
+        except ValueError as exc:
+            return _tool_error(400, str(exc) or "invalid project id")
         from prism_service.project_context import create_project
 
-        create_project(pid)
-        service.bind_project(pid, current_workspace.id)
+        try:
+            create_project(pid)
+        except Exception:
+            return _tool_error(500, "project creation failed")
         return CallToolResult(content=[TextContent(type="text", text=json.dumps({
             "created": pid,
             "message": f"Project '{pid}' created. Connect with ?project={pid}",
         }))])
 
-    return await handle_tool(name, arguments, project_id=ctx.project_id)
+    result = await handle_tool(name, arguments, project_id=ctx.project_id)
+    # Normalize the success path to a CallToolResult so a DIRECT call_tool()
+    # caller always gets a consistent shape (the SDK transport already wraps a
+    # bare content list; existing consumers are shape-agnostic).
+    if isinstance(result, CallToolResult):
+        return result
+    return CallToolResult(content=list(result))
 
 
 # ---------------------------------------------------------------------------
@@ -212,15 +283,12 @@ async def handle_mcp(scope, receive, send):
         return
     if principal.mode == "team":
         try:
-            membership = get_workspace_service().require_project_role(
-                principal.user_id, project_id, "viewer"
-            )
-        except AuthorizationDenied:
+            project_id = canonical_project_id(project_id)
+        except ValueError:
             await JSONResponse(
-                {"error": "project access denied"}, status_code=403
+                {"error": "invalid project id"}, status_code=400
             )(scope, receive, send)
             return
-        principal = replace(principal, role=membership.role)
     request_ctx = PrismRequestContext(
         project_id=project_id,
         request_id=uuid.uuid4().hex,

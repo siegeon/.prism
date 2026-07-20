@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.20"
+PRISM_VERSION = "7.1.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.21: TEAM BOUNDARY HARDENING INTEGRATED [task:b0dad59b, owner 2026-07-20]. "
+    "Merged the stranded team-boundary-bypass slice onto the branch (its work + "
+    "45-test suite lived only on the task's worktree branch): the production REST, "
+    "SSE, graph, and MCP surfaces now share workspace authorization; first-owner setup "
+    "is secret-gated and atomic; canonical project ownership is reserved before "
+    "filesystem/network work; every pytest truthy spelling requires a member. Local "
+    "single-user mode is unchanged; team mode fails closed. "
     "v7.1.20: SECURITY — evidence cross-project resolution is LOCAL-MODE ONLY [owner "
     "2026-07-20]. v7.1.19's fix (resolve a task across projects so a raw <img> without "
     "?project= still loads) was a cross-workspace artifact bypass in TEAM mode: a "

@@ -13,9 +13,16 @@ from pydantic import BaseModel
 
 from prism_service.config import DEFAULT_PROJECT
 from prism_service.models.workspace import Principal
-from prism_service.services.auth_service import AuthenticationRequired, AuthService
+from prism_service.api.security import query_requests_execution
+from prism_service.services.auth_service import (
+    AuthenticationRequired,
+    AuthService,
+    BootstrapSecretMismatch,
+    BootstrapSecretNotConfigured,
+)
 from prism_service.services.workspace_service import (
     AuthorizationDenied,
+    BootstrapAlreadyCompleted,
     get_workspace_service,
 )
 
@@ -37,8 +44,13 @@ def _unauthorized(exc: Exception) -> HTTPException:
 
 def current_principal(request: Request) -> Principal:
     """Resolve the caller once; never copy credentials into request state."""
+    resolved = getattr(request.state, "principal", None)
+    if isinstance(resolved, Principal):
+        return resolved
     try:
-        return _auth().resolve_principal(request.headers.get("authorization"))
+        resolved = _auth().resolve_principal(request.headers.get("authorization"))
+        request.state.principal = resolved
+        return resolved
     except AuthenticationRequired as exc:
         raise _unauthorized(exc)
 
@@ -97,7 +109,7 @@ def authorize_project_request(
     executes_tests = (
         request.method == "GET"
         and request.url.path.rstrip("/").endswith("/tests")
-        and request.query_params.get("run", "").lower() in {"1", "true", "yes", "on"}
+        and query_requests_execution(request)
     )
     minimum = "member" if request.method != "GET" or executes_tests else "viewer"
     require_project_role(principal, project, minimum)
@@ -120,22 +132,28 @@ def mode() -> dict:
 
 
 @router.post("/bootstrap")
-def bootstrap(body: BootstrapBody) -> dict:
+def bootstrap(body: BootstrapBody, request: Request) -> dict:
     """Create the first team owner and return its bearer exactly once."""
     auth = _auth()
     if auth.mode != "team":
         raise HTTPException(409, "bootstrap is only available in team mode")
-    service = get_workspace_service()
-    if service.has_users():
-        raise HTTPException(409, "team identity has already been bootstrapped")
     email = (body.email or "").strip()
     name = (body.workspace_name or "").strip()
     if not email or not name:
         raise HTTPException(422, "email and workspace_name are required")
     try:
-        user = service.create_user(email, display_name=(body.display_name or "").strip())
-        workspace = service.create_workspace(name, owner_user_id=user.id)
-        issued = auth.issue_token(user.id, label="bootstrap")
+        user, workspace, issued = auth.bootstrap_owner(
+            email=email,
+            display_name=(body.display_name or "").strip(),
+            workspace_name=name,
+            supplied_secret=request.headers.get("x-prism-bootstrap-secret"),
+        )
+    except BootstrapSecretNotConfigured as exc:
+        raise HTTPException(503, str(exc))
+    except BootstrapSecretMismatch as exc:
+        raise HTTPException(403, str(exc))
+    except BootstrapAlreadyCompleted as exc:
+        raise HTTPException(409, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return {"user": user, "workspace": workspace, "token": issued.secret,

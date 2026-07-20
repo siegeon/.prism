@@ -1488,6 +1488,13 @@ TOOLS: list[Tool] = [
                     "type": "string",
                     "description": "Project identifier (slug, e.g. 'my-app')",
                 },
+                "workspace_id": {
+                    "type": "string",
+                    "description": (
+                        "Owning workspace id; required when the caller "
+                        "administers multiple workspaces"
+                    ),
+                },
             },
             "required": ["project_id"],
         },
