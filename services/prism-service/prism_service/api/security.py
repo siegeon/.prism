@@ -91,7 +91,6 @@ _AUTH_ONLY_PREFIXES = {
 _DENIED_PREFIXES = {
     # These surfaces use process-global state or task ids without a verified
     # project relation.  They stay unavailable in team mode until scoped.
-    "/api/github-auth",
     "/api/conductor/jobs",
 }
 
@@ -182,6 +181,13 @@ async def enforce_team_boundary(request: Request):
 
     if any(_under(path, prefix) for prefix in _DENIED_PREFIXES):
         raise HTTPException(403, "route is not workspace-scoped in team mode")
+    if _under(path, "/api/github-auth"):
+        if request.method in {"GET", "HEAD"} and path in {
+            "/api/github-auth/status",
+            "/api/github-auth/client-id",
+        }:
+            return principal
+        raise HTTPException(403, "GitHub credentials are not workspace-scoped")
     if _under(path, "/api/update"):
         if request.method not in {"GET", "HEAD"}:
             raise HTTPException(403, "updates are disabled in team mode")
@@ -192,7 +198,12 @@ async def enforce_team_boundary(request: Request):
     # Aggregate run/job listings become cross-workspace leaks when their
     # optional project filter is omitted.  Detail-by-id has no safe ownership
     # resolver yet, so require a selector and deny unscoped details.
-    if _under(path, "/api/jobs") or _under(path, "/api/claude-runs"):
+    if _under(path, "/api/jobs"):
+        if "project" not in request.query_params:
+            raise HTTPException(403, "an explicit project is required in team mode")
+    if _under(path, "/api/claude-runs"):
+        if path not in {"/api/claude-runs", "/api/claude-runs/summary"}:
+            raise HTTPException(403, "run detail is not workspace-scoped")
         if "project" not in request.query_params:
             raise HTTPException(403, "an explicit project is required in team mode")
     if path == "/api/conductor/flow/workspace":

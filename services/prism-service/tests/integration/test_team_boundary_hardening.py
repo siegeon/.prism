@@ -224,6 +224,17 @@ def test_team_mode_denies_process_global_mutations_before_handlers(
     assert update_called == []
 
 
+def test_unscoped_run_detail_cannot_be_authorized_with_an_unrelated_query(
+    real_team,
+):
+    response = real_team.client.get(
+        "/api/claude-runs/foreign-run-id",
+        params={"project": "project-a"},
+        headers=real_team.bearer(real_team.alice_token),
+    )
+    assert response.status_code == 403
+
+
 def _empty_bootstrap_client(tmp_path, monkeypatch, *, configured_secret=True):
     from fastapi.testclient import TestClient
 
@@ -461,6 +472,33 @@ def test_mcp_viewer_cannot_create_a_project(real_team):
 
     assert result.isError is True
     assert _mcp_payload(result) == {"error": "workspace admin access required", "status": 403}
+
+
+def test_mcp_tool_argument_cannot_override_the_authorized_connection_project(
+    real_team,
+):
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.server import call_tool
+    from prism_service.services.auth_service import AuthService
+
+    principal = AuthService(real_team.service, mode="team").resolve_principal(
+        f"Bearer {real_team.alice_token}"
+    )
+    with use_request_context(
+        PrismRequestContext(project_id="project-a", tool_profile="all", principal=principal)
+    ):
+        result = asyncio.run(
+            call_tool(
+                "register_claude_source",
+                {"project": "project-b", "cwd": "C:/foreign"},
+            )
+        )
+
+    assert result.isError is True
+    assert _mcp_payload(result) == {
+        "error": "project selector does not match connection",
+        "status": 403,
+    }
 
 
 def test_local_mode_keeps_production_routes_open(real_team, monkeypatch):

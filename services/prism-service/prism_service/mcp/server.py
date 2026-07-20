@@ -22,7 +22,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
-from prism_service.config import DEFAULT_PROJECT
+from prism_service.config import DEFAULT_PROJECT, PROJECTS_DIR
 from prism_service.api.security import canonical_project_id
 from prism_service.mcp.instructions import PRISM_INSTRUCTIONS
 from prism_service.mcp.request_context import (
@@ -138,6 +138,19 @@ async def call_tool(name: str, arguments: dict):
                 "hint": hint,
             }, indent=2))],
         )
+    if ctx.principal.mode == "team" and name not in {
+        "project_list",
+        "project_create",
+    }:
+        explicit_project = (arguments or {}).get("project")
+        if explicit_project:
+            try:
+                target_project = canonical_project_id(explicit_project)
+                selected_project = canonical_project_id(ctx.project_id)
+            except ValueError:
+                return _tool_error(400, "invalid project id")
+            if target_project != selected_project:
+                return _tool_error(403, "project selector does not match connection")
     if ctx.principal.mode == "team" and name == "project_list":
         visible = get_workspace_service().list_projects_for_user(
             ctx.principal.user_id
@@ -172,6 +185,12 @@ async def call_tool(name: str, arguments: dict):
                 "workspace_id is required when the caller administers multiple workspaces",
             )
         workspace_id = eligible[0].workspace_id
+        owned = service.project_workspace(pid)
+        if owned is None and (PROJECTS_DIR / pid).is_dir():
+            return _tool_error(
+                409,
+                "existing unowned project must be bound by a workspace admin",
+            )
         try:
             _, reservation_created = service.reserve_project(pid, workspace_id)
         except ProjectOwnershipConflict:
