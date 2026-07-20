@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.21"
+PRISM_VERSION = "7.1.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.22: TESTS TAB READS GREEN FOR A MERGED TASK [owner 2026-07-20]. The Tests "
+    "tab runs the pinned tests live (?run=true) in the task's scratch worktree; for a "
+    "just-MERGED task that worktree still holds pre-merge code, so the live run yields "
+    "no usable status and every row painted 'not-run' — hiding the gate's own trusted-"
+    "runner receipt that already proved them pass. get_task_tests now fills any row a "
+    "live run didn't resolve from that receipt (a real live pass/fail still wins), so a "
+    "done, green-gated task's pinned tests read GREEN. "
     "v7.1.21: TEAM BOUNDARY HARDENING INTEGRATED [task:b0dad59b, owner 2026-07-20]. "
     "Merged the stranded team-boundary-bypass slice onto the branch (its work + "
     "45-test suite lived only on the task's worktree branch): the production REST, "

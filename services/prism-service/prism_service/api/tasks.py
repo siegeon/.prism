@@ -815,18 +815,24 @@ def get_task_tests(task_id: str, run: bool = Query(False),
             "ended_at": rc.ended_at, "runner": rc.runner_version,
             "reason": (rc.reason or "")[:400],
         }
-        # Only DERIVE row status from the receipt when we did NOT run live —
-        # a live run's real statuses win. The receipt runs the task's PINNED
-        # oracle file; its reason names that path, so rc==0 means every pinned
-        # test passed under the trusted runner (distinct actor).
-        if not ran:
-            reason = rc.reason or ""
-            for row in results:
-                f = row.get("file") or ""
-                if f and f in reason:
-                    row["status"] = "passed" if rc.passed else "failed"
-                    row["passed"] = bool(rc.passed)
-                    row["verified_by"] = "gate-receipt"
+        # Fill any row the live run did NOT resolve (or when we didn't run
+        # live at all) from the gate's trusted-runner receipt. A real live run
+        # keeps its own passed/failed statuses (they win); but a live run that
+        # executed in a stale/wrong tree — e.g. a just-MERGED task whose scratch
+        # worktree still holds pre-merge code — yields no usable status and
+        # leaves rows "not-run", which must NOT hide the distinct-actor receipt
+        # (owner 2026-07-20: a done, green-gated task's pinned tests read green).
+        # The receipt runs the task's PINNED oracle files; its reason names each
+        # path, so rc.passed means every pinned test passed under the runner.
+        reason = rc.reason or ""
+        for row in results:
+            if row.get("status") not in (None, "", "not-run"):
+                continue
+            f = row.get("file") or ""
+            if f and f in reason:
+                row["status"] = "passed" if rc.passed else "failed"
+                row["passed"] = bool(rc.passed)
+                row["verified_by"] = "gate-receipt"
     return {"tests": results, "ran": ran, "receipt": receipt_info}
 
 
