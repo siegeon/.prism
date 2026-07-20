@@ -16,18 +16,26 @@ from prism_service.services import sqlite_db
 from threading import Thread
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from prism_service.api.auth import (
+    coerce_principal,
+    current_principal,
+    require_project_role,
+    require_workspace_role,
+)
 from prism_service.config import DEFAULT_PROJECT, PROJECTS_DIR, project_data_dir
 from prism_service.engines import understand_engine as ue
+from prism_service.models.workspace import Principal
 from prism_service.project_context import get_all_projects, release_project
 from prism_service.services import source_service as ss
 from prism_service.services import trash as trash_svc
+from prism_service.services.workspace_service import get_workspace_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(current_principal)])
 
 
 def _count_tasks(name: str) -> int:
@@ -51,12 +59,20 @@ def _count_tasks(name: str) -> int:
 
 
 @router.get("")
-def list_projects() -> dict:
+def list_projects(
+    principal: Principal = Depends(current_principal),
+) -> dict:
     # `projects` stays the flat list for backward-compat; `task_counts`
     # is additive so the SPA cold-start resolver (lib/project.ts) can pick
     # the busiest non-'default' project on first load instead of landing on
     # the empty 'default' blank state (follow-up to #137 item 3).
+    principal = coerce_principal(principal)
     projects = get_all_projects() or []
+    if principal.mode == "team":
+        allowed = set(
+            get_workspace_service().list_projects_for_user(principal.user_id)
+        )
+        projects = [name for name in projects if name in allowed]
     task_counts = {name: _count_tasks(name) for name in projects}
     return {"projects": projects, "task_counts": task_counts}
 
@@ -66,6 +82,9 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 class CreateBody(BaseModel):
     name: str
+    # Required in team mode so ownership is explicit before any project
+    # directory is resolved. Optional/ignored by legacy local callers.
+    workspace_id: Optional[str] = None
     # v5.2.0 primary path: point PRISM at a bind-mounted folder on the
     # host. This is the simple flow for developer audiences — clone the
     # repo on your host with your existing git auth, mount it into the
@@ -78,7 +97,11 @@ class CreateBody(BaseModel):
 
 
 @router.post("")
-def create_project(body: CreateBody) -> dict:
+def create_project(
+    body: CreateBody,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal = coerce_principal(principal)
     name = (body.name or "").strip()
     if not _NAME_RE.match(name):
         raise HTTPException(
@@ -86,6 +109,29 @@ def create_project(body: CreateBody) -> dict:
             "name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63} "
             "(no slashes, no spaces)",
         )
+
+    workspace_id = (body.workspace_id or "").strip()
+    workspace_service = get_workspace_service()
+    if principal.mode == "team":
+        if not workspace_id:
+            memberships = workspace_service.list_memberships_for_user(
+                principal.user_id
+            )
+            if len(memberships) != 1:
+                raise HTTPException(
+                    422,
+                    "workspace_id is required when the caller has zero or multiple workspaces",
+                )
+            workspace_id = memberships[0].workspace_id
+        require_workspace_role(principal, workspace_id, "member")
+        owned = workspace_service.project_workspace(name)
+        if owned is not None and owned.id != workspace_id:
+            raise HTTPException(409, "project is owned by another workspace")
+        if owned is None and (PROJECTS_DIR / name).is_dir():
+            raise HTTPException(
+                409,
+                "existing unowned project must be bound by a workspace admin",
+            )
 
     pdir = project_data_dir(name)  # seeds source/, graph/, state.json
     head_sha: Optional[str] = None
@@ -129,6 +175,9 @@ def create_project(body: CreateBody) -> dict:
         bootstrap = "started"
         mode = "clone"
 
+    if principal.mode == "team":
+        workspace_service.bind_project(name, workspace_id)
+
     return {
         "created": True,
         "name": name,
@@ -139,6 +188,7 @@ def create_project(body: CreateBody) -> dict:
         "tracked_ref": body.tracked_ref if remote_url else None,
         "head_sha": head_sha,
         "bootstrap": bootstrap,
+        "workspace_id": workspace_id or None,
     }
 
 
@@ -158,8 +208,12 @@ def _dir_size_bytes(root) -> int:
 
 
 @router.delete("/{name}")
-def delete_project(name: str) -> dict:
+def delete_project(
+    name: str,
+    principal: Principal = Depends(current_principal),
+) -> dict:
     """Wipe a project's data dir + cached services. Refuses 'default'."""
+    principal = coerce_principal(principal)
     name = (name or "").strip()
     if not _NAME_RE.match(name):
         raise HTTPException(400, "invalid project name")
@@ -169,6 +223,7 @@ def delete_project(name: str) -> dict:
             f"'{DEFAULT_PROJECT}' is the implicit fallback project and "
             "cannot be deleted",
         )
+    require_project_role(principal, name, "admin")
     pdir = PROJECTS_DIR / name
     if not pdir.is_dir():
         raise HTTPException(404, f"project {name!r} not found")

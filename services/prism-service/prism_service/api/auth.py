@@ -1,0 +1,176 @@
+"""Team principal HTTP adapter.
+
+The domain resolver deliberately lives in ``services.auth_service`` so the
+REST and MCP transports authenticate the same opaque bearer credential.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
+
+from prism_service.config import DEFAULT_PROJECT
+from prism_service.models.workspace import Principal
+from prism_service.services.auth_service import AuthenticationRequired, AuthService
+from prism_service.services.workspace_service import (
+    AuthorizationDenied,
+    get_workspace_service,
+)
+
+
+router = APIRouter()
+
+
+def _auth() -> AuthService:
+    return AuthService(get_workspace_service())
+
+
+def _unauthorized(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail=str(exc) or "authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def current_principal(request: Request) -> Principal:
+    """Resolve the caller once; never copy credentials into request state."""
+    try:
+        return _auth().resolve_principal(request.headers.get("authorization"))
+    except AuthenticationRequired as exc:
+        raise _unauthorized(exc)
+
+
+def coerce_principal(value: object) -> Principal:
+    """Keep direct local-mode route calls used by legacy unit tests working.
+
+    FastAPI replaces ``Depends`` defaults on real HTTP requests.  Older tests
+    call route functions directly, leaving the marker object in place; local
+    mode may safely synthesize its explicit single-user principal.
+    """
+    if isinstance(value, Principal):
+        return value
+    try:
+        return _auth().resolve_principal(None)
+    except AuthenticationRequired as exc:
+        raise _unauthorized(exc)
+
+
+def require_project_role(
+    principal: Principal, project: str, minimum_role: str = "viewer"
+):
+    if principal.mode == "local":
+        return None
+    try:
+        return get_workspace_service().require_project_role(
+            principal.user_id, project, minimum_role
+        )
+    except AuthorizationDenied as exc:
+        raise HTTPException(403, str(exc) or "project access denied")
+
+
+def require_workspace_role(
+    principal: Principal, workspace_id: str, minimum_role: str = "viewer"
+):
+    if principal.mode == "local":
+        return None
+    try:
+        return get_workspace_service().require_workspace_role(
+            principal.user_id, workspace_id, minimum_role
+        )
+    except AuthorizationDenied as exc:
+        raise HTTPException(403, str(exc) or "workspace access denied")
+
+
+def authorize_project_request(
+    request: Request,
+    project: str = Query(DEFAULT_PROJECT),
+) -> Principal:
+    """Tasks-router guard: authenticate and authorize before ``get_project``.
+
+    GET is viewer-safe except ``tests?run=true``, which executes code and is
+    therefore a member mutation.  Every non-GET method requires member.
+    """
+    principal = current_principal(request)
+    executes_tests = (
+        request.method == "GET"
+        and request.url.path.rstrip("/").endswith("/tests")
+        and request.query_params.get("run", "").lower() in {"1", "true", "yes", "on"}
+    )
+    minimum = "member" if request.method != "GET" or executes_tests else "viewer"
+    require_project_role(principal, project, minimum)
+    return principal
+
+
+class BootstrapBody(BaseModel):
+    email: str
+    display_name: str = ""
+    workspace_name: str
+
+
+class TokenBody(BaseModel):
+    label: str = ""
+
+
+@router.get("/mode")
+def mode() -> dict:
+    return {"mode": _auth().mode}
+
+
+@router.post("/bootstrap")
+def bootstrap(body: BootstrapBody) -> dict:
+    """Create the first team owner and return its bearer exactly once."""
+    auth = _auth()
+    if auth.mode != "team":
+        raise HTTPException(409, "bootstrap is only available in team mode")
+    service = get_workspace_service()
+    if service.has_users():
+        raise HTTPException(409, "team identity has already been bootstrapped")
+    email = (body.email or "").strip()
+    name = (body.workspace_name or "").strip()
+    if not email or not name:
+        raise HTTPException(422, "email and workspace_name are required")
+    try:
+        user = service.create_user(email, display_name=(body.display_name or "").strip())
+        workspace = service.create_workspace(name, owner_user_id=user.id)
+        issued = auth.issue_token(user.id, label="bootstrap")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"user": user, "workspace": workspace, "token": issued.secret,
+            "token_id": issued.id}
+
+
+@router.get("/me")
+def me(principal: Principal = Depends(current_principal)) -> dict:
+    principal = coerce_principal(principal)
+    service = get_workspace_service()
+    user = service.get_user(principal.user_id) if principal.mode == "team" else None
+    memberships = (
+        service.list_memberships_for_user(principal.user_id)
+        if principal.mode == "team"
+        else []
+    )
+    return {
+        "mode": principal.mode,
+        "user": {
+            "id": principal.user_id,
+            "email": user.email if user else principal.email,
+            "display_name": user.display_name if user else principal.display_name,
+        },
+        "memberships": memberships,
+    }
+
+
+@router.post("/tokens")
+def create_token(
+    body: Optional[TokenBody] = None,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal = coerce_principal(principal)
+    if principal.mode != "team":
+        raise HTTPException(409, "bearer tokens are only used in team mode")
+    issued = _auth().issue_token(principal.user_id, label=(body.label if body else ""))
+    return {"id": issued.id, "token": issued.secret, "label": issued.label}
+

@@ -11,6 +11,7 @@ app; the import-time side effects stay in the per-module routers.
 from fastapi import APIRouter
 
 from prism_service.api.agent_runs import router as agent_runs_router
+from prism_service.api.auth import router as auth_router
 from prism_service.api.brain import router as brain_router
 from prism_service.api.claude_auth import router as claude_auth_router
 from prism_service.api.claude_runs import router as claude_runs_router
@@ -36,10 +37,12 @@ from prism_service.api.understand import router as understand_router
 from prism_service.api.update import router as update_router
 from prism_service.api.version import router as version_router
 from prism_service.api.watchdog import router as watchdog_router
+from prism_service.api.workspaces import router as workspaces_router
 from prism_service.api.xref import router as xref_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(agent_runs_router, prefix="/agent-runs", tags=["agent-runs"])
+api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(brain_router, prefix="/brain", tags=["brain"])
 api_router.include_router(claude_auth_router, prefix="/claude-auth", tags=["claude-auth"])
 api_router.include_router(claude_runs_router, prefix="/claude-runs", tags=["claude-runs"])
@@ -65,4 +68,5 @@ api_router.include_router(understand_router, prefix="/understand", tags=["unders
 api_router.include_router(update_router, prefix="/update", tags=["update"])
 api_router.include_router(version_router, prefix="/version", tags=["version"])
 api_router.include_router(watchdog_router, prefix="/watchdog", tags=["watchdog"])
+api_router.include_router(workspaces_router, prefix="/workspaces", tags=["workspaces"])
 api_router.include_router(xref_router, prefix="/xref", tags=["xref"])

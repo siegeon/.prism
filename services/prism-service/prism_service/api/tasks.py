@@ -3,16 +3,18 @@
 import dataclasses
 import re
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from prism_service.api.auth import authorize_project_request
 from prism_service.data_dir import evidence_dir, prototype_file
 from prism_service.project_context import get_project
 from prism_service.services.task_service import SESSION_GATE_FIX
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(authorize_project_request)])
 
 
 def _svc(project: str):
@@ -388,6 +390,9 @@ def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     transcript instead of rendering a dishonest 0."""
     from prism_service.services.agent_runs_data import build_task_trace
 
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
+
     src, override = "", ""
     try:
         from prism_service.services.claude_transcripts import _project_source_path
@@ -547,13 +552,17 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
 
 
 @router.get("/{task_id}/prototype")
-def get_task_prototype(task_id: str):
+def get_task_prototype(
+    task_id: str, project: str = Query("default"),
+):
     """Serve the task's prototype HTML so the SPA can iframe it on the Plan
     card (prototypes viewable IN PRISM, not an external port). task_id is a
     server-generated UUID; reject anything else so a crafted id can't traverse
     out of the prototypes dir."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
     path = prototype_file(task_id)
     if not path.exists():
         raise HTTPException(404, "no prototype for this task")
@@ -586,11 +595,13 @@ def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
     from datetime import datetime, timezone
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    task = _svc(project).get(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
     d = evidence_dir(task_id)  # mkdirs; empty dir → empty list, not a 404
     # Which filenames the proof cites, so the caller can link row → artifact.
     cited: set[str] = set()
     try:
-        task = _svc(project).get(task_id)
         proof = (getattr(task, "completion_proof", "") or "") if task else ""
         for m in re.finditer(r"/evidence/([A-Za-z0-9][A-Za-z0-9._-]{0,127})", proof):
             cited.add(m.group(1))
@@ -604,7 +615,10 @@ def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
         st = p.stat()
         files.append({
             "name": p.name,
-            "url": f"/api/tasks/{task_id}/evidence/{p.name}",
+            "url": (
+                f"/api/tasks/{task_id}/evidence/{p.name}"
+                f"?project={quote(project, safe='')}"
+            ),
             "media_type": _EVIDENCE_MEDIA[ext],
             "kind": "video" if _EVIDENCE_MEDIA[ext].startswith("video/") else "image",
             "size_bytes": st.st_size,
@@ -615,13 +629,17 @@ def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
 
 
 @router.get("/{task_id}/evidence/{filename}")
-def get_task_evidence(task_id: str, filename: str):
+def get_task_evidence(
+    task_id: str, filename: str, project: str = Query("default"),
+):
     """Serve one of the task's evidence files (gate/audit screenshots) so the
     SPA renders it inline where the proof cites it — evidence viewable IN
     PRISM, never an external host (owner 2026-07-16). Both path pieces are
     whitelisted so a crafted request can't traverse out of the evidence dir."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", filename) or ".." in filename:
         raise HTTPException(400, "bad filename")
     ext = filename[filename.rfind(".") :].lower() if "." in filename else ""
@@ -703,6 +721,8 @@ def get_task_tests(task_id: str, run: bool = Query(False),
     the tab painting every pin RED forever: red is a phase, not a badge."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
 
     from pathlib import Path
     from prism_service.services.task_workspace import workspace_for
