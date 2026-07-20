@@ -258,9 +258,18 @@ def board_health(tasks) -> dict:
 # Artifact-looking signals that evidence a real, demonstrable UI surface:
 # an agent-browser / verify screenshot vs the dev :8888 surface, or a
 # Playwright assertion. A pytest/unit line alone is NOT a UI artifact.
+#
+# NOTE (task 9afd1b72): the bare word "screenshot" is DELIBERATELY excluded
+# here — "I took a screenshot" with no path/extension/host is gameable
+# self-attested prose, not proof. A concrete signal (a file extension, an
+# agent-browser/Playwright citation, or a dev-surface host:port) is trusted
+# on its own; a bare mention with none of those must instead be corroborated
+# by a REAL captured file via has_captured_evidence (evidence_dir on disk,
+# or a fresh EvidenceReceipt's artifacts[] naming a file that exists) at the
+# gate-decide call sites below.
 _UI_ARTIFACT_SIGNALS = (
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
-    "screenshot", "agent-browser", "playwright", ":8888", "127.0.0.1:8888",
+    "agent-browser", "playwright", ":8888", "127.0.0.1:8888",
 )
 
 
@@ -420,20 +429,37 @@ def green_gate_artifact_reason(completion_proof: object, reason: object,
             "string is not proof")
 
 
-def has_captured_evidence(task_id: object) -> bool:
-    """True iff the task has at least one captured evidence image on file
-    (data_dir/evidence/<id>/*). Owner 2026-07-19 ('implement to evidence'): a
-    captured screenshot/video in the task's evidence store SATISFIES the
-    demonstrable-UI requirement — the user (or the drive) captures it, and the
-    gate passes; no hand-cited path in completion_proof required."""
+def has_captured_evidence(task_id: object, project: object = "") -> bool:
+    """True iff the task has REAL captured evidence: at least one image/video
+    file directly under data_dir/evidence/<id>/, OR (task 9afd1b72) a fresh
+    EvidenceReceipt's ``artifacts[]`` naming a file that exists on disk — the
+    mint may write a walkthrough capture the receipt cites without also
+    landing it in the evidence_dir glob, so receipt.artifacts is consulted
+    directly rather than trusting a self-attested completion_proof substring.
+    Owner 2026-07-19 ('implement to evidence'): a captured screenshot/video in
+    the task's evidence store SATISFIES the demonstrable-UI requirement — the
+    user (or the drive) captures it, and the gate passes; no hand-cited path
+    in completion_proof required."""
     try:
         from prism_service.data_dir import evidence_dir
         d = evidence_dir(str(task_id or ""))
         exts = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".webm")
-        return any(p.is_file() and p.suffix.lower() in exts
-                   for p in d.glob("*"))
+        if any(p.is_file() and p.suffix.lower() in exts for p in d.glob("*")):
+            return True
     except Exception:
-        return False
+        pass
+    try:
+        from prism_service.services import oracle_spec as _osp
+        receipt = _osp.latest_receipt(str(project or "default"),
+                                      str(task_id or ""))
+        if receipt is not None:
+            for art in (receipt.artifacts or []):
+                path = art.get("path") if isinstance(art, dict) else None
+                if path and Path(str(path)).is_file():
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def gate_artifact_reason(gate_step_id: str, completion_proof: object,
@@ -2640,7 +2666,8 @@ class ConductorService:
             # 'Implement to evidence': a captured screenshot in the task's
             # evidence gallery satisfies the demonstrable-UI requirement, even
             # if completion_proof doesn't hand-cite the path.
-            if ui_reason and has_captured_evidence(task_id):
+            if ui_reason and has_captured_evidence(
+                    task_id, self._project_name or "default"):
                 ui_reason = ""
             if ui_reason:
                 # NOT a failure — the approve just can't go through YET (needs a
@@ -2974,7 +3001,8 @@ class ConductorService:
         if rollup_ok:
             # The children's proofs ARE the epic's artifact (issue #171).
             artifact_reason = ""
-        elif artifact_reason and has_captured_evidence(task_id):
+        elif artifact_reason and has_captured_evidence(
+                task_id, self._project_name or "default"):
             # 'Implement to evidence': a captured screenshot/video in the task's
             # evidence gallery IS the artifact (owner 2026-07-19).
             artifact_reason = ""

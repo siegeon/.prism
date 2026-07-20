@@ -58,6 +58,13 @@ dev = [
   "ruff>=0.4",
   "build>=1.0",
 ]
+# OPTIONAL (task 9afd1b72): browser_oracle_runner / evidence_capture use
+# Playwright to earn a real UI-oracle receipt and capture screenshots/video.
+# Both degrade gracefully (manual_evidence_required / artifact-less receipt)
+# when it is not installed, so it stays an opt-in extra, not a hard dep.
+browser = [
+  "playwright>=1.40",
+]
 
 [project.urls]
 Homepage = "https://github.com/siegeon/.prism"

@@ -613,6 +613,43 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
             [], [], False, ST_ERROR, f"unknown adapter {spec.adapter!r}")
     else:
         observations, artifacts, passed, status, reason = runner(spec, ctx)
+    # EVIDENCE CAPTURE for ui/demo tasks (task 9afd1b72): layer a richer
+    # walkthrough (screenshot + video) plus verbatim per-pytest-id assertion
+    # source onto the receipt's artifacts[], ON TOP of whatever the adapter
+    # itself already produced. ALL best-effort: evidence_capture never raises
+    # on its own, and this whole block is additionally guarded so a capture
+    # failure (no Playwright, unreachable app, unresolvable node id) yields
+    # an artifact-less receipt instead of failing the mint.
+    try:
+        _proof_type = str(getattr(task, "proof_type", "") or "").strip().lower()
+        _tag_set = {str(t).strip().lower()
+                   for t in (getattr(task, "tags", None) or [])}
+        if task_id and (_proof_type == "demo" or "ui" in _tag_set):
+            from prism_service.services import evidence_capture as _ec
+            from prism_service.services import browser_oracle_runner as _bor
+            from prism_service.data_dir import evidence_dir as _evidence_dir
+            _url = _bor._extract_url(spec)
+            if _url:
+                _cap = _ec.capture_walkthrough(_url, str(_evidence_dir(task_id)))
+                if not _cap.get("error"):
+                    _prov = _ec.provenance(RUNNER_VERSION, tree_sha or "")
+                    if _cap.get("screenshot"):
+                        artifacts.append({"kind": "screenshot",
+                                          "path": _cap["screenshot"],
+                                          "provenance": _prov})
+                    if _cap.get("video"):
+                        artifacts.append({"kind": "video",
+                                          "path": _cap["video"],
+                                          "provenance": _prov})
+            for _node_id in _pytest_ids_from_task(task):
+                _src = _ec.assertion_source_for(_node_id,
+                                                ctx.get("workspace") or "")
+                if _src:
+                    artifacts.append({"kind": "assertion_source",
+                                      "path": _node_id,
+                                      "provenance": {"source": _src}})
+    except Exception:
+        pass
     # PINNED CONTROL-PLANE PROVENANCE (inverted-flow #3): stamp the ref the
     # gate policy is pinned to + a hash over that policy set. Best-effort —
     # an unpinnable environment stamps "" (the gate then skips the policy tooth
