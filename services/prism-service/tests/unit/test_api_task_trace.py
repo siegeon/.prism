@@ -60,8 +60,17 @@ def _client(tmp_path, monkeypatch):
     scores_db = str(tmp_path / "scores.db")
     _seed_schema(scores_db)
 
+    # The trace route guards task existence via _svc(project).get(task_id)
+    # (its only use of task_svc; grouping reads scores.db). These tests all
+    # query tasks that DO exist (they seed that task's agent_runs), so a stub
+    # that reports the task present lets the real grouping be exercised.
+    class _Svc:
+        def get(self, _task_id):
+            return object()
+
     class _Ctx:
         _data_dir = tmp_path
+        task_svc = _Svc()
 
     monkeypatch.setattr(tasks_api, "get_project", lambda p: _Ctx())
 

@@ -43,6 +43,12 @@ def _arm_update_available():
         )
         au._state.latest_version = "9.9.9"
         au._state.restart_required = False
+        # Arm the release as workable so the workability guard (task e5fbec61)
+        # lets apply_update proceed — without this, apply_update fails closed on
+        # the missing PRISM-WORKABLE marker (the sibling test_auto_updater.py
+        # arms it the same way; this helper was missed when the guard landed).
+        au._state.latest_workable = True
+        au._state.workable_reason = "armed workable for test"
 
 
 def _reset_state():
