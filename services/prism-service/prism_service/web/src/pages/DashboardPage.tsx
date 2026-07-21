@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import * as Plot from "@observablehq/plot";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, Skeleton } from "@/components/ui";
 import { Lozenge } from "@/components/Lozenge";
 import { PlotFigure, Sparkline, TONE, plotBase } from "@/components/Chart";
 import { fmtTokens } from "@/lib/format";
@@ -137,10 +137,21 @@ export default function DashboardPage() {
   const [project] = useProject();
   const [data, setData] = useState<State | null>(null);
   const [act, setAct] = useState<Activity | null>(null);
+  // Hydration flags — the whole point of task 89e90d1a. `data`/`act` being
+  // null cannot distinguish "not fetched yet" from "fetched and genuinely
+  // empty", so every render downstream painted a confident 0. These flip once
+  // per source, on settle (including the error path — a failed fetch is still
+  // "we know now"), and gate the skeletons below.
+  const [stateLoaded, setStateLoaded] = useState(false);
+  const [actLoaded, setActLoaded] = useState(false);
 
   const load = useCallback(() => {
-    api.get<State>(`/api/dashboard/state?project=${project}`).then(setData).catch(() => setData(null));
-    api.get<Activity>(`/api/dashboard/activity?project=${project}&days=14`).then(setAct).catch(() => setAct(null));
+    api.get<State>(`/api/dashboard/state?project=${project}`)
+      .then(setData).catch(() => setData(null))
+      .finally(() => setStateLoaded(true));
+    api.get<Activity>(`/api/dashboard/activity?project=${project}&days=14`)
+      .then(setAct).catch(() => setAct(null))
+      .finally(() => setActLoaded(true));
   }, [project]);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -224,30 +235,48 @@ export default function DashboardPage() {
       {/* Hero — the brain's pulse over time */}
       <Card raised>
         <SectionLabel>Brain activity · last 14 days</SectionLabel>
-        {pulse ? <PlotFigure options={pulse} className="w-full" /> : <Empty>No activity yet.</Empty>}
+        {/* Skeleton ONLY while unhydrated; once actLoaded flips the real
+            empty state must show through (never mask true emptiness). */}
+        {!actLoaded
+          ? <Skeleton className="h-[210px] w-full" />
+          : pulse
+            ? <PlotFigure options={pulse} className="w-full" />
+            : <Empty>No activity yet.</Empty>}
       </Card>
 
       <StalenessCard project={project} />
 
       {/* Trend KPIs — movement, not static inventory */}
       <section className="flex flex-wrap gap-3">
-        <TrendKpi label="Queries" series={act?.series.searches ?? []} color={TONE.teal} />
-        <TrendKpi label="Docs indexed" series={act?.series.indexing ?? []} color={TONE.sage} />
-        <TrendKpi label="Workflow events" series={act?.series.workflow ?? []} color={TONE.violet} />
-        <TrendKpi label="Tasks shipped" series={act?.flow.completed ?? []} color={TONE.emerald} />
-        <TrendKpi label="Tokens (14d)" series={act?.tokens.per_day ?? []} color={TONE.amber} fmt={compact} />
+        {actLoaded ? (
+          <>
+            <TrendKpi label="Queries" series={act?.series.searches ?? []} color={TONE.teal} />
+            <TrendKpi label="Docs indexed" series={act?.series.indexing ?? []} color={TONE.sage} />
+            <TrendKpi label="Workflow events" series={act?.series.workflow ?? []} color={TONE.violet} />
+            <TrendKpi label="Tasks shipped" series={act?.flow.completed ?? []} color={TONE.emerald} />
+            <TrendKpi label="Tokens (14d)" series={act?.tokens.per_day ?? []} color={TONE.amber} fmt={compact} />
+          </>
+        ) : (
+          /* pre-hydration: 5 placeholders until actLoaded flips — `?? []`
+             would otherwise make sum([]) paint a confident 0 on every load */
+          [0, 1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-[92px] flex-1 min-w-[150px]" />
+          ))
+        )}
       </section>
 
       {/* Interactions + Delivery flow */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
           <SectionLabel>Interactions · search</SectionLabel>
-          <div className="flex gap-3 mb-3">
-            <Stat label="queries" value={nf(q?.total ?? 0)} />
-            <Stat label="avg latency" value={q?.avg_latency != null ? `${q.avg_latency} ms` : "—"} />
-            <Stat label="avg results" value={q ? String(q.avg_results) : "—"} tone={q && q.avg_results < 1 ? TONE.rose : undefined} />
-            <Stat label="zero-result" value={`${zeroPct}%`} tone={zeroPct > 50 ? TONE.rose : undefined} />
-          </div>
+          {!actLoaded ? <Skeleton className="h-[62px] w-full mb-3" /> : (
+            <div className="flex gap-3 mb-3">
+              <Stat label="queries" value={nf(q?.total ?? 0)} />
+              <Stat label="avg latency" value={q?.avg_latency != null ? `${q.avg_latency} ms` : "—"} />
+              <Stat label="avg results" value={q ? String(q.avg_results) : "—"} tone={q && q.avg_results < 1 ? TONE.rose : undefined} />
+              <Stat label="zero-result" value={`${zeroPct}%`} tone={zeroPct > 50 ? TONE.rose : undefined} />
+            </div>
+          )}
           {qChart && <PlotFigure options={qChart} className="w-full mb-3" />}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">Recent queries</div>
           {q?.recent.length ? (
@@ -265,12 +294,15 @@ export default function DashboardPage() {
 
         <Card>
           <SectionLabel>Delivery flow</SectionLabel>
-          <div className="flex gap-3 mb-3">
-            <Stat label="gate pass-rate" value={gatePct != null ? `${gatePct}%` : "—"} tone={gatePct === 100 ? TONE.emerald : gatePct != null ? TONE.amber : undefined} />
-            <Stat label="cycle time" value={act?.flow?.cycle_days != null ? `${act.flow.cycle_days} d` : "—"} />
-            <Stat label="shipped" value={nf(sum(act?.flow?.completed ?? []))} />
-            <Stat label="active" value={nf(data?.kpis?.tasks_active ?? 0)} />
-          </div>
+          {/* reads BOTH sources — skeleton until each has loaded */}
+          {!(actLoaded && stateLoaded) ? <Skeleton className="h-[62px] w-full mb-3" /> : (
+            <div className="flex gap-3 mb-3">
+              <Stat label="gate pass-rate" value={gatePct != null ? `${gatePct}%` : "—"} tone={gatePct === 100 ? TONE.emerald : gatePct != null ? TONE.amber : undefined} />
+              <Stat label="cycle time" value={act?.flow?.cycle_days != null ? `${act.flow.cycle_days} d` : "—"} />
+              <Stat label="shipped" value={nf(sum(act?.flow?.completed ?? []))} />
+              <Stat label="active" value={nf(data?.kpis?.tasks_active ?? 0)} />
+            </div>
+          )}
           {flowChart && <PlotFigure options={flowChart} className="w-full mb-3" />}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-1">Workflow events by action</div>
           {eventsChart ? <PlotFigure options={eventsChart} className="w-full" /> : <Empty>No events.</Empty>}
@@ -281,19 +313,21 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
           <SectionLabel>Token usage · per work session</SectionLabel>
-          <div className="flex gap-3 mb-3">
-            <Stat label="total tokens" value={compact(act?.tokens.total ?? 0)} tone={TONE.amber} />
-            <Stat label="avg / session" value={compact(act?.tokens.avg_session ?? 0)} />
-            <Stat label="sessions" value={nf(act?.tokens.sessions ?? 0)} />
-            <Stat label="last 14 days" value={compact(act?.tokens.window_total ?? 0)} />
-          </div>
+          {!actLoaded ? <Skeleton className="h-[62px] w-full mb-3" /> : (
+            <div className="flex gap-3 mb-3">
+              <Stat label="total tokens" value={compact(act?.tokens.total ?? 0)} tone={TONE.amber} />
+              <Stat label="avg / session" value={compact(act?.tokens.avg_session ?? 0)} />
+              <Stat label="sessions" value={nf(act?.tokens.sessions ?? 0)} />
+              <Stat label="last 14 days" value={compact(act?.tokens.window_total ?? 0)} />
+            </div>
+          )}
           {tokenChart ? <PlotFigure options={tokenChart} className="w-full" /> : <Empty>No token data yet.</Empty>}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-2">Tracked per session — PRISM does not record tokens per individual task.</div>
         </Card>
 
         <Card>
           <SectionLabel>Governance</SectionLabel>
-          {health ? (
+          {!stateLoaded ? <Skeleton className="h-[132px] w-full" /> : health ? (
             <div className="space-y-2 text-sm">
               <Row label="Flagged conflicts" v={health.flagged_conflicts} bad={health.flagged_conflicts > 0} />
               <Row label="Stuck tasks" v={health.stuck_tasks} bad={health.stuck_tasks > 0} />

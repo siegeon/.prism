@@ -72,7 +72,10 @@ def test_ac1_dashboard_declares_named_hydration_flag():
 
 def test_ac1_hydration_flag_is_set_when_each_fetch_resolves():
     src = _read(_DASH)
-    load = _block(src, "const load = useCallback", 700)
+    # Anchor on the dashboard GET itself: "const load = useCallback" also
+    # appears in StalenessCard higher up the file, and anchoring there tested
+    # the wrong component.
+    load = _block(src, "/api/dashboard/state", 700)
     assert _FLAG_TOKEN.search(load), (
         "AC-1: load() must FLIP the hydration flag as each of the two GETs "
         "settles (:141-146) — a flag never set is the same lie as no flag.")

@@ -65,6 +65,11 @@ export default function LiveBar() {
   const [project] = useProject();
   const { pathname } = useLocation();
   const [managed, setManaged] = useState<ManagedTask[]>([]);
+  // `managed` inits [] which computes state="idle" — so the bar flashed
+  // "Idle · no task being driven — queue is quiet" before its FIRST poll had
+  // even returned, on every load (task 89e90d1a likely_misfire). Hold a
+  // neutral "connecting" state until this flips.
+  const [polled, setPolled] = useState(false);
   const [version, setVersion] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
   // Task 25a25d84: the "awaiting gate" chip expands (click) into the gate's
@@ -81,7 +86,8 @@ export default function LiveBar() {
   const load = useCallback(() => {
     api.get<{ managed_tasks?: ManagedTask[] }>(`/api/conductor/state?project=${project}`)
       .then((d) => { setManaged(d.managed_tasks ?? []); fetchedAt.current = performance.now(); setSinceFetchS(0); })
-      .catch(() => setManaged([]));
+      .catch(() => setManaged([]))
+      .finally(() => setPolled(true));
   }, [project]);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -106,17 +112,22 @@ export default function LiveBar() {
   // Honest states, in precedence order: LIVE (something is actually moving)
   // > AWAITING REVIEW (parked at a gate — a human/machine owes a decision)
   // > IN FLOW (managed work between reports) > IDLE (queue truly quiet).
-  const state: "live" | "gated" | "inflow" | "idle" =
-    isLive ? "live" : gated.length > 0 ? "gated"
-      : inflow.length > 0 ? "inflow" : "idle";
+  // "loading" precedes every honest state: until `polled` flips we have NOT
+  // observed the queue, so claiming it is quiet would be a guess, not a fact.
+  const state: "loading" | "live" | "gated" | "inflow" | "idle" =
+    !polled ? "loading"
+      : isLive ? "live" : gated.length > 0 ? "gated"
+        : inflow.length > 0 ? "inflow" : "idle";
   const tint = {
+    loading: { bg: "var(--surface-1)", ring: "var(--border-subtle)", fg: "var(--text-muted)" },
     live: { bg: "var(--accent-sage-bg)", ring: "var(--accent-sage-ring)", fg: "var(--accent-sage-fg)" },
     gated: { bg: "var(--accent-amber-bg)", ring: "var(--accent-amber-ring)", fg: "var(--accent-amber-fg)" },
     inflow: { bg: "var(--surface-1)", ring: "var(--border-default)", fg: "var(--text-secondary)" },
     idle: { bg: "var(--surface-1)", ring: "var(--border-subtle)", fg: "var(--text-muted)" },
   }[state];
-  const stateLabel = state === "live" ? "Live" : state === "gated" ? "Awaiting review"
-    : state === "inflow" ? "In flow" : "Idle";
+  const stateLabel = state === "loading" ? "Connecting…"
+    : state === "live" ? "Live" : state === "gated" ? "Awaiting review"
+      : state === "inflow" ? "In flow" : "Idle";
   const heartbeat = `poll ${Math.floor(sinceFetchS)}s · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
 
   // Legible chip: the task TITLE (truncated), never a bare uuid — the full
@@ -245,7 +256,8 @@ export default function LiveBar() {
           </Link>
         ))}
 
-        {!collapsed && state === "idle" && (
+        {/* only claim the queue is quiet once `polled` proves we looked */}
+        {!collapsed && polled && state === "idle" && (
           <div className="mt-1.5 border-t pt-1.5 text-xs" style={{ borderColor: tint.ring, color: "var(--text-muted)" }}>
             no task being driven — queue is quiet
           </div>
