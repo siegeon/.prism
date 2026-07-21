@@ -206,6 +206,37 @@ MACHINE_SEATS = frozenset(
     {ADJUDICATOR_SEAT, "conductor-autoclear", "gate-card-rerun"})
 
 
+def _red_pytest_spec(task: object):
+    """The spec used to DEMONSTRATE RED — always a pytest concern.
+
+    Task a9215794 (owner 2026-07-21). Red and completion are different
+    questions and were wrongly sharing one spec. ``OracleSpec.from_task``
+    describes how the FINISHED outcome is proved, so a ticket whose oracle
+    names a URL derives ``http_probe`` — right for completion, useless for
+    red, because a red gate must observe the PINNED TESTS failing at the red
+    anchor. Worse, the old red paths ALSO demanded ``proof_type == "test"``,
+    so task 89e90d1a — proof_type=artifact (its proof is browser
+    screenshots) with a textbook tests-only anchor at 53c23a4 — could never
+    be machine-decided and dead-ended at red_gate forever.
+
+    Resolve red from the task's PINNED TEST material instead, independent of
+    proof_type. Returns None when there is no pytest material, which keeps
+    the honest boundary: a demo/browser ticket with nothing to run still has
+    no machine red and correctly stays with a human. This widens WHICH
+    tickets the seat will attempt; it does NOT weaken the proof burden — the
+    caller still requires the trusted runner to observe those tests FAILING
+    at a tests-only anchor before red is granted.
+    """
+    from prism_service.services import oracle_spec as osp
+    try:
+        ids = osp._pytest_ids_from_task(task)
+        if not ids:
+            return None
+        return osp.OracleSpec._pytest_spec(ids)
+    except Exception:
+        return None
+
+
 def _is_low_value_completion(task: object) -> bool:
     """A done task is LOW-VALUE on reliable signals only (goalbuddy GAP-5).
 
@@ -1992,15 +2023,16 @@ class ConductorService:
         task = self._task_svc.get(task_id)
         if task is None:
             return {"ok": False, "reason": "unknown task"}
-        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
-        if pt != "test":
-            return {"ok": False, "reason": f"proof_type={pt!r}: red "
-                    "receipts are for test-proof tickets"}
         from prism_service.services import oracle_spec as osp
-        spec = osp.OracleSpec.from_task(task)
-        if spec.adapter != osp.ADAPTER_PYTEST:
+        # Red is resolved from the task's PINNED TESTS, not from proof_type
+        # (task a9215794). The proof burden is unchanged: run_red_oracle below
+        # must still observe those tests FAILING at the anchor.
+        spec = _red_pytest_spec(task)
+        if spec is None:
             return {"ok": False,
-                    "reason": "derived oracle is not pytest-runnable"}
+                    "reason": ("no pinned pytest material to demonstrate red "
+                               "with — set task.verify to the failing test "
+                               "path(s), or decide this gate manually")}
         # Anchor on the committed red-tests commit, NOT the scratch-worktree
         # HEAD (mx-6decaa): when the failing tests were committed to the
         # working branch, the worktree lags a commit and a HEAD anchor lands
@@ -2043,9 +2075,6 @@ class ConductorService:
         if getattr(task, "status", "") in ("cancelled", "archived",
                                            "deleted", "done"):
             return None
-        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
-        if pt != "test":
-            return None
         try:
             from prism_service.services import control_plane as _cp
             if _cp.candidate_controls_judge_reason(task):
@@ -2053,8 +2082,12 @@ class ConductorService:
         except Exception:
             return None
         from prism_service.services import oracle_spec as osp
-        spec = osp.OracleSpec.from_task(task)
-        if spec.adapter != osp.ADAPTER_PYTEST:
+        # Resolve red from the PINNED TESTS, not proof_type (task a9215794):
+        # an artifact/demo-proofed ticket can still own a perfectly good
+        # tests-only red anchor. No pytest material -> no machine red, and the
+        # gate honestly stays with a human.
+        spec = _red_pytest_spec(task)
+        if spec is None:
             return None
         red_sha = self._red_step_sha(task_id)
         if not red_sha:

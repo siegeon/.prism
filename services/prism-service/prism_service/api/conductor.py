@@ -109,11 +109,15 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                            "artifact; the rubric decides "
                                            "on Approve")}}
         from prism_service.services import oracle_spec as osp
-        spec = osp.OracleSpec.from_task(task)
+        from prism_service.services.conductor_service import _red_pytest_spec
+        # MUST be the same spec the mint and the adjudicator use (task
+        # a9215794): spec_hash is the receipt's freshness key, so deriving a
+        # different spec here would never match the receipt just minted.
+        spec = _red_pytest_spec(task)
         red_sha = s._red_step_sha(task_id)
         fresh = (osp.fresh_red_receipt(project, task_id, red_sha,
                                        spec.spec_hash())
-                 if red_sha else None)
+                 if (red_sha and spec is not None) else None)
         if fresh is not None:
             return {"receipt_ok": True, "receipt_refusal": "",
                     "receipt": {"adapter": fresh.adapter, "passed": False,
@@ -123,9 +127,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
         # Does the machine red seat actually TAKE this ticket? Promising "no
         # owner action needed" for a sweep that can never come is how an owner
         # waits forever (owner 2026-07-21: task 89e90d1a sat at red_gate while
-        # the card said the machine had it). adjudicate_test_red_gate refuses
-        # unless proof_type == "test" AND the oracle spec uses the pytest
-        # adapter; the seat must also be enabled. Name the blocker instead.
+        # the card said the machine had it). Name the real blocker instead.
         _blocks: list[str] = []
         try:
             from prism_service.services import gate_adjudicator as _ga
@@ -134,12 +136,10 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                "environment (PRISM_GATE_ADJUDICATOR_INTERVAL)")
         except Exception:
             pass
-        if pt != "test":
-            _blocks.append(f"this ticket's proof_type is "
-                           f"'{pt or 'unset'}', not 'test'")
-        if spec.adapter != osp.ADAPTER_PYTEST:
-            _blocks.append(f"its oracle adapter is '{spec.adapter}', "
-                           "not pytest")
+        if spec is None:
+            _blocks.append("this ticket has no pinned pytest material to "
+                           "demonstrate red with (set task.verify to the "
+                           "failing test path(s))")
         if not red_sha:
             return {"receipt_ok": False,
                     "receipt_refusal": (
