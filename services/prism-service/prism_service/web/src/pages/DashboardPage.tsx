@@ -279,7 +279,7 @@ export default function DashboardPage() {
           )}
           {qChart && <PlotFigure options={qChart} className="w-full mb-3" />}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">Recent queries</div>
-          {q?.recent.length ? (
+          {!actLoaded ? <Skeleton className="h-[92px] w-full" /> : q?.recent.length ? (
             <ul className="space-y-1.5">
               {q.recent.map((r, i) => (
                 <li key={i} className="flex items-center gap-2 text-sm">
@@ -305,7 +305,9 @@ export default function DashboardPage() {
           )}
           {flowChart && <PlotFigure options={flowChart} className="w-full mb-3" />}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-1">Workflow events by action</div>
-          {eventsChart ? <PlotFigure options={eventsChart} className="w-full" /> : <Empty>No events.</Empty>}
+          {!actLoaded
+            ? <Skeleton className="h-[92px] w-full" />
+            : eventsChart ? <PlotFigure options={eventsChart} className="w-full" /> : <Empty>No events.</Empty>}
         </Card>
       </div>
 
@@ -321,7 +323,9 @@ export default function DashboardPage() {
               <Stat label="last 14 days" value={compact(act?.tokens.window_total ?? 0)} />
             </div>
           )}
-          {tokenChart ? <PlotFigure options={tokenChart} className="w-full" /> : <Empty>No token data yet.</Empty>}
+          {!actLoaded
+            ? <Skeleton className="h-[150px] w-full" />
+            : tokenChart ? <PlotFigure options={tokenChart} className="w-full" /> : <Empty>No token data yet.</Empty>}
           <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-2">Tracked per session — PRISM does not record tokens per individual task.</div>
         </Card>
 

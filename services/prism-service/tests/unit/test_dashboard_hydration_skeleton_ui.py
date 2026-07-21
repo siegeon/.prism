@@ -128,6 +128,23 @@ def test_ac5_real_empty_states_survive_for_a_hydrated_empty_store():
             "the dashboard lie in the opposite direction.")
 
 
+def test_ac4_secondary_empty_states_are_also_gated():
+    """The four stat strips were not the only liars: "No searches yet.",
+    "No events." and "No token data yet." painted pre-fetch too — the same
+    defect in a different component (the recorded likely_misfire). Caught by
+    LOOKING at the pre-hydration screenshot, not by the strip assertions."""
+    src = _read(_DASH)
+    for literal in ("No searches yet.", "No events.", "No token data yet."):
+        i = src.find(literal)
+        assert i != -1, f"{literal!r} vanished — it must survive (AC-5)"
+        # generous lookback: the recent-queries <li> map alone is ~500 chars,
+        # so the guard sits well above the literal it protects.
+        before = src[max(0, i - 1100):i]
+        assert "Skeleton" in before and _FLAG_TOKEN.search(before), (
+            f"AC-4: {literal!r} must be gated behind the hydration flag — "
+            "pre-fetch it claims emptiness the page has not yet observed.")
+
+
 def test_ac5_guard_keys_on_the_flag_not_on_data_truthiness():
     src = _read(_DASH)
     hero = _block(src, "Brain activity")
