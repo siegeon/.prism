@@ -749,6 +749,11 @@ export default function TaskDetailPage() {
   // file names the task) — rendered beneath the oracle panel.
   const [pinTests, setPinTests] = useState<PinTest[]>([]);
   const [testReceipt, setTestReceipt] = useState<TestReceipt>(null);
+  // WHEN the counts on the card were observed, and from WHICH tree. Without
+  // these the card states a number with no way to tell how old it is or what
+  // it was measured against (owner 2026-07-21: "fake facts in prism").
+  const [pinTestsAt, setPinTestsAt] = useState<string>("");
+  const [pinSource, setPinSource] = useState<{ source?: string; source_sha?: string }>({});
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
@@ -895,7 +900,13 @@ export default function TaskDetailPage() {
   const ranPinTestsFor = useRef<string>("");
   useEffect(() => {
     const step = task?.workflow_step || "";
-    if (!id || !task || ranPinTestsFor.current === id) return;
+    // Key the one-shot on the task's GATE POSITION, not just its id (owner
+    // 2026-07-21). Keyed on id alone the evidence was fetched once and never
+    // again, so a card could sit on minutes-old counts indefinitely while the
+    // footer's /api/version poll advertised a newer build — the panel
+    // contradicting itself. A step/gate transition now re-observes.
+    const runKey = `${id}:${step}:${task?.gate_state || ""}:${task?.status || ""}`;
+    if (!id || !task || ranPinTestsFor.current === runKey) return;
     // Run live when parked AT a gate (statuses inform the decision), OR when a
     // DONE task still has discovered tests the gate's receipt did NOT cover —
     // so no badge stays a non-observation ("not run") on finished work. The
@@ -905,12 +916,16 @@ export default function TaskDetailPage() {
     const hasUnverified = pinTests.some((t) => !(t.status && t.status.toLowerCase() !== "not-run"));
     const doneWithGaps = task.status === "done" && pinTests.length > 0 && hasUnverified;
     if (!atGate && !doneWithGaps) return;
-    ranPinTestsFor.current = id;
+    ranPinTestsFor.current = runKey;
     let cancelled = false;
     (async () => {
       try {
-        const tr = await api.get<{ tests: PinTest[]; receipt?: TestReceipt | null }>(`/api/tasks/${id}/tests?run=true&project=${project}`);
-        if (!cancelled) { setPinTests(tr.tests ?? []); setTestReceipt(tr.receipt ?? null); }
+        const tr = await api.get<{ tests: PinTest[]; receipt?: TestReceipt | null; source?: string; source_sha?: string }>(`/api/tasks/${id}/tests?run=true&project=${project}`);
+        if (!cancelled) {
+          setPinTests(tr.tests ?? []); setTestReceipt(tr.receipt ?? null);
+          setPinSource({ source: tr.source, source_sha: tr.source_sha });
+          setPinTestsAt(new Date().toLocaleTimeString());
+        }
       } catch { /* keep the discovery rows — statuses stay honestly not-run */ }
     })();
     return () => { cancelled = true; };
@@ -1503,6 +1518,14 @@ export default function TaskDetailPage() {
                         <tr>
                           <td className="py-1.5 pr-3">
                             <button type="button" onClick={showTests} className="font-mono underline decoration-dotted underline-offset-2 text-left">pinned tests</button>
+                            {/* Name the tree the count came from and when it was taken, so
+                                the number is checkable rather than merely trusted. */}
+                            {(pinSource.source || pinTestsAt) && (
+                              <div className="text-2xs font-mono" style={{ color: "var(--text-muted)" }}>
+                                {pinSource.source ? `${pinSource.source}${pinSource.source_sha ? ` ${pinSource.source_sha.slice(0, 7)}` : ""}` : ""}
+                                {pinTestsAt ? ` · as of ${pinTestsAt}` : ""}
+                              </div>
+                            )}
                             <div className="text-2xs" style={{ color: testReceipt?.stale ? "var(--accent-amber-fg)" : "var(--text-muted)" }}>{!testReceipt ? "task's own suite — not the gate" : testReceipt.stale ? `stale — measured at ${testReceipt.tree_sha.slice(0, 7)}, NOT the tree under review${testReceipt.current_tree_sha ? ` (${testReceipt.current_tree_sha.slice(0, 7)})` : ""} · re-run to judge now` : "reflects the gate's trusted-runner result"}</div>
                           </td>
                           <td className="py-1.5 pr-3">
