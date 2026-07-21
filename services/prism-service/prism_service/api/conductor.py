@@ -120,16 +120,47 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                 "status": fresh.status,
                                 "ended_at": fresh.ended_at,
                                 "reason": str(fresh.reason)[:300]}}
+        # Does the machine red seat actually TAKE this ticket? Promising "no
+        # owner action needed" for a sweep that can never come is how an owner
+        # waits forever (owner 2026-07-21: task 89e90d1a sat at red_gate while
+        # the card said the machine had it). adjudicate_test_red_gate refuses
+        # unless proof_type == "test" AND the oracle spec uses the pytest
+        # adapter; the seat must also be enabled. Name the blocker instead.
+        _blocks: list[str] = []
+        try:
+            from prism_service.services import gate_adjudicator as _ga
+            if not _ga.is_enabled():
+                _blocks.append("the machine gate seat is off in this "
+                               "environment (PRISM_GATE_ADJUDICATOR_INTERVAL)")
+        except Exception:
+            pass
+        if pt != "test":
+            _blocks.append(f"this ticket's proof_type is "
+                           f"'{pt or 'unset'}', not 'test'")
+        if spec.adapter != osp.ADAPTER_PYTEST:
+            _blocks.append(f"its oracle adapter is '{spec.adapter}', "
+                           "not pytest")
+        if not red_sha:
+            return {"receipt_ok": False,
+                    "receipt_refusal": (
+                        "no red-step commit derivable — commit the failing "
+                        "tests with a [task:<id>] trailer, or decide the "
+                        "gate manually")}
+        if _blocks:
+            return {"receipt_ok": False,
+                    "receipt_refusal": (
+                        f"no RED receipt, and NO machine sweep is coming: "
+                        f"{'; '.join(_blocks)}. The red anchor "
+                        f"{red_sha[:12]} is on file — re-running the oracle "
+                        "cannot help (it mints a PASSING receipt; a red gate "
+                        "needs the pinned tests observed FAILING there). "
+                        "This gate needs a distinct actor's decision.")}
         return {"receipt_ok": False,
                 "receipt_refusal": (
-                    ("no RED receipt yet — the machine seat will "
-                     "demonstrate the pinned tests failing at red-step "
-                     f"commit {red_sha[:12]} on its next sweep and decide "
-                     "this gate; no owner action needed")
-                    if red_sha else
-                    ("no red-step commit derivable — commit the failing "
-                     "tests with a [task:<id>] trailer, or decide the "
-                     "gate manually"))}
+                    "no RED receipt yet — the machine seat will "
+                    "demonstrate the pinned tests failing at red-step "
+                    f"commit {red_sha[:12]} on its next sweep and decide "
+                    "this gate; no owner action needed")}
     # EPIC ROLL-UP (issue #171, owner 2026-07-19): a parent whose children all
     # rolled up cleanly is signable — the children's proofs ARE the epic's proof,
     # and gate_decide's rollup path accepts a plain distinct-actor approve (no

@@ -1062,16 +1062,22 @@ export default function TaskDetailPage() {
   const mintEvidence = async () => {
     setNotice("re-running the oracle inside the daemon…");
     setMintResult("running the oracle inside the daemon…");
+    let msg = "";
     try {
       const r = await api.post<{ ok: boolean; receipt_ok: boolean; receipt_refusal?: string }>(
         `/api/conductor/gate/mint?project=${project}`, { task_id: id });
-      const msg = r.receipt_ok
-        ? "fresh evidence receipt minted — Approve will pass the evidence check"
+      // Do NOT claim "Approve will pass" from the MINT's own result: on a red
+      // gate the mint writes a PASSING oracle receipt, which can never satisfy
+      // the red tooth (that wants the pinned tests observed FAILING at the red
+      // anchor). Saying it passed sent the owner to a button that could not
+      // help (owner 2026-07-21). Re-pull READINESS and let it be the verdict.
+      msg = r.receipt_ok
+        ? "oracle re-ran and a fresh receipt was minted — checking the gate…"
         : `oracle ran but evidence still not ready: ${r.receipt_refusal || "no receipt minted"}`;
       setNotice(msg);
       setMintResult(msg);
     } catch (e) {
-      const msg = `oracle re-run failed: ${(e as Error).message}`;
+      msg = `oracle re-run failed: ${(e as Error).message}`;
       setNotice(msg);
       setMintResult(msg);
     }
@@ -1082,6 +1088,12 @@ export default function TaskDetailPage() {
       const gr = await api.get<GateReadiness>(
         `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
       setGateReadiness(gr);
+      // Readiness is the authority on whether Approve will actually pass.
+      msg = gr.receipt_ok
+        ? "fresh evidence receipt minted — Approve will pass the evidence check"
+        : `re-run did NOT satisfy this gate: ${gr.receipt_refusal || "evidence still missing"}`;
+      setNotice(msg);
+      setMintResult(msg);
     } catch { /* keep the last known readiness */ }
     load();
   };

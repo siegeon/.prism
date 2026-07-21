@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.24"
+PRISM_VERSION = "7.1.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.25: THE GATE CARD STOPS PROMISING WHAT IT CANNOT DO [owner "
+    "2026-07-21]. Three lies on one red_gate card. (1) RE-RUN reported "
+    "'Approve will pass the evidence check' straight off the MINT result, but "
+    "on a red gate the mint writes a PASSING oracle receipt, which can never "
+    "satisfy the red tooth (it wants the pinned tests observed FAILING at the "
+    "red anchor) — the message now comes from a re-pulled READINESS, the only "
+    "authority on whether Approve passes. (2) Readiness told every red gate "
+    "'the machine seat will decide this gate; no owner action needed', but "
+    "adjudicate_test_red_gate refuses anything whose proof_type != 'test' or "
+    "whose oracle adapter isn't pytest, so that sweep never came; it now names "
+    "the blocker and says a distinct actor must decide. (3) Stale-bundle "
+    "self-heal: a rebuild rewrites hashed chunk names, so an open tab 404'd "
+    "every lazy route and the app looked DEAD while the daemon was healthy — "
+    "main.tsx now reloads once (30s cooldown, no loop) on a chunk-load error. "
     "v7.1.24: A STALE RECEIPT NO LONGER READS AS A LIVE VERDICT [owner 2026-07-21]. The "
     "gate card rendered the trusted runner's counts with no freshness signal, so a "
     "receipt measured at an OLDER commit showed as an amber '13 / 14 passing' under the "
