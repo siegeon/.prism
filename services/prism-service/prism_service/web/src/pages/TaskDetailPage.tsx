@@ -1190,6 +1190,19 @@ export default function TaskDetailPage() {
   const shortId = String(task.id ?? id).slice(0, 8);
   const gateActive = (task.gate_state ?? "none") !== "none";
   const gateStep = /_gate$/.test(task.workflow_step ?? "");
+  // ─ Gate-panel receipt reconciliation (task 5a6837a0) ─────────────────────
+  // The panel renders TWO independent receipt lookups: the DecisionPacket row
+  // is oracle_spec.latest_receipt() — newest receipt on the task, ANY gate, ANY
+  // tree (services/decision_packet.py:86-98) — while the check row is
+  // GET /api/conductor/gate/readiness, pinned to THIS gate's spec + anchor
+  // commit (api/conductor.py:102-163). Both can be true at once and read as one
+  // contradictory fact. Remedy (mx-352a3d, v7.1.24): NAME the tree each was
+  // measured at, and say in one line why they differ — never delete a row.
+  const gateAnchorSha = (/\b[0-9a-f]{12,40}\b/.exec(gateReadiness?.receipt_refusal || "") || [""])[0];
+  const receiptsDiverge = !!testReceipt && !gateReadiness?.receipt;
+  // The gate panel OWNS the oracle while a gate is up (stop_if #2: it must not
+  // render twice on one page); PlanView keeps it for every other state.
+  const gatePanelOwnsOracle = conductorOn && (task.gate_state === "pending" || task.gate_state === "failed");
   // Repo-relative code paths capped at 8 rows with a "N more" expander.
   const CODE_CAP = 8;
   const codeShown = codeExpanded ? codePaths : codePaths.slice(0, CODE_CAP);
@@ -1422,6 +1435,17 @@ export default function TaskDetailPage() {
                     </>
                   );
                 })()}
+                {/* The risk that makes a PASS wrong belongs with the contract
+                    it qualifies — not only in the Tests tab the judge would
+                    have to go hunting for. */}
+                {task.likely_misfire && (
+                  <details className="text-[12.5px]">
+                    <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--accent-amber-fg)" }}>
+                      how a pass could still be wrong
+                    </summary>
+                    <div className="mt-1.5 leading-relaxed text-[color:var(--text-secondary)]">{task.likely_misfire}</div>
+                  </details>
+                )}
               </div>
 
               {/* 2 · EVIDENCE — a table, two proof systems separated */}
@@ -1441,7 +1465,21 @@ export default function TaskDetailPage() {
                     from real worktree artifacts. Leads the machine-receipt
                     table so the reviewer sees the concrete change first. */}
                 <div className="mb-4">
-                  <DecisionPacket taskId={id} project={project} state={task.gate_state} step={task.workflow_step} />
+                  <DecisionPacket taskId={id} project={project} state={task.gate_state} step={task.workflow_step}
+                                  latestReceipt={testReceipt} />
+                  {/* ONE actionable line when the packet's receipt and the
+                      gate's tooth are not the same receipt — a silent
+                      contradiction is the defect this slice closes. */}
+                  {receiptsDiverge && (
+                    <div className="mt-2 rounded-md px-2.5 py-1.5 text-2xs leading-relaxed"
+                         style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)" }}>
+                      These are two different receipts, not a contradiction: the packet above shows the
+                      task's LATEST receipt (job {testReceipt!.job_id.slice(0, 8)} measured at {testReceipt!.tree_sha.slice(0, 7)}, whatever
+                      gate it served), while {stepLabel(task.workflow_step ?? "gate")} has no receipt of its own
+                      {gateAnchorSha ? ` at anchor ${gateAnchorSha.slice(0, 7)}` : ""}. Act on the check row
+                      below — the packet's pass does not decide this gate.
+                    </div>
+                  )}
                 </div>
                 <table className="w-full text-[12.5px]">
                   <thead>
@@ -1456,6 +1494,12 @@ export default function TaskDetailPage() {
                       <td className="py-1.5 pr-3">
                         <span className="font-mono">oracle receipt · {gateReadiness?.receipt?.adapter || "trusted run"}</span>
                         <div className="text-2xs" style={{ color: "var(--text-muted)" }}>the gate's evidence tooth</div>
+                        {/* Name the receipt: which gate it serves and the tree it
+                            was measured at, so it can't be read as the packet's
+                            latest-receipt row (mx-352a3d: name the tree). */}
+                        <div className="text-2xs font-mono" style={{ color: "var(--text-muted)" }}>
+                          serves {stepLabel(task.workflow_step ?? "gate")} · {gateAnchorSha ? `anchor ${gateAnchorSha.slice(0, 7)}` : "anchor not reported"}
+                        </div>
                       </td>
                       <td className="py-1.5 pr-3">
                         {gateReadiness?.receipt_ok
@@ -1677,7 +1721,7 @@ export default function TaskDetailPage() {
             taskId={id}
             project={project}
             proofType={task.proof_type}
-            oracle={task.oracle}
+            oracle={gatePanelOwnsOracle ? undefined : task.oracle}
             completionProof={task.completion_proof}
             likelyMisfire={task.likely_misfire}
             fullOutcomeComplete={task.full_outcome_complete}

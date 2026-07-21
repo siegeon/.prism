@@ -217,9 +217,16 @@ def test_skeleton_primitive_exported_from_existing_ui_module():
 # ---------------------------------------------------------------------------
 
 def test_ac8_version_patch_bumped_with_a_notes_line():
+    """The AC is 'the 7.1.22 -> 7.1.23 bump rode the same commit', and the
+    NOTES entry is the durable proof of it. Asserting equality on the LIVE
+    PRISM_VERSION pinned a monotonically increasing global: it held for exactly
+    one commit and then went red on every later patch bump (red from v7.1.24
+    onward — see task 5a6837a0). Assert the bump is ON FILE and the version has
+    not regressed BELOW it; the instrument, not the AC, was wrong."""
     src = _read(_VERSION)
-    assert 'PRISM_VERSION = "7.1.23"' in src, (
-        "AC-8: PRISM_VERSION must patch-bump 7.1.22 -> 7.1.23 in the same "
-        "commit as the user-visible change.")
     assert "v7.1.23:" in src, (
         "AC-8: PRISM_VERSION_NOTES needs a one-line v7.1.23 entry.")
+    m = re.search(r'PRISM_VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"', src)
+    assert m, "PRISM_VERSION must be a parseable semver string"
+    assert tuple(int(g) for g in m.groups()) >= (7, 1, 23), (
+        "AC-8: PRISM_VERSION must be at least the 7.1.23 this AC bumped to.")

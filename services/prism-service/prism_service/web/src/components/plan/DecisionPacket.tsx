@@ -26,8 +26,8 @@ const TONE: Record<Packet["state"], { label: string; bg: string; fg: string; rin
   done:      { label: "Done",      bg: "--accent-sage-bg",  fg: "--accent-sage-fg",  ring: "--accent-sage-ring" },
 };
 
-function Row({ icon, title, summary, empty, children }: {
-  icon: string; title: string; summary: string; empty: boolean; children?: React.ReactNode;
+function Row({ icon, title, note, summary, empty, children }: {
+  icon: string; title: string; note?: string; summary: string; empty: boolean; children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -39,8 +39,11 @@ function Row({ icon, title, summary, empty, children }: {
       >
         <span className="text-[color:var(--text-muted)] text-[11px] w-2.5 shrink-0" style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
         <span className="w-4 text-center shrink-0 text-[12px]">{icon}</span>
-        <span className="text-[12.5px] font-medium">{title}</span>
-        <span className="ml-auto text-[12px] text-[color:var(--text-secondary)]">{empty ? "none" : summary}</span>
+        <span className="text-[12.5px] font-medium shrink-0">{title}</span>
+        {/* A row that names its own source can't be misread as another row's
+            fact (mx-352a3d, v7.1.24) — stays visible while collapsed. */}
+        {note && <span className="text-[11px] font-mono truncate text-[color:var(--text-muted)]">{note}</span>}
+        <span className="ml-auto text-[12px] text-[color:var(--text-secondary)] shrink-0">{empty ? "none" : summary}</span>
       </button>
       {open && !empty && <div className="pb-3 pl-9 pr-1">{children}</div>}
     </div>
@@ -49,8 +52,12 @@ function Row({ icon, title, summary, empty, children }: {
 
 const mono = "font-mono text-[11.5px] leading-relaxed text-[color:var(--text-secondary)]";
 
-export default function DecisionPacket({ taskId, project, state, step }: {
+export default function DecisionPacket({ taskId, project, state, step, latestReceipt }: {
   taskId?: string; project?: string; state?: string; step?: string;
+  // The panel's own view of the newest receipt (tree_sha/job_id from
+  // GET /api/tasks/:id/tests) — the packet fetches only a projection with no
+  // tree on it, so the tree it was measured at is handed down.
+  latestReceipt?: { job_id: string; tree_sha: string } | null;
 }) {
   const [pkt, setPkt] = useState<Packet | null>(null);
   const [err, setErr] = useState(false);
@@ -72,6 +79,9 @@ export default function DecisionPacket({ taskId, project, state, step }: {
   const st = (["pending", "failed", "recovered", "waived", "done"].includes(state ?? "")
     ? (state as Packet["state"]) : pkt.state);
   const tone = TONE[st] ?? TONE.pending;
+  // The tree the latest receipt was measured at: preferred from the panel's
+  // receipt context, else the packet's own head commit.
+  const receiptSha = latestReceipt?.tree_sha || pkt.commits[0]?.sha || "";
 
   return (
     <div
@@ -112,7 +122,12 @@ export default function DecisionPacket({ taskId, project, state, step }: {
         </ul>
       </Row>
 
+      {/* This receipt is oracle_spec.latest_receipt() (services/decision_packet.py:86-98):
+          the NEWEST receipt on the task, whatever gate it served, whatever tree
+          it measured. Unlabelled it reads as this gate's verdict and contradicts
+          the gate-readiness row next to it (task 5a6837a0). */}
       <Row icon="⚚" title="Oracle receipt" empty={!pkt.receipt}
+           note={`latest on this task · any gate${receiptSha ? ` · ${receiptSha.slice(0, 7)}` : ""}`}
            summary={pkt.receipt ? `${pkt.receipt.adapter} · ${pkt.receipt.status}` : ""}>
         <div className={mono}>
           {pkt.receipt && (
@@ -121,6 +136,10 @@ export default function DecisionPacket({ taskId, project, state, step }: {
               <div className="opacity-80 mt-1">{pkt.receipt.reason}</div>
             </>
           )}
+          <div className="opacity-70 mt-1">
+            the latest receipt on this task{receiptSha ? `, measured at ${receiptSha.slice(0, 7)}` : ""} — it does not
+            necessarily serve {step || "this gate"}; the gate's own tooth is the "oracle receipt" check row below.
+          </div>
         </div>
       </Row>
 

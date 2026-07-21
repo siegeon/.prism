@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.25"
+PRISM_VERSION = "7.1.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.26: THE GATE PANEL STOPS CONTRADICTING ITSELF ON EVIDENCE [task "
+    "5a6837a0]. The panel rendered two independent receipt lookups side by "
+    "side and neither named itself: the DECISION PACKET row is "
+    "oracle_spec.latest_receipt() — newest receipt on the task, ANY gate, ANY "
+    "tree — while the check row is gate/readiness, pinned to THIS gate's spec "
+    "and anchor commit. On 89e90d1a's red_gate one said 'passed' and the other "
+    "'missing'; both were true and the owner could only read it as a lie. Each "
+    "row now NAMES its receipt (which gate it serves + the short sha it was "
+    "measured at), and when they are different receipts the panel says so in "
+    "ONE actionable line instead of leaving the contradiction silent. Neither "
+    "row is deleted. The likely_misfire now sits inside 'what you're "
+    "approving' with the oracle, and PlanView yields its oracle block while a "
+    "gate is up so the contract renders exactly once. "
     "v7.1.25: THE GATE CARD STOPS PROMISING WHAT IT CANNOT DO [owner "
     "2026-07-21]. Three lies on one red_gate card. (1) RE-RUN reported "
     "'Approve will pass the evidence check' straight off the MINT result, but "
