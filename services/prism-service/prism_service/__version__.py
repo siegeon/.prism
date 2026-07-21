@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.23"
+PRISM_VERSION = "7.1.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.24: A STALE RECEIPT NO LONGER READS AS A LIVE VERDICT [owner 2026-07-21]. The "
+    "gate card rendered the trusted runner's counts with no freshness signal, so a "
+    "receipt measured at an OLDER commit showed as an amber '13 / 14 passing' under the "
+    "label 'reflects the gate's trusted-runner result' — a failure that was not "
+    "happening now, on a task whose suite was 14/14 green at HEAD. The owner could not "
+    "tell a past observation from the present one and so could not honestly sign the "
+    "gate. /api/tasks/{id}/tests now returns current_tree_sha + stale (tree_sha != the "
+    "tree under review) and the card renders a stale receipt NEUTRAL, stamped 'at "
+    "<sha>' and 'measured at <sha>, NOT the tree under review · re-run to judge now'. "
     "v7.1.23: DASHBOARD STOPS FLASHING ZEROS BEFORE DATA LOADS [task:89e90d1a]. A cold "
     "load painted a confident empty state — hero 'No activity yet', every KPI tile 0, "
     "stat strips 0/em-dash, the LiveBar flashing 'Idle · no task being driven — queue "

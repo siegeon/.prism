@@ -80,6 +80,11 @@ type TestReceipt = {
   ended_at: string;
   runner: string;
   reason: string;
+  // Freshness (owner 2026-07-21). A receipt is bound to the tree it ran
+  // against; when tree_sha != current_tree_sha its counts are HISTORY, not the
+  // current verdict, and the card must never present them as "now".
+  current_tree_sha?: string;
+  stale?: boolean;
 } | null;
 
 // GET /api/conductor/gate/readiness — the evidence tooth evaluated LIVE, so
@@ -1498,12 +1503,16 @@ export default function TaskDetailPage() {
                         <tr>
                           <td className="py-1.5 pr-3">
                             <button type="button" onClick={showTests} className="font-mono underline decoration-dotted underline-offset-2 text-left">pinned tests</button>
-                            <div className="text-2xs" style={{ color: "var(--text-muted)" }}>{testReceipt ? "reflects the gate's trusted-runner result" : "task's own suite — not the gate"}</div>
+                            <div className="text-2xs" style={{ color: testReceipt?.stale ? "var(--accent-amber-fg)" : "var(--text-muted)" }}>{!testReceipt ? "task's own suite — not the gate" : testReceipt.stale ? `stale — measured at ${testReceipt.tree_sha.slice(0, 7)}, NOT the tree under review${testReceipt.current_tree_sha ? ` (${testReceipt.current_tree_sha.slice(0, 7)})` : ""} · re-run to judge now` : "reflects the gate's trusted-runner result"}</div>
                           </td>
                           <td className="py-1.5 pr-3">
-                            <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={passing === scope.length ? { color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" } : { color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}>{passing} / {scope.length} passing</span>
+                            {/* A stale receipt is HISTORY: render it neutral and stamped with the
+                                commit it was measured at, never as a live pass/fail verdict — an
+                                amber "13 / 14 passing" from an older tree reads as a failure that
+                                is happening NOW (owner 2026-07-21: "fake facts in prism"). */}
+                            <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={testReceipt?.stale ? { color: "var(--text-muted)", boxShadow: "inset 0 0 0 1px var(--border-default)" } : passing === scope.length ? { color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" } : { color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}>{passing} / {scope.length} {testReceipt?.stale ? `at ${testReceipt.tree_sha.slice(0, 7)}` : "passing"}</span>
                           </td>
-                          <td className="py-1.5 text-right font-mono text-2xs" style={{ color: testReceipt?.passed ? "var(--accent-sage-fg)" : "var(--text-muted)" }} title={testReceipt ? testReceipt.reason : ""}>{testReceipt ? `receipt ${testReceipt.job_id.slice(0, 8)} · ${testReceipt.tree_sha.slice(0, 7)}` : "latest run"}</td>
+                          <td className="py-1.5 text-right font-mono text-2xs" style={{ color: testReceipt?.stale ? "var(--accent-amber-fg)" : testReceipt?.passed ? "var(--accent-sage-fg)" : "var(--text-muted)" }} title={testReceipt ? testReceipt.reason : ""}>{testReceipt ? `receipt ${testReceipt.job_id.slice(0, 8)} · ${testReceipt.tree_sha.slice(0, 7)}${testReceipt.stale ? " · STALE" : ""}` : "latest run"}</td>
                         </tr>
                       );
                     })()}

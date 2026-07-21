@@ -765,13 +765,21 @@ def get_task_tests(task_id: str, run: bool = Query(False),
     # task like this one). Without the workspace root the gate's test evidence
     # is invisible for every unmerged task, which reads as "no evidence".
     checkout_root = Path(__file__).resolve().parents[2] / "tests"
-    roots: list[Path] = [checkout_root]
-    run_root = checkout_root.parent
     ws = workspace_for(task_id)
-    if ws:
-        ws_tests = Path(ws["path"]) / "services" / "prism-service" / "tests"
-        roots.append(ws_tests)
-        run_root = ws_tests.parent  # the pinned tests live here — run them here
+    _ws_tests = (Path(ws["path"]) / "services" / "prism-service" / "tests"
+                 if ws else None)
+    # SAME-TREE RULE (owner 2026-07-21: "fake facts in prism"). The row LIST
+    # and the live RUN must come from ONE tree. We execute in the task's
+    # workspace whenever it exists, so the workspace must also be scanned
+    # FIRST — it wins the rel-path dedup below. Listing from the merged
+    # checkout (14 tests at branch HEAD) while running in the workspace (13
+    # tests at its older HEAD) produced a phantom amber "13 / 14 passing":
+    # a denominator from one commit over a numerator from another, with the
+    # test that exists only in the newer tree silently counted "not-run".
+    _use_ws = bool(_ws_tests and _ws_tests.is_dir())
+    roots: list[Path] = ([_ws_tests, checkout_root] if _use_ws
+                         else [checkout_root])
+    run_root = (_ws_tests.parent if _use_ws else checkout_root.parent)
 
     for tests_root in roots:
         if not tests_root.is_dir():
@@ -809,11 +817,27 @@ def get_task_tests(task_id: str, run: bool = Query(False),
     if rc is not None:
         # Always surface the gate's receipt as provenance (even on a live
         # re-run) so the tab can cite what the trusted runner observed.
+        # FRESHNESS — owner 2026-07-21: "if you are giving me fake facts in
+        # prism ... then i have no way forward". A receipt is bound to the tree
+        # it ran against; when that is NOT the tree under review its numbers are
+        # HISTORY, not the current verdict. Returning tree_sha alone was not
+        # enough: the gate card rendered a stale "13 / 14 passing" (measured at
+        # b04be24, before the follow-up fix landed) in amber under the label
+        # "reflects the gate's trusted-runner result", so a reader could not
+        # tell a past observation from the present one. Say it explicitly.
+        _cur_tree = ""
+        try:
+            _cur_tree = _osp.current_tree_sha(ws["path"] if ws else None)
+        except Exception:
+            _cur_tree = ""
         receipt_info = {
             "job_id": rc.job_id, "tree_sha": rc.tree_sha,
             "passed": bool(rc.passed), "status": rc.status,
             "ended_at": rc.ended_at, "runner": rc.runner_version,
             "reason": (rc.reason or "")[:400],
+            "current_tree_sha": _cur_tree,
+            "stale": bool(_cur_tree and rc.tree_sha
+                          and rc.tree_sha != _cur_tree),
         }
         # Fill any row the live run did NOT resolve (or when we didn't run
         # live at all) from the gate's trusted-runner receipt. A real live run
@@ -833,7 +857,19 @@ def get_task_tests(task_id: str, run: bool = Query(False),
                 row["status"] = "passed" if rc.passed else "failed"
                 row["passed"] = bool(rc.passed)
                 row["verified_by"] = "gate-receipt"
-    return {"tests": results, "ran": ran, "receipt": receipt_info}
+    # Name the tree the rows were listed from AND run in, so the count on the
+    # card is checkable instead of merely trusted (same owner directive).
+    _src_sha = ""
+    try:
+        from prism_service.services import oracle_spec as _osp3
+        _src_sha = _osp3.current_tree_sha(
+            str(_ws_tests.parent.parent.parent) if _use_ws
+            else str(checkout_root.parent.parent.parent))
+    except Exception:
+        _src_sha = ""
+    return {"tests": results, "ran": ran, "receipt": receipt_info,
+            "source": ("workspace" if _use_ws else "checkout"),
+            "source_sha": _src_sha}
 
 
 def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
