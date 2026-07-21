@@ -158,6 +158,28 @@ export const Empty = ({ children }: { children: ReactNode }) => (
   </div>
 );
 
+/** Skeleton — the honest pre-hydration placeholder.
+ *
+ * A dashboard that paints 0s and "No activity yet" before its first fetch
+ * resolves is LYING: `sum([]) === 0` and an empty array both render as a
+ * confident, settled empty state. Render this instead until the caller's
+ * hydration flag flips, then fall through to the REAL value — including the
+ * real empty state, which this must never mask (task 89e90d1a).
+ *
+ * Surface-2 on surface-1 so it reads as "content shaped, not yet known";
+ * animate-pulse is dropped under prefers-reduced-motion via motion-reduce.
+ */
+export const Skeleton = ({ className }: { className?: string }) => (
+  <div
+    aria-hidden
+    className={cn(
+      "animate-pulse motion-reduce:animate-none rounded-md",
+      "bg-[color:var(--surface-2)]",
+      className,
+    )}
+  />
+);
+
 export const Page = ({ children }: { children: ReactNode }) => (
   // Full-width: page fills the available content column; minimum is
   // whatever the children require. (Was capped at 1400px previously,

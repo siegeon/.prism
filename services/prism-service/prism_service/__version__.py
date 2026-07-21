@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.22"
+PRISM_VERSION = "7.1.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.23: DASHBOARD STOPS FLASHING ZEROS BEFORE DATA LOADS [task:89e90d1a]. A cold "
+    "load painted a confident empty state — hero 'No activity yet', every KPI tile 0, "
+    "stat strips 0/em-dash, the LiveBar flashing 'Idle · no task being driven — queue "
+    "is quiet', selector absent — then re-rendered real data seconds later, so every "
+    "load read as 'your project is empty'. Root cause: data/act init null with NO flag "
+    "separating 'not fetched yet' from 'fetched and genuinely empty', so `sum([])` "
+    "rendered a settled 0. DashboardPage now tracks per-source hydration flags and "
+    "skeletons the hero, the 5 KPI tiles and all four stat strips until each fetch "
+    "settles; LiveBar holds a neutral 'Connecting…' state until its first poll returns; "
+    "the PageHeader selector holds a stable slot instead of popping in. New Skeleton "
+    "primitive in components/ui.tsx. The real empty states still show through once "
+    "loaded — the skeleton covers only the pre-hydration window, never true emptiness. "
     "v7.1.22: TESTS TAB READS GREEN FOR A MERGED TASK [owner 2026-07-20]. The Tests "
     "tab runs the pinned tests live (?run=true) in the task's scratch worktree; for a "
     "just-MERGED task that worktree still holds pre-merge code, so the live run yields "
