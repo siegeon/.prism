@@ -66,7 +66,10 @@ export default function TokenTurns({
   const quietClock = session_quiet_s != null ? mmss(session_quiet_s) : "";
   const heading =
     st === "paused" ? "linked session · not this task"
-    : st === "adrift" ? "linked session busy — not this task"
+    // "not this task" was the same lie the pill told: on `adrift` a driver IS
+    // mid-step on this task. Stay honest about ATTRIBUTION (we can't prove which
+    // step each token bought) without denying the work (owner 2026-07-21).
+    : st === "adrift" ? "driver active · linked session burn"
     : st === "stalled" ? `no active driver${quietClock ? ` · quiet ${quietClock}` : ""}`
     : st === "awaiting_gate" ? "awaiting review · paused here"
     : approximate ? "project activity (approximate)"

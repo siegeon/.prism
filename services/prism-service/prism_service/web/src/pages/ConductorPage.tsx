@@ -31,14 +31,17 @@ type ManagedTask = {
   subtasks?: { id: string; title: string; status: string }[];
 };
 
-// Honest activity STATE → tile pill label + tone. adrift/stalled append an idle
-// mm:ss (from task_motion_s) so the pill says how long it's been dark.
+// Honest activity STATE → tile pill label + tone. Only `stalled` appends an idle
+// mm:ss and wears the alarm wording — it is the one state where the owner truly
+// has to step in. `adrift` (linked session live, no step boundary in 120s) is the
+// NORMAL middle of a 5-10min step and reads as work, not as darkness
+// (owner 2026-07-21). Mirrors ACTIVITY_META in conductor/SdlcProgress.
 const ACT_TILE: Record<string, { label: string; tone: PillTone }> = {
   working: { label: "working", tone: "teal" },
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
-  adrift: { label: "session busy", tone: "slate" },
-  stalled: { label: "stalled", tone: "rose" },
+  adrift: { label: "driver active", tone: "teal" },
+  stalled: { label: "stalled · needs you", tone: "rose" },
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
   pending: { label: "pending", tone: "amber" },
@@ -147,7 +150,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const status = (task.status ?? "").toLowerCase();
   const actState = (task.activity?.state ?? status).toLowerCase();
   const actTone: PillTone = ACT_TILE[actState]?.tone ?? domainTone("taskStatus", status) ?? "slate";
-  const actWorking = actState === "working";
+  // "being worked" covers `adrift` too: a driver holding a 5-10min step crosses
+  // no boundary for most of it, and excluding it made a BUILDING task render as
+  // "last worked by" with a dead grey tick (owner 2026-07-21). Only `stalled`
+  // (nothing driving it) loses the live treatment.
+  const actWorking = actState === "working" || actState === "adrift";
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
   const idle = fmtIdle(liveMotionS);
   const kids = `${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0}`;
@@ -157,8 +164,8 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const qDone = task.phase_progress?.children_done ?? 0;
   const qPending = Math.max(0, qTotal - qDone);
   const actLabel =
-    actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
-    : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
+    actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
+    : actState === "stalled" ? `stalled · needs you${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";

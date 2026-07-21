@@ -74,13 +74,21 @@ function fmtEta(s: number): string {
 
 // Honest activity STATE → label + accent tone. Keyed by activity.state (not the
 // raw status) so a task the conductor isn't driving reads as slate/rose, not a
-// teal "in progress" lie. adrift/stalled append a mm:ss idle clock (see below).
-const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
+// teal "in progress" lie. THE ONE map every surface renders through — LiveBar and
+// ConductorPage import it rather than printing the raw enum (owner 2026-07-21 was
+// shown a bare "adrift" on the LiveBar and asked what he was supposed to do).
+//
+// "idle"/"stalled" are ALARM WORDS: the owner reads them as "I must intervene
+// somewhere", so they may appear ONLY when there IS an owner action. `adrift`
+// is NOT one of those moments — it means a linked session emitted tokens in the
+// last 90s while no conductor step BOUNDARY was crossed in 120s, which is the
+// normal condition of a healthy 5-10min step. It now says so plainly.
+export const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   working: { label: "in progress", tone: "teal" },
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
-  adrift: { label: "session busy · task idle", tone: "slate" },
-  stalled: { label: "stalled · idle", tone: "rose" },
+  adrift: { label: "driver active · between step reports", tone: "teal" },
+  stalled: { label: "stalled · needs you", tone: "rose" },
   in_progress: { label: "in progress", tone: "teal" },  // pre-activity fallback
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
@@ -127,28 +135,36 @@ export default function SdlcProgress({
   // The honest state: prefer activity.state, fall back to raw status.
   const state = (activity?.state ?? status ?? "").toLowerCase();
   const meta = ACTIVITY_META[state] ?? { label: state || "", tone: "slate" };
-  // adrift/stalled surface HOW LONG the task has been idle (from task_motion_s).
+  // How long since the last conductor STEP BOUNDARY (task_motion_s). On `adrift`
+  // that is a "last report" age, NOT an idle time — the driver is mid-step and
+  // steps run 5-10min, so the clock must not be captioned as idleness. Only a
+  // genuinely dead drive (`stalled`) earns the alarm wording.
   const idleClock = activity?.task_motion_s != null ? fmtClock(activity.task_motion_s) : "";
   const stateLabel =
-    state === "adrift" ? `session busy · task idle${idleClock ? ` ${idleClock}` : ""}`
-    : state === "stalled" ? `stalled · idle${idleClock ? ` ${idleClock}` : ""}`
+    state === "adrift" ? `driver active · last step report ${idleClock || "—"} ago`
+    : state === "stalled" ? `stalled · needs you · idle ${idleClock || "—"}`
     : state === "paused" ? `paused · ${phase?.children_done ?? 0}/${phase?.children_total ?? 0} done`
     : meta.label;
-  // "live" = the task is genuinely being DRIVEN right now — ONLY the "working"
-  // state (a real recent conductor transition on THIS task), NEVER raw
-  // in_progress. This is the honest basis for the shimmer + pulse; an adrift or
-  // stalled tile must read as still, not animated.
-  const live = state === "working";
+  // "live" = the task is genuinely being DRIVEN right now — a real recent
+  // conductor transition ("working") OR a live linked session mid-step
+  // ("adrift"), NEVER raw in_progress. `adrift` is included because a 5-10min
+  // step crosses no boundary for most of its life, so excluding it rendered a
+  // BUILDING task as motionless (owner 2026-07-21). A `stalled` tile — nothing
+  // driving it at all — must still read as still, not animated.
+  const live = state === "working" || state === "adrift";
 
   // Overall task progress toward DONE: completed steps + current phase fraction.
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
   const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
   // The step clock measures EXECUTION time, not wall time (owner 2026-07-14:
-  // 'when the ball is in our court it shouldn't be running'). While the task
-  // is actually being WORKED the clock ticks live; in any parked state
-  // (awaiting review / adrift / stalled) it FREEZES at the last conductor
-  // motion: in_step_s minus task_motion_s (both server-truth).
-  const counting = state === "working";
+  // 'when the ball is in our court it shouldn't be running'). It ticks while the
+  // task is actually being WORKED — "working" AND "adrift", since on `adrift`
+  // the ball IS in our court (a driver is mid-step). It FREEZES only when the
+  // ball is genuinely elsewhere (awaiting review / stalled), at in_step_s minus
+  // task_motion_s (both server-truth). Before this, the execution clock froze
+  // DURING execution while the idle clock ticked beside it on the same line —
+  // two clocks disagreeing about the same second (owner 2026-07-21).
+  const counting = state === "working" || state === "adrift";
   const frozenInStep = Math.max(
     0, (phase?.in_step_s ?? 0) - (activity?.task_motion_s ?? 0));
   const [liveInStep, setLiveInStep] = useState(

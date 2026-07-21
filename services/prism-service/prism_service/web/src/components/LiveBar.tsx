@@ -18,6 +18,7 @@ import { Link, useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { stepLabel } from "@/lib/workflowChips";
+import { ACTIVITY_META } from "@/components/conductor/SdlcProgress";
 import { useScanActivity } from "@/lib/scan-activity";
 import { type Activity } from "@/components/conductor/SdlcProgress";
 import { Lozenge } from "@/components/Lozenge";
@@ -247,8 +248,14 @@ export default function LiveBar() {
           >
             <EntityChip kind="task" label={chipLabel(m)} />
             {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
-            <span className="text-2xs font-mono" style={{ color: "var(--text-muted)" }}>
-              {m.activity?.state || "between reports"}
+            {/* Render the state through the SHARED humanized map — never the raw
+                enum. This printed a bare "adrift" next to the bar's own "IN FLOW"
+                header, so the strip contradicted itself and handed the owner an
+                internal token to interpret (owner 2026-07-21: "what am I supposed
+                to do in this state?"). */}
+            <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
+              {ACTIVITY_META[(m.activity?.state ?? "").toLowerCase()]?.label
+                ?? "between reports"}
             </span>
             <span className="ml-auto text-xs opacity-0 group-hover:opacity-100" style={{ color: "var(--text-muted)" }}>
               open ›
