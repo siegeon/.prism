@@ -208,8 +208,19 @@ def test_oracle_does_not_render_twice_on_a_conductor_task() -> None:
 # 6 · The build the owner LOOKS at is identifiable
 # ---------------------------------------------------------------------------
 
+# The bump THIS slice shipped. A FLOOR, never an equality: the guard's intent
+# is "a user-visible change ships a patch bump", which stays true at every
+# later version. Pinning the literal made the test go red on the very next
+# bump — exactly the behaviour the rule demands — so it punished the next
+# person to obey it (task 90c32aa4; red on CI run 29893922722, PR #220).
+_VERSION_FLOOR = (7, 1, 26)
+
+
 def test_version_patch_bumped_for_the_reconciled_gate_panel() -> None:
     ver = _read(_VERSION)
-    assert 'PRISM_VERSION = "7.1.26"' in ver, (
-        "user-visible change ⇒ patch-bump 7.1.25 → 7.1.26 in the same commit")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver)
+    assert m, "PRISM_VERSION must stay a readable semver literal"
+    assert tuple(int(g) for g in m.groups()) >= _VERSION_FLOOR, (
+        "user-visible change ⇒ patch-bump to at least "
+        f"{'.'.join(str(n) for n in _VERSION_FLOOR)} in the same commit")
     assert "v7.1.26:" in ver, "add a PRISM_VERSION_NOTES line for 7.1.26"
