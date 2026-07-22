@@ -106,9 +106,18 @@ function useStaleness(project: string): Staleness {
         .then((s) => { if (!cancel) setStale(s); })
         .catch(() => { /* leave last good state */ });
     };
+    // Only poll a tab someone is looking at (task c38ef597) — this ran every
+    // 5s in every background tab. Refetch on focus so the badge is current
+    // the moment it is seen.
+    const tick = () => { if (!cancel && !document.hidden) load(); };
     load();
-    const t = setInterval(load, 5000);
-    return () => { cancel = true; clearInterval(t); };
+    const t = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      cancel = true;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [project]);
   return stale;
 }

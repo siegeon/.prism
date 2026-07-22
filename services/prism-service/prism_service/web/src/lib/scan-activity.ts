@@ -45,7 +45,17 @@ export function useScanActivity(): ScanActivity {
     let cancel = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    // HIDDEN TAB = NO POLL (task c38ef597). This ran /api/jobs?limit=200 every
+    // 2s forever, including in background tabs nobody was looking at. Skipping
+    // the FETCH while hidden — rather than not rescheduling — is what keeps the
+    // loop alive, so becoming visible again resumes instead of freezing (the
+    // recorded misfire).
     const load = async () => {
+      if (cancel) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        timer = setTimeout(load, POLL_COLD_MS);
+        return;
+      }
       try {
         const r = await api.get<{ jobs: ScanJob[] }>("/api/jobs?limit=200");
         if (cancel) return;
@@ -61,9 +71,18 @@ export function useScanActivity(): ScanActivity {
       }
     };
 
+    // Come back to a fresh number the moment the tab is looked at again.
+    const onVisible = () => {
+      if (cancel || document.hidden) return;
+      if (timer !== null) clearTimeout(timer);
+      load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     load();
     return () => {
       cancel = true;
+      document.removeEventListener("visibilitychange", onVisible);
       if (timer !== null) clearTimeout(timer);
     };
   }, []);
