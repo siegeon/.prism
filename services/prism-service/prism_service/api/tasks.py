@@ -692,6 +692,48 @@ def _clean_doc(doc: str) -> str:
     return " ".join(doc.split())
 
 
+_TASK_ID_RE = re.compile(
+    r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\b")
+
+
+def file_owns_task(source: str, task_id: str) -> bool:
+    """True when this test module BELONGS to ``task_id`` — as opposed to
+    merely mentioning it (task e0149f1f, 2026-07-21).
+
+    The old predicate was ``task_id in text``: a bare substring scan over the
+    whole file. Any test that CITED another task in prose ("see task <id>",
+    "Regression: task <id>") was therefore attributed to the cited task, and
+    the gate panel for 5a6837a0 listed 33 tests over three files of which only
+    12 were its own — the owner was shown another ticket's tests as if they
+    were this ticket's.
+
+    Ownership rule: a red-test module NAMES its task in its module docstring
+    (the convention ``get_task_tests`` already documents), and the FIRST task
+    id in that docstring is the owner — a later citation never transfers
+    ownership. Files we cannot parse, or that carry no module docstring, fall
+    back to the old mention behaviour so a task never silently LOSES its pins.
+    """
+    text = source or ""
+    tid = (task_id or "").strip()
+    if not tid:
+        return False
+    short = tid[:8]
+    mentioned = tid in text or (len(short) >= 8 and short in text)
+    if not mentioned:
+        return False
+    try:
+        import ast
+        doc = ast.get_docstring(ast.parse(text))
+    except Exception:
+        return mentioned          # unparseable — keep the old behaviour
+    if not doc:
+        return mentioned          # no docstring — keep the old behaviour
+    found = _TASK_ID_RE.findall(doc)
+    if not found:
+        return mentioned
+    return found[0][:8] == short
+
+
 def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
     """AST-parse a test module and return one record per ``def test_*`` with
     its (cleaned) docstring, the test BODY source (so a reviewer can read
@@ -789,7 +831,8 @@ def get_task_tests(task_id: str, run: bool = Query(False),
                 text = p.read_text(encoding="utf-8")
             except Exception:
                 continue
-            if task_id in text or (len(short) >= 8 and short in text):
+            # OWNERSHIP, not mention (task e0149f1f) — see file_owns_task.
+            if file_owns_task(text, task_id):
                 rel = p.relative_to(tests_root.parent).as_posix()
                 if rel in seen_rel:
                     continue
@@ -922,7 +965,8 @@ def _discover_pinned_test_rows(task_id: str) -> list[dict]:
                 text = p.read_text(encoding="utf-8")
             except Exception:
                 continue
-            if task_id in text or (len(short) >= 8 and short in text):
+            # OWNERSHIP, not mention (task e0149f1f) — see file_owns_task.
+            if file_owns_task(text, task_id):
                 rel = p.relative_to(tests_root.parent).as_posix()
                 if rel in seen_rel:
                     continue

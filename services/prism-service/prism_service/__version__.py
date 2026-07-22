@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.27"
+PRISM_VERSION = "7.1.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.28: THE GREEN SEAT ALSO CHECKS THE ADAPTER, AND A TEST FILE IS "
+    "ATTRIBUTED BY OWNERSHIP NOT BY MENTION [task e0149f1f, owner "
+    "2026-07-21]. Completes v7.1.27. (1) 5a6837a0's closing receipt was "
+    "adapter=http_probe while its task.verify pinned a pytest file - a probe "
+    "returning ok is not evidence for a suite it never ran. "
+    "adjudicate_green_gate now refuses an adapter that cannot evidence what "
+    "the task pins, naming BOTH the pinned and the measured adapter. It "
+    "fires ONLY when the task itself pins pytest paths, so probe- and "
+    "browser-oracle tasks keep machine adjudication untouched - the tooth "
+    "narrows the seat, it never becomes a blanket refusal. (2) "
+    "GET /api/tasks/<id>/tests attributed a file by a bare substring scan, "
+    "so any test that CITED another task in prose ('see task <id>', "
+    "'Regression: task <id>') was attributed to the cited task: 5a6837a0's "
+    "gate panel listed 33 tests over three files of which only 12 were its "
+    "own. A file now belongs to the task named FIRST in its module "
+    "docstring; a later citation never transfers ownership, and an "
+    "unparseable or docstring-less file falls back to the old behaviour so "
+    "no task silently LOSES its pins. "
     "v7.1.27: A GREEN GATE NO LONGER CLOSES ON ANOTHER TASK'S TREE [task "
     "e0149f1f, owner 2026-07-21]. Task 5a6837a0 reached status=done on "
     "'adapter=http_probe, tree=c162b66' - a commit belonging to task "

@@ -1944,6 +1944,11 @@ class ConductorService:
         # tree that does not even contain the task's own pinned tests.
         if self._receipt_tree_missing_reason(task, receipt):
             return None
+        # ...and the same question about the ADAPTER: 5a6837a0's receipt was an
+        # http_probe on a task pinning pytest. A probe returning ok is not
+        # evidence for a suite it never ran.
+        if self._receipt_adapter_mismatch_reason(task, receipt):
+            return None
         _rsn = (
             "machine adjudication: fresh passing EvidenceReceipt "
             f"{getattr(receipt, 'job_id', '')} "
@@ -2006,6 +2011,31 @@ class ConductorService:
                 f"contain this task's pinned test(s) {', '.join(missing)} — "
                 "it cannot have exercised this change; a distinct actor "
                 "must decide")
+
+    def _receipt_adapter_mismatch_reason(self, task, receipt) -> Optional[str]:
+        """Refuse a receipt whose ADAPTER cannot evidence what the task pins
+        (task e0149f1f, 2026-07-21). 5a6837a0 closed on adapter=http_probe
+        while its task.verify pinned a pytest file — an http probe returning
+        ok says NOTHING about that suite.
+
+        Fires ONLY when the task itself pins pytest paths, so a probe- or
+        browser-oracle task keeps machine adjudication untouched: the tooth
+        narrows the seat, it can never become a blanket refusal (the
+        pre-declared likely_misfire). Returns a one-line reason naming BOTH
+        what was pinned and what was measured, or None when sound."""
+        if not self.pinned_test_paths(task):
+            return None
+        try:
+            from prism_service.services import oracle_spec as osp
+            got = str(getattr(receipt, "adapter", "") or "").strip()
+            if not got or got == osp.ADAPTER_PYTEST:
+                return None
+            want = osp.ADAPTER_PYTEST
+        except Exception as exc:
+            return f"could not verify the receipt adapter ({type(exc).__name__})"
+        return (f"receipt was measured by adapter={got}, but this task pins a "
+                f"pytest suite (adapter={want}) in task.verify — {got} cannot "
+                "evidence those tests; a distinct actor must decide")
 
     def _failed_gate_is_refused_approve(self, task_id: str,
                                         gate_step_id: str) -> bool:
