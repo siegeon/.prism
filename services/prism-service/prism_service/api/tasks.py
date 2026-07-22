@@ -1070,6 +1070,13 @@ def get_task_gate_evidence(task_id: str, project: str = Query("default")) -> dic
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
+    # A task's DESCRIPTION was settable at create and then frozen forever —
+    # neither this route nor mcp task_update could touch it. When a design is
+    # corrected mid-flight (owner reversed the whole access model on 6cef97ec,
+    # 2026-07-22) the description keeps asserting the retired premise, which is
+    # the first thing any reader sees. TaskService.update already accepts
+    # arbitrary fields; only this model was blocking it.
+    description: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[int] = None
     # tags were settable at create but never updatable over the API — the

@@ -73,17 +73,6 @@ export function parseAc(doc?: string): { badge: string | null; rest: string } {
 
 // Ascending numeric order of the AC/FR ids (AC-2 before AC-10); tests without
 // a parsed id sink to the end but keep a stable order.
-/** Heading for one part of the Design package (prototype / diagram /
- *  proposed change). They are stacked in one tab, so each part still has
- *  to name itself or the reviewer cannot tell where one ends. */
-function DesignPartLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-2 text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
-      {children}
-    </div>
-  );
-}
-
 function acOrder(t: PinTest): number {
   const b = parseAc(t.doc).badge;
   const n = b ? parseInt(b.replace(/\D+/g, ""), 10) : NaN;
@@ -290,6 +279,16 @@ export default function PlanView({
     setActive(["prototype", "diagram", "doc"].includes(req) ? "design" : req);
   }, [tabRequest?.n, tabRequest?.tab]);
 
+  // Design sub-tabs — the package's three parts, one at a time.
+  const designParts: { key: string; label: string }[] = [];
+  if (hasProto) designParts.push({ key: "proto", label: "Prototype" });
+  if (hasDiagram) designParts.push({ key: "diagram", label: "Diagram" });
+  if (hasDoc) designParts.push({ key: "doc", label: "Proposed change" });
+  const [designPart, setDesignPart] = useState(designParts[0]?.key ?? "proto");
+  const curPart = designParts.some((p) => p.key === designPart)
+    ? designPart
+    : designParts[0]?.key ?? "proto";
+
   // Tests tab: which pin is expanded to show its actual assertion source —
   // a reviewer must be able to EVALUATE a pin, not just read its name.
   const [openTest, setOpenTest] = useState<string | null>(null);
@@ -322,7 +321,7 @@ export default function PlanView({
             {t.label}
           </button>
         ))}
-        {cur === "design" && hasProto && (
+        {cur === "design" && curPart === "proto" && hasProto && (
           <a
             href={prototypeSrc}
             target="_blank"
@@ -335,33 +334,43 @@ export default function PlanView({
       </div>
 
       {cur === "design" && (
-        <div className="space-y-6">
-          {hasProto && (
-            <div>
-              <DesignPartLabel>Prototype</DesignPartLabel>
-              <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
-                <iframe
-                  title="prototype"
-                  src={prototypeSrc}
-                  className="w-full block"
-                  style={{ height: "80vh", background: "var(--background-base)" }}
-                />
-              </div>
+        <div className="space-y-3">
+          {/* The three parts are SUB-TABS of Design, not one long scroll
+              (owner 2026-07-22): a reviewer compares them, they do not read
+              them end to end. */}
+          <div className="flex items-center gap-1">
+            {designParts.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setDesignPart(p.key)}
+                className={
+                  "px-2.5 py-1 rounded text-2xs uppercase tracking-wider transition-colors " +
+                  (curPart === p.key
+                    ? "bg-[color:var(--midground-base)]/15 text-[color:var(--text-primary)]"
+                    : "text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)]")
+                }
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {curPart === "proto" && hasProto && (
+            <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
+              <iframe
+                title="prototype"
+                src={prototypeSrc}
+                className="w-full block"
+                style={{ height: "80vh", background: "var(--background-base)" }}
+              />
             </div>
           )}
-          {hasDiagram && (
-            <div>
-              <DesignPartLabel>Diagram</DesignPartLabel>
-              <div className="rounded-lg p-4 bg-[color:var(--midground-base)]/5">
-                <Mermaid chart={diagram!} />
-              </div>
+          {curPart === "diagram" && hasDiagram && (
+            <div className="rounded-lg p-4 bg-[color:var(--midground-base)]/5">
+              <Mermaid chart={diagram!} />
             </div>
           )}
-          {hasDoc && (
-            <div>
-              <DesignPartLabel>Proposed change</DesignPartLabel>
-              <Markdown text={doc!} className="space-y-4 max-w-none" />
-            </div>
+          {curPart === "doc" && hasDoc && (
+            <Markdown text={doc!} className="space-y-4 max-w-none" />
           )}
         </div>
       )}
