@@ -54,10 +54,10 @@
     {
       "id": "AC-SPARKLINE-5",
       "statement": "The tile's throughput sparkline (TokenTurns) marks the window peak bar.",
-      "status": "retired",
-      "proof_node_id": null,
-      "guard_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tokenturns_sparkline_AC_retired_tile_renders_no_tokenturns",
-      "note": "The showcase tile renders no <TokenTurns>; a source-scan of TokenTurns.tsx proved nothing about the tile. Retired; guard asserts the tile stays TokenTurns-free."
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_conductor_token_source.py::test_tile_renders_the_token_burn_graph",
+      "guard_node_id": null,
+      "note": "UN-RETIRED (owner 2026-07-22: \"its supposed to show the wave form of token per second\"). The tile renders the burn graph again; peak marking lives in TokenTurns.tsx and is now reachable by a user."
     },
     {
       "id": "AC-ETA-UI",
@@ -70,10 +70,10 @@
     {
       "id": "AC-TOKENSOURCE-UI",
       "statement": "The tile's per-turn burn graph (TokenTurns) consumes tokens_source and labels the wall-clock 'project activity' case.",
-      "status": "retired",
-      "proof_node_id": null,
-      "guard_node_id": "tests/unit/test_conductor_token_source.py::test_token_turns_ui_guard_RETIRED_tile_renders_no_tokenturns",
-      "note": "The showcase tile renders no <TokenTurns>. tokens_source honesty is proven at runtime by the phase_progress oracles in test_conductor_token_source.py, not a source-scan of an unrendered component."
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_conductor_token_source.py::test_tile_burn_graph_consumes_tokens_source",
+      "guard_node_id": null,
+      "note": "UN-RETIRED (owner 2026-07-22). It was retired because the tile rendered no <TokenTurns> at all - a fact, not a decision that the graph should not exist. The tile now renders it and passes phase_progress.tokens_source, so a wallclock series is labelled rather than posing as per-task truth."
     }
   ]
 }

@@ -176,11 +176,15 @@ def test_tasktile_honest_activity_states_render():
 #    throughput sparkline is ever re-added to the tile, add a fresh AC to the
 #    frozen manifest (tests/acceptance/conductor_tile.acceptance.json) rather than
 #    resurrecting this scan.
-def test_tokenturns_sparkline_AC_retired_tile_renders_no_tokenturns():
+def test_tokenturns_sparkline_AC_delivered_tile_renders_the_burn_graph():
+    """AC-5 UN-RETIRED (owner 2026-07-22). It was retired because the tile
+    rendered no TokenTurns — a statement of fact, not a decision that the
+    graph should not exist. Re-introduction went through the manifest, as
+    that retirement required."""
     src = _page()
-    assert "<TokenTurns" not in src, (
-        "AC-5 (throughput sparkline) is RETIRED — the showcase tile does not "
-        "render TokenTurns; re-introducing it must go through the manifest"
+    assert "<TokenTurns" in src, (
+        "AC-5 (throughput sparkline) is DELIVERED — the tile renders the "
+        "per-turn burn graph, so a drive in flight never looks static"
     )
 
 

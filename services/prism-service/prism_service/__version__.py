@@ -13,10 +13,33 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.30"
+PRISM_VERSION = "7.1.31"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.31: THE BOARD SHOWS ITS WORK, AND STOPS WORKING WHEN NOBODY IS "
+    "WATCHING [owner 2026-07-22]. (1) The tok/s BURN GRAPH now renders on the "
+    "conductor tile. TokenTurns was DEAD CODE - the component existed, the "
+    "server already served phase_progress.token_turns, and three files "
+    "referred to it in comments as 'the live TokenTurns graph beside each "
+    "conductor tile', but nothing ever imported it. A tile mid-drive looked "
+    "static while a driver burned hundreds of thousands of tokens. (2) "
+    "Conductor tiles are WIDE, not portrait: the grid packed four per row so "
+    "every tile was a ~280px card whose title truncated to 'L...', whose "
+    "10-step timeline read 'Revie / Implem / Verify' and whose burn graph had "
+    "no room. Tiles are now >=560px and landscape. (3) POLLING STOPS IN "
+    "HIDDEN TABS: /api/jobs (2s), /api/staleness (5s) and /api/conductor/state "
+    "(5s, ~29KB) ran forever in every background tab - ~30 requests a minute "
+    "on an idle board. All three skip the fetch while hidden and refetch on "
+    "focus, so a backgrounded tab resumes rather than freezing. "
+    "resolveInitialProject's raw fetch() now goes through the api chokepoint "
+    "so it cannot miss a credential later. (4) DESIGN SUB-TABS: Prototype | "
+    "Diagram | Proposed change are sub-tabs of one Design package, not a long "
+    "scroll. (5) A task DESCRIPTION can finally be corrected - TaskUpdate had "
+    "no description field, so a PATCH carrying one was silently dropped and a "
+    "task kept asserting a premise the owner had already reversed. "
+)
+PRISM_VERSION_NOTES += (
     "v7.1.30: YOU CAN ACTUALLY SEE A PROTOTYPE NOW [task 8c512299, owner "
     "2026-07-22]. Two separate reasons the design was invisible. (1) The task "
     "page built the prototype iframe URL as /api/tasks/<id>/prototype with NO "

@@ -289,27 +289,45 @@ def test_in_progress_task_with_linked_events_still_reports_real_per_task(tmp_pat
 
 
 # ----------------------------------------------------------------------
-# UI guard — RETIRED (inverted-flow #4).
+# UI guard — UN-RETIRED (owner 2026-07-22: "its supposed to show the wave
+# form of token per second").
 #
-# The original AC pinned that the conductor TILE's per-turn burn graph
-# (<TokenTurns>) consumes tokens_source and labels the wall-clock case. But the
-# showcase ConductorPage that SUPERSEDES the PR-#212 tile does NOT render
-# <TokenTurns> anywhere in the SPA — so a source-scan of TokenTurns.tsx proves
-# nothing a user can see; it was laundering (a scan of an unrendered component).
+# This AC was retired because the tile did not render <TokenTurns> at all, so
+# a source-scan of TokenTurns.tsx proved nothing a user could see — it was
+# laundering a scan of an unrendered component. That retirement recorded a
+# FACT, not a decision that the graph should not exist: the component was
+# built, the server already served phase_progress.token_turns, and three files
+# described it in comments as "the live TokenTurns graph beside each conductor
+# tile". Nothing imported it, so a tile mid-drive looked static while a driver
+# burned hundreds of thousands of tokens.
 #
-# The tokens_source HONESTY that matters is proven by the runtime oracles above
-# (phase_progress returns tokens_source=='linked' with an empty series for a
-# parked/unlinked task, and a real per-task series when genuinely linked). We
-# retire the source-scan and instead pin the real fact: the tile renders no
-# TokenTurns. Re-introducing a burn graph to the tile must go through the frozen
-# manifest (tests/acceptance/conductor_tile.acceptance.json).
+# The tile now renders it, so the AC is delivered again and pinned by a test
+# that fails if it regresses — the manifest's own rule (add/retire an AC here,
+# never re-point a proof at a comment or an unrendered feature).
 # ----------------------------------------------------------------------
 
-def test_token_turns_ui_guard_RETIRED_tile_renders_no_tokenturns():
+def test_tile_renders_the_token_burn_graph():
+    """The conductor tile shows the per-turn tok/s waveform."""
     page = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "pages"
             / "ConductorPage.tsx").read_text(encoding="utf-8")
-    assert "<TokenTurns" not in page, (
-        "the showcase conductor tile renders no TokenTurns burn graph — the "
-        "tokens_source UI-guard AC is retired; honesty is proven by the "
-        "phase_progress runtime oracles above"
+    assert "<TokenTurns" in page, (
+        "the conductor tile must render the TokenTurns burn graph — without "
+        "it a tile mid-drive looks static while a driver burns tokens"
+    )
+    assert "import TokenTurns" in page, (
+        "TokenTurns must be imported, not merely mentioned in a comment — "
+        "that is exactly how it sat as dead code"
+    )
+
+
+def test_tile_burn_graph_consumes_tokens_source():
+    """The wall-clock fallback must reach the component, so an approximate
+    series can be rendered dimmed/labelled instead of posing as per-task
+    truth. Passing `turns` without `tokens_source` would silently launder a
+    project-wide estimate into a per-task claim."""
+    page = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "pages"
+            / "ConductorPage.tsx").read_text(encoding="utf-8")
+    assert "tokens_source={task.phase_progress?.tokens_source}" in page, (
+        "the tile must pass phase_progress.tokens_source into TokenTurns so "
+        "a 'wallclock' series is labelled rather than presented as linked"
     )
