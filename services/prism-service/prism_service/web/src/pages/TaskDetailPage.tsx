@@ -1329,7 +1329,7 @@ export default function TaskDetailPage() {
       {/* Two-column issue layout (artifact .issue: 1fr / 300px, stacks
           below 900px). LEFT = the document column (plan/oracle/contract/…
           intact); RIGHT = the Details + Connections rail. */}
-      <div className="grid grid-cols-1 min-[900px]:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+      <div className="grid grid-cols-1 gap-6 items-start">
       <div className="space-y-6 min-w-0">
 
       {/* Doc-column tab strip (artifact .itabs): Overview / Trace. The Trace
@@ -2088,7 +2088,7 @@ export default function TaskDetailPage() {
 
       </div>{/* end left doc column */}
 
-      <aside className="space-y-3.5 min-w-0 min-[900px]:sticky min-[900px]:top-6">
+      <aside className="grid grid-cols-1 min-[720px]:grid-cols-2 gap-3.5 items-start min-w-0">
         <RailCard title="Details">
           <Field k="Status"><Lozenge tone={statusLoz(taskStatus)}>{taskStatus.replace(/_/g, " ")}</Lozenge></Field>
           {task.workflow_step && <Field k="Step"><Lozenge tone="neutral">{task.workflow_step}</Lozenge></Field>}

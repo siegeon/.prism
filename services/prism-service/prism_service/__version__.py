@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.29"
+PRISM_VERSION = "7.1.30"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.30: YOU CAN ACTUALLY SEE A PROTOTYPE NOW [task 8c512299, owner "
+    "2026-07-22]. Two separate reasons the design was invisible. (1) The task "
+    "page built the prototype iframe URL as /api/tasks/<id>/prototype with NO "
+    "project, and get_task_prototype defaults to project='default' - so for "
+    "any task outside the default project the lookup missed and the tab "
+    "rendered the raw body {'detail':'task not found'}. Ten prototypes have "
+    "been on disk since 2026-06-29 and none could be opened from a task page "
+    "in a named project: the feature shipped, the tab pointing at it never "
+    "worked. `project` was already in scope; the URL just never used it, and "
+    "PlanView's open-in-new-tab href reads the same value so both are fixed. "
+    "(2) The work panel was squeezed into a column beside a fixed 300px "
+    "Details+Connections rail, so a prototype of an ENTIRE app rendered "
+    "through a ~650px letterbox with its own inner scrollbar. Details "
+    "duplicated the status and priority chips already under the title. The "
+    "document column is now full width and the two rail cards sit beneath it "
+    "as a compact two-up row. "
+)
+PRISM_VERSION_NOTES += (
     "v7.1.29: A MACHINE REFUSAL NOW SAYS WHY [task e0149f1f]. Both green-seat "
     "receipt teeth computed a precise, actionable one-liner and then threw it "
     "away on `return None`, so the gate parked with an EMPTY gate_reason and "
