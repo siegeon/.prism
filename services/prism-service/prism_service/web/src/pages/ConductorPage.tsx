@@ -7,6 +7,7 @@ import { Lozenge } from "@/components/Lozenge";
 import { domainTone } from "@/lib/domainTone";
 import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
+import TokenTurns from "@/components/conductor/TokenTurns";
 
 type ManagedTask = {
   id: string;
@@ -202,6 +203,18 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       <TileHero task={task} />
       {/* the 10-step SDLC timeline with gate diamonds + roles */}
       <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
+      {/* BURN — tok/s per turn off the live transcript. The component and the
+          server data (phase_progress.token_turns, tokens_source, turns) both
+          existed; nothing ever rendered it, so a tile mid-drive looked static
+          even while a driver was burning tokens (owner 2026-07-22). */}
+      <TokenTurns
+        turns={task.phase_progress?.token_turns}
+        total={task.phase_progress?.turns}
+        live={actWorking}
+        reduced={reduced}
+        tokens_source={task.phase_progress?.tokens_source}
+        state={actState}
+      />
       {/* HANDOFF strip — which worker is on deck for the current step. */}
       <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
         <span className="font-mono text-2xs uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
