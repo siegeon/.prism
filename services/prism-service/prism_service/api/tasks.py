@@ -566,7 +566,16 @@ def get_task_prototype(
     path = prototype_file(task_id)
     if not path.exists():
         raise HTTPException(404, "no prototype for this task")
-    return FileResponse(str(path), media_type="text/html")
+    # NEVER cache a prototype. A design is ITERATED — the reviewer's feedback
+    # is applied and the same URL then serves different content. FileResponse
+    # sends only ETag/Last-Modified, so the browser was free to keep showing
+    # the previous draft inside the iframe: the owner asked for changes, the
+    # changes landed on disk, and they still saw the old design (owner
+    # 2026-07-22). Stale here is not a stale asset, it is a stale DECISION.
+    return FileResponse(
+        str(path), media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate, no-cache"},
+    )
 
 
 # Evidence media a drive cites in its proof, or that the trusted-runner
