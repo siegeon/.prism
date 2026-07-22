@@ -99,3 +99,55 @@ def test_sound_tree_still_APPROVES(tmp_path, monkeypatch):
     assert svc._receipt_tree_missing_reason(
         _task(["services/prism-service/tests/unit/test_pinned.py"]),
         SimpleNamespace(tree_sha=real)) is None
+
+
+# ---------------------------------------------------------------------
+# AC-2 / AC-5: the ADAPTER must match what the task pins. 5a6837a0 closed
+# on adapter=http_probe while its task.verify pinned a pytest file — an
+# http probe returning ok says NOTHING about that suite.
+# ---------------------------------------------------------------------
+
+PINNED = ["services/prism-service/tests/unit/test_a.py"]
+
+
+def _svc():
+    return ConductorService.__new__(ConductorService)
+
+
+def test_http_probe_receipt_on_a_pytest_pinned_task_is_REFUSED():
+    from prism_service.services import oracle_spec as osp
+    reason = _svc()._receipt_adapter_mismatch_reason(
+        _task(PINNED), SimpleNamespace(adapter=osp.ADAPTER_HTTP))
+    assert reason, "an http probe cannot evidence a pinned pytest suite"
+    assert osp.ADAPTER_HTTP in reason and osp.ADAPTER_PYTEST in reason, \
+        "the reason must name BOTH what was pinned and what was measured"
+
+
+def test_browser_receipt_on_a_pytest_pinned_task_is_REFUSED():
+    from prism_service.services import oracle_spec as osp
+    assert _svc()._receipt_adapter_mismatch_reason(
+        _task(PINNED), SimpleNamespace(adapter=osp.ADAPTER_BROWSER))
+
+
+def test_matching_pytest_adapter_still_APPROVES():
+    # Anti-misfire (AC-3): the tooth narrows, it does not disable.
+    from prism_service.services import oracle_spec as osp
+    assert _svc()._receipt_adapter_mismatch_reason(
+        _task(PINNED), SimpleNamespace(adapter=osp.ADAPTER_PYTEST)) is None
+
+
+def test_task_pinning_no_pytest_files_is_not_this_tooths_business():
+    # A probe-oracle task keeps machine adjudication untouched.
+    from prism_service.services import oracle_spec as osp
+    assert _svc()._receipt_adapter_mismatch_reason(
+        _task([]), SimpleNamespace(adapter=osp.ADAPTER_HTTP)) is None
+
+
+def test_adjudicator_calls_BOTH_teeth_before_approving():
+    """AC-5: a refusal must return out of the approve path, never fall
+    through to a write. Pin that both reasons are consulted by the
+    adjudicate path itself, not merely defined."""
+    import inspect
+    src = inspect.getsource(ConductorService.adjudicate_green_gate)
+    assert "_receipt_tree_missing_reason" in src
+    assert "_receipt_adapter_mismatch_reason" in src
