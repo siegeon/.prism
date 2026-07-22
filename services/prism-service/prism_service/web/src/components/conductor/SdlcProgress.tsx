@@ -74,13 +74,21 @@ function fmtEta(s: number): string {
 
 // Honest activity STATE → label + accent tone. Keyed by activity.state (not the
 // raw status) so a task the conductor isn't driving reads as slate/rose, not a
-// teal "in progress" lie. adrift/stalled append a mm:ss idle clock (see below).
-const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
+// teal "in progress" lie. THE ONE map every surface renders through — LiveBar and
+// ConductorPage import it rather than printing the raw enum (owner 2026-07-21 was
+// shown a bare "adrift" on the LiveBar and asked what he was supposed to do).
+//
+// "idle"/"stalled" are ALARM WORDS: the owner reads them as "I must intervene
+// somewhere", so they may appear ONLY when there IS an owner action. `adrift`
+// is NOT one of those moments — it means a linked session emitted tokens in the
+// last 90s while no conductor step BOUNDARY was crossed in 120s, which is the
+// normal condition of a healthy 5-10min step. It now says so plainly.
+export const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   working: { label: "in progress", tone: "teal" },
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
-  adrift: { label: "session busy · task idle", tone: "slate" },
-  stalled: { label: "stalled · idle", tone: "rose" },
+  adrift: { label: "driver active · between step reports", tone: "teal" },
+  stalled: { label: "stalled · needs you", tone: "rose" },
   in_progress: { label: "in progress", tone: "teal" },  // pre-activity fallback
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
@@ -127,23 +135,40 @@ export default function SdlcProgress({
   // The honest state: prefer activity.state, fall back to raw status.
   const state = (activity?.state ?? status ?? "").toLowerCase();
   const meta = ACTIVITY_META[state] ?? { label: state || "", tone: "slate" };
-  // adrift/stalled surface HOW LONG the task has been idle (from task_motion_s).
+  // How long since the last conductor STEP BOUNDARY (task_motion_s). On `adrift`
+  // that is a "last report" age, NOT an idle time — the driver is mid-step and
+  // steps run 5-10min, so the clock must not be captioned as idleness. Only a
+  // genuinely dead drive (`stalled`) earns the alarm wording.
   const idleClock = activity?.task_motion_s != null ? fmtClock(activity.task_motion_s) : "";
   const stateLabel =
-    state === "adrift" ? `session busy · task idle${idleClock ? ` ${idleClock}` : ""}`
-    : state === "stalled" ? `stalled · idle${idleClock ? ` ${idleClock}` : ""}`
+    state === "adrift" ? `driver active · last step report ${idleClock || "—"} ago`
+    : state === "stalled" ? `stalled · needs you · idle ${idleClock || "—"}`
     : state === "paused" ? `paused · ${phase?.children_done ?? 0}/${phase?.children_total ?? 0} done`
     : meta.label;
-  // "live" = the task is genuinely being DRIVEN right now — ONLY the "working"
-  // state (a real recent conductor transition on THIS task), NEVER raw
-  // in_progress. This is the honest basis for the shimmer + pulse; an adrift or
-  // stalled tile must read as still, not animated.
-  const live = state === "working";
+  // "live" = the task is genuinely being DRIVEN right now — a real recent
+  // conductor transition ("working") OR a live linked session mid-step
+  // ("adrift"), NEVER raw in_progress. `adrift` is included because a 5-10min
+  // step crosses no boundary for most of its life, so excluding it rendered a
+  // BUILDING task as motionless (owner 2026-07-21). A `stalled` tile — nothing
+  // driving it at all — must still read as still, not animated.
+  const live = state === "working" || state === "adrift";
 
   // Overall task progress toward DONE: completed steps + current phase fraction.
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
   const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
-  const [liveInStep, setLiveInStep] = useState(phase?.in_step_s ?? 0);
+  // The step clock measures EXECUTION time, not wall time (owner 2026-07-14:
+  // 'when the ball is in our court it shouldn't be running'). It ticks while the
+  // task is actually being WORKED — "working" AND "adrift", since on `adrift`
+  // the ball IS in our court (a driver is mid-step). It FREEZES only when the
+  // ball is genuinely elsewhere (awaiting review / stalled), at in_step_s minus
+  // task_motion_s (both server-truth). Before this, the execution clock froze
+  // DURING execution while the idle clock ticked beside it on the same line —
+  // two clocks disagreeing about the same second (owner 2026-07-21).
+  const counting = state === "working" || state === "adrift";
+  const frozenInStep = Math.max(
+    0, (phase?.in_step_s ?? 0) - (activity?.task_motion_s ?? 0));
+  const [liveInStep, setLiveInStep] = useState(
+    counting ? (phase?.in_step_s ?? 0) : frozenInStep);
   // current-SEGMENT fill (within the active step) drives just that segment.
   // The animation frame writes the raw live fraction to `segFill`; a spring
   // tweens the DISPLAYED value smoothly between the 5s poll snapshots instead
@@ -164,6 +189,18 @@ export default function SdlcProgress({
   const lastClockAt = useRef(0);
   useAnimationFrame((t) => {
     if (!phase || curIdx < 0) return;
+    // Parked (not working): the execution clock and the segment fill hold
+    // at the last conductor motion — never creep on wall time.
+    if (!counting) {
+      const wf = liveFraction(phase, 0);
+      segFill.set(wf);
+      if (t - lastClockAt.current > 500) {
+        lastClockAt.current = t;
+        setLiveInStep(frozenInStep);
+        setLiveLabel(((curIdx + wf) / steps.length) * 100);
+      }
+      return;
+    }
     const elapsedS = (performance.now() - anchor.current.t0) / 1000;
     const wf = liveFraction(phase, elapsedS);
     segFill.set(wf);
@@ -227,7 +264,7 @@ export default function SdlcProgress({
 
       {showCaption && curIdx >= 0 && (
         <>
-          <div className="mt-1 flex items-center justify-between text-[10px] font-mono text-[color:var(--text-muted)]">
+          <div className="mt-1 flex items-center justify-between text-2xs font-mono text-[color:var(--text-muted)]">
             <span className="uppercase tracking-wider truncate">
               {stepLabel(steps[curIdx].id)} · {liveLabel.toFixed(2)}%
               {basis === "children" && phase?.children_total ? ` · ${phase.children_done}/${phase.children_total}` : ""}
@@ -242,7 +279,13 @@ export default function SdlcProgress({
                 animate={!reduced && live ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
                 transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
-              <span>{fmtClock(liveInStep)}</span>
+              {/* The clock is an EXECUTION metric (owner: for observing and
+                  refining LLM process time). We have no per-step llm-active
+                  duration recorded yet (agent_runs carries tokens only), so
+                  when the task is parked the clock is HIDDEN rather than
+                  showing wall time — tokens are the honest effort figure.
+                  Waiting time lives on the LiveBar chip (· 3H) explicitly. */}
+              {counting && <span>{fmtClock(liveInStep)}</span>}
               {live && (phase?.eta_s ?? 0) > 5 && (
                 <span
                   className="opacity-70"

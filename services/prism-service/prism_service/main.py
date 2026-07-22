@@ -33,7 +33,7 @@ from pathlib import Path
 from prism_service.thread_limits import apply_thread_limits
 apply_thread_limits()
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -471,6 +471,17 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.watchdog import start_watchdog
         start_watchdog()
 
+        # Task 1d3322a6 (owner 2026-07-15) — the machine adjudicator seat.
+        # Sweeps PENDING green_gates and approves on a fresh passing
+        # EvidenceReceipt as 'conductor-adjudicator'; runs the oracle itself
+        # when machine-runnable and unevidenced. Humans keep manual-evidence
+        # oracles, failed gates and overrides. Own thread (mints take
+        # minutes); PRISM_GATE_ADJUDICATOR_INTERVAL=0 disables.
+        from prism_service.services.gate_adjudicator import (
+            start_gate_adjudicator,
+        )
+        start_gate_adjudicator()
+
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
@@ -530,7 +541,13 @@ async def lifespan(_app: FastAPI):
     _LOCK_FILE.unlink(missing_ok=True)
 
 
-app = FastAPI(title="PRISM Service", lifespan=lifespan)
+from prism_service.api.security import enforce_team_boundary
+
+app = FastAPI(
+    title="PRISM Service",
+    lifespan=lifespan,
+    dependencies=[Depends(enforce_team_boundary)],
+)
 
 # The standalone Tauri shell loads its splash from a tauri:// origin and
 # polls /api/version cross-origin. Without these headers the webview sends
@@ -550,6 +567,18 @@ from prism_service.api import api_router
 from prism_service.routes import routes_router
 app.include_router(api_router)
 app.include_router(routes_router)
+
+# FastAPI's lazy router inclusion (_IncludedRouter) keeps every include_router'd
+# path OUT of the top-level app.routes table — only routes registered directly
+# on the app surface there. The session-detail seam is served fine through the
+# include above, but route-table introspection and the SPA deep-link contract
+# need it discoverable at the top level, so promote that one handler with a
+# direct registration (include_in_schema=False so OpenAPI isn't duplicated).
+from prism_service.api.sessions import detail as _sessions_detail
+app.add_api_route(
+    "/api/sessions/{session_id}", _sessions_detail,
+    methods=["GET"], include_in_schema=False,
+)
 
 
 # Static SPA. /assets/* served directly; everything else falls through to

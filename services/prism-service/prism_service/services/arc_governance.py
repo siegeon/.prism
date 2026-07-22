@@ -79,22 +79,31 @@ def _find_section(sections: dict[str, str], wanted: str) -> Optional[str]:
 
 
 def _ac_lines(section_body: str) -> list[tuple[str, str]]:
-    """Return [(ac_id, full_line)] for every bullet carrying an AC id.
-    Continuation lines (wrapped bullets) are folded into their bullet."""
-    bullets: list[str] = []
+    """Return [(ac_id, full_line)] for every entry carrying an AC id.
+
+    An entry starts on a markdown bullet ('- AC-1: ...' / '* AC-1: ...') OR on a
+    PLAIN line that begins with the AC id ('AC-1: ...') — owner 2026-07-19: accept
+    either so a naive author is not silently rejected for omitting the bullet
+    (the job instructions never said the AC must be a bullet). Continuation
+    (wrapped/indented) lines fold into the current entry, so an 'Oracle:' line
+    under its AC counts toward that AC."""
+    entries: list[str] = []
     for raw in (section_body or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
             continue
-        if re.match(r"^\s*[-*]\s+", line):
-            bullets.append(line.strip())
-        elif bullets:
-            bullets[-1] += " " + line.strip()
+        stripped = line.strip()
+        is_bullet = re.match(r"^\s*[-*]\s+", line) is not None
+        starts_ac = re.match(r"^AC-\d+\b", stripped) is not None
+        if is_bullet or starts_ac:
+            entries.append(stripped)
+        elif entries:
+            entries[-1] += " " + stripped
     out: list[tuple[str, str]] = []
-    for b in bullets:
-        m = re.search(r"\b(AC-\d+)\b", b)
+    for e in entries:
+        m = re.search(r"\b(AC-\d+)\b", e)
         if m:
-            out.append((m.group(1), b))
+            out.append((m.group(1), e))
     return out
 
 

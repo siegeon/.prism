@@ -156,7 +156,7 @@ function SummaryBlock({ summary, loading }: { summary: { text: string; source: s
   return (
     <div>
       <p className="text-sm leading-relaxed text-[color:var(--text-secondary)] whitespace-pre-wrap">{shown}</p>
-      <div className="mt-2 flex items-center gap-3 text-[11px]">
+      <div className="mt-2 flex items-center gap-3 text-2xs">
         <span className="uppercase tracking-wider opacity-40">{summary.source}</span>
         {long && (
           <button onClick={() => setOpen((v) => !v)} className="opacity-70 hover:opacity-100 underline-offset-2 hover:underline">
@@ -359,7 +359,7 @@ function C4Bar() {
         <span
           key={l}
           title={`C4 depth layer: ${l}`}
-          className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${
+          className={`text-2xs uppercase tracking-wider px-2 py-0.5 rounded border ${
             i === C4_LAYERS.length - 1
               ? "border-[color:var(--accent-teal-ring)] text-[color:var(--accent-teal-fg)] bg-[color:var(--accent-teal-bg)]"
               : "border-[color:var(--border-default)] text-[color:var(--text-label)]"
@@ -444,7 +444,7 @@ const DrillLink = ({ to, icon, label }: { to: string; icon: React.ReactNode; lab
 const Faint = ({ children }: { children: React.ReactNode }) => <div className="text-xs opacity-40">{children}</div>;
 const Section = ({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) => (
   <div>
-    <div className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5 flex items-center gap-1">{icon}{label}</div>
+    <div className="text-2xs uppercase tracking-[0.18em] text-[color:var(--text-label)] mb-1.5 flex items-center gap-1">{icon}{label}</div>
     {children}
   </div>
 );

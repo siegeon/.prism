@@ -66,7 +66,10 @@ export default function TokenTurns({
   const quietClock = session_quiet_s != null ? mmss(session_quiet_s) : "";
   const heading =
     st === "paused" ? "linked session · not this task"
-    : st === "adrift" ? "linked session busy — not this task"
+    // "not this task" was the same lie the pill told: on `adrift` a driver IS
+    // mid-step on this task. Stay honest about ATTRIBUTION (we can't prove which
+    // step each token bought) without denying the work (owner 2026-07-21).
+    : st === "adrift" ? "driver active · linked session burn"
     : st === "stalled" ? `no active driver${quietClock ? ` · quiet ${quietClock}` : ""}`
     : st === "awaiting_gate" ? "awaiting review · paused here"
     : approximate ? "project activity (approximate)"
@@ -81,10 +84,10 @@ export default function TokenTurns({
       title={heading}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[9px] uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">
+        <span className="text-2xs uppercase tracking-[0.12em] font-mono text-[color:var(--text-muted)] opacity-70">
           {heading}
         </span>
-        <span className="flex items-center gap-1 text-[10px] font-mono tabular-nums text-[color:var(--text-muted)]">
+        <span className="flex items-center gap-1 text-2xs font-mono tabular-nums text-[color:var(--text-muted)]">
           {live && (
             <motion.span
               className="inline-block h-1.5 w-1.5 rounded-full"
@@ -101,7 +104,7 @@ export default function TokenTurns({
           between polls so the field flows as the live tail advances. */}
       <div className={`relative flex-1 ${working ? "min-h-[56px]" : "min-h-[30px]"} flex items-end gap-[2px] rounded bg-[color:var(--surface-2)]/40 px-1.5 pt-1.5 pb-1 overflow-hidden`}>
         {series.length === 0 ? (
-          <span className="absolute inset-0 grid place-items-center text-[10px] font-mono opacity-30 italic">
+          <span className="absolute inset-0 grid place-items-center text-2xs font-mono opacity-30 italic">
             awaiting first turn…
           </span>
         ) : (
@@ -151,7 +154,7 @@ export default function TokenTurns({
 
       {/* Single rate readout — the live (latest-turn) burn + the window peak.
           The ONLY numeric token figures on the tile. */}
-      <div className="flex items-baseline justify-between text-[10px] font-mono tabular-nums text-[color:var(--text-muted)]">
+      <div className="flex items-baseline justify-between text-2xs font-mono tabular-nums text-[color:var(--text-muted)]">
         <span>
           <span className="text-[color:var(--accent-amber-fg)]">{latest ? fmtRate(latest.tok_s) : "—"}</span> tok/s now
         </span>

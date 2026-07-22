@@ -61,6 +61,11 @@ ST_PASSED = "passed"
 ST_FAILED = "failed"
 ST_MANUAL = "manual_evidence_required"
 ST_ERROR = "error"
+# RED demonstration (task a5e8d877): the trusted runner observed the task's
+# pinned tests FAILING at the red-step commit. Receipts with this status
+# always carry passed=False, so no red receipt can ever satisfy
+# fresh_passing_receipt / green_gate.
+ST_RED = "red_demonstrated"
 
 # Body tokens that, if present in an HTTP response, evidence a broken surface
 # (the polarity fix: a page that "crashed" no longer satisfies a URL citation).
@@ -70,6 +75,27 @@ _ERROR_BODY_TOKENS = (
 )
 
 _URL_RE = re.compile(r"https?://[^\s)\"'<>]+")
+
+
+def is_human_judgment(spec) -> bool:
+    """Owner rule (2026-07-18, task eaafdf75): a MACHINE seat may sign off a
+    gate only when its oracle signal is OBJECTIVE-OBSERVABLE — a test suite
+    passes (``pytest_ids``) or an http probe returns ok (``http_probe``). A
+    SUBJECTIVE HUMAN-JUDGMENT oracle stays pending for the human: a
+    browser/render check (a render receipt proves the pixels exist, NOT that
+    the owner approves the direction) or any positive assertion of kind
+    ``manual``. Returns True iff the oracle is subjective (human-only)."""
+    # A spec with NO target (the task declared no oracle) is NOT human-judgment:
+    # a bare task defaults to a browser/manual shape but has nothing for a
+    # person to judge, so it takes the normal (verifier) path, not the sign-off.
+    if not str(getattr(spec, "target", "") or "").strip():
+        return False
+    if getattr(spec, "adapter", "") == ADAPTER_BROWSER:
+        return True
+    for a in getattr(spec, "positive", ()) or ():
+        if str(getattr(a, "kind", "") or "").lower() == "manual":
+            return True
+    return False
 
 
 def _now_iso() -> str:
@@ -148,6 +174,14 @@ class OracleSpec:
         ``derived=True`` so a caller knows it was inferred, not authored."""
         oracle = str(getattr(task, "oracle", "") or "")
         misfire = str(getattr(task, "likely_misfire", "") or "")
+        # PYTEST RUNG (task 68e5c699): a test-proofed task naming pytest
+        # material in verify[] derives a REAL pytest_ids spec — the adapter
+        # existed but nothing ever derived it, so test-proofed tasks could
+        # never be machine-evidenced and their green_gate was override-only.
+        proof_type = str(getattr(task, "proof_type", "") or "").strip().lower()
+        pytest_ids = _pytest_ids_from_task(task)
+        if pytest_ids and proof_type == "test":
+            return cls._pytest_spec(pytest_ids)
         m = _URL_RE.search(oracle)
         if m:
             url = m.group(0).rstrip(".,;)!?\"'")
@@ -168,10 +202,50 @@ class OracleSpec:
                        positive=tuple(positive), negative=tuple(negative),
                        thresholds={"max_ms": 10000, "max_payload_bytes":
                                    8_000_000}, timeout_s=10.0, derived=True)
+        if pytest_ids and proof_type != "demo":
+            # No URL to probe but real pytest material on file: machine
+            # evidence beats the manual floor (demo stays demo — it wants a
+            # UI artifact, not a test run).
+            return cls._pytest_spec(pytest_ids)
         return cls(adapter=ADAPTER_BROWSER, target=oracle.strip(),
                    positive=(Assertion("customer_observable_holds", "positive",
                                        "manual", True),),
                    derived=True)
+
+    @classmethod
+    def _pytest_spec(cls, ids: list) -> "OracleSpec":
+        return cls(adapter=ADAPTER_PYTEST, target=" ".join(ids),
+                   positive=(Assertion("pinned_tests_pass", "positive",
+                                       "pytest_pass", True),),
+                   thresholds={}, timeout_s=600.0, derived=True)
+
+
+def _pytest_ids_from_task(task: Any) -> list:
+    """Pytest node ids / test paths named by task.verify[] entries. An entry
+    contributes when it invokes pytest (a token is/ends with 'pytest') or IS a
+    bare test path / node id. Flags and interpreters are dropped; order kept,
+    deduped — the derivation must be deterministic (stable spec_hash)."""
+    out: list = []
+    seen: set = set()
+    for raw in (getattr(task, "verify", None) or []):
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        toks = s.split()
+        invoked = any(t == "pytest" or t.endswith("/pytest")
+                      or t.endswith("pytest.exe") for t in toks)
+        cands = toks if invoked else (
+            [s] if (".py" in s or "::" in s) and " " not in s else [])
+        for t in cands:
+            if (not t or t.startswith("-") or "=" in t.split("::", 1)[0]
+                    or t in ("pytest", "python", "python3", "-m")
+                    or t.endswith("python.exe") or t.endswith("pytest.exe")
+                    or t.endswith("/pytest")):
+                continue
+            if (".py" in t or "::" in t) and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return out
 
 
 _MISFIRE_TOKENS = ("blank", "white", "crash", "error", "500", "undefined")
@@ -312,6 +386,23 @@ def fresh_passing_receipt(project: str, task_id: str, tree_sha: str,
         if policy_hash and r.policy_hash and r.policy_hash != policy_hash:
             continue
         return r
+    return None
+
+
+def fresh_red_receipt(project: str, task_id: str, red_sha: str,
+                      spec_hash: str) -> Optional[EvidenceReceipt]:
+    """The most-recent receipt DEMONSTRATING RED for THIS ``red_sha`` AND
+    THIS ``spec_hash`` (task a5e8d877): the trusted runner executed the
+    spec's pytest ids in a disposable worktree at the red-step commit and
+    observed them FAILING. Red receipts always carry ``passed=False`` —
+    status ST_RED is the demonstration — so they are structurally invisible
+    to ``fresh_passing_receipt`` and can never soften green_gate."""
+    if not (red_sha and spec_hash):
+        return None
+    for r in reversed(read_receipts(project, task_id)):
+        if (r.status == ST_RED and r.tree_sha == red_sha
+                and r.spec_hash == spec_hash):
+            return r
     return None
 
 
@@ -461,12 +552,33 @@ def _run_browser(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, st
     ``manual_evidence_required`` (passed=False) — an honest boundary, NOT a
     silent pass."""
     runner = ctx.get("browser_runner")
+    if not callable(runner):
+        # WIRED BY DEFAULT (task d30c9a75): a browser oracle now EARNS its
+        # receipt via a real headless Playwright run instead of falling back
+        # to manual_evidence_required (which forced a human override). An
+        # explicit ctx['browser_runner'] still wins (tests inject a fake).
+        try:
+            from prism_service.services import browser_oracle_runner as _bor
+            runner = _bor.run
+        except Exception:
+            runner = None
     if callable(runner):
         res = runner(spec, ctx) or {}
         obs = res.get("observations", [])
         artifacts = []
         for p in res.get("artifacts", []) or []:
             artifacts.append({"path": p, "sha256": _sha256_file(p)})
+        # INCONCLUSIVE (runner could not capture: no URL, no browser engine,
+        # subprocess/verdict failure, surface unreachable) is NOT a failure —
+        # it is the honest manual-evidence boundary (a human attaches the
+        # screenshot), never a silent pass and never a hard fail.
+        if res.get("inconclusive"):
+            return (obs or [_obs("customer_observable_holds", "positive",
+                                 "human/agent-browser evidence",
+                                 "runner inconclusive", False)],
+                    artifacts, False, ST_MANUAL,
+                    res.get("reason", "browser: inconclusive — manual "
+                            "evidence required"))
         passed = bool(res.get("passed"))
         return (obs, artifacts, passed,
                 (ST_PASSED if passed else ST_FAILED),
@@ -500,6 +612,7 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
     receipt is APPENDED to the task's receipts.jsonl unless ``persist=False``."""
     ctx = dict(ctx or {})
     task_id = getattr(task, "id", "") or ctx.get("task_id", "")
+    ctx["task_id"] = task_id  # available to adapters (browser runner -> evidence path)
     project = ctx.get("project") or ""
     tree_sha = ctx.get("tree_sha")
     if tree_sha is None:
@@ -511,6 +624,43 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
             [], [], False, ST_ERROR, f"unknown adapter {spec.adapter!r}")
     else:
         observations, artifacts, passed, status, reason = runner(spec, ctx)
+    # EVIDENCE CAPTURE for ui/demo tasks (task 9afd1b72): layer a richer
+    # walkthrough (screenshot + video) plus verbatim per-pytest-id assertion
+    # source onto the receipt's artifacts[], ON TOP of whatever the adapter
+    # itself already produced. ALL best-effort: evidence_capture never raises
+    # on its own, and this whole block is additionally guarded so a capture
+    # failure (no Playwright, unreachable app, unresolvable node id) yields
+    # an artifact-less receipt instead of failing the mint.
+    try:
+        _proof_type = str(getattr(task, "proof_type", "") or "").strip().lower()
+        _tag_set = {str(t).strip().lower()
+                   for t in (getattr(task, "tags", None) or [])}
+        if task_id and (_proof_type == "demo" or "ui" in _tag_set):
+            from prism_service.services import evidence_capture as _ec
+            from prism_service.services import browser_oracle_runner as _bor
+            from prism_service.data_dir import evidence_dir as _evidence_dir
+            _url = _bor._extract_url(spec)
+            if _url:
+                _cap = _ec.capture_walkthrough(_url, str(_evidence_dir(task_id)))
+                if not _cap.get("error"):
+                    _prov = _ec.provenance(RUNNER_VERSION, tree_sha or "")
+                    if _cap.get("screenshot"):
+                        artifacts.append({"kind": "screenshot",
+                                          "path": _cap["screenshot"],
+                                          "provenance": _prov})
+                    if _cap.get("video"):
+                        artifacts.append({"kind": "video",
+                                          "path": _cap["video"],
+                                          "provenance": _prov})
+            for _node_id in _pytest_ids_from_task(task):
+                _src = _ec.assertion_source_for(_node_id,
+                                                ctx.get("workspace") or "")
+                if _src:
+                    artifacts.append({"kind": "assertion_source",
+                                      "path": _node_id,
+                                      "provenance": {"source": _src}})
+    except Exception:
+        pass
     # PINNED CONTROL-PLANE PROVENANCE (inverted-flow #3): stamp the ref the
     # gate policy is pinned to + a hash over that policy set. Best-effort —
     # an unpinnable environment stamps "" (the gate then skips the policy tooth
@@ -520,9 +670,12 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
     if not control_ref or not pol_hash:
         try:
             from prism_service.services import control_plane as _cp
-            pin = _cp.pinned_policy(task_id, ctx={
-                k: ctx[k] for k in ("workspace", "baseline", "repo_root",
-                                    "control_ref") if k in ctx})
+            # ONE resolution path (task 68e5c699): the stamp falls back to
+            # the same workspace-anchored task_pin the gate check resolves,
+            # so mint-then-check agree by construction. An explicit
+            # ctx['control_ref']/['policy_hash'] from a runner still wins
+            # (handled above); only the FALLBACK is unified.
+            pin = _cp.task_pin(task_id)
             control_ref = control_ref or pin.get("control_ref", "")
             pol_hash = pol_hash or pin.get("policy_hash", "")
         except Exception:
@@ -533,6 +686,103 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
         status=status, control_ref=control_ref, policy_hash=pol_hash,
         env=_env_fingerprint(), started_at=started,
         ended_at=_now_iso(), observations=observations, artifacts=artifacts,
+        reason=reason, derived_spec=spec.derived)
+    if persist:
+        append_receipt(project, receipt)
+    return receipt
+
+
+def _red_worktree_run(spec: OracleSpec, workspace: str, red_sha: str,
+                      ctx: dict) -> tuple[list, str, str]:
+    """Check out ``red_sha`` in a throwaway worktree and run the spec's
+    pytest adapter there. Red is demonstrated iff the run yields pytest
+    rc==1 (tests ran and failed) — a pass, a timeout, a collection error or
+    an unrunnable environment is honestly NOT a demonstration."""
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="prism-red-")
+    wt = str(Path(tmp) / "wt")
+    try:
+        add = subprocess.run(
+            ["git", "worktree", "add", "--detach", wt, red_sha],
+            cwd=workspace, capture_output=True, text=True, timeout=120)
+        if add.returncode != 0:
+            return [], ST_ERROR, (
+                f"red oracle: could not check out red-step commit "
+                f"{red_sha[:12]} ({(add.stderr or '').strip()[:160]})")
+        runner = _ADAPTERS.get(ADAPTER_PYTEST)
+        obs, _arts, passed, _st, run_reason = runner(
+            spec, dict(ctx, workspace=wt))
+        rc = next((o.get("observed") for o in obs
+                   if o.get("name") == "pytest_pass"), None)
+        if rc == 1:
+            return obs, ST_RED, (
+                f"red demonstrated at {red_sha[:12]}: {run_reason}")
+        if passed:
+            return obs, ST_FAILED, (
+                f"NOT red: the spec's tests PASS at the red-step commit "
+                f"{red_sha[:12]} ({run_reason})")
+        return obs, ST_FAILED, (
+            f"red not demonstrated at {red_sha[:12]} (rc={rc!r}, wanted "
+            f"rc==1 test failures): {run_reason}")
+    except subprocess.TimeoutExpired:
+        return [], ST_ERROR, "red oracle: git worktree add timed out"
+    except (OSError, FileNotFoundError) as exc:
+        return [], ST_ERROR, f"red oracle: could not run ({exc})"
+    finally:
+        try:
+            subprocess.run(["git", "worktree", "remove", "--force", wt],
+                           cwd=workspace, capture_output=True, text=True,
+                           timeout=60)
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_red_oracle(spec: OracleSpec, task: Any, red_sha: str,
+                   ctx: Optional[dict] = None,
+                   persist: bool = True) -> EvidenceReceipt:
+    """Demonstrate RED for real (task a5e8d877): check out ``red_sha`` — the
+    red-step commit — in a DISPOSABLE git worktree and run the spec's pytest
+    ids there, expecting failure (pytest rc==1: tests ran and FAILED).
+
+    Anchored to the red-step commit because once the implementation lands in
+    the workspace a fresh-HEAD run passes and can no longer demonstrate red.
+    pytest_ids only — every other adapter refuses (a red demonstration is a
+    real failing run, never prose). The receipt carries tree_sha=red_sha and
+    status=ST_RED on a genuine demonstration; ``passed`` is ALWAYS False so
+    green_gate's fresh_passing_receipt can never match a red receipt."""
+    ctx = dict(ctx or {})
+    task_id = getattr(task, "id", "") or ctx.get("task_id", "")
+    project = ctx.get("project") or ""
+    workspace = ctx.get("workspace") or ""
+    started = _now_iso()
+    observations: list = []
+    status, reason = ST_ERROR, ""
+    if spec.adapter != ADAPTER_PYTEST:
+        reason = (f"red oracle needs a pytest_ids spec, got {spec.adapter!r}"
+                  " — a red demonstration is a real failing run, not prose")
+    elif not (workspace and red_sha):
+        reason = "red oracle needs a workspace and a red-step commit sha"
+    else:
+        observations, status, reason = _red_worktree_run(
+            spec, str(workspace), red_sha, ctx)
+    control_ref = str(ctx.get("control_ref") or "")
+    pol_hash = str(ctx.get("policy_hash") or "")
+    if not control_ref or not pol_hash:
+        try:
+            from prism_service.services import control_plane as _cp
+            pin = _cp.task_pin(task_id)
+            control_ref = control_ref or pin.get("control_ref", "")
+            pol_hash = pol_hash or pin.get("policy_hash", "")
+        except Exception:
+            pass
+    receipt = EvidenceReceipt(
+        task_id=task_id, job_id=str(uuid.uuid4()), spec_hash=spec.spec_hash(),
+        tree_sha=red_sha or "", adapter=spec.adapter, passed=False,
+        status=status, control_ref=control_ref, policy_hash=pol_hash,
+        env=_env_fingerprint(), started_at=started,
+        ended_at=_now_iso(), observations=observations, artifacts=[],
         reason=reason, derived_spec=spec.derived)
     if persist:
         append_receipt(project, receipt)

@@ -49,17 +49,17 @@ def test_shared_markdown_component_exists():
 
 def test_parser_logic_lives_only_in_markdown():
     # AC-1: a grep over web/src/components shows parseMarkdown / highlight()
-    # block+token logic lives ONLY in Markdown.tsx — OnboardingView and
-    # EvidenceView must delegate, not keep their own copies.
+    # block+token logic lives ONLY in Markdown.tsx. OnboardingView was deleted
+    # with the verified-orphan understand/* cluster (ui-redesign 16777a76) —
+    # its absence satisfies the no-duplicate rule by construction; EvidenceView
+    # must still delegate rather than keep its own copy.
     md = _read(_MARKDOWN)
     assert "parseMarkdown" in md or "function parse" in md, \
         "the block parser must live in Markdown.tsx"
 
-    onboard = _read(_ONBOARD)
+    assert not _ONBOARD.exists(), \
+        "AC-1: OnboardingView.tsx was deleted as an orphan; do not resurrect"
     evidence = _read(_EVIDENCE)
-    # The duplicated parser/highlighter bodies must be gone from the originals.
-    assert "function parseMarkdown" not in onboard, \
-        "AC-1: parseMarkdown body must NOT remain in OnboardingView.tsx"
     assert "function highlight" not in evidence, \
         "AC-1: highlight() body must NOT remain in EvidenceView.tsx"
 
@@ -125,16 +125,18 @@ def test_text_page_description_routes_through_markdown():
         "FR-5: TaskTextPage must import the shared <Markdown>"
 
 
-def test_tasks_board_card_renders_description_markdown():
-    src = _read(_TASKS)
-    # The list/timeline entry-body must actually surface the description, and
-    # do so via the shared renderer — readable list view, not just detail.
+def test_task_description_renders_via_shared_markdown():
+    # FR-5 re-pinned to the shipped design: the board became the artifact's
+    # title-row grouped table (ui-redesign 16777a76 — descriptions no longer
+    # render in the list view by design); the description's rich-markdown
+    # rendering lives on the task DETAIL page via the ONE shared renderer.
+    src = _read(_DETAIL)
     assert "description" in src, \
-        "FR-5: TasksPage card type/body must carry the description"
+        "FR-5: task detail must carry the description"
     assert "<Markdown" in src, \
-        "FR-5: /tasks list entry body must render description via <Markdown>"
+        "FR-5: the description body must render via the shared <Markdown>"
     assert "components/Markdown" in src, \
-        "FR-5: TasksPage must import the shared <Markdown>"
+        "FR-5: TaskDetailPage must import the shared <Markdown>"
 
 
 # ---- NFR-1 / AC-6: colors from Hermes CSS vars, no hardcoded bypass ---------

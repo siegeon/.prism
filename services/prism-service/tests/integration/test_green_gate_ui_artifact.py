@@ -129,9 +129,12 @@ def test_ui_task_green_gate_rejected_with_pytest_only_proof(tmp_path):
         "a `ui` task green-gated on a pytest line with NO UI artifact — the "
         "UI-FIRST mandate requires a demonstrable UI surface, not a unit test"
     )
-    assert result["gate_state"] == "failed"
+    # Owner 2026-07-19: a refused approve must NOT strand the ticket into
+    # 'failed' (which then demands recover-with-override). It stays PENDING with
+    # the actionable reason so the operator attaches the artifact and re-approves.
+    assert result["gate_state"] == "pending"
     refreshed = task_svc.get(t.id)
-    assert refreshed.gate_state == "failed"
+    assert refreshed.gate_state == "pending"
     assert refreshed.workflow_step == _green_gate_id()
     # The refusal reason must name the missing UI artifact so the operator
     # knows WHY (progressive-disclosure-friendly, actionable).

@@ -161,9 +161,34 @@ def _final_assistant_text(parsed_events: list[dict]) -> str:
     return (text_blocks[-1] if text_blocks else "").strip()
 
 
+def _usage_from_result(parsed: list[dict]) -> dict:
+    """Authoritative whole-run usage: the single ``type=="result"`` event
+    carries the run's totals counted ONCE, across all four token fields, plus
+    ``total_cost_usd`` and the model that did the work. Summing usage across
+    the per-assistant-event snapshots (as the old code did) multi-counts the
+    same turn — the identical usage object recurs on many stream chunks. No
+    result event (crash / not-logged-in) -> an honest zero, never a partial
+    sum. (task 45e04fad)"""
+    usage = {"input_tokens": 0, "output_tokens": 0,
+             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+             "cost_usd": 0.0, "model": ""}
+    result = next((e for e in reversed(parsed) if e.get("type") == "result"), None)
+    if result is None:
+        return usage
+    u = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    for f in ("input_tokens", "output_tokens",
+              "cache_read_input_tokens", "cache_creation_input_tokens"):
+        usage[f] = int(u.get(f) or 0)
+    usage["cost_usd"] = float(result.get("total_cost_usd") or 0.0)
+    mu = result.get("modelUsage")
+    if isinstance(mu, dict) and mu:
+        # the model that actually ran (single-key on a normal -p run)
+        usage["model"] = next(iter(mu.keys()), "") or ""
+    return usage
+
+
 def _parse_jsonl(out_path: Path) -> tuple[list[dict], dict]:
     parsed: list[dict] = []
-    usage = {"input_tokens": 0, "output_tokens": 0}
     try:
         for line in out_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -174,13 +199,9 @@ def _parse_jsonl(out_path: Path) -> tuple[list[dict], dict]:
             except json.JSONDecodeError:
                 continue
             parsed.append(evt)
-            u = evt.get("usage") or (evt.get("message") or {}).get("usage")
-            if isinstance(u, dict):
-                usage["input_tokens"] += int(u.get("input_tokens") or 0)
-                usage["output_tokens"] += int(u.get("output_tokens") or 0)
     except OSError:
         pass
-    return parsed, usage
+    return parsed, _usage_from_result(parsed)
 
 
 def invoke(

@@ -225,6 +225,10 @@ def _arm_update_available():
         au._state.asset_url = "https://example.com/prism_service-9.9.9-py3-none-any.whl"
         au._state.latest_version = "9.9.9"
         au._state.restart_required = False
+        # Arm the release as workable so the workability guard (task e5fbec61)
+        # is out of the way — these tests exercise the dev/docker guards.
+        au._state.latest_workable = True
+        au._state.workable_reason = "armed workable for test"
 
 
 def _reset_state():
@@ -234,6 +238,8 @@ def _reset_state():
         au._state.asset_url = None
         au._state.latest_version = None
         au._state.restart_required = False
+        au._state.latest_workable = False
+        au._state.workable_reason = ""
 
 
 def _guard_subprocess(monkeypatch):

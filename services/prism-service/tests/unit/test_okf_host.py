@@ -85,11 +85,16 @@ def test_get_concept_carries_id_and_wikilink_resolves_to_memory_route():
     assert "/memory/mx-2" in got["links"]
 
 
-def test_code_reference_links_into_understand():
+def test_code_reference_deep_links_into_artifact():
+    # Traceability slice (task 961f273b): memory evidence file paths deep-link
+    # to the unified /artifact surface for that exact file — the SAME
+    # destination the xref file rung resolves to — instead of the generic
+    # /understand graph.
     host = OkfHost(_mem(), _FakeBrain([]))
     got = host.get("/memory/conventions/task-titles.md")
-    assert "/understand" in got["body"]
-    assert "/understand" in got["links"]
+    assert "/artifact?focus=" in got["body"]
+    assert "](/understand)" not in got["body"]
+    assert any(link.startswith("/artifact?focus=") for link in got["links"])
 
 
 def test_raw_serves_conformant_markdown_with_okf_version():

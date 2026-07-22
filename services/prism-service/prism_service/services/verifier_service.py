@@ -1327,6 +1327,11 @@ class VerifierService:
                 "PRISM_DATA_DIR": env.get("PRISM_DATA_DIR"),
             },
             "receipt": receipt.as_dict() if receipt is not None else None,
+            # Threaded explicitly (task 9afd1b72) so the API layer (slice 3)
+            # can read captured evidence (screenshot/video/assertion-source
+            # entries) off the report without reaching into receipt.as_dict().
+            "artifacts": (getattr(receipt, "artifacts", None) or []
+                          if receipt is not None else []),
             "planned_ids": pids,
         })
         return agg

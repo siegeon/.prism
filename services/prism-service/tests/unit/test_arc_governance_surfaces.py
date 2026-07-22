@@ -35,9 +35,12 @@ _WEB = _SERVICE_ROOT / "prism_service" / "web" / "src"
 # architecture-analysis TABS (tour/layers/domains/violations) with one
 # OKF concept wiki (graph + detail panel). The architecture-VIOLATIONS
 # governance card was retired alongside the deprecated understand_*
-# analysis surface; the ViolationsView component is kept (next test) for
-# the tracked follow-up that rehomes governance near /conductor. So the
-# Understand page is now the concept wiki, NOT a violations card host.
+# analysis surface. The parked ViolationsView component sat unrouted for
+# the "rehome governance near /conductor" follow-up until the ui-redesign
+# epic's verified orphan sweep (16777a76 ws6: zero imports project-wide)
+# removed it with the rest of components/understand/. The governance
+# surface, when rehomed, will be built against the live design system —
+# resurrecting the dead component is a regression, so we pin its absence.
 
 def test_understand_page_is_the_okf_concept_wiki():
     src = (_WEB / "pages" / "UnderstandPage.tsx").read_text(encoding="utf-8")
@@ -48,14 +51,12 @@ def test_understand_page_is_the_okf_concept_wiki():
         "consolidated wiki (v6.7.0); governance rehoming is a follow-up")
 
 
-def test_violations_view_renders_count_and_expands():
-    vv = _WEB / "components" / "understand" / "ViolationsView.tsx"
-    assert vv.exists(), (
-        "ViolationsView component missing (sibling of LayersView)")
-    src = vv.read_text(encoding="utf-8")
-    assert "count" in src, "card must lead with a count summary"
-    assert "useState" in src, (
-        "progressive disclosure: click-to-expand needs local open state")
+def test_orphaned_understand_components_stay_deleted():
+    orphan_dir = _WEB / "components" / "understand"
+    assert not orphan_dir.exists(), (
+        "components/understand/ was deleted as a verified orphan cluster "
+        "(ui-redesign 16777a76 ws6); do not resurrect dead components — "
+        "rehomed governance builds on the live design system")
 
 
 # ── e1: mermaid-syntax skill at the BYOS-injected path ─────────────────

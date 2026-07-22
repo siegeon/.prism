@@ -30,6 +30,20 @@ def list_runs(
     return {"runs": runs, "count": len(runs)}
 
 
+@router.get("/summary")
+def runs_summary(
+    group_by: str = Query("purpose", pattern="^(purpose|day)$"),
+    project: Optional[str] = Query(None),
+) -> dict:
+    """TRUE per-purpose / per-day background-inference spend (task 45e04fad):
+    all four token fields + real cost_usd + run count, failures included.
+    `_prefix_runs` counts pre-fix (over-counted, cache-blind) manifest rows
+    excluded from the buckets so the UI can flag them, never silently mix."""
+    buckets = claude_run_log.summarize(group_by=group_by, project=project)
+    prefix_runs = buckets.pop("_prefix_runs", 0)
+    return {"group_by": group_by, "buckets": buckets, "prefix_runs": prefix_runs}
+
+
 @router.get("/{run_id}")
 def get_run(run_id: str) -> dict:
     entry = claude_run_log.get_run(run_id)

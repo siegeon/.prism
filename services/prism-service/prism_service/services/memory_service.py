@@ -36,9 +36,11 @@ CREATE TABLE IF NOT EXISTS recall_log (
     query TEXT DEFAULT '',
     recalled_at TEXT NOT NULL,
     task_id TEXT DEFAULT '',
-    outcome TEXT DEFAULT ''
+    outcome TEXT DEFAULT '',
+    session_id TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_recall_log_task ON recall_log(task_id);
+CREATE INDEX IF NOT EXISTS idx_recall_log_session ON recall_log(session_id);
 CREATE INDEX IF NOT EXISTS idx_recall_log_entry ON recall_log(entry_id);
 """
 
@@ -66,6 +68,21 @@ class MemoryService:
         self._tlocal = threading.local()
         # Schema init runs ONCE here, on the constructing thread's
         # connection; other threads open the already-migrated db file.
+        # ALTER-IF-MISSING (task fc258f15, mirroring the brain `searches`
+        # migration) — and it must run BEFORE the schema script: the script
+        # now creates idx_recall_log_session, which would fail against a
+        # legacy table missing the column. A legacy recall_log.db gains the
+        # column in place; a fresh db is a no-op here (no table yet).
+        try:
+            cols = {r[1] for r in self._recall_db.execute(
+                "PRAGMA table_info(recall_log)").fetchall()}
+            if cols and "session_id" not in cols:
+                self._recall_db.execute(
+                    "ALTER TABLE recall_log ADD COLUMN "
+                    "session_id TEXT DEFAULT ''")
+                self._recall_db.commit()
+        except Exception:
+            pass
         self._recall_db.executescript(_CREATE_RECALL_LOG_SQL)
 
     @property
@@ -348,6 +365,7 @@ class MemoryService:
         query: str,
         domain: Optional[str] = None,
         limit: int = 5,
+        session_id: str = "",
     ) -> list[ExpertiseEntry]:
         """Search expertise entries using Brain FTS5 with keyword fallback.
 
@@ -407,7 +425,8 @@ class MemoryService:
         current_task_id = self._get_current_task_id()
         for entry in results[:limit]:
             self._record_recall_stat(entry, now)
-            self._log_recall(entry, query, now, current_task_id)
+            self._log_recall(entry, query, now, current_task_id,
+                             session_id=session_id)
 
         return results[:limit]
 
@@ -586,13 +605,18 @@ class MemoryService:
 
     def _log_recall(
         self, entry: ExpertiseEntry, query: str, now: str, task_id: str,
+        session_id: str = "",
     ) -> None:
-        """Log a recall event for later outcome correlation."""
+        """Log a recall event for later outcome correlation. ``session_id``
+        is the ASKING transcript session when the caller resolved one
+        (task fc258f15) — "" otherwise, never a fabricated id."""
         try:
             self._recall_db.execute(
-                "INSERT INTO recall_log (entry_id, entry_domain, query, recalled_at, task_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (entry.id, entry.domain, query, now, task_id),
+                "INSERT INTO recall_log (entry_id, entry_domain, query, "
+                "recalled_at, task_id, session_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (entry.id, entry.domain, query, now, task_id,
+                 session_id or ""),
             )
             self._recall_db.commit()
         except Exception:
@@ -630,6 +654,99 @@ class MemoryService:
             self._recalculate_effectiveness(entry_id)
 
         return updated
+
+    # ------------------------------------------------------------------
+    # Recall attribution readers — the recall_log projected as connections
+    # ------------------------------------------------------------------
+
+    def concepts_recalled_by_task(self, task_id: str, limit: int = 50) -> list[dict]:
+        """Distinct memory entries a task recalled, most-recent first.
+
+        Backs the Task detail 'Knowledge · Understand' rail: the curated
+        concepts a task actually pulled in (recall_log.task_id -> entry_id),
+        each with how many times it was recalled on this task and the latest
+        recall timestamp. Tolerant — a missing/locked recall db yields []."""
+        if not task_id:
+            return []
+        try:
+            rows = self._recall_db.execute(
+                "SELECT entry_id, entry_domain, COUNT(*) AS recall_count, "
+                "MAX(recalled_at) AS last_recalled "
+                "FROM recall_log WHERE task_id = ? AND entry_id != '' "
+                "GROUP BY entry_id "
+                "ORDER BY last_recalled DESC LIMIT ?",
+                (task_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            return []
+        return [
+            {
+                "entry_id": r[0],
+                "entry_domain": r[1] or "",
+                "recall_count": int(r[2] or 0),
+                "last_recalled": r[3] or "",
+            }
+            for r in rows
+        ]
+
+    def sessions_that_recalled(self, entry_id: str,
+                               limit: int = 50) -> list[dict]:
+        """Distinct SESSIONS that recalled a memory entry, most-recent
+        first (task fc258f15) — the honest session->concept attribution the
+        Understand 'Cited by' rail lacked. Tolerant of a missing recall db
+        or a legacy schema (returns [])."""
+        if not entry_id:
+            return []
+        try:
+            rows = self._recall_db.execute(
+                "SELECT session_id, COUNT(*) AS recall_count, "
+                "MAX(recalled_at) AS last_recalled "
+                "FROM recall_log WHERE entry_id = ? AND session_id != '' "
+                "GROUP BY session_id "
+                "ORDER BY last_recalled DESC LIMIT ?",
+                (entry_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            return []
+        return [
+            {
+                "session_id": r[0],
+                "recall_count": int(r[1] or 0),
+                "last_recalled": r[2] or "",
+            }
+            for r in rows
+        ]
+
+    def tasks_that_recalled(self, entry_id: str, limit: int = 50) -> list[dict]:
+        """Distinct tasks that recalled a memory entry, most-recent first.
+
+        Backs the Understand 'Cited by' extension: which tasks pulled this
+        concept into their work (recall_log.entry_id -> task_id), with the
+        recorded outcome and recall count. Tolerant of a missing recall db.
+        Sessions are intentionally absent — recall_log records the asking
+        TASK, not a session."""
+        if not entry_id:
+            return []
+        try:
+            rows = self._recall_db.execute(
+                "SELECT task_id, COUNT(*) AS recall_count, "
+                "MAX(recalled_at) AS last_recalled, MAX(outcome) AS outcome "
+                "FROM recall_log WHERE entry_id = ? AND task_id != '' "
+                "GROUP BY task_id "
+                "ORDER BY last_recalled DESC LIMIT ?",
+                (entry_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            return []
+        return [
+            {
+                "task_id": r[0],
+                "recall_count": int(r[1] or 0),
+                "last_recalled": r[2] or "",
+                "outcome": r[3] or "",
+            }
+            for r in rows
+        ]
 
     def _recalculate_effectiveness(self, entry_id: str) -> None:
         """Recalculate effectiveness score for an entry from its recall_log.

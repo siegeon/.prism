@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
-import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
+import { Page, Card, SectionLabel, Empty, lozengeTone, type PillTone } from "@/components/ui";
+import { Lozenge } from "@/components/Lozenge";
 import { domainTone } from "@/lib/domainTone";
 import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
@@ -30,14 +31,17 @@ type ManagedTask = {
   subtasks?: { id: string; title: string; status: string }[];
 };
 
-// Honest activity STATE → tile pill label + tone. adrift/stalled append an idle
-// mm:ss (from task_motion_s) so the pill says how long it's been dark.
+// Honest activity STATE → tile pill label + tone. Only `stalled` appends an idle
+// mm:ss and wears the alarm wording — it is the one state where the owner truly
+// has to step in. `adrift` (linked session live, no step boundary in 120s) is the
+// NORMAL middle of a 5-10min step and reads as work, not as darkness
+// (owner 2026-07-21). Mirrors ACTIVITY_META in conductor/SdlcProgress.
 const ACT_TILE: Record<string, { label: string; tone: PillTone }> = {
   working: { label: "working", tone: "teal" },
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
-  adrift: { label: "session busy", tone: "slate" },
-  stalled: { label: "stalled", tone: "rose" },
+  adrift: { label: "driver active", tone: "teal" },
+  stalled: { label: "stalled · needs you", tone: "rose" },
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
   pending: { label: "pending", tone: "amber" },
@@ -98,7 +102,7 @@ export default function ConductorPage() {
       {reorient && (
         <Card>
           <div className="flex items-center gap-2">
-            <TileBadge tone="amber">reorient</TileBadge>
+            <Lozenge tone="warn">reorient</Lozenge>
             <span className="text-[12px] text-[color:var(--text-secondary)]">
               ⚠ {lowValueN} low-confidence slices in a row — reorient toward a milestone
             </span>
@@ -107,7 +111,7 @@ export default function ConductorPage() {
       )}
       <Card>
         <SectionLabel>Under conductor</SectionLabel>
-        <p className="text-[11px] opacity-60 mt-1 mb-3">
+        <p className="text-2xs opacity-60 mt-1 mb-3">
           Workflow-claimed tasks moving through the SDLC. Each tile leads with a completion ring and a
           labeled phase timeline (the task's current phase shown top-right) that advance automatically as the
           conductor drives it. Tasks worked without conductor (status flips only) don't appear here. Click a tile to open it.
@@ -146,7 +150,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const status = (task.status ?? "").toLowerCase();
   const actState = (task.activity?.state ?? status).toLowerCase();
   const actTone: PillTone = ACT_TILE[actState]?.tone ?? domainTone("taskStatus", status) ?? "slate";
-  const actWorking = actState === "working";
+  // "being worked" covers `adrift` too: a driver holding a 5-10min step crosses
+  // no boundary for most of it, and excluding it made a BUILDING task render as
+  // "last worked by" with a dead grey tick (owner 2026-07-21). Only `stalled`
+  // (nothing driving it) loses the live treatment.
+  const actWorking = actState === "working" || actState === "adrift";
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
   const idle = fmtIdle(liveMotionS);
   const kids = `${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0}`;
@@ -156,8 +164,8 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const qDone = task.phase_progress?.children_done ?? 0;
   const qPending = Math.max(0, qTotal - qDone);
   const actLabel =
-    actState === "adrift" ? `session busy${idle ? ` · idle ${idle}` : ""}`
-    : actState === "stalled" ? `stalled${idle ? ` · idle ${idle}` : ""}`
+    actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
+    : actState === "stalled" ? `stalled · needs you${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";
@@ -186,14 +194,9 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[17px] font-semibold leading-snug text-[color:var(--text-primary)] line-clamp-1">{task.title}</div>
-          <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
+          <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
         </div>
-        <span
-          className="shrink-0 text-[11px] uppercase tracking-wider px-2.5 py-1 rounded-full font-mono whitespace-nowrap"
-          style={{ background: `var(--accent-${actTone}-bg)`, color: `var(--accent-${actTone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${actTone}-ring)` }}
-        >
-          {actLabel}
-        </span>
+        <Lozenge tone={lozengeTone(actTone)} className="shrink-0">{actLabel}</Lozenge>
       </div>
       {/* ring + "N/10 steps complete · the conductor drives this task…" */}
       <TileHero task={task} />
@@ -201,7 +204,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
       {/* HANDOFF strip — which worker is on deck for the current step. */}
       <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
+        <span className="font-mono text-2xs uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>
         <span className="font-mono text-[12.5px] truncate" style={{ color: showGate ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)" }}>{handoff}</span>
       </div>
       {/* QUEUE strip — the count of sub-tasks queued under this item. The card
@@ -209,11 +212,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
           listed (child-task checklist). Only shown for epics with children. */}
       {qTotal > 0 && (
         <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Queue</span>
+          <span className="font-mono text-2xs uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Queue</span>
           <span className="font-mono text-[12.5px] truncate" style={{ color: qPending > 0 ? "var(--accent-teal-fg)" : "var(--accent-emerald-fg)" }}>
             {qPending > 0 ? `${qPending} task${qPending > 1 ? "s" : ""} pending` : "all queued tasks done"}
           </span>
-          <span className="ml-auto font-mono text-[11px] text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
+          <span className="ml-auto font-mono text-2xs text-[color:var(--text-muted)] shrink-0">{qDone}/{qTotal} · open →</span>
         </div>
       )}
       {/* worked by + heartbeat. HONEST: the emerald "live Ns" tick renders ONLY
@@ -225,22 +228,22 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
         <span className="text-[color:var(--text-muted)]">{actWorking ? "worked by:" : "last worked by:"}</span>
         <span className="font-mono text-[12px] px-2 py-0.5 rounded bg-[color:var(--surface-3)] text-[color:var(--text-secondary)] border border-[color:var(--border-default)]">{worker}</span>
         {actWorking ? (
-          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] tabular-nums" title="work is live — recent conductor transition on this task">
+          <span className="ml-auto inline-flex items-center gap-1 text-2xs font-mono text-[color:var(--text-muted)] tabular-nums" title="work is live — recent conductor transition on this task">
             <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-emerald-fg)" }}
               animate={reduced ? { opacity: 1 } : { opacity: [1, 0.2, 1] }} transition={reduced ? { duration: 0.2 } : { duration: 1, repeat: Infinity, ease: "easeInOut" }} />
             live {Math.floor(sinceFetchS)}s
           </span>
         ) : (
-          <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-mono text-[color:var(--text-muted)] opacity-60 tabular-nums" title="board poll only — the task is idle, not being worked">
+          <span className="ml-auto inline-flex items-center gap-1 text-2xs font-mono text-[color:var(--text-muted)] opacity-60 tabular-nums" title="board poll only — the task is idle, not being worked">
             <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--text-muted)" }} />
             board {Math.floor(sinceFetchS)}s
           </span>
         )}
       </div>
-      <div className="text-[11px] text-[color:var(--text-muted)] font-mono">one MCP loop verb · conductor_work (call until done)</div>
+      <div className="text-2xs text-[color:var(--text-muted)] font-mono">one MCP loop verb · conductor_work (call until done)</div>
       {gateReason && (
-        <div className="text-[11px] text-[color:var(--text-muted)]">
-          <button type="button" onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }} className="font-mono uppercase tracking-wider text-[10px] opacity-70 hover:opacity-100 transition-opacity">
+        <div className="text-2xs text-[color:var(--text-muted)]">
+          <button type="button" onClick={(e) => { e.stopPropagation(); setShowReason((v) => !v); }} className="font-mono uppercase tracking-wider text-2xs opacity-70 hover:opacity-100 transition-opacity">
             {showReason ? "▾" : "▸"} gate reason
           </button>
           {showReason && (
@@ -252,21 +255,6 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   );
 }
 
-
-function TileBadge({ tone, children }: { tone: PillTone; children: ReactNode }) {
-  return (
-    <span
-      className="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded ring-1"
-      style={{
-        background: `var(--accent-${tone}-bg)`,
-        color: `var(--accent-${tone}-fg)`,
-        boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)`,
-      }}
-    >
-      {children}
-    </span>
-  );
-}
 
 // TileHero — the completion RING (done SDLC steps / total over the REAL
 // WORKFLOW_STEPS_ORDERED) beside a 2×2 metric grid. Every value is sourced from
@@ -315,7 +303,7 @@ function TileHero({ task }: { task: ManagedTask }) {
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
           <span className="text-[22px] font-semibold tabular-nums text-[color:var(--text-primary)]">{done}</span>
-          <span className="text-[9px] text-[color:var(--text-muted)] mt-0.5">of {total}</span>
+          <span className="text-2xs text-[color:var(--text-muted)] mt-0.5">of {total}</span>
         </div>
       </div>
       <div className="flex-1 min-w-0">
@@ -346,7 +334,7 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
   const last = steps.length - 1;
   return (
     <div className="mt-2 pt-3 border-t border-[color:var(--border-default)]">
-      <div className="text-[9px] uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">SDLC steps · gates pause for a distinct reviewer</div>
+      <div className="text-2xs uppercase tracking-[0.16em] font-mono text-[color:var(--text-muted)] mb-2.5">SDLC steps · gates pause for a distinct reviewer</div>
       <div
         className="flex items-start"
         role="img"
@@ -376,7 +364,7 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
                     animate={!reduced && current && live ? { opacity: [1, 0.45, 1] } : { opacity: 1 }}
                     transition={!reduced && current && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
                   >
-                    <span className="text-[8px] font-bold leading-none" style={{ transform: isGate ? "rotate(-45deg)" : "none", color: isGate ? "#3a2a04" : "#06281c" }}>
+                    <span className="text-2xs font-bold leading-none" style={{ transform: isGate ? "rotate(-45deg)" : "none", color: isGate ? "#3a2a04" : "#06281c" }}>
                       {isGate ? "G" : (done ? "✓" : "")}
                     </span>
                   </motion.span>
@@ -385,12 +373,12 @@ function LabeledTimeline({ step, phase, reduced, live }: { step?: string; phase?
                 <div className="h-[2px] flex-1 rounded-full" style={{ background: i === last ? "transparent" : (i < curIdx ? "var(--accent-emerald-ring)" : "var(--surface-3)") }} />
               </div>
               <span
-                className="text-[9px] leading-tight text-center w-full px-0.5 mt-2 line-clamp-2"
+                className="text-2xs leading-tight text-center w-full px-0.5 mt-2 line-clamp-2"
                 style={{ color: current ? "var(--accent-teal-fg)" : done ? "var(--text-secondary)" : "var(--text-muted)" }}
               >
                 {s.label}
               </span>
-              <span className="text-[7.5px] uppercase tracking-wide text-center w-full truncate mt-0.5 text-[color:var(--text-muted)]">
+              <span className="text-2xs uppercase tracking-wide text-center w-full truncate mt-0.5 text-[color:var(--text-muted)]">
                 {s.role}
               </span>
             </div>

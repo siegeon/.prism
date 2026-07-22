@@ -3,16 +3,18 @@
 import dataclasses
 import re
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from prism_service.data_dir import prototype_file
+from prism_service.api.auth import authorize_project_request
+from prism_service.data_dir import evidence_dir, prototype_file
 from prism_service.project_context import get_project
 from prism_service.services.task_service import SESSION_GATE_FIX
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(authorize_project_request)])
 
 
 def _svc(project: str):
@@ -20,6 +22,13 @@ def _svc(project: str):
         return get_project(project).task_svc
     except Exception as exc:
         raise HTTPException(404, f"unknown project: {project}: {exc}")
+
+
+def _scores_db(project: str) -> str:
+    """scores.db path for the project — same resolution api/agent_runs.py uses
+    (ctx._data_dir / 'scores.db'), so the Trace tab reads the agent_runs spine
+    the telemetry channel writes."""
+    return str(get_project(project)._data_dir / "scores.db")
 
 
 def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
@@ -98,8 +107,17 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
 
 
 @router.get("")
-def list_tasks(project: str = Query("default")) -> dict:
-    return {"tasks": _svc(project).list()}
+def list_tasks(project: str = Query("default"),
+              include_deleted: bool = Query(False)) -> dict:
+    # Soft-deleted tasks stay in the store for audit but must NOT surface on
+    # the board / task list — a deleted task is removed, not active work (it
+    # was still feeding the AWAITING-REVIEW bar and the kanban). Opt in with
+    # ?include_deleted=true for an admin/audit view.
+    tasks = _svc(project).list()
+    if not include_deleted:
+        tasks = [t for t in tasks
+                 if str(getattr(t, "status", "") or "") != "deleted"]
+    return {"tasks": tasks}
 
 
 class TaskCreate(BaseModel):
@@ -110,6 +128,15 @@ class TaskCreate(BaseModel):
     likely_misfire: str = ""
     full_outcome_complete: bool = False
     enter_conductor: bool = False
+    # REST parity with MCP task_create (task b78a193c): the oracle/proof
+    # contract was create-only on MCP — POST /api/tasks silently dropped
+    # these fields. Forwarded to task_svc.create() below and validated
+    # identically (validate_for_authoring) before the row is inserted.
+    oracle: str = ""
+    proof_type: str = ""
+    verify: Optional[list[str]] = None
+    allowed_files: Optional[list[str]] = None
+    stop_if: Optional[list[str]] = None
     # Conductor session gate (ef81fc15): optional driving session linked in
     # the same request right after create (two writes, not one transaction —
     # benign, because the gate re-checks on every transition) — REQUIRED when
@@ -135,6 +162,17 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     sid = (body.session_id or "").strip()
     if body.enter_conductor and not sid:
         raise HTTPException(422, SESSION_GATE_FIX)
+    # Authoring-time oracle validation (task b78a193c) — REST mirror of the
+    # MCP task_create check: reject the hard contradiction (proof_type=test
+    # with an oracle but no runnable pytest ids in verify[]) with the same
+    # domain-level message, BEFORE the row is inserted.
+    from prism_service.services.oracle_authoring import validate_for_authoring
+    spec_summary, domain_errors = validate_for_authoring(
+        oracle=body.oracle, proof_type=body.proof_type,
+        verify=body.verify, likely_misfire=body.likely_misfire,
+    )
+    if domain_errors:
+        raise HTTPException(422, domain_errors[0])
     ctx = get_project(project)
     task = ctx.task_svc.create(
         title=body.title.strip(),
@@ -143,8 +181,15 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         tags=body.tags or [],
         likely_misfire=body.likely_misfire or "",
         full_outcome_complete=bool(body.full_outcome_complete),
+        oracle=body.oracle or "",
+        proof_type=body.proof_type or "",
+        verify=body.verify,
+        allowed_files=body.allowed_files,
+        stop_if=body.stop_if,
     )
     out: dict = {"task": task, "advanced": None}
+    if spec_summary is not None:
+        out["oracle_spec"] = spec_summary
     if sid:
         ctx.task_svc.link_session(task.id, sid)
         out["sessions"] = ctx.task_svc.sessions_for_task(task.id)
@@ -296,6 +341,12 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
     # (prev, this] wall-clock window) onto the history rows. Best-effort.
     _attach_turn_tokens(out["history"], out["sessions"], project)
+    # Honest per-field, per-turn-model dollar spend, split main-vs-background
+    # (SpendPanel on the task-detail page). Best-effort.
+    try:
+        _attach_spend(out, out["sessions"], project)
+    except Exception:
+        pass
     # Way 1 — typed activity Gantt (real session lanes + gate markers).
     out["timeline"] = _build_timeline(out["history"], out["sessions"])
     # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
@@ -323,18 +374,314 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     return out
 
 
+@router.get("/{task_id}/trace")
+def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
+    """Drive-scoped token trace for the task-detail Trace tab.
+
+    Groups this task's agent_runs (the per-agent/step telemetry spine) by
+    session then SDLC step, with token counts on every row —
+    ``{"sessions": [{session_id, tokens_total, steps: [...]}],
+    "totals": {tokens, steps, sessions}}``. A task with no runs returns empty
+    arrays so the tab shows an honest empty state rather than 404. Cross-task
+    totals belong on the Sessions page; this stays scoped to the one drive.
+
+    source_path/override_dir resolve exactly the way _attach_turn_tokens
+    resolves them, so a zero-token UUID session gets re-attributed from its
+    transcript instead of rendering a dishonest 0."""
+    from prism_service.services.agent_runs_data import build_task_trace
+
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
+
+    src, override = "", ""
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        src = _project_source_path(project) or ""
+    except Exception:
+        pass
+    try:
+        from prism_service.services import claude_memory
+        override = claude_memory.configured_project_dir(project) or ""
+    except Exception:
+        pass
+    return build_task_trace(
+        _scores_db(project), task_id, source_path=src, override_dir=override
+    )
+
+
+def _attach_spend(out: dict, sessions: list, project: str) -> None:
+    """Best-effort: attach `spend` = honest per-field, per-turn-model dollar
+    cost summed across the task's linked sessions, split MAIN vs BACKGROUND
+    (claude_transcripts.live_spend_for_session — never folded together, and
+    each usage field priced at its OWN rate, not a flat blend). Mirrors the
+    src/override_dir resolution _attach_turn_tokens uses so both surfaces
+    agree on which transcripts belong to this task. Never raises — a
+    missing transcript / folder-mode-off project leaves spend at the honest
+    zero shape (UI renders "no measured spend", never a fabricated figure)."""
+    from prism_service.services.claude_transcripts import (
+        _project_source_path,
+        _merge_spend_sections,
+        live_spend_for_session,
+    )
+    try:
+        src = _project_source_path(project) or ""
+    except Exception:
+        src = ""
+    override = ""
+    try:
+        from prism_service.services import claude_memory
+        override = claude_memory.configured_project_dir(project) or ""
+    except Exception:
+        pass
+
+    sections = []
+    for s in sessions or []:
+        sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
+        if not sid:
+            continue
+        try:
+            if override:
+                sections.append(live_spend_for_session(sid, "", override_dir=override))
+            elif src:
+                sections.append(live_spend_for_session(sid, src))
+        except Exception:
+            continue
+
+    if not sections:
+        out["spend"] = live_spend_for_session("", "")
+        return
+    main = _merge_spend_sections([sec["main"] for sec in sections])
+    background = _merge_spend_sections([sec["background"] for sec in sections])
+    total = _merge_spend_sections([main, background])
+    out["spend"] = {
+        "main": main, "background": background, "total": total,
+        "priced": total["priced"],
+    }
+
+
+def _git(repo: str, *args: str) -> tuple[int, str]:
+    """Run one git command in `repo`, no shell, short timeout. (rc, stdout)."""
+    import subprocess
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True, text=True, timeout=10,
+        )
+        return p.returncode, (p.stdout or "").strip()
+    except Exception:
+        return 1, ""
+
+
+@router.get("/{task_id}/delivery")
+def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
+    """WHERE the task's work lives and what's left to ship (owner 2026-07-16:
+    done means SHIPPED — merged and validated on main; the app must visually
+    show where you are and what still needs to be done).
+
+    Finds the task's commits by the [task:<id-prefix>] trailer convention in
+    the project's git repo, then reports an honest stage pipeline:
+    verified (green_gate passed) → committed → pushed (on any remote ref) →
+    merged to main (ancestor of origin/main) → released (reachable from a
+    tag). Every stage is computed from git facts, never inferred from the
+    gate; no repo / no tagged commits yields honest empty stages."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    t = _svc(project).get(task_id)
+    if t is None:
+        raise HTTPException(404, "task not found")
+    verified = (getattr(t, "gate_state", "") == "passed"
+                and getattr(t, "workflow_step", "") == "green_gate") \
+        or getattr(t, "status", "") == "done"
+
+    repo = ""
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        repo = _project_source_path(project) or ""
+    except Exception:
+        pass
+
+    commits: list[dict] = []
+    branch = ""
+    if repo:
+        _, branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        rc, log = _git(repo, "log", "--grep", f"task:{task_id[:8]}",
+                       "--format=%h%x09%s", "-n", "20", "HEAD")
+        if rc == 0 and log:
+            main_ref = "origin/main"
+            if _git(repo, "rev-parse", "--verify", "-q", main_ref)[0] != 0:
+                main_ref = "main"
+            for line in log.splitlines():
+                sha, _, subject = line.partition("\t")
+                sha = sha.strip()
+                if not sha:
+                    continue
+                pushed = bool(_git(repo, "branch", "-r", "--contains", sha)[1])
+                merged = _git(repo, "merge-base", "--is-ancestor", sha, main_ref)[0] == 0
+                tags = _git(repo, "tag", "--contains", sha)[1]
+                commits.append({
+                    "sha": sha, "subject": subject.strip(),
+                    "pushed": pushed, "merged_to_main": merged,
+                    "released_in": tags.splitlines()[0] if tags else "",
+                })
+
+    def _all(flag: str) -> bool:
+        return bool(commits) and all(c[flag] for c in commits)
+
+    stage_states = [
+        ("verified", "verified", verified,
+         "green gate passed on live evidence" if verified else "gate not passed yet"),
+        ("committed", "committed", bool(commits),
+         f"{len(commits)} commit(s) on {branch or 'local'}" if commits
+         else "no [task:…]-tagged commits found"),
+        ("pushed", "pushed", _all("pushed"),
+         "on a remote ref" if _all("pushed") else "branch not pushed"),
+        ("merged", "merged to main", _all("merged_to_main"),
+         "reachable from main" if _all("merged_to_main") else "no PR merged yet"),
+        ("released", "released", _all("released_in"),
+         (commits and commits[0].get("released_in")) or "no release tag contains this work"),
+    ]
+    stages, next_seen = [], False
+    for key, label, ok, detail in stage_states:
+        state = "done" if ok else ("next" if not next_seen else "pending")
+        if not ok:
+            next_seen = True
+        stages.append({"key": key, "label": label, "state": state,
+                       "detail": str(detail)})
+    return {"branch": branch, "commits": commits, "stages": stages,
+            "delivered": all(s["state"] == "done" for s in stages)}
+
+
 @router.get("/{task_id}/prototype")
-def get_task_prototype(task_id: str):
+def get_task_prototype(
+    task_id: str, project: str = Query("default"),
+):
     """Serve the task's prototype HTML so the SPA can iframe it on the Plan
     card (prototypes viewable IN PRISM, not an external port). task_id is a
     server-generated UUID; reject anything else so a crafted id can't traverse
     out of the prototypes dir."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
     path = prototype_file(task_id)
     if not path.exists():
         raise HTTPException(404, "no prototype for this task")
     return FileResponse(str(path), media_type="text/html")
+
+
+# Evidence media a drive cites in its proof, or that the trusted-runner
+# receipt captured (screenshot + walkthrough video) — whitelisted image/video
+# types only, so this route can never serve executable content.
+_EVIDENCE_MEDIA = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+}
+
+
+@router.get("/{task_id}/evidence")
+def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
+    """Enumerate a task's evidence store so the SPA can SHOW every captured
+    artifact — not only the ones a proof string happens to cite by name. Until
+    this existed the store was write-only from the UI's side: files landed in
+    ``data_dir/evidence/<task_id>/`` but nothing listed them, so an approver
+    could not see evidence that wasn't hand-linked in completion_proof. Returns
+    each servable image/video with its /evidence/<name> url, byte size and mtime
+    (newest first). ``cited`` marks files the task's completion_proof references,
+    so the UI can tie a row to the specific piece it produced."""
+    from datetime import datetime, timezone
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    task = _svc(project).get(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    d = evidence_dir(task_id)  # mkdirs; empty dir → empty list, not a 404
+    # Which filenames the proof cites, so the caller can link row → artifact.
+    cited: set[str] = set()
+    try:
+        proof = (getattr(task, "completion_proof", "") or "") if task else ""
+        for m in re.finditer(r"/evidence/([A-Za-z0-9][A-Za-z0-9._-]{0,127})", proof):
+            cited.add(m.group(1))
+    except Exception:
+        pass
+    files = []
+    for p in sorted(d.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        ext = p.suffix.lower()
+        if not p.is_file() or ext not in _EVIDENCE_MEDIA:
+            continue
+        st = p.stat()
+        files.append({
+            "name": p.name,
+            "url": (
+                f"/api/tasks/{task_id}/evidence/{p.name}"
+                f"?project={quote(project, safe='')}"
+            ),
+            "media_type": _EVIDENCE_MEDIA[ext],
+            "kind": "video" if _EVIDENCE_MEDIA[ext].startswith("video/") else "image",
+            "size_bytes": st.st_size,
+            "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            "cited": p.name in cited,
+        })
+    return {"files": files}
+
+
+@router.get("/{task_id}/evidence/{filename}")
+def get_task_evidence(
+    task_id: str, filename: str, project: str = Query("default"),
+):
+    """Serve one of the task's evidence files (gate/audit screenshots) so the
+    SPA renders it inline where the proof cites it — evidence viewable IN
+    PRISM, never an external host (owner 2026-07-16). Both path pieces are
+    whitelisted so a crafted request can't traverse out of the evidence dir."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    # A completion_proof image renders as a RAW <img src="/api/tasks/.../
+    # evidence/x.png"> that bypasses the SPA api-client, so it carries NO
+    # ?project= param and defaults to 'default' -> a 404 in any non-default
+    # project, showing BROKEN visual evidence (owner 2026-07-20). The evidence
+    # dir is keyed by the globally-unique task_id, not the project, so in
+    # LOCAL (single-user) mode resolve the task across projects.
+    # SECURITY (task b0dad59b): in TEAM mode this cross-project resolution is a
+    # cross-workspace artifact bypass — a project-a member could fetch a
+    # project-b task's evidence — so it is gated to local mode ONLY; team mode
+    # keeps the strict per-project 404 the workspace boundary depends on.
+    if _svc(project).get(task_id) is None:
+        resolved = False
+        try:
+            from prism_service.api.auth import _auth
+            _local_mode = _auth().mode != "team"
+        except Exception:
+            _local_mode = False
+        if _local_mode:
+            try:
+                from prism_service import config as _cfg
+                for _proj in _cfg.list_projects():
+                    if _proj != project and _svc(_proj).get(task_id) is not None:
+                        resolved = True
+                        break
+            except Exception:
+                resolved = False
+        if not resolved:
+            raise HTTPException(404, "task not found")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", filename) or ".." in filename:
+        raise HTTPException(400, "bad filename")
+    ext = filename[filename.rfind(".") :].lower() if "." in filename else ""
+    media = _EVIDENCE_MEDIA.get(ext)
+    if not media:
+        raise HTTPException(400, "unsupported evidence type")
+    path = evidence_dir(task_id) / filename
+    if not path.exists():
+        raise HTTPException(404, "no such evidence file")
+    # no-cache (NOT no-store): evidence files get retaken in place under the
+    # same name, so the browser must revalidate; the etag still yields a 304
+    # when the file is unchanged.
+    return FileResponse(
+        str(path), media_type=media, headers={"Cache-Control": "no-cache"}
+    )
 
 
 def _clean_doc(doc: str) -> str:
@@ -345,63 +692,381 @@ def _clean_doc(doc: str) -> str:
     return " ".join(doc.split())
 
 
+_TASK_ID_RE = re.compile(
+    r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\b")
+
+
+def file_owns_task(source: str, task_id: str) -> bool:
+    """True when this test module BELONGS to ``task_id`` — as opposed to
+    merely mentioning it (task e0149f1f, 2026-07-21).
+
+    The old predicate was ``task_id in text``: a bare substring scan over the
+    whole file. Any test that CITED another task in prose ("see task <id>",
+    "Regression: task <id>") was therefore attributed to the cited task, and
+    the gate panel for 5a6837a0 listed 33 tests over three files of which only
+    12 were its own — the owner was shown another ticket's tests as if they
+    were this ticket's.
+
+    Ownership rule: a red-test module NAMES its task in its module docstring
+    (the convention ``get_task_tests`` already documents), and the FIRST task
+    id in that docstring is the owner — a later citation never transfers
+    ownership. Files we cannot parse, or that carry no module docstring, fall
+    back to the old mention behaviour so a task never silently LOSES its pins.
+    """
+    text = source or ""
+    tid = (task_id or "").strip()
+    if not tid:
+        return False
+    short = tid[:8]
+    mentioned = tid in text or (len(short) >= 8 and short in text)
+    if not mentioned:
+        return False
+    try:
+        import ast
+        doc = ast.get_docstring(ast.parse(text))
+    except Exception:
+        return mentioned          # unparseable — keep the old behaviour
+    if not doc:
+        return mentioned          # no docstring — keep the old behaviour
+    found = _TASK_ID_RE.findall(doc)
+    if not found:
+        return mentioned
+    return found[0][:8] == short
+
+
 def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
     """AST-parse a test module and return one record per ``def test_*`` with
-    its (cleaned) docstring. Never raises — a syntax error yields []."""
+    its (cleaned) docstring, the test BODY source (so a reviewer can read
+    what it actually asserts, not just its name), and its line number.
+    Never raises — a syntax error yields []."""
     import ast
 
     out: list[dict] = []
+    lines = source.splitlines()
     try:
         tree = ast.parse(source)
     except Exception:
         return out
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            # The function's own source, docstring stripped, capped — enough
+            # to EVALUATE the pin (its asserts), not a wall of text.
+            body_start = (node.body[0].end_lineno
+                          if (node.body and isinstance(node.body[0], ast.Expr)
+                              and isinstance(getattr(node.body[0], "value", None), ast.Constant)
+                              and isinstance(node.body[0].value.value, str))
+                          else node.body[0].lineno - 1 if node.body else node.lineno)
+            snippet = "\n".join(
+                lines[body_start:(node.end_lineno or body_start)][:24]
+            ).strip("\n")
             out.append(
                 {
                     "name": node.name,
                     "doc": _clean_doc(ast.get_docstring(node) or ""),
                     "file": rel_file,
+                    "line": node.lineno,
+                    "snippet": snippet,
                 }
             )
     return out
 
 
 @router.get("/{task_id}/tests")
-def get_task_tests(task_id: str):
+def get_task_tests(task_id: str, run: bool = Query(False),
+                   project: str = Query("default")):
     """Discover the test file(s) that PIN this task's oracle and return each
-    ``def test_*`` as ``{name, doc, file}`` so the detail page can show, next
-    to the oracle, exactly which tests currently prove the work is NOT done.
+    ``def test_*`` as ``{name, doc, file}`` so the detail page can show,
+    next to the oracle, exactly which tests pin the acceptance criteria.
 
     Discovery is content-based and read-only: scan ``tests/**/*.py`` for files
     that mention the task id (full or first 8 chars) — the red-test file names
     the task in its module docstring. Best-effort: any parse/read failure is
     swallowed and an empty list is returned. task_id is validated (same shape
-    as the prototype route) so a crafted id can't influence the scan."""
+    as the prototype route) so a crafted id can't influence the scan.
+
+    ``run=true`` additionally EXECUTES the discovered test files (pytest, in
+    the daemon's service checkout, bounded) and stamps each row with its REAL
+    current ``status`` (passed/failed/skipped/not-run) — the honest fix for
+    the tab painting every pin RED forever: red is a phase, not a badge."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
         raise HTTPException(400, "bad task id")
+    if _svc(project).get(task_id) is None:
+        raise HTTPException(404, "task not found")
 
     from pathlib import Path
+    from prism_service.services.task_workspace import workspace_for
 
-    tests_root = Path(__file__).resolve().parents[2] / "tests"
     short = task_id[:8]
     results: list[dict] = []
-    if tests_root.is_dir():
+    files: list[str] = []
+    seen_rel: set[str] = set()
+
+    # Scan TWO roots: the service checkout's tests/ (tests already merged to
+    # main) AND the task's own git worktree tests/ (work that still lives only
+    # in the task workspace — the common case for a just-finished, unmerged
+    # task like this one). Without the workspace root the gate's test evidence
+    # is invisible for every unmerged task, which reads as "no evidence".
+    checkout_root = Path(__file__).resolve().parents[2] / "tests"
+    ws = workspace_for(task_id)
+    _ws_tests = (Path(ws["path"]) / "services" / "prism-service" / "tests"
+                 if ws else None)
+    # SAME-TREE RULE (owner 2026-07-21: "fake facts in prism"). The row LIST
+    # and the live RUN must come from ONE tree. We execute in the task's
+    # workspace whenever it exists, so the workspace must also be scanned
+    # FIRST — it wins the rel-path dedup below. Listing from the merged
+    # checkout (14 tests at branch HEAD) while running in the workspace (13
+    # tests at its older HEAD) produced a phantom amber "13 / 14 passing":
+    # a denominator from one commit over a numerator from another, with the
+    # test that exists only in the newer tree silently counted "not-run".
+    _use_ws = bool(_ws_tests and _ws_tests.is_dir())
+    roots: list[Path] = ([_ws_tests, checkout_root] if _use_ws
+                         else [checkout_root])
+    run_root = (_ws_tests.parent if _use_ws else checkout_root.parent)
+
+    for tests_root in roots:
+        if not tests_root.is_dir():
+            continue
         for p in sorted(tests_root.rglob("*.py")):
             try:
                 text = p.read_text(encoding="utf-8")
             except Exception:
                 continue
-            if task_id in text or (len(short) >= 8 and short in text):
+            # OWNERSHIP, not mention (task e0149f1f) — see file_owns_task.
+            if file_owns_task(text, task_id):
                 rel = p.relative_to(tests_root.parent).as_posix()
+                if rel in seen_rel:
+                    continue
+                seen_rel.add(rel)
+                files.append(rel)
                 results.extend(_extract_tests_from_source(text, rel))
-    return {"tests": results}
+    ran = False
+    if run and files and results:
+        statuses = _run_pinned_tests(run_root, files)
+        if statuses is not None:
+            ran = True
+            for row in results:
+                row["status"] = statuses.get(row["name"], "not-run")
+    # HONEST OBSERVATION (trust fix, task 45e04fad follow-up): when we did NOT
+    # re-run live, reflect the gate's own trusted-runner EvidenceReceipt so a
+    # done/green-gated task shows the TRUE result the gate already observed —
+    # never a false "not-run" on tests the trusted runner proved pass. The
+    # receipt is the source of truth and is cited so the claim is checkable.
+    receipt_info = None
+    try:
+        from prism_service.services import oracle_spec as _osp
+        rc = _osp.latest_receipt(project, task_id)
+    except Exception:
+        rc = None
+    if rc is not None:
+        # Always surface the gate's receipt as provenance (even on a live
+        # re-run) so the tab can cite what the trusted runner observed.
+        # FRESHNESS — owner 2026-07-21: "if you are giving me fake facts in
+        # prism ... then i have no way forward". A receipt is bound to the tree
+        # it ran against; when that is NOT the tree under review its numbers are
+        # HISTORY, not the current verdict. Returning tree_sha alone was not
+        # enough: the gate card rendered a stale "13 / 14 passing" (measured at
+        # b04be24, before the follow-up fix landed) in amber under the label
+        # "reflects the gate's trusted-runner result", so a reader could not
+        # tell a past observation from the present one. Say it explicitly.
+        _cur_tree = ""
+        try:
+            _cur_tree = _osp.current_tree_sha(ws["path"] if ws else None)
+        except Exception:
+            _cur_tree = ""
+        receipt_info = {
+            "job_id": rc.job_id, "tree_sha": rc.tree_sha,
+            "passed": bool(rc.passed), "status": rc.status,
+            "ended_at": rc.ended_at, "runner": rc.runner_version,
+            "reason": (rc.reason or "")[:400],
+            "current_tree_sha": _cur_tree,
+            "stale": bool(_cur_tree and rc.tree_sha
+                          and rc.tree_sha != _cur_tree),
+        }
+        # Fill any row the live run did NOT resolve (or when we didn't run
+        # live at all) from the gate's trusted-runner receipt. A real live run
+        # keeps its own passed/failed statuses (they win); but a live run that
+        # executed in a stale/wrong tree — e.g. a just-MERGED task whose scratch
+        # worktree still holds pre-merge code — yields no usable status and
+        # leaves rows "not-run", which must NOT hide the distinct-actor receipt
+        # (owner 2026-07-20: a done, green-gated task's pinned tests read green).
+        # The receipt runs the task's PINNED oracle files; its reason names each
+        # path, so rc.passed means every pinned test passed under the runner.
+        reason = rc.reason or ""
+        for row in results:
+            if row.get("status") not in (None, "", "not-run"):
+                continue
+            f = row.get("file") or ""
+            if f and f in reason:
+                row["status"] = "passed" if rc.passed else "failed"
+                row["passed"] = bool(rc.passed)
+                row["verified_by"] = "gate-receipt"
+    # Name the tree the rows were listed from AND run in, so the count on the
+    # card is checkable instead of merely trusted (same owner directive).
+    _src_sha = ""
+    try:
+        from prism_service.services import oracle_spec as _osp3
+        _src_sha = _osp3.current_tree_sha(
+            str(_ws_tests.parent.parent.parent) if _use_ws
+            else str(checkout_root.parent.parent.parent))
+    except Exception:
+        _src_sha = ""
+    return {"tests": results, "ran": ran, "receipt": receipt_info,
+            "source": ("workspace" if _use_ws else "checkout"),
+            "source_sha": _src_sha}
+
+
+def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
+    """Run the pinned test files (bounded) and map test name -> outcome via
+    pytest's line report. Returns None when the run itself could not happen
+    (missing interpreter, timeout) — callers then omit statuses honestly."""
+    import subprocess
+    import sys as _sys
+    try:
+        cmd = [_sys.executable, "-m", "pytest", "-v", "--no-header",
+               "--color=no", "-p", "no:cacheprovider", *files]
+        out = subprocess.run(
+            cmd, cwd=str(service_root), capture_output=True, text=True,
+            timeout=180)
+        statuses: dict[str, str] = {}
+        for line in (out.stdout or "").splitlines():
+            m = re.match(r".*::(\w+)(?:\[[^\]]*\])?\s+(PASSED|FAILED|ERROR|"
+                         r"SKIPPED|XFAIL|XPASS)", line)
+            if m:
+                statuses[m.group(1)] = m.group(2).lower()
+        return statuses
+    except Exception:
+        return None
+
+
+def _discover_pinned_test_rows(task_id: str) -> list[dict]:
+    """Fallback assertion-source discovery for a proof_type=test gate whose
+    receipt predates (or whose adapter skips) the mint-time
+    ``assertion_source`` capture: scan the same two roots ``/tests`` uses
+    (service checkout + task workspace) for files that pin this task by id,
+    and hand every ``def test_*`` to ``_extract_tests_from_source`` for its
+    VERBATIM body — never a paraphrase. Best-effort; a missing workspace or
+    unparseable file yields fewer rows, never an error."""
+    from pathlib import Path
+    from prism_service.services.task_workspace import workspace_for
+
+    short = task_id[:8]
+    results: list[dict] = []
+    seen_rel: set[str] = set()
+    checkout_root = Path(__file__).resolve().parents[2] / "tests"
+    roots: list[Path] = [checkout_root]
+    ws = workspace_for(task_id)
+    if ws:
+        roots.append(Path(ws["path"]) / "services" / "prism-service" / "tests")
+    for tests_root in roots:
+        if not tests_root.is_dir():
+            continue
+        for p in sorted(tests_root.rglob("*.py")):
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            # OWNERSHIP, not mention (task e0149f1f) — see file_owns_task.
+            if file_owns_task(text, task_id):
+                rel = p.relative_to(tests_root.parent).as_posix()
+                if rel in seen_rel:
+                    continue
+                seen_rel.add(rel)
+                results.extend(_extract_tests_from_source(text, rel))
+    return results
+
+
+@router.get("/{task_id}/gate_evidence")
+def get_task_gate_evidence(task_id: str, project: str = Query("default")) -> dict:
+    """Project the task's newest EvidenceReceipt into what a gate CARD needs
+    to show: captured screenshot(s)/video (re-pointed at the whitelisted
+    ``/evidence/<file>`` route), verbatim per-test assertion source, and the
+    capture provenance (who/when/build/tree).
+
+    CRITICAL (likely_misfire): this renders ONLY the RECEIPT's own
+    ``artifacts[]`` — what the trusted runner actually captured — never the
+    driving agent's hand-attached completion_proof markdown. A gate with none
+    of the three modalities (screenshot, video, assertion source) must come
+    back with all three lists empty, so the caller can render an honest
+    "no captured evidence — not evidence-backed" state instead of looking
+    evidence-backed on borrowed prose.
+    """
+    from pathlib import Path
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    task = _svc(project).get(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+
+    from prism_service.services import oracle_spec as _osp
+    try:
+        receipt = _osp.latest_receipt(project, task_id)
+    except Exception:
+        receipt = None
+
+    artifacts: list[dict] = []
+    assertions: list[dict] = []
+    captured_by = captured_at = build = ""
+    tree_sha = (receipt.tree_sha if receipt else "") or ""
+
+    if receipt is not None:
+        for art in receipt.artifacts or []:
+            if not isinstance(art, dict):
+                continue
+            kind = art.get("kind", "")
+            prov = art.get("provenance") or {}
+            if kind in ("screenshot", "video"):
+                raw_path = str(art.get("path") or "")
+                name = Path(raw_path).name if raw_path else ""
+                ext = name[name.rfind(".") :].lower() if "." in name else ""
+                # Never trust the receipt's raw path verbatim — only serve a
+                # name that resolves under this task's evidence dir with a
+                # whitelisted extension (same guard as get_task_evidence).
+                if name and ext in _EVIDENCE_MEDIA and (evidence_dir(task_id) / name).is_file():
+                    artifacts.append({
+                        "kind": kind,
+                        "path": (
+                            f"/api/tasks/{task_id}/evidence/{name}"
+                            f"?project={quote(project, safe='')}"
+                        ),
+                        "provenance": prov,
+                    })
+                    captured_by = captured_by or str(prov.get("captured_by", ""))
+                    captured_at = captured_at or str(prov.get("captured_at", ""))
+                    build = build or str(prov.get("build", ""))
+            elif kind == "assertion_source":
+                src = str(prov.get("source", "") or "")
+                if src:
+                    assertions.append({"id": art.get("path", ""), "source": src})
+
+    # Fallback for proof_type=test gates whose receipt predates (or whose
+    # adapter skips) mint-time assertion_source capture — reuse the SAME
+    # discovery + VERBATIM extraction the Tests tab uses (task 25a25d84: do
+    # not re-paraphrase what a test asserts).
+    if not assertions and str(getattr(task, "proof_type", "") or "").strip().lower() == "test":
+        for row in _discover_pinned_test_rows(task_id):
+            snippet = row.get("snippet") or ""
+            if snippet:
+                assertions.append({"id": row.get("name", ""), "source": snippet})
+
+    return {
+        "artifacts": artifacts,
+        "captured_by": captured_by,
+        "captured_at": captured_at,
+        "build": build,
+        "tree_sha": tree_sha,
+        "assertions": assertions,
+    }
 
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[int] = None
+    # tags were settable at create but never updatable over the API — the
+    # control-plane's 'policy-change' authorized route was unreachable for
+    # SPA/API users (2026-07-16).
+    tags: Optional[list[str]] = None
     assigned_agent: Optional[str] = None
     blocked_reason: Optional[str] = None
     parent_id: Optional[str] = None

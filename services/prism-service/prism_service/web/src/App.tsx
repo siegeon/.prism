@@ -6,6 +6,7 @@ import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
+import LiveBar from "@/components/LiveBar";
 
 // Route-level code splitting (v6.3.40). Every page used to be a static import,
 // so the graph/Sigma, conductor animation, settings, and mermaid-adjacent code
@@ -21,6 +22,7 @@ const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
 const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
 const ConductorPage = lazy(() => import("@/pages/ConductorPage"));
 const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
+const SessionDetailPage = lazy(() => import("@/pages/SessionDetailPage"));
 const RetrievalsPage = lazy(() => import("@/pages/RetrievalsPage"));
 const LearningPage = lazy(() => import("@/pages/LearningPage"));
 const ConsolidationPage = lazy(() => import("@/pages/ConsolidationPage"));
@@ -46,6 +48,9 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0">
         <LiveStatusStrip />
         <PageHeader />
+        {/* Conductor pulse — persistent across navigation, honest idle state.
+            Distinct from LiveStatusStrip (the analyzer scan-queue strip). */}
+        <LiveBar />
         <div className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
           <Suspense
@@ -56,7 +61,7 @@ export default function App() {
             {/* Brain = the one place to explore the knowledge. /graph and
                 the old /explore redirect here so nothing breaks. */}
             <Route path="/brain" element={<ExplorePage />} />
-            <Route path="/explore" element={<Navigate to="/brain" replace />} />
+            <Route path="/explore" element={<Navigate to={{ pathname: "/brain", search: location.search }} replace />} />
             <Route path="/graph" element={<Navigate to="/brain" replace />} />
             {/* Knowledge collapsed to TWO surfaces (task 89a1ddef): Brain
                 (Sigma graphvis) + the unified Understand wiki. /memory and
@@ -77,6 +82,7 @@ export default function App() {
             <Route path="/tasks/:id/:section" element={<TaskTextPage />} />
             <Route path="/conductor" element={<ConductorPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
+            <Route path="/sessions/:id" element={<SessionDetailPage />} />
             <Route path="/retrievals" element={<RetrievalsPage />} />
             <Route path="/learning" element={<LearningPage />} />
             <Route path="/consolidation" element={<ConsolidationPage />} />

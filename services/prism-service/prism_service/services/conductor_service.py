@@ -190,6 +190,53 @@ def _task_attr(task: object, name: str, default: str = "") -> object:
     return getattr(task, name, default)
 
 
+# The conductor's own gate-deciding identity (owner directive 2026-07-15:
+# customers cannot click our board — a green_gate whose oracle the server can
+# run itself must clear itself). Distinct from every producing session by
+# construction, same trust model as the story/plan 'conductor-autoclear' seat.
+ADJUDICATOR_SEAT = "conductor-adjudicator"
+
+# Machine JUDGE seats are never work PRODUCERS (defect found 2026-07-16 on
+# d09bee0b: the adjudicator's red_gate decision stamped it into the task's
+# sessions, so its green_gate approval was refused as self-review and the
+# gate flipped failed). Seats in this set are excluded from session stamping
+# and from the distinct-actor producer set — a judge deciding two gates on
+# one task is not reviewing its own work.
+MACHINE_SEATS = frozenset(
+    {ADJUDICATOR_SEAT, "conductor-autoclear", "gate-card-rerun"})
+
+
+def _red_pytest_spec(task: object):
+    """The spec used to DEMONSTRATE RED — always a pytest concern.
+
+    Task a9215794 (owner 2026-07-21). Red and completion are different
+    questions and were wrongly sharing one spec. ``OracleSpec.from_task``
+    describes how the FINISHED outcome is proved, so a ticket whose oracle
+    names a URL derives ``http_probe`` — right for completion, useless for
+    red, because a red gate must observe the PINNED TESTS failing at the red
+    anchor. Worse, the old red paths ALSO demanded ``proof_type == "test"``,
+    so task 89e90d1a — proof_type=artifact (its proof is browser
+    screenshots) with a textbook tests-only anchor at 53c23a4 — could never
+    be machine-decided and dead-ended at red_gate forever.
+
+    Resolve red from the task's PINNED TEST material instead, independent of
+    proof_type. Returns None when there is no pytest material, which keeps
+    the honest boundary: a demo/browser ticket with nothing to run still has
+    no machine red and correctly stays with a human. This widens WHICH
+    tickets the seat will attempt; it does NOT weaken the proof burden — the
+    caller still requires the trusted runner to observe those tests FAILING
+    at a tests-only anchor before red is granted.
+    """
+    from prism_service.services import oracle_spec as osp
+    try:
+        ids = osp._pytest_ids_from_task(task)
+        if not ids:
+            return None
+        return osp.OracleSpec._pytest_spec(ids)
+    except Exception:
+        return None
+
+
 def _is_low_value_completion(task: object) -> bool:
     """A done task is LOW-VALUE on reliable signals only (goalbuddy GAP-5).
 
@@ -242,9 +289,18 @@ def board_health(tasks) -> dict:
 # Artifact-looking signals that evidence a real, demonstrable UI surface:
 # an agent-browser / verify screenshot vs the dev :8888 surface, or a
 # Playwright assertion. A pytest/unit line alone is NOT a UI artifact.
+#
+# NOTE (task 9afd1b72): the bare word "screenshot" is DELIBERATELY excluded
+# here — "I took a screenshot" with no path/extension/host is gameable
+# self-attested prose, not proof. A concrete signal (a file extension, an
+# agent-browser/Playwright citation, or a dev-surface host:port) is trusted
+# on its own; a bare mention with none of those must instead be corroborated
+# by a REAL captured file via has_captured_evidence (evidence_dir on disk,
+# or a fresh EvidenceReceipt's artifacts[] naming a file that exists) at the
+# gate-decide call sites below.
 _UI_ARTIFACT_SIGNALS = (
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
-    "screenshot", "agent-browser", "playwright", ":8888", "127.0.0.1:8888",
+    "agent-browser", "playwright", ":8888", "127.0.0.1:8888",
 )
 
 
@@ -402,6 +458,39 @@ def green_gate_artifact_reason(completion_proof: object, reason: object,
             "demonstrable-UI screenshot/Playwright artifact in "
             "completion_proof or the re-run output) — a self-attested "
             "string is not proof")
+
+
+def has_captured_evidence(task_id: object, project: object = "") -> bool:
+    """True iff the task has REAL captured evidence: at least one image/video
+    file directly under data_dir/evidence/<id>/, OR (task 9afd1b72) a fresh
+    EvidenceReceipt's ``artifacts[]`` naming a file that exists on disk — the
+    mint may write a walkthrough capture the receipt cites without also
+    landing it in the evidence_dir glob, so receipt.artifacts is consulted
+    directly rather than trusting a self-attested completion_proof substring.
+    Owner 2026-07-19 ('implement to evidence'): a captured screenshot/video in
+    the task's evidence store SATISFIES the demonstrable-UI requirement — the
+    user (or the drive) captures it, and the gate passes; no hand-cited path
+    in completion_proof required."""
+    try:
+        from prism_service.data_dir import evidence_dir
+        d = evidence_dir(str(task_id or ""))
+        exts = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".webm")
+        if any(p.is_file() and p.suffix.lower() in exts for p in d.glob("*")):
+            return True
+    except Exception:
+        pass
+    try:
+        from prism_service.services import oracle_spec as _osp
+        receipt = _osp.latest_receipt(str(project or "default"),
+                                      str(task_id or ""))
+        if receipt is not None:
+            for art in (receipt.artifacts or []):
+                path = art.get("path") if isinstance(art, dict) else None
+                if path and Path(str(path)).is_file():
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def gate_artifact_reason(gate_step_id: str, completion_proof: object,
@@ -1425,8 +1514,11 @@ class ConductorService:
     ) -> None:
         """Best-effort upsert of a task_sessions row via the single
         TaskService writer. No-op when no session is carried or the
-        writer is unavailable — must never break a transition."""
-        if not session_id:
+        writer is unavailable — must never break a transition. Machine
+        JUDGE seats are never stamped: a gate decision is not work on the
+        task, and stamping one poisons the distinct-actor producer set
+        for every later gate (d09bee0b, 2026-07-16)."""
+        if not session_id or session_id in MACHINE_SEATS:
             return
         link = getattr(self._task_svc, "link_session", None)
         if not callable(link):
@@ -1664,7 +1756,10 @@ class ConductorService:
             # different pinned policy_hash is stale, like a spec edit. Resolved
             # best-effort; "" (unpinnable) keeps the tree+spec behavior.
             from prism_service.services import control_plane as _cp
-            _pin = _cp.pinned_policy(getattr(task, "id", ""))
+            # ONE resolution path (task 68e5c699): the check resolves the
+            # SAME workspace-anchored pin the mint stamped — see
+            # control_plane.task_pin.
+            _pin = _cp.task_pin(getattr(task, "id", ""))
             _policy_hash = _pin.get("policy_hash", "")
             fresh = osp.fresh_passing_receipt(
                 project, getattr(task, "id", ""), tree_sha, spec.spec_hash(),
@@ -1740,6 +1835,602 @@ class ConductorService:
                     f"{type(exc).__name__}: {exc}"}
         return {"ok": report.get("verdict") == "pass", "lanes": report}
 
+    def adjudicate_green_gate(self, task_id: str,
+                              mint: bool = True) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING green_gate.
+
+        Decides the gate as ``conductor-adjudicator`` — the distinct actor
+        the flow's gate jobs ask for, filled by the server itself. Approves
+        ONLY on the oracle-receipt tooth (a FRESH PASSING EvidenceReceipt:
+        tree+spec+policy-pin matched). When the CURRENT tree+spec has no
+        receipt at all and the derived oracle is machine-runnable
+        (pytest_ids / http_probe), it exercises the oracle ONCE itself —
+        the gate card's Re-run action, machine-initiated — then re-checks.
+        One attempt per evidence state: a failing/tried oracle never loops
+        and stays with a human.
+
+        Never flips pending->failed: every other green_gate tooth
+        (ui-artifact, candidate-controls-judge) is pre-flighted and any
+        objection leaves the gate pending for a human. Epics (children),
+        oracle-less tasks, and manual_evidence_required oracles are all
+        left for a human too. Returns the gate_decide result on approve,
+        else None."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        if task is None \
+                or getattr(task, "workflow_step", "") != "green_gate":
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        gate_state = getattr(task, "gate_state", "")
+        if gate_state == "failed":
+            # Re-present ONLY a machine refusal artifact (a refused APPROVE
+            # attempt — control-plane / same-actor / receipt tooth), never a
+            # decision: an explicit human reject is final for this seat.
+            if not self._failed_gate_is_refused_approve(task_id,
+                                                        "green_gate"):
+                return None
+        elif gate_state != "pending":
+            return None
+        if not str(getattr(task, "oracle", "") or "").strip():
+            return None
+        # Epics stay with a human: their roll-up verdict reads children.
+        try:
+            if any(_task_attr(c, "parent_id", "") == task_id
+                   for c in self._task_svc.list()):
+                return None
+        except Exception:
+            return None
+        # Pre-flight the OTHER green_gate teeth — adjudication may only
+        # ever flip pending->passed, never pending->failed.
+        if ui_artifact_gate_reason(getattr(task, "tags", None),
+                                   getattr(task, "proof_type", ""),
+                                   getattr(task, "completion_proof", "")):
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        # Owner rule (2026-07-18, task eaafdf75): the machine seat signs off
+        # ONLY an OBJECTIVE-OBSERVABLE oracle — a test suite passes
+        # (pytest_ids) or an http probe returns ok (http_probe). Anything
+        # validated VISUALLY — screenshots, videos, prototype/demo components,
+        # "does this look right" — is a HUMAN judgment and stays PENDING for
+        # the person: a render receipt proves the pixels exist, not that the
+        # owner approves them. This is the single-sign-off the machine used to
+        # eat (both 7cc4f0cf and a1e4120f auto-passed, one a false-green).
+        try:
+            from prism_service.services import oracle_spec as _osp
+            _pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+            if _pt in ("demo", "review") \
+                    or _osp.is_human_judgment(_osp.OracleSpec.from_task(task)):
+                return None
+        except Exception:
+            return None
+        refusal, receipt = self._oracle_receipt_refusal(
+            task, override=False, reason="")
+        if refusal and mint:
+            try:
+                from prism_service.services import oracle_spec as osp
+                from prism_service.services import task_workspace
+                spec = osp.OracleSpec.from_task(task)
+                if spec.adapter not in (osp.ADAPTER_PYTEST,
+                                        osp.ADAPTER_HTTP):
+                    return None
+                ws = task_workspace.workspace_for(task_id)
+                tree = osp.current_tree_sha(
+                    (ws or {}).get("path") if ws else None)
+                tried = any(
+                    r.tree_sha == tree and r.spec_hash == spec.spec_hash()
+                    for r in osp.read_receipts(
+                        self._project_name or "default", task_id))
+            except Exception:
+                return None
+            if tried:
+                return None
+            self.mint_green_evidence(task_id, session_id=ADJUDICATOR_SEAT)
+            refusal, receipt = self._oracle_receipt_refusal(
+                task, override=False, reason="")
+        if refusal or receipt is None:
+            return None
+        # FALSE-GREEN TOOTH (task e0149f1f): the receipt tooth above matches
+        # the receipt's tree against the WORKTREE's tree — so when the
+        # scratch worktree is stale BOTH agree, on the wrong tree, and the
+        # gate closes on evidence that never saw this task's code. Refuse a
+        # tree that does not even contain the task's own pinned tests.
+        _tree_reason = self._receipt_tree_missing_reason(task, receipt)
+        if _tree_reason:
+            self._park_green_refusal(task_id, _tree_reason)
+            return None
+        # ...and the same question about the ADAPTER: 5a6837a0's receipt was an
+        # http_probe on a task pinning pytest. A probe returning ok is not
+        # evidence for a suite it never ran.
+        _adapter_reason = self._receipt_adapter_mismatch_reason(task, receipt)
+        if _adapter_reason:
+            self._park_green_refusal(task_id, _adapter_reason)
+            return None
+        _rsn = (
+            "machine adjudication: fresh passing EvidenceReceipt "
+            f"{getattr(receipt, 'job_id', '')} "
+            f"(adapter={getattr(receipt, 'adapter', '')}, "
+            f"tree={(getattr(receipt, 'tree_sha', '') or 'n/a')[:12]}) — "
+            "the server exercised the oracle and approves on the receipt "
+            "tooth; manual-evidence and failed cases stay with a human")
+        res = self.gate_decide(task_id, "approve", reason=_rsn,
+                               session_id=ADJUDICATOR_SEAT,
+                               actor=ADJUDICATOR_SEAT, model="machine")
+        return res if res and res.get("ok") else None
+
+    @staticmethod
+    def pinned_test_paths(task) -> list:
+        """Repo-relative .py test paths named by task.verify. Entries are
+        sometimes whole COMMANDS ("python -m pytest a.py b.py"), so paths
+        are EXTRACTED, never assumed to be the bare string."""
+        import re as _re
+        out: list = []
+        for v in (getattr(task, "verify", None) or []):
+            out += _re.findall(r"(\S+?/tests/\S+?\.py)",
+                               str(v).replace("\\", "/"))
+        return sorted(set(out))
+
+    def _receipt_tree_missing_reason(self, task, receipt) -> Optional[str]:
+        """Refuse a receipt measured on a tree that does not CONTAIN this
+        task's pinned tests (task e0149f1f, 2026-07-21). 5a6837a0 closed on
+        adapter=http_probe, tree=c162b66 — a commit belonging to a DIFFERENT
+        task — because its scratch worktree was never advanced to the lane's
+        work, so `git cat-file -e <tree>:<its own test file>` failed. v7.1.24
+        taught the gate CARD to distrust a stale receipt; the deciding seat
+        never learned it.
+
+        Returns a one-line reason to refuse on, or None when the tree is
+        sound. NOTHING pinned -> None: other teeth own that case. A tree we
+        cannot RESOLVE also refuses — an unverifiable tree is exactly what
+        must not auto-close; a human can still approve."""
+        paths = self.pinned_test_paths(task)
+        tree = str(getattr(receipt, "tree_sha", "") or "").strip()
+        if not paths or not tree:
+            return None
+        import subprocess
+        from prism_service.services import task_workspace
+        try:
+            ws = task_workspace.workspace_for(
+                getattr(task, "id", "") or "") or {}
+            cwd = ws.get("path") or self._project_source_path()
+            if not cwd:
+                return f"cannot resolve a checkout to verify tree {tree[:12]}"
+            missing = [
+                p for p in paths
+                if subprocess.run(["git", "cat-file", "-e", f"{tree}:{p}"],
+                                  cwd=cwd, capture_output=True).returncode != 0]
+        except Exception as exc:
+            return (f"could not verify receipt tree {tree[:12]} "
+                    f"({type(exc).__name__})")
+        if not missing:
+            return None
+        return (f"receipt measured at tree {tree[:12]}, which does NOT "
+                f"contain this task's pinned test(s) {', '.join(missing)} — "
+                "it cannot have exercised this change; a distinct actor "
+                "must decide")
+
+    def _park_green_refusal(self, task_id: str, reason: str) -> None:
+        """RECORD a machine refusal instead of discarding it (task e0149f1f).
+
+        Both receipt teeth compute a precise, actionable one-liner and used to
+        `return None` on it — so the gate parked with an EMPTY gate_reason and
+        neither the owner nor the driving agent could tell WHY, which is the
+        exact 'pings a human at every gate' failure. Mirrors the ui-artifact
+        precedent: NOT a failure (a refused approve must never strand a ticket
+        into 'failed'), just pending WITH the reason, plus an audit row.
+
+        Re-sweeps every ~20s, so the history row is written only when the
+        reason CHANGES — otherwise the audit trail fills with duplicates."""
+        if self._task_svc is None:
+            return
+        try:
+            task = self._task_svc.get(task_id)
+            prior = str(_task_attr(task, "gate_reason", "") or "")
+            self._task_svc.update(task_id, gate_state="pending",
+                                  gate_reason=reason)
+            if prior.strip() != reason.strip():
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate=green_gate; action=approve; "
+                             f"machine=refused; reason={reason}"))
+        except Exception:
+            return
+
+    def _receipt_adapter_mismatch_reason(self, task, receipt) -> Optional[str]:
+        """Refuse a receipt whose ADAPTER cannot evidence what the task pins
+        (task e0149f1f, 2026-07-21). 5a6837a0 closed on adapter=http_probe
+        while its task.verify pinned a pytest file — an http probe returning
+        ok says NOTHING about that suite.
+
+        Fires ONLY when the task itself pins pytest paths, so a probe- or
+        browser-oracle task keeps machine adjudication untouched: the tooth
+        narrows the seat, it can never become a blanket refusal (the
+        pre-declared likely_misfire). Returns a one-line reason naming BOTH
+        what was pinned and what was measured, or None when sound."""
+        if not self.pinned_test_paths(task):
+            return None
+        try:
+            from prism_service.services import oracle_spec as osp
+            got = str(getattr(receipt, "adapter", "") or "").strip()
+            if not got or got == osp.ADAPTER_PYTEST:
+                return None
+            want = osp.ADAPTER_PYTEST
+        except Exception as exc:
+            return f"could not verify the receipt adapter ({type(exc).__name__})"
+        return (f"receipt was measured by adapter={got}, but this task pins a "
+                f"pytest suite (adapter={want}) in task.verify — {got} cannot "
+                "evidence those tests; a distinct actor must decide")
+
+    def _failed_gate_is_refused_approve(self, task_id: str,
+                                        gate_step_id: str) -> bool:
+        """True when the LATEST gate_decide history row for this gate
+        records a refused APPROVE attempt (a tooth refusal: control-plane,
+        same-actor, oracle-receipt) rather than an explicit reject. A
+        reject is a decision the machine seat must never re-litigate; a
+        tooth refusal is 'not yet' — re-presentable once the evidence or
+        authorization is cured (d09bee0b/b07fd46e, 2026-07-16)."""
+        try:
+            rows = self._task_svc.history(task_id) or []
+        except Exception:
+            return False
+        for row in reversed(list(rows)):
+            s = str(row)
+            if "gate_decide" not in s or f"gate={gate_step_id}" not in s:
+                continue
+            return "action=reject" not in s
+        return False
+
+    def adjudicate_demo_red_gate(self, task_id: str) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING red_gate on a
+        proof_type=demo ticket (task 59ddfcbc). A demo ticket has no test
+        suite by design, so the red_with_trace expectation can never be
+        met by evidence — the demo rubric in _verify_gate confirms
+        instead, and the real proof burden stays with green_gate's
+        demo-artifact teeth. Approves as ``conductor-adjudicator``; only
+        opted-in environments call this (see gate_adjudicator.is_enabled).
+        Test-proofed tickets are untouched. Returns the gate_decide result
+        on approve, else None (never flips pending->failed)."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        if (task is None
+                or getattr(task, "workflow_step", "") != "red_gate"
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt != "demo":
+            return None
+        check = self._verify_gate(task, "red_gate", pt)
+        if check.get("verified") is not True:
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        res = self.gate_decide(
+            task_id, "approve",
+            reason=("machine adjudication (demo rubric): "
+                    + str(check.get("reason", ""))),
+            session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
+            model="machine")
+        return res if res and res.get("ok") else None
+
+    def mint_red_evidence(self, task_id: str,
+                          session_id: Optional[str] = None) -> dict:
+        """Mint the RED EvidenceReceipt at the write_failing_tests report
+        (task a5e8d877, owner 2026-07-16): record the red-step commit and
+        let the trusted runner demonstrate the task's own pinned tests
+        FAILING there, so the red_gate that follows can be machine-decided
+        on evidence instead of stranding every test-proof drive as
+        'evidence not on file'. Best-effort mirror of mint_green_evidence:
+        a mint error never blocks the advance — the gate simply stays with
+        a human until evidence exists."""
+        if self._task_svc is None:
+            return {"ok": False, "reason": "no TaskService attached"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "reason": "unknown task"}
+        from prism_service.services import oracle_spec as osp
+        # Red is resolved from the task's PINNED TESTS, not from proof_type
+        # (task a9215794). The proof burden is unchanged: run_red_oracle below
+        # must still observe those tests FAILING at the anchor.
+        spec = _red_pytest_spec(task)
+        if spec is None:
+            return {"ok": False,
+                    "reason": ("no pinned pytest material to demonstrate red "
+                               "with — set task.verify to the failing test "
+                               "path(s), or decide this gate manually")}
+        # Anchor on the committed red-tests commit, NOT the scratch-worktree
+        # HEAD (mx-6decaa): when the failing tests were committed to the
+        # working branch, the worktree lags a commit and a HEAD anchor lands
+        # pre-tests -> 'no tests ran' -> permanent strand. Fall back to the
+        # worktree HEAD only when no tests-only [task:<id>] commit resolves.
+        red_sha, red_repo = self._red_tests_commit(task_id)
+        if not (red_sha and red_repo):
+            red_repo, red_sha = self._workspace_and_head(task_id)
+        if not (red_repo and red_sha):
+            return {"ok": False,
+                    "reason": "no workspace/commit to anchor red to"}
+        self._task_svc.record_history(
+            task_id, action="red_step_sha", details=red_sha,
+            actor=session_id or "conductor")
+        receipt = osp.run_red_oracle(
+            spec, task, red_sha,
+            ctx={"project": self._project_name or "default",
+                 "workspace": red_repo})
+        return {"ok": receipt.status == osp.ST_RED,
+                "reason": receipt.reason, "red_sha": red_sha}
+
+    def adjudicate_test_red_gate(self, task_id: str) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING red_gate on a
+        proof_type=test ticket (task a5e8d877, owner directive 2026-07-16:
+        test-proof red gates dead-ended as 'evidence not on file' with no
+        machine path — the sweep only knew the demo rubric). Approves ONLY
+        on a fresh RED EvidenceReceipt: the trusted runner observed the
+        task's own pinned tests FAILING at the recorded red-step commit.
+        Mints once when unevidenced (backfilling tasks parked before red
+        receipts existed); a run that PASSES at the red commit — or an
+        unresolvable red-step commit — stays with a human. Never flips
+        pending->failed."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        if (task is None
+                or getattr(task, "workflow_step", "") != "red_gate"
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        from prism_service.services import oracle_spec as osp
+        # Resolve red from the PINNED TESTS, not proof_type (task a9215794):
+        # an artifact/demo-proofed ticket can still own a perfectly good
+        # tests-only red anchor. No pytest material -> no machine red, and the
+        # gate honestly stays with a human.
+        spec = _red_pytest_spec(task)
+        if spec is None:
+            return None
+        red_sha = self._red_step_sha(task_id)
+        if not red_sha:
+            return None
+        project = self._project_name or "default"
+        fresh = osp.fresh_red_receipt(project, task_id, red_sha,
+                                      spec.spec_hash())
+        if fresh is None:
+            tried = any(
+                r.tree_sha == red_sha and r.spec_hash == spec.spec_hash()
+                for r in osp.read_receipts(project, task_id))
+            if tried:
+                return None
+            _s, red_repo = self._red_tests_commit(task_id)
+            ws_path = red_repo or self._workspace_and_head(task_id)[0]
+            if not ws_path:
+                return None
+            osp.run_red_oracle(spec, task, red_sha,
+                               ctx={"project": project,
+                                    "workspace": ws_path})
+            fresh = osp.fresh_red_receipt(project, task_id, red_sha,
+                                          spec.spec_hash())
+        if fresh is None:
+            return None
+        res = self.gate_decide(
+            task_id, "approve",
+            reason=("machine adjudication: RED demonstrated — trusted "
+                    "runner observed the pinned tests FAILING at red-step "
+                    f"commit {red_sha[:12]} (receipt {fresh.job_id}); a "
+                    "passing or unrunnable red stays with a human"),
+            session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
+            model="machine")
+        return res if res and res.get("ok") else None
+
+    def adjudicate_rubric_gate(self, task_id: str) -> Optional[dict]:
+        """MACHINE ADJUDICATOR SEAT for a PENDING story_gate/plan_gate
+        (task a5e8d877 gap 2, strand mx-2812f9): the rubric autoclear runs
+        exactly once at gate entry, so a near-miss cured moments later
+        (e.g. plan_diagram set right after the report) stranded pending
+        forever with no re-sweep. Re-scores the SAME rubric the entry-time
+        autoclear uses and approves a green score as the adjudicator seat.
+        PENDING only — a rubric-FAILED gate or a human reject stays
+        decided; never flips pending->failed."""
+        if self._task_svc is None:
+            return None
+        task = self._task_svc.get(task_id)
+        step = getattr(task, "workflow_step", "") if task else ""
+        if (task is None or step not in ("story_gate", "plan_gate")
+                or getattr(task, "gate_state", "") != "pending"):
+            return None
+        if getattr(task, "status", "") in ("cancelled", "archived",
+                                           "deleted", "done"):
+            return None
+        validation = self._validation_for_gate(step)
+        rule = (self._VERIFIER_RULES.get(validation)
+                if validation else None)
+        if not (rule and rule.get("rubric")):
+            return None
+        check = self._verify_rubric_gate(task, validation)
+        if check.get("verified") is not True:
+            return None
+        try:
+            from prism_service.services import control_plane as _cp
+            if _cp.candidate_controls_judge_reason(task):
+                return None
+        except Exception:
+            return None
+        res = self.gate_decide(
+            task_id, "approve",
+            reason=("machine adjudication (rubric re-sweep): "
+                    + str(check.get("reason", ""))),
+            session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
+            model="machine")
+        return res if res and res.get("ok") else None
+
+    def _red_tests_commit(self, task_id: str) -> tuple[str, str]:
+        """(sha, repo_path) of the newest commit trailered ``[task:<id8>]``
+        whose diff touches ONLY test files — the red-tests commit — searched
+        in the task's own scratch worktree FIRST, then the shared project
+        checkout. The shared checkout is essential when a session commits the
+        failing tests to the WORKING BRANCH rather than the per-task scratch
+        worktree (mx-6decaa): the scratch worktree then lags by a commit, so a
+        HEAD-based anchor lands one commit early (pre-tests) and strands the
+        red_gate as 'no tests ran'. Anchoring on the committed tests instead of
+        a possibly-stale HEAD is robust to either convention. ('', '') when
+        none resolves."""
+        import subprocess as _sp
+        tag = f"[task:{task_id[:8]}"
+        repos: list[str] = []
+        ws_path, _head = self._workspace_and_head(task_id)
+        if ws_path:
+            repos.append(ws_path)
+        root = str(self._project_root or "")
+        if root and root not in repos:
+            repos.append(root)
+        for repo in repos:
+            try:
+                r = _sp.run(["git", "log", "--format=%H%x09%s", "-n", "80"],
+                            cwd=repo, capture_output=True, text=True,
+                            timeout=15)
+                if r.returncode != 0:
+                    continue
+                for line in r.stdout.splitlines():
+                    sha, _, subj = line.partition("\t")
+                    if tag not in subj:
+                        continue
+                    if self._commit_is_tests_only(repo, sha.strip()):
+                        return sha.strip(), repo
+            except Exception:
+                continue
+        return "", ""
+
+    def _commit_is_tests_only(self, repo: str, sha: str) -> bool:
+        """True when ``sha``'s diff in ``repo`` is non-empty and touches only
+        test files — the shape of a red-tests commit. Used both to find the
+        anchor and to reject a stale ``red_step_sha`` row that points one
+        commit early (at a pre-tests commit whose diff is not tests-only)."""
+        if not (repo and sha):
+            return False
+        import subprocess as _sp
+        try:
+            f = _sp.run(["git", "diff-tree", "--no-commit-id", "--name-only",
+                         "-r", sha], cwd=repo, capture_output=True, text=True,
+                        timeout=15)
+            files = [p.strip() for p in f.stdout.splitlines() if p.strip()]
+            return bool(files) and all("tests/" in p.replace("\\", "/")
+                                       for p in files)
+        except Exception:
+            return False
+
+    def _red_step_sha(self, task_id: str) -> str:
+        """The commit red is anchored to. Prefer a recorded ``red_step_sha``
+        history row (stamped by mint_red_evidence at the write_failing_tests
+        report) — but ONLY when that commit genuinely carries the pinned tests.
+        A row stamped from a lagging scratch worktree points one commit early
+        (mx-6decaa) and must NOT shadow the real red-tests commit; in that case
+        fall through to ``_red_tests_commit``, which self-heals the anchor.
+        '' when neither resolves (the seat then leaves the gate with a human)."""
+        import re as _re
+        try:
+            rows = self._task_svc.history(task_id) or []
+        except Exception:
+            rows = []
+        recorded = ""
+        for row in reversed(list(rows)):
+            if "red_step_sha" not in str(row):
+                continue
+            m = _re.search(r"\b[0-9a-f]{40}\b", str(row))
+            if m:
+                recorded = m.group(0)
+                break
+        tests_sha, repo = self._red_tests_commit(task_id)
+        if recorded and recorded != tests_sha:
+            # Keep the recorded row only if it truly is a tests-only commit;
+            # a lagging-worktree mis-stamp (points pre-tests) yields to the
+            # real red-tests commit resolved above.
+            ws_path, _h = self._workspace_and_head(task_id)
+            for r in (repo, ws_path, str(self._project_root or "")):
+                if r and self._commit_is_tests_only(r, recorded):
+                    return recorded
+            if tests_sha:
+                return tests_sha
+        return recorded or tests_sha
+
+    def _workspace_and_head(self, task_id: str) -> tuple[str, str]:
+        """(workspace_path, HEAD sha) for a task — its own scratch workspace
+        when one exists, else the shared project checkout. ('', '') when
+        neither resolves; callers refuse rather than fall back to cwd."""
+        from prism_service.services import oracle_spec as osp
+        from prism_service.services import task_workspace
+        ws = None
+        try:
+            ws = task_workspace.workspace_for(task_id)
+        except Exception:
+            ws = None
+        ws_path = (ws or {}).get("path") or ""
+        if not ws_path and self._project_root:
+            ws_path = str(self._project_root)
+        if not ws_path:
+            return "", ""
+        return ws_path, osp.current_tree_sha(ws_path)
+
+    def rewind_task(self, task_id: str, reason: str = "",
+                    actor: str = "owner") -> dict:
+        """AUDITED one-step rewind for an overshot task (task b07fd46e).
+
+        The repair lever for a double-advance (mx-f8ed3f): moves the task
+        back EXACTLY one step in WORKFLOW_STEPS, resets the gate state for
+        the target step ('pending' on a gate, 'none' otherwise), clears
+        gate_reason, and records a task_history row carrying the mandatory
+        reason + actor. Refuses a blank reason and refuses to rewind off
+        the first step — a guarded lever, never a silent hand-drive."""
+        if self._task_svc is None:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "no TaskService attached"}
+        if not (reason and reason.strip()):
+            return {"ok": False, "task_id": task_id,
+                    "reason": "rewind requires a reason (audited lever)"}
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return {"ok": False, "task_id": task_id, "reason": "unknown task"}
+        from prism_service.models.workflow import WORKFLOW_STEPS
+        ids = [s["id"] for s in WORKFLOW_STEPS]
+        cur = getattr(task, "workflow_step", "") or ""
+        if cur not in ids:
+            return {"ok": False, "task_id": task_id,
+                    "reason": f"task is not on a workflow step ({cur!r})"}
+        i = ids.index(cur)
+        if i == 0:
+            return {"ok": False, "task_id": task_id,
+                    "reason": "already on the first workflow step; "
+                              "cannot rewind further"}
+        target = WORKFLOW_STEPS[i - 1]
+        self._task_svc.update(
+            task_id, workflow_step=target["id"],
+            gate_state="pending" if target.get("type") == "gate" else "none",
+            gate_reason="")
+        self._task_svc.record_history(
+            task_id, action="rewind_task",
+            details=f"{cur} -> {target['id']}; reason={reason.strip()}",
+            actor=actor or "owner")
+        return {"ok": True, "task_id": task_id, "from_step": cur,
+                "to_step": target["id"]}
+
     def _verify_rubric_gate(self, task, validation: str) -> dict:
         """Score a rubric validation kind (story_complete/plan_coverage)
         as a PURE function of the task's own evidence + the YAML rubric
@@ -1804,6 +2495,70 @@ class ConductorService:
         # override on every gate. Skip the test-shaped consult for those; the
         # proof_type artifact tooth (gate_artifact_reason) is the real check.
         pt = str(proof_type or "").strip().lower()
+        # DEMO-PROOF RED GATE (task 59ddfcbc): a demo ticket has no test
+        # suite BY DESIGN, so tier0's red_with_trace expectation can never
+        # be met and every demo ticket parked at red_gate forever. The
+        # honest red state for a demo is the ABSENT artifact; the proof
+        # burden lives at green_gate (ui-artifact + oracle-receipt teeth).
+        # Confirm on that basis instead of consulting the test-shaped
+        # verifier. green_full for demo is NOT relaxed here.
+        if pt == "demo" and gate_step_id == "red_gate":
+            return {
+                "verified": True,
+                "reason": ("demo-proof ticket: no test suite by design — "
+                           "red state is the absent artifact; proof burden "
+                           "carried by green_gate's demo-artifact teeth"),
+                "verifier": None,
+                "validation": validation,
+            }
+        # TEST-PROOF RED GATE (task a5e8d877): when the trusted runner has
+        # DEMONSTRATED red — this task's own pinned tests observed FAILING
+        # at the recorded red-step commit, receipt on file — that receipt
+        # IS the red_with_trace artifact, and it is stronger evidence than
+        # the tier0 diff heuristic (which reads the CURRENT workspace,
+        # where a committed implementation already turns the tests green
+        # and made every honest red drive override-only). Unevidenced red
+        # gates fall through to the tier0 consult unchanged.
+        if pt == "test" and gate_step_id == "red_gate":
+            try:
+                from prism_service.services import oracle_spec as osp
+                spec = osp.OracleSpec.from_task(task)
+                tid = getattr(task, "id", "")
+                proj = self._project_name or "default"
+                red_sha = self._red_step_sha(tid)
+                fresh = (osp.fresh_red_receipt(proj, tid, red_sha,
+                                               spec.spec_hash())
+                         if red_sha else None)
+                if fresh is None and red_sha:
+                    # Mint the red demonstration ON DEMAND (mx-6decaa): a
+                    # test-proof red_gate must not dead-end on 'no receipt
+                    # yet'. Demonstrate the pinned tests FAILING at the
+                    # anchored red-tests commit so this approve resolves on
+                    # merit. Guarded like the adjudicator: never re-run a
+                    # spec_hash already attempted at this sha (no mint loop).
+                    already = any(
+                        r.tree_sha == red_sha
+                        and r.spec_hash == spec.spec_hash()
+                        for r in osp.read_receipts(proj, tid))
+                    if not already:
+                        _s, red_repo = self._red_tests_commit(tid)
+                        ws_path = red_repo or self._workspace_and_head(tid)[0]
+                        if ws_path:
+                            osp.run_red_oracle(
+                                spec, task, red_sha,
+                                ctx={"project": proj, "workspace": ws_path})
+                            fresh = osp.fresh_red_receipt(
+                                proj, tid, red_sha, spec.spec_hash())
+                if fresh is not None:
+                    return {
+                        "verified": True,
+                        "reason": ("red demonstrated by trusted runner at "
+                                   f"{red_sha[:12]}: {fresh.reason}"),
+                        "verifier": None,
+                        "validation": validation,
+                    }
+            except Exception:
+                pass
         if pt and pt not in ("test", "demo"):
             return {
                 "verified": True,
@@ -1812,6 +2567,29 @@ class ConductorService:
                 "verifier": None,
                 "validation": validation,
             }
+        # HUMAN-JUDGMENT GREEN GATE (owner 2026-07-19): a demo/visual/manual
+        # oracle has NO test suite — the person's Approve IS the sign-off. The
+        # shell verifier finds no claims (no diff in scope) and refuses, which
+        # forced an override on every visual gate (68e5c699). Skip the
+        # test-shaped verifier consult here; the proof burden is the human
+        # decision (distinct-actor) + the ui-artifact/oracle-receipt teeth.
+        if gate_step_id == "green_gate":
+            _hj = pt in ("demo", "review")
+            if not _hj:
+                try:
+                    from prism_service.services import oracle_spec as _osp
+                    _hj = _osp.is_human_judgment(_osp.OracleSpec.from_task(task))
+                except Exception:
+                    _hj = False
+            if _hj:
+                return {
+                    "verified": True,
+                    "reason": ("human-judgment gate: visual/demo sign-off "
+                               "carried by the person's decision — test-shaped "
+                               "verifier skipped (no suite by design)"),
+                    "verifier": None,
+                    "validation": validation,
+                }
         # gate_decide short-circuits when self._verifier_svc is None
         # (legacy trust-caller path). _verify_gate is only called when
         # a verifier is attached, so we don't need a None-check here.
@@ -1929,8 +2707,12 @@ class ConductorService:
         # work-producer and wrongly blocked from overriding.
         prior_work_actors: list[str] = []
         try:
-            prior_work_actors = [s.get("session_id")
-                                 for s in self._task_svc.sessions_for_task(task_id)]
+            # Machine JUDGE seats are excluded — rows stamped before the
+            # MACHINE_SEATS exemption existed must not poison the set.
+            prior_work_actors = [
+                s.get("session_id")
+                for s in self._task_svc.sessions_for_task(task_id)
+                if s.get("session_id") not in MACHINE_SEATS]
         except Exception:
             prior_work_actors = []
 
@@ -1960,9 +2742,20 @@ class ConductorService:
         # 'reject' on a failed gate is still pointless (already failed).
         if task.gate_state == "failed":
             if action == "approve" and not override:
-                recheck = self._verify_gate(
-                    task, task.workflow_step,
-                    getattr(task, "proof_type", None))
+                # ORACLE-RECEIPT PRECEDENCE on recovery, checked FIRST
+                # (68e5c699): a fresh passing EvidenceReceipt clears the
+                # recheck in seconds without invoking the env-fragile /
+                # hanging shell verifier.
+                recheck = None
+                if task.workflow_step == "green_gate":
+                    _rr, _rc = self._oracle_receipt_refusal(
+                        task, override=False, reason=reason or "")
+                    if not _rr and _rc is not None:
+                        recheck = {"verified": True}
+                if recheck is None:
+                    recheck = self._verify_gate(
+                        task, task.workflow_step,
+                        getattr(task, "proof_type", None))
                 if recheck.get("verified") is not True:
                     return {
                         "ok": False,
@@ -2093,22 +2886,33 @@ class ConductorService:
                 getattr(task, "proof_type", ""),
                 getattr(task, "completion_proof", ""),
             )
+            # 'Implement to evidence': a captured screenshot in the task's
+            # evidence gallery satisfies the demonstrable-UI requirement, even
+            # if completion_proof doesn't hand-cite the path.
+            if ui_reason and has_captured_evidence(
+                    task_id, self._project_name or "default"):
+                ui_reason = ""
             if ui_reason:
+                # NOT a failure — the approve just can't go through YET (needs a
+                # UI artifact). Keep the gate PENDING with the actionable reason
+                # so the owner attaches the screenshot and re-approves WITHOUT a
+                # rewind/override (owner 2026-07-19: a refused click must never
+                # strand a ticket into 'failed').
                 self._task_svc.update(
-                    task_id, gate_state="failed", gate_reason=ui_reason,
+                    task_id, gate_state="pending", gate_reason=ui_reason,
                 )
                 self._task_svc.record_history(
                     task_id,
                     action="gate_decide",
                     details=(f"gate={gate_step_id}; action=approve; "
-                             f"ui-artifact=fail; reason={ui_reason}"),
+                             f"ui-artifact=not-yet; reason={ui_reason}"),
                     actor="conductor",
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "failed",
+                    "gate_state": "pending",
                     "reason": ui_reason,
                 }
         # EPIC GREEN_GATE ROLL-UP (issue #171): a parent whose children all
@@ -2149,8 +2953,24 @@ class ConductorService:
         green_outcome_note = ""
         _live = self._task_svc.get(task_id)
         _has_oracle = bool(str(getattr(_live, "oracle", "") or "").strip())
+        # HUMAN-JUDGMENT gate (owner 2026-07-19): a demo/visual/manual oracle has
+        # NO machine tooth to satisfy — the person's approve IS the evidence, so
+        # a plain Approve by a DISTINCT actor signs off (no override ceremony, no
+        # failed-browser-receipt block). The distinct-actor + misfire teeth below
+        # still apply. Objective oracles (pytest/http) keep the fresh-receipt
+        # requirement. Pairs with the adjudicator guard (task eaafdf75).
+        _human_judgment = False
+        if gate_step_id == "green_gate" and _has_oracle:
+            try:
+                from prism_service.services import oracle_spec as _osp
+                _pt = str(getattr(_live, "proof_type", "") or "").strip().lower()
+                _human_judgment = _pt in ("demo", "review") or \
+                    _osp.is_human_judgment(_osp.OracleSpec.from_task(_live))
+            except Exception:
+                _human_judgment = False
         if (gate_step_id == "green_gate" and not override
-                and not rollup_has_children and _has_oracle):
+                and not rollup_has_children and _has_oracle
+                and not _human_judgment):
             receipt_reason, _fresh = self._oracle_receipt_refusal(
                 _live, override=False, reason=reason)
             if receipt_reason:
@@ -2319,8 +3139,36 @@ class ConductorService:
             # kind and consult VerifierService. If the verifier rejects
             # or no verifier is attached, fail the gate (do NOT advance)
             # with the verifier's reason recorded on the task.
-            outcome = self._verify_gate(
-                task, gate_step_id, getattr(task, "proof_type", ""))
+            # ORACLE-RECEIPT PRECEDENCE (68e5c699 interim), checked FIRST:
+            # the trusted-runner EvidenceReceipt is the green gate's DESIGNED
+            # deciding authority (inverted-flow #2). The in-daemon shell
+            # verifier is known env-fragile AND can hang for tens of minutes
+            # (a synchronous approve that never returns — no user can pass
+            # it). A FRESH PASSING receipt (tree+spec+policy-pin matched)
+            # therefore releases the gate on merit in seconds, WITHOUT
+            # invoking the shell verifier; the verifier keeps its role for
+            # un-receipted tasks. Judge-tamper and proof-artifact teeth
+            # below still apply unchanged.
+            outcome = None
+            if gate_step_id == "green_gate":
+                _r_refusal, _r_receipt = self._oracle_receipt_refusal(
+                    task, override=False, reason=reason or "")
+                if not _r_refusal and _r_receipt is not None:
+                    outcome = {
+                        "verified": True,
+                        "reason": (
+                            "released on the oracle-receipt tooth: fresh "
+                            "passing EvidenceReceipt "
+                            f"{str(getattr(_r_receipt, 'job_id', ''))[:8]} "
+                            f"({getattr(_r_receipt, 'adapter', '')}) — a real "
+                            "trusted run; shell verifier skipped (env-fragile"
+                            "/hanging, 68e5c699)"),
+                        "verifier": None,
+                        "validation": "green_receipt",
+                    }
+            if outcome is None:
+                outcome = self._verify_gate(
+                    task, gate_step_id, getattr(task, "proof_type", ""))
             verifier_payload = outcome.get("verifier")
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
@@ -2375,6 +3223,11 @@ class ConductorService:
         )
         if rollup_ok:
             # The children's proofs ARE the epic's artifact (issue #171).
+            artifact_reason = ""
+        elif artifact_reason and has_captured_evidence(
+                task_id, self._project_name or "default"):
+            # 'Implement to evidence': a captured screenshot/video in the task's
+            # evidence gallery IS the artifact (owner 2026-07-19).
             artifact_reason = ""
         elif (artifact_reason and rollup_has_children and rollup_reason):
             # An epic with children that did NOT cleanly roll up AND no
@@ -2494,6 +3347,31 @@ class ConductorService:
             detail_bits.append(
                 f"policy_hash={_pin['policy_hash'][:19]}; "
                 f"control_ref={(_pin.get('control_ref') or '')[:12]}")
+        # IDEMPOTENT DECISION (task b07fd46e): the verifier consult above can
+        # take minutes; a timed-out client's retry may have decided this gate
+        # while we were inside it. Re-fetch and require the task is STILL on
+        # THIS gate with the gate in the SAME state we entered on — a lost
+        # race is a RECORDED no-op naming the true step, never a second
+        # 'passed' write or advance (mx-f8ed3f: red_gate overshot two steps).
+        _live = self._task_svc.get(task_id)
+        _live_step = getattr(_live, "workflow_step", "")
+        _live_state = getattr(_live, "gate_state", "")
+        if _live_step != gate_step_id or _live_state != task.gate_state:
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; no-op: "
+                         f"decision raced — task now at {_live_step}/"
+                         f"{_live_state}"),
+                actor=actor)
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": _live_state,
+                "reason": (f"decision raced: this gate was already decided — "
+                           f"the task is now at {_live_step} "
+                           f"(gate_state={_live_state}); no second advance"),
+            }
         self._task_svc.update(
             task_id,
             gate_state="passed",
@@ -2638,6 +3516,51 @@ class ConductorService:
                 break
         return out
 
+    def session_file_paths(self, session_id: str) -> dict:
+        """The code files a session touched: {"read": [...], "modified": [...]}.
+
+        Reads the files_read_paths / files_modified_paths JSON columns the
+        transcript importer persists (task 961f273b). Guarded: a scores.db
+        predating path capture (columns absent) or an unknown session yields
+        empty lists — the caller just omits those session->code edges. Feeds
+        the Explore mesh's session<->code neighborhood.
+        """
+        empty = {"read": [], "modified": []}
+        if not (session_id or "").strip():
+            return empty
+        try:
+            conn = self._scores_conn()
+        except Exception:
+            return empty
+        try:
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(session_outcomes)").fetchall()}
+            if not ({"files_read_paths", "files_modified_paths"} & cols):
+                return empty
+            row = conn.execute(
+                "SELECT files_read_paths, files_modified_paths "
+                "FROM session_outcomes WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        except Exception:
+            return empty
+        finally:
+            conn.close()
+        if row is None:
+            return empty
+
+        def _decode(raw) -> list:
+            if not raw:
+                return []
+            try:
+                val = json.loads(raw)
+            except (TypeError, ValueError):
+                return []
+            return [str(p) for p in val if p] if isinstance(val, list) else []
+
+        return {"read": _decode(row["files_read_paths"]),
+                "modified": _decode(row["files_modified_paths"])}
+
     def get_skill_usage(self, session_id: Optional[str] = None) -> list[dict]:
         """Query skill_usage from scores.db."""
         try:
@@ -2702,14 +3625,19 @@ class ConductorService:
             gate = getattr(t, "gate_state", "none") or "none"
             status = getattr(t, "status", "") or ""
             # Terminal statuses leave the conductor view: done is shipped,
-            # cancelled is abandoned. Both keep their workflow_step in the
-            # audit trail but must not render as currently-managed tiles.
-            if status in ("done", "cancelled"):
+            # cancelled is abandoned, deleted is removed. All keep their
+            # workflow_step in the audit trail but must not render as
+            # currently-managed tiles or feed the AWAITING REVIEW bar — a
+            # deleted task parked at a pending gate is NOT awaiting review.
+            if status in ("done", "cancelled", "deleted"):
                 continue
-            # Conductor mirrors the /tasks board: only TOP-LEVEL tasks are
-            # tiles. Subtasks (parent_id set) belong under their parent's
-            # detail page, never as standalone swimlane cards.
-            if getattr(t, "parent_id", ""):
+            # Subtasks (parent_id set) belong under their parent's detail
+            # page while IDLE — but a child the conductor is actively
+            # engaged with (a live step or a gate awaiting decision) MUST
+            # surface: the LIVE bar's whole promise is "who's working now +
+            # what's stuck at a gate", and epic workstreams are children
+            # (ui-redesign 16777a76: fix the board, never the tree).
+            if getattr(t, "parent_id", "") and step == "" and gate == "none":
                 continue
             if step == "" and gate == "none":
                 # Claimed by a workflow but pre-first-advance (the Locate /
@@ -2783,9 +3711,12 @@ class ConductorService:
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
             status = getattr(t, "status", "") or ""
-            if status in ("done", "cancelled"):
+            gate = getattr(t, "gate_state", "none") or "none"
+            if status in ("done", "cancelled", "deleted"):
                 continue
-            if getattr(t, "parent_id", ""):
+            # Mirror managed_tasks: an ENGAGED child (live step or gate)
+            # counts; an idle child stays under its parent.
+            if getattr(t, "parent_id", "") and not step and gate == "none":
                 continue
             if not step:
                 # Mirror managed_tasks: claimed-but-pre-step in_progress work

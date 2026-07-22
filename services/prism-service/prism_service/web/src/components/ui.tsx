@@ -9,14 +9,28 @@
  * their parent (surface-1 → surface-2), and every text tier is WCAG
  * AA on both surfaces.
  */
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { Tone } from "@/lib/domainTone";
 import { toneFromLabel } from "@/lib/domainTone";
+import type { LozengeTone } from "@/components/Lozenge";
 
 // Re-exported so existing `import { toneFromLabel } from "@/components/ui"`
 // call sites keep working; the implementation lives in lib/domainTone.
 export { toneFromLabel };
+
+// palette Tone (the 7-hue domainTone family) → Lozenge semantic tone (6).
+// Both emerald and sage read as the success "ok" green; every other hue maps
+// to the accent family Lozenge borrows (see Lozenge.tsx header). Lets a status
+// already resolved through domainTone() render as a Lozenge without a 2nd map —
+// e.g. the conductor tile's ACT_TILE tones and taskStatus fallbacks.
+const PALETTE_TO_LOZENGE: Record<Tone, LozengeTone> = {
+  teal: "info", sage: "ok", amber: "warn", rose: "danger",
+  violet: "new", emerald: "ok", slate: "neutral",
+};
+export function lozengeTone(tone: Tone): LozengeTone {
+  return PALETTE_TO_LOZENGE[tone];
+}
 
 export const Card = ({
   children, className, nested, raised,
@@ -42,16 +56,16 @@ export const Card = ({
 };
 
 export const SectionLabel = ({ children }: { children: ReactNode }) => (
-  <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-3">
+  <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-3">
     {children}
   </div>
 );
 
 export const Kpi = ({ label, value, hint }: { label: string; value: ReactNode; hint?: ReactNode }) => (
   <div className="flex-1 min-w-[150px] rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-4">
-    <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
+    <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)] mb-2">{label}</div>
     <div className="text-2xl font-semibold leading-none text-[color:var(--text-primary)]">{value}</div>
-    {hint && <div className="text-[10px] uppercase tracking-wider text-[color:var(--text-muted)] mt-2">{hint}</div>}
+    {hint && <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mt-2">{hint}</div>}
   </div>
 );
 
@@ -104,7 +118,7 @@ export const Pill = ({
   <button
     onClick={onClick}
     className={cn(
-      "px-3 py-1 rounded-full text-[11px] uppercase tracking-wider transition-colors",
+      "px-3 py-1 rounded-full text-2xs uppercase tracking-wider transition-colors",
       active
         ? tone
           ? PILL_TONE_ACTIVE[tone]
@@ -116,10 +130,54 @@ export const Pill = ({
   >{children}</button>
 );
 
+/** Button — the artifact's `.btn` / `.btn.pri`. Two variants:
+ *  - "primary": solid --accent-solid fill, white text (the page's one CTA).
+ *  - "default": bordered --border-default on the subtle surface (secondary).
+ *  13px / 550 weight, 6px radius. Standard <button> props pass through. */
+export const Button = ({
+  variant = "default", className, children, ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "default";
+}) => (
+  <button
+    className={cn(
+      "inline-flex items-center gap-1.5 rounded-md px-[13px] py-[6px] text-[13px] font-[550]",
+      "transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+      variant === "primary"
+        ? "bg-[color:var(--accent-solid)] text-white border border-[color:var(--accent-solid)] hover:opacity-90"
+        : "bg-[color:var(--surface-1)] text-[color:var(--text-secondary)] border border-[color:var(--border-default)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)]",
+      className,
+    )}
+    {...rest}
+  >{children}</button>
+);
+
 export const Empty = ({ children }: { children: ReactNode }) => (
   <div className="rounded-md border border-dashed border-[color:var(--border-default)] px-5 py-8 text-center text-sm text-[color:var(--text-muted)]">
     {children}
   </div>
+);
+
+/** Skeleton — the honest pre-hydration placeholder.
+ *
+ * A dashboard that paints 0s and "No activity yet" before its first fetch
+ * resolves is LYING: `sum([]) === 0` and an empty array both render as a
+ * confident, settled empty state. Render this instead until the caller's
+ * hydration flag flips, then fall through to the REAL value — including the
+ * real empty state, which this must never mask (task 89e90d1a).
+ *
+ * Surface-2 on surface-1 so it reads as "content shaped, not yet known";
+ * animate-pulse is dropped under prefers-reduced-motion via motion-reduce.
+ */
+export const Skeleton = ({ className }: { className?: string }) => (
+  <div
+    aria-hidden
+    className={cn(
+      "animate-pulse motion-reduce:animate-none rounded-md",
+      "bg-[color:var(--surface-2)]",
+      className,
+    )}
+  />
 );
 
 export const Page = ({ children }: { children: ReactNode }) => (

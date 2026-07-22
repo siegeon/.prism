@@ -163,7 +163,7 @@ function SummaryChip({ label, value, tone }: { label: string; value: number; ton
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="shrink-0 text-[11px] font-mono text-[color:var(--text-muted)] tabular-nums">{children}</span>
+    <span className="shrink-0 text-2xs font-mono text-[color:var(--text-muted)] tabular-nums">{children}</span>
   );
 }
 
@@ -174,7 +174,7 @@ function Row({ r, onOpen }: { r: Row; onOpen: (id?: string) => void }) {
       className="w-full flex items-center gap-3 py-2 px-1 text-left border-b border-[color:var(--border-subtle)] last:border-0 group"
     >
       <span
-        className="shrink-0 grid place-items-center w-[18px] h-[18px] rounded-full text-[11px]"
+        className="shrink-0 grid place-items-center w-[18px] h-[18px] rounded-full text-2xs"
         style={{
           background: "var(--accent-sage-bg)",
           color: "var(--accent-sage-fg)",
@@ -187,7 +187,7 @@ function Row({ r, onOpen }: { r: Row; onOpen: (id?: string) => void }) {
       {(r.tags ?? []).slice(0, 2).map((tag) => (
         <span
           key={tag}
-          className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded"
+          className="shrink-0 text-2xs font-mono px-1.5 py-0.5 rounded"
           style={{ background: `var(--accent-${toneFromLabel(tag)}-bg)`, color: `var(--accent-${toneFromLabel(tag)}-fg)` }}
         >#{tag}</span>
       ))}
@@ -282,11 +282,11 @@ function SearchView({
               <tr>
                 <th
                   onClick={() => onSort("title")}
-                  className="text-left text-[10px] uppercase tracking-wider text-[color:var(--text-label)] font-semibold px-4 py-2.5 border-b border-[color:var(--border-default)] cursor-pointer hover:text-[color:var(--text-secondary)] select-none"
+                  className="text-left text-2xs uppercase tracking-wider text-[color:var(--text-label)] font-semibold px-4 py-2.5 border-b border-[color:var(--border-default)] cursor-pointer hover:text-[color:var(--text-secondary)] select-none"
                 >Task{arrow("title")}</th>
                 <th
                   onClick={() => onSort("when")}
-                  className="text-left text-[10px] uppercase tracking-wider text-[color:var(--text-label)] font-semibold px-4 py-2.5 border-b border-[color:var(--border-default)] cursor-pointer hover:text-[color:var(--text-secondary)] select-none whitespace-nowrap w-px"
+                  className="text-left text-2xs uppercase tracking-wider text-[color:var(--text-label)] font-semibold px-4 py-2.5 border-b border-[color:var(--border-default)] cursor-pointer hover:text-[color:var(--text-secondary)] select-none whitespace-nowrap w-px"
                 >Completed{arrow("when")}</th>
               </tr>
             </thead>

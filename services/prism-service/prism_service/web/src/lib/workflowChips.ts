@@ -31,7 +31,7 @@ export function gateLabel(state: GateState): string {
   return state;
 }
 
-const CHIP_SIZING = "px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-mono";
+const CHIP_SIZING = "px-2 py-0.5 rounded text-2xs uppercase tracking-wider font-mono";
 
 export function stepChipClass(step: string): string {
   return toneClass(domainTone("step", step) ?? "slate") + " " + CHIP_SIZING;

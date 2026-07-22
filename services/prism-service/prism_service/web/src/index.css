@@ -2,6 +2,36 @@
 @import '@nous-research/ui/styles/fonts.css';
 @import '@nous-research/ui/styles/globals.css';
 
+/* Radix Colors — dual-theme scales (task 401811b8). Light values bind on
+ * `:root, .light, .light-theme`; dark values on `.dark, .dark-theme`.
+ * index.html sets <html class="dark dark-theme" data-theme="dark"> so the
+ * app defaults dark; flipping the class + data-theme to "light" swaps every
+ * scale (and the --accent-* aliases below) to the light-tuned values. */
+@import '@radix-ui/colors/slate.css';
+@import '@radix-ui/colors/slate-alpha.css';
+@import '@radix-ui/colors/slate-dark.css';
+@import '@radix-ui/colors/slate-dark-alpha.css';
+@import '@radix-ui/colors/blue.css';
+@import '@radix-ui/colors/blue-alpha.css';
+@import '@radix-ui/colors/blue-dark.css';
+@import '@radix-ui/colors/blue-dark-alpha.css';
+@import '@radix-ui/colors/green.css';
+@import '@radix-ui/colors/green-alpha.css';
+@import '@radix-ui/colors/green-dark.css';
+@import '@radix-ui/colors/green-dark-alpha.css';
+@import '@radix-ui/colors/amber.css';
+@import '@radix-ui/colors/amber-alpha.css';
+@import '@radix-ui/colors/amber-dark.css';
+@import '@radix-ui/colors/amber-dark-alpha.css';
+@import '@radix-ui/colors/red.css';
+@import '@radix-ui/colors/red-alpha.css';
+@import '@radix-ui/colors/red-dark.css';
+@import '@radix-ui/colors/red-dark-alpha.css';
+@import '@radix-ui/colors/violet.css';
+@import '@radix-ui/colors/violet-alpha.css';
+@import '@radix-ui/colors/violet-dark.css';
+@import '@radix-ui/colors/violet-dark-alpha.css';
+
 @source '../node_modules/@nous-research/ui/dist';
 
 /* Slate Blue palette as PRISM's default (LENS_0).
@@ -31,65 +61,95 @@
   --foreground: color-mix(in srgb, #ffffff 0%, transparent);
   --foreground-base: #ffffff;
   --foreground-alpha: 0;
-  --midground: color-mix(in srgb, #edf1f7 100%, transparent);
-  --midground-base: #edf1f7;          /* alias of --text-primary */
+  --midground: color-mix(in srgb, #edeef0 100%, transparent);
+  --midground-base: #edeef0;          /* alias of --text-primary */
   --midground-alpha: 1;
-  --background: color-mix(in srgb, #0d1726 100%, transparent);
-  --background-base: #0d1726;         /* alias of --surface-0 */
+  --background: color-mix(in srgb, #111113 100%, transparent);
+  --background-base: #111113;         /* alias of --surface-0 */
   --background-alpha: 1;
   --warm-glow: rgba(120, 165, 220, 0.30);
 
-  /* Surface elevation — dark-mode "elevation = lighter" pattern. */
-  --surface-0: #0d1726;
-  --surface-1: #172234;
-  --surface-2: #212e44;
-  --surface-3: #2c3a55;
+  /* Surface elevation — Radix slate (dark), UI-direction-v2 Foundation.
+   * Re-valued off the old navy "slate blue" hexes to the neutral Radix
+   * slate steps 1/2/3/5 so the canvas matches the direction artifact. */
+  --surface-0: #111113;
+  --surface-1: #18191b;
+  --surface-2: #212225;
+  --surface-3: #2e3135;
 
-  /* Text hierarchy — every visible tier is WCAG AA on surface-0 + 1. */
-  --text-primary:   #edf1f7;
-  --text-secondary: #b8c3d4;
-  --text-muted:     #8b97ad;
-  --text-label:     #9aa6bd;
-  --text-disabled:  #5a6478;
+  /* Text hierarchy — Radix slate (dark) text steps 12/11/10. high/low/
+   * faint from the Foundation artifact; muted+label both land on faint. */
+  --text-primary:   #edeef0;
+  --text-secondary: #b0b4ba;
+  --text-muted:     #777d84;
+  --text-label:     #777d84;
+  --text-disabled:  #5a6169;
 
-  /* Borders — same hue, varied alpha. Strong is for emphasized cards. */
-  --border-subtle:  rgba(237, 241, 247, 0.06);
-  --border-default: rgba(237, 241, 247, 0.12);
-  --border-strong:  rgba(237, 241, 247, 0.22);
+  /* Borders — Radix slate (dark) steps 6/7/8, solid (Foundation). */
+  --border-subtle:  #363a3f;
+  --border-default: #43484e;
+  --border-strong:  #5a6169;
 
-  /* Semantic accents — muted hues that sit on the Slate-Blue base
-   * without overwhelming it. Used by chips/badges that encode
-   * meaning (memory type, status, importance band). Each role
-   * carries a -bg (~10-12% alpha fill), -ring (~30% alpha border),
-   * and -fg (saturated foreground that hits AA on -bg).
-   */
-  --accent-teal-bg:     rgba(45, 212, 191, 0.12);
-  --accent-teal-ring:   rgba(45, 212, 191, 0.32);
-  --accent-teal-fg:     #5eead4;
+  /* Primary accent — Radix blue (Foundation). Dark values; the light
+   * block below re-values to the light-tuned blue. */
+  --accent:        #70b8ff;
+  --accent-solid:  #0090ff;
+  --accent-weak:   #0d2847;
+  --accent-border: #104d87;
 
-  --accent-sage-bg:     rgba(132, 204, 132, 0.12);
-  --accent-sage-ring:   rgba(132, 204, 132, 0.32);
-  --accent-sage-fg:     #a3d9a5;
+  /* Nav rail — a DISTINCT dark panel per the artifact's exact values:
+   * near-black #0d0e10 in DARK (neutral, never blue against the slate
+   * canvas), navy #1c2333 in LIGHT. The light block overrides bg/text/
+   * line; the active blue fills are shared. */
+  --nav-bg:          #0d0e10;
+  --nav-text:        #9ba1aa;
+  --nav-text-hi:     #edeef0;
+  --nav-line:        rgba(237, 241, 247, 0.08);
+  --nav-hover:       rgba(255, 255, 255, 0.06);
+  --nav-active-bg:   rgba(0, 144, 255, 0.16);
+  --nav-active-text: #8ec8ff;
 
-  --accent-amber-bg:    rgba(251, 191, 36, 0.12);
-  --accent-amber-ring:  rgba(251, 191, 36, 0.32);
-  --accent-amber-fg:    #fcd34d;
+  /* Semantic accents — aliased to Radix Colors so every chip/badge is
+   * legible in BOTH themes (task 401811b8; the old hand-tuned rgba/hex
+   * literals measured ~1.4:1 on white). Tone → radix scale mapping:
+   * teal→blue, sage/emerald→green, amber→amber, rose→red, violet→violet,
+   * slate→slate. Each role carries -bg (alpha step a3 fill), -ring
+   * (alpha step a7 border) and -fg (step 11 text — >=4.5:1 on an a3
+   * fill over --surface-1 in dark; the light block below lifts -fg to
+   * step 12, radix's high-contrast text step, to hold 4.5:1 on white). */
+  --accent-teal-bg:     var(--blue-a3);
+  --accent-teal-ring:   var(--blue-a7);
+  --accent-teal-fg:     var(--blue-11);
 
-  --accent-rose-bg:     rgba(244, 114, 182, 0.12);
-  --accent-rose-ring:   rgba(244, 114, 182, 0.32);
-  --accent-rose-fg:     #f9a8d4;
+  --accent-sage-bg:     var(--green-a3);
+  --accent-sage-ring:   var(--green-a7);
+  --accent-sage-fg:     var(--green-11);
 
-  --accent-violet-bg:   rgba(167, 139, 250, 0.12);
-  --accent-violet-ring: rgba(167, 139, 250, 0.32);
-  --accent-violet-fg:   #c4b5fd;
+  --accent-amber-bg:    var(--amber-a3);
+  --accent-amber-ring:  var(--amber-a7);
+  --accent-amber-fg:    var(--amber-11);
 
-  --accent-emerald-bg:  rgba(52, 211, 153, 0.14);
-  --accent-emerald-ring:rgba(52, 211, 153, 0.32);
-  --accent-emerald-fg:  #6ee7b7;
+  /* Amber/warn SOLID surfaces: bright step 9 always takes DARK text
+   * (light-on-amber is illegible in either theme). #4f3422 is radix
+   * light amber-12 — 7.2:1 on --amber-9 in both themes. */
+  --accent-amber-solid-bg: var(--amber-9);
+  --accent-amber-solid-fg: #4f3422;
 
-  --accent-slate-bg:    rgba(148, 163, 184, 0.10);
-  --accent-slate-ring:  rgba(148, 163, 184, 0.24);
-  --accent-slate-fg:    #cbd5e1;
+  --accent-rose-bg:     var(--red-a3);
+  --accent-rose-ring:   var(--red-a7);
+  --accent-rose-fg:     var(--red-11);
+
+  --accent-violet-bg:   var(--violet-a3);
+  --accent-violet-ring: var(--violet-a7);
+  --accent-violet-fg:   var(--violet-11);
+
+  --accent-emerald-bg:  var(--green-a4);
+  --accent-emerald-ring:var(--green-a8);
+  --accent-emerald-fg:  var(--green-11);
+
+  --accent-slate-bg:    var(--slate-a3);
+  --accent-slate-ring:  var(--slate-a7);
+  --accent-slate-fg:    var(--slate-11);
 
   /* Legibility override (2026-07-09): the Nous brand faces — 'Collapse'
    * (a display typeface) for sans and 'Courier Prime' for mono — are hard
@@ -107,7 +167,79 @@
   --theme-radius: 0.5rem;
   --theme-spacing-mul: 1;
   --theme-density: comfortable;
+
+  /* --et-*: categorical entity-type ramp for canvas/graph surfaces —
+   * DISTINCT from the semantic accents above. Equi-lightness OKLCH,
+   * L 0.72 on dark canvases (default; hex mirror = ET_HEX in
+   * lib/palette.ts and ET_COLORS in routes/graph_static.py — keep all
+   * three byte-aligned). The light block below drops to L 0.52. */
+  --et-task:    oklch(0.72 0.12 25);
+  --et-doc:     oklch(0.72 0.12 85);
+  --et-search:  oklch(0.72 0.12 145);
+  --et-session: oklch(0.72 0.12 205);
+  --et-code:    oklch(0.72 0.12 265);
+  --et-memory:  oklch(0.72 0.12 325);
+  /* test/gate: chip-only entity kinds (no canvas node yet, so no ET_HEX
+   * mirror). Hues 150/75 per the UI-direction-v2 artifact — test reads
+   * green (pass), gate reads gold (checkpoint). */
+  --et-test:    oklch(0.72 0.12 150);
+  --et-gate:    oklch(0.72 0.12 75);
 }
+
+/* Light theme — activated by <html class="light light-theme"
+ * data-theme="light"> (the same switch that flips the imported Radix
+ * scales). Accent text lifts to radix step 12 (high-contrast text) so
+ * every lozenge pair holds >=4.5:1 on white; the --et-* categorical
+ * ramp drops to L 0.52 for light canvases. */
+.light, .light-theme, :root[data-theme="light"] {
+  /* Radix slate (light) canvas — Foundation steps 1/2/3/5, text 12/11/10,
+   * borders 6/7/8; blue accent + navy nav rail (light-tuned). */
+  --background-base: #fcfcfd;
+  --background: color-mix(in srgb, #fcfcfd 100%, transparent);
+  --midground-base: #1c2024;
+  --midground: color-mix(in srgb, #1c2024 100%, transparent);
+  --surface-0: #fcfcfd;
+  --surface-1: #f9f9fb;
+  --surface-2: #f0f0f3;
+  --surface-3: #e0e1e6;
+  --text-primary:   #1c2024;
+  --text-secondary: #60646c;
+  --text-muted:     #8b8d98;
+  --text-label:     #8b8d98;
+  --text-disabled:  #b9bbc6;
+  --border-subtle:  #d9d9e0;
+  --border-default: #cdced6;
+  --border-strong:  #b9bbc6;
+  --accent:        #0d74ce;
+  --accent-solid:  #0090ff;
+  --accent-weak:   #e6f4fe;
+  --accent-border: #acd8fc;
+  /* Nav rail, light-tuned per the artifact: navy panel on the white
+   * canvas (dark theme keeps the neutral near-black from :root). */
+  --nav-bg:      #1c2333;
+  --nav-text:    #aab6c9;
+  --nav-text-hi: #e9eef6;
+  --nav-line:    rgba(237, 241, 247, 0.10);
+
+  --accent-teal-fg:    var(--blue-12);
+  --accent-sage-fg:    var(--green-12);
+  --accent-amber-fg:   var(--amber-12);
+  --accent-rose-fg:    var(--red-12);
+  --accent-violet-fg:  var(--violet-12);
+  --accent-emerald-fg: var(--green-12);
+  --accent-slate-fg:   var(--slate-12);
+
+  --et-task:    oklch(0.52 0.12 25);
+  --et-doc:     oklch(0.52 0.12 85);
+  --et-search:  oklch(0.52 0.12 145);
+  --et-session: oklch(0.52 0.12 205);
+  --et-code:    oklch(0.52 0.12 265);
+  --et-memory:  oklch(0.52 0.12 325);
+  --et-test:    oklch(0.52 0.12 150);
+  --et-gate:    oklch(0.52 0.12 75);
+  color-scheme: light;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
 
 html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 body {
@@ -119,6 +251,24 @@ body {
 }
 
 @theme inline { --spacing: calc(0.25rem * var(--theme-spacing-mul, 1)); }
+
+/* 5-step type scale (task 401811b8; re-valued to the UI-direction-v2
+ * Foundation ladder — 20 title / 15 section / 13.5 body / 12 meta /
+ * 11 label). The floor is text-2xs = 11px — NOTHING in the app renders
+ * below 11px; the old inline text-[9-10px] sizes were swept onto this
+ * scale. The whole ladder is authored here in one place:
+ *   text-2xs 11px  label   ·  text-xs 12px  meta
+ *   text-sm 13.5px body    ·  text-base 15px section
+ *   text-xl 20px  title (Tailwind default, uncustomized)
+ * text-lg stays 18px as the one intermediate between section and title. */
+@theme {
+  --text-2xs: 0.6875rem;            /* 11px — label, the app-wide floor */
+  --text-2xs--line-height: 1.3;
+  --text-xs: 0.75rem;               /* 12px — meta */
+  --text-sm: 0.84375rem;            /* 13.5px — body */
+  --text-base: 0.9375rem;           /* 15px — section */
+  --text-lg: 1.125rem;              /* 18px */
+}
 
 /* Reduced-motion reset (task a5e0d9f5). Belt-and-braces alongside the
    per-component useReducedMotion() guards: when the OS asks for reduced

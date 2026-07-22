@@ -752,3 +752,28 @@ class TaskService:
         finally:
             conn.close()
         return [dict(r) for r in rows]
+
+    def task_for_session(self, session_id: str) -> str:
+        """Reverse lookup on task_sessions: the most recently started task
+        this session is linked to, or '' when unlinked. Backs retrieval
+        attribution (who asked) — same mapping consolidation_data reads."""
+        if not session_id:
+            return ""
+        if not self._scores_db:
+            for task_id, links in self._session_links.items():
+                if session_id in links:
+                    return task_id
+            return ""
+        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
+        try:
+            self._ensure_task_sessions(conn)
+            row = conn.execute(
+                "SELECT task_id FROM task_sessions WHERE session_id=? "
+                "ORDER BY started_at DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            return row[0] if row else ""
+        except sqlite3.OperationalError:
+            return ""
+        finally:
+            conn.close()

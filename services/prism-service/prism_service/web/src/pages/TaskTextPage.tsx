@@ -17,6 +17,7 @@ type Task = {
   description?: string;
   workflow_step?: string;
   gate_state?: string;
+  proof_type?: string;
 };
 
 const SECTIONS: Record<string, { label: string; field: keyof Task }> = {
@@ -49,12 +50,12 @@ export default function TaskTextPage() {
     <Page>
       <button
         onClick={() => navigate(back)}
-        className="text-[11px] uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
+        className="text-2xs uppercase tracking-wider opacity-60 hover:opacity-100 self-start"
       >
         ← back to task
       </button>
       <div>
-        <h1 className="font-serif text-2xl tracking-tight">{meta?.label ?? "Detail"}</h1>
+        <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em]">{meta?.label ?? "Detail"}</h1>
         {task?.title && <div className="text-[12px] opacity-60 mt-1 truncate">{task.title}</div>}
       </div>
       <Card>
@@ -64,16 +65,19 @@ export default function TaskTextPage() {
           <Empty>Loading…</Empty>
         ) : !meta ? (
           <Empty>Unknown section.</Empty>
-        ) : text ? (
-          // The description is authored markdown → render structured blocks;
-          // gate validation / completion proof are receipt-style → EvidenceView.
-          section === "description" ? (
-            <Markdown text={text} />
-          ) : (
-            <EvidenceView text={text} />
-          )
+        ) : section === "description" ? (
+          // The description is authored markdown → render structured blocks.
+          text ? <Markdown text={text} /> : <Empty>Nothing recorded.</Empty>
         ) : (
-          <Empty>Nothing recorded.</Empty>
+          // Gate validation / completion proof are receipt-style →
+          // EvidenceView, threaded with the task id (task 25a25d84) so it
+          // ALWAYS renders the RECEIPT-captured evidence block (screenshot,
+          // video, verbatim assertion, provenance) underneath whatever prose
+          // exists — even when no prose was written, so a gate with a real
+          // receipt but no hand-typed proof text still shows what was
+          // actually captured, and one with neither reads honestly empty
+          // rather than looking like the page is broken.
+          <EvidenceView text={text ?? ""} taskId={id} project={project} proofType={task?.proof_type} />
         )}
       </Card>
     </Page>

@@ -41,8 +41,11 @@ def search(
     project: str = Query("default"),
     domain: str | None = Query(None),
     limit: int = Query(20, ge=1, le=200),
+    session_id: str | None = Query(None),
+    task_id: str | None = Query(None),
 ) -> dict:
-    results = _svc(project).search(q.strip(), domain=domain, limit=limit)
+    results = _svc(project).search(q.strip(), domain=domain, limit=limit,
+                                   session_id=session_id, task_id=task_id)
     return {"query": q, "domain": domain, "results": results}
 
 

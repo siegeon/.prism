@@ -66,6 +66,9 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # threading module, so threads started inside the indirectly-imported
     # services are also intercepted.
     started = [c for c in mock_t.return_value.start.mock_calls]
+    # Still 10 as of v7.0.32: the green-gate machine adjudicator sweep
+    # (task 1d3322a6, services/gate_adjudicator.py) ships OFF by default —
+    # its thread only starts when PRISM_GATE_ADJUDICATOR_INTERVAL opts in.
     assert len(started) == 10
 
 

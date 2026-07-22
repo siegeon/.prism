@@ -1488,6 +1488,13 @@ TOOLS: list[Tool] = [
                     "type": "string",
                     "description": "Project identifier (slug, e.g. 'my-app')",
                 },
+                "workspace_id": {
+                    "type": "string",
+                    "description": (
+                        "Owning workspace id; required when the caller "
+                        "administers multiple workspaces"
+                    ),
+                },
             },
             "required": ["project_id"],
         },
@@ -3257,11 +3264,19 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # Brain tools
         # ------------------------------------------------------------------
         if name == "brain_search":
+            # Attribute the retrieval to its asking session/task (961f273b):
+            # the REAL transcript session (never the phantom MCP handle) and
+            # that session's linked task, when either exists.
+            _ask_sid = _resolve_real_session_id() or None
+            _ask_tid = (task_svc.task_for_session(_ask_sid) or None) \
+                if _ask_sid else None
             results = brain_svc.search(
                 query=arguments["query"],
                 domain=arguments.get("domain"),
                 limit=arguments.get("limit", 5),
                 domains=arguments.get("domains"),
+                session_id=_ask_sid,
+                task_id=_ask_tid,
             )
             return [TextContent(type="text", text=_json(results))]
 
@@ -3887,10 +3902,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                                 text=_json(ctx.graph_annotate_svc.status()))]
 
         if name == "memory_recall":
+            # SESSION ATTRIBUTION (task fc258f15): stamp the REAL transcript
+            # session onto the recall_log rows — an explicit session_id arg
+            # wins; else the linked-session resolver (the same one
+            # conductor_work trusts). Never a fabricated per-request id.
+            _recall_sid = (str(arguments.get("session_id") or "").strip()
+                           or _resolve_link_session_id())
             results = memory_svc.recall(
                 query=arguments["query"],
                 domain=arguments.get("domain"),
                 limit=arguments.get("limit", 5),
+                session_id=_recall_sid,
             )
             return [TextContent(type="text", text=_json(results))]
 
@@ -4011,6 +4033,24 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
         # Task tools
         # ------------------------------------------------------------------
         if name == "task_create":
+            # Authoring-time oracle validation (task b78a193c): "the oracle
+            # like a compiler" — derive the OracleSpec from the would-be
+            # task fields BEFORE the row exists and reject the one hard,
+            # unrepairable-later contradiction (proof_type=test with an
+            # oracle but no runnable pytest ids in verify[]) instead of
+            # letting it surface lazily at green_gate.
+            from prism_service.services.oracle_authoring import validate_for_authoring
+            _spec_summary, _domain_errors = validate_for_authoring(
+                oracle=arguments.get("oracle", ""),
+                proof_type=arguments.get("proof_type", ""),
+                verify=arguments.get("verify"),
+                likely_misfire=arguments.get("likely_misfire", ""),
+            )
+            if _domain_errors:
+                return [TextContent(type="text", text=_json({
+                    "error": "oracle_validation_failed",
+                    "domain_errors": _domain_errors,
+                }))]
             task = task_svc.create(
                 title=arguments["title"],
                 description=arguments.get("description", ""),
@@ -4031,6 +4071,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 plan_doc=arguments.get("plan_doc", ""),
                 plan_diagram=arguments.get("plan_diagram", ""),
             )
+            if _spec_summary is not None:
+                _out = _serialise(task)
+                _out["oracle_spec"] = _spec_summary
+                return [TextContent(type="text", text=_json(_out))]
             return [TextContent(type="text", text=_json(task))]
 
         if name == "task_list":
@@ -4083,6 +4127,30 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
+            # Authoring-time oracle validation (task b78a193c): only when
+            # this update actually TOUCHES oracle/proof_type/verify (R7) —
+            # an update to an unrelated field on a task with a pre-existing
+            # stale/contradictory oracle shape is NOT retroactively
+            # rejected. Merges against the task's CURRENT values for any of
+            # the three fields this call does not itself touch.
+            _spec_summary = None
+            if any(k in arguments for k in ("oracle", "proof_type", "verify")):
+                from prism_service.services.oracle_authoring import validate_for_authoring
+                _existing = task_svc.get(arguments["id"])
+                if _existing is None:
+                    return [TextContent(type="text", text=_json({"error": f"Task {arguments['id']} not found"}))]
+                _spec_summary, _domain_errors = validate_for_authoring(
+                    oracle=arguments.get("oracle", getattr(_existing, "oracle", "")),
+                    proof_type=arguments.get("proof_type", getattr(_existing, "proof_type", "")),
+                    verify=arguments.get("verify", getattr(_existing, "verify", None)),
+                    likely_misfire=arguments.get(
+                        "likely_misfire", getattr(_existing, "likely_misfire", "")),
+                )
+                if _domain_errors:
+                    return [TextContent(type="text", text=_json({
+                        "error": "oracle_validation_failed",
+                        "domain_errors": _domain_errors,
+                    }))]
             # Conductor session gate (ef81fc15): flipping to in_progress
             # hands the task to the conductor — a sessionless tile is
             # frozen (no transcript, no tokens). AUTO-LINK the caller's
@@ -4142,6 +4210,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     except Exception:
                         pass  # best-effort — never break task updates
 
+            if _spec_summary is not None:
+                _out = _serialise(task)
+                _out["oracle_spec"] = _spec_summary
+                return [TextContent(type="text", text=_json(_out))]
             return [TextContent(type="text", text=_json(task))]
 
         if name == "task_link_session":
@@ -4352,12 +4424,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "note": "task had not entered the flow; started it"}))]
             if _proof and str(_proof).strip():
                 try:
-                    # draft_story's artifact IS the story — the story/plan
-                    # rubrics read task.plan_doc (conductor_service reads
-                    # story_md from plan_doc), so a story left only in
-                    # completion_proof auto-fails story_gate with
-                    # "story_md is empty". Route it to BOTH homes.
-                    if _cur["id"] == "draft_story":
+                    # draft_story's artifact IS the story and verify_plan's
+                    # IS the plan — the story/plan rubrics read
+                    # task.plan_doc (conductor_service reads story_md from
+                    # plan_doc), so an artifact left only in
+                    # completion_proof auto-fails its gate with
+                    # "story_md is empty" / empty plan. Route BOTH steps'
+                    # proofs to BOTH homes (verify_plan strand: 2 live
+                    # drives parked at plan_gate on 2026-07-16 because
+                    # only draft_story routed).
+                    if _cur["id"] in ("draft_story", "verify_plan"):
                         task_svc.update(_task_id, plan_doc=str(_proof),
                                         completion_proof=str(_proof))
                     else:

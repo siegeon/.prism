@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
 import Mermaid from "./Mermaid";
@@ -6,6 +7,7 @@ import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/co
 import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { stepLabel } from "@/lib/workflowChips";
+import { useTaskEvidence } from "@/components/EvidenceGallery";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -43,10 +45,15 @@ export type GateControls = {
 // One committed RED test that pins the task's oracle: its function name, its
 // docstring (whose lead "AC-N / FR-N —" correlates it to an acceptance
 // criterion), and the file it lives in. Sourced from GET /api/tasks/:id/tests.
+// `status` is the latest ACTUAL pytest outcome (?run=true) — absent when the
+// run couldn't happen.
 export type PinTest = {
   name: string;
   doc?: string;
   file?: string;
+  status?: string;
+  line?: number;
+  snippet?: string;
 };
 
 // Pull the leading acceptance-criterion id(s) out of a test's docstring.
@@ -72,6 +79,23 @@ function acOrder(t: PinTest): number {
   return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
 }
 
+// Pull the acceptance-criteria lines out of the proposed change (plan_doc) so
+// the Tests tab can show the oracle tied to the ACs it covers. A plan lists
+// them as bullet lines that name an AC id ("AC-1, AC-2 -> assertion_source_for
+// …"); we take those, stripped of markdown bullets, in document order.
+function parseAcLines(planDoc?: string): string[] {
+  if (!planDoc) return [];
+  const out: string[] = [];
+  for (const raw of planDoc.split("\n")) {
+    // Only the mapping lines — a bullet that STARTS with an AC id, e.g.
+    // "- AC-1, AC-2 -> assertion_source_for (...)". Prose that merely mentions
+    // "Covers AC-3" is not an AC definition and must not be swept in.
+    const line = raw.trim().replace(/^[-*+]\s*/, "").replace(/`/g, "").trim();
+    if (/^AC-\d/.test(line)) out.push(line);
+  }
+  return out;
+}
+
 // ── Gate evidence ("what you're approving") ─────────────────────────────
 // When a gate is PENDING a human is asked to approve/reject with NO visible
 // evidence of what led here. This surfaces that evidence straight from the
@@ -92,7 +116,7 @@ function advanceValidation(t: StepTurn): string {
 // recorded SINCE the last resolved gate (that's the work this gate reviews).
 // Falls back to the single most-recent advance validation if no prior gate
 // boundary exists. Each note is split into distinct, deduped, readable lines.
-function gateEvidenceLines(turns: StepTurn[]): string[] {
+export function gateEvidenceLines(turns: StepTurn[]): string[] {
   const rows = turns ?? [];
   let start = 0;
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -135,7 +159,7 @@ function GateEvidence({ step, turns }: { step?: string; turns: StepTurn[] }) {
       <div className="flex items-center gap-2 mb-2">
         <span className="text-[13px]" style={{ color: "var(--accent-amber-fg)" }}>⚖</span>
         <span
-          className="text-[11px] uppercase tracking-wider font-medium"
+          className="text-2xs uppercase tracking-wider font-medium"
           style={{ color: "var(--accent-amber-fg)" }}
         >
           What you're approving{label ? ` — ${label}` : ""}
@@ -175,7 +199,16 @@ export default function PlanView({
   gate,
   onValidation,
   pinTests,
+  gateReadiness,
+  onMintEvidence,
   tabRequest,
+  taskId,
+  project,
+  proofType,
+  oracle,
+  completionProof,
+  likelyMisfire,
+  fullOutcomeComplete,
 }: {
   diagram?: string;
   doc?: string;
@@ -186,9 +219,34 @@ export default function PlanView({
   onValidation?: () => void;
   // RED tests pinning this task, drilled from the parent (avoids a 2nd fetch).
   pinTests?: PinTest[];
+  // LIVE evidence-tooth state (GET /api/conductor/gate/readiness) — the gate
+  // card renders CURRENT truth + a concrete action, never a stale snapshot.
+  gateReadiness?: {
+    receipt_ok: boolean;
+    receipt_refusal?: string;
+    receipt?: { adapter?: string; passed?: boolean; status?: string; ended_at?: string; reason?: string };
+  } | null;
+  // Gate-card action: re-run the oracle inside the daemon and mint a fresh
+  // EvidenceReceipt (POST /api/conductor/gate/mint), then refresh readiness.
+  onMintEvidence?: () => void;
   // External tab drive: the oracle card's "view tests" summary bumps `n` to
   // switch this panel to the Tests tab. The nonce lets a repeat click re-fire.
   tabRequest?: { tab: string; n: number } | null;
+  // Task id + project — used to fetch the evidence store so a gate row can show
+  // the artifacts that passed it. Omitted → no evidence fetch.
+  taskId?: string;
+  project?: string;
+  // The task's proof_type (test / demo / ui / …) — tailors a gate's empty
+  // evidence message (a test-proof gate points at the Tests tab, not a photo).
+  proofType?: string;
+  // The task's oracle — the plain-language acceptance criterion. Shown with
+  // the tests in the Tests tab.
+  oracle?: string;
+  // Completion proof & risk — rendered in the gate's evidence area (not a
+  // separate overview card), so the proof lives with the pipeline.
+  completionProof?: string;
+  likelyMisfire?: string;
+  fullOutcomeComplete?: boolean;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
@@ -214,6 +272,17 @@ export default function PlanView({
     if (tabRequest?.tab) setActive(tabRequest.tab);
   }, [tabRequest?.n, tabRequest?.tab]);
 
+  // Tests tab: which pin is expanded to show its actual assertion source —
+  // a reviewer must be able to EVALUATE a pin, not just read its name.
+  const [openTest, setOpenTest] = useState<string | null>(null);
+
+  // The task's evidence store — handed to the rail so a gate row, when
+  // expanded, shows the VISUAL artifacts that passed it (screenshots/video).
+  const evidence = useTaskEvidence(taskId, project);
+  // Acceptance criteria parsed from the proposed change — shown with the
+  // oracle in the Tests tab, tying the oracle to what it must satisfy.
+  const acLines = parseAcLines(doc);
+
   if (tabs.length === 0) return <Empty>No plan yet.</Empty>;
   const cur = tabs.some((t) => t.key === active) ? active : tabs[0].key;
   const c = conductor;
@@ -226,7 +295,7 @@ export default function PlanView({
             key={t.key}
             onClick={() => setActive(t.key)}
             className={
-              "px-3 py-2 text-[11px] uppercase tracking-wider -mb-px border-b-2 transition-colors " +
+              "px-3 py-2 text-2xs uppercase tracking-wider -mb-px border-b-2 transition-colors " +
               (cur === t.key
                 ? "border-[color:var(--accent-teal-fg)] text-[color:var(--accent-teal-fg)]"
                 : "border-transparent text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)]")
@@ -240,7 +309,7 @@ export default function PlanView({
             href={prototypeSrc}
             target="_blank"
             rel="noreferrer"
-            className="ml-auto px-2 text-[11px] uppercase tracking-wider text-[color:var(--accent-teal-fg)] hover:opacity-80"
+            className="ml-auto px-2 text-2xs uppercase tracking-wider text-[color:var(--accent-teal-fg)] hover:opacity-80"
           >
             open full screen ↗
           </a>
@@ -268,23 +337,74 @@ export default function PlanView({
 
       {cur === "tests" && hasTests && (
         <div className="space-y-3">
+          {/* The oracle lives WITH the tests — the observable completion signal
+              and the acceptance criteria (from the proposed change) that the
+              tests below prove. Visual evidence is separate: it's at the gate
+              in the Implementation tab. */}
+          {(oracle || acLines.length > 0) && (
+            <div className="rounded-md px-3 py-2.5 leading-relaxed"
+              style={{ background: "var(--accent-teal-bg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}>
+              <div className="text-2xs uppercase tracking-wider mb-1 font-semibold" style={{ color: "var(--accent-teal-fg)" }}>
+                oracle — observable completion signal
+              </div>
+              {oracle && <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-primary)" }}>{oracle}</div>}
+              {acLines.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-2xs uppercase tracking-wider mb-1" style={{ color: "var(--accent-teal-fg)" }}>
+                    acceptance criteria · from the proposed change
+                  </div>
+                  <ul className="space-y-0.5">
+                    {acLines.map((l, i) => (
+                      <li key={i} className="text-[12px] leading-relaxed flex gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                        <span className="shrink-0" style={{ color: "var(--accent-teal-fg)" }}>›</span>
+                        <span>{l}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
-            The committed tests whose failure currently proves this task is{" "}
-            <span className="font-medium">not done</span> — each pins an
-            acceptance criterion. They turn green only when the outcome is met.
+            The committed tests that pin this task's acceptance criteria.
+            Badges show each test's <span className="font-medium">latest
+            actual run</span> — red while the outcome is unmet, green once it
+            holds.
           </div>
           <ul className="space-y-3">
             {[...tests].sort((a, b) => acOrder(a) - acOrder(b)).map((t) => {
               const { badge, rest } = parseAc(t.doc);
+              // Honest per-test badge from the REAL run (api ?run=true).
+              // No status = the run couldn't happen: say "not run", never
+              // paint a phase-colored guess.
+              const st = (t.status || "").toLowerCase();
+              const chip = st === "passed"
+                ? { label: "✓ pass", fg: "var(--accent-sage-fg)", ring: "var(--accent-sage-ring)", title: "this test currently PASSES" }
+                : st === "failed" || st === "error"
+                  ? { label: "✗ red", fg: "var(--accent-rose-fg)", ring: "var(--accent-rose-ring)", title: "this test is currently RED" }
+                  : st === "skipped"
+                    ? { label: "skipped", fg: "var(--accent-amber-fg)", ring: "var(--accent-amber-ring)", title: "this test was skipped in the last run" }
+                    : { label: "not run", fg: "var(--text-muted)", ring: "var(--border-default)", title: "no recorded run for this test yet" };
+              const key = `${t.file}:${t.name}`;
+              const isOpen = openTest === key;
               return (
                 <li
-                  key={`${t.file}:${t.name}`}
+                  key={key}
                   className="rounded-md p-3 border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
                 >
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setOpenTest(isOpen ? null : key)}
+                    className="flex items-center gap-2 flex-wrap w-full text-left"
+                    aria-expanded={isOpen}
+                    title={isOpen ? "collapse" : "show what this test asserts"}
+                  >
+                    <span className="text-2xs w-3 shrink-0" style={{ color: "var(--text-muted)" }}>
+                      {isOpen ? "▾" : "▸"}
+                    </span>
                     {badge && (
                       <span
-                        className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
                         style={{
                           background: "var(--accent-violet-bg)",
                           color: "var(--accent-violet-fg)",
@@ -299,24 +419,33 @@ export default function PlanView({
                       {t.name}
                     </span>
                     <span
-                      className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                      style={{
-                        color: "var(--accent-rose-fg)",
-                        boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)",
-                      }}
-                      title="this test is currently RED"
+                      className="text-2xs uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                      style={{ color: chip.fg, boxShadow: `inset 0 0 0 1px ${chip.ring}` }}
+                      title={chip.title}
                     >
-                      ✗ red
+                      {chip.label}
                     </span>
-                  </div>
+                  </button>
                   {rest && (
-                    <div className="text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed mt-1.5">
+                    <div className="text-[12.5px] text-[color:var(--text-secondary)] leading-relaxed mt-1.5 pl-5">
                       {rest}
                     </div>
                   )}
+                  {isOpen && t.snippet && (
+                    <pre className="mt-2 ml-5 p-2.5 rounded text-[12px] font-mono leading-relaxed overflow-x-auto whitespace-pre bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] border border-[color:var(--border-subtle)]">
+                      {t.snippet}
+                    </pre>
+                  )}
                   {t.file && (
-                    <div className="text-[11px] font-mono text-[color:var(--text-muted)] mt-1.5 truncate">
-                      {t.file}
+                    <div className="text-2xs font-mono mt-1.5 pl-5 truncate">
+                      <Link
+                        to={`/artifact?focus=${encodeURIComponent(t.file)}`}
+                        className="underline decoration-dotted underline-offset-2 hover:opacity-80"
+                        style={{ color: "var(--text-muted)" }}
+                        title="open the full test file"
+                      >
+                        {t.file}{t.line ? ` · L${t.line}` : ""} →
+                      </Link>
                     </div>
                   )}
                 </li>
@@ -358,6 +487,9 @@ export default function PlanView({
             gates={c.timeline?.gates ?? []}
             turns={c.turns ?? []}
             reduced={reduced}
+            evidence={evidence}
+            proofType={proofType}
+            completion={{ proofType, proof: completionProof, misfire: likelyMisfire, fullOutcome: fullOutcomeComplete, taskId }}
           />
 
           {c.status === "done" && (c.gateState === "pending" || c.gateState === "failed") && (
@@ -373,7 +505,7 @@ export default function PlanView({
               onClick={onValidation}
               className="mt-3 flex items-center gap-1.5 text-left group"
             >
-              <span className="text-[11px] uppercase tracking-wider text-[color:var(--text-muted)]">
+              <span className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
                 {c.gateState === "failed" ? "failure reason" : "validation"}
               </span>
               <span className="text-[12px] leading-snug opacity-80 group-hover:opacity-100 truncate max-w-[520px]">{c.gateReason}</span>
@@ -386,47 +518,59 @@ export default function PlanView({
               {/* Show the evidence FIRST — what the reviewer is approving —
                   then the approve/reject control directly beneath it. */}
               <GateEvidence step={c.step} turns={c.turns ?? []} />
-              {tests.length > 0 && (
-                <div className="mt-4">
-                  <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--accent-rose-fg)" }}>
-                    {tests.length} failing test{tests.length > 1 ? "s" : ""} you're approving — each must go green to finish
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {[...tests].sort((a, b) => {
-                      const na = parseInt((parseAc(a.doc).badge || "").replace(/\D/g, "") || "999", 10);
-                      const nb = parseInt((parseAc(b.doc).badge || "").replace(/\D/g, "") || "999", 10);
-                      return na - nb;
-                    }).map((t) => {
-                      const { badge, rest } = parseAc(t.doc);
-                      return (
-                        <div key={`${t.file}:${t.name}`} className="rounded-md p-2.5 border border-[color:var(--border-default)] bg-[color:var(--surface-2)]">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {badge && (
-                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0" style={{ background: "var(--accent-violet-bg)", color: "var(--accent-violet-fg)" }}>{badge}</span>
-                            )}
-                            <span className="font-mono text-[12px] break-all bg-transparent text-[color:var(--text-primary)]">{t.name}</span>
-                            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}>✗ red</span>
-                          </div>
-                          <div className="text-[12px] leading-snug mt-1 text-[color:var(--text-secondary)]">{rest}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
               {c.gateState === "failed" && (
                 <div
                   className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
                   style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
                 >
-                  <span className="uppercase tracking-wider text-[11px] mr-2">gate failed</span>
+                  <span className="uppercase tracking-wider text-2xs mr-2">last decision · gate failed</span>
                   {c.gateReason || "no reason recorded"}
-                  <div className="opacity-80 mt-1">
-                    Fix the evidence, then Approve — the gate re-runs its machine check and releases on merit. Check override only to force past a failing check (audited).
+                  <div className="opacity-70 mt-1 text-[11.5px]">
+                    This is the stored snapshot from the LAST decision — the live evidence check below is current truth.
                   </div>
                 </div>
               )}
-              <div className="opacity-50 mb-2 mt-4 text-[11px] uppercase tracking-wider">
+              {gateReadiness && (
+                <div
+                  className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
+                  style={gateReadiness.receipt_ok
+                    ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
+                    : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+                >
+                  <span className="uppercase tracking-wider text-2xs mr-2">evidence check · live</span>
+                  {gateReadiness.receipt_ok ? (
+                    <>
+                      ✓ Oracle evidence receipt is FRESH and PASSING
+                      {gateReadiness.receipt?.adapter ? ` (${gateReadiness.receipt.adapter} — a real run, not a claim)` : ""}.
+                      <div className="opacity-90 mt-1">
+                        <b>Action:</b> type a reason and click Approve — the evidence tooth passes now.
+                        If the shell verifier still refuses (known engine defect 68e5c699), check override:
+                        that is the audited manual release, and your evidence is already on file.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      Oracle evidence is NOT ready: {gateReadiness.receipt_refusal || "no receipt on file"}
+                      <div className="opacity-90 mt-1 flex items-center gap-3 flex-wrap">
+                        <b>Action:</b>
+                        {onMintEvidence && (
+                          <button
+                            type="button"
+                            onClick={onMintEvidence}
+                            className="text-2xs uppercase tracking-wider px-2.5 py-1 rounded"
+                            style={{ background: "var(--accent-amber-fg)", color: "var(--accent-amber-bg)" }}
+                            title="run the oracle now, inside the daemon, and mint a fresh evidence receipt"
+                          >
+                            ↻ re-run oracle now
+                          </button>
+                        )}
+                        <span>then Approve — or check override to release on manual judgment (audited).</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              <div className="opacity-50 mb-2 mt-4 text-2xs uppercase tracking-wider">
                 {c.gateState === "failed" ? "Recover gate" : "Resolve gate"}
               </div>
               <textarea
@@ -446,7 +590,7 @@ export default function PlanView({
                   type="button"
                   disabled={gate.busy || !gate.reason.trim()}
                   onClick={() => gate.decide("approve")}
-                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)" }}
                   title={c.gateState === "failed" ? "re-runs the machine check on current evidence; override forces past a failing check" : undefined}
                 >
@@ -457,7 +601,7 @@ export default function PlanView({
                   type="button"
                   disabled={gate.busy || !gate.reason.trim()}
                   onClick={() => gate.decide("reject")}
-                  className="text-[11px] uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
+                  className="text-2xs uppercase tracking-wider px-3 py-1.5 rounded disabled:opacity-40"
                   style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)" }}
                 >
                   Reject
@@ -465,7 +609,7 @@ export default function PlanView({
                 )}
               </div>
               {!gate.reason.trim() && (
-                <div className="text-[11px] mt-1.5 text-[color:var(--text-muted)]">
+                <div className="text-2xs mt-1.5 text-[color:var(--text-muted)]">
                   type a reason above to enable the button{c.gateState === "failed" ? "" : "s"}
                 </div>
               )}

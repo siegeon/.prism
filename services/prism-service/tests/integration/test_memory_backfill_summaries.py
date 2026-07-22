@@ -175,51 +175,26 @@ def test_backfill_is_idempotent(svc, captured_bus, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# UI SEAM — MemoryPage.tsx renders real content, truthful KPI, backfill button
-# (page render is verified via the running deploy; here we pin that the source
-#  actually drops the placeholder + wires the button — mirrors the established
-#  source-structure asserts in test_task_session_association.py.)
+# UI SEAM — the MemoryPage.tsx source pins that used to live here were removed
+# with the page itself: it was a verified unrouted orphan (App.tsx redirects
+# /memory -> /understand) deleted by the ui-redesign epic's orphan sweep
+# (16777a76 ws6). The backfill SERVICE seams above remain the live contract;
+# the memory reading surface is the Understand wiki, which must stay free of
+# the fake "Summarizing…" placeholder this file originally banned.
 # ---------------------------------------------------------------------------
 
-def _memory_page_src() -> str:
-    return (_WEB_SRC / "pages" / "MemoryPage.tsx").read_text(encoding="utf-8")
+def test_memory_orphan_page_stays_deleted():
+    assert not (_WEB_SRC / "pages" / "MemoryPage.tsx").exists(), (
+        "MemoryPage.tsx was deleted as a verified unrouted orphan "
+        "(ui-redesign 16777a76); do not resurrect it — /memory redirects "
+        "to the Understand wiki"
+    )
 
 
-def test_memory_tile_drops_summarizing_placeholder():
-    src = _memory_page_src()
+def test_understand_surface_has_no_fake_summarizing_placeholder():
+    src = (_WEB_SRC / "pages" / "UnderstandPage.tsx").read_text(
+        encoding="utf-8")
     assert "Summarizing" not in src, (
-        "MemoryPage.tsx must NOT render the fake 'Summarizing…' progress "
-        "placeholder — show entry.description when summary is empty"
-    )
-
-
-def test_memory_tile_renders_description_fallback():
-    src = _memory_page_src()
-    # The tile face must fall back to the real content (entry.description)
-    # when summary is empty — pin the `summary || description` shape on the
-    # tile face, not just any occurrence of entry.description in the file.
-    assert ("entry.summary || entry.description" in src
-            or "summary || entry.description" in src), (
-        "MemoryPage.tsx tile must render entry.description as the real "
-        "content fallback when summary is empty (summary || description)"
-    )
-
-
-def test_memory_kpi_reframed_to_summaries_coverage():
-    src = _memory_page_src()
-    assert "Awaiting summary" not in src, (
-        "the misleading 'Awaiting summary' KPI must be reframed"
-    )
-    assert "Summaries" in src, (
-        "MemoryPage.tsx must show a truthful 'Summaries N/M' coverage KPI"
-    )
-
-
-def test_memory_page_wires_backfill_button():
-    src = _memory_page_src()
-    assert "Generate summaries" in src, (
-        "MemoryPage.tsx header must offer a 'Generate summaries (N)' button"
-    )
-    assert "backfill-summaries" in src, (
-        "the button must POST /api/memory/backfill-summaries"
+        "the memory reading surface must not render a fake 'Summarizing…' "
+        "progress placeholder"
     )

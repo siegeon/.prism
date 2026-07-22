@@ -43,11 +43,20 @@ def graph(project: str = Query("default")) -> dict:
 
 @router.get("/concept")
 def concept(project: str = Query("default"), path: str = Query(...)) -> dict:
-    """One projected OKF concept (frontmatter + body + links) by path."""
+    """One projected OKF concept (frontmatter + body + links + recalled_by)."""
     c = _host(project).get(path)
     if c is None:
         raise HTTPException(404, f"unknown concept: {path}")
     return c
+
+
+@router.get("/task_concepts")
+def task_concepts(project: str = Query("default"), task_id: str = Query(...)) -> dict:
+    """Concepts a task recalled — the Task detail 'Knowledge · Understand' rail.
+
+    Sourced from the memory recall_log (task_id -> entry_id), resolved to live
+    concepts. Empty list when the task recalled no surviving concept."""
+    return {"concepts": _host(project).task_concepts(task_id)}
 
 
 @router.get("/raw/{path:path}", response_class=PlainTextResponse)

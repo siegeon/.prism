@@ -99,15 +99,24 @@ def test_run_claude_returns_tuple(tmp_path):
 
 
 def test_invoke_parses_jsonl_events(tmp_path):
-    """parse_events=True must aggregate usage from stream-json output."""
+    """parse_events=True takes usage from the result event ONCE, not by summing
+    per-assistant-event snapshots (task 45e04fad). The two assistant events sum
+    to 12/8; the authoritative result event reports different totals + all four
+    fields + cost + model — usage must reflect the result event, not the sum."""
 
     def fake_run(cmd, cwd, env, stdout, **kwargs):
-        # Write a tiny JSONL transcript to the captured stdout file.
         stdout.write(
-            '{"type":"message","usage":{"input_tokens":10,"output_tokens":5}}\n'
+            '{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5}}}\n'
         )
         stdout.write(
-            '{"type":"message","message":{"usage":{"input_tokens":2,"output_tokens":3}}}\n'
+            '{"type":"assistant","message":{"usage":{"input_tokens":2,"output_tokens":3}}}\n'
+        )
+        stdout.write(
+            '{"type":"result","subtype":"success",'
+            '"usage":{"input_tokens":50,"output_tokens":9,'
+            '"cache_read_input_tokens":100,"cache_creation_input_tokens":20},'
+            '"total_cost_usd":0.0123,'
+            '"modelUsage":{"claude-haiku-4-5":{"costUSD":0.0123}}}\n'
         )
         stdout.flush()
         return _completed(exit_code=0)
@@ -117,8 +126,14 @@ def test_invoke_parses_jsonl_events(tmp_path):
             "hi", tmp_path, tmp_path, max_turns=1, parse_events=True,
         )
 
-    assert len(res.parsed_events) == 2
-    assert res.usage == {"input_tokens": 12, "output_tokens": 8}
+    assert len(res.parsed_events) == 3
+    # 50/9 (the result event) — NOT 12/8 (the cross-event sum).
+    assert res.usage["input_tokens"] == 50
+    assert res.usage["output_tokens"] == 9
+    assert res.usage["cache_read_input_tokens"] == 100
+    assert res.usage["cache_creation_input_tokens"] == 20
+    assert round(res.usage["cost_usd"], 4) == 0.0123
+    assert res.usage["model"] == "claude-haiku-4-5"
 
 
 def test_build_cmd_includes_required_flags():

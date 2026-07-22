@@ -16,6 +16,7 @@ so a producer can never clear its own gate.
 """
 from __future__ import annotations
 
+import subprocess
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -74,10 +75,25 @@ def _job(task) -> Optional[dict]:
         "role": role,
         "role_label": _ROLE.get(role, "-"),
         "gate_state": task.gate_state,
+        # task 8f48f9bb — surface WHY a pending gate parked directly on the job
+        # the driver loops on, so a driving agent self-diagnoses (e.g. "story_
+        # complete: no acceptance criteria with AC-<n> ids found") without a
+        # second fetch. Empty until the adjudicator sweep stamps it.
+        "gate_reason": getattr(task, "gate_reason", "") or "",
         "instructions": instructions,
         "doctrine": doctrine,
         "expected_proof": step.get("validation") or (
             "prior step's validation" if kind == "gate" else "n/a"),
+        # Worker contract (fb2846dc): the STRUCTURED allowed_files/verify/
+        # stop_if the task was given — a first-class job field the worker
+        # can read deterministically, not prose it is merely trusted to
+        # parse out of `instructions`. Always present (empty lists on a
+        # contract-less task) so callers never branch on key presence.
+        "contract": {
+            "allowed_files": list(getattr(task, "allowed_files", None) or []),
+            "verify": list(getattr(task, "verify", None) or []),
+            "stop_if": list(getattr(task, "stop_if", None) or []),
+        },
     }
 
 
@@ -97,6 +113,12 @@ class Ident(BaseModel):
     # artifact for red/green). override is an explicit, audited exception —
     # a genuine independent reviewer forcing a decision — never the default.
     override: bool = False
+    # Worker contract (fb2846dc): an audited escape hatch for the
+    # implement_tasks out-of-allowlist refusal below — names every offending
+    # path the worker knowingly touched outside allowed_files. Only consulted
+    # when a refusal would otherwise fire; recorded to task history, never a
+    # silent bypass.
+    acknowledged_out_of_contract: Optional[list[str]] = None
 
 
 # A worker's outcome only signals FAILURE when it is UNAMBIGUOUS — an
@@ -145,12 +167,54 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     if task is None or getattr(task, "gate_state", "") != "pending":
         return None
     step = ConductorService._step_by_id(task.workflow_step)
-    if step is None or step["type"] != "gate" \
-            or step["id"] not in _AUTOCLEAR_GATES:
+    if step is None or step["type"] != "gate":
+        return None
+    if step["id"] == "green_gate":
+        # MACHINE ADJUDICATOR SEAT (task 1d3322a6): the flow just minted at
+        # verify_green_state, so a fresh passing EvidenceReceipt can approve
+        # the gate in seconds. SHIPS OFF BY DEFAULT (owner 2026-07-15:
+        # human clicks stay the norm) — only environments that opted in via
+        # PRISM_GATE_ADJUDICATOR_INTERVAL adjudicate here.
+        from prism_service.services import gate_adjudicator
+        res = (svc.adjudicate_green_gate(task_id)
+               if gate_adjudicator.is_enabled() else None)
+        if res:
+            return res
+        # Parked for the HUMAN sign-off — write an actionable reason so the
+        # field itself says WHAT to do (was blank; owner 2026-07-19). The
+        # readiness card already carries the prompt; this makes the raw task
+        # consistent for a driver reading gate_reason.
+        try:
+            _t = svc._task_svc.get(task_id)
+            if _t and getattr(_t, "gate_state", "") == "pending" \
+                    and not (getattr(_t, "gate_reason", "") or "").strip():
+                svc._task_svc.update(task_id, gate_reason=(
+                    "awaiting your sign-off — the evidence is ready; review it "
+                    "and Approve (the single human decision for this ticket)"))
+        except Exception:
+            pass
+        return None
+    if step["id"] == "red_gate":
+        # Demo-proof tickets only (task 59ddfcbc) — same opt-in switch.
+        from prism_service.services import gate_adjudicator
+        if gate_adjudicator.is_enabled():
+            return svc.adjudicate_demo_red_gate(task_id)
+        return None
+    if step["id"] not in _AUTOCLEAR_GATES:
         return None
     check = svc._verify_gate(task, step["id"],
                              getattr(task, "proof_type", None))
     if check.get("verified") is not True:
+        # Park WITH the actionable reason NOW (owner 2026-07-19): a rubric gate
+        # must never sit pending with a BLANK gate_reason the driver can't act
+        # on. Previously the reason only appeared on the next ~20s adjudicator
+        # resweep, so the first poll saw 'pending' + '' and no signal.
+        _r = str(check.get("reason", "") or "")
+        if _r and _r != (getattr(task, "gate_reason", "") or ""):
+            try:
+                svc._task_svc.update(task_id, gate_reason=_r)
+            except Exception:
+                pass
         return None
     return svc.gate_decide(
         task_id, "approve",
@@ -200,6 +264,117 @@ def flow_workspace(task_id: str) -> dict:
     return {"workspace": ws}
 
 
+# ---------------------------------------------------------------------------
+# Worker-contract enforcement at the implement_tasks report (fb2846dc).
+# allowed_files/verify/stop_if (models/task.py) were stored + displayed but
+# never checked — a dev-step report could silently touch anything. This
+# closes that: a non-empty allowed_files is checked against the REAL
+# workspace diff at report time, refusing on an out-of-contract change
+# unless the worker explicitly acknowledges it (audited, not a hard wall —
+# other tasks' uncommitted work can share this tree).
+# ---------------------------------------------------------------------------
+
+def _contract_workspace_root(task_id: str) -> Optional[str]:
+    """The SAME per-task workspace-root resolution the oracle receipt's
+    tree_sha uses (oracle_spec.current_tree_sha / ConductorService.
+    _verify_gate) — never the daemon cwd."""
+    try:
+        ws = task_workspace.workspace_for(task_id)
+    except Exception:
+        return None
+    return (ws or {}).get("path") or None
+
+
+def _contract_changed_paths(workspace: str) -> list[str]:
+    """Changed + untracked file paths, name-only, relative to `workspace` —
+    one `git status --porcelain` pass covers staged, unstaged, AND
+    untracked. Never raises: a git failure yields an empty list (the caller
+    then sees no offenders, which is the same fail-open behavior an empty
+    allowed_files already has — this helper never invents a refusal)."""
+    try:
+        r = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=workspace, capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return []
+    if r.returncode != 0:
+        return []
+    paths: list[str] = []
+    for line in r.stdout.splitlines():
+        if not line:
+            continue
+        rest = line[3:] if len(line) > 3 else line.strip()
+        if " -> " in rest:  # rename: "old -> new"
+            rest = rest.split(" -> ", 1)[1]
+        rest = rest.strip()
+        if rest.startswith('"') and rest.endswith('"'):
+            rest = rest[1:-1]
+        if rest:
+            paths.append(rest)
+    return paths
+
+
+def _contract_norm(path: str) -> str:
+    return str(path or "").replace("\\", "/").strip("/")
+
+
+def _contract_violations(paths: list[str], allowed: list[str]) -> list[str]:
+    """Paths not covered by `allowed` — exact match OR a directory-prefix
+    match (an allowlisted directory covers everything under it)."""
+    allow_norm = [_contract_norm(a) for a in (allowed or [])
+                  if str(a or "").strip()]
+    offenders = []
+    for p in paths:
+        pn = _contract_norm(p)
+        covered = any(pn == a or pn.startswith(a + "/") for a in allow_norm)
+        if not covered:
+            offenders.append(p)
+    return offenders
+
+
+def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
+    """implement_tasks PASS-report guard. Returns a refusal dict to hand
+    straight back to the caller, or None to let the report proceed
+    (recording an audited acknowledgment first when one covers every
+    offender)."""
+    allowed = list(getattr(task, "allowed_files", None) or [])
+    if not allowed:
+        return None  # unconstrained — today's behavior, untouched (AC-4)
+    root = _contract_workspace_root(task.id)
+    if not root:
+        # stop_if: never fall back to the daemon cwd — a structural gap is
+        # refused distinctly from an allowlist breach.
+        return {"ok": False, "step": "implement_tasks", "advanced": False,
+                "reason": "worker-contract check could not resolve this "
+                          "task's workspace root server-side — refusing "
+                          "rather than falling back to the daemon cwd",
+                "next_job": _job(task)}
+    offenders = _contract_violations(_contract_changed_paths(root), allowed)
+    if not offenders:
+        return None
+    acked = {_contract_norm(p)
+             for p in (body.acknowledged_out_of_contract or [])}
+    offenders_norm = {_contract_norm(p) for p in offenders}
+    if acked and offenders_norm <= acked:
+        try:
+            svc._task_svc.record_history(
+                task.id, action="worker_contract_ack",
+                details=("acknowledged out-of-contract files: "
+                          + ", ".join(sorted(offenders))),
+                actor=body.session_id or "")
+        except Exception:
+            pass
+        return None
+    return {"ok": False, "step": "implement_tasks", "advanced": False,
+            "reason": ("worker contract violated: file(s) outside "
+                       "allowed_files changed — " + ", ".join(sorted(offenders))
+                       + ". Re-send the report with "
+                         "acknowledged_out_of_contract=[...] naming these "
+                         "paths for an audited exception."),
+            "offending_files": sorted(offenders),
+            "next_job": _job(task)}
+
+
 @router.post("/report")
 def flow_report(body: Ident, project: str = Query("default")) -> dict:
     """Record the worker's outcome and let the SERVER advance the flow —
@@ -244,8 +419,10 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
         # who produced any prior step of this task may not clear its gate.
         producers = []
         try:
+            from prism_service.services.conductor_service import MACHINE_SEATS
             producers = [s.get("session_id")
-                         for s in svc._task_svc.sessions_for_task(body.task_id)]
+                         for s in svc._task_svc.sessions_for_task(body.task_id)
+                         if s.get("session_id") not in MACHINE_SEATS]
         except Exception:
             producers = []
         if body.session_id in producers:
@@ -285,6 +462,13 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 "outcome is not step completion)",
                 "next_job": _job(task)}
     else:
+        # WORKER-CONTRACT ENFORCEMENT (fb2846dc): the implement_tasks PASS
+        # report only — never another agent step, never a gate — is checked
+        # against the task's own allowed_files (empty = unconstrained).
+        if step["id"] == "implement_tasks":
+            refusal = _contract_refusal(svc, task, body)
+            if refusal is not None:
+                return refusal
         # MINT GREEN EVIDENCE at verify_green (inverted-flow #5): a SUCCESS
         # report on the verify_green_state step runs the 3-lane honest signal
         # (oracle receipt + red->green continuity + baseline-diff regression)
@@ -298,6 +482,18 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 svc.mint_green_evidence(body.task_id,
                                         session_id=body.session_id,
                                         model=body.model)
+            except Exception:
+                pass
+        # MINT RED EVIDENCE at the red step (task a5e8d877): a SUCCESS report
+        # on write_failing_tests records the red-step commit and lets the
+        # trusted runner demonstrate the pinned tests FAILING there, so the
+        # red_gate that follows is machine-decidable on a receipt instead of
+        # stranding as 'evidence not on file'. Best-effort like the green
+        # mint: an error never blocks the advance.
+        if step["id"] == "write_failing_tests":
+            try:
+                svc.mint_red_evidence(body.task_id,
+                                      session_id=body.session_id)
             except Exception:
                 pass
         res = svc.advance_task(body.task_id, session_id=body.session_id,

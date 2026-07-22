@@ -129,6 +129,200 @@ def sum_usage(usage: dict | None) -> int:
     return sum(usage_components(usage).values())
 
 
+# v7.0.53 (task ff160371) — honest per-field, per-turn-model USD pricing.
+# sum_usage/usage_components above treat all four usage fields as equally
+# "tokens" — right for token-budget accounting, wrong for DOLLARS: a
+# cache_read token is ~0.1x the price of an input token, an output token is
+# ~5x an input token. PRICING prices each field at its OWN rate, sourced
+# from the claude-api skill's current per-model $/1M table (cached
+# 2026-06-24). Anthropic doesn't publish separate per-model cache sticker
+# prices — only the ratio (cache_read ~=0.1x input, cache_creation ~=1.25x
+# input at the default 5-minute ephemeral TTL) — so cache rates are derived
+# from that documented ratio, not invented.
+def _tier(input_per_mtok: float, output_per_mtok: float) -> dict[str, float]:
+    input_rate = input_per_mtok / 1_000_000
+    return {
+        "input_tokens": input_rate,
+        "output_tokens": output_per_mtok / 1_000_000,
+        "cache_read_input_tokens": input_rate * 0.1,
+        "cache_creation_input_tokens": input_rate * 1.25,
+    }
+
+
+PRICING: dict[str, dict[str, float]] = {
+    "claude-fable-5": _tier(10.00, 50.00),
+    "claude-mythos-5": _tier(10.00, 50.00),
+    "claude-opus-4-8": _tier(5.00, 25.00),
+    "claude-opus-4-8[1m]": _tier(5.00, 25.00),  # 1M-context id, same rate (no long-context premium)
+    "claude-opus-4-7": _tier(5.00, 25.00),
+    "claude-opus-4-6": _tier(5.00, 25.00),
+    "claude-sonnet-5": _tier(3.00, 15.00),      # standard sticker (2026-08-31 intro pricing not modeled)
+    "claude-sonnet-4-6": _tier(3.00, 15.00),
+    "claude-haiku-4-5": _tier(1.00, 5.00),
+    "claude-haiku-4-5-20251001": _tier(1.00, 5.00),
+}
+
+# Unrecognized model id (new release, dated snapshot, or a non-billing
+# pseudo-model like "<synthetic>"): priced at this clearly-labeled Opus-tier
+# default so the dollar figure isn't silently zero — but every turn priced
+# this way is also counted into `unpriced_tokens` (see live_spend_for_session)
+# so the UI can flag it. Never presented as a sourced rate by itself.
+PRICING_DEFAULT: dict[str, float] = _tier(5.00, 25.00)
+PRICING_DEFAULT_LABEL = "unpriced (default: Opus-tier rate)"
+
+
+def usd_cost(components: dict, model: str) -> float:
+    """Dollar cost of one turn's usage, priced PER FIELD at `model`'s own
+    rate — cache_read (~0.1x input) and output (~5x input) are NOT the same
+    price, so summing them at one flat rate would misrepresent cost. Falls
+    back to PRICING_DEFAULT for an unrecognized `model` (see that constant's
+    docstring for why this is never treated as ground truth by itself)."""
+    rates = PRICING.get(model, PRICING_DEFAULT)
+    return sum(
+        int(components.get(f) or 0) * rates.get(f, 0.0)
+        for f in USAGE_TOKEN_FIELDS
+    )
+
+
+def _empty_spend_section() -> dict:
+    return {
+        "tokens": 0,
+        "components": {f: 0 for f in USAGE_TOKEN_FIELDS},
+        "usd": 0.0,
+        "unpriced_tokens": 0,
+        "priced": True,
+    }
+
+
+# path -> (mtime, size, offset, section_dict). Same incremental discipline as
+# _TOKEN_CACHE (_sum_billable_tokens) — a growing transcript is re-priced
+# only from the last consumed byte offset; per-turn usd is additive so
+# incremental accumulation is exact, not an approximation.
+_SPEND_CACHE: dict[str, tuple[float, int, int, dict]] = {}
+
+
+def _spend_for_path(path: Path) -> dict:
+    """Per-file USD spend + 4-field token totals, priced PER TURN by that
+    turn's own message.model (a session can mix models mid-transcript)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return _empty_spend_section()
+    key = str(path)
+    cached = _SPEND_CACHE.get(key)
+    try:
+        lines, new_offset, mode = _read_new_lines(path, st, cached)
+    except OSError:
+        return cached[3] if cached else _empty_spend_section()
+    if mode == "hit":
+        return cached[3]  # type: ignore[index]
+    if mode == "grew" and cached:
+        section = {
+            "tokens": cached[3]["tokens"],
+            "components": dict(cached[3]["components"]),
+            "usd": cached[3]["usd"],
+            "unpriced_tokens": cached[3]["unpriced_tokens"],
+            "priced": cached[3]["priced"],
+        }
+    else:
+        section = _empty_spend_section()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        msg = evt.get("message") or {}
+        usage = msg.get("usage") or {}
+        if not usage:
+            continue
+        comps = usage_components(usage)
+        tok = sum(comps.values())
+        if tok <= 0:
+            continue
+        model = str(msg.get("model") or "")
+        section["usd"] += usd_cost(comps, model)
+        section["tokens"] += tok
+        for f in USAGE_TOKEN_FIELDS:
+            section["components"][f] += comps[f]
+        if model not in PRICING:
+            section["unpriced_tokens"] += tok
+            section["priced"] = False
+    _SPEND_CACHE[key] = (st.st_mtime, st.st_size, new_offset, section)
+    return section
+
+
+def _merge_spend_sections(sections: list[dict]) -> dict:
+    out = _empty_spend_section()
+    for s in sections:
+        out["tokens"] += s["tokens"]
+        out["usd"] += s["usd"]
+        out["unpriced_tokens"] += s["unpriced_tokens"]
+        out["priced"] = out["priced"] and s["priced"]
+        for f in USAGE_TOKEN_FIELDS:
+            out["components"][f] += s["components"][f]
+    return out
+
+
+def live_spend_for_session(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> dict:
+    """Honest dollar spend for `session_id`, split MAIN (the <sid>.jsonl
+    transcript) vs BACKGROUND (nested <sid>/**/*.jsonl workflow-subagent
+    transcripts — same split point as live_tokens_for_session, never folded
+    together). Each of "main"/"background"/"total" carries tokens/
+    components/usd/unpriced_tokens; top-level "priced" is False if ANY turn
+    anywhere used the unrecognized-model default rate (see PRICING_DEFAULT)."""
+    if not session_id:
+        return {
+            "main": _empty_spend_section(),
+            "background": _empty_spend_section(),
+            "total": _empty_spend_section(),
+            "priced": True,
+        }
+    main_paths: list[Path] = []
+    bg_paths: list[Path] = []
+    if override_dir and override_dir.strip():
+        d = Path(override_dir.strip())
+        if d.is_dir():
+            main = d / f"{session_id}.jsonl"
+            if main.is_file():
+                main_paths.append(main)
+            sess_dir = d / session_id
+            if sess_dir.is_dir():
+                bg_paths.extend(sorted(sess_dir.rglob("*.jsonl")))
+    elif project_path:
+        claude_home = claude_home or resolve_claude_home()
+        projects_dir = claude_home / "projects"
+        if projects_dir.is_dir():
+            seen: set[Path] = set()
+            for sub in projects_dir.iterdir():
+                if not sub.is_dir() or not slug_matches(sub.name, project_path):
+                    continue
+                main = sub / f"{session_id}.jsonl"
+                if main.is_file() and main not in seen:
+                    main_paths.append(main)
+                    seen.add(main)
+                sess_dir = sub / session_id
+                if sess_dir.is_dir():
+                    for f in sess_dir.rglob("*.jsonl"):
+                        if f not in seen:
+                            bg_paths.append(f)
+                            seen.add(f)
+    main_section = _merge_spend_sections([_spend_for_path(p) for p in main_paths])
+    bg_section = _merge_spend_sections([_spend_for_path(p) for p in bg_paths])
+    total_section = _merge_spend_sections([main_section, bg_section])
+    return {
+        "main": main_section,
+        "background": bg_section,
+        "total": total_section,
+        "priced": total_section["priced"],
+    }
+
+
 def is_machinery_turn(text: str) -> bool:
     """True when a turn is autonomous-loop MACHINERY (Stop-hook directive,
     loop-tick/ScheduleWakeup re-invocation, scheduler heartbeat), not genuine
@@ -395,6 +589,11 @@ def parse_session_metrics(path: Path) -> dict | None:
         "tokens_used": tokens_out,
         "files_read": len(files_read),
         "files_modified": len(files_modified),
+        # Carry the actual paths alongside the legacy counts — the counts stay
+        # ints so every existing session_outcomes consumer keeps working, while
+        # the path lists let the store/UI show WHICH files a session touched.
+        "files_read_paths": sorted(files_read),
+        "files_modified_paths": sorted(files_modified),
         "skills_invoked": len(skill_invocations),
         "skill_invocations": skill_invocations,
         "signals": {
@@ -473,18 +672,72 @@ def _parse_ts(s: str) -> float | None:
         return None
 
 
+def _ensure_session_path_columns(conn: sqlite3.Connection) -> None:
+    """ALTER-if-missing: add the JSON-array path columns to session_outcomes so
+    a store created by an older schema (or predating this slice) can still hold
+    the per-session file paths. Pre-existing rows keep loading — the columns
+    default NULL, which the readers treat as []. Idempotent + best-effort."""
+    try:
+        cols = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(session_outcomes)"
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return
+    for col in ("files_read_paths", "files_modified_paths"):
+        if col not in cols:
+            try:
+                conn.execute(
+                    f"ALTER TABLE session_outcomes ADD COLUMN {col} TEXT"
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+
+
+def _refresh_path_columns(conn: sqlite3.Connection, metrics: dict) -> int:
+    """Backfill the JSON path columns on an already-imported session row that
+    predates path persistence (both columns NULL). Pure column fill — no
+    skill_usage rows, no reflection enqueue; those fired on first import.
+    Returns 1 when a row was updated."""
+    try:
+        cur = conn.execute(
+            "UPDATE session_outcomes SET files_read_paths=?, "
+            "files_modified_paths=? WHERE session_id=? "
+            "AND files_read_paths IS NULL AND files_modified_paths IS NULL",
+            (
+                json.dumps(metrics.get("files_read_paths") or []),
+                json.dumps(metrics.get("files_modified_paths") or []),
+                metrics["session_id"],
+            ),
+        )
+        if cur.rowcount > 0:
+            conn.commit()
+            return 1
+    except sqlite3.Error:
+        pass
+    return 0
+
+
 def import_unseen(
     scores_db: str,
     project_source_path: str,
     claude_home: Path | None = None,
     override_dir: str | None = None,
+    refresh_paths: bool = False,
 ) -> int:
     """Parse every transcript matching the project, insert any session
     whose id isn't already in `session_outcomes`. Returns the import count.
 
     v6.2.16 — when `override_dir` is set (the per-project claude_project_dir
     config), read transcripts directly from `<override_dir>/*.jsonl` instead
-    of slug-scanning ~/.claude/projects; used when auto-discovery misses."""
+    of slug-scanning ~/.claude/projects; used when auto-discovery misses.
+
+    v6.9.7 — `refresh_paths=True` additionally BACKFILLS the file-path
+    columns on already-imported rows that predate path persistence (both
+    columns NULL); refreshed rows count toward the return value."""
     claude_home = claude_home or resolve_claude_home()
     if override_dir and override_dir.strip():
         d = Path(override_dir.strip())
@@ -499,11 +752,14 @@ def import_unseen(
     except sqlite3.Error:
         return 0
     try:
+        _ensure_session_path_columns(conn)
         for path in paths:
             metrics = parse_session_metrics(path)
             if not metrics:
                 continue
             if _is_imported(conn, metrics["session_id"]):
+                if refresh_paths:
+                    n += _refresh_path_columns(conn, metrics)
                 continue
             # Use the file's mtime as recorded_at if possible — better
             # than the import moment for chronological ordering.
@@ -519,8 +775,9 @@ def import_unseen(
                 conn.execute(
                     "INSERT OR IGNORE INTO session_outcomes "
                     "(session_id, duration_s, tokens_used, files_read, "
-                    "files_modified, skills_invoked, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "files_modified, skills_invoked, timestamp, "
+                    "files_read_paths, files_modified_paths) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         metrics["session_id"],
                         metrics["duration_s"],
@@ -529,6 +786,8 @@ def import_unseen(
                         metrics["files_modified"],
                         metrics["skills_invoked"],
                         ts_iso,
+                        json.dumps(metrics.get("files_read_paths") or []),
+                        json.dumps(metrics.get("files_modified_paths") or []),
                     ),
                 )
                 if conn.total_changes > before:

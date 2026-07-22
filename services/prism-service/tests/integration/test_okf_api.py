@@ -121,7 +121,12 @@ def test_okf_concept_links_use_memory_id_and_understand_routes(client):
         for href in concept.get("links", []):
             if href.startswith("/"):
                 found_internal = True
-                assert href.startswith("/memory/") or href.startswith("/understand"), href
+                # Concept links land on a wiki route; file-evidence citations
+                # deep-link the artifact page since the traceability slice
+                # (961f273b): /artifact?focus=<path>, never a dead generic.
+                assert href.startswith("/memory/") \
+                    or href.startswith("/understand") \
+                    or href.startswith("/artifact?focus="), href
         if found_internal:
             break
     assert found_internal, "no concept body produced a navigable /memory or /understand link"

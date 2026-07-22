@@ -14,7 +14,25 @@
  *     "// COMMUNITY_COLORS — sourced from web/src/lib/palette.ts").
  */
 
-/** Saturated foreground hexes — match --accent-{tone}-fg. */
+/** ET_HEX — categorical entity-type ramp for canvas surfaces. Hex
+ * mirror of the DARK-canvas --et-* tokens in index.css (equi-L OKLCH,
+ * L 0.72 C 0.12, hues 25/85/145/205/265/325 = task/doc/search/session/
+ * code/memory; the light L 0.52 ramp lives only in CSS). MUST stay
+ * byte-identical with ET_COLORS in routes/graph_static.py — same
+ * hexes, same order (the known misfire is these two lists drifting). */
+export const ET_HEX = [
+  "#e6857e", // task    — oklch(0.72 0.12 25)
+  "#c79e41", // doc     — oklch(0.72 0.12 85)
+  "#72b875", // search  — oklch(0.72 0.12 145)
+  "#17bac8", // session — oklch(0.72 0.12 205)
+  "#80a3f0", // code    — oklch(0.72 0.12 265)
+  "#ca8ace", // memory  — oklch(0.72 0.12 325)
+] as const;
+
+/** Legacy saturated foreground hexes — the pre-radix dark-theme
+ * --accent-{tone}-fg values, retained verbatim because COMMUNITY_HEX
+ * (and its byte-aligned COMMUNITY_COLORS mirror in graph_static.py)
+ * derives from them. Entity-TYPE coloring uses ET_HEX above. */
 export const ACCENT_HEX = [
   "#5eead4", // teal
   "#a3d9a5", // sage
