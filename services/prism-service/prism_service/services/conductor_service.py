@@ -1942,12 +1942,16 @@ class ConductorService:
         # scratch worktree is stale BOTH agree, on the wrong tree, and the
         # gate closes on evidence that never saw this task's code. Refuse a
         # tree that does not even contain the task's own pinned tests.
-        if self._receipt_tree_missing_reason(task, receipt):
+        _tree_reason = self._receipt_tree_missing_reason(task, receipt)
+        if _tree_reason:
+            self._park_green_refusal(task_id, _tree_reason)
             return None
         # ...and the same question about the ADAPTER: 5a6837a0's receipt was an
         # http_probe on a task pinning pytest. A probe returning ok is not
         # evidence for a suite it never ran.
-        if self._receipt_adapter_mismatch_reason(task, receipt):
+        _adapter_reason = self._receipt_adapter_mismatch_reason(task, receipt)
+        if _adapter_reason:
+            self._park_green_refusal(task_id, _adapter_reason)
             return None
         _rsn = (
             "machine adjudication: fresh passing EvidenceReceipt "
@@ -2011,6 +2015,33 @@ class ConductorService:
                 f"contain this task's pinned test(s) {', '.join(missing)} — "
                 "it cannot have exercised this change; a distinct actor "
                 "must decide")
+
+    def _park_green_refusal(self, task_id: str, reason: str) -> None:
+        """RECORD a machine refusal instead of discarding it (task e0149f1f).
+
+        Both receipt teeth compute a precise, actionable one-liner and used to
+        `return None` on it — so the gate parked with an EMPTY gate_reason and
+        neither the owner nor the driving agent could tell WHY, which is the
+        exact 'pings a human at every gate' failure. Mirrors the ui-artifact
+        precedent: NOT a failure (a refused approve must never strand a ticket
+        into 'failed'), just pending WITH the reason, plus an audit row.
+
+        Re-sweeps every ~20s, so the history row is written only when the
+        reason CHANGES — otherwise the audit trail fills with duplicates."""
+        if self._task_svc is None:
+            return
+        try:
+            task = self._task_svc.get(task_id)
+            prior = str(_task_attr(task, "gate_reason", "") or "")
+            self._task_svc.update(task_id, gate_state="pending",
+                                  gate_reason=reason)
+            if prior.strip() != reason.strip():
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate=green_gate; action=approve; "
+                             f"machine=refused; reason={reason}"))
+        except Exception:
+            return
 
     def _receipt_adapter_mismatch_reason(self, task, receipt) -> Optional[str]:
         """Refuse a receipt whose ADAPTER cannot evidence what the task pins

@@ -151,3 +151,53 @@ def test_adjudicator_calls_BOTH_teeth_before_approving():
     src = inspect.getsource(ConductorService.adjudicate_green_gate)
     assert "_receipt_tree_missing_reason" in src
     assert "_receipt_adapter_mismatch_reason" in src
+
+
+# ---------------------------------------------------------------------
+# AC-6: the refusal must be RECORDED, not computed and thrown away. A gate
+# that parks with an empty gate_reason cannot be self-diagnosed by the
+# driver and pings a human at every gate.
+# ---------------------------------------------------------------------
+
+class _RecordingTaskSvc:
+    def __init__(self, gate_reason=""):
+        self.updates, self.history = [], []
+        self._task = SimpleNamespace(id="t1", gate_reason=gate_reason)
+
+    def get(self, _tid):
+        return self._task
+
+    def update(self, tid, **kw):
+        self.updates.append((tid, kw))
+
+    def record_history(self, tid, **kw):
+        self.history.append((tid, kw))
+
+
+def test_a_refusal_RECORDS_its_reason_and_stays_pending():
+    svc = _svc()
+    svc._task_svc = _RecordingTaskSvc()
+    svc._park_green_refusal("t1", "receipt measured at tree abc123, which "
+                                  "does NOT contain this task's pinned test")
+    assert svc._task_svc.updates, "the refusal reason must be RECORDED"
+    _tid, kw = svc._task_svc.updates[0]
+    assert kw["gate_state"] == "pending", "a refusal NEVER writes passed"
+    assert "abc123" in kw["gate_reason"]
+    assert svc._task_svc.history, "the refusal must leave an audit row"
+
+
+def test_an_unchanged_refusal_does_not_respam_history():
+    """The seat re-sweeps every 20s; the same reason must not append a
+    history row on every pass."""
+    reason = "receipt measured at tree abc123, which does NOT contain"
+    svc = _svc()
+    svc._task_svc = _RecordingTaskSvc(gate_reason=reason)
+    svc._park_green_refusal("t1", reason)
+    assert not svc._task_svc.history
+
+
+def test_adjudicator_records_the_refusal_for_both_teeth():
+    import inspect
+    src = inspect.getsource(ConductorService.adjudicate_green_gate)
+    assert src.count("_park_green_refusal") >= 2, \
+        "both the tree tooth and the adapter tooth must record their reason"

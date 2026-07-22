@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.28"
+PRISM_VERSION = "7.1.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.1.29: A MACHINE REFUSAL NOW SAYS WHY [task e0149f1f]. Both green-seat "
+    "receipt teeth computed a precise, actionable one-liner and then threw it "
+    "away on `return None`, so the gate parked with an EMPTY gate_reason and "
+    "neither the owner nor the driving agent could tell why - the exact "
+    "'pings a human at every gate' failure. A refusal now parks PENDING with "
+    "the reason recorded plus an audit row (never 'failed' - a refused "
+    "approve must not strand a ticket), and re-writes history only when the "
+    "reason CHANGES so the 20s re-sweep cannot spam the trail. "
     "v7.1.28: THE GREEN SEAT ALSO CHECKS THE ADAPTER, AND A TEST FILE IS "
     "ATTRIBUTED BY OWNERSHIP NOT BY MENTION [task e0149f1f, owner "
     "2026-07-21]. Completes v7.1.27. (1) 5a6837a0's closing receipt was "
