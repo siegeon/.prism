@@ -13,11 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.26"
+PRISM_VERSION = "7.1.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v7.1.26: THE GATE PANEL STOPS CONTRADICTING ITSELF ON EVIDENCE [task "
+    "v7.1.27: A GREEN GATE NO LONGER CLOSES ON ANOTHER TASK'S TREE [task "
+    "e0149f1f, owner 2026-07-21]. Task 5a6837a0 reached status=done on "
+    "'adapter=http_probe, tree=c162b66' - a commit belonging to task "
+    "89e90d1a - because its per-task scratch worktree was never advanced to "
+    "the lane's work. The receipt tooth compares the receipt's tree to the "
+    "WORKTREE's tree, so a stale worktree makes BOTH agree on the wrong "
+    "tree and the gate closes on evidence that never saw the code under "
+    "review; /api/tasks/<id>/tests even listed the OTHER task's suite. "
+    "v7.1.24 taught the gate CARD to distrust a stale receipt - the "
+    "DECIDING SEAT never learned it. adjudicate_green_gate now refuses any "
+    "receipt whose tree does not contain the task's own pinned tests "
+    "(paths EXTRACTED from task.verify, which is sometimes a whole "
+    "command), naming the tree and the missing file; an unresolvable tree "
+    "refuses too, since an unverifiable tree is exactly what must not "
+    "auto-close. Humans can still approve. Also: the SDLC tile, LiveBar "
+    "and Conductor tile stop calling an actively-driven task 'idle' - "
+    "'idle'/'stalled' are ALARM words reserved for when the owner really "
+    "must step in; `adrift` now reads 'driver active - between step "
+    "reports' through ONE shared label map (no raw enum on screen) and the "
+    "step execution clock runs instead of freezing mid-execution. "
+    "v7.1.26: THE GATE PANEL STOPS CONTRADICTING ITSELF ON EVIDENCE [task"
     "5a6837a0]. The panel rendered two independent receipt lookups side by "
     "side and neither named itself: the DECISION PACKET row is "
     "oracle_spec.latest_receipt() — newest receipt on the task, ANY gate, ANY "

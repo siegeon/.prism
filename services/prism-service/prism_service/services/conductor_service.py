@@ -1937,6 +1937,13 @@ class ConductorService:
                 task, override=False, reason="")
         if refusal or receipt is None:
             return None
+        # FALSE-GREEN TOOTH (task e0149f1f): the receipt tooth above matches
+        # the receipt's tree against the WORKTREE's tree — so when the
+        # scratch worktree is stale BOTH agree, on the wrong tree, and the
+        # gate closes on evidence that never saw this task's code. Refuse a
+        # tree that does not even contain the task's own pinned tests.
+        if self._receipt_tree_missing_reason(task, receipt):
+            return None
         _rsn = (
             "machine adjudication: fresh passing EvidenceReceipt "
             f"{getattr(receipt, 'job_id', '')} "
@@ -1948,6 +1955,57 @@ class ConductorService:
                                session_id=ADJUDICATOR_SEAT,
                                actor=ADJUDICATOR_SEAT, model="machine")
         return res if res and res.get("ok") else None
+
+    @staticmethod
+    def pinned_test_paths(task) -> list:
+        """Repo-relative .py test paths named by task.verify. Entries are
+        sometimes whole COMMANDS ("python -m pytest a.py b.py"), so paths
+        are EXTRACTED, never assumed to be the bare string."""
+        import re as _re
+        out: list = []
+        for v in (getattr(task, "verify", None) or []):
+            out += _re.findall(r"(\S+?/tests/\S+?\.py)",
+                               str(v).replace("\\", "/"))
+        return sorted(set(out))
+
+    def _receipt_tree_missing_reason(self, task, receipt) -> Optional[str]:
+        """Refuse a receipt measured on a tree that does not CONTAIN this
+        task's pinned tests (task e0149f1f, 2026-07-21). 5a6837a0 closed on
+        adapter=http_probe, tree=c162b66 — a commit belonging to a DIFFERENT
+        task — because its scratch worktree was never advanced to the lane's
+        work, so `git cat-file -e <tree>:<its own test file>` failed. v7.1.24
+        taught the gate CARD to distrust a stale receipt; the deciding seat
+        never learned it.
+
+        Returns a one-line reason to refuse on, or None when the tree is
+        sound. NOTHING pinned -> None: other teeth own that case. A tree we
+        cannot RESOLVE also refuses — an unverifiable tree is exactly what
+        must not auto-close; a human can still approve."""
+        paths = self.pinned_test_paths(task)
+        tree = str(getattr(receipt, "tree_sha", "") or "").strip()
+        if not paths or not tree:
+            return None
+        import subprocess
+        from prism_service.services import task_workspace
+        try:
+            ws = task_workspace.workspace_for(
+                getattr(task, "id", "") or "") or {}
+            cwd = ws.get("path") or self._project_source_path()
+            if not cwd:
+                return f"cannot resolve a checkout to verify tree {tree[:12]}"
+            missing = [
+                p for p in paths
+                if subprocess.run(["git", "cat-file", "-e", f"{tree}:{p}"],
+                                  cwd=cwd, capture_output=True).returncode != 0]
+        except Exception as exc:
+            return (f"could not verify receipt tree {tree[:12]} "
+                    f"({type(exc).__name__})")
+        if not missing:
+            return None
+        return (f"receipt measured at tree {tree[:12]}, which does NOT "
+                f"contain this task's pinned test(s) {', '.join(missing)} — "
+                "it cannot have exercised this change; a distinct actor "
+                "must decide")
 
     def _failed_gate_is_refused_approve(self, task_id: str,
                                         gate_step_id: str) -> bool:
