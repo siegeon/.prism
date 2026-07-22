@@ -73,6 +73,17 @@ export function parseAc(doc?: string): { badge: string | null; rest: string } {
 
 // Ascending numeric order of the AC/FR ids (AC-2 before AC-10); tests without
 // a parsed id sink to the end but keep a stable order.
+/** Heading for one part of the Design package (prototype / diagram /
+ *  proposed change). They are stacked in one tab, so each part still has
+ *  to name itself or the reviewer cannot tell where one ends. */
+function DesignPartLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-2 text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">
+      {children}
+    </div>
+  );
+}
+
 function acOrder(t: PinTest): number {
   const b = parseAc(t.doc).badge;
   const n = b ? parseInt(b.replace(/\D+/g, ""), 10) : NaN;
@@ -255,21 +266,28 @@ export default function PlanView({
   const tests = pinTests ?? [];
   const hasTests = tests.length > 0;
 
+  // DESIGN IS ONE PACKAGE, not three tabs (owner 2026-07-22). The prototype,
+  // the diagram and the proposed change are the same artifact seen three ways;
+  // splitting them made the reviewer hunt for the parts and let a design be
+  // "approved" having seen only whichever tab happened to be open.
+  const hasDesign = hasProto || hasDiagram || hasDoc;
+
   const tabs: { key: string; label: string }[] = [];
-  if (hasProto) tabs.push({ key: "prototype", label: "Prototype" });
-  if (hasDiagram) tabs.push({ key: "diagram", label: "Diagram" });
-  if (hasDoc) tabs.push({ key: "doc", label: "Proposed change" });
+  if (hasDesign) tabs.push({ key: "design", label: "Design" });
   if (hasImpl) tabs.push({ key: "implementation", label: "Implementation" });
   if (hasTests) tabs.push({ key: "tests", label: "Tests" });
 
   // Default to Implementation when the conductor is engaged (the live status),
   // else the first available artifact tab.
-  const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "doc");
+  const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "design");
 
   // Honor an external tab request (e.g. the oracle "N RED" summary click).
   // Keyed on the nonce so clicking again after a manual tab change re-fires.
   useEffect(() => {
-    if (tabRequest?.tab) setActive(tabRequest.tab);
+    if (!tabRequest?.tab) return;
+    // Callers still ask for the old split keys; they all land on Design now.
+    const req = tabRequest.tab;
+    setActive(["prototype", "diagram", "doc"].includes(req) ? "design" : req);
   }, [tabRequest?.n, tabRequest?.tab]);
 
   // Tests tab: which pin is expanded to show its actual assertion source —
@@ -304,7 +322,7 @@ export default function PlanView({
             {t.label}
           </button>
         ))}
-        {cur === "prototype" && (
+        {cur === "design" && hasProto && (
           <a
             href={prototypeSrc}
             target="_blank"
@@ -316,23 +334,36 @@ export default function PlanView({
         )}
       </div>
 
-      {cur === "prototype" && hasProto && (
-        <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
-          <iframe
-            title="prototype"
-            src={prototypeSrc}
-            className="w-full block"
-            style={{ height: "80vh", background: "var(--background-base)" }}
-          />
+      {cur === "design" && (
+        <div className="space-y-6">
+          {hasProto && (
+            <div>
+              <DesignPartLabel>Prototype</DesignPartLabel>
+              <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
+                <iframe
+                  title="prototype"
+                  src={prototypeSrc}
+                  className="w-full block"
+                  style={{ height: "80vh", background: "var(--background-base)" }}
+                />
+              </div>
+            </div>
+          )}
+          {hasDiagram && (
+            <div>
+              <DesignPartLabel>Diagram</DesignPartLabel>
+              <div className="rounded-lg p-4 bg-[color:var(--midground-base)]/5">
+                <Mermaid chart={diagram!} />
+              </div>
+            </div>
+          )}
+          {hasDoc && (
+            <div>
+              <DesignPartLabel>Proposed change</DesignPartLabel>
+              <Markdown text={doc!} className="space-y-4 max-w-none" />
+            </div>
+          )}
         </div>
-      )}
-      {cur === "diagram" && hasDiagram && (
-        <div className="rounded-lg p-4 bg-[color:var(--midground-base)]/5">
-          <Mermaid chart={diagram!} />
-        </div>
-      )}
-      {cur === "doc" && hasDoc && (
-        <Markdown text={doc!} className="space-y-4 max-w-none" />
       )}
 
       {cur === "tests" && hasTests && (

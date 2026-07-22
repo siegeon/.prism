@@ -32,7 +32,13 @@ PRISM_VERSION_NOTES = (
     "through a ~650px letterbox with its own inner scrollbar. Details "
     "duplicated the status and priority chips already under the title. The "
     "document column is now full width and the two rail cards sit beneath it "
-    "as a compact two-up row. "
+    "as a compact two-up row. (3) DESIGN IS ONE TAB, not three. Prototype, "
+    "Diagram and Proposed change were three sibling tabs, so a reviewer had "
+    "to hunt for the parts and a design could be 'approved' having seen only "
+    "whichever tab happened to be open. They are now stacked as one DESIGN "
+    "package, each part labelled, matching the owner's framing that a design "
+    "is a package like the evidence package. Callers still requesting the old "
+    "prototype/diagram/doc tab keys land on Design. "
 )
 PRISM_VERSION_NOTES += (
     "v7.1.29: A MACHINE REFUSAL NOW SAYS WHY [task e0149f1f]. Both green-seat "
