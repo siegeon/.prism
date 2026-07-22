@@ -120,10 +120,13 @@ export default function ConductorPage() {
         {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_work() to pull the next task and start the loop.</Empty>
         ) : (
-          // Up to 4 tiles per row, container-relative so it fills to 4 on a wide
-          // board and drops to 3/2/1 as width shrinks — independent of viewport/DPR
-          // (each column is at least a 4-across share, min 280px).
-          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(max(280px,calc((100%-3rem)/4)),1fr))]">
+          // WIDE, not portrait (owner 2026-07-22). The old rule packed up to 4
+          // tiles per row — minmax(max(280px, (100%-3rem)/4), 1fr) — so every
+          // tile was a ~280px portrait card whose 10-step timeline truncated to
+          // "Revie / Implem / Verify" and whose burn graph had no room. Tiles
+          // are now at least 560px and landscape: one full-width tile on a
+          // normal board, two side by side only when there is genuinely room.
+          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr))]">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
