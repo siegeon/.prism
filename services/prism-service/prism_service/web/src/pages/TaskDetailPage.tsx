@@ -1712,7 +1712,9 @@ export default function TaskDetailPage() {
           <PlanView
             diagram={task.plan_diagram}
             doc={task.plan_doc}
-            prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
+            prototypeSrc={task.has_prototype
+              ? `/api/tasks/${id}/prototype?project=${encodeURIComponent(project)}`
+              : undefined}
             reduced={reduced}
             pinTests={pinTests}
             gateReadiness={gateReadiness}
