@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.2.1"
+PRISM_VERSION = "7.3.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.3.0: CLAIM YOUR PRISM [task fa52ba9e, held unreleased]. The identity "
+    "release. When PRISM auto-updates from a credential-free build, the first "
+    "time you open it you claim the instance as yours (name + email, no setup "
+    "code, nothing to edit) and are handed your key. It is additive — your "
+    "tasks, memories, projects and history are untouched — and until you "
+    "claim, the app shows only the claim screen. The claim gate now renders in "
+    "the SPA (App.tsx), so an unclaimed instance actually surfaces it. Backing "
+    "it: a single-row `instance` table, AuthService.claim_instance / "
+    "is_claimed / claimed_owner, GET /api/auth/claim-status, POST "
+    "/api/auth/claim (409 on re-claim, no takeover). Server-side "
+    "no-anonymous-window enforcement and user management are the remaining "
+    "slices. "
+)
+PRISM_VERSION_NOTES += (
     "v7.2.1: ONBOARDING CLAIM, backend slice [task fa52ba9e, held unreleased]. "
     "The first piece of moving a credential-free instance into the keyed owned "
     "system (decision mx-935cc2/mx-30fc0c). When PRISM auto-updates to the "
