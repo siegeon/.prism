@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.3.1"
+PRISM_VERSION = "7.3.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.3.2: WHO YOU ARE, in the header [task fa52ba9e]. The app header now "
+    "shows an identity chip (avatar + name) reading GET /api/auth/me, so you "
+    "can see who you are signed in as. After you claim your instance it shows "
+    "your real name; hover for name + email. Held unreleased with the rest of "
+    "the identity train. "
+)
+PRISM_VERSION_NOTES += (
     "v7.3.1: PRIVATE MEMORY SCOPE, data-model slice [task e8059640, held "
     "unreleased]. Memory is the same structure whether shared or private; "
     "privacy is a scope on the entry. ExpertiseEntry gains owner_user_id: "
