@@ -117,6 +117,72 @@ class WorkspaceService:
         self._db_path = str(db_path)
         self._tlocal = threading.local()
         self._db.executescript(_SCHEMA_SQL)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Column adds the CREATE TABLE IF NOT EXISTS schema cannot apply to an
+        existing db (there is no migration runner — task e8059640/6cef97ec).
+        Idempotent: each ALTER is guarded by a pragma check.
+
+        `secret`: the owner reversed the shown-once model (decision mx-935cc2 /
+        mx-ba4111) — "we can store the key, and I can get it any time I am
+        logged in." So the key is recoverable. But a raw bearer must never
+        touch disk in the clear (test_team_tokens_are_hashed_at_rest), so the
+        column holds Fernet CIPHERTEXT, decrypted only in-process for the
+        signed-in owner. token_hash stays for the fast bearer lookup."""
+        cols = {
+            r["name"]
+            for r in self._db.execute("PRAGMA table_info(auth_tokens)")
+        }
+        if "secret" not in cols:
+            self._db.execute("ALTER TABLE auth_tokens ADD COLUMN secret TEXT NOT NULL DEFAULT ''")
+            self._db.commit()
+
+    @property
+    def _fernet(self):
+        """Per-instance key-encryption key, in a file beside the db (the data
+        dir), never the repo and never the db itself. Readable-at-rest is not
+        the same as plaintext-at-rest: the stored access-key secret is
+        encrypted with this, so a db dump or backup leaks ciphertext, not the
+        key."""
+        f = getattr(self, "_fernet_cache", None)
+        if f is not None:
+            return f
+        from cryptography.fernet import Fernet
+        key_path = Path(self._db_path).with_name(".token_key")
+        if key_path.exists():
+            key = key_path.read_bytes()
+        else:
+            key = Fernet.generate_key()
+            key_path.write_bytes(key)
+            try:
+                import os
+                os.chmod(key_path, 0o600)  # best-effort; a no-op on Windows
+            except OSError:
+                pass
+        f = Fernet(key)
+        self._fernet_cache = f
+        return f
+
+    def _encrypt_secret(self, secret: str) -> str:
+        if not secret:
+            return ""
+        return self._fernet.encrypt(secret.encode("utf-8")).decode("ascii")
+
+    def _decrypt_secret(self, stored: str) -> Optional[str]:
+        """Plaintext for a stored ciphertext, or None when it cannot be
+        decrypted (a pre-encryption plaintext row, or a foreign key) — the
+        caller then treats it as no readable key and mints a fresh one."""
+        if not stored:
+            return None
+        try:
+            from cryptography.fernet import InvalidToken
+            try:
+                return self._fernet.decrypt(stored.encode("ascii")).decode("utf-8")
+            except InvalidToken:
+                return None
+        except Exception:
+            return None
 
     @property
     def _db(self) -> sqlite3.Connection:
@@ -569,6 +635,7 @@ class WorkspaceService:
         user_id: str,
         token_hash: str,
         label: str = "",
+        secret: str = "",
     ) -> AuthToken:
         if self.get_user(user_id) is None:
             raise ValueError(f"unknown user: {user_id}")
@@ -577,12 +644,41 @@ class WorkspaceService:
             self._db.execute(
                 """
                 INSERT INTO auth_tokens
-                    (id, user_id, token_hash, label, created_at, revoked_at)
-                VALUES (?, ?, ?, ?, ?, '')
+                    (id, user_id, token_hash, label, created_at, revoked_at, secret)
+                VALUES (?, ?, ?, ?, ?, '', ?)
                 """,
-                (token_id, user_id, token_hash, label.strip(), created_at),
+                (token_id, user_id, token_hash, label.strip(), created_at,
+                 self._encrypt_secret(secret)),
             )
         return AuthToken(token_id, user_id, label.strip(), created_at, "")
+
+    def active_key_for_user(self, user_id: str) -> Optional[dict]:
+        """The user's current readable access key (task 6cef97ec) — the newest
+        non-revoked token whose stored secret DECRYPTS. Returns
+        {id, secret, label, created_at} or None. Served only to the
+        authenticated owner of the key, never listed cross-user. Rows whose
+        ciphertext cannot be decrypted (pre-encryption plaintext, foreign key)
+        are skipped so the caller mints a fresh, encrypted one."""
+        rows = self._db.execute(
+            """
+            SELECT id, secret, label, created_at
+            FROM auth_tokens
+            WHERE user_id = ? AND revoked_at = '' AND secret <> ''
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        for row in rows:
+            plain = self._decrypt_secret(row["secret"])
+            if plain is None:
+                continue
+            return {
+                "id": row["id"],
+                "secret": plain,
+                "label": row["label"],
+                "created_at": row["created_at"],
+            }
+        return None
 
     def user_for_token_hash(self, token_hash: str) -> Optional[User]:
         row = self._db.execute(

@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.1.31"
+PRISM_VERSION = "7.2.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.2.0: HOLD YOUR OWN ACCESS KEY [task 6cef97ec, owner 2026-07-22]. "
+    "First slice of the identity model (decision mx-935cc2): identity comes "
+    "from your native instance - you are already you, no login screen for the "
+    "owner - and the access key is the credential you hand to agents/MCP and "
+    "to anyone you invite, NOT how you log in. The key is now READABLE any "
+    "time you are signed in (reversing the shown-once model): Settings gains "
+    "an Access key section beside the real five, showing your key with copy, "
+    "the ready-to-paste `claude mcp add` snippet, and Rotate. Backed by "
+    "recoverable storage - auth_tokens gains a `secret` column via a "
+    "migration-safe add (the schema had no migration runner), persisted in "
+    "the data-dir workspace.db, never the repo. GET /api/auth/my-key mints on "
+    "first read then returns the same key; POST /api/auth/my-key/rotate mints "
+    "a replacement and revokes the prior. Follow-on slices: derived "
+    "single/multi-user mode, the joiner login, and server-side role "
+    "enforcement. A minor bump - this is a feature, not a patch. "
+)
+PRISM_VERSION_NOTES += (
     "v7.1.31: THE BOARD SHOWS ITS WORK, AND STOPS WORKING WHEN NOBODY IS "
     "WATCHING [owner 2026-07-22]. (1) The tok/s BURN GRAPH now renders on the "
     "conductor tile. TokenTurns was DEAD CODE - the component existed, the "

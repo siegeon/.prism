@@ -19,9 +19,13 @@ function isInTauri(): boolean {
   return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 }
 
-type SectionId = "projects" | "connections" | "activity" | "logs" | "service";
+type SectionId = "projects" | "connections" | "activity" | "logs" | "service" | "access-key";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
+  "access-key": {
+    title: "Access key",
+    description: "Your personal key. It is how agents and MCP reach this PRISM, and how you give someone access so they can join you. Readable whenever you are signed in — copy it, or rotate it if it is ever exposed.",
+  },
   projects: {
     title: "Projects",
     description: "Add, configure, sync, and delete tracked repos.",
@@ -44,7 +48,7 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "activity", "logs", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["access-key", "projects", "connections", "activity", "logs", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
   // Legacy URL aliases — keep bookmarked links and prior versions working.
@@ -166,6 +170,13 @@ export default function SettingsPage() {
       </div>
 
       {error && <ErrorBanner>{error}</ErrorBanner>}
+
+      {section === "access-key" && (
+        <Card>
+          <SectionLabel>Your access key</SectionLabel>
+          <AccessKeyPanel />
+        </Card>
+      )}
 
       {section === "projects" && (
         <Card>
@@ -595,6 +606,94 @@ function ClaudeSourceCard({ project }: { project: string }) {
         {saving ? "Saving…" : "Save source"}
       </button>
     </form>
+  );
+}
+
+type MyKey = { id: string; key: string; label: string; created_at: string; user_id: string };
+
+function AccessKeyPanel() {
+  const [key, setKey] = useState<MyKey | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
+  const load = useCallback(() => {
+    api.get<MyKey>("/api/auth/my-key")
+      .then((k) => { setKey(k); setErr(null); })
+      .catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const copy = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { /* clipboard blocked — the key is still visible to copy by hand */ }
+  };
+  const rotate = async () => {
+    setRotating(true);
+    try { const k = await api.post<MyKey>("/api/auth/my-key/rotate", {}); setKey(k); }
+    catch (e) { setErr(String(e)); }
+    finally { setRotating(false); }
+  };
+
+  if (err) return <ErrorBanner>{err}</ErrorBanner>;
+  if (!key) return <Empty>Loading your key…</Empty>;
+
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const mcpSnippet =
+    `claude mcp add --transport http prism "${origin}/mcp/?project=prism" ` +
+    `--header "Authorization: Bearer ${key.key}"`;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-[13px] text-[color:var(--text-secondary)]">
+        This is your personal key. Agents and MCP use it to reach this PRISM, and you give
+        it to someone so they can join you. It stays readable here whenever you are signed
+        in — copy it, or rotate it if it is ever exposed.
+      </p>
+
+      <div>
+        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">Access key</div>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 min-w-0 truncate rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[12.5px] text-[color:var(--accent-teal-fg)]">
+            {key.key}
+          </code>
+          <button
+            onClick={() => copy(key.key)}
+            className="shrink-0 rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">Connect a coding agent over MCP</div>
+        <div className="flex items-start gap-2">
+          <code className="flex-1 min-w-0 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap break-all">
+            {mcpSnippet}
+          </code>
+          <button
+            onClick={() => copy(mcpSnippet)}
+            className="shrink-0 rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+          >
+            Copy
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <button
+          onClick={rotate}
+          disabled={rotating}
+          className="rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-50"
+        >
+          {rotating ? "Rotating…" : "Rotate key"}
+        </button>
+        <span className="text-2xs text-[color:var(--text-muted)]">
+          Rotating mints a new key and stops the old one. Anything still using the old key must be updated.
+        </span>
+      </div>
+    </div>
   );
 }
 

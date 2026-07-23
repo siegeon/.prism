@@ -192,3 +192,36 @@ def create_token(
     issued = _auth().issue_token(principal.user_id, label=(body.label if body else ""))
     return {"id": issued.id, "token": issued.secret, "label": issued.label}
 
+
+@router.get("/my-key")
+def my_key(principal: Principal = Depends(current_principal)) -> dict:
+    """The caller's OWN access key, readable while logged in (task 6cef97ec,
+    decision mx-935cc2). Scoped to the authenticated principal — you can only
+    ever read your own. Mints one on first read so the owner always has a key
+    to hand to agents/MCP. This is the key, not the login: identity comes from
+    the instance; this is the credential you give out."""
+    principal = coerce_principal(principal)
+    key = _auth().my_access_key(principal.user_id)
+    return {
+        "id": key.get("id", ""),
+        "key": key.get("secret", ""),
+        "label": key.get("label", ""),
+        "created_at": key.get("created_at", ""),
+        "user_id": principal.user_id,
+    }
+
+
+@router.post("/my-key/rotate")
+def rotate_my_key(principal: Principal = Depends(current_principal)) -> dict:
+    """Mint a replacement key and revoke the prior one (owner: Rotate is the
+    recovery path). Only rotates the caller's own key."""
+    principal = coerce_principal(principal)
+    key = _auth().rotate_access_key(principal.user_id)
+    return {
+        "id": key.get("id", ""),
+        "key": key.get("secret", ""),
+        "label": key.get("label", ""),
+        "created_at": key.get("created_at", ""),
+        "user_id": principal.user_id,
+    }
+

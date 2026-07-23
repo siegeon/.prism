@@ -60,7 +60,11 @@ class AuthService:
         return resolved
 
     def issue_token(self, user_id: str, label: str = "") -> IssuedToken:
-        """Issue an opaque bearer token and persist only its SHA-256 digest."""
+        """Issue an opaque bearer token, persisting its digest AND the readable
+        secret. The owner reversed the shown-once model (mx-935cc2): the key is
+        readable whenever you are logged in, so the secret is stored in the
+        data dir (never the repo). The digest stays for the fast bearer lookup.
+        """
 
         token_id = str(uuid4())
         secret = secrets.token_urlsafe(32)
@@ -70,8 +74,55 @@ class AuthService:
             user_id=user_id,
             token_hash=token_hash,
             label=label,
+            secret=secret,
         )
         return IssuedToken(id=token_id, secret=secret, label=label.strip())
+
+    def ensure_local_owner(self) -> User:
+        """The single-user identity, persisted so it can own a key (task
+        6cef97ec). Local mode's principal was synthetic (not in `users`), so
+        it could not hold a token. Idempotent: created once, returned
+        thereafter. This is 'you are already you because it is your
+        instance' (mx-935cc2) made real."""
+        user = self._service.get_user(self.LOCAL_USER_ID)
+        if user is None:
+            user = self._service.create_user(
+                email=self.LOCAL_EMAIL,
+                display_name=self.LOCAL_DISPLAY_NAME,
+                user_id=self.LOCAL_USER_ID,
+            )
+        return user
+
+    def my_access_key(self, user_id: str) -> dict:
+        """The caller's readable access key (task 6cef97ec) — mint one on first
+        read so the owner always has a key to hand to agents/MCP. Returns
+        {secret, label, created_at, id}. Never lists another user's key."""
+        if user_id == self.LOCAL_USER_ID:
+            self.ensure_local_owner()
+        existing = self._service.active_key_for_user(user_id)
+        if existing is not None:
+            return existing
+        issued = self.issue_token(user_id, label="default")
+        minted = self._service.active_key_for_user(user_id)
+        # active_key_for_user re-reads the stored row; fall back to the issued
+        # secret if the read races (it will not in practice — same thread).
+        return minted or {
+            "id": issued.id, "secret": issued.secret,
+            "label": issued.label, "created_at": "",
+        }
+
+    def rotate_access_key(self, user_id: str) -> dict:
+        """Mint a replacement and revoke the prior key (owner: Rotate is the
+        recovery path). Returns the new readable key."""
+        prior = self._service.active_key_for_user(user_id)
+        issued = self.issue_token(user_id, label="default")
+        if prior is not None:
+            self._service.revoke_token(prior["id"], user_id=user_id)
+        minted = self._service.active_key_for_user(user_id)
+        return minted or {
+            "id": issued.id, "secret": issued.secret,
+            "label": issued.label, "created_at": "",
+        }
 
     @staticmethod
     def require_bootstrap_secret(supplied_secret: Optional[str]) -> None:
