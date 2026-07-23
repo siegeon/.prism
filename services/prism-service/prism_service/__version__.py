@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.3.0"
+PRISM_VERSION = "7.3.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.3.1: PRIVATE MEMORY SCOPE, data-model slice [task e8059640, held "
+    "unreleased]. Memory is the same structure whether shared or private; "
+    "privacy is a scope on the entry. ExpertiseEntry gains owner_user_id: "
+    "empty = SHARED project memory (the default, so every existing entry stays "
+    "shared and the change is purely additive on the JSONL store), set = "
+    "PRIVATE to that user. store(owner_user_id=...) stamps it; "
+    "recall(caller_user_id=...) returns shared + the caller's own private and "
+    "NEVER a peer's private, enforced in the service every read goes through "
+    "(not the UI). In the product the owner is inherited from the source "
+    "connection (a private connection like your email owns everything it "
+    "produces, mx-43606b). Owner-approved delta-only prototype. Remaining "
+    "slices: wire the real caller through MCP/API, role checks on shared "
+    "writes, the promote action, the UI. "
+)
+PRISM_VERSION_NOTES += (
     "v7.3.0: CLAIM YOUR PRISM [task fa52ba9e, held unreleased]. The identity "
     "release. When PRISM auto-updates from a credential-free build, the first "
     "time you open it you claim the instance as yours (name + email, no setup "

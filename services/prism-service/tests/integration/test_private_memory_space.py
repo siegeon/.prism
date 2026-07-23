@@ -45,8 +45,8 @@ def test_store_private_stamps_owner(mem):
 def test_recall_gives_shared_plus_own_private_not_peers(mem):
     """AC-2: A recalls shared + A's private; never B's private."""
     _store(mem, "shared-gate", "shared decision gate honesty receipt", owner="")
-    _store(mem, "a-private", "private note gate from user A email", owner="user-A")
-    _store(mem, "b-private", "private note gate from user B email", owner="user-B")
+    _store(mem, "a-private", "gate reminder about Acme vendor quote due Friday", owner="user-A")
+    _store(mem, "b-private", "gate note on Dana's contract renewal with legal", owner="user-B")
 
     got = mem.recall(query="gate", domain="architecture", limit=10,
                      caller_user_id="user-A")
@@ -62,8 +62,10 @@ def test_recall_gives_shared_plus_own_private_not_peers(mem):
 def test_old_entry_without_owner_field_is_shared(mem, tmp_path):
     """AC-1: additive. A pre-existing JSONL line with no owner_user_id loads as
     shared, so the migration never strands old memory."""
-    # write a legacy entry by hand, without the owner_user_id field
-    f = tmp_path / "architecture.jsonl"
+    # write a legacy entry by hand, without the owner_user_id field, into the
+    # real mulch layout (MemoryService stores under <dir>/expertise/).
+    f = tmp_path / "expertise" / "architecture.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps({
         "id": "mx-legacy", "type": "decision", "name": "legacy",
         "description": "an old memory from before scopes existed",
