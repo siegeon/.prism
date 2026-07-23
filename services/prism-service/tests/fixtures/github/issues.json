@@ -1,0 +1,33 @@
+[
+  {
+    "node_id": "I_kwDOAAA001",
+    "number": 1,
+    "title": "Crash on startup when config missing",
+    "body": "Steps to reproduce...",
+    "state": "open",
+    "html_url": "https://github.com/acme/app/issues/1",
+    "updated_at": "2026-07-01T10:00:00Z",
+    "assignees": [{"login": "octocat"}]
+  },
+  {
+    "node_id": "I_kwDOAAA002",
+    "number": 2,
+    "title": "Add dark mode",
+    "body": "",
+    "state": "closed",
+    "html_url": "https://github.com/acme/app/issues/2",
+    "updated_at": "2026-07-02T10:00:00Z",
+    "assignees": []
+  },
+  {
+    "node_id": "PR_kwDOAAA009",
+    "number": 9,
+    "title": "Fix the startup crash",
+    "body": "closes #1",
+    "state": "open",
+    "html_url": "https://github.com/acme/app/pull/9",
+    "updated_at": "2026-07-03T10:00:00Z",
+    "assignees": [],
+    "pull_request": {"url": "https://api.github.com/repos/acme/app/pulls/9"}
+  }
+]
