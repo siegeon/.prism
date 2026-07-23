@@ -170,6 +170,13 @@ def me(principal: Principal = Depends(current_principal)) -> dict:
     principal = coerce_principal(principal)
     service = get_workspace_service()
     user = service.get_user(principal.user_id) if principal.mode == "team" else None
+    # Once the instance is CLAIMED, the owner's real name/email is on file even
+    # in local mode (task fa52ba9e) — show it, not the synthetic "Local User".
+    if user is None:
+        owner = _auth().claimed_owner()
+        if owner is not None and (
+                principal.mode == "local" or principal.user_id == owner.id):
+            user = owner
     memberships = (
         service.list_memberships_for_user(principal.user_id)
         if principal.mode == "team"
