@@ -669,7 +669,7 @@ function AccessKeyPanel() {
       <div>
         <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">Connect a coding agent over MCP</div>
         <div className="flex items-start gap-2">
-          <code className="flex-1 min-w-0 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap break-all">
+          <code className="flex-1 min-w-0 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-all text-[color:var(--text-primary)]">
             {mcpSnippet}
           </code>
           <button
