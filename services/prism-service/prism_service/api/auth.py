@@ -126,6 +126,11 @@ class TokenBody(BaseModel):
     label: str = ""
 
 
+class ClaimBody(BaseModel):
+    name: str
+    email: str
+
+
 @router.get("/mode")
 def mode() -> dict:
     return {"mode": _auth().mode}
@@ -191,6 +196,35 @@ def create_token(
         raise HTTPException(409, "bearer tokens are only used in team mode")
     issued = _auth().issue_token(principal.user_id, label=(body.label if body else ""))
     return {"id": issued.id, "token": issued.secret, "label": issued.label}
+
+
+@router.get("/claim-status")
+def claim_status() -> dict:
+    """Whether the existing owner has claimed this instance yet (task
+    fa52ba9e). Public: the SPA reads this before anything else to decide
+    between the one-time claim screen and the normal app. An unclaimed
+    instance that just auto-updated shows the claim screen."""
+    return {"claimed": _auth().is_claimed()}
+
+
+@router.post("/claim")
+def claim(body: ClaimBody) -> dict:
+    """One-time claim of a credential-free instance by its existing owner
+    (name + email, no setup secret). Additive: records the owner and hands
+    them their key; never touches existing tasks or memory. 409 if already
+    claimed — a claimed instance can never be taken over."""
+    from prism_service.services.workspace_service import InstanceAlreadyClaimed
+    name = (body.name or "").strip()
+    email = (body.email or "").strip()
+    if not name or not email:
+        raise HTTPException(422, "name and email are required")
+    try:
+        key = _auth().claim_instance(name=name, email=email)
+    except InstanceAlreadyClaimed as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return key
 
 
 @router.get("/my-key")

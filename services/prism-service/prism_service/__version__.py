@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.2.0"
+PRISM_VERSION = "7.2.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.2.1: ONBOARDING CLAIM, backend slice [task fa52ba9e, held unreleased]. "
+    "The first piece of moving a credential-free instance into the keyed owned "
+    "system (decision mx-935cc2/mx-30fc0c). When PRISM auto-updates to the "
+    "identity build, the existing owner claims it once (name + email, no setup "
+    "secret, no db edit) and is handed their key. Additive only: a new single- "
+    "row `instance` table records the owner via CREATE TABLE IF NOT EXISTS, so "
+    "no existing task, memory or token is touched (proven by a count-identical "
+    "migration test written before the code). A claimed instance refuses "
+    "re-claim BEFORE mutating anything, so a second caller can never take it "
+    "over. New: AuthService.claim_instance/is_claimed/claimed_owner, GET "
+    "/api/auth/claim-status, POST /api/auth/claim. The no-anonymous-window "
+    "enforcement and the claim SCREEN are the next slices; user management is "
+    "a separate task (de86bb53). "
+)
+PRISM_VERSION_NOTES += (
     "v7.2.0: HOLD YOUR OWN ACCESS KEY [task 6cef97ec, owner 2026-07-22]. "
     "First slice of the identity model (decision mx-935cc2): identity comes "
     "from your native instance - you are already you, no login screen for the "

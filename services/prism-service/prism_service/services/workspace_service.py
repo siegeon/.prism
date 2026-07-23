@@ -34,6 +34,11 @@ class BootstrapAlreadyCompleted(RuntimeError):
     """Raised when a caller tries to create a second initial team owner."""
 
 
+class InstanceAlreadyClaimed(RuntimeError):
+    """Raised when a caller tries to claim an instance that already has an
+    owner (task fa52ba9e) — a claimed instance can never be taken over."""
+
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -75,6 +80,13 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     created_at TEXT NOT NULL,
     revoked_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS instance (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    owner_user_id TEXT NOT NULL,
+    claimed_at TEXT NOT NULL,
+    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_memberships_user
@@ -373,6 +385,23 @@ class WorkspaceService:
             raise ValueError("user id or email already exists") from exc
         return User(resolved_id, normalized_email, display_name.strip(), created_at)
 
+    def update_user(self, user_id: str, email: str = "",
+                    display_name: str = "") -> Optional[User]:
+        """Set a user's email/display name (task fa52ba9e: the claim names the
+        existing owner). Only non-empty fields are written, so a blank never
+        wipes an existing value. Additive: touches only this row."""
+        user = self.get_user(user_id)
+        if user is None:
+            return None
+        new_email = email.strip().lower() or user.email
+        new_name = display_name.strip() or user.display_name
+        with self._db:
+            self._db.execute(
+                "UPDATE users SET email = ?, display_name = ? WHERE id = ?",
+                (new_email, new_name, user_id),
+            )
+        return self.get_user(user_id)
+
     def get_user(self, user_id: str) -> Optional[User]:
         row = self._db.execute(
             "SELECT id, email, display_name, created_at FROM users WHERE id = ?",
@@ -651,6 +680,31 @@ class WorkspaceService:
                  self._encrypt_secret(secret)),
             )
         return AuthToken(token_id, user_id, label.strip(), created_at, "")
+
+    def instance_owner_id(self) -> Optional[str]:
+        """The user_id that has CLAIMED this instance, or None when unclaimed
+        (task fa52ba9e). A single-row table: an instance is owned by exactly
+        one person, established once at first-run claim."""
+        row = self._db.execute(
+            "SELECT owner_user_id FROM instance WHERE id = 1"
+        ).fetchone()
+        return row["owner_user_id"] if row is not None else None
+
+    def mark_instance_claimed(self, user_id: str) -> None:
+        """Record the owner. Refuses to overwrite an existing claim — a claimed
+        instance can never be re-claimed by a second caller (no takeover)."""
+        if self.get_user(user_id) is None:
+            raise ValueError(f"unknown user: {user_id}")
+        with self._db:
+            cur = self._db.execute(
+                "INSERT OR IGNORE INTO instance (id, owner_user_id, claimed_at) "
+                "VALUES (1, ?, ?)",
+                (user_id, _now()),
+            )
+            if cur.rowcount == 0:
+                raise InstanceAlreadyClaimed(
+                    "this instance already has an owner"
+                )
 
     def active_key_for_user(self, user_id: str) -> Optional[dict]:
         """The user's current readable access key (task 6cef97ec) — the newest

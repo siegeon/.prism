@@ -93,6 +93,50 @@ class AuthService:
             )
         return user
 
+    def is_claimed(self) -> bool:
+        """True once the existing owner has claimed this instance (task
+        fa52ba9e). A credential-free instance that just auto-updated to the
+        identity build starts UNCLAIMED — the owner claims it once."""
+        return self._service.instance_owner_id() is not None
+
+    def claimed_owner(self) -> Optional[User]:
+        owner_id = self._service.instance_owner_id()
+        return self._service.get_user(owner_id) if owner_id else None
+
+    def claim_instance(self, name: str, email: str) -> dict:
+        """One-time claim: the existing owner names themselves and is handed
+        their readable access key. No setup secret, no db edit (mx-935cc2 /
+        mx-30fc0c). Additive only — it records who the owner is and mints a
+        key; it never touches existing tasks or memory. Refuses if already
+        claimed, so a second caller can never take the instance over."""
+        # Refuse BEFORE touching anything — a second caller must never be able
+        # to rename the owner or mint a key on the way to being rejected.
+        if self.is_claimed():
+            from prism_service.services.workspace_service import (
+                InstanceAlreadyClaimed)
+            raise InstanceAlreadyClaimed("this instance already has an owner")
+        display = str(name or "").strip()
+        addr = str(email or "").strip()
+        if not display or not addr:
+            raise ValueError("name and email are required to claim")
+        # The single-user owner is the existing local principal — reuse its id
+        # so anything already attributed to the local owner stays theirs.
+        user = self._service.get_user(self.LOCAL_USER_ID)
+        if user is None:
+            self._service.create_user(
+                email=addr, display_name=display, user_id=self.LOCAL_USER_ID)
+        else:
+            self._service.update_user(
+                self.LOCAL_USER_ID, email=addr, display_name=display)
+        self._service.mark_instance_claimed(self.LOCAL_USER_ID)
+        key = self.my_access_key(self.LOCAL_USER_ID)
+        return {
+            "key": key.get("secret", ""),
+            "id": key.get("id", ""),
+            "label": key.get("label", ""),
+            "created_at": key.get("created_at", ""),
+        }
+
     def my_access_key(self, user_id: str) -> dict:
         """The caller's readable access key (task 6cef97ec) — mint one on first
         read so the owner always has a key to hand to agents/MCP. Returns
