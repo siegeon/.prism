@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Brain, Eye, FolderTree, Info,
-  Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
+  KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -82,6 +82,7 @@ const SETTINGS_SECTIONS: Section[] = [
   {
     label: "Settings",
     items: [
+      { to: "/settings/access-key", label: "Access key", icon: KeyRound },
       { to: "/settings/projects", label: "Projects", icon: FolderTree },
       { to: "/settings/connections", label: "Claude auth", icon: Plug },
       { to: "/settings/activity", label: "Background activity", icon: Activity },
