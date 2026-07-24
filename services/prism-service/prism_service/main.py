@@ -564,8 +564,14 @@ app.add_middleware(
 
 # JSON API for the SPA + non-API routes (SSE, graph viewer).
 from prism_service.api import api_router
+from prism_service.api.integration_webhooks import router as integration_webhooks_router
 from prism_service.routes import routes_router
 app.include_router(api_router)
+# Provider webhooks authenticate by signature, not a bearer, so they mount at a
+# top-level path OUTSIDE /api — the app-level enforce_team_boundary dependency
+# only guards /api|/sse|/graph, leaving signature auth to own these endpoints
+# (task c16cb8e3).
+app.include_router(integration_webhooks_router, prefix="/integrations/webhooks")
 app.include_router(routes_router)
 
 # FastAPI's lazy router inclusion (_IncludedRouter) keeps every include_router'd
