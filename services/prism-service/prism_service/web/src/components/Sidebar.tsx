@@ -57,7 +57,7 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Activity",
     items: [
-      { to: "/tasks", label: "Tasks", icon: ListChecks },
+      { to: "/tasks", label: "Work", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       { to: "/retrievals", label: "Retrievals", icon: Search },
     ],

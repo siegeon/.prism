@@ -5,7 +5,16 @@ import {
   ChevronDown, ChevronRight, ExternalLink, FolderTree, GitBranch,
   Github, Loader2, Plus, Search, X,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import {
+  api,
+  listWorkspaces,
+  listConnections,
+  listContainers,
+  pullContainer,
+  type IntegrationConnection,
+  type ExternalContainer,
+  type SyncRun,
+} from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import type { ScanJob } from "@/lib/scan-activity";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
@@ -225,6 +234,10 @@ export default function SettingsPage() {
           <Card>
             <SectionLabel>Claude source</SectionLabel>
             <ClaudeSourceCard project={active} />
+          </Card>
+          <Card>
+            <SectionLabel>Integrations</SectionLabel>
+            <IntegrationsCard project={active} />
           </Card>
         </div>
       )}
@@ -3306,5 +3319,103 @@ function ProjectEditor({
         />
       )}
     </form>
+  );
+}
+
+// Integration setup + manual sync (task ae31c2c0). Lists the workspace's
+// GitHub/Jira connections and their containers, triggers a manual pull, and
+// links the durable sanitized receipt the sync produced. Authorization and
+// receipts are the server's — this card only surfaces them.
+function IntegrationsCard({ project }: { project: string }) {
+  const [workspace, setWorkspace] = useState<string>("");
+  const [connections, setConnections] = useState<IntegrationConnection[]>([]);
+  const [containers, setContainers] = useState<ExternalContainer[]>([]);
+  const [lastRun, setLastRun] = useState<SyncRun | null>(null);
+  const [busy, setBusy] = useState<string>("");
+  const [err, setErr] = useState<string>("");
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const ws = await listWorkspaces();
+        if (cancel || !ws.length) return;
+        const wid = ws[0].id;
+        setWorkspace(wid);
+        setConnections(await listConnections(wid));
+        setContainers(await listContainers(wid));
+      } catch (e) {
+        if (!cancel) setErr(String((e as Error).message ?? e));
+      }
+    })();
+    return () => { cancel = true; };
+  }, []);
+
+  const sync = useCallback(async (containerId: string) => {
+    if (!workspace) return;
+    setBusy(containerId);
+    setErr("");
+    try {
+      const run = await pullContainer(workspace, containerId, project);
+      setLastRun(run);
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy("");
+    }
+  }, [workspace, project]);
+
+  if (!workspace) {
+    return <Empty>No team workspace yet — integrations appear once a workspace is created.</Empty>;
+  }
+  return (
+    <div className="space-y-3">
+      {err && <ErrorBanner>{err}</ErrorBanner>}
+      {connections.length === 0 ? (
+        <Empty>No GitHub or Jira connections configured for this workspace.</Empty>
+      ) : (
+        <ul className="text-sm space-y-1">
+          {connections.map((c) => (
+            <li key={c.id} className="flex items-center gap-2">
+              <span className="font-mono text-2xs uppercase px-1.5 py-0.5 rounded bg-[color:var(--surface-2)]">{c.provider}</span>
+              <span className="text-[color:var(--text-secondary)]">{c.display_name || c.remote_scope}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="space-y-1">
+        {containers.map((k) => (
+          <div key={k.id} className="flex items-center gap-2 text-sm">
+            <span className="text-[color:var(--text-secondary)]">{k.display_key || k.display_name || k.id}</span>
+            <button
+              type="button"
+              disabled={busy === k.id}
+              onClick={() => sync(k.id)}
+              className="ml-auto text-2xs font-semibold px-2 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+              style={{ color: "var(--accent-teal-fg)" }}
+            >
+              {busy === k.id ? "Syncing…" : "Sync"}
+            </button>
+          </div>
+        ))}
+      </div>
+      {lastRun && (
+        // The durable, sanitized sync receipt for the last manual pull.
+        <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
+          Last sync: {lastRun.status} · imported {lastRun.imported ?? 0}
+          {lastRun.id && (
+            <a
+              href={`/api/workspaces/${workspace}/integrations/receipts?run_id=${lastRun.id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 hover:underline"
+              style={{ color: "var(--accent-teal-fg)" }}
+            >
+              view receipt ↗
+            </a>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

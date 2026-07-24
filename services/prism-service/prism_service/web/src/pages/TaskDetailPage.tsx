@@ -26,6 +26,11 @@ type Task = {
   status?: string;
   priority?: number | string;
   tags?: string[];
+  // Set by the API for an imported external item whose linked provider context
+  // the viewer is not authorized to see — the UI shows a Restricted placeholder
+  // instead of the metadata, never inferring authorization client-side.
+  restricted?: boolean;
+  external_url?: string;
   assigned_agent?: string;
   description?: string;
   story_file?: string;
@@ -1304,6 +1309,21 @@ export default function TaskDetailPage() {
               <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
             ))}
           </div>
+          {(task.tags ?? []).includes("external") && (
+            <div data-external-context className="mt-1.5 text-2xs">
+              {task.restricted ? (
+                <span data-restricted className="italic" style={{ color: "var(--text-disabled)" }}>
+                  Restricted — you don't have access to this item's linked provider context.
+                </span>
+              ) : task.external_url ? (
+                <a href={task.external_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
+                  Open the linked provider item ↗
+                </a>
+              ) : (
+                <span style={{ color: "var(--text-muted)" }}>Imported external work.</span>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
           {transitions.map((target) => (
