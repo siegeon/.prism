@@ -589,7 +589,29 @@ _EVIDENCE_MEDIA = {
     ".webp": "image/webp",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
+    # TEXT EVIDENCE (task 939756eb). A test log, a diff, or a receipt IS
+    # evidence — before this the store took images/video only, so the only way
+    # to show a passing run was to render a terminal to a PNG (unreadable and
+    # unsearchable). Types are listed EXPLICITLY, never a catch-all, and every
+    # one is inert: `text/html` is deliberately absent because an
+    # attacker-supplied .html served same-origin from the evidence store would
+    # be stored XSS. Anything unmapped (.html, .exe, …) still 400s.
+    ".txt": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+    ".diff": "text/plain; charset=utf-8",
+    ".patch": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".json": "application/json",
 }
+
+
+def _evidence_kind(media: str) -> str:
+    """Which renderer the SPA should use for an artifact."""
+    if media.startswith("video/"):
+        return "video"
+    if media.startswith("image/"):
+        return "image"
+    return "text"
 
 
 @router.get("/{task_id}/evidence")
@@ -630,7 +652,7 @@ def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
                 f"?project={quote(project, safe='')}"
             ),
             "media_type": _EVIDENCE_MEDIA[ext],
-            "kind": "video" if _EVIDENCE_MEDIA[ext].startswith("video/") else "image",
+            "kind": _evidence_kind(_EVIDENCE_MEDIA[ext]),
             "size_bytes": st.st_size,
             "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
             "cited": p.name in cited,
