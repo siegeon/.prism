@@ -96,6 +96,44 @@ export async function listConnections(
   return d.connections ?? [];
 }
 
+// ── Connect front door (task dbbea1d3) ─────────────────────────────────
+// Connecting GitHub/Jira is OPTIONAL and works solo — no workspace, no admin
+// role. PRISM's own tasks are always the work of record (decision mx-639efa).
+
+export type ProviderStatus = { provider: string; configured: boolean };
+export type MyConnection = {
+  id: string;
+  provider?: string;
+  display_name?: string;
+  remote_scope?: string;
+};
+
+export async function listProviders(): Promise<ProviderStatus[]> {
+  const d = await api.get<{ providers: ProviderStatus[] }>(
+    "/api/integrations/connect/providers");
+  return d.providers ?? [];
+}
+
+export async function startConnect(provider: string): Promise<string> {
+  const d = await api.get<{ authorize_url: string }>(
+    `/api/integrations/connect/${provider}/start`);
+  return d.authorize_url;
+}
+
+export async function listMyConnections(): Promise<MyConnection[]> {
+  const d = await api.get<{ connections: MyConnection[] }>(
+    "/api/integrations/connect/connections");
+  return d.connections ?? [];
+}
+
+export async function addContainer(
+  connectionId: string,
+  body: { kind: string; remote_id: string; display_key?: string },
+): Promise<unknown> {
+  return api.post(
+    `/api/integrations/connect/connections/${connectionId}/containers`, body);
+}
+
 export type ExternalContainer = {
   id: string;
   connection_id?: string;

@@ -10,6 +10,12 @@ import {
   listWorkspaces,
   listConnections,
   listContainers,
+  listProviders,
+  startConnect,
+  listMyConnections,
+  addContainer,
+  type ProviderStatus,
+  type MyConnection,
   pullContainer,
   type IntegrationConnection,
   type ExternalContainer,
@@ -237,6 +243,7 @@ export default function SettingsPage() {
           </Card>
           <Card>
             <SectionLabel>Integrations</SectionLabel>
+            <ConnectProvidersCard />
             <IntegrationsCard project={active} />
           </Card>
         </div>
@@ -3415,6 +3422,114 @@ function IntegrationsCard({ project }: { project: string }) {
             </a>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// Connect GitHub / Jira (task dbbea1d3). These are OPTIONAL places to see work
+// — PRISM tracks your tasks either way (decision mx-639efa), so this card never
+// nags and an empty state is a perfectly fine end state. Works solo: no
+// workspace, no team, no admin role.
+function ConnectProvidersCard() {
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [mine, setMine] = useState<MyConnection[]>([]);
+  const [err, setErr] = useState<string>("");
+  const [picking, setPicking] = useState<string>("");
+  const [remoteId, setRemoteId] = useState<string>("");
+
+  const reload = useCallback(() => {
+    listProviders().then(setProviders).catch(() => setProviders([]));
+    listMyConnections().then(setMine).catch(() => setMine([]));
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  const connect = useCallback(async (provider: string) => {
+    setErr("");
+    try {
+      const url = await startConnect(provider);
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    }
+  }, []);
+
+  const track = useCallback(async (conn: MyConnection) => {
+    if (!remoteId.trim()) return;
+    setErr("");
+    try {
+      await addContainer(conn.id, {
+        kind: conn.provider === "jira" ? "jira_project" : "repository",
+        remote_id: remoteId.trim(),
+        display_key: remoteId.trim(),
+      });
+      setRemoteId("");
+      setPicking("");
+      reload();
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    }
+  }, [remoteId, reload]);
+
+  const label = (p: string) => (p === "github" ? "Connect GitHub" : "Connect Jira");
+
+  return (
+    <div className="space-y-3 mb-4">
+      <p className="text-2xs" style={{ color: "var(--text-muted)" }}>
+        Optional. PRISM tracks your work on its own; connect GitHub or Jira only
+        if you also want to see work that lives there.
+      </p>
+      {err && <ErrorBanner>{err}</ErrorBanner>}
+      <div className="flex flex-wrap gap-2">
+        {providers.map((p) => (
+          <button
+            key={p.provider}
+            type="button"
+            disabled={!p.configured}
+            onClick={() => connect(p.provider)}
+            title={p.configured ? "" : "Not configured on this instance yet"}
+            className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+            style={{ color: "var(--accent-teal-fg)" }}
+          >
+            {label(p.provider)}
+          </button>
+        ))}
+      </div>
+      {providers.some((p) => !p.configured) && (
+        <p className="text-2xs" style={{ color: "var(--text-disabled)" }}>
+          A greyed-out button needs its OAuth app registered first
+          (PRISM_JIRA_CLIENT_ID / PRISM_JIRA_CLIENT_SECRET, PRISM_GITHUB_APP_SLUG).
+        </p>
+      )}
+      {mine.length > 0 && (
+        <ul className="text-sm space-y-1">
+          {mine.map((c) => (
+            <li key={c.id} className="flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-2xs uppercase px-1.5 py-0.5 rounded bg-[color:var(--surface-2)]">{c.provider}</span>
+              <span style={{ color: "var(--text-secondary)" }}>{c.display_name || c.remote_scope}</span>
+              {picking === c.id ? (
+                <>
+                  <input
+                    value={remoteId}
+                    onChange={(e) => setRemoteId(e.target.value)}
+                    placeholder={c.provider === "jira" ? "Jira project key" : "owner/repo"}
+                    className="text-2xs px-2 py-1 rounded border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
+                    style={{ color: "var(--text-secondary)" }}
+                  />
+                  <button type="button" onClick={() => track(c)}
+                    className="text-2xs font-semibold px-2 py-0.5 rounded border border-[color:var(--border-default)]"
+                    style={{ color: "var(--accent-teal-fg)" }}>Track</button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setPicking(c.id)}
+                  className="ml-auto text-2xs font-semibold px-2 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
+                  style={{ color: "var(--accent-teal-fg)" }}>
+                  Choose what to track
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
