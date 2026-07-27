@@ -3373,7 +3373,9 @@ function IntegrationsCard({ project }: { project: string }) {
   }, [workspace, project]);
 
   if (!workspace) {
-    return <Empty>No team workspace yet — integrations appear once a workspace is created.</Empty>;
+    // NOT an error and NOT a prerequisite: providers are optional and connecting
+    // works solo (mx-639efa). Nothing to sync simply means nothing connected yet.
+    return <Empty>Nothing connected yet. Connect GitHub or Jira above to sync work from there.</Empty>;
   }
   return (
     <div className="space-y-3">
