@@ -199,6 +199,8 @@ export default function PlanView({
   gate,
   onValidation,
   pinTests,
+  onRunTests,
+  runningTests,
   gateReadiness,
   onMintEvidence,
   tabRequest,
@@ -219,6 +221,11 @@ export default function PlanView({
   onValidation?: () => void;
   // RED tests pinning this task, drilled from the parent (avoids a 2nd fetch).
   pinTests?: PinTest[];
+  // Run the pinned tests on demand (GET ...?run=true) and refresh the rows.
+  // Page load never runs them — that is what kept the page fast, and what left
+  // the badges blind until this action existed (task f3e8d477).
+  onRunTests?: () => void;
+  runningTests?: boolean;
   // LIVE evidence-tooth state (GET /api/conductor/gate/readiness) — the gate
   // card renders CURRENT truth + a concrete action, never a stale snapshot.
   gateReadiness?: {
@@ -405,11 +412,28 @@ export default function PlanView({
               )}
             </div>
           )}
-          <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
-            The committed tests that pin this task's acceptance criteria.
-            Badges show each test's <span className="font-medium">latest
-            actual run</span> — red while the outcome is unmet, green once it
-            holds.
+          <div className="flex items-start justify-between gap-3">
+            <div className="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
+              The committed tests that pin this task's acceptance criteria.
+              Badges show each test's <span className="font-medium">latest
+              actual run</span> — red while the outcome is unmet, green once it
+              holds.
+            </div>
+            {/* Explicit run (task f3e8d477). Page load stays cheap (run=false,
+                no pytest); this is how a driver or reviewer PRODUCES the
+                evidence on demand. The result is persisted, so the badge
+                survives a reload instead of resetting to NOT RUN. */}
+            {onRunTests && (
+              <button
+                type="button"
+                disabled={runningTests}
+                onClick={() => onRunTests()}
+                className="shrink-0 text-2xs font-semibold px-2.5 py-1 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                style={{ color: "var(--accent-teal-fg)" }}
+              >
+                {runningTests ? "Running…" : "Run tests"}
+              </button>
+            )}
           </div>
           <ul className="space-y-3">
             {[...tests].sort((a, b) => acOrder(a) - acOrder(b)).map((t) => {

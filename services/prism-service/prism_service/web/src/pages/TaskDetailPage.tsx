@@ -758,6 +758,10 @@ export default function TaskDetailPage() {
   // these the card states a number with no way to tell how old it is or what
   // it was measured against (owner 2026-07-21: "fake facts in prism").
   const [pinTestsAt, setPinTestsAt] = useState<string>("");
+  // Explicit, on-demand test run (task f3e8d477). Page load stays cheap; this
+  // is how a reviewer PRODUCES the evidence. The server persists the outcome,
+  // so the badge survives a reload instead of resetting to NOT RUN.
+  const [runningTests, setRunningTests] = useState(false);
   const [pinSource, setPinSource] = useState<{ source?: string; source_sha?: string }>({});
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
@@ -935,6 +939,25 @@ export default function TaskDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [id, task?.workflow_step, task?.status, pinTests]);
+
+  // Run the pinned tests ON DEMAND and refresh the rows. The server records
+  // the outcome (test_run_store), so the badges keep showing this run after a
+  // reload — the fix for a TESTS tab that could only ever say NOT RUN.
+  const runTests = useCallback(async () => {
+    setRunningTests(true);
+    try {
+      const tr = await api.get<{ tests: PinTest[]; receipt?: TestReceipt | null; source?: string; source_sha?: string }>(
+        `/api/tasks/${id}/tests?run=true&project=${project}`);
+      setPinTests(tr.tests ?? []);
+      setTestReceipt(tr.receipt ?? null);
+      setPinSource({ source: tr.source, source_sha: tr.source_sha });
+      setPinTestsAt(new Date().toLocaleTimeString());
+    } catch {
+      /* leave the discovery rows — statuses stay honestly not-run */
+    } finally {
+      setRunningTests(false);
+    }
+  }, [id, project]);
 
   // Navigating task → task (the route reuses this component) resets the tab
   // back to Overview and drops the previous task's trace so it re-fetches.
@@ -1737,6 +1760,8 @@ export default function TaskDetailPage() {
               : undefined}
             reduced={reduced}
             pinTests={pinTests}
+            runningTests={runningTests}
+            onRunTests={runTests}
             gateReadiness={gateReadiness}
             onMintEvidence={mintEvidence}
             tabRequest={tabRequest}

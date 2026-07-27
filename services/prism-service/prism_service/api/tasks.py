@@ -919,6 +919,22 @@ def get_task_tests(task_id: str, run: bool = Query(False),
             else str(checkout_root.parent.parent.parent))
     except Exception:
         _src_sha = ""
+    # PERSIST + HYDRATE (task f3e8d477). A run used to be computed and thrown
+    # away with the response, so the tab printed NOT RUN forever and the
+    # evidence package could never answer "did the tests run?". Now a real run
+    # is recorded against the tree it ran on, and EVERY read (including the
+    # cheap run=false page load, which still never spawns pytest) stamps each
+    # row from that record. A record from another tree is marked stale; a test
+    # with no record stays not-run.
+    try:
+        from prism_service.services import test_run_store as _trs
+        _store = _trs.get_test_run_store()
+        if ran:
+            _store.record_run(task_id, _src_sha, results)
+        results = _trs.hydrate(_store, task_id, results, _src_sha)
+    except Exception:
+        pass  # best-effort: never fail the tab over its own evidence store
+
     return {"tests": results, "ran": ran, "receipt": receipt_info,
             "source": ("workspace" if _use_ws else "checkout"),
             "source_sha": _src_sha}
