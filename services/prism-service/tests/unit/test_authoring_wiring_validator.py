@@ -129,9 +129,22 @@ def test_both_callers_forward_allowed_files():
         encoding="utf-8")
     mcp = (_SERVICE_ROOT / "prism_service" / "mcp" / "tools.py").read_text(
         encoding="utf-8")
-    for name, src in (("api/tasks.py", rest), ("mcp/tools.py", mcp)):
+    def _call_text(src: str) -> str:
+        """The ACTUAL call, delimited by paren balance — not a fixed window,
+        which a comment inside the call can push the argument out of."""
         i = src.index("validate_for_authoring(")
-        call = src[i:i + 400]
-        assert "allowed_files" in call, (
+        start = src.index("(", i)
+        depth = 0
+        for j in range(start, len(src)):
+            if src[j] == "(":
+                depth += 1
+            elif src[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    return src[start:j + 1]
+        raise AssertionError("unbalanced validate_for_authoring( call")
+
+    for name, src in (("api/tasks.py", rest), ("mcp/tools.py", mcp)):
+        assert "allowed_files" in _call_text(src), (
             f"{name} calls validate_for_authoring without passing "
             "allowed_files — that path still accepts unwired tasks")

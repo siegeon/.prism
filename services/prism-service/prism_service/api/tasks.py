@@ -170,6 +170,10 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     spec_summary, domain_errors = validate_for_authoring(
         oracle=body.oracle, proof_type=body.proof_type,
         verify=body.verify, likely_misfire=body.likely_misfire,
+        # allowed_files feeds the unwired-slice check (task 597839d9): a slice
+        # that creates a module nothing constructs is refused here, not
+        # discovered after the epic ships green and dead.
+        allowed_files=body.allowed_files,
     )
     if domain_errors:
         raise HTTPException(422, domain_errors[0])

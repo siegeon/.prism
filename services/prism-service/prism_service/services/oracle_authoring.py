@@ -16,15 +16,85 @@ must never import anything that requires editing that module.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
 from prism_service.services.oracle_spec import OracleSpec, _pytest_ids_from_task
 
 
+# Repo root: this file is <root>/services/prism-service/prism_service/services/
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _is_test_path(rel: str) -> bool:
+    r = rel.replace("\\", "/").lower()
+    return "/tests/" in r or r.startswith("tests/") or "/test_" in r
+
+
+def _unwired_reason(allowed_files: Optional[list]) -> str:
+    """A slice that introduces a NEW module while touching NO existing
+    production module is unwired — nothing will ever construct it.
+
+    This is the exact shape that let epic 0784729f ship five green slices
+    whose feature could not run: `register_adapter` had no production caller
+    because every test injected its own adapter (mx-8f4666).
+
+    Deliberately quiet for the legitimate shapes: an empty list, a tests-only
+    slice, or any slice that touches something already on disk. A validator
+    that refuses honest work gets routed around, which is worse than none.
+    """
+    files = [str(f).strip() for f in (allowed_files or []) if str(f).strip()]
+    prod = [f for f in files if not _is_test_path(f)]
+    if not prod:
+        return ""  # nothing to wire (empty list, or tests only)
+    existing = [f for f in prod if (_REPO_ROOT / f).exists()]
+    if existing:
+        return ""  # touches something real — a caller can be edited there
+    new_modules = [f for f in prod if f.endswith(".py") or f.endswith(".tsx")]
+    if not new_modules:
+        return ""
+    named = ", ".join(Path(f).name for f in new_modules[:3])
+    return (
+        f"unwired slice: {named} would be created but allowed_files names no "
+        "EXISTING production module, so nothing will construct it (this is how "
+        "an epic ships green slices whose feature cannot run). Add the wiring "
+        "file — the api module, main.py, project_context.py or whichever "
+        "module instantiates it — to allowed_files, or fold this into the "
+        "slice that does."
+    )
+
+
+# An oracle written only in test vocabulary describes a verify command, not an
+# outcome. It must ALSO name something a person can reach.
+_TEST_VOCAB = re.compile(
+    r"\b(focused tests|contract tests|unit tests?|integration tests?|"
+    r"tests? (prove|show|pin|assert|demonstrate)|test suite)\b", re.I)
+_SURFACE = re.compile(
+    r"(https?://|/api/|\b(page|screen|tab|view|button|dashboard|sidebar|"
+    r"settings|browser|ui)\b|\buser (opens|clicks|sees|visits|selects|runs)\b|"
+    r"\b(opens|clicks|sees|visits)\b|\bcli\b|\bcommand line\b|\$ )", re.I)
+
+
+def _oracle_surface_reason(oracle: str) -> str:
+    """Refuse an oracle that is satisfiable with every collaborator mocked."""
+    if not _TEST_VOCAB.search(oracle):
+        return ""      # not a test-vocabulary oracle at all
+    if _SURFACE.search(oracle):
+        return ""      # names tests AND a surface — the target shape
+    return (
+        "oracle names only tests, no user-reachable surface: an oracle that "
+        "passes with every collaborator mocked proves the slice, not the "
+        "outcome. Name what a person can reach — a URL, an /api path, the "
+        "screen or the command — alongside the tests."
+    )
+
+
 def validate_for_authoring(oracle: str = "", proof_type: str = "",
                            verify: Optional[list] = None,
-                           likely_misfire: str = "") -> tuple:
+                           likely_misfire: str = "",
+                           allowed_files: Optional[list] = None) -> tuple:
     """Authoring-time OracleSpec validation ("the oracle like a compiler").
 
     Derives the spec the same way ``from_task`` would at gate time, straight
@@ -48,10 +118,18 @@ def validate_for_authoring(oracle: str = "", proof_type: str = "",
     verify_l = list(verify or [])
     if not oracle_s:
         return None, []
+    # Authoring checks that stop the 0784729f shape being written down again
+    # (mx-8f4666): a slice nothing constructs, and an oracle that passes fully
+    # mocked. Both feed the SAME domain_errors the callers already treat as
+    # fatal, so no caller logic changes shape.
+    structural: list = []
+    for reason in (_unwired_reason(allowed_files), _oracle_surface_reason(oracle_s)):
+        if reason:
+            structural.append(reason)
     duck = SimpleNamespace(oracle=oracle_s, likely_misfire=likely_misfire or "",
                            proof_type=proof_type_l, verify=verify_l)
     spec = OracleSpec.from_task(duck)
-    domain_errors: list = []
+    domain_errors: list = list(structural)
     if proof_type_l == "test" and not _pytest_ids_from_task(duck):
         domain_errors.append(
             "proof_type=test but verify[] contains no runnable pytest node "
