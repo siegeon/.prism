@@ -131,3 +131,30 @@ def test_the_guard_reads_the_row_rendering():
     assert "TasksPage.tsx" in me and "<a " in me, (
         "a correct lookup table must not satisfy this suite while the row "
         "itself is unchanged")
+
+
+# ── Layout: the pill leads the line, long titles truncate ─────────────
+
+def test_the_provider_pill_is_the_first_thing_on_the_summary_line():
+    """Owner 2026-07-28: "i want the pill on the left hand side of the summary
+    line not the right"."""
+    body = _row_body()
+    cell = body[body.index('<td className="px-3 py-1.5">'):]
+    pill = cell.index("{mirror &&")
+    ident = cell.index("item.displayKey")
+    title = cell.index("item.title")
+    assert pill < ident < title, (
+        "the provider pill must lead the summary line, before the id and the "
+        f"title; got pill@{pill}, id@{ident}, title@{title}")
+
+
+def test_a_long_task_name_is_truncated():
+    """Owner: "some of the rows are two long we should truncate task names"."""
+    body = _row_body()
+    i = body.index("item.title")
+    opening = body.rindex("className=", 0, i)
+    cls = body[opening:i]
+    assert "truncate" in cls, "a long title must truncate rather than stretch the row"
+    assert "min-w-0" in cls, (
+        "truncate does nothing to a flex item that cannot shrink; the title "
+        "needs min-w-0 too, which is why the rows were still running long")

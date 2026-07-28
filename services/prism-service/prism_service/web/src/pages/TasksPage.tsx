@@ -322,6 +322,19 @@ function WorkRow({ item, focused, started, onStart }: {
     >
       <td className="px-3 py-1.5">
         <div className="flex items-center gap-2 min-w-0">
+          {mirror && (
+            <a
+              href={mirror.href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 text-2xs font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
+              style={{ color: "var(--accent-teal-fg)" }}
+              aria-label={`Open this task's ${mirror.label} issue`}
+            >
+              {mirror.label}
+            </a>
+          )}
           <span className="shrink-0 font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }}>
             {item.displayKey ?? shortId(item.id)}
           </span>
@@ -335,26 +348,13 @@ function WorkRow({ item, focused, started, onStart }: {
             <Link
               to={`/tasks/${item.id}`}
               state={{ from: "/tasks" }}
-              className="truncate font-medium hover:underline decoration-dotted underline-offset-2"
+              className="truncate min-w-0 font-medium hover:underline decoration-dotted underline-offset-2"
               style={{ color: "var(--text-primary)" }}
             >
               {item.title}
             </Link>
           ) : (
-            <span className="truncate font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</span>
-          )}
-          {mirror && (
-            <a
-              href={mirror.href}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="shrink-0 text-2xs font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
-              style={{ color: "var(--accent-teal-fg)" }}
-              aria-label={`Open this task's ${mirror.label} issue`}
-            >
-              {mirror.label}
-            </a>
+            <span className="truncate min-w-0 font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</span>
           )}
           {step && <Lozenge tone="info">{stepLabel(step)}</Lozenge>}
           {gTone && <Lozenge tone={gTone}>{`gate ${gate}`}</Lozenge>}
