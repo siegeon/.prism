@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.5.0"
+PRISM_VERSION = "7.5.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.5.1: SYNC IS A SWITCH YOU CONTROL [task 01118728]. Connecting a "
+    "provider proves the credential works and nothing more. Whether PRISM "
+    "syncs your work there is now an explicit switch, and it starts off, "
+    "including for a provider that is already connected. It is per provider, "
+    "so GitHub on and Jira off is fine, and turning it off never disconnects "
+    "you. The status badge moved to the top right of the connector card and "
+    "is now the button that opens its configuration. "
+)
+PRISM_VERSION_NOTES += (
     "v7.5.0: GITHUB CONNECTS WITH NO SETUP [task f4dd3687]. If the GitHub CLI "
     "is logged in on this machine, GitHub is simply connected, naming the "
     "account. No OAuth app to register, nothing to configure. Connected is "
