@@ -1,16 +1,20 @@
-"""RED scaffold — EVERY evidence renderer handles text (task 48ee8f05).
+"""Guard — NO evidence renderer can paint a broken tile (task 63d0086e).
 
-Task 939756eb made logs/diffs servable and taught EvidenceView to render them,
-but the GATE PANEL uses a different component: EvidenceGallery, whose item kind
-is only "image" | "video". The API's new kind "text" therefore falls through to
-an <img src=...txt>, painting a BROKEN IMAGE tile — which is exactly what the
-owner saw on task dbbea1d3.
+History this suite exists to end: a cited log rendered as a BROKEN IMAGE three
+separate times, because PRISM has three independent evidence renderers and each
+fix touched only the ones the author happened to know about.
 
-That miss happened because the previous slice pinned ONE renderer. This suite
-enumerates them ALL, so adding a third renderer without text support fails.
+  939756eb  fixed EvidenceView.
+  48ee8f05  fixed EvidenceGallery — and added a guard with a HAND-MAINTAINED
+            list of those two files, which is exactly why it stayed green while
+            TaskDetailPage's ProofShots kept imaging logs.
 
-The SPA has no JS test runner, so these ACs are pinned by asserting the ACTUAL
-TSX source (the convention used by every other *_ui.py test here).
+So the renderer set is now DISCOVERED from the source. There is no list to keep
+up to date and no ignore list: a false positive is fixed by making the detector
+more precise, never by suppressing a file.
+
+The SPA has no JS test runner, so these ACs are pinned against the ACTUAL TSX
+source (the convention used by every other *_ui.py test here).
 """
 
 from __future__ import annotations
@@ -26,88 +30,101 @@ _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
-_WEB = _SERVICE_ROOT / "prism_service" / "web" / "src"
-_GALLERY = _WEB / "components" / "EvidenceGallery.tsx"
-_VIEW = _WEB / "components" / "EvidenceView.tsx"
+_WEB_SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
 
-# Every component that renders task evidence. A new renderer belongs HERE, and
-# the guard below forces it to handle text before it can ship.
-EVIDENCE_RENDERERS = [_GALLERY, _VIEW]
+# An <img> whose src is bound to an EVIDENCE/PROOF url expression. Matched
+# structurally (the JSX), never by filename — a new component is caught the
+# moment it renders one of these.
+_EVIDENCE_IMG = re.compile(
+    r"<img\s[^>]*src=\{\s*(?:it|shown|f|item|ev|shot)?\.?"
+    r"(?:url|src)\s*\}", re.S)
+
+# Evidence of text handling: a text kind branch, a text-src predicate, or a
+# dedicated text component.
+_TEXT_HANDLING = re.compile(
+    r'===\s*"text"|kind\s*===\s*\'text\'|"text"\s*\?|isTextSrc|'
+    r'TextEvidence|TextArtifact|ProofText', re.S)
+
+
+def _tsx_files() -> list[Path]:
+    return sorted(p for p in _WEB_SRC.rglob("*.tsx") if p.is_file())
+
+
+def discover_evidence_renderers() -> list[Path]:
+    """Every .tsx that renders an evidence image. DERIVED, never listed."""
+    return [p for p in _tsx_files()
+            if _EVIDENCE_IMG.search(p.read_text(encoding="utf-8"))]
+
+
+DISCOVERED = discover_evidence_renderers()
 
 
 def _read(p: Path) -> str:
-    assert p.exists(), f"expected renderer missing: {p}"
     return p.read_text(encoding="utf-8")
 
 
-# ── AC-1: the gallery knows the text kind ──────────────────────────────
+# ── AC-5 / AC-6: discovery is real, and finds what we know is there ────
 
-def test_gallery_kind_admits_text():
-    """EVERY kind annotation must admit text — including the one that derives a
-    kind for files cited by the completion proof, which is the path that made a
-    cited .txt render as a broken image tile."""
-    src = _read(_GALLERY)
-    kinds = re.findall(r'kind\s*\??:\s*("(?:image|video)"(?:\s*\|\s*"\w+")*)', src)
-    assert len(kinds) >= 3, (
-        f"expected the item type, the api type AND the derived kind to be "
-        f"annotated; found {kinds}")
-    for union in kinds:
-        assert '"text"' in union, (
-            f'the kind union {union!r} must admit "text" — otherwise a log is '
-            "coerced down the image path and paints a broken tile")
+def test_the_guard_has_no_hardcoded_renderer_list():
+    """The hand-maintained list WAS the defect generator — it must not return."""
+    src = _read(_HERE)
+    # Anchored to a MODULE-LEVEL assignment so this assertion cannot match its
+    # own text (the naive substring check flagged itself).
+    assert not re.search(r"^[A-Z_]*RENDERERS\s*=\s*\[", src, re.M), (
+        "the renderer set must be discovered, not enumerated by hand")
+    assert "rglob" in src, "the guard must walk the source tree"
 
 
-# ── AC-2 / AC-3: text renders as text, in the tile AND the lightbox ────
-
-def test_gallery_has_a_text_branch():
-    src = _read(_GALLERY)
-    assert '=== "text"' in src or "=== 'text'" in src, (
-        "EvidenceGallery needs an explicit text branch")
-    assert "<pre" in src, (
-        "a text artifact must render as preformatted text, not an <img>")
-
-
-def test_text_is_not_routed_into_the_image_element():
-    """The bug: every non-video item fell through to <img src={it.url}>.
-
-    Anchored on the REAL JSX elements (not any '<img' substring, which also
-    appears in prose) so the assertion cannot be satisfied by a comment.
-    """
-    src = _read(_GALLERY)
-    tile_img = src.index("<img src={it.url}")
-    text_branch = src.index('it.kind === "text"')
-    assert text_branch < tile_img, (
-        "the tile's text branch must be evaluated BEFORE the <img> fallback")
-    box_img = src.index("<img src={shown.url}")
-    box_text = src.index('shown.kind === "text"')
-    assert box_text < box_img, (
-        "the lightbox's text branch must be evaluated BEFORE the image viewer")
+def test_discovery_finds_the_known_renderers():
+    """A detector that matches nothing would pass every other test vacuously."""
+    names = {p.name for p in DISCOVERED}
+    for expected in ("TaskDetailPage.tsx", "EvidenceGallery.tsx"):
+        assert expected in names, (
+            f"discovery must find {expected}; found {sorted(names)}")
+    assert len(DISCOVERED) >= 2
 
 
-# ── AC-4: media still works ────────────────────────────────────────────
+# ── AC-7: every DISCOVERED renderer handles text ──────────────────────
 
-def test_image_and_video_branches_survive():
-    src = _read(_GALLERY)
-    assert "<img" in src, "image evidence must still render an <img>"
-    assert "<video" in src, "video evidence must still render a <video>"
-
-
-# ── AC-5: text is rendered, never hidden ───────────────────────────────
-
-def test_text_items_are_not_filtered_out():
-    src = _read(_GALLERY)
-    assert 'kind !== "text"' not in src and "kind !== 'text'" not in src, (
-        "text evidence must be RENDERED, not filtered out of the gallery")
+@pytest.mark.parametrize("path", DISCOVERED, ids=lambda p: p.name)
+def test_every_discovered_renderer_handles_text(path):
+    assert _TEXT_HANDLING.search(_read(path)), (
+        f"{path.name} renders evidence images but has no text handling — a "
+        "cited .txt/.log/.json would paint a BROKEN TILE there. Give it a "
+        "text branch; do not add an exclusion.")
 
 
-# ── AC-6: every renderer is guarded ────────────────────────────────────
+# ── AC-1 / AC-2: the task page proof tiles + lightbox render text ─────
 
-@pytest.mark.parametrize("path", EVIDENCE_RENDERERS, ids=lambda p: p.name)
-def test_every_evidence_renderer_handles_text(path):
-    src = _read(path)
-    handles_text = ('"text"' in src or "'text'" in src
-                    or "isTextSrc" in src or "TextEvidence" in src)
-    assert handles_text, (
-        f"{path.name} renders evidence but has no text handling — a cited log "
-        "would paint a broken image tile there (the defect this suite exists "
-        "to prevent)")
+def test_proof_shots_renders_text_before_falling_back_to_an_image():
+    src = _read(_WEB_SRC / "pages" / "TaskDetailPage.tsx")
+    assert "ProofText" in src or 'kind === "text"' in src, (
+        "ProofShots needs a text branch")
+    assert "<pre" in src, "a cited log must render as preformatted text"
+    tile_img = src.index("<img")
+    first_text = min(
+        (src.index(tok) for tok in ('kind === "text"', "ProofText")
+         if tok in src),
+        default=len(src))
+    assert first_text < tile_img, (
+        "the text branch must be evaluated BEFORE the image fallback")
+
+
+def test_proof_lightbox_opens_text_as_text():
+    src = _read(_WEB_SRC / "pages" / "TaskDetailPage.tsx")
+    box = src[src.index("aria-modal"):]
+    assert 'kind === "text"' in box or "ProofText" in box, (
+        "the lightbox must open a text artifact as text, not the image viewer")
+
+
+# ── AC-3 / AC-4: media survives, text is never hidden ─────────────────
+
+def test_media_paths_survive():
+    src = _read(_WEB_SRC / "pages" / "TaskDetailPage.tsx")
+    assert "<img" in src, "screenshots must still render"
+
+
+def test_text_citations_are_not_filtered_out():
+    src = _read(_WEB_SRC / "pages" / "TaskDetailPage.tsx")
+    assert 'kind !== "text"' not in src, (
+        "text evidence must be RENDERED, not filtered out of the proof tiles")
