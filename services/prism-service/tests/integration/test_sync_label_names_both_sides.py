@@ -72,8 +72,17 @@ def test_both_states_are_described_and_neither_says_only_work():
     body = _switch_body()
     # The copy branches live in the on/off ternary.
     assert "tasks" in body.lower(), "the copy must name PRISM's tasks"
-    assert body.lower().count("issues") >= 1, (
-        "the copy must name the provider's items, not just the heading")
+    # The component is generic on purpose: it interpolates the provider's own
+    # noun rather than hardcoding "issues", so a future provider that calls
+    # them something else reads correctly. Assert the INTERPOLATION, in the
+    # description branches and not only the heading.
+    prose = body[body.index("<p "):]
+    assert "{noun}" in prose or "${noun}" in prose, (
+        "the description a person reads to decide must name the provider's "
+        "items, not just the heading above it")
+    assert prose.count("noun") >= 2, (
+        "both the on and off copy must name them; one branch naming them and "
+        "the other saying 'work' is the recorded misfire")
     assert "Sync work with" not in body and "sync data" not in body.lower(), (
         "the recorded misfire: renaming the heading while the description a "
         "person reads to decide still says work or data")

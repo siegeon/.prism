@@ -3424,7 +3424,7 @@ function IntegrationsCard({ project }: { project: string }) {
 // never infers health from whether a connection row exists.
 /** Syncing is a CHOICE, separate from connecting. It starts off, and a
  *  working credential never turns it on (owner 2026-07-28, task 01118728). */
-function SyncSwitch({ connector, onChanged }: { connector: Connector; onChanged: () => void }) {
+function SyncSwitch({ connector, noun, onChanged }: { connector: Connector; noun: string; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const on = connector.sync_enabled === true;
 
@@ -3441,17 +3441,19 @@ function SyncSwitch({ connector, onChanged }: { connector: Connector; onChanged:
     <div className="flex items-start justify-between gap-4 pb-4">
       <div className="min-w-0">
         <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-          Sync work with {connector.name}
+          Sync PRISM tasks with {connector.name} {noun}
         </div>
         <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
           {on
-            ? `PRISM keeps work in step with ${connector.name}.`
-            : `Off. Connecting only proves the credential works; nothing is synced until you turn this on.`}
+            ? `On. PRISM tasks and ${connector.name} ${noun} are kept in step with each other. Your PRISM tasks stay the record either way.`
+            : `Off. Your PRISM tasks are untouched and no ${connector.name} ${noun} are read or written. PRISM tracks this work on its own, so leaving this off costs you nothing.`}
         </p>
       </div>
       <button type="button" role="switch" aria-checked={on} disabled={busy}
         onClick={flip}
-        title={on ? `Stop syncing with ${connector.name}` : `Sync work with ${connector.name}`}
+        title={on
+          ? `Stop syncing PRISM tasks with ${connector.name} ${noun}`
+          : `Sync PRISM tasks with ${connector.name} ${noun}`}
         className={cn(
           "shrink-0 w-11 h-6 rounded-full relative transition-colors disabled:opacity-40",
           on ? "bg-[color:var(--accent-sage-fg)]" : "bg-[color:var(--surface-3)] border border-[color:var(--border-default)]",
@@ -3494,6 +3496,15 @@ function ConnectorsSection({ project }: { project: string }) {
     needs_attention: "var(--accent-amber-fg)",
     not_connected: "var(--text-muted)",
     not_configured: "var(--text-disabled)",
+  };
+  // What this provider CALLS the work it holds. Its presence is also the
+  // capability answer: a connector with no work noun has nothing to sync and
+  // gets no sync switch. Claude falls out here because it is a credential for
+  // running analyzers, not a tracker, never because it is named Claude
+  // (task fc6ec2c9). The server agrees: PROVIDERS is ("github", "jira").
+  const WORK_NOUN: Record<string, string> = {
+    github: "issues",
+    jira: "issues",
   };
   const LABEL: Record<string, string> = {
     connected: "Connected",
@@ -3589,9 +3600,9 @@ function ConnectorsSection({ project }: { project: string }) {
               page; it belongs to Claude's card, not to a second nav entry.
               Guarded by openDetail so ClaudeAuthCard's 5s status poll starts
               on expand, never on page load (task c89edbeb). */}
-          {openDetail === c.provider && (
+          {openDetail === c.provider && WORK_NOUN[c.provider] && (
             <div className="px-5 pt-4 border-t border-[color:var(--border-subtle)]">
-              <SyncSwitch connector={c} onChanged={reload} />
+              <SyncSwitch connector={c} noun={WORK_NOUN[c.provider]} onChanged={reload} />
             </div>
           )}
           {c.provider === "claude" && openDetail === c.provider && (
