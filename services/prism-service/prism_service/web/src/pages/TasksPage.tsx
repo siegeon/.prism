@@ -23,6 +23,7 @@ type Task = {
   parent_id?: string;
   updated_at?: string;
   tags?: string[];
+  description?: string;
 };
 
 // A row on the unified Work surface — a native PRISM task OR an external
@@ -47,6 +48,8 @@ type WorkItem = {
   displayKey?: string;      // e.g. #123 / PROJ-1
   restricted?: boolean;     // server says: exists, but linked context is hidden
   imported?: boolean;       // has a local intake task that can be started
+  tags?: string[];          // provenance, e.g. ['github','external']
+  description?: string;     // carries the mirrored-from line + issue URL
 };
 
 // My Work vs Team — the attention model. "mine" scopes to the signed-in
@@ -74,11 +77,6 @@ function gateTone(gate: string): "warn" | "danger" | "ok" | null {
   return null;
 }
 
-const SOURCES: { key: WorkSource; label: string }[] = [
-  { key: "native", label: "PRISM" },
-  { key: "github", label: "GitHub" },
-  { key: "jira", label: "Jira" },
-];
 
 function providerOf(kind?: string, provider?: string): WorkSource {
   if (provider === "github" || provider === "jira") return provider;
@@ -87,16 +85,23 @@ function providerOf(kind?: string, provider?: string): WorkSource {
   return "github";
 }
 
-// A small provider badge so a GitHub/Jira/native row is identifiable at a
-// glance without reading the title.
-function ProviderBadge({ source }: { source: WorkSource }) {
-  const label = source === "native" ? "PRISM" : source === "github" ? "GH" : "JIRA";
-  const tone = source === "native" ? "info" : source === "github" ? "new" : "warn";
-  return (
-    <span data-provider={source}>
-      <Lozenge tone={tone as "info" | "new" | "warn"}>{label}</Lozenge>
-    </span>
-  );
+// Everything on this page IS a PRISM task, because PRISM is where the work
+// happens, so labelling every row "PRISM" says nothing (owner 2026-07-28).
+// A badge earns its place only by taking you somewhere: a task mirrored from
+// a provider gets a link to the real thing, and a native task gets nothing.
+const MIRROR_URL_RE = /(https:\/\/(?:github\.com|[\w.-]+\.atlassian\.net)\/\S+)/;
+
+function mirrorOf(item: WorkItem): { label: string; href: string } | null {
+  if (item.url) {
+    return { label: item.source === "jira" ? "JIRA" : "GITHUB", href: item.url };
+  }
+  // An imported issue becomes an ordinary PRISM task, so the link lives in
+  // what the sync recorded on it (task 900a4fb9).
+  const tags = (item.tags ?? []).map((t) => t.toLowerCase());
+  const provider = tags.includes("jira") ? "jira" : tags.includes("github") ? "github" : null;
+  if (!provider) return null;
+  const found = MIRROR_URL_RE.exec(item.description ?? "");
+  return found ? { label: provider.toUpperCase(), href: found[1] } : null;
 }
 
 function nativeToWork(t: Task): WorkItem {
@@ -111,6 +116,8 @@ function nativeToWork(t: Task): WorkItem {
     gate_state: t.gate_state,
     priority: t.priority,
     updated_at: t.updated_at,
+    tags: t.tags,
+    description: t.description,
     parent_id: t.parent_id,
   };
 }
@@ -138,7 +145,6 @@ export default function TasksPage() {
   const [external, setExternal] = useState<ExternalEntity[]>([]);
   const [me, setMe] = useState<string>("");
   const [view, setView] = useState<WorkView>("team");
-  const [sourceFilter, setSourceFilter] = useState<WorkSource | "all">("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   const [cursor, setCursor] = useState<number>(0);
   const [started, setStarted] = useState<Set<string>>(new Set());
@@ -176,7 +182,6 @@ export default function TasksPage() {
       ...external.map(externalToWork),
     ];
     return merged.filter((it) => {
-      if (sourceFilter !== "all" && it.source !== sourceFilter) return false;
       if (assigneeFilter && !it.assignee.toLowerCase().includes(assigneeFilter.toLowerCase())) return false;
       if (view === "mine") {
         // My Work: rows assigned to the signed-in viewer. With no identity we
@@ -186,7 +191,7 @@ export default function TasksPage() {
       }
       return true;
     });
-  }, [tasks, external, sourceFilter, assigneeFilter, view, me]);
+  }, [tasks, external, assigneeFilter, view, me]);
 
   // Keyboard navigation across the unified rows: j/ArrowDown and k/ArrowUp move
   // the cursor; Enter opens the focused row's local task.
@@ -241,23 +246,6 @@ export default function TasksPage() {
               }}
             >
               {v === "mine" ? "My Work" : "Team"}
-            </button>
-          ))}
-        </div>
-
-        <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" data-source-filter>
-          {([{ key: "all", label: "All" }, ...SOURCES] as { key: WorkSource | "all"; label: string }[]).map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => setSourceFilter(s.key)}
-              className="px-2.5 py-1.5 text-2xs font-semibold uppercase tracking-wider"
-              style={{
-                background: sourceFilter === s.key ? "var(--surface-2)" : "var(--surface-1)",
-                color: sourceFilter === s.key ? "var(--text-primary)" : "var(--text-muted)",
-              }}
-            >
-              {s.label}
             </button>
           ))}
         </div>
@@ -325,6 +313,7 @@ function WorkRow({ item, focused, started, onStart }: {
   const gate = item.gate_state ?? "none";
   const gTone = gateTone(gate);
   const external = item.source !== "native";
+  const mirror = mirrorOf(item);
   return (
     <tr
       className="h-10 transition-colors border-b border-[color:var(--border-subtle)]"
@@ -333,7 +322,6 @@ function WorkRow({ item, focused, started, onStart }: {
     >
       <td className="px-3 py-1.5">
         <div className="flex items-center gap-2 min-w-0">
-          <ProviderBadge source={item.source} />
           <span className="shrink-0 font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }}>
             {item.displayKey ?? shortId(item.id)}
           </span>
@@ -355,16 +343,17 @@ function WorkRow({ item, focused, started, onStart }: {
           ) : (
             <span className="truncate font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</span>
           )}
-          {external && item.url && (
+          {mirror && (
             <a
-              href={item.url}
+              href={mirror.href}
               target="_blank"
               rel="noreferrer"
-              className="text-2xs hover:underline"
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 text-2xs font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
               style={{ color: "var(--accent-teal-fg)" }}
-              aria-label="Open in provider"
+              aria-label={`Open this task's ${mirror.label} issue`}
             >
-              ↗
+              {mirror.label}
             </a>
           )}
           {step && <Lozenge tone="info">{stepLabel(step)}</Lozenge>}

@@ -57,7 +57,11 @@ def test_tasks_page_has_source_and_assignee_filters():
     src = _read(_TASKS)
     # a provider/source filter spanning all three sources
     assert "native" in src and "github" in src and "jira" in src
-    assert "sourceFilter" in src or "data-source-filter" in src
+    # The SOURCE filter is retired, not weakened (task feeec35e). Owner:
+    # "everything is a PRISM task period since we worek it from here", so
+    # slicing the list by provenance was the wrong control. Provenance now
+    # shows as a LINK on the row, pinned by test_work_rows_link_out.py. The
+    # assignee filter is untouched and still asserted.
     assert "assigneeFilter" in src or "data-assignee-filter" in src
 
 
@@ -65,8 +69,10 @@ def test_tasks_page_has_source_and_assignee_filters():
 
 def test_external_rows_show_provider_badge_backlink_and_remote_status():
     src = _read(_TASKS)
-    assert "ProviderBadge" in src, "external rows need a provider badge component"
-    # a real backlink to the provider (anchor with href), opening the source
+    # ProviderBadge is retired (task feeec35e): it labelled EVERY row, so it
+    # said nothing. The backlink claim survives and is what mattered, now as a
+    # provider-named button rather than an unlinked lozenge.
+    assert "mirrorOf" in src, "a mirrored row must resolve its provider link"
     assert "href={" in src and "target=\"_blank\"" in src
     # remote status is rendered with a label DISTINCT from the local gate/step
     assert "Remote" in src, "external remote status must be labelled Remote"
