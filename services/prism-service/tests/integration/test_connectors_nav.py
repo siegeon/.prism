@@ -57,13 +57,15 @@ def test_the_nav_route_is_the_route_the_page_renders():
     assert 'section === "connectors"' in _read(_SETTINGS)
 
 
-# ── AC-3 / AC-4: Claude auth is a sibling; nothing else lost ──────────
-
-def test_claude_auth_remains_a_sibling_entry():
-    src = _read(_SIDEBAR)
-    assert "/settings/connections" in src, (
-        "Claude auth keeps its own entry for Claude's credentials — it simply "
-        "stops being the only door to integrations")
+# ── AC-4: nothing else lost ───────────────────────────────────────────
+#
+# AC-3 (`test_claude_auth_remains_a_sibling_entry`) is RETIRED, not weakened.
+# It pinned "/settings/connections stays in the nav", which was true when this
+# file was written. Task c89edbeb then removed that entry at the owner's
+# request ("you now have two place for claude"), moving Claude's credentials
+# onto its own connector card. The current contract is asserted by
+# test_claude_single_home.py, which requires the entry to be ABSENT — the
+# direct opposite. Keeping both would pin a contradiction (task 2ba63a22).
 
 
 def test_the_other_settings_entries_survive():

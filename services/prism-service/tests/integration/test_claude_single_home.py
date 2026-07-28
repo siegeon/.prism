@@ -70,13 +70,20 @@ def test_the_claude_card_owns_the_auth_and_source_detail():
 
 
 def test_the_claude_card_has_something_to_click():
-    """A detail nobody can open is the same as a deleted one."""
+    """A detail nobody can open is the same as a deleted one.
+
+    This pinned a "Details" BUTTON, which was the affordance at the time. Task
+    064fc09b replaced it with a better one at the owner's request ("clicking
+    anywhere in the panel in the connectors section should open it"), so the
+    button is gone by design. The claim itself still matters, so it is
+    re-pointed at the current affordance rather than deleted; the exhaustive
+    version (keyboard, aria-expanded, stopPropagation) lives in
+    test_connector_card_click.py.
+    """
     body = _connectors_body()
-    assert "Details" in body, (
-        "the Claude card needs a visible Details affordance to open its "
-        "auth/source panel")
-    assert re.search(r"onClick=\{[^}]*[Dd]etail", body), (
-        "the Details affordance must be wired to a click handler")
+    assert re.search(r"onClick=\{[^}]*(setOpenDetail|toggle)", body), (
+        "the Claude card must be openable by a person; nothing in "
+        "ConnectorsSection is wired to the open-state")
 
 
 # ── AC-3: a collapsed box is a lazy load ──────────────────────────────

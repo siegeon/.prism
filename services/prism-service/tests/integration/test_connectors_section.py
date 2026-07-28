@@ -69,16 +69,13 @@ def test_claude_is_a_peer_connector_not_a_parent_section(app):
         f"Claude must be listed as a PEER connector (mx-dc7c38); got {rows}")
 
 
-def test_integrations_no_longer_render_under_claude_auth():
-    """The owner's actual complaint, pinned."""
-    src = _read(_SETTINGS)
-    i = src.index('section === "connections"')
-    # the Claude-auth block ends where the next section test begins
-    nxt = src.find("section ===", i + 10)
-    block = src[i:nxt if nxt > 0 else i + 4000]
-    assert "IntegrationsCard" not in block, (
-        "the Claude auth section must no longer render the Integrations card "
-        "— that nesting is the defect")
+# `test_integrations_no_longer_render_under_claude_auth` is RETIRED, not
+# weakened. It located the `section === "connections"` block and asserted the
+# Integrations card was absent from it. Task c89edbeb DELETED that block
+# outright, so the assertion now raises ValueError: substring not found while
+# describing a state that is more than satisfied. The owner's complaint is
+# pinned harder by test_claude_single_home.py, which requires the whole
+# standalone section to be gone (task 2ba63a22).
 
 
 # ── AC-4 / AC-5 / AC-7: server-reported status ────────────────────────
