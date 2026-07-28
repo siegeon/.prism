@@ -98,11 +98,25 @@ def test_mermaid_ships_in_its_own_chunk_not_the_task_page_chunk():
     chunks = _chunks()
     page = [n for n in chunks if n.startswith("TaskDetailPage-")]
     assert page, f"no TaskDetailPage chunk in {sorted(chunks)[:12]}"
+
+    # The diagram code must be emitted as its OWN chunk...
+    mermaid_chunks = [n for n in chunks if n.startswith("Mermaid-")]
+    assert mermaid_chunks, (
+        f"no separate Mermaid-*.js chunk emitted; the lazy boundary did not "
+        f"split it out. chunks: {sorted(chunks)[:12]}")
+    assert chunks[mermaid_chunks[0]] > 200 * 1024, (
+        "the Mermaid chunk is suspiciously small — the library may still be "
+        "bundled elsewhere")
+
+    # ...and the page chunk may reference it ONLY by module specifier (the
+    # lazy import resolves through the emitted filename), never carry the code.
     page_src = (_DIST / page[0]).read_text(encoding="utf-8", errors="ignore")
-    # mermaid's own marker strings should NOT be inside the page chunk.
-    assert "mermaid" not in page_src[:200000].lower(), (
-        "the task page chunk still contains mermaid — the lazy boundary did "
-        "not move it out")
+    stray = [m.start() for m in re.finditer(r"mermaid", page_src, re.I)
+             if not re.match(r"Mermaid-[A-Za-z0-9_-]+\.js",
+                             page_src[m.start():m.start() + 40])]
+    assert stray == [], (
+        f"the task page chunk carries mermaid code at {len(stray)} site(s), "
+        "not just the lazy chunk's filename — the boundary did not hold")
 
 
 def test_task_page_chunk_is_materially_smaller():

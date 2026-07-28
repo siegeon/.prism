@@ -1,8 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import { Empty } from "@/components/ui";
 import Markdown from "@/components/Markdown";
-import Mermaid from "./Mermaid";
+// LAZY BY DESIGN (task 14d266a1). Mermaid.tsx does a top-level
+// `import mermaid from "mermaid"`, which drags cytoscape, katex and every
+// diagram pack with it. Statically importing it here put ~646 kB in the task
+// page's critical path for the Diagram TAB — which is not the default tab and
+// is usually never opened. Owner rule: anything behind a collapsed box or an
+// inactive tab is a lazy load, so this edge stays dynamic.
+const Mermaid = lazy(() => import("./Mermaid"));
 import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
@@ -373,7 +379,10 @@ export default function PlanView({
           )}
           {curPart === "diagram" && hasDiagram && (
             <div className="rounded-lg p-4 bg-[color:var(--midground-base)]/5">
-              <Mermaid chart={diagram!} />
+              {/* The diagram chunk is fetched HERE, the moment the tab opens. */}
+              <Suspense fallback={<div className="text-xs opacity-50 py-6 text-center">Loading diagram…</div>}>
+                <Mermaid chart={diagram!} />
+              </Suspense>
             </div>
           )}
           {curPart === "doc" && hasDoc && (
