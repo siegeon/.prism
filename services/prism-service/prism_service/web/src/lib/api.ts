@@ -125,3 +125,33 @@ export async function pullContainer(
     {},
   );
 }
+
+// ── Connectors (task e139295d) ─────────────────────────────────────────
+// One server-decided status per connector. Claude, GitHub and Jira are PEERS
+// (mx-dc7c38) and health is the SERVER's answer, never inferred here from
+// whether a connection row happens to exist.
+
+export type ConnectorState =
+  | "not_configured" | "not_connected" | "connected" | "needs_attention";
+
+export type Connector = {
+  provider: string;
+  name: string;
+  state: ConnectorState;
+  detail?: string;
+  account?: string;
+  tracking?: string[];
+};
+
+export async function listConnectorStatus(): Promise<Connector[]> {
+  const d = await api.get<{ connectors: Connector[] }>(
+    "/api/integrations/connect/status");
+  return d.connectors ?? [];
+}
+
+/** Begin the OAuth round trip; returns the provider authorize URL to open. */
+export async function startConnect(provider: string): Promise<string> {
+  const d = await api.get<{ authorize_url: string }>(
+    `/api/integrations/connect/${provider}/start`);
+  return d.authorize_url;
+}

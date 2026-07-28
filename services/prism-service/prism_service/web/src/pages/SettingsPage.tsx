@@ -11,6 +11,9 @@ import {
   listConnections,
   listContainers,
   pullContainer,
+  listConnectorStatus,
+  startConnect,
+  type Connector,
   type IntegrationConnection,
   type ExternalContainer,
   type SyncRun,
@@ -28,9 +31,16 @@ function isInTauri(): boolean {
   return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 }
 
-type SectionId = "projects" | "connections" | "activity" | "logs" | "service" | "access-key";
+// "connectors" is its OWN section (mx-dc7c38). Claude is an integration like
+// any other, so it appears as a peer card inside Connectors rather than owning
+// a section that GitHub and Jira hang beneath.
+type SectionId = "projects" | "connectors" | "connections" | "activity" | "logs" | "service" | "access-key";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
+  connectors: {
+    title: "Connectors",
+    description: "Places PRISM can connect to. Optional — PRISM tracks your work on its own; connect a provider only if you also want to see work that lives there.",
+  },
   "access-key": {
     title: "Access key",
     description: "Your personal key. It is how agents and MCP reach this PRISM, and how you give someone access so they can join you. Readable whenever you are signed in — copy it, or rotate it if it is ever exposed.",
@@ -57,7 +67,7 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["access-key", "projects", "connections", "activity", "logs", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["access-key", "projects", "connectors", "connections", "activity", "logs", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
   // Legacy URL aliases — keep bookmarked links and prior versions working.
@@ -235,12 +245,12 @@ export default function SettingsPage() {
             <SectionLabel>Claude source</SectionLabel>
             <ClaudeSourceCard project={active} />
           </Card>
-          <Card>
-            <SectionLabel>Integrations</SectionLabel>
-            <IntegrationsCard project={active} />
-          </Card>
         </div>
       )}
+
+      {/* CONNECTORS — its own section. Claude, GitHub and Jira are PEERS here
+          (mx-dc7c38); integrations are no longer nested under Claude auth. */}
+      {section === "connectors" && <ConnectorsSection project={active} />}
 
       {section === "activity" && (
         <div className="space-y-6">
@@ -3416,6 +3426,107 @@ function IntegrationsCard({ project }: { project: string }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// CONNECTORS (task e139295d). Its own settings section, with Claude, GitHub and
+// Jira as PEER cards — Claude is an integration, not the category the others
+// hang beneath (mx-dc7c38). Every status here is the SERVER's answer; the UI
+// never infers health from whether a connection row exists.
+function ConnectorsSection({ project }: { project: string }) {
+  const [rows, setRows] = useState<Connector[]>([]);
+  const [err, setErr] = useState<string>("");
+  const [busy, setBusy] = useState<string>("");
+
+  const reload = useCallback(() => {
+    listConnectorStatus().then(setRows).catch((e) => setErr(String((e as Error).message ?? e)));
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  const connect = useCallback(async (provider: string) => {
+    setErr(""); setBusy(provider);
+    try {
+      const url = await startConnect(provider);
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally { setBusy(""); }
+  }, []);
+
+  const TONE: Record<string, string> = {
+    connected: "var(--accent-sage-fg)",
+    needs_attention: "var(--accent-amber-fg)",
+    not_connected: "var(--text-muted)",
+    not_configured: "var(--text-disabled)",
+  };
+  const LABEL: Record<string, string> = {
+    connected: "Connected",
+    needs_attention: "Connection issue",
+    not_connected: "Not connected",
+    not_configured: "Not configured",
+  };
+
+  return (
+    <div className="space-y-4">
+      {err && <ErrorBanner>{err}</ErrorBanner>}
+      {rows.length === 0 && <Empty>Loading connectors…</Empty>}
+      {rows.map((c) => (
+        <Card key={c.provider}>
+          <div className="flex items-start gap-3">
+            <span
+              className="shrink-0 grid place-items-center w-9 h-9 rounded-md font-semibold text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+              aria-hidden
+            >
+              {c.name.slice(0, 2)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold" style={{ color: "var(--text-primary)" }}>{c.name}</span>
+                <span className="text-2xs uppercase tracking-wider font-semibold"
+                      style={{ color: TONE[c.state] ?? "var(--text-muted)" }}>
+                  {LABEL[c.state] ?? c.state}
+                </span>
+              </div>
+              {c.detail && (
+                <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>{c.detail}</p>
+              )}
+              {c.account && (
+                <p className="text-2xs mt-1 font-mono" style={{ color: "var(--text-secondary)" }}>{c.account}</p>
+              )}
+              {c.tracking && c.tracking.length > 0 && (
+                <p className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>
+                  Tracking: {c.tracking.join(", ")}
+                </p>
+              )}
+            </div>
+            <div className="shrink-0 flex items-center gap-2">
+              {c.state === "needs_attention" && (
+                <button type="button" disabled={busy === c.provider}
+                  onClick={() => connect(c.provider)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                  style={{ color: "var(--accent-amber-fg)" }}>
+                  Reconnect
+                </button>
+              )}
+              {c.state === "not_connected" && (
+                <button type="button" disabled={busy === c.provider}
+                  onClick={() => connect(c.provider)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                  style={{ color: "var(--accent-teal-fg)" }}>
+                  Connect {c.name}
+                </button>
+              )}
+            </div>
+          </div>
+          {c.state === "connected" && c.provider !== "claude" && (
+            <div className="mt-3 pt-3 border-t border-[color:var(--border-subtle)]">
+              <IntegrationsCard project={project} />
+            </div>
+          )}
+        </Card>
+      ))}
     </div>
   );
 }

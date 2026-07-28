@@ -47,15 +47,26 @@ def test_connectors_is_its_own_settings_section():
         "the page must render a connectors section of its own")
 
 
-def test_claude_github_and_jira_are_peer_cards():
+def test_the_connectors_section_renders_a_card_per_connector():
+    """Peer-ness is SERVER-driven: the section maps over the status rows rather
+    than hardcoding providers, so a new connector needs no UI edit."""
     src = _read(_SETTINGS)
-    i = src.index('section === "connectors"')
-    block = src[i:i + 4000]
-    for provider in ("Claude", "GitHub", "Jira"):
-        assert provider in block, (
-            f"{provider} must appear as a PEER connector card in the "
-            "connectors section (mx-dc7c38: Claude is an integration, not the "
-            "category others hang beneath)")
+    assert "ConnectorsSection" in src
+    body = src[src.index("function ConnectorsSection"):]
+    assert "listConnectorStatus" in body, (
+        "the section must read the server's status list")
+    assert ".map(" in body, "it must render ONE CARD PER connector row"
+    assert "Reconnect" in body and "Connect " in body, (
+        "the action must match the state")
+
+
+def test_claude_is_a_peer_connector_not_a_parent_section(app):
+    """AC-2 at the level that actually decides it: the server lists Claude
+    alongside GitHub and Jira, as equals."""
+    rows = [r["provider"] for r in
+            app.get("/api/integrations/connect/status").json()["connectors"]]
+    assert {"claude", "github", "jira"} <= set(rows), (
+        f"Claude must be listed as a PEER connector (mx-dc7c38); got {rows}")
 
 
 def test_integrations_no_longer_render_under_claude_auth():
@@ -160,8 +171,19 @@ def test_the_card_offers_reconnect_for_needs_attention():
 # ── AC-6: the connect routes exist in THIS build ──────────────────────
 
 def test_connect_routes_are_mounted_in_the_app():
+    """Mount the REAL aggregate router on a real app and look at its route
+    table — FastAPI's lazy inclusion keeps sub-router paths off
+    api_router.routes, so inspecting that alone would false-negative."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
     from prism_service.api import api_router
-    paths = {getattr(r, "path", "") for r in api_router.routes}
-    assert any("/integrations/connect" in p for p in paths), (
-        "the connect routes must be mounted in this build or every button on "
-        "the page points at nothing")
+
+    probe = FastAPI()
+    probe.include_router(api_router)
+    # FastAPI's lazy inclusion keeps sub-router paths out of probe.routes
+    # entirely (see the note in main.py), so ASK the app instead of reading
+    # its table: a mounted route answers, an unmounted one 404s.
+    resp = TestClient(probe).get("/api/integrations/connect/status")
+    assert resp.status_code != 404, (
+        "the connect routes are not mounted in this build — every button on "
+        "the Connectors page would point at nothing")

@@ -22,6 +22,7 @@ from prism_service.api.dashboard import router as dashboard_router
 from prism_service.api.github_auth import router as github_auth_router
 from prism_service.api.graph import router as graph_router
 from prism_service.api.integrations import router as integrations_router
+from prism_service.api.integrations_connect import router as integrations_connect_router
 from prism_service.api.jobs import router as jobs_router
 from prism_service.api.learning import router as learning_router
 from prism_service.api.memory import router as memory_router
@@ -71,4 +72,8 @@ api_router.include_router(version_router, prefix="/version", tags=["version"])
 api_router.include_router(watchdog_router, prefix="/watchdog", tags=["watchdog"])
 api_router.include_router(workspaces_router, prefix="/workspaces", tags=["workspaces"])
 api_router.include_router(integrations_router, prefix="/workspaces", tags=["integrations"])
+# Connect front door (task e139295d) — user-scoped, works solo, so NOT under
+# /workspaces/{id}: connecting must never require a team (mx-639efa).
+api_router.include_router(integrations_connect_router,
+                          prefix="/integrations/connect", tags=["connectors"])
 api_router.include_router(xref_router, prefix="/xref", tags=["xref"])
