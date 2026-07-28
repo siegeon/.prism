@@ -186,6 +186,31 @@ def _provider_state(provider: str, scope: str) -> dict:
                 "detail": detail, "account": account, "tracking": []}
 
     name = "GitHub" if provider == "github" else "Jira"
+
+    # GitHub needs NO setup when this machine's GitHub CLI is already logged
+    # in: the credential is right here and github_work.py only ever wanted a
+    # token string (owner 2026-07-28, task f4dd3687). This runs BEFORE the
+    # env-var check so an unregistered OAuth app is no longer the last word.
+    # `connected` is EARNED: the CLI source validates the token and downgrades
+    # a rejected one to needs_attention rather than looking healthy until the
+    # first sync 401s.
+    if provider == "github":
+        from prism_service.services.github_cli_auth import get_cli_credentials
+
+        cli = get_cli_credentials().status()
+        if cli["state"] in {"connected", "needs_attention"}:
+            store = get_integration_store()
+            conns = [c for c in store.list_connections(scope)
+                     if c.provider == provider]
+            tracking = [k.display_key or k.remote_id
+                        for c in conns
+                        for k in store.list_containers(scope, c.id)]
+            return {"provider": provider, "name": name, "state": cli["state"],
+                    "detail": cli["detail"], "account": cli["account"],
+                    "tracking": tracking}
+        # No usable CLI: fall through to the OAuth app path, which still
+        # serves server and multi-user installs.
+
     if not _configured(provider):
         env = ("PRISM_GITHUB_APP_SLUG" if provider == "github"
                else "PRISM_JIRA_CLIENT_ID / PRISM_JIRA_CLIENT_SECRET")

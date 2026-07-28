@@ -11,6 +11,7 @@ can never be silently accepted. Pull-only this slice: no outbound route.
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,9 +30,11 @@ from prism_service.services.workspace_service import get_workspace_service
 
 router = APIRouter(dependencies=[Depends(current_principal)])
 
-# Provider adapters (GitHub, Jira, …) register here at import time in later
-# slices; tests inject a scripted adapter. Pull-only, no network in this slice.
 _adapters: dict = {}
+
+# Why a built-in provider failed to register, if it did. Read by diagnostics
+# rather than left to a silent except (task f4dd3687).
+adapter_registration_errors: dict = {}
 
 
 def register_adapter(adapter) -> None:
@@ -40,6 +43,40 @@ def register_adapter(adapter) -> None:
 
 def reset_adapters() -> None:
     _adapters.clear()
+
+
+def register_builtin_adapters() -> None:
+    """Wire the providers PRISM ships with, at import time.
+
+    This used to say adapters would register "in later slices"; nothing ever
+    did, so `_adapters` was empty in production and EVERY sync failed with no
+    adapter for provider github while the tests stayed green by injecting one
+    (task f4dd3687). Registration is deliberately best-effort: a provider whose
+    module cannot import must never take the whole API down with it, because
+    connecting is optional (mx-639efa).
+    """
+    try:
+        from prism_service.services.github_cli_auth import get_cli_credentials
+        from prism_service.services.github_rest import GithubRestClient
+        from prism_service.services.github_work import GitHubWorkAdapter
+
+        register_adapter(GitHubWorkAdapter(
+            client=GithubRestClient(),
+            credentials=get_cli_credentials(),
+            # A CLI token is not installation-scoped. The adapter only passes
+            # this back to credentials.installation_token(), which ignores it.
+            installation="github-cli",
+        ))
+    except Exception as exc:  # pragma: no cover - a broken provider is not fatal
+        # RECORD the reason. Swallowing it silently is how this hole stayed
+        # open: the surface looks alive, every sync dies, and nothing anywhere
+        # says why. Non-fatal, but never invisible.
+        adapter_registration_errors["github"] = f"{type(exc).__name__}: {exc}"
+        logging.getLogger(__name__).warning(
+            "github adapter not registered, syncs will fail: %s", exc)
+
+
+register_builtin_adapters()
 
 
 class ConnectionBody(BaseModel):
