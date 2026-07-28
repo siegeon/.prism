@@ -43,9 +43,14 @@ def _read(p: Path) -> str:
 # ── AC-1: the gallery knows the text kind ──────────────────────────────
 
 def test_gallery_kind_admits_text():
+    """EVERY kind annotation must admit text — including the one that derives a
+    kind for files cited by the completion proof, which is the path that made a
+    cited .txt render as a broken image tile."""
     src = _read(_GALLERY)
-    kinds = re.findall(r'kind\??:\s*("image"[^;\n]*)', src)
-    assert kinds, "EvidenceGallery must declare an item kind union"
+    kinds = re.findall(r'kind\s*\??:\s*("(?:image|video)"(?:\s*\|\s*"\w+")*)', src)
+    assert len(kinds) >= 3, (
+        f"expected the item type, the api type AND the derived kind to be "
+        f"annotated; found {kinds}")
     for union in kinds:
         assert '"text"' in union, (
             f'the kind union {union!r} must admit "text" — otherwise a log is '
@@ -63,12 +68,20 @@ def test_gallery_has_a_text_branch():
 
 
 def test_text_is_not_routed_into_the_image_element():
-    """The bug: every non-video item fell through to <img src={it.url}>."""
+    """The bug: every non-video item fell through to <img src={it.url}>.
+
+    Anchored on the REAL JSX elements (not any '<img' substring, which also
+    appears in prose) so the assertion cannot be satisfied by a comment.
+    """
     src = _read(_GALLERY)
-    # The image element must be reached only after text has been handled.
-    assert src.index('=== "text"' if '=== "text"' in src else "=== 'text'") < \
-        src.index("<img"), (
-        "the text branch must be evaluated BEFORE the <img> fallback")
+    tile_img = src.index("<img src={it.url}")
+    text_branch = src.index('it.kind === "text"')
+    assert text_branch < tile_img, (
+        "the tile's text branch must be evaluated BEFORE the <img> fallback")
+    box_img = src.index("<img src={shown.url}")
+    box_text = src.index('shown.kind === "text"')
+    assert box_text < box_img, (
+        "the lightbox's text branch must be evaluated BEFORE the image viewer")
 
 
 # ── AC-4: media still works ────────────────────────────────────────────
