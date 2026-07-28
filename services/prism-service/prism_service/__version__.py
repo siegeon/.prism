@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.4.1"
+PRISM_VERSION = "7.4.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.4.2: ONE CLAUDE, NOT TWO [task c89edbeb]. Claude was reachable from "
+    "two places in Settings: as a card under Connectors and as its own Claude "
+    "auth entry. Claude is an integration, so it now has one home. Its CLI "
+    "login status and project source registration live on the Claude "
+    "connector card behind a Details expander, and the second nav entry is "
+    "gone. The expander is a lazy load, so nothing mounts and no status "
+    "polling starts until you open it. Old /settings/connections links land "
+    "on Connectors. "
+)
+PRISM_VERSION_NOTES += (
     "v7.4.1: CONNECTORS, ITS OWN PLACE [tasks e139295d, 7fff8ef0]. Settings "
     "gains a Connectors entry in the nav, and integrations no longer live "
     "inside Claude auth: Claude, GitHub and Jira are peer connectors, each a "
