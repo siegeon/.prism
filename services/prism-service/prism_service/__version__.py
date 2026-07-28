@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.5.2"
+PRISM_VERSION = "7.6.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "
+    "as owner/repo on the GitHub connector and press Sync now: its open "
+    "issues arrive as ordinary PRISM tasks, each recording the issue it "
+    "mirrors. They are tasks, not a separate list, because PRISM's tasks are "
+    "the record. Choosing a repo no longer needs a team workspace, which is "
+    "what made the picker unreachable locally. The sync switch is now "
+    "load-bearing: with it off, a sync refuses and imports nothing. "
+    "Read-only for now, nothing is written back to GitHub yet. "
+)
+PRISM_VERSION_NOTES += (
     "v7.5.2: THE SYNC SWITCH SAYS WHAT IT DOES [task fc6ec2c9]. It read "
     "\"Sync work with GitHub\", which never said what would actually move. It "
     "now reads \"Sync PRISM tasks with GitHub issues\", and the line beneath "
