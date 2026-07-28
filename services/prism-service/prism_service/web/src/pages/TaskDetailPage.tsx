@@ -573,9 +573,39 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
 // rendered wherever the proof is judged, so the approver SEES what the proof
 // cites right on the task page (owner 2026-07-16: "i still dont see the
 // screenshot on the task"). Click opens the full-size image.
+// A cited artifact is not always a picture: a pytest log, a diff, or a JSON
+// receipt is evidence too. Before this, EVERY citation was handed to <img>, so
+// a cited .txt painted a BROKEN TILE under "visual evidence" (task 63d0086e).
+function ProofText({ src, full }: { src: string; full?: boolean }) {
+  const [body, setBody] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    fetch(src)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => { if (!cancelled) setBody(t); })
+      .catch(() => { if (!cancelled) setBody("(could not read artifact)"); });
+    return () => { cancelled = true; };
+  }, [src]);
+  return (
+    <pre
+      className={"m-0 p-3 font-mono whitespace-pre-wrap break-words rounded-md border border-[color:var(--border-default)] " +
+        (full
+          ? "text-[12px] leading-relaxed max-h-[88vh] overflow-auto"
+          : "text-[10px] leading-snug max-h-[380px] overflow-hidden")}
+      style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
+    >
+      {body || "loading…"}
+    </pre>
+  );
+}
+
+const TEXT_PROOF_RE = /\.(txt|log|diff|patch|md|json)(\?.*)?$/i;
+
 function ProofShots({ text, className }: { text?: string; className?: string }) {
   const shots = useMemo(
-    () => [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)].map(([, alt, src]) => ({ alt, src })),
+    () => [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)].map(([, alt, src]) => ({
+      alt, src, kind: TEXT_PROOF_RE.test(src) ? "text" as const : "image" as const,
+    })),
     [text],
   );
   // In-app lightbox (owner 2026-07-16: "not redirect to an image, its hard
@@ -601,18 +631,22 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
   // Side-by-side grid (owner 2026-07-16), one column only on narrow screens.
   return (
     <div className={`grid grid-cols-1 min-[720px]:grid-cols-2 gap-3 items-start ${className ?? "mt-3"}`}>
-      {shots.map(({ alt, src }, i) => (
+      {shots.map(({ alt, src, kind }, i) => (
         <button key={i} type="button" onClick={() => setOpen(i)} className="block min-w-0 text-left"
-                title={`${alt || "evidence screenshot"} — click to view`}>
+                title={`${alt || "evidence"} — click to view`}>
           {/* Natural-size box (w-auto, never w-full): the border hugs the
               actual pixels, so a tall image can't letterbox dead space into
               a wide cell (owner 2026-07-16: "look at the dead space"). */}
-          <img
-            src={src}
-            alt={alt || "evidence screenshot"}
-            loading="lazy"
-            className="max-w-full max-h-[380px] w-auto rounded-md border border-[color:var(--border-default)]"
-          />
+          {kind === "text" ? (
+            <ProofText src={src} />
+          ) : (
+            <img
+              src={src}
+              alt={alt || "evidence screenshot"}
+              loading="lazy"
+              className="max-w-full max-h-[380px] w-auto rounded-md border border-[color:var(--border-default)]"
+            />
+          )}
           {/* The caption is the proof's own claim — the APP says what the
               image proves (owner 2026-07-16), the reader never has to guess. */}
           {alt && (
@@ -632,7 +666,23 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
           aria-label={shown.alt || "evidence screenshot"}
           onClick={() => setOpen(null)}
         >
-          {zoom ? (
+          {shown.kind === "text" ? (
+            // A log opens as SCROLLABLE TEXT — never the zoomable image viewer.
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-4">
+              <div
+                className="w-[min(1100px,96vw)] max-h-[88vh] overflow-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ProofText src={shown.src} full />
+              </div>
+              {shown.alt && (
+                <div className="text-[13px] leading-relaxed text-center max-w-[80vw]" style={{ color: "rgba(255,255,255,0.92)" }}>
+                  <span className="text-2xs uppercase tracking-wider mr-1.5 font-semibold" style={{ color: "var(--accent-teal-fg)" }}>proves</span>
+                  {shown.alt}
+                </div>
+              )}
+            </div>
+          ) : zoom ? (
             <div className="absolute inset-0 overflow-auto">
               <img
                 src={shown.src}

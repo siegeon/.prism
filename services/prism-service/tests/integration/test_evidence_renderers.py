@@ -101,11 +101,14 @@ def test_proof_shots_renders_text_before_falling_back_to_an_image():
     assert "ProofText" in src or 'kind === "text"' in src, (
         "ProofShots needs a text branch")
     assert "<pre" in src, "a cited log must render as preformatted text"
-    tile_img = src.index("<img")
+    # Scope to the ProofShots renderer — the file also contains unrelated
+    # images (avatars), so a whole-file index would compare the wrong element.
+    body = src[src.index("function ProofShots"):]
+    tile_img = body.index("<img")
     first_text = min(
-        (src.index(tok) for tok in ('kind === "text"', "ProofText")
-         if tok in src),
-        default=len(src))
+        (body.index(tok) for tok in ('kind === "text"', "ProofText")
+         if tok in body),
+        default=len(body))
     assert first_text < tile_img, (
         "the text branch must be evaluated BEFORE the image fallback")
 
