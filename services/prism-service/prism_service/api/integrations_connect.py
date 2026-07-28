@@ -29,6 +29,7 @@ from prism_service.api.auth import coerce_principal, current_principal
 from prism_service.models.workspace import Principal
 from prism_service.services import jira_oauth
 from prism_service.services.integration_store import get_integration_store
+from prism_service.services.sync_prefs import get_sync_preferences
 from prism_service.services.workspace_service import get_workspace_service
 
 
@@ -250,6 +251,28 @@ def _provider_state(provider: str, scope: str) -> dict:
             "tracking": tracking}
 
 
+class SyncBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+@router.put("/{provider}/sync")
+def set_sync(provider: str, body: SyncBody,
+             principal: Principal = Depends(current_principal)) -> dict:
+    """Turn syncing with a provider on or off.
+
+    Separate from connecting on purpose (owner 2026-07-28): a working
+    credential must never imply consent to sync. Turning this off leaves the
+    connection intact.
+    """
+    principal = coerce_principal(principal)
+    if provider not in PROVIDERS and provider != "claude":
+        raise HTTPException(404, "unknown provider")
+    scope = personal_scope(principal)
+    enabled = get_sync_preferences().set_enabled(scope, provider, body.enabled)
+    return {"provider": provider, "sync_enabled": enabled}
+
+
 @router.get("/status")
 def connector_status(principal: Principal = Depends(current_principal)) -> dict:
     """Every connector, connected or not, with ONE server-decided status each.
@@ -259,8 +282,15 @@ def connector_status(principal: Principal = Depends(current_principal)) -> dict:
     """
     principal = coerce_principal(principal)
     scope = personal_scope(principal)
-    return {"connectors": [_provider_state(p, scope)
-                           for p in ("claude", "github", "jira")]}
+    prefs = get_sync_preferences()
+    rows = []
+    for p in ("claude", "github", "jira"):
+        row = _provider_state(p, scope)
+        # Computed INDEPENDENTLY of row["state"]: a usable credential is not
+        # consent to sync (owner 2026-07-28, task 01118728).
+        row["sync_enabled"] = prefs.enabled(scope, p)
+        rows.append(row)
+    return {"connectors": rows}
 
 
 @router.get("/{provider}/start")

@@ -27,6 +27,12 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }),
+  put: <T = unknown>(p: string, body: unknown) =>
+    fetchJSON<T>(p, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   delete: <T = unknown>(p: string) =>
     fetchJSON<T>(p, { method: "DELETE" }),
 };
@@ -141,7 +147,20 @@ export type Connector = {
   detail?: string;
   account?: string;
   tracking?: string[];
+  /** Whether the user asked PRISM to sync with this provider. Separate from
+   *  `state`: a working credential is not consent to sync. */
+  sync_enabled?: boolean;
 };
+
+/** Turn syncing with a provider on or off. Leaves the connection intact. */
+export async function setConnectorSync(
+  provider: string, enabled: boolean,
+): Promise<boolean> {
+  const d = await api.put<{ sync_enabled: boolean }>(
+    `/api/integrations/connect/${encodeURIComponent(provider)}/sync`,
+    { enabled });
+  return d.sync_enabled;
+}
 
 export async function listConnectorStatus(): Promise<Connector[]> {
   const d = await api.get<{ connectors: Connector[] }>(

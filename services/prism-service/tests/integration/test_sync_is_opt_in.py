@@ -185,9 +185,20 @@ def test_the_badge_opens_configuration_without_double_firing():
 # ── AC-8: the switch a person actually throws ─────────────────────────
 
 def test_the_configuration_panel_renders_a_sync_switch():
-    body = _connectors_body()
-    assert re.search(r'role="switch"', body), (
+    """Two halves, both required: the connectors card must RENDER the control,
+    and the control must really be a switch. Checking only the second would
+    pass on a component nothing mounts."""
+    assert "<SyncSwitch" in _connectors_body(), (
+        "the connector's configuration panel must render the sync switch")
+
+    src = _read(_SETTINGS)
+    switch = src[src.index("function SyncSwitch"):]
+    switch = switch[:switch.index("function ConnectorsSection")]
+    assert re.search(r'role="switch"', switch), (
         "the configuration needs a real switch control for syncing")
-    assert "aria-checked" in body, (
+    assert "aria-checked" in switch, (
         "the switch must report its state to assistive tech")
-    assert "sync" in body.lower(), "the switch must be labelled for syncing"
+    assert "sync" in switch.lower(), "the switch must be labelled for syncing"
+    assert "setConnectorSync" in switch, (
+        "flipping the switch must persist through the server, not just local "
+        "state that a reload forgets")

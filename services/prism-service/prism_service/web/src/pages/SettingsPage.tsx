@@ -12,6 +12,7 @@ import {
   listContainers,
   pullContainer,
   listConnectorStatus,
+  setConnectorSync,
   startConnect,
   type Connector,
   type IntegrationConnection,
@@ -3421,6 +3422,49 @@ function IntegrationsCard({ project }: { project: string }) {
 // Jira as PEER cards — Claude is an integration, not the category the others
 // hang beneath (mx-dc7c38). Every status here is the SERVER's answer; the UI
 // never infers health from whether a connection row exists.
+/** Syncing is a CHOICE, separate from connecting. It starts off, and a
+ *  working credential never turns it on (owner 2026-07-28, task 01118728). */
+function SyncSwitch({ connector, onChanged }: { connector: Connector; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const on = connector.sync_enabled === true;
+
+  const flip = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true);
+    try {
+      await setConnectorSync(connector.provider, !on);
+      onChanged();
+    } finally { setBusy(false); }
+  }, [connector.provider, on, onChanged]);
+
+  return (
+    <div className="flex items-start justify-between gap-4 pb-4">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          Sync work with {connector.name}
+        </div>
+        <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+          {on
+            ? `PRISM keeps work in step with ${connector.name}.`
+            : `Off. Connecting only proves the credential works; nothing is synced until you turn this on.`}
+        </p>
+      </div>
+      <button type="button" role="switch" aria-checked={on} disabled={busy}
+        onClick={flip}
+        title={on ? `Stop syncing with ${connector.name}` : `Sync work with ${connector.name}`}
+        className={cn(
+          "shrink-0 w-11 h-6 rounded-full relative transition-colors disabled:opacity-40",
+          on ? "bg-[color:var(--accent-sage-fg)]" : "bg-[color:var(--surface-3)] border border-[color:var(--border-default)]",
+        )}>
+        <span className={cn(
+          "absolute top-1 w-4 h-4 rounded-full bg-white transition-all",
+          on ? "left-6" : "left-1",
+        )} />
+      </button>
+    </div>
+  );
+}
+
 function ConnectorsSection({ project }: { project: string }) {
   const [rows, setRows] = useState<Connector[]>([]);
   const [err, setErr] = useState<string>("");
@@ -3490,10 +3534,6 @@ function ConnectorsSection({ project }: { project: string }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-semibold" style={{ color: "var(--text-primary)" }}>{c.name}</span>
-                <span className="text-2xs uppercase tracking-wider font-semibold"
-                      style={{ color: TONE[c.state] ?? "var(--text-muted)" }}>
-                  {LABEL[c.state] ?? c.state}
-                </span>
               </div>
               {c.detail && (
                 <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>{c.detail}</p>
@@ -3508,6 +3548,18 @@ function ConnectorsSection({ project }: { project: string }) {
               )}
             </div>
             <div className="shrink-0 flex items-center gap-2">
+              {/* The state badge IS the configuration control, top right
+                  (owner 2026-07-28). stopPropagation first: it sits inside
+                  the card's own clickable header, so without it a click
+                  would toggle the card twice and land on the wrong state. */}
+              <button type="button"
+                onClick={(e) => { e.stopPropagation(); setOpenDetail(isOpen ? "" : c.provider); }}
+                aria-expanded={isOpen}
+                title={`Configure ${c.name}`}
+                className="text-2xs uppercase tracking-wider font-semibold px-2 py-1 rounded-md border border-transparent hover:border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] transition-colors"
+                style={{ color: TONE[c.state] ?? "var(--text-muted)" }}>
+                {LABEL[c.state] ?? c.state}
+              </button>
               {c.state === "needs_attention" && (
                 <button type="button" disabled={busy === c.provider}
                   onClick={(e) => { e.stopPropagation(); connect(c.provider); }}
@@ -3537,8 +3589,13 @@ function ConnectorsSection({ project }: { project: string }) {
               page; it belongs to Claude's card, not to a second nav entry.
               Guarded by openDetail so ClaudeAuthCard's 5s status poll starts
               on expand, never on page load (task c89edbeb). */}
+          {openDetail === c.provider && (
+            <div className="px-5 pt-4 border-t border-[color:var(--border-subtle)]">
+              <SyncSwitch connector={c} onChanged={reload} />
+            </div>
+          )}
           {c.provider === "claude" && openDetail === c.provider && (
-            <div className="px-5 pb-5 pt-4 border-t border-[color:var(--border-subtle)] space-y-4">
+            <div className="px-5 pb-5 pt-4 space-y-4">
               <div>
                 <SectionLabel>Claude auth</SectionLabel>
                 <ClaudeAuthCard />
@@ -3550,7 +3607,7 @@ function ConnectorsSection({ project }: { project: string }) {
             </div>
           )}
           {c.provider !== "claude" && openDetail === c.provider && (
-            <div className="px-5 pb-5 pt-4 border-t border-[color:var(--border-subtle)]">
+            <div className="px-5 pb-5 pt-4">
               {c.state === "connected" ? (
                 <IntegrationsCard project={project} />
               ) : (
