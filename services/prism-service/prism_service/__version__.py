@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.4.0"
+PRISM_VERSION = "7.4.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.4.1: CONNECTORS, ITS OWN PLACE [tasks e139295d, 7fff8ef0]. Settings "
+    "gains a Connectors entry in the nav, and integrations no longer live "
+    "inside Claude auth: Claude, GitHub and Jira are peer connectors, each a "
+    "card with one server-decided status (connected / not connected / not "
+    "configured / needs attention) and the matching action. Connecting is "
+    "optional by design, PRISM tracks your work on its own. "
+)
+PRISM_VERSION_NOTES += (
     "v7.3.2: WHO YOU ARE, in the header [task fa52ba9e]. The app header now "
     "shows an identity chip (avatar + name) reading GET /api/auth/me, so you "
     "can see who you are signed in as. After you claim your instance it shows "
