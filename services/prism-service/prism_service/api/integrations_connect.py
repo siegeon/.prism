@@ -256,6 +256,89 @@ class SyncBody(BaseModel):
     enabled: bool
 
 
+class TrackBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    repo: str
+
+
+@router.post("/{provider}/track")
+def track_repo(provider: str, body: TrackBody,
+               principal: Principal = Depends(current_principal)) -> dict:
+    """Track a repository, with NO team workspace required.
+
+    The connection attaches to the caller's own scope, provisioned on demand.
+    The workspace-scoped route in api/integrations.py needs a membership that
+    a local install never has, which is why the picker was unreachable
+    (task 900a4fb9).
+    """
+    principal = coerce_principal(principal)
+    if provider not in PROVIDERS:
+        raise HTTPException(404, "unknown provider")
+    repo = (body.repo or "").strip().strip("/")
+    if repo.count("/") != 1 or not all(repo.split("/")):
+        raise HTTPException(422, "repository must look like owner/repo")
+
+    scope = personal_scope(principal)
+    store = get_integration_store()
+    owner = repo.split("/")[0]
+    connection = store.ensure_connection(scope, provider, owner,
+                                         display_name=owner)
+    container = store.ensure_container(
+        scope, connection.id, "repository", repo,
+        display_key=repo, display_name=repo,
+        url=f"https://github.com/{repo}")
+    return {"provider": provider, "repo": repo,
+            "connection_id": connection.id, "container_id": container.id}
+
+
+@router.post("/{provider}/sync/run")
+def run_sync(provider: str, project: str = Query(...),
+             principal: Principal = Depends(current_principal)) -> dict:
+    """Pull the tracked containers into PRISM TASKS.
+
+    Same wiring as the workspace route (api/integrations.py:215-224), differing
+    only in the scope it authorizes: intake is the project's task service, so
+    an imported issue becomes an ordinary PRISM task on /api/tasks, which is
+    what the Work page reads. PRISM's tasks are the record; this is a mirror,
+    never a second list (owner 2026-07-28).
+    """
+    principal = coerce_principal(principal)
+    if provider not in PROVIDERS:
+        raise HTTPException(404, "unknown provider")
+    scope = personal_scope(principal)
+
+    # The switch decides FIRST, before any container is resolved or any
+    # provider is contacted, so turning it off really stops the sync.
+    if not get_sync_preferences().enabled(scope, provider):
+        raise HTTPException(
+            409, f"syncing with {provider} is turned off. Turn it on from the "
+                 f"{provider} connector to sync.")
+
+    from prism_service import project_context
+    from prism_service.api.integrations import _adapters
+    from prism_service.services.work_item_sync import WorkItemSyncService
+
+    store = get_integration_store()
+    intake = project_context.get_project(project).task_svc
+    sync = WorkItemSyncService(store, intake=intake, registry=_adapters)
+
+    runs, imported = [], 0
+    for connection in store.list_connections(scope):
+        if connection.provider != provider:
+            continue
+        for container in store.list_containers(scope, connection.id):
+            run = sync.pull_container(scope, connection, container)
+            runs.append({"container": container.display_key or container.remote_id,
+                         "status": run.status,
+                         "imported": run.items_processed})
+            imported += run.items_processed or 0
+    if not runs:
+        raise HTTPException(
+            409, f"no {provider} repository is being tracked yet. Add one to "
+                 f"start syncing.")
+    return {"provider": provider, "imported": imported, "runs": runs}
+
+
 @router.put("/{provider}/sync")
 def set_sync(provider: str, body: SyncBody,
              principal: Principal = Depends(current_principal)) -> dict:

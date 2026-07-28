@@ -115,6 +115,13 @@ def _track(app):
                     json={"repo": REPO})
 
 
+def _enable(app):
+    """Turn syncing on, the way the owner did. Sync is opt-in and starts OFF
+    (task 01118728), so every import test must ask for it explicitly."""
+    r = app.put("/api/integrations/connect/github/sync", json={"enabled": True})
+    assert r.status_code == 200, r.text
+
+
 def _sync(app):
     # /sync is the PREFERENCE (PUT). Running a sync is a distinct action, so
     # it gets its own path rather than overloading the same one by verb.
@@ -154,6 +161,7 @@ def test_tracking_persists_a_real_connection(app):
 
 def test_sync_imports_issues_as_prism_tasks(app):
     _track(app)
+    _enable(app)
     resp = _sync(app)
     assert resp.status_code == 200, resp.text
 
@@ -168,6 +176,7 @@ def test_sync_imports_issues_as_prism_tasks(app):
 def test_each_imported_task_carries_the_issue_it_came_from(app):
     """Without this the later push slice cannot find the counterpart."""
     _track(app)
+    _enable(app)
     _sync(app)
     imported = [t for t in _tasks() if t.title == ISSUES[0]["title"]]
     assert imported, "precondition: the issue was imported"
@@ -205,6 +214,7 @@ def test_running_sync_twice_does_not_duplicate(app):
     """Recorded third misfire. Identity is meant to be a deterministic UUIDv5
     of the provider tuple, so this proves that rather than assuming it."""
     _track(app)
+    _enable(app)
     _sync(app)
     first = len(_tasks())
     assert first >= len(ISSUES), (
@@ -220,6 +230,7 @@ def test_running_sync_twice_does_not_duplicate(app):
 def test_this_slice_never_writes_to_github(app):
     """Owner instruction: siegeon/.prism, read-only for now."""
     _track(app)
+    _enable(app)
     _sync(app)
     assert app.transport_recorder.calls, (
         "precondition: the sync must actually have reached GitHub, or "

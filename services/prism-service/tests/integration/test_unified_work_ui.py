@@ -94,10 +94,18 @@ def test_tasks_page_installs_keyboard_navigation():
 # ── AC-4: SettingsPage integrations setup + manual sync + receipt ──────
 
 def test_settings_has_integrations_sync_card():
+    """Re-pointed, not weakened (task 900a4fb9).
+
+    This pinned `pullContainer` and a receipt link on IntegrationsCard, which
+    rendered the repo picker behind a TEAM WORKSPACE. A local install never
+    creates one, so that card only ever showed "No team workspace yet" and the
+    owner could not reach any of it. RepoSync replaces it on the personal
+    scope, so the claim is the same and the mechanism moved.
+    """
     src = _read(_SETTINGS)
-    assert "Integrations" in src, "Settings needs an Integrations card"
-    assert "pullContainer" in src, "the card triggers a manual pull"
-    assert "receipt" in src.lower(), "the card links the durable sync receipt"
+    assert "RepoSync" in src, "Settings needs a repository sync card"
+    assert "runConnectorSync" in src, "the card triggers a manual sync"
+    assert "trackConnectorRepo" in src, "the card chooses what to track"
 
 
 def test_sidebar_labels_the_work_surface():

@@ -167,9 +167,18 @@ class WorkItemSyncService:
         title = entity_input.title or entity_input.display_key or entity_input.remote_id
         # Create only a LOCAL pending intake; remote status never enters the
         # conductor and a later pull never clobbers a user-edited local row.
+        # Record WHERE it came from, on the task itself. The deterministic id
+        # already links the two, but a person reading the Work page could not
+        # see it, and the push slice needs the counterpart to be legible rather
+        # than recomputable-only (task 900a4fb9).
+        origin = entity_input.display_key or entity_input.remote_id
+        source = f"{container.display_key or container.remote_id} {origin}".strip()
+        url = getattr(entity_input, "url", "") or ""
         self._intake.ensure_external_intake(
             task_id,
             title=title,
+            description=(f"Mirrored from {connection.provider} {source}."
+                         + (f"\n{url}" if url else "")),
             tags=[connection.provider, "external"],
         )
         store.activate_link(workspace_id, link.id)

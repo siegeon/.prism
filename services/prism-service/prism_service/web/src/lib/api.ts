@@ -162,6 +162,23 @@ export async function setConnectorSync(
   return d.sync_enabled;
 }
 
+/** Track a repository (owner/repo). No team workspace required. */
+export async function trackConnectorRepo(
+  provider: string, repo: string,
+): Promise<{ repo: string }> {
+  return api.post(
+    `/api/integrations/connect/${encodeURIComponent(provider)}/track`, { repo });
+}
+
+/** Run a sync now. Refuses with 409 when syncing is switched off. */
+export async function runConnectorSync(
+  provider: string, project: string,
+): Promise<{ imported: number; runs: { container: string; status: string; imported: number }[] }> {
+  return api.post(
+    `/api/integrations/connect/${encodeURIComponent(provider)}/sync/run`
+    + `?project=${encodeURIComponent(project)}`, {});
+}
+
 export async function listConnectorStatus(): Promise<Connector[]> {
   const d = await api.get<{ connectors: Connector[] }>(
     "/api/integrations/connect/status");

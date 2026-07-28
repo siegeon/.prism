@@ -7,17 +7,12 @@ import {
 } from "lucide-react";
 import {
   api,
-  listWorkspaces,
-  listConnections,
-  listContainers,
-  pullContainer,
   listConnectorStatus,
   setConnectorSync,
+  trackConnectorRepo,
+  runConnectorSync,
   startConnect,
   type Connector,
-  type IntegrationConnection,
-  type ExternalContainer,
-  type SyncRun,
 } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import type { ScanJob } from "@/lib/scan-activity";
@@ -3324,104 +3319,11 @@ function ProjectEditor({
 // GitHub/Jira connections and their containers, triggers a manual pull, and
 // links the durable sanitized receipt the sync produced. Authorization and
 // receipts are the server's — this card only surfaces them.
-function IntegrationsCard({ project }: { project: string }) {
-  const [workspace, setWorkspace] = useState<string>("");
-  const [connections, setConnections] = useState<IntegrationConnection[]>([]);
-  const [containers, setContainers] = useState<ExternalContainer[]>([]);
-  const [lastRun, setLastRun] = useState<SyncRun | null>(null);
-  const [busy, setBusy] = useState<string>("");
-  const [err, setErr] = useState<string>("");
+// IntegrationsCard was removed with task 900a4fb9. It rendered the
+// repo picker behind a TEAM WORKSPACE, which a local install never
+// creates, so it always showed "No team workspace yet". RepoSync
+// above replaces it on the personal scope.
 
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      try {
-        const ws = await listWorkspaces();
-        if (cancel || !ws.length) return;
-        const wid = ws[0].id;
-        setWorkspace(wid);
-        setConnections(await listConnections(wid));
-        setContainers(await listContainers(wid));
-      } catch (e) {
-        if (!cancel) setErr(String((e as Error).message ?? e));
-      }
-    })();
-    return () => { cancel = true; };
-  }, []);
-
-  const sync = useCallback(async (containerId: string) => {
-    if (!workspace) return;
-    setBusy(containerId);
-    setErr("");
-    try {
-      const run = await pullContainer(workspace, containerId, project);
-      setLastRun(run);
-    } catch (e) {
-      setErr(String((e as Error).message ?? e));
-    } finally {
-      setBusy("");
-    }
-  }, [workspace, project]);
-
-  if (!workspace) {
-    return <Empty>No team workspace yet — integrations appear once a workspace is created.</Empty>;
-  }
-  return (
-    <div className="space-y-3">
-      {err && <ErrorBanner>{err}</ErrorBanner>}
-      {connections.length === 0 ? (
-        <Empty>No GitHub or Jira connections configured for this workspace.</Empty>
-      ) : (
-        <ul className="text-sm space-y-1">
-          {connections.map((c) => (
-            <li key={c.id} className="flex items-center gap-2">
-              <span className="font-mono text-2xs uppercase px-1.5 py-0.5 rounded bg-[color:var(--surface-2)]">{c.provider}</span>
-              <span className="text-[color:var(--text-secondary)]">{c.display_name || c.remote_scope}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="space-y-1">
-        {containers.map((k) => (
-          <div key={k.id} className="flex items-center gap-2 text-sm">
-            <span className="text-[color:var(--text-secondary)]">{k.display_key || k.display_name || k.id}</span>
-            <button
-              type="button"
-              disabled={busy === k.id}
-              onClick={() => sync(k.id)}
-              className="ml-auto text-2xs font-semibold px-2 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
-              style={{ color: "var(--accent-teal-fg)" }}
-            >
-              {busy === k.id ? "Syncing…" : "Sync"}
-            </button>
-          </div>
-        ))}
-      </div>
-      {lastRun && (
-        // The durable, sanitized sync receipt for the last manual pull.
-        <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
-          Last sync: {lastRun.status} · imported {lastRun.imported ?? 0}
-          {lastRun.id && (
-            <a
-              href={`/api/workspaces/${workspace}/integrations/receipts?run_id=${lastRun.id}`}
-              target="_blank"
-              rel="noreferrer"
-              className="ml-2 hover:underline"
-              style={{ color: "var(--accent-teal-fg)" }}
-            >
-              view receipt ↗
-            </a>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// CONNECTORS (task e139295d). Its own settings section, with Claude, GitHub and
-// Jira as PEER cards — Claude is an integration, not the category the others
-// hang beneath (mx-dc7c38). Every status here is the SERVER's answer; the UI
-// never infers health from whether a connection row exists.
 /** Syncing is a CHOICE, separate from connecting. It starts off, and a
  *  working credential never turns it on (owner 2026-07-28, task 01118728). */
 function SyncSwitch({ connector, noun, onChanged }: { connector: Connector; noun: string; onChanged: () => void }) {
@@ -3463,6 +3365,71 @@ function SyncSwitch({ connector, noun, onChanged }: { connector: Connector; noun
           on ? "left-6" : "left-1",
         )} />
       </button>
+    </div>
+  );
+}
+
+/** Choose a repository and pull its issues in as PRISM tasks. No team
+ *  workspace needed: this is the local, personal scope (task 900a4fb9). */
+function RepoSync({ connector, project, onChanged }:
+  { connector: Connector; project: string; onChanged: () => void }) {
+  const [repo, setRepo] = useState("");
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+  const tracked = connector.tracking ?? [];
+
+  const track = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setErr(""); setNote(""); setBusy("track");
+    try {
+      await trackConnectorRepo(connector.provider, repo.trim());
+      setRepo(""); onChanged();
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(""); }
+  }, [connector.provider, repo, onChanged]);
+
+  const sync = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setErr(""); setNote(""); setBusy("sync");
+    try {
+      const r = await runConnectorSync(connector.provider, project);
+      setNote(`Imported ${r.imported} item${r.imported === 1 ? "" : "s"} as PRISM tasks.`);
+      onChanged();
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(""); }
+  }, [connector.provider, project, onChanged]);
+
+  return (
+    <div className="space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div>
+        <SectionLabel>Repositories</SectionLabel>
+        {tracked.length === 0 ? (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Nothing tracked yet. Add one as owner/repo.
+          </p>
+        ) : (
+          <ul className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>
+            {tracked.map((t) => <li key={t}>{t}</li>)}
+          </ul>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <input value={repo} onChange={(e) => setRepo(e.target.value)}
+          placeholder="owner/repo"
+          className="flex-1 text-xs font-mono px-3 py-1.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]" />
+        <button type="button" onClick={track} disabled={!repo.trim() || busy !== ""}
+          className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40">
+          Track
+        </button>
+        <button type="button" onClick={sync} disabled={busy !== "" || tracked.length === 0}
+          className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+          style={{ color: "var(--accent-teal-fg)" }}>
+          {busy === "sync" ? "Syncing…" : "Sync now"}
+        </button>
+      </div>
+      {note && <p className="text-xs" style={{ color: "var(--accent-sage-fg)" }}>{note}</p>}
+      {err && <p className="text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
     </div>
   );
 }
@@ -3620,7 +3587,7 @@ function ConnectorsSection({ project }: { project: string }) {
           {c.provider !== "claude" && openDetail === c.provider && (
             <div className="px-5 pb-5 pt-4">
               {c.state === "connected" ? (
-                <IntegrationsCard project={project} />
+                <RepoSync connector={c} project={project} onChanged={reload} />
               ) : (
                 <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                   {c.detail} Connecting is optional: PRISM tracks your work on
