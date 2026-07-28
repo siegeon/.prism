@@ -34,7 +34,7 @@ function isInTauri(): boolean {
 // "connectors" is its OWN section (mx-dc7c38). Claude is an integration like
 // any other, so it appears as a peer card inside Connectors rather than owning
 // a section that GitHub and Jira hang beneath.
-type SectionId = "projects" | "connectors" | "connections" | "activity" | "logs" | "service" | "access-key";
+type SectionId = "projects" | "connectors" | "activity" | "logs" | "service" | "access-key";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
   connectors: {
@@ -48,10 +48,6 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   projects: {
     title: "Projects",
     description: "Add, configure, sync, and delete tracked repos.",
-  },
-  connections: {
-    title: "Claude auth",
-    description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. PRISM reads tokens from your host's ~/.claude directory (native install) or the bind-mounted /root/.claude (docker install), so any `claude login` you've already done is reused — no second login here.",
   },
   activity: {
     title: "Background activity",
@@ -67,13 +63,16 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["access-key", "projects", "connectors", "connections", "activity", "logs", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["access-key", "projects", "connectors", "activity", "logs", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
   // Legacy URL aliases — keep bookmarked links and prior versions working.
   // `auth` (v5.1.8) is now Connections; `jobs` and `workers` are now
   // the unified `activity` page.
-  if (raw === "auth") return "connections";
+  // `connections` was the standalone Claude auth page. Claude now lives on
+  // its own card under Connectors, so the old link lands there rather than
+  // silently dropping the user on Projects (task c89edbeb).
+  if (raw === "auth" || raw === "connections") return "connectors";
   if (raw === "jobs" || raw === "workers") return "activity";
   return (raw && (KNOWN_SECTIONS as string[]).includes(raw)) ? (raw as SectionId) : "projects";
 }
@@ -233,19 +232,6 @@ export default function SettingsPage() {
             </ul>
           )}
         </Card>
-      )}
-
-      {section === "connections" && (
-        <div className="space-y-6">
-          <Card>
-            <SectionLabel>Claude auth</SectionLabel>
-            <ClaudeAuthCard />
-          </Card>
-          <Card>
-            <SectionLabel>Claude source</SectionLabel>
-            <ClaudeSourceCard project={active} />
-          </Card>
-        </div>
       )}
 
       {/* CONNECTORS — its own section. Claude, GitHub and Jira are PEERS here
@@ -3438,6 +3424,10 @@ function ConnectorsSection({ project }: { project: string }) {
   const [rows, setRows] = useState<Connector[]>([]);
   const [err, setErr] = useState<string>("");
   const [busy, setBusy] = useState<string>("");
+  // Which card has its detail open. A collapsed box is a LAZY LOAD (owner
+  // rule): the detail's children only mount once it is opened, so their
+  // polling never runs for a panel nobody looked at.
+  const [openDetail, setOpenDetail] = useState<string>("");
 
   const reload = useCallback(() => {
     listConnectorStatus().then(setRows).catch((e) => setErr(String((e as Error).message ?? e)));
@@ -3502,6 +3492,15 @@ function ConnectorsSection({ project }: { project: string }) {
               )}
             </div>
             <div className="shrink-0 flex items-center gap-2">
+              {c.provider === "claude" && (
+                <button type="button"
+                  onClick={() => setOpenDetail(openDetail === "claude" ? "" : "claude")}
+                  aria-expanded={openDetail === "claude"}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
+                  style={{ color: "var(--text-secondary)" }}>
+                  Details
+                </button>
+              )}
               {c.state === "needs_attention" && (
                 <button type="button" disabled={busy === c.provider}
                   onClick={() => connect(c.provider)}
@@ -3520,6 +3519,22 @@ function ConnectorsSection({ project }: { project: string }) {
               )}
             </div>
           </div>
+          {/* Claude's own detail. It used to be the standalone Claude auth
+              page; it belongs to Claude's card, not to a second nav entry.
+              Guarded by openDetail so ClaudeAuthCard's 5s status poll starts
+              on expand, never on page load (task c89edbeb). */}
+          {c.provider === "claude" && openDetail === "claude" && (
+            <div className="mt-3 pt-3 border-t border-[color:var(--border-subtle)] space-y-4">
+              <div>
+                <SectionLabel>Claude auth</SectionLabel>
+                <ClaudeAuthCard />
+              </div>
+              <div>
+                <SectionLabel>Claude source</SectionLabel>
+                <ClaudeSourceCard project={project} />
+              </div>
+            </div>
+          )}
           {c.state === "connected" && c.provider !== "claude" && (
             <div className="mt-3 pt-3 border-t border-[color:var(--border-subtle)]">
               <IntegrationsCard project={project} />

@@ -61,7 +61,9 @@ def test_the_nav_has_no_claude_auth_entry():
 
 def test_the_claude_card_owns_the_auth_and_source_detail():
     body = _connectors_body()
-    for component in ("ClaudeAuthCard", "ClaudeSourceCard"):
+    # The RENDERED tag, not the bare name — a mention in a comment is not a
+    # panel anybody can see.
+    for component in ("<ClaudeAuthCard", "<ClaudeSourceCard"):
         assert component in body, (
             f"{component} must render from inside ConnectorsSection — removing "
             f"the nav entry without this orphans the panel entirely")
@@ -84,15 +86,23 @@ def test_the_detail_does_not_mount_until_it_is_opened():
     unauthenticated (SettingsPage.tsx ~line 736). Mounting it eagerly puts
     that poll on every visit to Connectors for a panel nobody opened."""
     body = _connectors_body()
-    assert "ClaudeAuthCard" in body, (
+    assert "<ClaudeAuthCard" in body, (
         "cannot judge laziness of a panel that is not on the card yet")
-    i = body.index("ClaudeAuthCard")
-    # the guard sits immediately above the render, inside the same JSX branch
-    guard = body[max(0, i - 400):i]
-    assert re.search(r"(open|expand|show)\w*\s*===\s*|(open|expand|show)\w*\s*&&",
-                     guard, re.IGNORECASE), (
-        "the Claude detail must be guarded by an open-state so it mounts on "
-        f"expand, not on page load; saw instead: {guard.strip()[-200:]}")
+    i = body.index("<ClaudeAuthCard")
+    # Read the CONDITION of the JSX branch that renders it, not a fixed window
+    # of characters: `{ <condition> && ( … <ClaudeAuthCard/> … )}`.
+    opener = body.rindex("&& (", 0, i)
+    condition = body[body.rindex("{", 0, opener):opener]
+    assert re.search(r"open|expand|show", condition, re.IGNORECASE), (
+        "the Claude detail must be rendered under an open-state condition so "
+        "it mounts on expand, not on page load; the branch that renders it "
+        f"is guarded only by: {condition.strip()!r}")
+
+    # …and that state must START closed, or "lazy" is a lie.
+    init = re.search(r"const \[open\w*, set\w+\] = useState[^;]*;", body)
+    assert init, "expected an open-state hook for the connector detail"
+    assert re.search(r'useState<[^>]*>\(\s*(""|\'\'|false|null)\s*\)', init.group(0)), (
+        f"the detail must default to CLOSED; got {init.group(0)}")
 
 
 # ── AC-4: the old URL still lands somewhere real ──────────────────────

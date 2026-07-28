@@ -84,11 +84,11 @@ const SETTINGS_SECTIONS: Section[] = [
     items: [
       { to: "/settings/access-key", label: "Access key", icon: KeyRound },
       { to: "/settings/projects", label: "Projects", icon: FolderTree },
-      // Connectors is the home for every integration; Claude auth keeps its
-      // own entry for Claude's credentials but no longer reads as the place
-      // other integrations live beneath (mx-dc7c38, task 7fff8ef0).
+      // Connectors is the ONE home for every integration, Claude included.
+      // Claude's own credentials and source registration live on its card
+      // here, not behind a second nav entry — one subject, one door
+      // (owner 2026-07-28, task c89edbeb).
       { to: "/settings/connectors", label: "Connectors", icon: Plug },
-      { to: "/settings/connections", label: "Claude auth", icon: Plug },
       { to: "/settings/activity", label: "Background activity", icon: Activity },
       { to: "/settings/logs", label: "Logs", icon: ScrollText },
       { to: "/settings/service", label: "Service", icon: Info },
