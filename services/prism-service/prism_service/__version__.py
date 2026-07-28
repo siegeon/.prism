@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.4.3"
+PRISM_VERSION = "7.5.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.5.0: GITHUB CONNECTS WITH NO SETUP [task f4dd3687]. If the GitHub CLI "
+    "is logged in on this machine, GitHub is simply connected, naming the "
+    "account. No OAuth app to register, nothing to configure. Connected is "
+    "earned: a token the CLI cannot validate reads Connection issue rather "
+    "than looking healthy until the first sync fails. This also ships the "
+    "GitHub REST client and registers the work adapter in production, which "
+    "nothing did before, so a sync now has an adapter to call. OAuth stays "
+    "for server and multi-user installs. "
+)
+PRISM_VERSION_NOTES += (
     "v7.4.3: THE WHOLE CONNECTOR PANEL OPENS [task 064fc09b]. Clicking "
     "anywhere on a connector card opens it, instead of hunting for a small "
     "Details button in the corner. The card shows a pointer cursor, a hover "
