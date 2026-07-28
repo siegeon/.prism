@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.5.1"
+PRISM_VERSION = "7.5.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.5.2: THE SYNC SWITCH SAYS WHAT IT DOES [task fc6ec2c9]. It read "
+    "\"Sync work with GitHub\", which never said what would actually move. It "
+    "now reads \"Sync PRISM tasks with GitHub issues\", and the line beneath "
+    "it names both sides in either state and says your PRISM tasks stay the "
+    "record regardless. The Claude card no longer offers a sync switch at "
+    "all: Claude holds a credential for running analyzers and has no issues "
+    "to sync, so the control was meaningless there. "
+)
+PRISM_VERSION_NOTES += (
     "v7.5.1: SYNC IS A SWITCH YOU CONTROL [task 01118728]. Connecting a "
     "provider proves the credential works and nothing more. Whether PRISM "
     "syncs your work there is now an explicit switch, and it starts off, "
