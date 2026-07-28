@@ -158,3 +158,20 @@ def test_a_long_task_name_is_truncated():
     assert "min-w-0" in cls, (
         "truncate does nothing to a flex item that cannot shrink; the title "
         "needs min-w-0 too, which is why the rows were still running long")
+
+
+def test_the_table_uses_fixed_layout_so_columns_share_its_width():
+    """Owner 2026-07-28: "the horizontal scroll still happens, maybe the
+    truncate needs to dynamically calculate the % of space it can use based on
+    its total table width".
+
+    That is table-layout: fixed. Under the default `auto`, the Summary column
+    sizes to its CONTENT, so a long title grows the cell and `truncate` can
+    never engage no matter what classes the title carries.
+    """
+    src = _read()
+    i = src.index("<table")
+    tag = src[i:src.index(">", i)]
+    assert "table-fixed" in tag, (
+        f"the work table must use fixed layout or a long title widens it past "
+        f"the viewport; got: {tag}")
