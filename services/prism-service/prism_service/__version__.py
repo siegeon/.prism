@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.4.2"
+PRISM_VERSION = "7.4.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.4.3: THE WHOLE CONNECTOR PANEL OPENS [task 064fc09b]. Clicking "
+    "anywhere on a connector card opens it, instead of hunting for a small "
+    "Details button in the corner. The card shows a pointer cursor, a hover "
+    "state and a chevron that turns with it, and it works from the keyboard "
+    "with Enter or Space. Connect and Reconnect still do their own job "
+    "without collapsing the panel. GitHub and Jira open too, showing what "
+    "they track or what they still need. "
+)
+PRISM_VERSION_NOTES += (
     "v7.4.2: ONE CLAUDE, NOT TWO [task c89edbeb]. Claude was reachable from "
     "two places in Settings: as a card under Connectors and as its own Claude "
     "auth entry. Claude is an integration, so it now has one home. Its CLI "
