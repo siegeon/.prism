@@ -21,6 +21,7 @@ import {
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import type { ScanJob } from "@/lib/scan-activity";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 /** True when the SPA is loaded inside a Tauri WebView (so the dialog
  * plugin and other Tauri APIs are available). Lets us gracefully degrade
@@ -3461,9 +3462,24 @@ function ConnectorsSection({ project }: { project: string }) {
     <div className="space-y-4">
       {err && <ErrorBanner>{err}</ErrorBanner>}
       {rows.length === 0 && <Empty>Loading connectors…</Empty>}
-      {rows.map((c) => (
-        <Card key={c.provider}>
-          <div className="flex items-start gap-3">
+      {rows.map((c) => {
+      const isOpen = openDetail === c.provider;
+      const toggle = () => setOpenDetail(isOpen ? "" : c.provider);
+      return (
+        // p-0 hands the padding to the header below, so the ENTIRE panel is
+        // the click target rather than a small button in the corner
+        // (owner 2026-07-28). twMerge lets p-0 win over Card's own p-5.
+        <Card key={c.provider} className="p-0 overflow-hidden">
+          <div
+            role="button"
+            tabIndex={0}
+            aria-expanded={isOpen}
+            onClick={toggle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+            }}
+            className="p-5 cursor-pointer transition-colors hover:bg-[color:var(--surface-2)] flex items-start gap-3"
+          >
             <span
               className="shrink-0 grid place-items-center w-9 h-9 rounded-md font-semibold text-sm"
               style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
@@ -3492,18 +3508,9 @@ function ConnectorsSection({ project }: { project: string }) {
               )}
             </div>
             <div className="shrink-0 flex items-center gap-2">
-              {c.provider === "claude" && (
-                <button type="button"
-                  onClick={() => setOpenDetail(openDetail === "claude" ? "" : "claude")}
-                  aria-expanded={openDetail === "claude"}
-                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
-                  style={{ color: "var(--text-secondary)" }}>
-                  Details
-                </button>
-              )}
               {c.state === "needs_attention" && (
                 <button type="button" disabled={busy === c.provider}
-                  onClick={() => connect(c.provider)}
+                  onClick={(e) => { e.stopPropagation(); connect(c.provider); }}
                   className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
                   style={{ color: "var(--accent-amber-fg)" }}>
                   Reconnect
@@ -3511,20 +3518,27 @@ function ConnectorsSection({ project }: { project: string }) {
               )}
               {c.state === "not_connected" && (
                 <button type="button" disabled={busy === c.provider}
-                  onClick={() => connect(c.provider)}
+                  onClick={(e) => { e.stopPropagation(); connect(c.provider); }}
                   className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
                   style={{ color: "var(--accent-teal-fg)" }}>
                   Connect {c.name}
                 </button>
               )}
+              {/* The card's own state, shown where a Details button used to
+                  be. The whole panel is the control now. */}
+              <ChevronDown
+                aria-hidden
+                className={cn("w-4 h-4 transition-transform", isOpen && "rotate-180")}
+                style={{ color: "var(--text-muted)" }}
+              />
             </div>
           </div>
           {/* Claude's own detail. It used to be the standalone Claude auth
               page; it belongs to Claude's card, not to a second nav entry.
               Guarded by openDetail so ClaudeAuthCard's 5s status poll starts
               on expand, never on page load (task c89edbeb). */}
-          {c.provider === "claude" && openDetail === "claude" && (
-            <div className="mt-3 pt-3 border-t border-[color:var(--border-subtle)] space-y-4">
+          {c.provider === "claude" && openDetail === c.provider && (
+            <div className="px-5 pb-5 pt-4 border-t border-[color:var(--border-subtle)] space-y-4">
               <div>
                 <SectionLabel>Claude auth</SectionLabel>
                 <ClaudeAuthCard />
@@ -3535,13 +3549,22 @@ function ConnectorsSection({ project }: { project: string }) {
               </div>
             </div>
           )}
-          {c.state === "connected" && c.provider !== "claude" && (
-            <div className="mt-3 pt-3 border-t border-[color:var(--border-subtle)]">
-              <IntegrationsCard project={project} />
+          {c.provider !== "claude" && openDetail === c.provider && (
+            <div className="px-5 pb-5 pt-4 border-t border-[color:var(--border-subtle)]">
+              {c.state === "connected" ? (
+                <IntegrationsCard project={project} />
+              ) : (
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  {c.detail} Connecting is optional: PRISM tracks your work on
+                  its own, and {c.name} only adds a place to see work that
+                  already lives there.
+                </p>
+              )}
             </div>
           )}
         </Card>
-      ))}
+      );
+      })}
     </div>
   );
 }

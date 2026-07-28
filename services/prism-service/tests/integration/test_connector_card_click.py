@@ -49,8 +49,19 @@ def test_the_card_itself_toggles_its_detail():
     assert "onClick=" in region, (
         "the connector card has no click handler of its own — only the small "
         "Details button opens it, which is the owner's complaint")
-    assert re.search(r"onClick=\{[^}]*(setOpenDetail|toggleDetail)", region), (
-        "the card's click must drive the open-state, not some unrelated action")
+    handler = re.search(r"onClick=\{([A-Za-z_$][\w$]*)\}", region)
+    if handler:
+        # A named handler is fine, but it must RESOLVE to the open-state
+        # setter — follow it rather than trusting the name.
+        name = handler.group(1)
+        defn = re.search(rf"(const|function)\s+{re.escape(name)}\b[^\n]*", _connectors_body())
+        assert defn and "setOpenDetail" in defn.group(0), (
+            f"the card's onClick={{{name}}} does not resolve to the open-state "
+            f"setter; found: {defn.group(0) if defn else 'no definition'}")
+    else:
+        assert re.search(r"onClick=\{[^}]*setOpenDetail", region), (
+            "the card's click must drive the open-state, not some unrelated "
+            "action")
 
 
 # ── AC-2: keyboard and assistive tech reach it too ────────────────────
@@ -88,7 +99,10 @@ def test_action_buttons_do_not_toggle_the_card():
     """The recorded likely_misfire: starting an OAuth round trip must not
     collapse the panel it was started from."""
     body = _connectors_body()
-    handlers = re.findall(r"onClick=\{\([^)]*\)\s*=>\s*connect\([^}]*\}", body)
+    # EVERY onClick that starts a connect must stop the event first, whatever
+    # shape it is written in (expression body or block body).
+    handlers = [h for h in re.findall(r"onClick=\{.*?\}\}", body, re.DOTALL)
+                if "connect(" in h]
     assert handlers, "expected the Connect/Reconnect handlers to be present"
     for h in handlers:
         assert "stopPropagation" in h, (
