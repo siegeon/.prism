@@ -476,6 +476,41 @@ def _git(repo: str, *args: str) -> tuple[int, str]:
         return 1, ""
 
 
+def _resolve_delivery_branch(repo: str, task_id: str) -> tuple[str, str]:
+    """(branch, revision-to-search) for this task's [task:...] commits.
+
+    PREREQUISITE FIX (task cb1dc6f4): this used to be the project source
+    checkout's CURRENT branch (`git rev-parse --abbrev-ref HEAD`) — whatever
+    the shared checkout happened to have checked out, never the task's OWN
+    branch. A task's real, tagged commits live on its own
+    `prism/ws/<task_id>` worktree branch (task_workspace.ensure_workspace),
+    so whenever the checkout sat on unrelated work the search ran against
+    the wrong ref and reported "no commits found" for tasks that plainly had
+    them (live repro 2026-07-29: task a4c1bf03 reported
+    branch="fix/decision-packet-visual-evidence" with 0 commits while
+    prism/ws/a4c1bf03... held 2 tagged commits).
+
+    Prefer the task's workspace branch when task_workspace still has a
+    record for it AND the branch ref still resolves (a torn-down workspace
+    deletes its branch too); fall back to the checkout's current branch
+    otherwise — the old behavior, which still matters for tasks that never
+    got a per-task worktree or whose workspace was already cleaned up after
+    landing on main."""
+    branch = ""
+    try:
+        from prism_service.services import task_workspace
+        ws = task_workspace.workspace_for(task_id)
+        cand = str((ws or {}).get("branch") or "")
+        if cand and _git(repo, "rev-parse", "--verify", "-q", cand)[0] == 0:
+            branch = cand
+    except Exception:
+        branch = ""
+    if branch:
+        return branch, branch
+    _, cur = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    return cur, "HEAD"
+
+
 @router.get("/{task_id}/delivery")
 def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     """WHERE the task's work lives and what's left to ship (owner 2026-07-16:
@@ -505,11 +540,11 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
         pass
 
     commits: list[dict] = []
-    branch = ""
+    branch, rev = "", "HEAD"
     if repo:
-        _, branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        branch, rev = _resolve_delivery_branch(repo, task_id)
         rc, log = _git(repo, "log", "--grep", f"task:{task_id[:8]}",
-                       "--format=%h%x09%s", "-n", "20", "HEAD")
+                       "--format=%h%x09%s", "-n", "20", rev)
         if rc == 0 and log:
             main_ref = "origin/main"
             if _git(repo, "rev-parse", "--verify", "-q", main_ref)[0] != 0:

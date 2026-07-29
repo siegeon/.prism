@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.6.3"
+PRISM_VERSION = "7.6.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.6.4: APPROVING GREEN_GATE FINISHES THE PIPELINE [task cb1dc6f4]. "
+    "Approving a task's final gate used to stop at 'verified' — the board "
+    "said done while the code sat on its own branch forever. Opt in with "
+    "PRISM_DELIVERY_AUTOMERGE=1 and an approve re-verifies the task's "
+    "pinned tests at the tree being merged, then lands that branch on "
+    "local main; a red tree is refused, a conflict parks with a reason, "
+    "and main is never forced, reset, or rewritten. The Delivery card's "
+    "prerequisite bug is fixed too: it used to report the shared "
+    "checkout's CURRENT branch instead of the task's own, so it found "
+    "\"no commits\" for tasks that plainly had them."
+)
+PRISM_VERSION_NOTES += (
     "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "
     "as owner/repo on the GitHub connector and press Sync now: its open "
     "issues arrive as ordinary PRISM tasks, each recording the issue it "
