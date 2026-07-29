@@ -146,6 +146,9 @@ export default function TasksPage() {
   const [me, setMe] = useState<string>("");
   const [view, setView] = useState<WorkView>("team");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  // Owner 2026-07-29: "i need a way to search work for e696d952 a task on
+  // this" — id prefix, full uuid, title, or tag, case-insensitive.
+  const [query, setQuery] = useState<string>("");
   const [cursor, setCursor] = useState<number>(0);
   const [started, setStarted] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -181,8 +184,15 @@ export default function TasksPage() {
       }).map(nativeToWork),
       ...external.map(externalToWork),
     ];
+    const q = query.trim().toLowerCase();
     return merged.filter((it) => {
       if (assigneeFilter && !it.assignee.toLowerCase().includes(assigneeFilter.toLowerCase())) return false;
+      if (q) {
+        const idHit = it.id?.toLowerCase().startsWith(q) || it.id?.toLowerCase().includes(q);
+        const titleHit = it.title.toLowerCase().includes(q);
+        const tagHit = (it.tags ?? []).some((t) => t.toLowerCase().includes(q));
+        if (!idHit && !titleHit && !tagHit) return false;
+      }
       if (view === "mine") {
         // My Work: rows assigned to the signed-in viewer. With no identity we
         // fall back to "assigned to someone" so the toggle still narrows.
@@ -191,7 +201,7 @@ export default function TasksPage() {
       }
       return true;
     });
-  }, [tasks, external, assigneeFilter, view, me]);
+  }, [tasks, external, assigneeFilter, view, me, query]);
 
   // Keyboard navigation across the unified rows: j/ArrowDown and k/ArrowUp move
   // the cursor; Enter opens the focused row's local task.
@@ -249,6 +259,17 @@ export default function TasksPage() {
             </button>
           ))}
         </div>
+
+        <input
+          data-work-search
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search id, title, tag..."
+          aria-label="Search work by id, title, or tag"
+          className="px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] min-w-0"
+          style={{ color: "var(--text-secondary)" }}
+        />
 
         <select
           data-assignee-filter

@@ -44,6 +44,30 @@ def _items_memo_body(src: str) -> str:
     return src[start:end]
 
 
+def _input_tag(src: str) -> str:
+    """The full <input data-work-search ...> JSX tag. A naive `[^>]*` regex
+    stops at the FIRST literal '>' it meets, which an arrow-function attr
+    value like `onChange={(e) => setQuery(...)}` contains well before the
+    tag's real close — so this walks brace depth instead, only treating a
+    bare '>' as the tag end while depth is 0 (i.e. outside any `{...}`
+    JSX expression)."""
+    i = src.index("<input")
+    assert "data-work-search" in src[i:i + 400], (
+        "expected data-work-search on the <input> immediately at this index")
+    depth = 0
+    j = i
+    while j < len(src):
+        ch = src[j]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == ">" and depth == 0:
+            return src[i:j + 1]
+        j += 1
+    raise AssertionError("could not find the end of the <input ...> tag")
+
+
 def _filter_callback_body(memo_body: str) -> str:
     """Just the predicate passed to `.filter(...)` inside the items memo —
     the actual boolean logic a row must satisfy to be rendered, not the
@@ -75,27 +99,24 @@ def _filter_callback_body(memo_body: str) -> str:
 
 def test_search_input_is_always_visible_above_the_table():
     src = _read()
-    m = re.search(r"<input\b[^>]*data-work-search[^>]*/?>", src)
-    assert m, "expected an always-visible <input data-work-search ...> in TasksPage.tsx"
-    input_tag = m.group(0)
+    tag = _input_tag(src)
+    i = src.index(tag)
     # Unconditional: not gated behind a truthy JSX expression like
     # `{expanded && <input ...>}` immediately preceding it.
-    preceding = src[max(0, m.start() - 40):m.start()]
-    assert not re.search(r"\{[A-Za-z_][\w.]*\s*&&\s*\($?$", preceding), (
+    preceding = src[max(0, i - 40):i]
+    assert "&&" not in preceding, (
         f"the search input must render unconditionally; found a guard just "
         f"before it: {preceding!r}")
     table_idx = src.index("<table")
-    assert m.start() < table_idx, "the search input must sit above the <table>"
+    assert i < table_idx, "the search input must sit above the <table>"
 
 
 def test_search_input_is_wired_to_query_state():
     src = _read()
-    m = re.search(r"<input\b[^>]*data-work-search[^>]*/?>", src)
-    assert m
-    tag = m.group(0)
+    tag = _input_tag(src)
     assert re.search(r"value=\{query\}", tag), (
         f"the search input must be a controlled input bound to `query`; got {tag}")
-    assert re.search(r"onChange=\{[^}]*setQuery", tag), (
+    assert re.search(r"onChange=\{[^}]*setQuery", tag, re.DOTALL), (
         f"the search input must call setQuery on change; got {tag}")
 
 
