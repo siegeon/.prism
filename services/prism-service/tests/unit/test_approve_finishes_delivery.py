@@ -414,3 +414,62 @@ def test_gate_decide_wires_delivery_behind_the_env_switch_at_green_gate():
     call_idx = src.index("self.deliver_task(")
     assert guard_idx < call_idx, (
         "the env-switch check must gate the call, not follow it")
+
+
+# ---------------------------------------------------------------------
+# Discovered while driving THIS task through the conductor's own red_gate
+# (not part of the delivery feature itself, but a real defect this drive
+# hit and fixed in the same allowed file): a red-tests commit that gets
+# corrected via a soft-reset + recommit (e.g. fixing a collection-error
+# shape so red is a genuine test FAILURE) leaves the OLD commit dangling
+# but still resolvable in the shared git object store -- so it still LOOKS
+# tests-only by content and used to shadow the new anchor in
+# _red_step_sha forever, permanently blocking the adjudicator's red-gate
+# retry (its `tried` cache keys on that same stale sha + spec_hash).
+# ---------------------------------------------------------------------
+
+
+class _HistorySvc:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def history(self, _tid):
+        return self._rows
+
+
+def test_red_step_sha_ignores_a_superseded_dangling_commit(tmp_path):
+    repo = _init_main(tmp_path)
+    (repo / "services/prism-service/tests/unit").mkdir(parents=True,
+                                                        exist_ok=True)
+    (repo / "services/prism-service/tests/unit/test_a.py").write_text(
+        PASSING_TEST)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "old red commit [task:abc12345]")
+    old_sha = _git(repo, "rev-parse", "HEAD")
+    base = _git(repo, "rev-parse", "HEAD~1")
+
+    # Rewrite the branch past `old_sha`: a soft-reset + recommit, exactly
+    # what fixing a bad red-tests commit looks like. `old_sha` is now
+    # unreachable from HEAD but its object still resolves.
+    _git(repo, "reset", "--soft", base)
+    (repo / "services/prism-service/tests/unit/test_a.py").write_text(
+        FAILING_TEST)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "corrected red commit [task:abc12345]")
+    new_sha = _git(repo, "rev-parse", "HEAD")
+    assert old_sha != new_sha
+
+    svc = ConductorService.__new__(ConductorService)
+    svc._project_root = ""
+    svc._task_svc = _HistorySvc(
+        [{"action": "red_step_sha", "details": old_sha}])
+    from prism_service.services import task_workspace
+    import unittest.mock as mock
+    with mock.patch.object(task_workspace, "workspace_for",
+                          lambda tid: {"path": str(repo),
+                                      "baseline": base, "branch": "main",
+                                      "repo_root": str(repo)}):
+        got = svc._red_step_sha("abc12345")
+    assert got == new_sha, (
+        f"must self-heal past the dangling superseded commit {old_sha[:12]} "
+        f"to the real, current anchor {new_sha[:12]}; got {got[:12] if got else got}")
