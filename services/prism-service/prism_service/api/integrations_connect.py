@@ -339,6 +339,50 @@ def run_sync(provider: str, project: str = Query(...),
     return {"provider": provider, "imported": imported, "runs": runs}
 
 
+class PushBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    task_id: str
+    dry_run: bool = True
+
+
+@router.post("/{provider}/push")
+def push_task(provider: str, body: PushBody, project: str = Query(...),
+              principal: Principal = Depends(current_principal)) -> dict:
+    """Close the ONE external issue mirroring a single done task.
+
+    Explicitly scoped to ONE task_id per call — never a sweep over the board
+    (task ae67ed5c: an unattended drain over every done task would close many
+    real issues on first activation). ``dry_run`` defaults True: a caller must
+    deliberately ask for the live write. The switch decides FIRST, exactly as
+    it does for the pull direction above, before any link, container or
+    connection is resolved and before GitHub is contacted at all.
+    """
+    principal = coerce_principal(principal)
+    if provider not in PROVIDERS:
+        raise HTTPException(404, "unknown provider")
+    scope = personal_scope(principal)
+
+    from prism_service import project_context
+    from prism_service.api.integrations import _adapters
+    from prism_service.services.integration_outbox import get_outbox
+    from prism_service.services.work_item_sync import push_task_closure
+
+    task = project_context.get_project(project).task_svc.get(body.task_id)
+    task_is_done = bool(task is not None and task.status == "done")
+
+    result = push_task_closure(
+        get_integration_store(), get_outbox(), _adapters,
+        get_sync_preferences().enabled,
+        scope, body.task_id, task_is_done,
+        provider=provider, dry_run=body.dry_run)
+    return {
+        "task_id": result.task_id, "provider": result.provider,
+        "dry_run": result.dry_run, "eligible": result.eligible,
+        "closed": result.closed, "reason": result.reason,
+        "repo": result.repo, "issue": result.issue, "url": result.url,
+    }
+
+
 @router.put("/{provider}/sync")
 def set_sync(provider: str, body: SyncBody,
              principal: Principal = Depends(current_principal)) -> dict:
