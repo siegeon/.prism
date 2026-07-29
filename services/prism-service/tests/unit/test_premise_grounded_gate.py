@@ -40,7 +40,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 COMPLIANT_NOTES = """# Review notes
 
 ## Premises
-- The failing CI lane is `unit-tests.yml`, configured identically to \
+- The failing CI lane is unit-tests.yml, configured identically to \
 the integration lane — services/prism-service/.github/workflows/unit-tests.yml:12
 - The repo ships no Testcontainers configuration — UNVERIFIED, grep found \
 no hits yet, re-check before shipping this claim as fact
@@ -93,19 +93,26 @@ def test_bare_path_without_line_number_is_citation_theatre():
 def test_missing_premises_section_fails():
     res = _gov().score_premise_grounded(
         {"notes_md": NO_SECTION_NOTES}, _rubric())
-    assert res["ok"] is False
-    assert "Premises" in res["reason"], res
+    # SCOPE (regression guard): a report that never engages the '##
+    # Premises' convention has nothing to ground - it must PASS, not
+    # refuse, so completion_proof staged for an unrelated LATER purpose
+    # (e.g. a green_gate proof set early in a test fixture) never blocks
+    # review_previous_notes -> draft_story.
+    assert res["ok"] is True, res
 
 
 def test_empty_premises_section_fails():
+    """Unlike a MISSING section (nothing to ground -> pass), a PRESENT but
+    empty section means the driver opened the convention and wrote
+    nothing under it - that still fails."""
     res = _gov().score_premise_grounded(
         {"notes_md": EMPTY_SECTION_NOTES}, _rubric())
     assert res["ok"] is False
 
 
-def test_empty_notes_fail():
+def test_empty_notes_pass_nothing_to_ground():
     res = _gov().score_premise_grounded({"notes_md": ""}, _rubric())
-    assert res["ok"] is False
+    assert res["ok"] is True, res
 
 
 def test_refusal_names_the_offending_claim():
@@ -118,6 +125,25 @@ def test_refusal_names_the_offending_claim():
 
 def test_refuted_marker_is_accepted_as_grounding():
     notes = "# Review notes\n\n## Premises\n- The CI lanes differ — REFUTED, both jobs use the same runner image\n"
+    res = _gov().score_premise_grounded({"notes_md": notes}, _rubric())
+    assert res["ok"] is True, res
+
+
+def test_backtick_wrapped_bare_token_is_not_a_citation():
+    """likely_misfire, generalized: wrapping a single bare token (a
+    filename, a variable name) in backticks must not count as 'command
+    output' evidence — only a real multi-token output snippet does."""
+    notes = ("# Review notes\n\n## Premises\n"
+             "- The lane is misconfigured, see `unit-tests.yml`\n")
+    res = _gov().score_premise_grounded({"notes_md": notes}, _rubric())
+    assert res["ok"] is False, (
+        "a bare filename in backticks is not command-output evidence")
+
+
+def test_real_command_output_is_accepted_as_a_citation():
+    notes = ("# Review notes\n\n## Premises\n"
+             "- Both CI lanes use the same image, confirmed by "
+             "`pytest -q -> 2 passed`\n")
     res = _gov().score_premise_grounded({"notes_md": notes}, _rubric())
     assert res["ok"] is True, res
 
@@ -189,6 +215,27 @@ def test_advance_task_advances_on_compliant_notes(tmp_path):
     cond.advance_task(t.id)  # -> review_previous_notes
     task_svc.update(t.id, completion_proof=COMPLIANT_NOTES)
     res = cond.advance_task(t.id)
+    assert res["ok"] is True, res
+    assert res["to_step"] == "draft_story", res
+
+
+def test_unrelated_preset_completion_proof_does_not_block_the_step(
+        tmp_path):
+    """Regression guard for a real break this rubric caused on first pass:
+    task.completion_proof is a SHARED field also read at the green_gate
+    oracle tooth (score_green_outcome) — several existing suites
+    (e.g. test_gate_receipt_precedence.py) stage a green-proof-shaped
+    string on a FRESH task before walking it through advance_task from
+    step 0, purely as fixture setup unrelated to review_previous_notes.
+    That value carries no '## Premises' heading, so it must NOT block the
+    advance."""
+    task_svc, cond = _services(tmp_path)
+    t = task_svc.create(title="premise gate: unrelated preset proof")
+    task_svc.update(t.id, completion_proof=(
+        "full suite green: 1447 passed in 150s - pytest tests -q; "
+        "screenshot on file"))
+    cond.advance_task(t.id)  # '' -> review_previous_notes
+    res = cond.advance_task(t.id)  # must NOT be refused
     assert res["ok"] is True, res
     assert res["to_step"] == "draft_story", res
 
