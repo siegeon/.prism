@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.6.3"
+PRISM_VERSION = "7.6.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.6.4: IMPORTED ISSUES CARRY THEIR REAL BODY [task 4db228ec]. A "
+    "mirrored task's description now leads with the actual GitHub issue "
+    "body, with the mirror pointer (display key + URL) trailing as "
+    "provenance, instead of just the two-line stub. A re-sync never "
+    "duplicates the body and never clobbers a task you have since edited "
+    "by hand. Prerequisite for the two-way mirror's push half. "
+)
+PRISM_VERSION_NOTES += (
     "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "
     "as owner/repo on the GitHub connector and press Sync now: its open "
     "issues arrive as ordinary PRISM tasks, each recording the issue it "
