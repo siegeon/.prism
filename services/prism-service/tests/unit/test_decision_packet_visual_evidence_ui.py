@@ -4,10 +4,18 @@ The PRISM SPA has NO JS test runner, so UI acceptance criteria are pinned by
 asserting the ACTUAL TSX source (convention: test_conductor_page_animated_
 cleanup_ui.py:4-6).
 
-Owner 2026-07-29, reviewing task ae67ed5c's gate: "the decision packet should
-say visual evidence then have the screenshots in it". The row was titled
+Owner 2026-07-29, reviewing a green gate: "the decision packet should say
+visual evidence then have the screenshots in it". The row was titled
 "Screenshots", naming the file type rather than the question a reviewer is
 asking (can I SEE that this worked?).
+
+NOTE, deliberately: this docstring does NOT name the task id it came from.
+Pinned-test discovery (api/tasks.py _discover_pinned_test_rows) is
+CONTENT-BASED - it enrols any tests/**/*.py that MENTIONS a task id into
+that task's pinned oracle. An earlier draft said "reviewing task <id>'s
+gate" and silently added these two UI tests to that task's gate evidence,
+taking its pinned count from 6 to 8. A prose mention must never change what
+a gate measures.
 """
 from pathlib import Path
 
