@@ -228,7 +228,23 @@ def test_running_sync_twice_does_not_duplicate(app):
 # ── AC-8: read-only ───────────────────────────────────────────────────
 
 def test_this_slice_never_writes_to_github(app):
-    """Owner instruction: siegeon/.prism, read-only for now."""
+    """The PULL path never writes to GitHub.
+
+    Originally "Owner instruction: siegeon/.prism, read-only for now"
+    (task 900a4fb9). The owner LIFTED the repo-wide read-only rule on
+    2026-07-29, authorising write-back to siegeon/.prism, and task
+    ae67ed5c added GithubRestClient.close_issue (a PATCH) to serve it.
+    The blanket source-scan below asserted no write VERB may appear
+    anywhere in github_rest.py, so it now contradicts a shipped
+    capability rather than protecting anything; it is retired here, in
+    the slice that supersedes it, instead of being left to redden main.
+
+    What still holds, and is still asserted: a SYNC (the inbound pull)
+    must not write. That is the real contract, and it is checked at
+    runtime below against the transport recorder. Closing an issue is a
+    separate, explicitly-scoped push (work_item_sync.push_task_closure),
+    never something a pull may do.
+    """
     _track(app)
     _enable(app)
     _sync(app)
@@ -239,8 +255,7 @@ def test_this_slice_never_writes_to_github(app):
         assert "/issues" in url or "/pulls" in url, (
             f"unexpected GitHub endpoint touched: {url}")
 
-    rest = (_SERVICE_ROOT / "prism_service" / "services" / "github_rest.py"
-            ).read_text(encoding="utf-8")
-    for verb in ('"POST"', '"PATCH"', '"PUT"', '"DELETE"'):
-        assert verb not in rest, (
-            f"the REST client must stay read-only this slice; found {verb}")
+    # (retired) The source-scan for '"POST"' / '"PATCH"' / '"PUT"' /
+    # '"DELETE"' in github_rest.py lived here. Superseded 2026-07-29 by
+    # task ae67ed5c, which added close_issue (PATCH) under the owner's
+    # explicit write-back authorisation. See this test's docstring.
