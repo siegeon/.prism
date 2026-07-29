@@ -143,7 +143,11 @@ export default function DecisionPacket({ taskId, project, state, step, latestRec
         </div>
       </Row>
 
-      <Row icon="▣" title="Screenshots" empty={pkt.screenshots.length === 0}
+      {/* "Visual evidence", not "Screenshots" (owner 2026-07-29). The row is
+          what a reviewer scans for when deciding whether they can SEE the
+          outcome; naming it after the file type buried that. The screenshots
+          themselves still live inside it. */}
+      <Row icon="▣" title="Visual evidence" empty={pkt.screenshots.length === 0}
            summary={`${pkt.screenshots.length}`}>
         {/* Open evidence IN-APP (owner: a screenshot must open in the viewer,
             not navigate the browser to the raw .png). Reuse the shared
