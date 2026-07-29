@@ -2353,13 +2353,38 @@ class ConductorService:
         except Exception:
             return False
 
+    def _commit_is_reachable(self, repo: str, sha: str) -> bool:
+        """True when ``sha`` is an ancestor of ``repo``'s current HEAD — i.e.
+        still part of that checkout's real history, not a dangling object a
+        rewrite (soft-reset + recommit, correcting an earlier red-tests
+        commit) has moved the branch past. A superseded commit stays
+        resolvable in the shared object store — ``git diff-tree`` on it still
+        succeeds, so it still LOOKS tests-only by content — which otherwise
+        shadows the real, current anchor forever (task cb1dc6f4: a lane
+        corrected its red-tests commit after an initial rc=2 collection-error
+        refusal; the OLD commit kept winning in ``_red_step_sha`` below, and
+        the adjudicator's ``tried`` cache then permanently refused to
+        re-attempt at that stale, un-heal-able anchor)."""
+        if not (repo and sha):
+            return False
+        import subprocess as _sp
+        try:
+            r = _sp.run(["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+                        cwd=repo, capture_output=True, timeout=15)
+            return r.returncode == 0
+        except Exception:
+            return False
+
     def _red_step_sha(self, task_id: str) -> str:
         """The commit red is anchored to. Prefer a recorded ``red_step_sha``
         history row (stamped by mint_red_evidence at the write_failing_tests
-        report) — but ONLY when that commit genuinely carries the pinned tests.
-        A row stamped from a lagging scratch worktree points one commit early
-        (mx-6decaa) and must NOT shadow the real red-tests commit; in that case
-        fall through to ``_red_tests_commit``, which self-heals the anchor.
+        report) — but ONLY when that commit genuinely carries the pinned tests
+        AND is still reachable from the checkout's current HEAD. A row
+        stamped from a lagging scratch worktree points one commit early
+        (mx-6decaa), and a row whose commit was later superseded by a
+        soft-reset + recommit (task cb1dc6f4) points at a dangling object;
+        either must NOT shadow the real red-tests commit, so both fall
+        through to ``_red_tests_commit``, which self-heals the anchor.
         '' when neither resolves (the seat then leaves the gate with a human)."""
         import re as _re
         try:
@@ -2376,12 +2401,15 @@ class ConductorService:
                 break
         tests_sha, repo = self._red_tests_commit(task_id)
         if recorded and recorded != tests_sha:
-            # Keep the recorded row only if it truly is a tests-only commit;
-            # a lagging-worktree mis-stamp (points pre-tests) yields to the
-            # real red-tests commit resolved above.
+            # Keep the recorded row only if it truly is a tests-only commit
+            # AND still reachable from that checkout's HEAD; a lagging-
+            # worktree mis-stamp (points pre-tests) or a superseded
+            # (rewritten-past) commit both yield to the real red-tests
+            # commit resolved above.
             ws_path, _h = self._workspace_and_head(task_id)
             for r in (repo, ws_path, str(self._project_root or "")):
-                if r and self._commit_is_tests_only(r, recorded):
+                if (r and self._commit_is_tests_only(r, recorded)
+                        and self._commit_is_reachable(r, recorded)):
                     return recorded
             if tests_sha:
                 return tests_sha
