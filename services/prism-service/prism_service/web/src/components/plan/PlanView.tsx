@@ -237,6 +237,10 @@ export default function PlanView({
   gateReadiness?: {
     receipt_ok: boolean;
     receipt_refusal?: string;
+    // receipt_ok=true here can mean "a human review is the accepted
+    // evidence route", not "something passed" (task 72d3e0d1) — combined
+    // with receipt.adapter==="human" it names that bare-entitlement case.
+    manual_review?: boolean;
     receipt?: { adapter?: string; passed?: boolean; status?: string; ended_at?: string; reason?: string };
   } | null;
   // Gate-card action: re-run the oracle inside the daemon and mint a fresh
@@ -606,12 +610,29 @@ export default function PlanView({
               {gateReadiness && (
                 <div
                   className="mt-4 rounded-md p-3 text-[12.5px] leading-relaxed"
-                  style={gateReadiness.receipt_ok
-                    ? { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }
-                    : { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+                  style={!gateReadiness.receipt_ok
+                    ? { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }
+                    : gateReadiness.manual_review && gateReadiness.receipt?.adapter === "human"
+                      ? { background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }
+                      : { background: "var(--accent-sage-bg)", color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }}
                 >
+                  {/* receipt_ok=true can mean "a human review is the accepted
+                      evidence route" (adapter="human", manual_review=true) -
+                      NOT that anything passed (task 72d3e0d1). An epic
+                      roll-up sets manual_review too but over REAL child
+                      evidence (adapter="epic-rollup"), so it keeps the
+                      affirmative branch below. */}
                   <span className="uppercase tracking-wider text-2xs mr-2">evidence check · live</span>
-                  {gateReadiness.receipt_ok ? (
+                  {gateReadiness.receipt_ok && gateReadiness.manual_review && gateReadiness.receipt?.adapter === "human" ? (
+                    <>
+                      Awaiting your review — no machine evidence at this tree
+                      {gateReadiness.receipt?.reason ? `: ${gateReadiness.receipt.reason}` : ""}.
+                      <div className="opacity-90 mt-1">
+                        <b>Action:</b> this oracle has no machine runner — your review IS the sign-off.
+                        Look at the evidence, then type a reason and click Approve.
+                      </div>
+                    </>
+                  ) : gateReadiness.receipt_ok ? (
                     <>
                       ✓ Oracle evidence receipt is FRESH and PASSING
                       {gateReadiness.receipt?.adapter ? ` (${gateReadiness.receipt.adapter} — a real run, not a claim)` : ""}.
