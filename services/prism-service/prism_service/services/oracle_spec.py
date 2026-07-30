@@ -76,6 +76,43 @@ _ERROR_BODY_TOKENS = (
 
 _URL_RE = re.compile(r"https?://[^\s)\"'<>]+")
 
+# Vocabulary naming a VISUAL/RENDERED observable (task ee5b226d): a human (or
+# a real browser render) has to LOOK at the screen to check these — an
+# http_probe's assertions (status<400, non-empty body, no error token,
+# bounded latency) cannot observe a skeleton, a tint, a colour, an absent
+# row, or a screenshot. Presence of ANY of these keys the oracle to the
+# browser adapter EVEN WHEN a URL is also present (the bug this module
+# fixes: the URL branch used to win unconditionally).
+_VISUAL_CUE_WORDS = (
+    "screenshot", "skeleton", "placeholder", "tint", "colour", "color",
+    "layout", "pixel", "looks like", "look like", "kpi tile", "0-valued",
+    "0 valued", "renders", "rendered", "visible", "visually",
+    "no row", "no entry", "no entries", "loading tint",
+)
+# "no PR title appears as a task", "the row does not appear", "must not
+# appear" — an assertion that some UI element's PRESENCE/ABSENCE is what
+# proves the oracle. A bare http_probe (status/body/latency) cannot observe
+# whether a specific row/entry appears or not.
+_NEGATED_APPEAR_RE = re.compile(
+    r"\b(no|not|never|n't|without|nor)\b[^.;]{0,60}\bappear", re.IGNORECASE)
+_APPEAR_AS_RE = re.compile(r"\bappears?\b[^.;]{0,20}\bas a\b", re.IGNORECASE)
+
+
+def _names_visual_observable(oracle: str) -> bool:
+    """True iff ``oracle`` demands a VISUAL/rendered check — the customer
+    observable is something a machine http_probe cannot see (a skeleton, a
+    tint, an absent row) even when the oracle also cites a URL. Keys on the
+    OBSERVABLE named, not on whether a URL is present (the over-correction
+    this ticket's likely_misfire warns against: a genuine reachability
+    oracle — 'returns 200', 'the health endpoint is reachable' — names none
+    of these and must still derive http_probe)."""
+    low = oracle.lower()
+    if any(cue in low for cue in _VISUAL_CUE_WORDS):
+        return True
+    if _NEGATED_APPEAR_RE.search(low) or _APPEAR_AS_RE.search(low):
+        return True
+    return False
+
 
 def is_human_judgment(spec) -> bool:
     """Owner rule (2026-07-18, task eaafdf75): a MACHINE seat may sign off a
@@ -167,11 +204,16 @@ class OracleSpec:
         """Best-effort DERIVED spec from a task's oracle string.
 
         A URL in the oracle -> an http_probe (GET the surface; require
-        status<400, a non-empty body, no error token, bounded latency). No
-        URL -> a ``browser`` spec, which the runner reports as
-        ``manual_evidence_required`` — the honest boundary for an oracle we
-        cannot auto-run (this REPLACES the old fail-OPEN behavior). Always
-        ``derived=True`` so a caller knows it was inferred, not authored."""
+        status<400, a non-empty body, no error token, bounded latency) —
+        UNLESS the oracle also names a visual observable (a screenshot, a
+        skeleton, a tint, an absent row: see ``_names_visual_observable``),
+        in which case it derives a ``browser`` spec even with the URL
+        present (task ee5b226d: an http_probe cannot see any of those). No
+        URL (or a visual observable) -> a ``browser`` spec, which the
+        runner reports as ``manual_evidence_required`` — the honest
+        boundary for an oracle we cannot auto-run (this REPLACES the old
+        fail-OPEN behavior). Always ``derived=True`` so a caller knows it
+        was inferred, not authored."""
         oracle = str(getattr(task, "oracle", "") or "")
         misfire = str(getattr(task, "likely_misfire", "") or "")
         # PYTEST RUNG (task 68e5c699): a test-proofed task naming pytest
@@ -183,7 +225,14 @@ class OracleSpec:
         if pytest_ids and proof_type == "test":
             return cls._pytest_spec(pytest_ids)
         m = _URL_RE.search(oracle)
-        if m:
+        # VISUAL-OBSERVABLE FLOOR (task ee5b226d): a URL match used to win
+        # unconditionally here, so an oracle naming a screenshot/skeleton/
+        # tint/absent-row degraded to a shallow http_probe that cannot see
+        # any of it. When the oracle text demands a visual check, route to
+        # the browser adapter (manual_evidence_required) EVEN THOUGH a URL
+        # is present — the browser runner still finds that URL itself
+        # (target carries the full oracle text, see _extract_url).
+        if m and not _names_visual_observable(oracle):
             url = m.group(0).rstrip(".,;)!?\"'")
             negative = [
                 Assertion("status_under_400", "negative", "status_ge", 400),
