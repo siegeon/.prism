@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.1"
+PRISM_VERSION = "7.8.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -29,6 +29,17 @@ PRISM_VERSION_NOTES = (
     "Discovery also no longer attributes a file to a task on a bare prose "
     "mention (\"reviewing task X's gate\") with no declared \"(task <id>)\" "
     "owner in its docstring. "
+    "task_update CAN SET TAGS OVER MCP [task a1f2244d]. The MCP "
+    "task_update tool never exposed a `tags` field, even though task_create "
+    "always had one and PATCH /api/tasks/{id} accepted it since 2026-07-16. "
+    "control_plane only authorises a slice to touch a POLICY_FILES module "
+    "when its task carries the policy-change/control-plane tag, and "
+    "GitHub-imported tasks are created with tags fixed at "
+    "['github','external'] - so an agent driving purely through MCP could "
+    "never self-authorise an imported policy ticket and was pushed toward a "
+    "raw /api poke instead. `tags` is now on the task_update schema and "
+    "handler, routed through the SAME TaskService.update the REST route "
+    "already uses. Omitting `tags` still means untouched, never blanked. "
     "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "
