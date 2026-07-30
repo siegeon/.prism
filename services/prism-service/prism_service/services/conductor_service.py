@@ -3129,9 +3129,14 @@ class ConductorService:
         # through the authorized control-plane path (PRISM_POLICY_CHANGE_APPROVED
         # or a 'policy-change'-tagged task), never silently from inside the
         # graded task. Fail-open only on an internal error (never a false pass).
+        # UNCONDITIONAL, byte-for-byte unchanged (task 69233ca0 follow-up split
+        # this OFF the combined judge check — see control_plane.
+        # candidate_policy_edit_reason vs candidate_controls_judge_reason —
+        # so the DIFFERENT, non-blocking dirty-judge caveat right below cannot
+        # soften this real security boundary by so much as a character).
         try:
             from prism_service.services import control_plane as _cp
-            _cj_reason = _cp.candidate_controls_judge_reason(task)
+            _cj_reason = _cp.candidate_policy_edit_reason(task)
         except Exception:
             _cj_reason = ""
         if _cj_reason:
@@ -3153,6 +3158,34 @@ class ConductorService:
                 "gate_state": "failed",
                 "reason": _cj_reason,
             }
+        # DIRTY JUDGE CAVEAT (task 69233ca0 follow-up): the DAEMON'S OWN
+        # checkout — never this task's worktree — carrying an uncommitted edit
+        # to a gate-policy file means the running judge cannot prove it is
+        # executing the pinned code. Unlike the refusal above, this is NOT
+        # about this task being disqualified: the MACHINE seats
+        # (adjudicate_green_gate et al.) already pre-flight the COMBINED check
+        # (control_plane.candidate_controls_judge_reason) and abstain — leave
+        # the gate pending — on this exact same signal. A HUMAN approving here
+        # has SEEN the caveat (surfaced at GET /gate/readiness before they
+        # click); that sight is the escape hatch the doctrine preserves (owner
+        # 2026-07-15/16: the human always keeps visibility + override, never
+        # a required click). So: do NOT fail — record the caveat on the audit
+        # history now, and fold it into `reason` so it survives into whatever
+        # gate_reason gets persisted below (this approve, or a later refusal
+        # from an unrelated tooth further down).
+        try:
+            from prism_service.services import control_plane as _cp
+            _dirty_reason = _cp.dirty_judge_reason()
+        except Exception:
+            _dirty_reason = ""
+        if _dirty_reason:
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; "
+                         f"dirty-judge-caveat={_dirty_reason}"),
+                actor="conductor")
+            reason = (reason + "  " if reason else "") + \
+                f"[decided while the judge was dirty: {_dirty_reason}]"
         # STRAND C — demonstrable-UI requirement at green_gate (task
         # 56458db1). A `ui`-tagged task cannot green-gate on a pytest/unit
         # line alone; it needs proof_type='demo' + a real UI artifact path.

@@ -209,6 +209,50 @@ def task_pin(task_id: str = "") -> dict:
     return pinned_policy(task_id, ctx)
 
 
+def dirty_policy_files_in_daemon_checkout() -> list[str]:
+    """POLICY_FILES with UNCOMMITTED changes (staged or working-tree, vs HEAD)
+    in the DAEMON'S OWN checkout — the tree the running process actually
+    imported its modules from (``_prism_repo_root()``), NEVER a task's
+    worktree (never ``_resolve_repo_root``/ctx/ws). A dirty policy file here
+    means the running judge cannot prove it is executing the code it claims
+    to be pinned to (task 69233ca0: a lane once wrote uncommitted edits to
+    conductor_service.py directly into this tree). Empty when the checkout is
+    clean, has no git, or is unresolvable — fails OPEN so an environment
+    without git does not blanket-refuse every gate."""
+    root = _prism_repo_root()
+    if root is None:
+        return []
+    out = _git(root, "status", "--porcelain", "--", *POLICY_FILES)
+    if out is None:
+        return []
+    changed: set[str] = set()
+    for line in out.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].strip()
+        if " -> " in path:  # rename entries: "old -> new"
+            path = path.split(" -> ", 1)[1].strip()
+        path = path.strip('"')
+        if is_policy_file(path):
+            changed.add(_norm(path))
+    return sorted(changed)
+
+
+def dirty_judge_reason() -> str:
+    """Refusal reason when the DAEMON'S OWN checkout has uncommitted edits to
+    a gate-policy file, else "". UNCONDITIONAL — no PRISM_POLICY_CHANGE_APPROVED
+    or policy-change/control-plane task-tag escape, because a compromised
+    RUNTIME is not remedied by authorizing a TASK. Named so both a driving
+    agent and a human can act: commit or discard the edit."""
+    dirty = dirty_policy_files_in_daemon_checkout()
+    if not dirty:
+        return ""
+    return ("judge integrity unprovable: the daemon's own checkout has "
+            "uncommitted changes to gate policy (" + ", ".join(dirty) + "); "
+            "the running process cannot prove it is executing the pinned "
+            "code — commit or discard these edits before any gate is decided")
+
+
 def candidate_policy_edits(task_id: str) -> list[str]:
     """The gate-policy files the task's WORKTREE has modified vs its baseline
     (committed OR working-tree edits). Empty when the task has no worktree or
@@ -236,11 +280,16 @@ def policy_change_authorized(task: object = None) -> bool:
     return bool(tags & _POLICY_CHANGE_TAGS)
 
 
-def candidate_controls_judge_reason(task: object) -> str:
-    """REFUSAL reason when the candidate's worktree edits its own gate policy,
-    else "". The core tooth: a gate cannot be cleared on a branch that modifies
-    the rubric / ignore-list / oracle thresholds it is judged by. An authorized
-    policy-change path (env flag / task tag) is exempt."""
+def candidate_policy_edit_reason(task: object) -> str:
+    """REFUSAL reason when the candidate's OWN worktree edits its own gate
+    policy, else "". The ORIGINAL tooth (inverted-flow #3), UNCHANGED,
+    byte-for-byte, since before task 69233ca0's follow-up split it off the
+    combined check: a gate cannot be cleared on a branch that modifies the
+    rubric/ignore-list/oracle thresholds it is judged by. An authorized
+    policy-change path (env flag / task tag) is exempt. This is a real
+    security boundary (a task loosening its own judge) and gate_decide's
+    approve path keeps failing on it UNCONDITIONALLY, override or not — see
+    conductor_service.py's candidate-controls-judge block."""
     task_id = str(getattr(task, "id", "") or "")
     edits = candidate_policy_edits(task_id)
     if not edits:
@@ -251,3 +300,30 @@ def candidate_controls_judge_reason(task: object) -> str:
             + "; policy must change through the control-plane, not the task "
             "under test — route an authorized policy change via "
             "PRISM_POLICY_CHANGE_APPROVED=1 or a 'policy-change'-tagged task")
+
+
+def candidate_controls_judge_reason(task: object) -> str:
+    """REFUSAL reason when EITHER (a) the daemon's own checkout has
+    uncommitted edits to a gate-policy file — the judge's independence is
+    unprovable, task 69233ca0 — or (b) the candidate's worktree edits its own
+    gate policy (candidate_policy_edit_reason), else "". Checked FIRST and
+    unconditionally: (a) is a runtime integrity failure, not a task
+    authorization question, so it has no policy-change escape.
+
+    This COMBINED check is what every MACHINE adjudication seat in
+    conductor_service.py pre-flights (adjudicate_green_gate et al.) and
+    abstains (leaves the gate pending) on ANY truthy reason — correct for
+    both (a) and (b), since a machine should never decide on an unprovable
+    judge OR a self-editing candidate.
+
+    gate_decide's HUMAN approve path does NOT call this combined function —
+    it calls (b) alone (candidate_policy_edit_reason, unconditional hard-fail
+    preserved) and treats (a) separately as a non-blocking CAVEAT a human may
+    approve past, since a human who can see the dirty-judge warning is
+    exactly the escape hatch the doctrine preserves (owner 2026-07-15/16:
+    the human keeps visibility + override, never a required click) — see
+    conductor_service.py's gate_decide, "DIRTY JUDGE CAVEAT" block."""
+    dirty_judge = dirty_judge_reason()
+    if dirty_judge:
+        return dirty_judge
+    return candidate_policy_edit_reason(task)
