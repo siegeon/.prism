@@ -151,7 +151,8 @@ def test_one_uncollectable_root_does_not_zero_out_another_roots_passes(
     assert len(calls) == 2, (
         f"expected one _run_pinned_tests call PER ROOT (2), got {calls}")
     called_roots = {c[0] for c in calls}
-    assert called_roots == {str(ws), str(checkout)}, calls
+    ws_run_root = ws / "services" / "prism-service"
+    assert called_roots == {str(ws_run_root), str(checkout)}, calls
     for root, files in calls:
         assert len(files) == 1, (
             "each root's call must carry only ITS OWN file, never the "

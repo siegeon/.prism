@@ -777,11 +777,20 @@ def file_owns_task(source: str, task_id: str) -> bool:
     12 were its own — the owner was shown another ticket's tests as if they
     were this ticket's.
 
-    Ownership rule: a red-test module NAMES its task in its module docstring
-    (the convention ``get_task_tests`` already documents), and the FIRST task
-    id in that docstring is the owner — a later citation never transfers
-    ownership. Files we cannot parse, or that carry no module docstring, fall
-    back to the old mention behaviour so a task never silently LOSES its pins.
+    Ownership rule: the FIRST task id named in the module docstring is the
+    owner (the convention this suite already uses, e.g. "Pin the gate tooth
+    (task <id>)." / "Pins task <id>.") — a later citation never transfers
+    ownership. But a POSSESSIVE mention ("task <id>'s gate/telemetry/receipt")
+    is always talking ABOUT that other task's thing, never declaring this
+    file's own ownership, so it is skipped when hunting for the first real
+    owner (task 9f3c57dc, defect 3): "Owner 2026-07-29, reviewing task
+    ae67ed5c's gate: ..." was exactly this shape and silently inflated
+    ae67ed5c's pinned count from 6 to 8 — commit ce1c3c4 hand-patched that one
+    file's wording; this fixes the mechanism so no future file needs the same
+    hand patch. If EVERY mention in the docstring is possessive, there is no
+    declared owner at all. Files we cannot parse, or that carry no module
+    docstring, fall back to the old mention behaviour so a task never
+    silently LOSES its pins.
     """
     text = source or ""
     tid = (task_id or "").strip()
@@ -798,10 +807,18 @@ def file_owns_task(source: str, task_id: str) -> bool:
         return mentioned          # unparseable — keep the old behaviour
     if not doc:
         return mentioned          # no docstring — keep the old behaviour
-    found = _TASK_ID_RE.findall(doc)
-    if not found:
-        return mentioned
-    return found[0][:8] == short
+    owner = None
+    for m in _TASK_ID_RE.finditer(doc):
+        tail = doc[m.end():m.end() + 2]
+        if tail.startswith("'s") or tail.startswith("’s"):
+            continue  # possessive — cites that task's THING, not ownership
+        owner = m.group(0)
+        break
+    if owner is None:
+        # every mention was possessive (or none existed) — no declared owner,
+        # a bare/possessive citation never attributes the file (defect 3).
+        return False
+    return owner[:8].lower() == short.lower()
 
 
 def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
@@ -841,6 +858,14 @@ def _extract_tests_from_source(source: str, rel_file: str) -> list[dict]:
     return out
 
 
+def _checkout_tests_root():
+    """The service checkout's own tests/ dir. Split out from get_task_tests
+    so it can be pointed at a synthetic root in tests without touching the
+    real repo (task 9f3c57dc)."""
+    from pathlib import Path
+    return Path(__file__).resolve().parents[2] / "tests"
+
+
 @router.get("/{task_id}/tests")
 def get_task_tests(task_id: str, run: bool = Query(False),
                    project: str = Query("default")):
@@ -870,13 +895,18 @@ def get_task_tests(task_id: str, run: bool = Query(False),
     results: list[dict] = []
     files: list[str] = []
     seen_rel: set[str] = set()
+    # Grouped by the ROOT each file was discovered under (task 9f3c57dc,
+    # defect 2) — a file found via the workspace scan must be RUN against the
+    # workspace, a file found via the checkout scan must be run against the
+    # checkout, never pooled into one invocation against a single fixed root.
+    files_by_root: dict[Path, list[str]] = {}
 
     # Scan TWO roots: the service checkout's tests/ (tests already merged to
     # main) AND the task's own git worktree tests/ (work that still lives only
     # in the task workspace — the common case for a just-finished, unmerged
     # task like this one). Without the workspace root the gate's test evidence
     # is invisible for every unmerged task, which reads as "no evidence".
-    checkout_root = Path(__file__).resolve().parents[2] / "tests"
+    checkout_root = _checkout_tests_root()
     ws = workspace_for(task_id)
     _ws_tests = (Path(ws["path"]) / "services" / "prism-service" / "tests"
                  if ws else None)
@@ -891,11 +921,11 @@ def get_task_tests(task_id: str, run: bool = Query(False),
     _use_ws = bool(_ws_tests and _ws_tests.is_dir())
     roots: list[Path] = ([_ws_tests, checkout_root] if _use_ws
                          else [checkout_root])
-    run_root = (_ws_tests.parent if _use_ws else checkout_root.parent)
 
     for tests_root in roots:
         if not tests_root.is_dir():
             continue
+        tests_root_run_root = tests_root.parent
         for p in sorted(tests_root.rglob("*.py")):
             try:
                 text = p.read_text(encoding="utf-8")
@@ -908,14 +938,34 @@ def get_task_tests(task_id: str, run: bool = Query(False),
                     continue
                 seen_rel.add(rel)
                 files.append(rel)
+                files_by_root.setdefault(tests_root_run_root, []).append(rel)
                 results.extend(_extract_tests_from_source(text, rel))
     ran = False
+    could_not_run = False
     if run and files and results:
-        statuses = _run_pinned_tests(run_root, files)
-        if statuses is not None:
+        # ONE _run_pinned_tests call PER ROOT (task 9f3c57dc, defect 2) — a
+        # file that exists only in the checkout must never be pooled with a
+        # file that exists only in the workspace into a single invocation,
+        # because pytest aborts collection for the WHOLE argv the instant one
+        # path is missing from cwd. Running each group against the root it
+        # was actually discovered in means a group that cannot run never
+        # drags down a group that can, and no file is ever run from a tree
+        # OTHER than the one it was pinned from (the tree under review).
+        merged_statuses: dict[str, str] = {}
+        any_group_ran = False
+        for group_root, group_files in files_by_root.items():
+            statuses = _run_pinned_tests(group_root, group_files)
+            if statuses is not None:
+                any_group_ran = True
+                merged_statuses.update(statuses)
+        if any_group_ran:
             ran = True
             for row in results:
-                row["status"] = statuses.get(row["name"], "not-run")
+                row["status"] = merged_statuses.get(row["name"], "not-run")
+        else:
+            # every group failed to collect/execute — a genuine COULD NOT
+            # RUN, never a numeric 0 / N with a fresh timestamp (defect 1).
+            could_not_run = True
     # HONEST OBSERVATION (trust fix, task 45e04fad follow-up): when we did NOT
     # re-run live, reflect the gate's own trusted-runner EvidenceReceipt so a
     # done/green-gated task shows the TRUE result the gate already observed —
@@ -996,7 +1046,13 @@ def get_task_tests(task_id: str, run: bool = Query(False),
     except Exception:
         pass  # best-effort: never fail the tab over its own evidence store
 
-    return {"tests": results, "ran": ran, "receipt": receipt_info,
+    return {"tests": results, "ran": ran,
+            # COULD NOT RUN (task 9f3c57dc, defect 1): distinct from ran=False
+            # "never attempted" — this run WAS attempted, collected nothing,
+            # and must never be read as a numeric 0 / N with a fresh
+            # timestamp. Sibling ticket 72d3e0d1 renders this on the card.
+            "could_not_run": could_not_run,
+            "receipt": receipt_info,
             "source": ("workspace" if _use_ws else "checkout"),
             "source_sha": _src_sha}
 
@@ -1004,7 +1060,16 @@ def get_task_tests(task_id: str, run: bool = Query(False),
 def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
     """Run the pinned test files (bounded) and map test name -> outcome via
     pytest's line report. Returns None when the run itself could not happen
-    (missing interpreter, timeout) — callers then omit statuses honestly."""
+    (missing interpreter, timeout, or — task 9f3c57dc, defect 1 — pytest ran
+    but COLLECTED NOTHING, e.g. "file or directory not found ... collected 0
+    items"). The caller only ever calls this with files that own at least one
+    discovered ``def test_*``, so a genuine run always emits at least one
+    PASSED/FAILED/ERROR/SKIPPED line; an EMPTY statuses dict therefore means
+    the run itself did not happen, never that 0 tests passed. Returning {} in
+    that case used to be read by the caller as a confident, arithmetically
+    false 0 / N — callers must omit statuses honestly instead."""
+    if not files:
+        return None
     import subprocess
     import sys as _sys
     try:
@@ -1019,6 +1084,8 @@ def _run_pinned_tests(service_root, files: list[str]) -> Optional[dict]:
                          r"SKIPPED|XFAIL|XPASS)", line)
             if m:
                 statuses[m.group(1)] = m.group(2).lower()
+        if not statuses:
+            return None  # collected nothing — could not run, not "0 passed"
         return statuses
     except Exception:
         return None
