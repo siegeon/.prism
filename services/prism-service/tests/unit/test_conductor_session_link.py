@@ -65,6 +65,13 @@ def test_gate_decide_links_session(tmp_path):
     task_svc, cond, scores = _services(tmp_path)
     t = task_svc.create(title="link on gate")
 
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this unrelated session-link walk can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising session linking, not a "
+        "real premise claim - UNVERIFIED\n"))
+
     # Drive to red_gate, clearing the earlier story/plan gates (task
     # 8579d49e) with a plain approve (bare conductor = trust-caller).
     guard = 0

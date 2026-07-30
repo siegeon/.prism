@@ -82,6 +82,15 @@ class Task:
     # page falls back to the existing description view.
     plan_doc: str = ""
     plan_diagram: str = ""
+    # premise_notes (task 3928b7ac, issue #222 continued) — review_previous_
+    # notes' OWN dedicated field, never task.completion_proof. completion_
+    # proof is SHARED with the green_gate oracle tooth (score_green_outcome);
+    # several test fixtures stage green-proof-shaped content there on a
+    # fresh task before walking it through advance_task, so gating
+    # premise_grounded on that same field made an unrelated value look like
+    # (or fail to look like) a premise report. This field decouples the two
+    # so premise_grounded can be unconditional without that collision.
+    premise_notes: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

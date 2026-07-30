@@ -30,7 +30,17 @@ def _services(tmp_path):
 
 def _to_green_gate(task_svc, cond, task_id):
     """Advance a fresh task all the way to green_gate (gate pending),
-    trust-caller approving each earlier gate (no verifier attached)."""
+    trust-caller approving each earlier gate (no verifier attached).
+
+    task 3928b7ac (issue #222 continued): review_previous_notes'
+    premise_grounded check is now unconditional on its OWN dedicated
+    task.premise_notes field (never completion_proof) — a fixture walk
+    unrelated to premise content must seed it once, up front, or it never
+    leaves review_previous_notes.
+    """
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising green_gate receipt "
+        "precedence, not a real premise claim - UNVERIFIED\n"))
     for _ in range(30):
         t = task_svc.get(task_id)
         if t.workflow_step == "green_gate" and t.gate_state == "pending":
