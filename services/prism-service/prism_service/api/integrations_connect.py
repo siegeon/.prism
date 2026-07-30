@@ -348,14 +348,28 @@ class PushBody(BaseModel):
 @router.post("/{provider}/push")
 def push_task(provider: str, body: PushBody, project: str = Query(...),
               principal: Principal = Depends(current_principal)) -> dict:
-    """Close the ONE external issue mirroring a single done task.
+    """Push the ONE task named by ``task_id`` toward its GitHub counterpart:
+    close a done task's mirrored issue, or CREATE one for an active task that
+    has none yet (task 7cf6a2e5).
 
     Explicitly scoped to ONE task_id per call — never a sweep over the board
     (task ae67ed5c: an unattended drain over every done task would close many
-    real issues on first activation). ``dry_run`` defaults True: a caller must
-    deliberately ask for the live write. The switch decides FIRST, exactly as
-    it does for the pull direction above, before any link, container or
-    connection is resolved and before GitHub is contacted at all.
+    real issues on first activation; the same reasoning applies to creating
+    issues for every active task in one call). ``dry_run`` defaults True: a
+    caller must deliberately ask for the live write. The switch decides
+    FIRST, exactly as it does for the pull direction above, before any link,
+    container or connection is resolved and before GitHub is contacted at
+    all.
+
+    Assignment (owner decision 2026-07-29): a task already ``in_progress``
+    is assigned to the connected account, since a real actor is already
+    working it; any other active status goes up unassigned. The one-time
+    backfill of tasks that predate this capability (assigned to the
+    connected account regardless of status, "because they came from my
+    personal state") is a deliberate, explicit, one-off operation — not a
+    standing rule this endpoint applies to every future task — and is
+    driven by naming an explicit ``assignee`` at the call site, never
+    inferred here.
     """
     principal = coerce_principal(principal)
     if provider not in PROVIDERS:
@@ -365,21 +379,45 @@ def push_task(provider: str, body: PushBody, project: str = Query(...),
     from prism_service import project_context
     from prism_service.api.integrations import _adapters
     from prism_service.services.integration_outbox import get_outbox
-    from prism_service.services.work_item_sync import push_task_closure
+    from prism_service.services.work_item_sync import (
+        push_task_closure, push_task_creation)
 
     task = project_context.get_project(project).task_svc.get(body.task_id)
     task_is_done = bool(task is not None and task.status == "done")
 
-    result = push_task_closure(
+    if task_is_done:
+        result = push_task_closure(
+            get_integration_store(), get_outbox(), _adapters,
+            get_sync_preferences().enabled,
+            scope, body.task_id, task_is_done,
+            provider=provider, dry_run=body.dry_run)
+        return {
+            "task_id": result.task_id, "provider": result.provider,
+            "dry_run": result.dry_run, "eligible": result.eligible,
+            "closed": result.closed, "reason": result.reason,
+            "repo": result.repo, "issue": result.issue, "url": result.url,
+        }
+
+    status = task.status if task is not None else ""
+    account = ""
+    if status == "in_progress":
+        from prism_service.services.github_cli_auth import get_cli_credentials
+
+        account = get_cli_credentials().status().get("account", "")
+
+    result = push_task_creation(
         get_integration_store(), get_outbox(), _adapters,
         get_sync_preferences().enabled,
-        scope, body.task_id, task_is_done,
-        provider=provider, dry_run=body.dry_run)
+        scope, body.task_id, status,
+        title=(task.title if task is not None else ""),
+        body=(task.description if task is not None else ""),
+        assignee=account, provider=provider, dry_run=body.dry_run)
     return {
         "task_id": result.task_id, "provider": result.provider,
         "dry_run": result.dry_run, "eligible": result.eligible,
-        "closed": result.closed, "reason": result.reason,
+        "created": result.created, "reason": result.reason,
         "repo": result.repo, "issue": result.issue, "url": result.url,
+        "assignee": result.assignee,
     }
 
 
