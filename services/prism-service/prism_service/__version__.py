@@ -13,16 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.6.4"
+PRISM_VERSION = "7.7.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v7.6.4: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
+    "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "
     "the table now narrows the list as you type, matching id prefix, full "
     "id, title, or tag, case-insensitively, across native and GitHub/Jira "
     "mirrored rows alike. Clearing it restores the full board. "
+    "IMPORTED ISSUES CARRY THEIR REAL BODY [task 4db228ec]. A mirrored "
+    "task's description now leads with the actual GitHub issue body, with "
+    "the mirror pointer (display key + URL) trailing as provenance, instead "
+    "of just the two-line stub. A re-sync never duplicates the body and "
+    "never clobbers a task you have since edited by hand. "
 )
 PRISM_VERSION_NOTES += (
     "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "

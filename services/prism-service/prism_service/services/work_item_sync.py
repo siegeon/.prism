@@ -174,11 +174,20 @@ class WorkItemSyncService:
         origin = entity_input.display_key or entity_input.remote_id
         source = f"{container.display_key or container.remote_id} {origin}".strip()
         url = getattr(entity_input, "url", "") or ""
+        provenance = (f"Mirrored from {connection.provider} {source}."
+                      + (f"\n{url}" if url else ""))
+        body = (getattr(entity_input, "body", "") or "").strip()
+        # The real issue body leads; the mirror pointer trails as provenance
+        # so a reader can still reach the counterpart (task 4db228ec). This
+        # only ever runs on the FIRST import of a given task_id - the
+        # ensure_external_intake call below is idempotent (a later pull
+        # never clobbers a user-edited local row), so a re-sync neither
+        # duplicates the body nor overwrites a hand-edited description.
+        description = f"{body}\n\n{provenance}" if body else provenance
         self._intake.ensure_external_intake(
             task_id,
             title=title,
-            description=(f"Mirrored from {connection.provider} {source}."
-                         + (f"\n{url}" if url else "")),
+            description=description,
             tags=[connection.provider, "external"],
         )
         store.activate_link(workspace_id, link.id)
