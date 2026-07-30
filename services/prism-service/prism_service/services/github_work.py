@@ -103,6 +103,17 @@ class GitHubWorkAdapter:
         return PulledPage(entities=entities, next_page_token=None,
                           next_cursor=str(cursor or "") or None)
 
+    def create(self, connection, container, title: str, body: str = "",
+              assignee: str = "", token: Optional[str] = None) -> ExternalEntityInput:
+        """Create a new GitHub issue mirroring a PRISM task (task 7cf6a2e5).
+        Returns a NORMALIZED ``ExternalEntityInput`` — the same shape
+        ``pull_page`` hands back — so the orchestrator never has to know
+        GitHub's raw issue JSON shape; this stays the one place that does."""
+        tok = token if token is not None else self._token()
+        raw = self._client.create_issue(connection, container, title, body,
+                                        assignee, tok)
+        return _issue_input(raw)
+
     def close(self, connection, container, entity, token: Optional[str] = None) -> dict:
         """Close the GitHub issue mirroring ``entity``. Only ``entity_kind ==
         'issue'`` can be closed this way; a pull request closes by merging,

@@ -1170,6 +1170,11 @@ TOOLS: list[Tool] = [
                     "description": "New status: pending, in_progress, done, blocked",
                 },
                 "priority": {"type": "integer", "description": "New priority"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Replace the tag list (e.g. add 'policy-change'/'control-plane' to self-authorise a POLICY_FILES touch). Omit to leave existing tags untouched — omitted never means blanked.",
+                },
                 "assigned_agent": {"type": "string", "description": "New agent assignment"},
                 "blocked_reason": {"type": "string", "description": "Reason for blocking (when status=blocked)"},
                 "parent_id": {"type": "string", "description": "Re-parent this task under an epic (or '' to make it a root)."},
@@ -2009,10 +2014,11 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
   for roots) so a big board doesn't blow the token budget; `fields=[...]`
   projects each row to just those keys.
 - `task_next()` — highest-priority unblocked task.
-- `task_update(id, status?, priority?, assigned_agent?, blocked_reason?,
+- `task_update(id, status?, priority?, tags?, assigned_agent?, blocked_reason?,
   oracle?, proof_type?, completion_proof?)` — mutate. Set `proof_type`
   (test|metric|artifact|demo|…) to pick the gate's oracle shape; `test` is the
-  TDD default.
+  TDD default. `tags` REPLACES the tag list when passed; omit it to leave
+  existing tags untouched (never blanked).
 - `conductor_advance(id, validation?, fields?)` /
   `conductor_gate(id, action, reason, fields?, override?)` — drive the per-task
   SDLC. Pass `fields=["from_step","to_step","gate_state"]` for a lean response
@@ -4128,7 +4134,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("title", "status", "priority", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             # Authoring-time oracle validation (task b78a193c): only when

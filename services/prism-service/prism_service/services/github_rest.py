@@ -13,6 +13,10 @@ pin that used to live here (and the matching source-text assertion in
 tests/integration/test_pull_issues_into_tasks.py, which is outside this
 task's allowed_files and could not be updated alongside this change — see
 the task's friction log). Title, body and labels are still never touched.
+
+Task 7cf6a2e5 adds the SECOND write: ``create_issue``, a POST carrying only
+title/body/assignees — the outbound half of the mirror that lets a PRISM
+task appear on GitHub in the first place.
 """
 
 from __future__ import annotations
@@ -94,12 +98,18 @@ class GithubRestClient:
             raise GithubApiError(0, str(exc.reason)) from exc
 
     def _patch(self, path: str, token: str, body: dict):
+        return self._write(path, token, body, "PATCH")
+
+    def _post(self, path: str, token: str, body: dict):
+        return self._write(path, token, body, "POST")
+
+    def _write(self, path: str, token: str, body: dict, method: str):
         url = f"{self._api_root}{path}"
         if self._write_transport is not None:
             return self._write_transport(url, token, body)
 
         data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, method="PATCH")
+        req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Accept", _ACCEPT)
         req.add_header("Content-Type", "application/json")
         req.add_header("X-GitHub-Api-Version", _API_VERSION)
@@ -140,3 +150,15 @@ class GithubRestClient:
         return self._patch(
             f"/repos/{_repo_path(connection, container)}/issues/{number}",
             token, {"state": "closed"})
+
+    def create_issue(self, connection, container, title: str, body: str,
+                     assignee: str, token: str) -> dict:
+        """POST a new issue. ``assignees`` is a single-element list when
+        ``assignee`` is given, else empty — GitHub's create endpoint takes a
+        list, but this instance only ever has ONE connected account to name
+        (task 7cf6a2e5: do not invent a richer identity model)."""
+        payload = {"title": title, "body": body,
+                  "assignees": [assignee] if assignee else []}
+        return self._post(
+            f"/repos/{_repo_path(connection, container)}/issues",
+            token, payload)

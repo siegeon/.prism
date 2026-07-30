@@ -77,6 +77,16 @@ class IntakeProtocol(Protocol):
     def ensure_external_intake(self, task_id: str, title: str, **kwargs) -> object:
         ...
 
+    # get/update already exist on TaskService (task_service.py:444, :503) and
+    # are used ONLY to backfill an already-mirrored row's description (task
+    # 82223365) — never to weaken ensure_external_intake's own no-clobber
+    # early return, which stays untouched.
+    def get(self, task_id: str) -> object:
+        ...
+
+    def update(self, task_id: str, **kwargs: object) -> object:
+        ...
+
 
 class WorkItemSyncService:
     """Deterministic pull orchestration over an injected adapter registry."""
@@ -184,12 +194,25 @@ class WorkItemSyncService:
         # never clobbers a user-edited local row), so a re-sync neither
         # duplicates the body nor overwrites a hand-edited description.
         description = f"{body}\n\n{provenance}" if body else provenance
+        pre_existing = self._intake.get(task_id)
         self._intake.ensure_external_intake(
             task_id,
             title=title,
             description=description,
             tags=[connection.provider, "external"],
         )
+        # Backfill task 82223365: a row imported BEFORE 4db228ec keeps its
+        # bare mirror-pointer stub forever, because the ensure_external_intake
+        # call above is a no-op once the row exists. Converge it exactly
+        # once, and ONLY when the row's description is still that EXACT
+        # stub (never a loose/contains match) - anything else, including
+        # empty, a hand-edited note, or an already-backfilled description,
+        # is left alone. Title is never touched here; PRISM stays the
+        # record of the title, never GitHub.
+        if (pre_existing is not None
+                and pre_existing.description == provenance
+                and body):
+            self._intake.update(task_id, description=f"{body}\n\n{provenance}")
         store.activate_link(workspace_id, link.id)
         store.append_receipt(
             workspace_id, run_id, entity.id,
@@ -304,3 +327,159 @@ def push_task_closure(
     result.closed = True
     result.reason = "closed"
     return result
+
+
+# ── push: the CREATE half (task 7cf6a2e5) ───────────────────────────────
+#
+# The mirror image of push_task_closure, one task_id per call, never a
+# sweep. Owner decision 2026-07-29: only ACTIVE tasks (pending/in_progress/
+# blocked) ever get an issue — done/cancelled history stays local, deferred
+# not forgotten. Idempotence is structural: an existing active link refuses
+# the call before any GitHub contact, so a re-run of the SAME task_id is a
+# no-op and the deterministic (workspace, entity) key can never produce a
+# second issue.
+
+ACTIVE_STATUSES = frozenset({"pending", "in_progress", "blocked"})
+
+
+@dataclass
+class PushCreateResult:
+    """What the create push either would do (``dry_run``) or did."""
+
+    task_id: str
+    provider: str = ""
+    dry_run: bool = False
+    eligible: bool = False
+    created: bool = False
+    reason: str = ""
+    repo: str = ""
+    issue: str = ""
+    url: str = ""
+    assignee: str = ""
+
+
+def push_task_creation(
+    store,
+    outbox,
+    registry: dict,
+    sync_enabled_fn,
+    workspace_id: str,
+    task_id: str,
+    task_status: str,
+    title: str,
+    body: str = "",
+    assignee: str = "",
+    provider: str = "github",
+    dry_run: bool = False,
+) -> PushCreateResult:
+    """Create ONE external issue mirroring ``task_id``, iff it is active,
+    not already linked, and the connector's sync switch is on.
+
+    ``assignee`` is taken VERBATIM from the caller — this function does not
+    decide policy about who should be assigned. The owner's rule ("assigned
+    to the connected account for the pre-existing backlog; unassigned for a
+    new task until it starts") is a caller-side decision made once, at the
+    call site, not a status-driven computation baked in here; passing an
+    explicit ``assignee`` always wins, passing none means unassigned.
+    """
+    result = PushCreateResult(task_id=task_id, provider=provider,
+                              dry_run=dry_run, assignee=assignee)
+
+    if not sync_enabled_fn(workspace_id, provider):
+        result.reason = f"syncing with {provider} is turned off"
+        return result
+
+    if task_status not in ACTIVE_STATUSES:
+        result.reason = (
+            f"task is not active (status={task_status!r}); history stays "
+            "local (owner 2026-07-29)")
+        return result
+
+    active_links = [l for l in store.list_links(workspace_id, task_id=task_id)
+                    if l.state == "active"]
+    if active_links:
+        result.reason = "task already has an active external link; not created again"
+        return result
+
+    connections = [c for c in store.list_connections(workspace_id)
+                  if c.provider == provider]
+    if not connections:
+        result.reason = f"no {provider} repository is tracked yet"
+        return result
+    connection = connections[0]
+    containers = store.list_containers(workspace_id, connection.id)
+    if not containers:
+        result.reason = f"no {provider} repository is tracked yet"
+        return result
+    container = containers[0]
+
+    result.repo = container.remote_id or container.display_key
+
+    if dry_run:
+        result.eligible = True
+        result.reason = "would create"
+        return result
+
+    adapter = registry.get(provider)
+    if adapter is None or not hasattr(adapter, "create"):
+        result.reason = f"no push-capable adapter registered for {provider}"
+        return result
+
+    # Same one user-facing switch as the closure path enables outbound
+    # routing as a byproduct, rather than a second undocumented toggle.
+    outbox.enable_outbound(workspace_id, connection.id)
+    item = outbox.enqueue(workspace_id, connection.id, task_id, "create", title)
+    if item is None:
+        result.reason = "outbound is disabled for this connection, or this is an echo"
+        return result
+
+    entity_input = adapter.create(connection, container, title, body, assignee)
+    entity, _created = store.upsert_entity(
+        workspace_id, connection.id, container.id, entity_input)
+    marker = f"{entity_input.remote_id}:{entity_input.remote_updated_at}"
+    outbox.mark_sent(item.id, marker)
+
+    link = store.claim_import_link(workspace_id, entity.id, task_id)
+    store.activate_link(workspace_id, link.id)
+
+    result.eligible = True
+    result.created = True
+    result.reason = "created"
+    result.issue = entity.display_key or entity.remote_id
+    result.url = entity.url
+    return result
+
+
+@dataclass
+class PushScanReport:
+    """A pure classification of a candidate task set — never touches a
+    store, an outbox, or a registry, so it structurally cannot reach GitHub.
+    This is the dry-run VISIBILITY the oracle needs: proof the active-only
+    filter and the idempotence check are both exercised, not merely assumed
+    true of whatever query fed them in."""
+
+    would_create: list = field(default_factory=list)
+    skipped_done: list = field(default_factory=list)
+    skipped_cancelled: list = field(default_factory=list)
+    skipped_already_linked: list = field(default_factory=list)
+    skipped_other_status: list = field(default_factory=list)
+
+
+def scan_active_tasks(rows) -> PushScanReport:
+    """Classify ``(task_id, status, has_active_link)`` rows. Read-only by
+    construction: no store/outbox/registry parameter exists to reach
+    GitHub with, so this can never become the unattended sweep this task's
+    likely_misfire warns against — it can only report."""
+    report = PushScanReport()
+    for task_id, status, has_active_link in rows:
+        if has_active_link:
+            report.skipped_already_linked.append(task_id)
+        elif status == "done":
+            report.skipped_done.append(task_id)
+        elif status == "cancelled":
+            report.skipped_cancelled.append(task_id)
+        elif status in ACTIVE_STATUSES:
+            report.would_create.append(task_id)
+        else:
+            report.skipped_other_status.append(task_id)
+    return report
