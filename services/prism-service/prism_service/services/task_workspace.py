@@ -20,11 +20,19 @@ in the PRISM repo's worktree list; remove_workspace() unregisters them.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 from prism_service.data_dir import resolve_data_dir
+
+# Relative to a checkout root: where the SPA's JS deps live, and where its
+# build output lands. Both are gitignored, so a fresh worktree has neither.
+_WEB_DIR = Path("services") / "prism-service" / "prism_service" / "web"
+_NODE_MODULES = _WEB_DIR / "node_modules"
 
 
 def _root() -> Path:
@@ -79,6 +87,97 @@ def _prism_repo_root() -> Path:
         "fake workspace (fail closed)")
 
 
+def _create_junction(link: Path, target: Path) -> None:
+    """Create a directory LINK that needs no elevated privileges: a Windows
+    directory junction (a reparse point — distinct from a symlink, which
+    Windows normally restricts) or, on POSIX, a plain symlink. Raises (fail
+    closed) if the platform cannot make one, rather than leaving a
+    worktree that looks fine and silently cannot resolve its deps.
+
+    NOTE: a naive `mklink /J` from a bash/sh subprocess on this host has
+    produced a SILENTLY BROKEN junction (a malformed double-drive-letter
+    target) that LOOKS created but that npm cannot walk — that failure
+    mode is why this goes through the win32 API directly instead of
+    shelling out to mklink.
+    """
+    if sys.platform == "win32":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(str(target), str(link), target_is_directory=True)
+
+
+def _link_web_node_modules(ws: Path, root: Path) -> None:
+    """LINK (never copy) the main checkout's web `node_modules` into a
+    task worktree. `node_modules` is gitignored, so a fresh worktree
+    checkout has none, and any UI slice's real typecheck (`npm run build`;
+    `tsc --noEmit` is a known false green in this repo) fails immediately
+    with "'tsc' is not recognized". Copying is wrong: node_modules is
+    large, worktrees are per-task, and the deps are already pinned by
+    package-lock.json at the same commit — a link is exact and O(1).
+
+    Only `node_modules` is linked, never `web_dist` (the SPA build
+    output): they are siblings under the same web dir, and leaving
+    `web_dist` alone means a worktree's `npm run build` always writes its
+    OWN build output, never the main checkout's — a task build can never
+    mutate the bundle the running dev daemon serves.
+
+    Skips quietly if the main checkout has no `node_modules` yet (a fresh
+    clone before its first `npm install`): that is a setup gap unrelated
+    to worktree creation, not a reason to fail the task's workspace. Also
+    skips (no-op) if the worktree already has a `node_modules` — idempotent
+    for the "worktree already exists" fast path in ensure_workspace.
+    """
+    src = root / _NODE_MODULES
+    if not src.exists():
+        return
+    dest = ws / _NODE_MODULES
+    if dest.exists():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _create_junction(dest, src)
+
+
+def _is_link(path: Path) -> bool:
+    """True if `path` is a directory LINK (a Windows junction/symlink
+    reparse point, or a POSIX symlink) rather than a real directory.
+
+    Deliberately does NOT rely on Path.is_symlink()/os.path.islink() alone
+    on Windows: verified empirically (task 0384b04d) that a junction made
+    by `_create_junction` (IO_REPARSE_TAG_MOUNT_POINT) reports
+    is_symlink() == False on this Python/Windows combo — that check only
+    recognizes IO_REPARSE_TAG_SYMLINK. Checking the FILE_ATTRIBUTE_REPARSE_POINT
+    bit directly is what actually catches it.
+    """
+    try:
+        if sys.platform == "win32":
+            st = os.stat(str(path), follow_symlinks=False)
+            return bool(st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def _detach_link(path: Path) -> None:
+    """Remove a directory LINK without touching what it points to. This is
+    a safety precondition, not optional cleanup: a naive recursive delete
+    of a worktree containing our node_modules junction (`git worktree
+    remove --force` is one; so is a bare shutil.rmtree/rm -rf) can FOLLOW
+    the reparse point on Windows and delete the TARGET's contents instead
+    of just the link — confirmed empirically, it destroyed the main
+    checkout's real node_modules/.bin (96 shims) during verification of
+    this module's fix (task 0384b04d). `os.rmdir()` on a reparse point
+    removes only the reparse point itself; the target directory and its
+    contents are left untouched — also confirmed empirically.
+    """
+    if not _is_link(path):
+        return
+    if sys.platform == "win32":
+        os.rmdir(str(path))
+    else:
+        os.unlink(str(path))
+
+
 def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
                      base_ref: Optional[str] = None) -> dict:
     """Create (idempotently) a real git worktree of the PRISM repo for this
@@ -95,6 +194,11 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
     idx = _load_index()
     rec = idx.get(task_id)
     if rec and Path(rec["path"]).exists():
+        # Self-heal: a worktree created before this fix, or before the main
+        # checkout's first `npm install`, may still be missing its deps
+        # link. Idempotent no-op once the link exists.
+        _link_web_node_modules(Path(rec["path"]),
+                                Path(rec.get("repo_root") or _prism_repo_root()))
         return rec
 
     root = Path(repo_root) if repo_root else _prism_repo_root()
@@ -116,6 +220,9 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
     _git_out(root, "worktree", "add", "-b", branch, str(ws), base)
     _git_out(ws, "config", "user.email", "worker@prism")
     _git_out(ws, "config", "user.name", "prism-worker")
+    # JS deps are gitignored, so the fresh checkout has none; link them in
+    # so a UI slice's real typecheck (`npm run build`) works unaided.
+    _link_web_node_modules(ws, root)
 
     rec = {"task_id": task_id, "path": str(ws), "baseline": _git_out(
         ws, "rev-parse", "HEAD"), "branch": branch, "repo_root": str(root)}
@@ -127,11 +234,24 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
 def remove_workspace(task_id: str) -> dict:
     """Unregister and delete a task's worktree + its branch (best effort).
     Used on task teardown and by tests so the PRISM repo's worktree list
-    stays clean."""
+    stays clean.
+
+    SAFETY: detaches our node_modules link BEFORE any recursive delete of
+    the worktree tree. `git worktree remove --force` deletes the worktree
+    directory recursively, and on Windows that recursion FOLLOWS our
+    node_modules junction into the main checkout rather than stopping at
+    the link — see _detach_link. Skipping this step is not merely a
+    regression risk, it already destroyed a real node_modules/.bin once.
+    """
     idx = _load_index()
     rec = idx.pop(task_id, None)
     if rec is None:
         return {"ok": False, "reason": "no workspace for task"}
+    ws_path = Path(rec.get("path") or "")
+    try:
+        _detach_link(ws_path / _NODE_MODULES)
+    except OSError:
+        pass
     root = Path(rec.get("repo_root") or "")
     if root.exists():
         for args in (("worktree", "remove", "--force", rec["path"]),

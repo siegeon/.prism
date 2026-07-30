@@ -97,6 +97,13 @@ type TestReceipt = {
 type GateReadiness = {
   receipt_ok: boolean;
   receipt_refusal?: string;
+  // A human review is the ACCEPTED evidence route for this proof_type
+  // (owner 2026-07-29: "damnnit, how are we at a green wait state") — this
+  // does NOT mean a machine checked anything. Combined with
+  // receipt.adapter === "human" it names the bare-entitlement receipt (no
+  // machine tooth ran at all); an epic roll-up sets this too but over REAL
+  // aggregated child evidence (adapter="epic-rollup"), so it is NOT this case.
+  manual_review?: boolean;
   receipt?: {
     adapter?: string;
     passed?: boolean;
@@ -858,6 +865,22 @@ export default function TaskDetailPage() {
   // decision must not lock the button (it is shown as history below).
   const gateVerdict: "ready" | "blocked" =
     gateReadiness?.receipt_ok ? "ready" : "blocked";
+  // HONEST GATE HEADLINE (task 72d3e0d1, owner 2026-07-29): receipt_ok=true
+  // only means "a human review is the accepted evidence route for this
+  // proof_type" — it does NOT mean anything passed. isAwaitingReview names
+  // the bare-entitlement receipt (no machine tooth ran) so the headline can
+  // say so instead of claiming "evidence passing". A real fresh receipt or
+  // an epic roll-up's aggregated child evidence is NOT this case and keeps
+  // the affirmative headline.
+  const isAwaitingReview =
+    gateVerdict === "ready" &&
+    !!gateReadiness?.manual_review &&
+    gateReadiness?.receipt?.adapter === "human";
+  // Calm-but-not-a-pass tone (owner: awaiting-review is a normal, correct
+  // state — it must never read as alarming/failed, and must never be
+  // visually indistinguishable from a real pass).
+  const bannerTone: "sage" | "amber" | "rose" =
+    gateVerdict !== "ready" ? "rose" : isAwaitingReview ? "amber" : "sage";
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -1454,17 +1477,20 @@ export default function TaskDetailPage() {
           task, not just the implementation"). Each is clickable and jumps to
           the view where the action lives (the gate form in Implementation). */}
       {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") && (
-        <div className="rounded-md border overflow-hidden" style={{ borderColor: gateVerdict === "ready" ? "var(--accent-sage-ring)" : "var(--accent-rose-ring)" }}>
+        <div className="rounded-md border overflow-hidden" style={{ borderColor: `var(--accent-${bannerTone}-ring)` }}>
           <button
             type="button"
             onClick={() => {
               setGatePanelOpen((v) => !v);
               // Pre-fill a truthful suggested reason so Approve is clickable
-              // immediately — the owner edits or replaces at will.
+              // immediately — the owner edits or replaces at will. Never
+              // claim a "passing receipt" for the bare-entitlement case.
               if (!gateReason.trim()) {
-                setGateReason(gateReadiness?.receipt_ok
-                  ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
-                  : "");
+                setGateReason(isAwaitingReview
+                  ? "Approving on my own review — no machine evidence exists at this tree; my read of the artifacts is the sign-off."
+                  : gateReadiness?.receipt_ok
+                    ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
+                    : "");
               }
               // When the machine verifier already refused DESPITE passing
               // evidence (the known blind-verifier defect 68e5c699), guide
@@ -1476,14 +1502,18 @@ export default function TaskDetailPage() {
             }}
             className="w-full text-left px-4 py-3 text-[13px] leading-relaxed flex items-center gap-3 flex-wrap"
             style={{
-              background: gateVerdict === "ready" ? "var(--accent-sage-bg)" : "var(--accent-rose-bg)",
-              color: gateVerdict === "ready" ? "var(--accent-sage-fg)" : "var(--accent-rose-fg)",
+              background: `var(--accent-${bannerTone}-bg)`,
+              color: `var(--accent-${bannerTone}-fg)`,
             }}
             aria-expanded={gatePanelOpen}
             title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
           >
             <span className="font-semibold">
-              ● {gateVerdict === "ready" ? "READY · evidence passing" : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
+              ● {gateVerdict === "ready"
+                  ? (isAwaitingReview
+                      ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
+                      : "READY · evidence passing")
+                  : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
               {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "recover with override, or fix & re-run"}
