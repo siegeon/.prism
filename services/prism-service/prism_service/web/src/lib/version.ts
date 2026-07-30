@@ -12,6 +12,14 @@
  * when the backend restarts (Watchtower swap), so the post-swap
  * reconnect surfaces a new version → we force-reload the page so
  * the user picks up the new bundle without having to hard-refresh.
+ *
+ * `/api/version`'s default response deliberately OMITS `notes` (task
+ * 842248bd: the full changelog is ~262 KB, and this hook's mount fetch plus
+ * the 15s poll below only ever read `.version` — shipping the whole
+ * changelog on every one of those calls was pure waste). Call
+ * `useVersionNotes()` for the one place that genuinely wants the full
+ * string (Sidebar's tooltip); it fetches `?notes=true` once, lazily,
+ * cached module-scope same as `cached` above.
  */
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
@@ -67,4 +75,24 @@ export function useVersion(): ServiceVersion | null {
     inflight.then((r) => setV(r)).catch(() => {});
   }, []);
   return v;
+}
+
+let notesCached: string | null = null;
+let notesInflight: Promise<string> | null = null;
+
+/** Lazily, once, fetches the full changelog via the explicit `?notes=true`
+ * opt-in (task 842248bd) — never ridden on the lean default `useVersion()`
+ * path or the 15s poll. Sidebar's tooltip is the one consumer. */
+export function useVersionNotes(): string {
+  const [n, setN] = useState<string>(notesCached ?? "");
+  useEffect(() => {
+    if (notesCached !== null) return;
+    if (!notesInflight) {
+      notesInflight = api.get<ServiceVersion>("/api/version?notes=true")
+        .then((r) => { notesCached = r.notes ?? ""; return notesCached; })
+        .finally(() => { notesInflight = null; });
+    }
+    notesInflight.then((r) => setN(r)).catch(() => {});
+  }, []);
+  return n;
 }

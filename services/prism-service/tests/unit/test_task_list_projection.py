@@ -221,8 +221,11 @@ def test_mirror_of_reads_mirror_url_not_raw_description():
 
 def test_detail_children_fetch_is_scoped_not_the_whole_board():
     src = _read("pages/TaskDetailPage.tsx")
-    i = src.index("setChildren")
-    window = src[max(0, i - 300):i + 50]
+    # The children-checklist fetch, not the `const [children, setChildren] =
+    # useState(...)` declaration earlier in the file (a fixed offset from the
+    # first "setChildren" hit would land on the wrong occurrence).
+    i = src.index("ChildTask[] }>(")
+    window = src[i:i + 200]
     assert "parent_id=" in window, (
         f"children fetch must scope with parent_id=; got context: {window!r}")
     assert "fields=" in window, (
@@ -233,7 +236,13 @@ def test_detail_children_fetch_is_scoped_not_the_whole_board():
 
 
 def test_sidebar_tooltip_uses_the_explicit_notes_opt_in():
-    src = _read("components/Sidebar.tsx")
-    assert "notes=true" in src or "notes: true" in src or "?notes=" in src, (
-        "Sidebar's version tooltip must fetch notes via an explicit opt-in "
-        "query param, not rely on the lean default response carrying them")
+    sidebar = _read("components/Sidebar.tsx")
+    assert "useVersionNotes" in sidebar, (
+        "Sidebar's tooltip must read notes via a dedicated opt-in hook, not "
+        "the lean useVersion() default")
+    version_lib = _read("lib/version.ts")
+    assert re.search(r"useVersionNotes", version_lib), (
+        "lib/version.ts must export the notes opt-in hook Sidebar calls")
+    assert "?notes=true" in version_lib or "notes=true" in version_lib, (
+        "the notes hook must fetch the explicit opt-in query param, not the "
+        "lean default")

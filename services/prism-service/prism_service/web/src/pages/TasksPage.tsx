@@ -18,12 +18,11 @@ type Task = {
   priority?: number | string;
   assigned_agent?: string;
   workflow_step?: string;
-  gate_state?: string;
-  gate_reason?: string;
   parent_id?: string;
   updated_at?: string;
   tags?: string[];
-  description?: string;
+  gate_state?: string;
+  mirror_url?: string;
 };
 
 // A row on the unified Work surface — a native PRISM task OR an external
@@ -49,7 +48,7 @@ type WorkItem = {
   restricted?: boolean;     // server says: exists, but linked context is hidden
   imported?: boolean;       // has a local intake task that can be started
   tags?: string[];          // provenance, e.g. ['github','external']
-  description?: string;     // carries the mirrored-from line + issue URL
+  mirror_url?: string;      // server-derived backlink for a mirrored native task
 };
 
 // My Work vs Team — the attention model. "mine" scopes to the signed-in
@@ -89,7 +88,9 @@ function providerOf(kind?: string, provider?: string): WorkSource {
 // happens, so labelling every row "PRISM" says nothing (owner 2026-07-28).
 // A badge earns its place only by taking you somewhere: a task mirrored from
 // a provider gets a link to the real thing, and a native task gets nothing.
-const MIRROR_URL_RE = /(https:\/\/(?:github\.com|[\w.-]+\.atlassian\.net)\/\S+)/;
+// The URL itself is derived SERVER-SIDE (api/tasks.py's `mirror_url` field,
+// task 842248bd) so the board never has to ship the raw description body
+// that used to carry it, just this one small string.
 
 function mirrorOf(item: WorkItem): { label: string; href: string } | null {
   if (item.url) {
@@ -99,9 +100,8 @@ function mirrorOf(item: WorkItem): { label: string; href: string } | null {
   // what the sync recorded on it (task 900a4fb9).
   const tags = (item.tags ?? []).map((t) => t.toLowerCase());
   const provider = tags.includes("jira") ? "jira" : tags.includes("github") ? "github" : null;
-  if (!provider) return null;
-  const found = MIRROR_URL_RE.exec(item.description ?? "");
-  return found ? { label: provider.toUpperCase(), href: found[1] } : null;
+  if (!provider || !item.mirror_url) return null;
+  return { label: provider.toUpperCase(), href: item.mirror_url };
 }
 
 function nativeToWork(t: Task): WorkItem {
@@ -117,7 +117,7 @@ function nativeToWork(t: Task): WorkItem {
     priority: t.priority,
     updated_at: t.updated_at,
     tags: t.tags,
-    description: t.description,
+    mirror_url: t.mirror_url,
     parent_id: t.parent_id,
   };
 }
@@ -154,7 +154,12 @@ export default function TasksPage() {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(() => {
-    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}`)
+    // LEAN board projection (task 842248bd): the unprojected board shipped
+    // 1.84 MB over 356 rows, 86% of it fields this page never renders.
+    // `description` is deliberately NOT in this set — the server derives
+    // `mirror_url` instead so the link-out badge survives without the raw
+    // body riding the board (see mirrorOf below).
+    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirror_url`)
       .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
     // The viewer identity powers My Work; failure just leaves it empty (Team
