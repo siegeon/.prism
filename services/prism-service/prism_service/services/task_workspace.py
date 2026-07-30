@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -137,6 +138,46 @@ def _link_web_node_modules(ws: Path, root: Path) -> None:
     _create_junction(dest, src)
 
 
+def _is_link(path: Path) -> bool:
+    """True if `path` is a directory LINK (a Windows junction/symlink
+    reparse point, or a POSIX symlink) rather than a real directory.
+
+    Deliberately does NOT rely on Path.is_symlink()/os.path.islink() alone
+    on Windows: verified empirically (task 0384b04d) that a junction made
+    by `_create_junction` (IO_REPARSE_TAG_MOUNT_POINT) reports
+    is_symlink() == False on this Python/Windows combo — that check only
+    recognizes IO_REPARSE_TAG_SYMLINK. Checking the FILE_ATTRIBUTE_REPARSE_POINT
+    bit directly is what actually catches it.
+    """
+    try:
+        if sys.platform == "win32":
+            st = os.stat(str(path), follow_symlinks=False)
+            return bool(st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def _detach_link(path: Path) -> None:
+    """Remove a directory LINK without touching what it points to. This is
+    a safety precondition, not optional cleanup: a naive recursive delete
+    of a worktree containing our node_modules junction (`git worktree
+    remove --force` is one; so is a bare shutil.rmtree/rm -rf) can FOLLOW
+    the reparse point on Windows and delete the TARGET's contents instead
+    of just the link — confirmed empirically, it destroyed the main
+    checkout's real node_modules/.bin (96 shims) during verification of
+    this module's fix (task 0384b04d). `os.rmdir()` on a reparse point
+    removes only the reparse point itself; the target directory and its
+    contents are left untouched — also confirmed empirically.
+    """
+    if not _is_link(path):
+        return
+    if sys.platform == "win32":
+        os.rmdir(str(path))
+    else:
+        os.unlink(str(path))
+
+
 def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
                      base_ref: Optional[str] = None) -> dict:
     """Create (idempotently) a real git worktree of the PRISM repo for this
@@ -193,11 +234,24 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
 def remove_workspace(task_id: str) -> dict:
     """Unregister and delete a task's worktree + its branch (best effort).
     Used on task teardown and by tests so the PRISM repo's worktree list
-    stays clean."""
+    stays clean.
+
+    SAFETY: detaches our node_modules link BEFORE any recursive delete of
+    the worktree tree. `git worktree remove --force` deletes the worktree
+    directory recursively, and on Windows that recursion FOLLOWS our
+    node_modules junction into the main checkout rather than stopping at
+    the link — see _detach_link. Skipping this step is not merely a
+    regression risk, it already destroyed a real node_modules/.bin once.
+    """
     idx = _load_index()
     rec = idx.pop(task_id, None)
     if rec is None:
         return {"ok": False, "reason": "no workspace for task"}
+    ws_path = Path(rec.get("path") or "")
+    try:
+        _detach_link(ws_path / _NODE_MODULES)
+    except OSError:
+        pass
     root = Path(rec.get("repo_root") or "")
     if root.exists():
         for args in (("worktree", "remove", "--force", rec["path"]),

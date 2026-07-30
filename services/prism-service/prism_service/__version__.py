@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.8.1"
+PRISM_VERSION = "7.8.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.8.2: REMOVING A TASK WORKTREE NO LONGER DESTROYS node_modules "
+    "[task 0384b04d]. remove_workspace's `git worktree remove --force` "
+    "recursively deletes the worktree tree, and on Windows that recursion "
+    "FOLLOWED our v7.8.1 node_modules junction into the MAIN checkout, "
+    "deleting its real node_modules/.bin (96 shims) instead of just the "
+    "link - reproduced and confirmed destructive during review. Fixed by "
+    "detaching the junction (os.rmdir on the reparse point, verified to "
+    "leave the target untouched) BEFORE the recursive delete runs; "
+    "detection uses the FILE_ATTRIBUTE_REPARSE_POINT bit directly because "
+    "Path.is_symlink()/os.path.islink() do not recognize a junction "
+    "(IO_REPARSE_TAG_MOUNT_POINT) on this Windows/Python combo. "
     "v7.8.1: FRESH TASK WORKTREES CAN BUILD THE SPA [task 0384b04d]. "
     "node_modules is gitignored, so a conductor worktree had zero JS deps "
     "and any UI slice's real typecheck (`npm run build`; `tsc --noEmit` is "
