@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.8.0"
+PRISM_VERSION = "7.8.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.8.1: FRESH TASK WORKTREES CAN BUILD THE SPA [task 0384b04d]. "
+    "node_modules is gitignored, so a conductor worktree had zero JS deps "
+    "and any UI slice's real typecheck (`npm run build`; `tsc --noEmit` is "
+    "a known false green here) failed immediately with \"'tsc' is not "
+    "recognized\" unless someone hand-junctioned it mid-drive. "
+    "ensure_workspace now links (never copies) the main checkout's web "
+    "node_modules into every worktree it creates or reopens, via a real "
+    "Windows junction (_winapi.CreateJunction, no elevation needed) or a "
+    "POSIX symlink; web_dist stays untouched, so a worktree build can "
+    "never mutate the bundle the running daemon serves. "
     "v7.7.1: PINNED TESTS REPORT WHAT ACTUALLY RAN [task 9f3c57dc]. The "
     "Tests tab could show a confident '0 / N' when nothing had actually run: "
     "a pytest collection failure (one pinned file missing from the run root) "
