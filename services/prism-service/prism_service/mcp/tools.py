@@ -4446,6 +4446,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     if _cur["id"] in ("draft_story", "verify_plan"):
                         task_svc.update(_task_id, plan_doc=str(_proof),
                                         completion_proof=str(_proof))
+                    elif _cur["id"] == "review_previous_notes":
+                        # premise_grounded (task 3928b7ac, issue #222
+                        # continued) reads task.premise_notes, a field
+                        # DEDICATED to this step — never the shared
+                        # completion_proof (also read by the green_gate
+                        # oracle tooth). completion_proof is still written
+                        # too, for backward-compatible rendering (the task
+                        # detail page renders it generically).
+                        task_svc.update(_task_id, premise_notes=str(_proof),
+                                        completion_proof=str(_proof))
                     else:
                         task_svc.update(_task_id, completion_proof=str(_proof))
                 except Exception:

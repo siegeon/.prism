@@ -294,24 +294,30 @@ def score_premise_grounded(evidence: dict, rubric: dict) -> dict:
     an explicit REFUTED/UNVERIFIED marker; a refusal names the offending
     claim so the driver can self-diagnose.
 
-    SCOPE (task 3a63190b): task.completion_proof is a SHARED field also
-    used to carry proof for LATER steps/gates (e.g. the green_gate oracle
-    citation) — a value staged there for an unrelated purpose is not a
-    premise report. This rubric only engages once the report actually
-    carries a '## <claims_section>' heading: a report with no such
-    heading (blank, or unrelated content) has nothing to ground and
-    passes; a report that DOES declare the section is held to the full
-    rubric below (present-but-empty still fails — a driver who opens the
-    section owes it real content).
+    UNCONDITIONAL (task 3928b7ac, issue #222 continued): task 3a63190b
+    originally scoped this rubric to engage ONLY once the report opened a
+    '## <claims_section>' heading — a report with none "had nothing to
+    ground" and passed. That opt-in path is RETIRED here: notes_md is now
+    read from task.premise_notes, a field DEDICATED to this step (never the
+    shared task.completion_proof several fixtures stage with unrelated
+    green-proof content for a later gate), so the original collision this
+    opt-in guarded against cannot recur. A missing or empty section is a
+    real gap now (the exact population issue #222 named — a driver who
+    never considers citing evidence) and is REFUSED, not passed.
     """
     notes = str(evidence.get("notes_md") or "")
     section_name = rubric.get("claims_section", "premises")
     sections = _sections(notes) if notes.strip() else {}
     section_body = _find_section(sections, section_name)
     if section_body is None:
-        return {"ok": True,
+        return {"ok": False,
                 "reason": (f"premise_grounded: no '{section_name}' section "
-                           "present - nothing recorded to ground")}
+                           "present - record at least one load-bearing "
+                           "claim from the ticket (with a file:line "
+                           "citation, a run/PR/commit/issue id, backtick "
+                           "command output, or an explicit REFUTED/"
+                           "UNVERIFIED marker) before reporting "
+                           "review_previous_notes")}
     claims = _claim_lines(section_body)
     if not claims:
         return {"ok": False,

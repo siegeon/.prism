@@ -41,6 +41,13 @@ def _task_at_draft_story(plan_doc: str = ""):
     project = "gac-" + uuid.uuid4().hex[:8]
     svc = get_project(project).conductor_svc
     task = svc._task_svc.create(title="gate autoclear probe")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this unrelated autoclear/recheck walk can leave
+    # review_previous_notes.
+    svc._task_svc.update(task.id, premise_notes=(
+        "## Premises\n- fixture walk exercising gate autoclear, not a "
+        "real premise claim - UNVERIFIED\n"))
     svc.advance_task(task.id, session_id="prep")      # -> review_previous_notes
     svc.advance_task(task.id, session_id="prep")      # -> draft_story
     if plan_doc:

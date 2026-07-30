@@ -309,7 +309,7 @@ def test_mcp_report_routes_review_previous_notes_proof_to_premise_notes():
     src = tools_path.read_text(encoding="utf-8")
     idx = src.find('if _cur["id"] in ("draft_story", "verify_plan"):')
     assert idx != -1, "conductor_work proof-routing branch not found"
-    window = src[idx:idx + 800]
+    window = src[idx:idx + 1400]
     assert '"review_previous_notes"' in window, (
         "review_previous_notes must have its own routing arm in the "
         f"proof router: {window}")

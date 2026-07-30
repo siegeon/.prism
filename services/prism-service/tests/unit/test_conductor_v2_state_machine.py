@@ -141,6 +141,13 @@ def test_advance_into_gate_sets_gate_state_pending(tmp_path):
     # Walk up to (and including) the first gate.
     steps = _workflow()
     gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising raw state-machine "
+        "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
 
@@ -154,6 +161,13 @@ def test_advance_refused_when_gate_pending(tmp_path):
     t = task_svc.create(title="Stuck at gate")
     steps = _workflow()
     gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising raw state-machine "
+        "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
 
@@ -177,6 +191,13 @@ def test_advance_past_gate_when_gate_state_passed(tmp_path):
     t = task_svc.create(title="Approve and roll forward")
     steps = _workflow()
     gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising raw state-machine "
+        "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
 
@@ -198,6 +219,12 @@ def test_advance_past_gate_when_gate_state_passed(tmp_path):
 def test_advance_at_final_step_returns_refusal(tmp_path):
     task_svc, cond = _services(tmp_path)
     t = task_svc.create(title="Walks to the end")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising the final-step refusal, "
+        "not a real premise claim - UNVERIFIED\n"))
     steps = _workflow()
 
     # Walk to the end. After each step, if we landed on a gate we
@@ -260,6 +287,13 @@ def test_gate_decide_reject_does_not_auto_advance(tmp_path):
     t = task_svc.create(title="Reject me")
     steps = _workflow()
     gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising raw state-machine "
+        "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
 
@@ -278,6 +312,13 @@ def test_gate_decide_refuses_when_state_not_pending(tmp_path):
     t = task_svc.create(title="Already rejected")
     steps = _workflow()
     gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising raw state-machine "
+        "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
     cond.gate_decide(t.id, action="reject", reason="nope")
@@ -302,6 +343,13 @@ def test_task_history_captures_every_transition(tmp_path):
     steps = _workflow()
     gate_index = next(i for i, s in enumerate(steps) if s["type"] == "gate")
 
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this raw state-machine walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising raw state-machine "
+        "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
     cond.gate_decide(

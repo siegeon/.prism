@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     verify TEXT DEFAULT '[]',
     stop_if TEXT DEFAULT '[]',
     plan_doc TEXT DEFAULT '',
-    plan_diagram TEXT DEFAULT ''
+    plan_diagram TEXT DEFAULT '',
+    premise_notes TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -125,6 +126,9 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     # SPA keeps the current description view).
     ("plan_doc", "TEXT DEFAULT ''"),
     ("plan_diagram", "TEXT DEFAULT ''"),
+    # premise_notes (task 3928b7ac): review_previous_notes' own dedicated
+    # field, decoupled from the shared completion_proof column above.
+    ("premise_notes", "TEXT DEFAULT ''"),
 ]
 
 
@@ -293,6 +297,8 @@ class TaskService:
                       and row["plan_doc"] is not None else ""),
             plan_diagram=(row["plan_diagram"] if "plan_diagram" in keys
                           and row["plan_diagram"] is not None else ""),
+            premise_notes=(row["premise_notes"] if "premise_notes" in keys
+                           and row["premise_notes"] is not None else ""),
         )
 
     def _record_history(
@@ -340,6 +346,7 @@ class TaskService:
         stop_if: Optional[list[str]] = None,
         plan_doc: str = "",
         plan_diagram: str = "",
+        premise_notes: str = "",
     ) -> Task:
         """Create a new task and return it."""
         task = Task(
@@ -361,6 +368,7 @@ class TaskService:
             stop_if=stop_if or [],
             plan_doc=plan_doc,
             plan_diagram=plan_diagram,
+            premise_notes=premise_notes,
         )
         self._db.execute(
             "INSERT INTO tasks "
@@ -369,8 +377,9 @@ class TaskService:
             "blocked_reason, dependencies, tags, parent_id, "
             "oracle, proof_type, completion_proof, likely_misfire, "
             "full_outcome_complete, "
-            "allowed_files, verify, stop_if, plan_doc, plan_diagram) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "allowed_files, verify, stop_if, plan_doc, plan_diagram, "
+            "premise_notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -396,6 +405,7 @@ class TaskService:
                 json.dumps(task.stop_if),
                 task.plan_doc,
                 task.plan_diagram,
+                task.premise_notes,
             ),
         )
         self._db.commit()
@@ -541,7 +551,7 @@ class TaskService:
             "oracle=?, proof_type=?, completion_proof=?, likely_misfire=?, "
             "full_outcome_complete=?, "
             "allowed_files=?, verify=?, stop_if=?, "
-            "plan_doc=?, plan_diagram=? "
+            "plan_doc=?, plan_diagram=?, premise_notes=? "
             "WHERE id=?",
             (
                 task.title,
@@ -569,6 +579,7 @@ class TaskService:
                 json.dumps(task.stop_if),
                 task.plan_doc,
                 task.plan_diagram,
+                task.premise_notes,
                 task.id,
             ),
         )
