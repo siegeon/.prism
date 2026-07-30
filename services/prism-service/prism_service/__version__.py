@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.9.0"
+PRISM_VERSION = "7.9.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -3989,6 +3989,14 @@ PRISM_VERSION_NOTES += (
     "sidebar pulse while scanning. v5.1.6: bootstrap_after_clone + "
     "drainer + drift UI. v5.1: Understand-Anything. v5.0: "
     "Hermes-native React/Vite SPA."
+)
+PRISM_VERSION_NOTES += (
+    " v7.9.1: captured videos can actually be watched. The evidence route's "
+    "filename whitelist excluded '@', so every page@<hash>.webm recording the "
+    "browser-oracle runner writes 400'd — no video PRISM ever captured was "
+    "viewable. Widened the whitelist to admit '@' (traversal guard and "
+    "leading-alphanumeric rule unchanged) so the 6 existing on-disk "
+    "recordings now serve as playable video, without renaming anything."
 )
 
 
