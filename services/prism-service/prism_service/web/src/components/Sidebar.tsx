@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { useScanActivity } from "@/lib/scan-activity";
 import { currentTheme, toggleTheme } from "@/lib/theme";
-import { useVersion } from "@/lib/version";
+import { useVersion, useVersionNotes } from "@/lib/version";
 import { cn } from "@/lib/utils";
 
 type StaleKey = "understand" | "graph" | "brain";
@@ -133,6 +133,10 @@ export default function Sidebar() {
   const stale = useStaleness(project);
   const scan = useScanActivity();
   const version = useVersion();
+  // The footer's hover tooltip is the one consumer of the full changelog —
+  // fetched via the explicit `?notes=true` opt-in (task 842248bd), never
+  // riding the lean default `useVersion()` response or its 15s poll.
+  const versionNotes = useVersionNotes();
   const [theme, setTheme] = useState(currentTheme());
   const { pathname } = useLocation();
   const inSettings = pathname.startsWith("/settings");
@@ -255,7 +259,7 @@ export default function Sidebar() {
         )}
         <div
           className="px-5 py-3 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] border-t border-[color:var(--nav-line)] flex items-center gap-2"
-          title={version?.notes ?? ""}
+          title={versionNotes}
         >
           <button
             type="button"
