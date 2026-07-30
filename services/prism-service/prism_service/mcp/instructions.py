@@ -27,6 +27,12 @@ things to the table, all over this one MCP endpoint:
   A gate job is decided by a DISTINCT actor (the producing session cannot clear
   its own gate). conductor_advance/conductor_gate/workflow_state still exist for
   admin/debug behind tool_profile=all, but the loop verb supersedes them.
+- CLAIM EARLY: the moment you start working a task — BEFORE reading or
+  researching it — call task_update(id, status="in_progress") to claim it.
+  This is free (no worktree, no conductor_service.py involvement) and makes
+  the task visible on the Work board and the Conductor page's intake lane
+  right away, instead of staying invisible until conductor_work's first
+  call. It is distinct from conductor_work, which enters the graded SDLC.
 Start a session with prism_guide; onboard a fresh project with prism_onboard.
 """
 

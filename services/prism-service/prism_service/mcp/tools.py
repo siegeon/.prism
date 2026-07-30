@@ -1159,7 +1159,17 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="task_update",
-        description="Update an existing task (status, priority, assignment, etc.)",
+        description=(
+            "Update an existing task (status, priority, assignment, etc.). "
+            "CLAIM: the moment you start working a task — BEFORE reading or "
+            "researching it — set status=\"in_progress\" here. This is a free "
+            "claim (no worktree, no conductor_service.py involvement) that "
+            "makes the task visible on the Work board and the Conductor "
+            "page's intake lane immediately, instead of staying invisible "
+            "until conductor_work's first call. It is distinct from "
+            "conductor_work, which enters the graded SDLC and creates the "
+            "task's git worktree."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
