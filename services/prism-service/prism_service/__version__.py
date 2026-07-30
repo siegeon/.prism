@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.8.2"
+PRISM_VERSION = "7.9.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.9.0: TEN FIXES FOR THE WORK LOOP. Pull requests no longer arrive as tasks, an imported issue carries its real body, a finished task can close its GitHub issue, and PRISM tasks can become issues. Gates got honest: pinned tests report what actually ran instead of a fabricated 0/N, the gate headline stops claiming evidence it lacks, a visual oracle no longer passes on a probe that cannot see it, and a judge running uncommitted policy code says so. Plus: a task worktree can run the real typecheck, test order cannot leak a null adapter, and mcp is capped below 2.0 so CI installs a working SDK. "
     "v7.8.2: REMOVING A TASK WORKTREE NO LONGER DESTROYS node_modules "
     "[task 0384b04d]. remove_workspace's `git worktree remove --force` "
     "recursively deletes the worktree tree, and on Windows that recursion "
