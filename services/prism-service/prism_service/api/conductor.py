@@ -17,13 +17,13 @@ def _svc(project: str):
 
 
 @router.get("/state")
-def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1, le=1000)) -> dict:
+def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1, le=1000),
+          include_outcomes: bool = Query(False)) -> dict:
     s = _svc(project)
-    return {
+    out = {
         "exploration_rate": s.exploration_rate(),
         "variants": s.get_variants(),
         "scores": s.get_scores(),
-        "session_outcomes": s.get_session_outcomes(limit=outcomes_limit),
         "retired": s.get_retired(),
         # Conductor v2 (#79 follow-up): SPA /conductor page reads these to
         # render the SDLC dashboard — which tasks conductor is driving and
@@ -35,6 +35,17 @@ def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1
         # completions lead the newest-first run. Additive; SPA renders a badge.
         "board_health": board_health(_board_tasks(s)),
     }
+    # Task d5465a25 (heavy-poll scoping): session_outcomes is 93% of this
+    # payload (55.9 KB of a measured 60 KB) and this route is polled every
+    # 5s from LiveBar.tsx + ConductorPage.tsx — neither reads it (both type
+    # only managed_tasks/step_buckets/board_health). SessionsPage and
+    # SessionDetailPage get their OWN copy from /api/sessions
+    # (api/sessions.py independently calls get_session_outcomes), so this
+    # was dead weight on the polled path. Ship it only on explicit opt-in,
+    # mirroring the /api/version?notes=true pattern (task 842248bd).
+    if include_outcomes:
+        out["session_outcomes"] = s.get_session_outcomes(limit=outcomes_limit)
+    return out
 
 
 def _board_tasks(s) -> list:

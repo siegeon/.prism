@@ -80,19 +80,25 @@ export function useVersion(): ServiceVersion | null {
 let notesCached: string | null = null;
 let notesInflight: Promise<string> | null = null;
 
-/** Lazily, once, fetches the full changelog via the explicit `?notes=true`
- * opt-in (task 842248bd) — never ridden on the lean default `useVersion()`
- * path or the 15s poll. Sidebar's tooltip is the one consumer. */
-export function useVersionNotes(): string {
+/** Fetches the full changelog via the explicit `?notes=true` opt-in (task
+ * 842248bd) — never ridden on the lean default `useVersion()` path or the
+ * 15s poll. Task d5465a25: this used to fire inside a bare mount
+ * `useEffect`, so every Sidebar mount downloaded the whole ~262 KB
+ * changelog whether or not the user ever hovered the tooltip. There is no
+ * auto-fetch now — the caller must invoke the returned `ensureLoaded()`
+ * (Sidebar wires it to the footer's hover/focus). Repeated calls after the
+ * first are free: `notesCached`/`notesInflight` guard exactly like
+ * `useVersion()`'s cache above. */
+export function useVersionNotes(): { notes: string; ensureLoaded: () => void } {
   const [n, setN] = useState<string>(notesCached ?? "");
-  useEffect(() => {
-    if (notesCached !== null) return;
+  const ensureLoaded = () => {
+    if (notesCached !== null) { setN(notesCached); return; }
     if (!notesInflight) {
       notesInflight = api.get<ServiceVersion>("/api/version?notes=true")
         .then((r) => { notesCached = r.notes ?? ""; return notesCached; })
         .finally(() => { notesInflight = null; });
     }
     notesInflight.then((r) => setN(r)).catch(() => {});
-  }, []);
-  return n;
+  };
+  return { notes: n, ensureLoaded };
 }
