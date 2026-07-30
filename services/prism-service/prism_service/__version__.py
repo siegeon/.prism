@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.0"
+PRISM_VERSION = "7.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.7.1: GATE BANNER STOPS CLAIMING EVIDENCE IT LACKS [task 72d3e0d1]. "
+    "A manual/visual gate's headline said READY - evidence passing whenever "
+    "receipt_ok was true, even when the only evidence was that a human is "
+    "entitled to decide (adapter=human, manual_review=true, no machine "
+    "tooth ran) - exactly the sentence that makes a reviewer Approve "
+    "without opening the artifacts. The banner (TaskDetailPage.tsx) and the "
+    "Implementation-tab evidence panel (PlanView.tsx) now key on "
+    "manual_review + adapter===\"human\" to render an honest AWAITING YOUR "
+    "REVIEW state in a calm amber tone, never the word passing; a real "
+    "fresh receipt or an epic roll-up's aggregated child evidence keeps the "
+    "affirmative green passing state unchanged."
+)
+PRISM_VERSION_NOTES += (
     "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "
