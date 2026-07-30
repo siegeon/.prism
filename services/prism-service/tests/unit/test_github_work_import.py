@@ -123,6 +123,30 @@ def test_pull_requests_are_not_imported_as_issues(tmp_path):
     assert by_id["PR_kwDOAAA009"].status_category == "open"
 
 
+# ── AC-6: pull requests never become their own intake task (task 0665c829) ─
+#
+# github_rest.py/github_work.py already correctly TAG pull requests with
+# entity_kind="pull_request" (AC-2 above). This pins the layer ABOVE that:
+# the orchestrator must not turn a pull_request-kind entity into a visible
+# PRISM task, even though pull_page() deliberately returns PRs (so a future
+# github_work.link_pull_request() call has something to match against).
+
+def test_pull_requests_never_become_intake_tasks(tmp_path):
+    adapter = _adapter(_FixtureClient())
+    store, tasks, conn, cont = _synced(tmp_path, adapter)
+
+    imported = [t for t in tasks.list() if "external" in t.tags]
+    # issues.json has 2 real issues (one open, one closed) plus a THIRD row
+    # shaped like a PR (carries a "pull_request" key) that must never surface
+    # as its own issue OR task. pulls.json adds 2 more real PRs. None of the
+    # 2 PR titles may appear as a task; exactly the 2 issues do.
+    assert len(imported) == 2
+    titles = {t.title for t in imported}
+    assert "Fix the startup crash" not in titles
+    assert "Refactor the config loader" not in titles
+    assert titles == {"Crash on startup when config missing", "Add dark mode"}
+
+
 # ── AC-3: installation / repository scope is enforced ──────────────────
 
 def test_installation_and_repository_scope_is_enforced(tmp_path):

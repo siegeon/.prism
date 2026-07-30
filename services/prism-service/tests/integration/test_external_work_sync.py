@@ -162,6 +162,62 @@ def test_later_pull_does_not_clobber_local_edit(tmp_path):
     assert task.status == "in_progress"
 
 
+# ── AC-2/AC-3: stale PR-derived tasks self-heal on the next sync (0665c829) ─
+#
+# A pre-fix sync used to materialize a task for every pull request too,
+# keyed by the SAME deterministic task_id_for(...) a fixed sync recomputes.
+# These pin that the fix retracts an untouched stale row, but never one a
+# human has already started.
+
+def test_stale_pull_request_task_is_retracted_on_next_sync(tmp_path):
+    from prism_service.models.integration import task_id_for
+
+    store = _store(tmp_path)
+    tasks = _task_svc(tmp_path)
+    conn = store.ensure_connection(WS_A, "github", "install-1")
+    cont = store.ensure_container(WS_A, conn.id, "repository", "repo-1")
+
+    stale_id = task_id_for(WS_A, conn.id, "pull_request", "PR_stale")
+    tasks.ensure_external_intake(
+        stale_id, title="hardening: full suite green from agent worktrees",
+        tags=["github", "external"])
+
+    adapter = _scripted_adapter("github", [{"entities": [
+        {"remote_id": "PR_stale",
+         "title": "hardening: full suite green from agent worktrees",
+         "kind": "pull_request"},
+    ]}])
+    svc = _sync(store, tasks, adapter)
+    svc.pull_container(WS_A, conn, cont)
+
+    assert tasks.get(stale_id).status == "cancelled"
+
+
+def test_a_touched_stale_pull_request_task_is_left_alone(tmp_path):
+    from prism_service.models.integration import task_id_for
+
+    store = _store(tmp_path)
+    tasks = _task_svc(tmp_path)
+    conn = store.ensure_connection(WS_A, "github", "install-1")
+    cont = store.ensure_container(WS_A, conn.id, "repository", "repo-1")
+
+    stale_id = task_id_for(WS_A, conn.id, "pull_request", "PR_touched")
+    tasks.ensure_external_intake(
+        stale_id, title="fix: thread-safe task storage for concurrent drives",
+        tags=["github", "external"])
+    tasks.update(stale_id, status="in_progress")
+
+    adapter = _scripted_adapter("github", [{"entities": [
+        {"remote_id": "PR_touched",
+         "title": "fix: thread-safe task storage for concurrent drives",
+         "kind": "pull_request"},
+    ]}])
+    svc = _sync(store, tasks, adapter)
+    svc.pull_container(WS_A, conn, cont)
+
+    assert tasks.get(stale_id).status == "in_progress"
+
+
 # ── adapter contract: pagination cycle bounded ─────────────────────────
 
 def test_pagination_cycle_is_detected(tmp_path):

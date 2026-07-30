@@ -29,6 +29,14 @@ from prism_service.models.integration import (
 )
 
 
+# Entity kinds an adapter may hand back that are NEVER their own local task.
+# A pull request is a link target for an EXISTING task (github_work.
+# link_pull_request matches its [task:xxxx] trailer), not new work of its
+# own (task 0665c829); pull_page() still returns them so that linkage has
+# data to match against.
+NON_INTAKE_ENTITY_KINDS = frozenset({"pull_request"})
+
+
 @dataclass
 class PulledPage:
     """One normalized page from an adapter.
@@ -173,6 +181,22 @@ class WorkItemSyncService:
             workspace_id, connection.id, container.id, entity_input)
         task_id = task_id_for(
             workspace_id, connection.id, entity_input.entity_kind, entity_input.remote_id)
+
+        if entity_input.entity_kind in NON_INTAKE_ENTITY_KINDS:
+            # The entity is upserted above (so link_pull_request has data to
+            # match against later) but it never gets its own task. task_id_for
+            # is deterministic, so this recomputes the SAME id a pre-fix sync
+            # used to mistakenly create one (task 0665c829) -- retract it, but
+            # ONLY while it is still untouched. A row a human already picked
+            # up (status moved off pending, or a workflow_step is set) is left
+            # exactly alone, the same no-clobber invariant
+            # ensure_external_intake already keeps for a local edit.
+            stale = self._intake.get(task_id)
+            if (stale is not None and stale.status == "pending"
+                    and not stale.workflow_step):
+                self._intake.update(task_id, status="cancelled")
+            return 0
+
         link = store.claim_import_link(workspace_id, entity.id, task_id)
         title = entity_input.title or entity_input.display_key or entity_input.remote_id
         # Create only a LOCAL pending intake; remote status never enters the
