@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.1"
+PRISM_VERSION = "7.7.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.7.2: DIRTY JUDGE — MACHINE ABSTAINS, HUMAN STILL DECIDES [task "
+    "69233ca0 follow-up]. v7.7.1's guard unconditionally FAILED gate_decide's "
+    "human approve path too, deleting the human seat doctrine preserves "
+    "(visibility + override, never a required click). Split the check: "
+    "control_plane.candidate_policy_edit_reason keeps the ORIGINAL "
+    "candidate-worktree-edits-its-own-policy refusal unconditional, "
+    "byte-for-byte. The daemon-checkout-dirty case is now a non-blocking "
+    "CAVEAT — machine adjudicator seats still abstain (pre-flighting the "
+    "combined candidate_controls_judge_reason, unchanged), but gate_decide's "
+    "human approve proceeds, stamping the caveat into gate_reason + history "
+    "so the audit trail carries 'decided while the judge was dirty'. GET "
+    "/gate/readiness reflects this too: receipt_ok=True, manual_review=True."
+)
+PRISM_VERSION_NOTES += (
     "v7.7.1: A DIRTY JUDGE REFUSES TO ADJUDICATE [task 69233ca0]. "
     "control_plane pinned gate policy CONTENT to a baseline ref but never "
     "defended the RUNTIME: the daemon decides every gate with whatever "

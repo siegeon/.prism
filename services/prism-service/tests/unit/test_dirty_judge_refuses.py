@@ -190,8 +190,13 @@ def test_gate_readiness_names_dirty_policy_file(tmp_path, monkeypatch):
     monkeypatch.setattr(capi, "_svc", lambda project: cond)
 
     out = capi.gate_readiness(task_id=t.id, project="default")
-    assert out["receipt_ok"] is False
-    assert "conductor_service.py" in out["receipt_refusal"]
+    # CORRECTED (team-lead follow-up): a dirty judge is a CAVEAT a human may
+    # still approve past, not a refusal — receipt_ok stays True, manual_review
+    # flags it as not machine-decidable, and the dirty file is still named.
+    assert out["receipt_ok"] is True, out
+    assert out["manual_review"] is True, out
+    assert out["receipt_refusal"] == ""
+    assert "conductor_service.py" in out["receipt"]["reason"]
 
 
 def test_gate_readiness_untouched_when_daemon_checkout_clean(
@@ -211,3 +216,91 @@ def test_gate_readiness_untouched_when_daemon_checkout_clean(
     assert out["receipt_ok"] is False
     assert "conductor_service.py" not in out["receipt_refusal"]
     assert "daemon's own checkout" not in out["receipt_refusal"]
+
+
+# ---------------------------------------------------------------------------
+# THE DELIVERABLE (team-lead correction): with the daemon's own checkout
+# dirty on a POLICY_FILES entry, the MACHINE adjudicator seat ABSTAINS
+# (leaves green_gate pending, never decides) while a HUMAN approve still
+# SUCCEEDS — with the caveat recorded in gate_reason and history, never
+# silently. Both assertions in ONE run, on the SAME task.
+# ---------------------------------------------------------------------------
+
+
+def _clean_repo(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    _write(root, "README.md", "# ok\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "baseline")
+    return root
+
+
+def _stub_pytest_pass(monkeypatch):
+    """Instantly-passing pytest adapter (mirrors test_gate_adjudicator_seat.py)
+    — avoids needing a real pytest subprocess for this pin."""
+    from prism_service.services import oracle_spec as osp
+    monkeypatch.setitem(
+        osp._ADAPTERS, osp.ADAPTER_PYTEST,
+        lambda spec, ctx: ([], [], True, osp.ST_PASSED, "stub pass"))
+
+
+def test_machine_abstains_and_human_approve_succeeds_under_dirty_judge(
+        tmp_path, monkeypatch):
+    import prism_service.services.task_workspace as tw
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.conductor_service import ConductorService
+    from prism_service.services import oracle_spec as osp
+
+    # The TASK'S OWN worktree/pin — clean, no candidate edits of its own —
+    # kept SEPARATE from the daemon repo below to prove the caveat comes
+    # from the DAEMON's checkout, not this task's worktree diff.
+    task_repo = _clean_repo(tmp_path / "task_ws")
+    ws = {"path": str(task_repo),
+         "baseline": _git(task_repo, "rev-parse", "HEAD"),
+         "repo_root": str(task_repo)}
+    monkeypatch.setattr(tw, "workspace_for", lambda tid: ws)
+    monkeypatch.setattr(cp, "_workspace_for", lambda tid: ws)
+
+    # The DAEMON'S OWN checkout — dirty on a POLICY_FILES entry.
+    daemon = _daemon_repo(tmp_path)
+    _write(daemon, _POLICY_REL, "# daemon dirty, uncommitted\nX = 1\n")
+    monkeypatch.setattr(cp, "_prism_repo_root", lambda: daemon)
+
+    _stub_pytest_pass(monkeypatch)
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="green-gate task under a dirty judge",
+                        oracle="pinned tests green", proof_type="test",
+                        tags=["conductor"])
+    task_svc.update(t.id, verify=["pytest tests/unit/test_ok.py::test_ok"],
+                    workflow_step="green_gate", gate_state="pending")
+    task = task_svc.get(t.id)
+    spec = osp.OracleSpec.from_task(task)
+    receipt = osp.run_oracle(
+        spec, task, ctx={"project": "default", "workspace": str(task_repo)})
+    assert receipt.passed is True
+
+    cond = ConductorService(str(tmp_path / "scores.db"), enable_engine=False,
+                            task_svc=task_svc)
+    cond._project_name = "default"
+
+    # MACHINE seat: abstains — never decides while the judge is dirty.
+    res = cond.adjudicate_green_gate(t.id)
+    assert res is None, res
+    still_pending = task_svc.get(t.id)
+    assert still_pending.gate_state == "pending"
+    assert still_pending.workflow_step == "green_gate"
+
+    # HUMAN approve: succeeds — the caveat is recorded, not swallowed.
+    out = cond.gate_decide(
+        t.id, "approve",
+        reason="verify_green: pytest full suite passed (0 failed)",
+        actor="human-reviewer", session_id="human-reviewer")
+    assert out["ok"] is True, out
+    assert out["gate_state"] == "passed"
+    final = task_svc.get(t.id)
+    assert "dirty" in final.gate_reason.lower(), final.gate_reason
+    assert "conductor_service.py" in final.gate_reason, final.gate_reason
+    hist = task_svc.history(t.id)
+    joined = " ".join(str(h) for h in hist)
+    assert "dirty-judge-caveat" in joined, joined

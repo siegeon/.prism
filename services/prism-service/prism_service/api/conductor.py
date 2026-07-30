@@ -100,13 +100,21 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # entry means the running judge cannot prove it is executing the pinned
     # code. Checked FIRST, ahead of every gate-specific branch below, so a
     # driver and a human both see the named dirty file no matter what kind of
-    # gate this is; a clean checkout falls straight through, untouched.
+    # gate this is. NOT a refusal (follow-up correction, task 69233ca0): the
+    # MACHINE seat abstains on this same signal (conductor_service.py's
+    # adjudicate_* methods pre-flight control_plane.
+    # candidate_controls_judge_reason and leave the gate pending) — but a
+    # HUMAN who has SEEN this caveat may still click Approve; gate_decide
+    # records it into gate_reason + history rather than failing. receipt_ok
+    # True + manual_review True says exactly that: not machine-decidable, not
+    # blocked either. A clean checkout falls straight through, untouched.
     from prism_service.services import control_plane as _cp
     _dirty_reason = _cp.dirty_judge_reason()
     if _dirty_reason:
-        return {"receipt_ok": False, "receipt_refusal": _dirty_reason,
-                "receipt": {"adapter": "control-plane", "passed": False,
-                            "status": "judge_compromised", "ended_at": "",
+        return {"receipt_ok": True, "manual_review": True,
+                "receipt_refusal": "",
+                "receipt": {"adapter": "control-plane", "passed": True,
+                            "status": "judge_dirty_caveat", "ended_at": "",
                             "reason": _dirty_reason}}
     # RED-GATE READINESS (task a5e8d877, owner 2026-07-16): a red gate was
     # judged with the GREEN oracle tooth, so every test-proof red gate read
