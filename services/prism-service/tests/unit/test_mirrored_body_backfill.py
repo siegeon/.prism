@@ -128,8 +128,11 @@ def _import_stub_only(tmp_path, url="https://github.com/siegeon/.prism/issues/22
 
 def test_stub_only_task_gets_the_real_body_backfilled(tmp_path):
     store, tasks, conn, cont, task = _import_stub_only(tmp_path)
-    old_title = task.title
     stub_description = task.description
+    # a human has since renamed the task locally - the deliberate-rename
+    # guarantee (title authority stays with PRISM) must survive the backfill.
+    link = store.list_links(WS_A)[0]
+    tasks.update(link.task_id, title="Gate the ticket's premise, not just its form")
 
     adapter2 = _scripted_adapter("github", [{"entities": [
         {"remote_id": "gh-222", "display_key": "#222", "title": "raw github headline",
@@ -138,14 +141,13 @@ def test_stub_only_task_gets_the_real_body_backfilled(tmp_path):
     svc2 = _sync(store, tasks, adapter2)
     svc2.pull_container(WS_A, conn, cont)
 
-    link = store.list_links(WS_A)[0]
     task_after = tasks.get(link.task_id)
     assert "Where the hole is, from the source" in task_after.description
     assert task_after.description != stub_description
     # provenance (the old stub content) still reachable as a trailer
     assert "#222" in task_after.description
     # the safety line: title is NEVER refreshed from the remote
-    assert task_after.title == old_title
+    assert task_after.title == "Gate the ticket's premise, not just its form"
     assert task_after.title != "raw github headline"
 
 

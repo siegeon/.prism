@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.0"
+PRISM_VERSION = "7.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.7.1: ALREADY-MIRRORED TASKS GET THEIR BODIES BACKFILLED [task "
+    "82223365]. Slice 4db228ec made a fresh GitHub import write the real "
+    "issue body into a task's description, but only on first import; ~25 "
+    "tasks mirrored before that fix kept the two-line stub forever, which "
+    "would have let body-push overwrite real issue text with the stub. A "
+    "later sync now backfills the description, but only when it is still "
+    "byte-identical to the exact stub - a hand-edited description, an "
+    "empty pulled body, or an already-backfilled row are all left alone, "
+    "and the title is never refreshed from the remote. "
     "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "
