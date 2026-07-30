@@ -109,3 +109,27 @@ def _prism_data_dir_isolation(request):
         yield
     finally:
         os.environ[_ENV] = TEST_DATA_DIR
+
+
+@pytest.fixture(autouse=True)
+def _integration_adapter_registry_isolation():
+    """Snapshot/restore api.integrations._adapters around every test
+    (task c23e2e7b). That registry is a module-level global that
+    production populates once at import time, and tests reach into it
+    directly (reset_adapters/register_adapter) to script a scenario.
+    Running tests/integration/test_external_work_sync.py then
+    tests/integration/test_pull_issues_into_tasks.py in one process used
+    to leak: the first file's `team` fixture cleared the registry at
+    teardown and never put back what was there before it ran, so the
+    second file saw no github adapter. Because this fixture lives in the
+    root conftest, pytest sets it up before any test-module-local fixture
+    and tears it down after, so no test - this suite, a neighbour, or one
+    written next month - can leave a registry mutation for the next test
+    to inherit."""
+    from prism_service.api import integrations
+
+    before = integrations.adapters_snapshot()
+    try:
+        yield
+    finally:
+        integrations.restore_adapters(before)
