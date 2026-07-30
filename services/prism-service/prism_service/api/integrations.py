@@ -45,6 +45,21 @@ def reset_adapters() -> None:
     _adapters.clear()
 
 
+def adapters_snapshot() -> dict:
+    """Point-in-time copy of the registry (task c23e2e7b). Tests that
+    mutate the registry (reset_adapters/register_adapter) restore this
+    afterward instead of leaving it in whatever state their own teardown
+    happened to reach - see tests/conftest.py's autouse isolation fixture."""
+    return dict(_adapters)
+
+
+def restore_adapters(snapshot: dict) -> None:
+    """Put the registry back to a prior `adapters_snapshot()` (task
+    c23e2e7b)."""
+    _adapters.clear()
+    _adapters.update(snapshot)
+
+
 def register_builtin_adapters() -> None:
     """Wire the providers PRISM ships with, at import time.
 
