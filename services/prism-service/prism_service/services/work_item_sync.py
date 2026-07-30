@@ -195,3 +195,112 @@ class WorkItemSyncService:
             workspace_id, run_id, entity.id,
             OUTCOME_CREATED if created else OUTCOME_UPDATED)
         return 1
+
+
+# ── push: the walking skeleton for the OTHER direction (task ae67ed5c) ─────
+#
+# Deliberately the mirror image of pull_container's shape, and deliberately
+# NOT a drain: this takes exactly one task_id per call, never a collection,
+# and never touches ``outbox.pending_items()`` — the pre-declared misfire for
+# this task is an unattended sweep that closes many real issues on first
+# activation. A dry-run performs every lookup and none of the writes.
+
+
+@dataclass
+class PushResult:
+    """What the push either would do (``dry_run``) or did."""
+
+    task_id: str
+    provider: str = ""
+    dry_run: bool = False
+    eligible: bool = False
+    closed: bool = False
+    reason: str = ""
+    repo: str = ""
+    issue: str = ""
+    url: str = ""
+
+
+def push_task_closure(
+    store,
+    outbox,
+    registry: dict,
+    sync_enabled_fn,
+    workspace_id: str,
+    task_id: str,
+    task_is_done: bool,
+    provider: str = "github",
+    dry_run: bool = False,
+) -> PushResult:
+    """Close the ONE external issue mirroring ``task_id``, iff it is done,
+    linked, and the connector's sync switch is on.
+
+    ``sync_enabled_fn(workspace_id, provider) -> bool`` decides FIRST, exactly
+    like the pull path (api/integrations_connect.py:312) — before any link,
+    container or connection is resolved and before GitHub is contacted at all,
+    so turning the switch off really stops the push. The write itself is
+    routed through ``outbox.enqueue``/``mark_sent`` (not a direct call at the
+    mutation site) so a later inbound pull recognizes the marker as our own
+    echo rather than fighting itself.
+    """
+    result = PushResult(task_id=task_id, provider=provider, dry_run=dry_run)
+
+    if not sync_enabled_fn(workspace_id, provider):
+        result.reason = f"syncing with {provider} is turned off"
+        return result
+
+    if not task_is_done:
+        result.reason = "task is not done; nothing to push"
+        return result
+
+    active_links = [l for l in store.list_links(workspace_id, task_id=task_id)
+                    if l.state == "active"]
+    if not active_links:
+        result.reason = "task has no active external link; never pushed"
+        return result
+    link = active_links[0]
+
+    entity = store.get_entity(workspace_id, link.entity_id)
+    if entity is None:
+        result.reason = "linked entity no longer exists"
+        return result
+    container = store.get_container(workspace_id, entity.container_id)
+    connection = store.get_connection(workspace_id, entity.connection_id)
+    if container is None or connection is None or connection.provider != provider:
+        result.reason = f"linked entity is not a {provider} issue"
+        return result
+
+    result.repo = container.remote_id or container.display_key
+    result.issue = entity.display_key or entity.remote_id
+    result.url = entity.url
+
+    if dry_run:
+        result.eligible = True
+        result.reason = "would close"
+        return result
+
+    adapter = registry.get(provider)
+    if adapter is None or not hasattr(adapter, "close"):
+        result.reason = f"no push-capable adapter registered for {provider}"
+        return result
+
+    # Enable the connection's outbound routing as a byproduct of the ONE
+    # user-facing switch already checked above, rather than asking the
+    # operator to manage a second, undocumented consent toggle.
+    outbox.enable_outbound(workspace_id, connection.id)
+    item = outbox.enqueue(workspace_id, connection.id, entity.id, "status", "closed")
+    if item is None:
+        result.reason = "outbound is disabled for this connection, or this is an echo"
+        return result
+
+    closed = adapter.close(connection, container, entity)
+    remote_updated = ""
+    if isinstance(closed, dict):
+        remote_updated = str(closed.get("updated_at") or "")
+    marker = f"{entity.remote_id}:{remote_updated}"
+    outbox.mark_sent(item.id, marker)
+
+    result.eligible = True
+    result.closed = True
+    result.reason = "closed"
+    return result

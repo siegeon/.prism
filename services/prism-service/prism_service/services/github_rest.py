@@ -7,8 +7,12 @@ interface was exercised constantly while nothing in production could answer it.
 That is precisely how the 0784729f epic shipped five green slices over a
 feature that could not run.
 
-Read-only in this slice: it pulls issues and pull requests for a container.
-Nothing here creates or mutates anything on GitHub.
+Task ae67ed5c adds the FIRST write: ``close_issue``, a PATCH that only ever
+sends ``{"state": "closed"}``. This supersedes the "read-only in this slice"
+pin that used to live here (and the matching source-text assertion in
+tests/integration/test_pull_issues_into_tasks.py, which is outside this
+task's allowed_files and could not be updated alongside this change — see
+the task's friction log). Title, body and labels are still never touched.
 """
 
 from __future__ import annotations
@@ -51,8 +55,14 @@ class GithubRestClient:
     """Talks to api.github.com. The transport is injectable so a test can
     exercise request shaping without a network, but the DEFAULT is real."""
 
-    def __init__(self, transport=None, api_root: str = API_ROOT) -> None:
+    def __init__(self, transport=None, write_transport=None,
+                 api_root: str = API_ROOT) -> None:
         self._transport = transport
+        # A SEPARATE injection point from the read transport, so every
+        # existing read-only test (and its 2-arg ``transport(url, token)``
+        # double) keeps working unchanged; a write test injects its own
+        # ``write_transport(url, token, body)`` double instead.
+        self._write_transport = write_transport
         self._api_root = api_root.rstrip("/")
 
     # ── transport ─────────────────────────────────────────────────────
@@ -83,6 +93,32 @@ class GithubRestClient:
         except urllib.error.URLError as exc:
             raise GithubApiError(0, str(exc.reason)) from exc
 
+    def _patch(self, path: str, token: str, body: dict):
+        url = f"{self._api_root}{path}"
+        if self._write_transport is not None:
+            return self._write_transport(url, token, body)
+
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="PATCH")
+        req.add_header("Accept", _ACCEPT)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("X-GitHub-Api-Version", _API_VERSION)
+        req.add_header("User-Agent", "prism-service")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as exc:
+            resp_body = ""
+            try:
+                resp_body = exc.read().decode("utf-8", "replace")[:400]
+            except Exception:
+                pass
+            raise GithubApiError(exc.code, resp_body) from exc
+        except urllib.error.URLError as exc:
+            raise GithubApiError(0, str(exc.reason)) from exc
+
     # ── the interface github_work.py calls ────────────────────────────
 
     def issues(self, connection, container, token: str) -> list:
@@ -96,3 +132,11 @@ class GithubRestClient:
     def pulls(self, connection, container, token: str) -> list:
         return self._get(f"/repos/{_repo_path(connection, container)}/pulls",
                          token, {"state": "open", "per_page": _PER_PAGE}) or []
+
+    def close_issue(self, connection, container, number: int, token: str) -> dict:
+        """PATCH the issue closed. The ONLY field ever sent is
+        ``state: closed`` — title, body and labels are a later slice's
+        problem, not this one's (task ae67ed5c)."""
+        return self._patch(
+            f"/repos/{_repo_path(connection, container)}/issues/{number}",
+            token, {"state": "closed"})

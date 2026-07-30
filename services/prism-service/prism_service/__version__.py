@@ -28,6 +28,13 @@ PRISM_VERSION_NOTES = (
     "the mirror pointer (display key + URL) trailing as provenance, instead "
     "of just the two-line stub. A re-sync never duplicates the body and "
     "never clobbers a task you have since edited by hand. "
+    "A FINISHED TASK CAN CLOSE ITS GITHUB ISSUE [task ae67ed5c]. "
+    "Walking skeleton for the push half of the two-way mirror: "
+    "GithubRestClient can now PATCH an issue closed, routed through the "
+    "existing outbox for echo suppression. Explicitly scoped to one task_id "
+    "per call, dry-run first, and refuses whenever GitHub sync is off. "
+    "Title, body and labels are still untouched; this slice is close-on-done "
+    "only. "
 )
 PRISM_VERSION_NOTES += (
     "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "

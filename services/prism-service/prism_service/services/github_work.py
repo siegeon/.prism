@@ -103,6 +103,30 @@ class GitHubWorkAdapter:
         return PulledPage(entities=entities, next_page_token=None,
                           next_cursor=str(cursor or "") or None)
 
+    def close(self, connection, container, entity, token: Optional[str] = None) -> dict:
+        """Close the GitHub issue mirroring ``entity``. Only ``entity_kind ==
+        'issue'`` can be closed this way; a pull request closes by merging,
+        which is out of scope (task ae67ed5c: close-on-done, issues only).
+        """
+        if getattr(entity, "entity_kind", "") != "issue":
+            raise ValueError(
+                f"close() only supports mirrored issues, got "
+                f"{getattr(entity, 'entity_kind', '')!r}")
+        number = _issue_number(getattr(entity, "display_key", ""))
+        tok = token if token is not None else self._token()
+        return self._client.close_issue(connection, container, number, tok)
+
+
+def _issue_number(display_key: str) -> int:
+    """GitHub's close endpoint addresses an issue by NUMBER, not by the
+    opaque node_id identity the store keys entities on — display_key ('#123')
+    is the only place that number survives."""
+    key = (display_key or "").lstrip("#").strip()
+    if not key.isdigit():
+        raise ValueError(
+            f"cannot close a GitHub issue without a number, got {display_key!r}")
+    return int(key)
+
 
 def parse_task_keys(text: str) -> set[str]:
     return {m.lower() for m in _TASK_KEY_RE.findall(text or "")}
