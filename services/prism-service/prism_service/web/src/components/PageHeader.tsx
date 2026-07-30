@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
-import { useProject, useProjectsListChange } from "@/lib/project";
+import { fetchProjectsList, useProject, useProjectsListChange } from "@/lib/project";
 import { Skeleton } from "@/components/ui";
 
 const TITLES: Record<string, string> = {
@@ -64,8 +64,12 @@ export default function PageHeader() {
   const [projectsLoaded, setProjectsLoaded] = useState(false);
 
   const loadProjects = useCallback(() => {
-    api.get<{ projects: string[] }>("/api/projects")
-      .then((r) => setProjects(r.projects))
+    // Through the shared single-flight fetchProjectsList (task c38ef597) —
+    // resolveInitialProject's cold-start check fires in the same render,
+    // and coalescing the two onto one in-flight request is what keeps a
+    // cold mount to a single /api/projects call instead of two.
+    fetchProjectsList()
+      .then((r) => setProjects(r.projects ?? []))
       .catch(() => setProjects([]))
       .finally(() => setProjectsLoaded(true));
   }, []);

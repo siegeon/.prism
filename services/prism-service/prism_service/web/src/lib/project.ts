@@ -49,6 +49,28 @@ export function setProject(p: string) {
   listeners.forEach((fn) => fn(p));
 }
 
+type ProjectsListResponse = {
+  projects?: string[]; task_counts?: Record<string, number>;
+};
+
+// Single-flight /api/projects (task c38ef597): resolveInitialProject's
+// cold-start check and PageHeader's picker load both fire off the same
+// claimed-gate render, so two independent fetches doubled the very first
+// request the app makes. Coalescing concurrent callers onto ONE in-flight
+// promise fixes that without becoming a cache — the slot clears the moment
+// the request settles, so a call after notifyProjectsChanged() (project
+// create/delete) always gets a fresh fetch, never stale data.
+let _inFlightProjects: Promise<ProjectsListResponse> | null = null;
+
+export function fetchProjectsList(): Promise<ProjectsListResponse> {
+  if (_inFlightProjects) return _inFlightProjects;
+  const p = fetchJSON<ProjectsListResponse>("/api/projects").finally(() => {
+    _inFlightProjects = null;
+  });
+  _inFlightProjects = p;
+  return p;
+}
+
 let _coldStartResolved = false;
 
 /**
@@ -73,12 +95,12 @@ export async function resolveInitialProject(): Promise<void> {
   if (_readUrlProject()) return;
   if (localStorage.getItem(KEY)) return;
   try {
-    // Through the api chokepoint, never a raw fetch (task c38ef597): every
-    // call has to learn to carry a credential, and a bare fetch() here is
-    // exactly the one that gets forgotten and then silently 401s.
-    const data = await fetchJSON<{
-      projects?: string[]; task_counts?: Record<string, number>;
-    }>("/api/projects");
+    // Through the shared single-flight fetchProjectsList (task c38ef597),
+    // never a raw fetch or an independent call: every call has to learn to
+    // carry a credential, and this is also the same request PageHeader's
+    // picker load makes on the very same cold mount — coalescing them is
+    // what keeps this to ONE /api/projects request, not two.
+    const data = await fetchProjectsList();
     const counts = data.task_counts || {};
     let best: string | null = null;
     let bestCount = 0;

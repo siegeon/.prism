@@ -8,7 +8,7 @@ import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
-import LiveBar from "@/components/LiveBar";
+import LiveBar, { inActivityContext } from "@/components/LiveBar";
 
 // Route-level code splitting (v6.3.40). Every page used to be a static import,
 // so the graph/Sigma, conductor animation, settings, and mermaid-adjacent code
@@ -71,8 +71,12 @@ export default function App() {
         <LiveStatusStrip />
         <PageHeader />
         {/* Conductor pulse — persistent across navigation, honest idle state.
-            Distinct from LiveStatusStrip (the analyzer scan-queue strip). */}
-        <LiveBar />
+            Distinct from LiveStatusStrip (the analyzer scan-queue strip).
+            Mounted ONLY on activity-context routes (task c38ef597) — off
+            those routes LiveBar must actually UNMOUNT so its polling effects
+            (/api/conductor/state, its useScanActivity subscription) tear
+            down, not just hide their own JSX while still fetching. */}
+        {inActivityContext(location.pathname) && <LiveBar />}
         <div className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
           <Suspense

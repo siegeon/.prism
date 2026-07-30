@@ -56,7 +56,14 @@ function waitFor(ts?: string): string {
 // else (Explore/Understand/Sessions/Learning/Settings) renders no bar.
 const ACTIVITY_ROUTES = ["/", "/tasks", "/conductor"];
 
-function inActivityContext(pathname: string): boolean {
+// Exported (task c38ef597) so App.tsx can decide whether to MOUNT <LiveBar />
+// at all — LiveBar used to be mounted unconditionally and only render null
+// off these routes, which meant its polling effects (the /api/conductor/state
+// fetch and its useScanActivity subscription) kept running on every page,
+// including /understand, /learning, /settings, /sessions, where no task
+// chrome is ever shown. Gating the mount itself is what actually tears the
+// effects down.
+export function inActivityContext(pathname: string): boolean {
   return ACTIVITY_ROUTES.some(
     (r) => pathname === r || (r !== "/" && pathname.startsWith(r + "/")),
   ) || pathname.startsWith("/tasks");
