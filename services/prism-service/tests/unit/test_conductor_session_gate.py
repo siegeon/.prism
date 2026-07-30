@@ -363,6 +363,15 @@ def test_mcp_conductor_advance_mid_workflow_not_entry_gated(project):
         "conductor_advance", {"id": t["id"], "session_id": "S-mid"})))
     assert entered.get("ok") is True
 
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this unrelated mid-workflow-advance probe can leave
+    # review_previous_notes.
+    from prism_service.project_context import get_project
+    get_project(project).task_svc.update(t["id"], premise_notes=(
+        "## Premises\n- fixture probe exercising mid-workflow advance, "
+        "not a real premise claim - UNVERIFIED\n"))
+
     again = json.loads(_text(_call("conductor_advance", {"id": t["id"]})))
     assert "error" not in again
     assert again.get("ok") is True

@@ -228,6 +228,12 @@ def _services(tmp_path):
 
 
 def _walk_to_gate(cond, task_svc, task_id: str, gate_id: str) -> None:
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this unrelated rubric-gate walk can leave review_previous_notes.
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising rubric gates, not a real "
+        "premise claim - UNVERIFIED\n"))
     for _ in range(30):
         t = task_svc.get(task_id)
         if t.workflow_step == gate_id and t.gate_state == "pending":

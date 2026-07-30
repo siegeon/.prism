@@ -2541,11 +2541,14 @@ class ConductorService:
                 "story_md": getattr(task, "plan_doc", "") or "",
                 "plan_doc": getattr(task, "plan_doc", "") or "",
                 "plan_diagram": getattr(task, "plan_diagram", "") or "",
-                # premise_grounded (task 3a63190b): review_previous_notes'
-                # report lands in completion_proof (it is not draft_story/
-                # verify_plan, so the MCP tool routes it there, not
-                # plan_doc).
-                "notes_md": getattr(task, "completion_proof", "") or "",
+                # premise_grounded (task 3928b7ac, issue #222 continued):
+                # review_previous_notes' report reads task.premise_notes, a
+                # DEDICATED field — not completion_proof (task 3a63190b's
+                # original opt-in scoping read the shared completion_proof,
+                # which several fixtures also stage with unrelated
+                # green-proof content; the dedicated field removes that
+                # collision so the check below can be unconditional).
+                "notes_md": getattr(task, "premise_notes", "") or "",
             }
             if validation == "story_complete":
                 res = gov.score_story_complete(evidence, rubric)
