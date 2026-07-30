@@ -674,7 +674,7 @@ def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
     cited: set[str] = set()
     try:
         proof = (getattr(task, "completion_proof", "") or "") if task else ""
-        for m in re.finditer(r"/evidence/([A-Za-z0-9][A-Za-z0-9._-]{0,127})", proof):
+        for m in re.finditer(r"/evidence/([A-Za-z0-9][A-Za-z0-9._@-]{0,127})", proof):
             cited.add(m.group(1))
     except Exception:
         pass
@@ -737,7 +737,11 @@ def get_task_evidence(
                 resolved = False
         if not resolved:
             raise HTTPException(404, "task not found")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", filename) or ".." in filename:
+    # '@' is admitted (task 47bc3982) because the browser-oracle runner names
+    # every recording page@<hash>.webm — without it, every recording the
+    # runner ever captures 400s here before the disk is even touched. '@' is
+    # not a path separator and does not weaken the traversal guard below.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,127}", filename) or ".." in filename:
         raise HTTPException(400, "bad filename")
     ext = filename[filename.rfind(".") :].lower() if "." in filename else ""
     media = _EVIDENCE_MEDIA.get(ext)
