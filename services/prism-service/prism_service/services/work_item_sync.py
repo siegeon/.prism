@@ -77,6 +77,16 @@ class IntakeProtocol(Protocol):
     def ensure_external_intake(self, task_id: str, title: str, **kwargs) -> object:
         ...
 
+    # get/update already exist on TaskService (task_service.py:444, :503) and
+    # are used ONLY to backfill an already-mirrored row's description (task
+    # 82223365) — never to weaken ensure_external_intake's own no-clobber
+    # early return, which stays untouched.
+    def get(self, task_id: str) -> object:
+        ...
+
+    def update(self, task_id: str, **kwargs: object) -> object:
+        ...
+
 
 class WorkItemSyncService:
     """Deterministic pull orchestration over an injected adapter registry."""
@@ -184,12 +194,25 @@ class WorkItemSyncService:
         # never clobbers a user-edited local row), so a re-sync neither
         # duplicates the body nor overwrites a hand-edited description.
         description = f"{body}\n\n{provenance}" if body else provenance
+        pre_existing = self._intake.get(task_id)
         self._intake.ensure_external_intake(
             task_id,
             title=title,
             description=description,
             tags=[connection.provider, "external"],
         )
+        # Backfill task 82223365: a row imported BEFORE 4db228ec keeps its
+        # bare mirror-pointer stub forever, because the ensure_external_intake
+        # call above is a no-op once the row exists. Converge it exactly
+        # once, and ONLY when the row's description is still that EXACT
+        # stub (never a loose/contains match) - anything else, including
+        # empty, a hand-edited note, or an already-backfilled description,
+        # is left alone. Title is never touched here; PRISM stays the
+        # record of the title, never GitHub.
+        if (pre_existing is not None
+                and pre_existing.description == provenance
+                and body):
+            self._intake.update(task_id, description=f"{body}\n\n{provenance}")
         store.activate_link(workspace_id, link.id)
         store.append_receipt(
             workspace_id, run_id, entity.id,
