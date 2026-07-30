@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 import sys
@@ -204,6 +205,21 @@ ADJUDICATOR_SEAT = "conductor-adjudicator"
 # one task is not reviewing its own work.
 MACHINE_SEATS = frozenset(
     {ADJUDICATOR_SEAT, "conductor-autoclear", "gate-card-rerun"})
+
+
+# DELIVERY AUTO-MERGE (task cb1dc6f4, owner 2026-07-29: "i approved the green
+# gate ... make sure to fix prism so that when approved we finish the
+# pipeline there"). SHIPS OFF BY DEFAULT, mirroring gate_adjudicator's
+# PRISM_GATE_ADJUDICATOR_INTERVAL switch: an environment opts in with
+# PRISM_DELIVERY_AUTOMERGE=1 before a green_gate approve starts landing a
+# task's own branch on local main unattended. ConductorService.deliver_task
+# itself is unconditional and directly callable by tests/tools — only the
+# AUTOMATIC trigger wired into gate_decide honors this switch, so approving
+# THIS task's own green_gate cannot merge its branch into the real repo's
+# main unless an owner has explicitly turned delivery on.
+def _delivery_enabled() -> bool:
+    raw = os.environ.get("PRISM_DELIVERY_AUTOMERGE", "").strip().lower()
+    return raw in ("1", "true", "on", "yes")
 
 
 def _red_pytest_spec(task: object):
@@ -2390,13 +2406,38 @@ class ConductorService:
         except Exception:
             return False
 
+    def _commit_is_reachable(self, repo: str, sha: str) -> bool:
+        """True when ``sha`` is an ancestor of ``repo``'s current HEAD — i.e.
+        still part of that checkout's real history, not a dangling object a
+        rewrite (soft-reset + recommit, correcting an earlier red-tests
+        commit) has moved the branch past. A superseded commit stays
+        resolvable in the shared object store — ``git diff-tree`` on it still
+        succeeds, so it still LOOKS tests-only by content — which otherwise
+        shadows the real, current anchor forever (task cb1dc6f4: a lane
+        corrected its red-tests commit after an initial rc=2 collection-error
+        refusal; the OLD commit kept winning in ``_red_step_sha`` below, and
+        the adjudicator's ``tried`` cache then permanently refused to
+        re-attempt at that stale, un-heal-able anchor)."""
+        if not (repo and sha):
+            return False
+        import subprocess as _sp
+        try:
+            r = _sp.run(["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+                        cwd=repo, capture_output=True, timeout=15)
+            return r.returncode == 0
+        except Exception:
+            return False
+
     def _red_step_sha(self, task_id: str) -> str:
         """The commit red is anchored to. Prefer a recorded ``red_step_sha``
         history row (stamped by mint_red_evidence at the write_failing_tests
-        report) — but ONLY when that commit genuinely carries the pinned tests.
-        A row stamped from a lagging scratch worktree points one commit early
-        (mx-6decaa) and must NOT shadow the real red-tests commit; in that case
-        fall through to ``_red_tests_commit``, which self-heals the anchor.
+        report) — but ONLY when that commit genuinely carries the pinned tests
+        AND is still reachable from the checkout's current HEAD. A row
+        stamped from a lagging scratch worktree points one commit early
+        (mx-6decaa), and a row whose commit was later superseded by a
+        soft-reset + recommit (task cb1dc6f4) points at a dangling object;
+        either must NOT shadow the real red-tests commit, so both fall
+        through to ``_red_tests_commit``, which self-heals the anchor.
         '' when neither resolves (the seat then leaves the gate with a human)."""
         import re as _re
         try:
@@ -2413,12 +2454,15 @@ class ConductorService:
                 break
         tests_sha, repo = self._red_tests_commit(task_id)
         if recorded and recorded != tests_sha:
-            # Keep the recorded row only if it truly is a tests-only commit;
-            # a lagging-worktree mis-stamp (points pre-tests) yields to the
-            # real red-tests commit resolved above.
+            # Keep the recorded row only if it truly is a tests-only commit
+            # AND still reachable from that checkout's HEAD; a lagging-
+            # worktree mis-stamp (points pre-tests) or a superseded
+            # (rewritten-past) commit both yield to the real red-tests
+            # commit resolved above.
             ws_path, _h = self._workspace_and_head(task_id)
             for r in (repo, ws_path, str(self._project_root or "")):
-                if r and self._commit_is_tests_only(r, recorded):
+                if (r and self._commit_is_tests_only(r, recorded)
+                        and self._commit_is_reachable(r, recorded)):
                     return recorded
             if tests_sha:
                 return tests_sha
@@ -2718,6 +2762,182 @@ class ConductorService:
             "verifier": v,
             "validation": validation,
         }
+
+    def deliver_task(self, task_id: str, actor: str = "conductor") -> dict:
+        """Finish the pipeline (task cb1dc6f4): land a task's own committed
+        branch on local main. Approving green_gate marked a task verified
+        and stopped there — the task read DONE on the board while its code
+        sat on a branch forever (measured 2026-07-29: 19 of 137
+        prism/ws/* branches carried commits that never reached main).
+
+        The guardrails ARE the feature, not an afterthought:
+          * RE-VERIFIES the task's pinned tests at the CURRENT tip of its
+            own branch — never trusts a stale EvidenceReceipt. A receipt
+            minted at an older tree must not become a blank cheque for a
+            later commit (this session's own e58a6df + follow-up 767aa63
+            is exactly that shape).
+          * On red tests, REFUSES and leaves main untouched.
+          * Computes the merge HEADLESSLY (`git merge-tree --write-tree`) —
+            this never touches any working tree/index, so a conflict PARKS
+            with an actionable reason and main is provably byte-identical
+            to before the attempt.
+          * Never forces, resets, or rewrites main; landing is a
+            fast-forward-only `update-ref` compare-and-swap against the
+            main sha this call itself resolved, so a main that moved
+            concurrently is refused rather than overwritten.
+          * Confirms success from GIT FACTS (the commits are ancestors of
+            main afterwards), never from a command's exit code alone.
+
+        Returns {"ok", "state" ("delivered"|"already_delivered"|"refused"|
+        "parked"|"error"), "reason", "main_sha", "commits"}. Never raises —
+        a delivery failure is a recorded, actionable outcome, not an
+        exception the gate-decide caller must handle."""
+        import subprocess
+
+        from prism_service.services import task_workspace
+
+        def _res(state: str, reason_: str, **extra: Any) -> dict:
+            out: dict = {"ok": state in ("delivered", "already_delivered"),
+                        "state": state, "reason": reason_, "task_id": task_id}
+            out.update(extra)
+            return out
+
+        def _git(cwd: str, *args: str) -> tuple[int, str, str]:
+            try:
+                r = subprocess.run(["git", *args], cwd=str(cwd),
+                                   capture_output=True, text=True, timeout=60)
+                return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                return 1, "", str(exc)
+
+        if self._task_svc is None:
+            return _res("error", "no TaskService attached")
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return _res("error", "unknown task")
+        try:
+            ws = task_workspace.workspace_for(task_id)
+        except Exception as exc:
+            return _res("error", f"could not resolve task workspace ({exc})")
+        if not ws or not ws.get("path") or not ws.get("repo_root"):
+            return _res("error", "no task workspace to deliver from — the "
+                        "task never entered the conductor's per-task worktree")
+        branch = str(ws.get("branch") or "")
+        repo_root = str(ws.get("repo_root"))
+        ws_path = str(ws.get("path"))
+        if not branch:
+            return _res("error", "workspace has no recorded branch")
+
+        # 1) RE-VERIFY at the tree actually being merged — the workspace's
+        # CURRENT HEAD, not whatever tree an earlier receipt was minted at.
+        rc, tip_sha, err = _git(ws_path, "rev-parse", "HEAD")
+        if rc != 0 or not tip_sha:
+            return _res("error", f"could not resolve workspace HEAD ({err})")
+        paths = self.pinned_test_paths(task)
+        if paths:
+            try:
+                pr = subprocess.run(
+                    [sys.executable, "-m", "pytest", *paths, "-q",
+                     "-p", "no:cacheprovider"],
+                    cwd=ws_path, capture_output=True, text=True, timeout=600)
+            except subprocess.TimeoutExpired:
+                return _res("refused",
+                           f"pinned tests timed out at tree {tip_sha[:12]} — "
+                           "refusing to merge; main is unchanged")
+            if pr.returncode != 0:
+                tail = (pr.stdout or pr.stderr or "").strip().splitlines()
+                tail = tail[-1] if tail else ""
+                return _res("refused",
+                           f"pinned tests are RED at tree {tip_sha[:12]} "
+                           f"(rc={pr.returncode}: {tail[:200]}) — refusing "
+                           "to merge a red tree; main is unchanged",
+                           verified_tree=tip_sha)
+
+        # 2) Resolve main and short-circuit if this work already landed.
+        rc, before_main, err = _git(repo_root, "rev-parse", "refs/heads/main")
+        if rc != 0 or not before_main:
+            return _res("error", f"could not resolve refs/heads/main ({err})")
+        rc, _, _ = _git(repo_root, "merge-base", "--is-ancestor",
+                        tip_sha, before_main)
+        if rc == 0:
+            return _res("already_delivered",
+                        f"{branch} @ {tip_sha[:12]} is already an ancestor "
+                        "of main", main_sha=before_main)
+
+        # 3) Compute the merge HEADLESSLY. `git merge-tree --write-tree`
+        # never touches a working tree or index — a conflict here has made
+        # NO change to the repo at all, which is how a park leaves main
+        # provably byte-identical (likely_misfire: resolving a conflict by
+        # force/reset/rewriting main is exactly what must never happen).
+        rc, mt_out, mt_err = _git(repo_root, "merge-tree", "--write-tree",
+                                  before_main, tip_sha)
+        if rc != 0:
+            detail = (mt_out or mt_err or "").strip().splitlines()
+            detail = detail[0] if detail else "conflict"
+            return _res("parked",
+                        f"{branch} @ {tip_sha[:12]} conflicts with main — "
+                        f"{detail[:300]}; main is unchanged",
+                        main_sha=before_main, verified_tree=tip_sha)
+        merged_tree = (mt_out.strip().splitlines() or [""])[0].strip()
+        if not merged_tree:
+            return _res("parked",
+                        "merge-tree produced no result; main is unchanged",
+                        main_sha=before_main)
+
+        # 4) Audit: the commits this delivery is about to carry.
+        rc, log_out, _ = _git(repo_root, "log", "--format=%H%x09%s",
+                              f"{before_main}..{tip_sha}")
+        commits: list[dict] = []
+        if rc == 0:
+            for line in log_out.splitlines():
+                sha, _, subject = line.partition("\t")
+                if sha.strip():
+                    commits.append({"sha": sha.strip(),
+                                    "subject": subject.strip()})
+
+        # 5) Materialize the merge commit (still no working tree touched)
+        # and land it with a fast-forward-only, compare-and-swap ref update
+        # — if main moved since step 2 this refuses instead of overwriting
+        # a concurrent advance.
+        msg = (f"Merge {branch} into main [task:{task_id[:8]}]\n\n"
+              f"delivered by {actor}; re-verified green at {tip_sha[:12]}; "
+              f"{len(commits)} commit(s)")
+        rc, new_main, err = _git(repo_root, "commit-tree", merged_tree,
+                                 "-p", before_main, "-p", tip_sha, "-m", msg)
+        if rc != 0 or not new_main:
+            return _res("error", f"could not create the merge commit ({err})",
+                        main_sha=before_main)
+        rc, _, err = _git(repo_root, "update-ref", "-m",
+                          f"delivery: {msg.splitlines()[0]}",
+                          "refs/heads/main", new_main, before_main)
+        if rc != 0:
+            return _res("parked",
+                        f"main moved during delivery — refusing to "
+                        f"overwrite it ({err}); main is unchanged",
+                        main_sha=before_main)
+
+        # 6) Confirm from GIT FACTS, never the update-ref exit code alone.
+        rc, _, _ = _git(repo_root, "merge-base", "--is-ancestor",
+                        tip_sha, "refs/heads/main")
+        if rc != 0:
+            return _res("error",
+                        "update-ref reported success but the commits are "
+                        "not ancestors of main — treating as undelivered",
+                        main_sha=before_main)
+
+        reason = (f"delivered {branch} ({len(commits)} commit(s)) to main "
+                 f"as {new_main[:12]}; re-verified green at {tip_sha[:12]}")
+        try:
+            self._task_svc.record_history(
+                task_id, action="delivery",
+                details=(f"merged {branch} -> main @ {new_main[:12]}; "
+                        f"verified_tree={tip_sha[:12]}; approver={actor}; "
+                        "commits=" + ",".join(c["sha"][:12] for c in commits)),
+                actor=actor)
+        except Exception:
+            pass
+        return _res("delivered", reason, main_sha=new_main, commits=commits,
+                    verified_tree=tip_sha)
 
     def gate_decide(
         self,
@@ -3437,6 +3657,7 @@ class ConductorService:
             gate_state="passed",
             gate_reason=passed_gate_reason,
         )
+        _delivery: Optional[dict] = None
         if gate_step_id == "green_gate":
             # TERMINAL STEP REACHED (task ae63e375): green_gate is the LAST
             # WORKFLOW_STEPS entry, so a PASSED terminal gate IS the task
@@ -3447,6 +3668,21 @@ class ConductorService:
             self._task_svc.update(
                 task_id, full_outcome_complete=_outcome_complete,
                 status="done")
+            # FINISH THE PIPELINE (task cb1dc6f4): approving green_gate used
+            # to stop at 'verified' and leave the task's code stranded on
+            # its own branch — DONE on the board, absent from main. Land it
+            # now, opt-in only (PRISM_DELIVERY_AUTOMERGE=1): deliver_task
+            # re-verifies at the tree being merged, refuses red, parks on
+            # conflict and never forces/resets main. Advisory — a delivery
+            # failure never undoes the gate's own pass (green_gate=verified
+            # and shipped=delivered are separate claims); it is recorded on
+            # the task either way so the board reflects the truth.
+            if _delivery_enabled():
+                try:
+                    _delivery = self.deliver_task(task_id, actor=actor)
+                except Exception as exc:
+                    _delivery = {"ok": False, "state": "error",
+                                "reason": f"delivery raised {type(exc).__name__}: {exc}"}
         self._task_svc.record_history(
             task_id,
             action="gate_decide",
@@ -3488,6 +3724,8 @@ class ConductorService:
             response["policy_hash"] = _pin.get("policy_hash", "")
             response["policy_version"] = _pin.get(
                 "policy_version", "")
+        if _delivery is not None:
+            response["delivery"] = _delivery
         return response
 
     # Session-id prefixes used by smoke tests, dogfood probes, and the

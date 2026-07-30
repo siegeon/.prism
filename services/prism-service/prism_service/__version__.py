@@ -35,6 +35,16 @@ PRISM_VERSION_NOTES = (
     "per call, dry-run first, and refuses whenever GitHub sync is off. "
     "Title, body and labels are still untouched; this slice is close-on-done "
     "only. "
+    "APPROVING GREEN_GATE FINISHES THE PIPELINE [task cb1dc6f4]. "
+    "Approving a task's final gate used to stop at 'verified' — the board "
+    "said done while the code sat on its own branch forever. Opt in with "
+    "PRISM_DELIVERY_AUTOMERGE=1 and an approve re-verifies the task's "
+    "pinned tests at the tree being merged, then lands that branch on "
+    "local main; a red tree is refused, a conflict parks with a reason, "
+    "and main is never forced, reset, or rewritten. The Delivery card's "
+    "prerequisite bug is fixed too: it used to report the shared "
+    "checkout's CURRENT branch instead of the task's own, so it found "
+    "\"no commits\" for tasks that plainly had them."
 )
 PRISM_VERSION_NOTES += (
     "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "
