@@ -106,17 +106,50 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
         pass
 
 
+# The board never renders raw `description` (task 842248bd: it is 22% of a
+# 1.84 MB board payload) but ONE thing inside it IS rendered indirectly — a
+# mirrored/imported task's link-out badge, which regexes the trailing
+# provenance URL work_item_sync.py appends. Mirroring the frontend's
+# MIRROR_URL_RE (TasksPage.tsx) so a `fields=` projection can ship a small
+# derived `mirror_url` instead of the whole body.
+_MIRROR_URL_RE = re.compile(r"(https://(?:github\.com|[\w.-]+\.atlassian\.net)/\S+)")
+
+
+def _mirror_url(description: str) -> str:
+    m = _MIRROR_URL_RE.search(description or "")
+    return m.group(1) if m else ""
+
+
 @router.get("")
 def list_tasks(project: str = Query("default"),
-              include_deleted: bool = Query(False)) -> dict:
+              include_deleted: bool = Query(False),
+              parent_id: Optional[str] = Query(
+                  None, description="Scope to one epic's direct children "
+                                     "(or '' for root tasks only)."),
+              fields: Optional[str] = Query(
+                  None, description="Comma-separated projection (task "
+                                     "842248bd, FR-7 parity with the MCP "
+                                     "task_list tool) - lean board rows "
+                                     "instead of the full record. "
+                                     "'mirror_url' is a derived field, not a "
+                                     "raw Task attribute.")) -> dict:
     # Soft-deleted tasks stay in the store for audit but must NOT surface on
     # the board / task list — a deleted task is removed, not active work (it
     # was still feeding the AWAITING-REVIEW bar and the kanban). Opt in with
     # ?include_deleted=true for an admin/audit view.
-    tasks = _svc(project).list()
+    tasks = _svc(project).list(parent_id=parent_id) if parent_id is not None else _svc(project).list()
     if not include_deleted:
         tasks = [t for t in tasks
                  if str(getattr(t, "status", "") or "") != "deleted"]
+    if fields:
+        field_list = [f.strip() for f in fields.split(",") if f.strip()]
+        rows = []
+        for t in tasks:
+            row = {}
+            for f in field_list:
+                row[f] = _mirror_url(getattr(t, "description", "") or "") if f == "mirror_url" else getattr(t, f, None)
+            rows.append(row)
+        return {"tasks": rows}
     return {"tasks": tasks}
 
 

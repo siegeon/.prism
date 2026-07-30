@@ -928,10 +928,15 @@ export default function TaskDetailPage() {
       setTimeline(d.timeline ?? null);
       setError(null);
       // Children aren't on the detail payload — derive them from the task
-      // list (parent_id === this id). Cheap, and keeps the API unchanged.
+      // list, scoped server-side to THIS epic's direct children and
+      // projected to a lean field set (task 842248bd: this used to fetch the
+      // WHOLE unscoped board just to filter client-side by parent_id, the
+      // single biggest offender behind "task detail fetches 2.47 MB").
       try {
-        const all = await api.get<{ tasks: ChildTask[] }>(`/api/tasks?project=${project}`);
-        setChildren((all.tasks ?? []).filter((t) => t.parent_id === id));
+        const all = await api.get<{ tasks: ChildTask[] }>(
+          `/api/tasks?project=${project}&parent_id=${id}&fields=id,title,status,priority,parent_id`,
+        );
+        setChildren(all.tasks ?? []);
       } catch {
         setChildren([]);
       }
