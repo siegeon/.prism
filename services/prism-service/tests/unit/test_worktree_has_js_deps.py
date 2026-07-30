@@ -21,6 +21,16 @@ web `node_modules` into every fresh worktree it creates.
   AC-4  worktree creation does not regress when the main checkout has no
         node_modules yet - oracle: ensure_workspace still succeeds with no
         link created.
+  AC-5  removing a worktree through remove_workspace never destroys the
+        LINK TARGET's contents - oracle: after ensure_workspace links
+        node_modules and remove_workspace tears the worktree down, the
+        main checkout's node_modules/.bin still exists with all its
+        original shims. A naive recursive delete (git worktree remove
+        --force is one; so is a bare shutil.rmtree/rm -rf) can FOLLOW a
+        Windows junction and delete what it points to rather than just
+        the link — confirmed empirically: it destroyed the real
+        node_modules/.bin (96 shims) in the main checkout during
+        verification of this fix.
 """
 from __future__ import annotations
 
@@ -152,3 +162,36 @@ def test_worktree_creation_survives_missing_source_node_modules(
         "has none to link from")
 
     tw.remove_workspace("wsdeps-task-3")
+
+
+def test_removing_worktree_never_destroys_main_node_modules(
+        tmp_path, monkeypatch):
+    """AC-5. THIS is the deliverable: the main checkout's node_modules/.bin
+    must survive removal of a worktree that links to it. A naive recursive
+    delete of the worktree tree can follow the Windows junction into the
+    main checkout and delete what it finds there — that is not "the link
+    disappeared", it is the SOURCE directory's real contents gone."""
+    tw = _tw(tmp_path, monkeypatch)
+    repo = _fake_main_repo(tmp_path)
+    bin_dir = repo / WEB / "node_modules" / ".bin"
+    # A handful of shims, standing in for the real npm-installed
+    # tsc/vite/etc binaries a dev session depends on.
+    for i in range(5):
+        (bin_dir / f"shim{i}.cmd").write_text(f"SHIM_{i}\n", encoding="utf-8")
+    before = sorted(p.name for p in bin_dir.glob("*"))
+
+    rec = tw.ensure_workspace("wsdeps-task-4", repo_root=str(repo))
+    ws = Path(rec["path"])
+    assert (ws / WEB / "node_modules" / ".bin" / "shim0.cmd").exists(), (
+        "sanity: the link must be in place before we can test removing it")
+
+    tw.remove_workspace("wsdeps-task-4")
+
+    assert bin_dir.exists(), (
+        "the main checkout's node_modules/.bin was DELETED by tearing "
+        "down a worktree that merely linked to it — removing a worktree "
+        "must never reach into the link's target")
+    after = sorted(p.name for p in bin_dir.glob("*"))
+    assert after == before, (
+        f"node_modules/.bin contents changed after worktree removal: "
+        f"before={before} after={after}")
