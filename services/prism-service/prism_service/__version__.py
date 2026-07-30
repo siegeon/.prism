@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.0"
+PRISM_VERSION = "7.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.7.1: PRISM TASKS BECOME GITHUB ISSUES [task 7cf6a2e5]. The mirror "
+    "used to only flow inbound plus a close; a task born in PRISM could "
+    "never appear on GitHub. push_task_creation (work_item_sync.py) creates "
+    "one issue per active (pending/in_progress/blocked) task, gated by the "
+    "same sync switch as every other direction, idempotent via the existing "
+    "import-link check (a linked task is never re-created), and routed "
+    "through the outbox so a later pull recognizes the echo. Done/cancelled "
+    "tasks are permanently out of scope this slice (owner 2026-07-29). A "
+    "pre-existing task is assigned to the connected account; a new task "
+    "goes up unassigned until it starts. scan_active_tasks gives a pure, "
+    "read-only dry-run count with zero GitHub access possible. "
     "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "
