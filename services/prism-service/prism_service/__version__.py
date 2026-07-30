@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.0"
+PRISM_VERSION = "7.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.7.1: A DIRTY JUDGE REFUSES TO ADJUDICATE [task 69233ca0]. "
+    "control_plane pinned gate policy CONTENT to a baseline ref but never "
+    "defended the RUNTIME: the daemon decides every gate with whatever "
+    "Python was on disk when it started. When the daemon's OWN checkout has "
+    "an uncommitted edit to a control_plane.POLICY_FILES entry, its "
+    "independence is now unprovable and it says so instead of silently "
+    "deciding: candidate_controls_judge_reason (already consulted by every "
+    "adjudication seat) refuses, and GET /api/conductor/gate/readiness "
+    "names the dirty file. Scoped strictly to POLICY_FILES and unconditional "
+    "(no policy-change-tag escape); a clean checkout is untouched."
+)
+PRISM_VERSION_NOTES += (
     "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "

@@ -95,6 +95,19 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
     if task is None:
         raise HTTPException(404, "unknown task")
+    # DIRTY JUDGE (task 69233ca0): the daemon's OWN checkout — never a task
+    # worktree — carrying an uncommitted edit to a control_plane.POLICY_FILES
+    # entry means the running judge cannot prove it is executing the pinned
+    # code. Checked FIRST, ahead of every gate-specific branch below, so a
+    # driver and a human both see the named dirty file no matter what kind of
+    # gate this is; a clean checkout falls straight through, untouched.
+    from prism_service.services import control_plane as _cp
+    _dirty_reason = _cp.dirty_judge_reason()
+    if _dirty_reason:
+        return {"receipt_ok": False, "receipt_refusal": _dirty_reason,
+                "receipt": {"adapter": "control-plane", "passed": False,
+                            "status": "judge_compromised", "ended_at": "",
+                            "reason": _dirty_reason}}
     # RED-GATE READINESS (task a5e8d877, owner 2026-07-16): a red gate was
     # judged with the GREEN oracle tooth, so every test-proof red gate read
     # 'evidence not on file' with no possible action — a dead-end. Judge RED
