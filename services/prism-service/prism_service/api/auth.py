@@ -126,6 +126,11 @@ class TokenBody(BaseModel):
     label: str = ""
 
 
+class ClaimBody(BaseModel):
+    name: str
+    email: str
+
+
 @router.get("/mode")
 def mode() -> dict:
     return {"mode": _auth().mode}
@@ -165,6 +170,13 @@ def me(principal: Principal = Depends(current_principal)) -> dict:
     principal = coerce_principal(principal)
     service = get_workspace_service()
     user = service.get_user(principal.user_id) if principal.mode == "team" else None
+    # Once the instance is CLAIMED, the owner's real name/email is on file even
+    # in local mode (task fa52ba9e) — show it, not the synthetic "Local User".
+    if user is None:
+        owner = _auth().claimed_owner()
+        if owner is not None and (
+                principal.mode == "local" or principal.user_id == owner.id):
+            user = owner
     memberships = (
         service.list_memberships_for_user(principal.user_id)
         if principal.mode == "team"
@@ -191,4 +203,66 @@ def create_token(
         raise HTTPException(409, "bearer tokens are only used in team mode")
     issued = _auth().issue_token(principal.user_id, label=(body.label if body else ""))
     return {"id": issued.id, "token": issued.secret, "label": issued.label}
+
+
+@router.get("/claim-status")
+def claim_status() -> dict:
+    """Whether the existing owner has claimed this instance yet (task
+    fa52ba9e). Public: the SPA reads this before anything else to decide
+    between the one-time claim screen and the normal app. An unclaimed
+    instance that just auto-updated shows the claim screen."""
+    return {"claimed": _auth().is_claimed()}
+
+
+@router.post("/claim")
+def claim(body: ClaimBody) -> dict:
+    """One-time claim of a credential-free instance by its existing owner
+    (name + email, no setup secret). Additive: records the owner and hands
+    them their key; never touches existing tasks or memory. 409 if already
+    claimed — a claimed instance can never be taken over."""
+    from prism_service.services.workspace_service import InstanceAlreadyClaimed
+    name = (body.name or "").strip()
+    email = (body.email or "").strip()
+    if not name or not email:
+        raise HTTPException(422, "name and email are required")
+    try:
+        key = _auth().claim_instance(name=name, email=email)
+    except InstanceAlreadyClaimed as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return key
+
+
+@router.get("/my-key")
+def my_key(principal: Principal = Depends(current_principal)) -> dict:
+    """The caller's OWN access key, readable while logged in (task 6cef97ec,
+    decision mx-935cc2). Scoped to the authenticated principal — you can only
+    ever read your own. Mints one on first read so the owner always has a key
+    to hand to agents/MCP. This is the key, not the login: identity comes from
+    the instance; this is the credential you give out."""
+    principal = coerce_principal(principal)
+    key = _auth().my_access_key(principal.user_id)
+    return {
+        "id": key.get("id", ""),
+        "key": key.get("secret", ""),
+        "label": key.get("label", ""),
+        "created_at": key.get("created_at", ""),
+        "user_id": principal.user_id,
+    }
+
+
+@router.post("/my-key/rotate")
+def rotate_my_key(principal: Principal = Depends(current_principal)) -> dict:
+    """Mint a replacement key and revoke the prior one (owner: Rotate is the
+    recovery path). Only rotates the caller's own key."""
+    principal = coerce_principal(principal)
+    key = _auth().rotate_access_key(principal.user_id)
+    return {
+        "id": key.get("id", ""),
+        "key": key.get("secret", ""),
+        "label": key.get("label", ""),
+        "created_at": key.get("created_at", ""),
+        "user_id": principal.user_id,
+    }
 

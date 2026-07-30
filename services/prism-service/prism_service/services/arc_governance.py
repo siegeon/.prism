@@ -235,6 +235,103 @@ def score_plan_coverage(evidence: dict, rubric: dict,
 
 
 # ----------------------------------------------------------------------
+# premise_grounded (task 3a63190b / github issue #222) — pure scorer
+# ----------------------------------------------------------------------
+# The conductor gates whether a story is WELL-FORMED but nothing gated
+# whether it is TRUE. review_previous_notes was the only WORKFLOW_STEPS
+# entry with validation=None. This rubric requires every load-bearing claim
+# recorded there to carry EITHER a citation OR an explicit REFUTED/
+# UNVERIFIED marker — never neither.
+
+def _claim_lines(section_body: str) -> list[str]:
+    """Return each load-bearing claim bullet from a markdown section body,
+    folding wrapped/indented continuation lines into their claim (mirrors
+    _ac_lines' bullet-folding, generalized to any bulleted claim line — a
+    premise claim carries no required id, unlike an AC)."""
+    entries: list[str] = []
+    for raw in (section_body or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        stripped = line.strip()
+        if re.match(r"^\s*[-*]\s+", line):
+            entries.append(stripped)
+        elif entries:
+            entries[-1] += " " + stripped
+    return entries
+
+
+# A file:line citation REQUIRES the line number — a bare path with no digit
+# after the colon ('src/foo.py') is citation theatre, not evidence (the
+# task's recorded likely_misfire).
+_CLAIM_FILELINE_RE = re.compile(r'[\w./\\-]+\.[A-Za-z0-9]+:\d+')
+_CLAIM_RUNID_RE = re.compile(
+    r'\b(?:PR|issue|run|commit|sha)\s*#?\s*[0-9a-fA-F]+\b', re.IGNORECASE)
+# A bare single token in backticks ('`unit-tests.yml`', '`x`') is inline
+# CODE FORMATTING, not command output — accepting it would be the same
+# citation-theatre trap as a bare path, generalized. Require whitespace
+# inside the backticks (a real output/command snippet has multiple
+# tokens: 'pytest -q -> 2 passed').
+_CLAIM_OUTPUT_RE = re.compile(r'`[^`\n]*\s[^`\n]*`')
+_CLAIM_MARKER_RE = re.compile(r'\b(REFUTED|UNVERIFIED)\b', re.IGNORECASE)
+
+
+def _claim_is_grounded(line: str) -> bool:
+    return bool(_CLAIM_FILELINE_RE.search(line)
+                or _CLAIM_RUNID_RE.search(line)
+                or _CLAIM_OUTPUT_RE.search(line)
+                or _CLAIM_MARKER_RE.search(line))
+
+
+def score_premise_grounded(evidence: dict, rubric: dict) -> dict:
+    """PURE rubric verdict for review_previous_notes.
+
+    evidence: {"notes_md": <review_previous_notes report text>}; rubric:
+    the premise_grounded entry from governance_rubrics.yaml. Returns
+    {"ok": bool, "reason": str}. Every claim bullet under the rubric's
+    claims_section heading must carry a citation (file:line with a real
+    line number, a run/PR/commit/issue id, or backtick command output) or
+    an explicit REFUTED/UNVERIFIED marker; a refusal names the offending
+    claim so the driver can self-diagnose.
+
+    SCOPE (task 3a63190b): task.completion_proof is a SHARED field also
+    used to carry proof for LATER steps/gates (e.g. the green_gate oracle
+    citation) — a value staged there for an unrelated purpose is not a
+    premise report. This rubric only engages once the report actually
+    carries a '## <claims_section>' heading: a report with no such
+    heading (blank, or unrelated content) has nothing to ground and
+    passes; a report that DOES declare the section is held to the full
+    rubric below (present-but-empty still fails — a driver who opens the
+    section owes it real content).
+    """
+    notes = str(evidence.get("notes_md") or "")
+    section_name = rubric.get("claims_section", "premises")
+    sections = _sections(notes) if notes.strip() else {}
+    section_body = _find_section(sections, section_name)
+    if section_body is None:
+        return {"ok": True,
+                "reason": (f"premise_grounded: no '{section_name}' section "
+                           "present - nothing recorded to ground")}
+    claims = _claim_lines(section_body)
+    if not claims:
+        return {"ok": False,
+                "reason": (f"premise_grounded: '{section_name}' section is "
+                           "present but empty - record each load-bearing "
+                           "claim from the ticket, or drop the empty "
+                           "section")}
+    ungrounded = [c for c in claims if not _claim_is_grounded(c)]
+    if ungrounded:
+        shown = "; ".join(c[:100] for c in ungrounded)
+        return {"ok": False,
+                "reason": ("premise_grounded: claim(s) without a citation "
+                           "or REFUTED/UNVERIFIED marker: " + shown)}
+    return {"ok": True,
+            "reason": (f"premise_grounded: {len(claims)} claim(s) all "
+                       "carry a citation or an explicit REFUTED/UNVERIFIED "
+                       "marker")}
+
+
+# ----------------------------------------------------------------------
 # Green-gate oracle tooth (task 3eb67fb3) — pure scorer
 # ----------------------------------------------------------------------
 

@@ -1,7 +1,9 @@
-import { useEffect, lazy, Suspense } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { AnimatePresence } from "motion/react";
 import { resolveInitialProject } from "@/lib/project";
+import { api } from "@/lib/api";
+import ClaimPage from "@/pages/ClaimPage";
 import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
@@ -37,10 +39,30 @@ export default function App() {
   // animate out. The single flex-1 overflow-y-auto scroll container is
   // preserved as the wrapper, and the two <Navigate> redirects are untouched.
   const location = useLocation();
+  // CLAIM GATE (task fa52ba9e): the first time PRISM opens after auto-updating
+  // from a credential-free build, the instance is UNCLAIMED — show only the
+  // claim screen until the existing owner claims it. `null` = still checking.
+  const [claimed, setClaimed] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancel = false;
+    api.get<{ claimed: boolean }>("/api/auth/claim-status")
+      .then((s) => { if (!cancel) setClaimed(!!s.claimed); })
+      // Fail OPEN so a status glitch never locks the owner out of their own
+      // instance — the worst case is the app loads (data safety over a gate).
+      .catch(() => { if (!cancel) setClaimed(true); });
+    return () => { cancel = true; };
+  }, []);
   // Cold-start resolver (v6.3.23): on first mount with no persisted project
   // and no ?project= deep-link, land on the busiest non-'default' project so
   // /conductor opens on real work instead of the empty 'default' blank state.
-  useEffect(() => { void resolveInitialProject(); }, []);
+  useEffect(() => { if (claimed) void resolveInitialProject(); }, [claimed]);
+
+  if (claimed === null) {
+    return <div className="h-full w-full bg-[color:var(--background-base)]" />;
+  }
+  if (!claimed) {
+    return <ClaimPage onClaimed={() => setClaimed(true)} />;
+  }
   return (
     <div className="h-full w-full flex bg-[color:var(--background-base)] text-[color:var(--midground-base)] relative">
       <Backdrop />

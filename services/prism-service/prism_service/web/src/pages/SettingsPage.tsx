@@ -5,10 +5,19 @@ import {
   ChevronDown, ChevronRight, ExternalLink, FolderTree, GitBranch,
   Github, Loader2, Plus, Search, X,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import {
+  api,
+  listConnectorStatus,
+  setConnectorSync,
+  trackConnectorRepo,
+  runConnectorSync,
+  startConnect,
+  type Connector,
+} from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import type { ScanJob } from "@/lib/scan-activity";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 /** True when the SPA is loaded inside a Tauri WebView (so the dialog
  * plugin and other Tauri APIs are available). Lets us gracefully degrade
@@ -19,16 +28,23 @@ function isInTauri(): boolean {
   return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 }
 
-type SectionId = "projects" | "connections" | "activity" | "logs" | "service";
+// "connectors" is its OWN section (mx-dc7c38). Claude is an integration like
+// any other, so it appears as a peer card inside Connectors rather than owning
+// a section that GitHub and Jira hang beneath.
+type SectionId = "projects" | "connectors" | "activity" | "logs" | "service" | "access-key";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
+  connectors: {
+    title: "Connectors",
+    description: "Places PRISM can connect to. Optional — PRISM tracks your work on its own; connect a provider only if you also want to see work that lives there.",
+  },
+  "access-key": {
+    title: "Access key",
+    description: "Your personal key. It is how agents and MCP reach this PRISM, and how you give someone access so they can join you. Readable whenever you are signed in — copy it, or rotate it if it is ever exposed.",
+  },
   projects: {
     title: "Projects",
     description: "Add, configure, sync, and delete tracked repos.",
-  },
-  connections: {
-    title: "Claude auth",
-    description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. PRISM reads tokens from your host's ~/.claude directory (native install) or the bind-mounted /root/.claude (docker install), so any `claude login` you've already done is reused — no second login here.",
   },
   activity: {
     title: "Background activity",
@@ -44,13 +60,16 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "activity", "logs", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["access-key", "projects", "connectors", "activity", "logs", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
   // Legacy URL aliases — keep bookmarked links and prior versions working.
   // `auth` (v5.1.8) is now Connections; `jobs` and `workers` are now
   // the unified `activity` page.
-  if (raw === "auth") return "connections";
+  // `connections` was the standalone Claude auth page. Claude now lives on
+  // its own card under Connectors, so the old link lands there rather than
+  // silently dropping the user on Projects (task c89edbeb).
+  if (raw === "auth" || raw === "connections") return "connectors";
   if (raw === "jobs" || raw === "workers") return "activity";
   return (raw && (KNOWN_SECTIONS as string[]).includes(raw)) ? (raw as SectionId) : "projects";
 }
@@ -167,6 +186,13 @@ export default function SettingsPage() {
 
       {error && <ErrorBanner>{error}</ErrorBanner>}
 
+      {section === "access-key" && (
+        <Card>
+          <SectionLabel>Your access key</SectionLabel>
+          <AccessKeyPanel />
+        </Card>
+      )}
+
       {section === "projects" && (
         <Card>
           <SectionLabel>Projects</SectionLabel>
@@ -205,18 +231,9 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      {section === "connections" && (
-        <div className="space-y-6">
-          <Card>
-            <SectionLabel>Claude auth</SectionLabel>
-            <ClaudeAuthCard />
-          </Card>
-          <Card>
-            <SectionLabel>Claude source</SectionLabel>
-            <ClaudeSourceCard project={active} />
-          </Card>
-        </div>
-      )}
+      {/* CONNECTORS — its own section. Claude, GitHub and Jira are PEERS here
+          (mx-dc7c38); integrations are no longer nested under Claude auth. */}
+      {section === "connectors" && <ConnectorsSection project={active} />}
 
       {section === "activity" && (
         <div className="space-y-6">
@@ -595,6 +612,94 @@ function ClaudeSourceCard({ project }: { project: string }) {
         {saving ? "Saving…" : "Save source"}
       </button>
     </form>
+  );
+}
+
+type MyKey = { id: string; key: string; label: string; created_at: string; user_id: string };
+
+function AccessKeyPanel() {
+  const [key, setKey] = useState<MyKey | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
+  const load = useCallback(() => {
+    api.get<MyKey>("/api/auth/my-key")
+      .then((k) => { setKey(k); setErr(null); })
+      .catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const copy = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { /* clipboard blocked — the key is still visible to copy by hand */ }
+  };
+  const rotate = async () => {
+    setRotating(true);
+    try { const k = await api.post<MyKey>("/api/auth/my-key/rotate", {}); setKey(k); }
+    catch (e) { setErr(String(e)); }
+    finally { setRotating(false); }
+  };
+
+  if (err) return <ErrorBanner>{err}</ErrorBanner>;
+  if (!key) return <Empty>Loading your key…</Empty>;
+
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const mcpSnippet =
+    `claude mcp add --transport http prism "${origin}/mcp/?project=prism" ` +
+    `--header "Authorization: Bearer ${key.key}"`;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-[13px] text-[color:var(--text-secondary)]">
+        This is your personal key. Agents and MCP use it to reach this PRISM, and you give
+        it to someone so they can join you. It stays readable here whenever you are signed
+        in — copy it, or rotate it if it is ever exposed.
+      </p>
+
+      <div>
+        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">Access key</div>
+        <div className="flex items-center gap-2">
+          <code className="flex-1 min-w-0 truncate rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[12.5px] text-[color:var(--accent-teal-fg)]">
+            {key.key}
+          </code>
+          <button
+            onClick={() => copy(key.key)}
+            className="shrink-0 rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">Connect a coding agent over MCP</div>
+        <div className="flex items-start gap-2">
+          <code className="flex-1 min-w-0 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-all text-[color:var(--text-primary)]">
+            {mcpSnippet}
+          </code>
+          <button
+            onClick={() => copy(mcpSnippet)}
+            className="shrink-0 rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+          >
+            Copy
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <button
+          onClick={rotate}
+          disabled={rotating}
+          className="rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-50"
+        >
+          {rotating ? "Rotating…" : "Rotate key"}
+        </button>
+        <span className="text-2xs text-[color:var(--text-muted)]">
+          Rotating mints a new key and stops the old one. Anything still using the old key must be updated.
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -3207,5 +3312,294 @@ function ProjectEditor({
         />
       )}
     </form>
+  );
+}
+
+// Integration setup + manual sync (task ae31c2c0). Lists the workspace's
+// GitHub/Jira connections and their containers, triggers a manual pull, and
+// links the durable sanitized receipt the sync produced. Authorization and
+// receipts are the server's — this card only surfaces them.
+// IntegrationsCard was removed with task 900a4fb9. It rendered the
+// repo picker behind a TEAM WORKSPACE, which a local install never
+// creates, so it always showed "No team workspace yet". RepoSync
+// above replaces it on the personal scope.
+
+/** Syncing is a CHOICE, separate from connecting. It starts off, and a
+ *  working credential never turns it on (owner 2026-07-28, task 01118728). */
+function SyncSwitch({ connector, noun, onChanged }: { connector: Connector; noun: string; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const on = connector.sync_enabled === true;
+
+  const flip = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true);
+    try {
+      await setConnectorSync(connector.provider, !on);
+      onChanged();
+    } finally { setBusy(false); }
+  }, [connector.provider, on, onChanged]);
+
+  return (
+    <div className="flex items-start justify-between gap-4 pb-4">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          Sync PRISM tasks with {connector.name} {noun}
+        </div>
+        <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+          {on
+            ? `On. PRISM tasks and ${connector.name} ${noun} are kept in step with each other. Your PRISM tasks stay the record either way.`
+            : `Off. Your PRISM tasks are untouched and no ${connector.name} ${noun} are read or written. PRISM tracks this work on its own, so leaving this off costs you nothing.`}
+        </p>
+      </div>
+      <button type="button" role="switch" aria-checked={on} disabled={busy}
+        onClick={flip}
+        title={on
+          ? `Stop syncing PRISM tasks with ${connector.name} ${noun}`
+          : `Sync PRISM tasks with ${connector.name} ${noun}`}
+        className={cn(
+          "shrink-0 w-11 h-6 rounded-full relative transition-colors disabled:opacity-40",
+          on ? "bg-[color:var(--accent-sage-fg)]" : "bg-[color:var(--surface-3)] border border-[color:var(--border-default)]",
+        )}>
+        <span className={cn(
+          "absolute top-1 w-4 h-4 rounded-full bg-white transition-all",
+          on ? "left-6" : "left-1",
+        )} />
+      </button>
+    </div>
+  );
+}
+
+/** Choose a repository and pull its issues in as PRISM tasks. No team
+ *  workspace needed: this is the local, personal scope (task 900a4fb9). */
+function RepoSync({ connector, project, onChanged }:
+  { connector: Connector; project: string; onChanged: () => void }) {
+  const [repo, setRepo] = useState("");
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+  const tracked = connector.tracking ?? [];
+
+  const track = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setErr(""); setNote(""); setBusy("track");
+    try {
+      await trackConnectorRepo(connector.provider, repo.trim());
+      setRepo(""); onChanged();
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(""); }
+  }, [connector.provider, repo, onChanged]);
+
+  const sync = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setErr(""); setNote(""); setBusy("sync");
+    try {
+      const r = await runConnectorSync(connector.provider, project);
+      setNote(`Imported ${r.imported} item${r.imported === 1 ? "" : "s"} as PRISM tasks.`);
+      onChanged();
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(""); }
+  }, [connector.provider, project, onChanged]);
+
+  return (
+    <div className="space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div>
+        <SectionLabel>Repositories</SectionLabel>
+        {tracked.length === 0 ? (
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Nothing tracked yet. Add one as owner/repo.
+          </p>
+        ) : (
+          <ul className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>
+            {tracked.map((t) => <li key={t}>{t}</li>)}
+          </ul>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <input value={repo} onChange={(e) => setRepo(e.target.value)}
+          placeholder="owner/repo"
+          className="flex-1 text-xs font-mono px-3 py-1.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]" />
+        <button type="button" onClick={track} disabled={!repo.trim() || busy !== ""}
+          className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40">
+          Track
+        </button>
+        <button type="button" onClick={sync} disabled={busy !== "" || tracked.length === 0}
+          className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+          style={{ color: "var(--accent-teal-fg)" }}>
+          {busy === "sync" ? "Syncing…" : "Sync now"}
+        </button>
+      </div>
+      {note && <p className="text-xs" style={{ color: "var(--accent-sage-fg)" }}>{note}</p>}
+      {err && <p className="text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
+    </div>
+  );
+}
+
+function ConnectorsSection({ project }: { project: string }) {
+  const [rows, setRows] = useState<Connector[]>([]);
+  const [err, setErr] = useState<string>("");
+  const [busy, setBusy] = useState<string>("");
+  // Which card has its detail open. A collapsed box is a LAZY LOAD (owner
+  // rule): the detail's children only mount once it is opened, so their
+  // polling never runs for a panel nobody looked at.
+  const [openDetail, setOpenDetail] = useState<string>("");
+
+  const reload = useCallback(() => {
+    listConnectorStatus().then(setRows).catch((e) => setErr(String((e as Error).message ?? e)));
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+
+  const connect = useCallback(async (provider: string) => {
+    setErr(""); setBusy(provider);
+    try {
+      const url = await startConnect(provider);
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally { setBusy(""); }
+  }, []);
+
+  const TONE: Record<string, string> = {
+    connected: "var(--accent-sage-fg)",
+    needs_attention: "var(--accent-amber-fg)",
+    not_connected: "var(--text-muted)",
+    not_configured: "var(--text-disabled)",
+  };
+  // What this provider CALLS the work it holds. Its presence is also the
+  // capability answer: a connector with no work noun has nothing to sync and
+  // gets no sync switch. Claude falls out here because it is a credential for
+  // running analyzers, not a tracker, never because it is named Claude
+  // (task fc6ec2c9). The server agrees: PROVIDERS is ("github", "jira").
+  const WORK_NOUN: Record<string, string> = {
+    github: "issues",
+    jira: "issues",
+  };
+  const LABEL: Record<string, string> = {
+    connected: "Connected",
+    needs_attention: "Connection issue",
+    not_connected: "Not connected",
+    not_configured: "Not configured",
+  };
+
+  return (
+    <div className="space-y-4">
+      {err && <ErrorBanner>{err}</ErrorBanner>}
+      {rows.length === 0 && <Empty>Loading connectors…</Empty>}
+      {rows.map((c) => {
+      const isOpen = openDetail === c.provider;
+      const toggle = () => setOpenDetail(isOpen ? "" : c.provider);
+      return (
+        // p-0 hands the padding to the header below, so the ENTIRE panel is
+        // the click target rather than a small button in the corner
+        // (owner 2026-07-28). twMerge lets p-0 win over Card's own p-5.
+        <Card key={c.provider} className="p-0 overflow-hidden">
+          <div
+            role="button"
+            tabIndex={0}
+            aria-expanded={isOpen}
+            onClick={toggle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+            }}
+            className="p-5 cursor-pointer transition-colors hover:bg-[color:var(--surface-2)] flex items-start gap-3"
+          >
+            <span
+              className="shrink-0 grid place-items-center w-9 h-9 rounded-md font-semibold text-sm"
+              style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+              aria-hidden
+            >
+              {c.name.slice(0, 2)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold" style={{ color: "var(--text-primary)" }}>{c.name}</span>
+              </div>
+              {c.detail && (
+                <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>{c.detail}</p>
+              )}
+              {c.account && (
+                <p className="text-2xs mt-1 font-mono" style={{ color: "var(--text-secondary)" }}>{c.account}</p>
+              )}
+              {c.tracking && c.tracking.length > 0 && (
+                <p className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>
+                  Tracking: {c.tracking.join(", ")}
+                </p>
+              )}
+            </div>
+            <div className="shrink-0 flex items-center gap-2">
+              {/* The state badge IS the configuration control, top right
+                  (owner 2026-07-28). stopPropagation first: it sits inside
+                  the card's own clickable header, so without it a click
+                  would toggle the card twice and land on the wrong state. */}
+              <button type="button"
+                onClick={(e) => { e.stopPropagation(); setOpenDetail(isOpen ? "" : c.provider); }}
+                aria-expanded={isOpen}
+                title={`Configure ${c.name}`}
+                className="text-2xs uppercase tracking-wider font-semibold px-2 py-1 rounded-md border border-transparent hover:border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] transition-colors"
+                style={{ color: TONE[c.state] ?? "var(--text-muted)" }}>
+                {LABEL[c.state] ?? c.state}
+              </button>
+              {c.state === "needs_attention" && (
+                <button type="button" disabled={busy === c.provider}
+                  onClick={(e) => { e.stopPropagation(); connect(c.provider); }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                  style={{ color: "var(--accent-amber-fg)" }}>
+                  Reconnect
+                </button>
+              )}
+              {c.state === "not_connected" && (
+                <button type="button" disabled={busy === c.provider}
+                  onClick={(e) => { e.stopPropagation(); connect(c.provider); }}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                  style={{ color: "var(--accent-teal-fg)" }}>
+                  Connect {c.name}
+                </button>
+              )}
+              {/* The card's own state, shown where a Details button used to
+                  be. The whole panel is the control now. */}
+              <ChevronDown
+                aria-hidden
+                className={cn("w-4 h-4 transition-transform", isOpen && "rotate-180")}
+                style={{ color: "var(--text-muted)" }}
+              />
+            </div>
+          </div>
+          {/* Claude's own detail. It used to be the standalone Claude auth
+              page; it belongs to Claude's card, not to a second nav entry.
+              Guarded by openDetail so ClaudeAuthCard's 5s status poll starts
+              on expand, never on page load (task c89edbeb). */}
+          {openDetail === c.provider && WORK_NOUN[c.provider] && (
+            <div className="px-5 pt-4 border-t border-[color:var(--border-subtle)]">
+              <SyncSwitch connector={c} noun={WORK_NOUN[c.provider]} onChanged={reload} />
+            </div>
+          )}
+          {c.provider === "claude" && openDetail === c.provider && (
+            <div className="px-5 pb-5 pt-4 space-y-4">
+              <div>
+                <SectionLabel>Claude auth</SectionLabel>
+                <ClaudeAuthCard />
+              </div>
+              <div>
+                <SectionLabel>Claude source</SectionLabel>
+                <ClaudeSourceCard project={project} />
+              </div>
+            </div>
+          )}
+          {c.provider !== "claude" && openDetail === c.provider && (
+            <div className="px-5 pb-5 pt-4">
+              {c.state === "connected" ? (
+                <RepoSync connector={c} project={project} onChanged={reload} />
+              ) : (
+                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  {c.detail} Connecting is optional: PRISM tracks your work on
+                  its own, and {c.name} only adds a place to see work that
+                  already lives there.
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      );
+      })}
+    </div>
   );
 }

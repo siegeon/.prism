@@ -11,7 +11,10 @@ import { api } from "@/lib/api";
 export type EvidenceItem = {
   url: string;
   name: string;
-  kind?: "image" | "video";
+  // "text" covers a log/diff/receipt (task 48ee8f05). Without it a cited .txt
+  // fell through to <img src=...txt> and painted a BROKEN TILE on the gate
+  // panel — evidence that cannot be read is not evidence.
+  kind?: "image" | "video" | "text";
   caption?: string;
   cited?: boolean;
 };
@@ -20,11 +23,37 @@ type ApiEvidenceFile = {
   name: string;
   url: string;
   media_type: string;
-  kind: "image" | "video";
+  kind: "image" | "video" | "text";
   size_bytes: number;
   modified: string;
   cited: boolean;
 };
+
+// A log/diff/receipt tile. Fetches the artifact and shows it as readable text
+// (task 48ee8f05) — the gallery used to hand every non-video item to <img>, so
+// a cited .txt rendered as a broken image on the gate panel.
+function TextArtifact({ url, full }: { url: string; full?: boolean }) {
+  const [body, setBody] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    fetch(url)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => { if (!cancelled) setBody(t); })
+      .catch(() => { if (!cancelled) setBody("(could not read artifact)"); });
+    return () => { cancelled = true; };
+  }, [url]);
+  return (
+    <pre
+      className={"m-0 p-2 font-mono whitespace-pre-wrap break-words " +
+        (full
+          ? "text-[12px] leading-relaxed max-h-[80vh] overflow-auto"
+          : "text-2xs leading-snug h-full overflow-hidden")}
+      style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
+    >
+      {body || "loading…"}
+    </pre>
+  );
+}
 
 function fmtSize(bytes?: number): string {
   if (!bytes || bytes <= 0) return "";
@@ -78,6 +107,10 @@ export function EvidenceGallery({ items, thumb = "md", className }: {
                   className={`w-full ${tileH} object-cover`} />
                 <span className="absolute inset-0 grid place-items-center text-lg" style={{ color: "rgba(255,255,255,0.85)" }} aria-hidden>▶</span>
               </>
+            ) : it.kind === "text" ? (
+              <div className={`w-full ${tileH} overflow-hidden`}>
+                <TextArtifact url={it.url} />
+              </div>
             ) : (
               <img src={it.url} alt={it.caption || it.name} loading="lazy"
                 className={`w-full ${tileH} object-cover`} />
@@ -107,6 +140,14 @@ export function EvidenceGallery({ items, thumb = "md", className }: {
               <video src={shown.url} controls autoPlay
                 className="max-w-[98vw] max-h-[92vh] rounded-sm shadow-2xl"
                 onClick={(e) => e.stopPropagation()} />
+            ) : shown.kind === "text" ? (
+              // A log opens as SCROLLABLE TEXT, never the zoomable image viewer.
+              <div
+                className="max-w-[98vw] w-[min(1100px,98vw)] max-h-[92vh] overflow-auto rounded-sm shadow-2xl border border-[color:var(--border-default)]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <TextArtifact url={shown.url} full />
+              </div>
             ) : zoom ? (
               <div className="absolute inset-0 overflow-auto" onClick={() => setOpen(null)}>
                 <img src={shown.url} alt={shown.name}
@@ -155,7 +196,7 @@ export function useTaskEvidence(taskId?: string, project = "default"): EvidenceI
   return useMemo(
     () => files.map((f) => ({
       url: f.url, name: f.name, kind: f.kind, cited: f.cited,
-      caption: `${f.kind === "video" ? "video" : "screenshot"}${fmtSize(f.size_bytes) ? " · " + fmtSize(f.size_bytes) : ""}`,
+      caption: `${f.kind === "video" ? "video" : f.kind === "text" ? "log" : "screenshot"}${fmtSize(f.size_bytes) ? " · " + fmtSize(f.size_bytes) : ""}`,
     })),
     [files],
   );
@@ -173,7 +214,13 @@ export function citedEvidence(text?: string): EvidenceItem[] {
     if (seen.has(url)) continue;
     seen.add(url);
     const name = m[1];
-    const kind: "image" | "video" = /\.(mp4|webm)$/i.test(name) ? "video" : "image";
+    // THIS is the path a completion-proof citation takes. It used to call
+    // everything that was not video an "image", so `![pytest run](run.txt)`
+    // became an <img> pointing at a log — the broken tile on the gate panel.
+    const kind: "image" | "video" | "text" =
+      /\.(mp4|webm)$/i.test(name) ? "video"
+        : /\.(txt|log|diff|patch|md|json)$/i.test(name) ? "text"
+          : "image";
     out.push({ url, name, kind });
   }
   return out;

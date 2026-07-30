@@ -26,6 +26,11 @@ type Task = {
   status?: string;
   priority?: number | string;
   tags?: string[];
+  // Set by the API for an imported external item whose linked provider context
+  // the viewer is not authorized to see — the UI shows a Restricted placeholder
+  // instead of the metadata, never inferring authorization client-side.
+  restricted?: boolean;
+  external_url?: string;
   assigned_agent?: string;
   description?: string;
   story_file?: string;
@@ -568,9 +573,39 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
 // rendered wherever the proof is judged, so the approver SEES what the proof
 // cites right on the task page (owner 2026-07-16: "i still dont see the
 // screenshot on the task"). Click opens the full-size image.
+// A cited artifact is not always a picture: a pytest log, a diff, or a JSON
+// receipt is evidence too. Before this, EVERY citation was handed to <img>, so
+// a cited .txt painted a BROKEN TILE under "visual evidence" (task 63d0086e).
+function ProofText({ src, full }: { src: string; full?: boolean }) {
+  const [body, setBody] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    fetch(src)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => { if (!cancelled) setBody(t); })
+      .catch(() => { if (!cancelled) setBody("(could not read artifact)"); });
+    return () => { cancelled = true; };
+  }, [src]);
+  return (
+    <pre
+      className={"m-0 p-3 font-mono whitespace-pre-wrap break-words rounded-md border border-[color:var(--border-default)] " +
+        (full
+          ? "text-[12px] leading-relaxed max-h-[88vh] overflow-auto"
+          : "text-2xs leading-snug max-h-[380px] overflow-hidden")}
+      style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
+    >
+      {body || "loading…"}
+    </pre>
+  );
+}
+
+const TEXT_PROOF_RE = /\.(txt|log|diff|patch|md|json)(\?.*)?$/i;
+
 function ProofShots({ text, className }: { text?: string; className?: string }) {
   const shots = useMemo(
-    () => [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)].map(([, alt, src]) => ({ alt, src })),
+    () => [...(text ?? "").matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)].map(([, alt, src]) => ({
+      alt, src, kind: TEXT_PROOF_RE.test(src) ? "text" as const : "image" as const,
+    })),
     [text],
   );
   // In-app lightbox (owner 2026-07-16: "not redirect to an image, its hard
@@ -596,18 +631,22 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
   // Side-by-side grid (owner 2026-07-16), one column only on narrow screens.
   return (
     <div className={`grid grid-cols-1 min-[720px]:grid-cols-2 gap-3 items-start ${className ?? "mt-3"}`}>
-      {shots.map(({ alt, src }, i) => (
+      {shots.map(({ alt, src, kind }, i) => (
         <button key={i} type="button" onClick={() => setOpen(i)} className="block min-w-0 text-left"
-                title={`${alt || "evidence screenshot"} — click to view`}>
+                title={`${alt || "evidence"} — click to view`}>
           {/* Natural-size box (w-auto, never w-full): the border hugs the
               actual pixels, so a tall image can't letterbox dead space into
               a wide cell (owner 2026-07-16: "look at the dead space"). */}
-          <img
-            src={src}
-            alt={alt || "evidence screenshot"}
-            loading="lazy"
-            className="max-w-full max-h-[380px] w-auto rounded-md border border-[color:var(--border-default)]"
-          />
+          {kind === "text" ? (
+            <ProofText src={src} />
+          ) : (
+            <img
+              src={src}
+              alt={alt || "evidence screenshot"}
+              loading="lazy"
+              className="max-w-full max-h-[380px] w-auto rounded-md border border-[color:var(--border-default)]"
+            />
+          )}
           {/* The caption is the proof's own claim — the APP says what the
               image proves (owner 2026-07-16), the reader never has to guess. */}
           {alt && (
@@ -627,7 +666,23 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
           aria-label={shown.alt || "evidence screenshot"}
           onClick={() => setOpen(null)}
         >
-          {zoom ? (
+          {shown.kind === "text" ? (
+            // A log opens as SCROLLABLE TEXT — never the zoomable image viewer.
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 p-4">
+              <div
+                className="w-[min(1100px,96vw)] max-h-[88vh] overflow-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ProofText src={shown.src} full />
+              </div>
+              {shown.alt && (
+                <div className="text-[13px] leading-relaxed text-center max-w-[80vw]" style={{ color: "rgba(255,255,255,0.92)" }}>
+                  <span className="text-2xs uppercase tracking-wider mr-1.5 font-semibold" style={{ color: "var(--accent-teal-fg)" }}>proves</span>
+                  {shown.alt}
+                </div>
+              )}
+            </div>
+          ) : zoom ? (
             <div className="absolute inset-0 overflow-auto">
               <img
                 src={shown.src}
@@ -753,6 +808,10 @@ export default function TaskDetailPage() {
   // these the card states a number with no way to tell how old it is or what
   // it was measured against (owner 2026-07-21: "fake facts in prism").
   const [pinTestsAt, setPinTestsAt] = useState<string>("");
+  // Explicit, on-demand test run (task f3e8d477). Page load stays cheap; this
+  // is how a reviewer PRODUCES the evidence. The server persists the outcome,
+  // so the badge survives a reload instead of resetting to NOT RUN.
+  const [runningTests, setRunningTests] = useState(false);
   const [pinSource, setPinSource] = useState<{ source?: string; source_sha?: string }>({});
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
@@ -930,6 +989,25 @@ export default function TaskDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [id, task?.workflow_step, task?.status, pinTests]);
+
+  // Run the pinned tests ON DEMAND and refresh the rows. The server records
+  // the outcome (test_run_store), so the badges keep showing this run after a
+  // reload — the fix for a TESTS tab that could only ever say NOT RUN.
+  const runTests = useCallback(async () => {
+    setRunningTests(true);
+    try {
+      const tr = await api.get<{ tests: PinTest[]; receipt?: TestReceipt | null; source?: string; source_sha?: string }>(
+        `/api/tasks/${id}/tests?run=true&project=${project}`);
+      setPinTests(tr.tests ?? []);
+      setTestReceipt(tr.receipt ?? null);
+      setPinSource({ source: tr.source, source_sha: tr.source_sha });
+      setPinTestsAt(new Date().toLocaleTimeString());
+    } catch {
+      /* leave the discovery rows — statuses stay honestly not-run */
+    } finally {
+      setRunningTests(false);
+    }
+  }, [id, project]);
 
   // Navigating task → task (the route reuses this component) resets the tab
   // back to Overview and drops the previous task's trace so it re-fetches.
@@ -1304,6 +1382,21 @@ export default function TaskDetailPage() {
               <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
             ))}
           </div>
+          {(task.tags ?? []).includes("external") && (
+            <div data-external-context className="mt-1.5 text-2xs">
+              {task.restricted ? (
+                <span data-restricted className="italic" style={{ color: "var(--text-disabled)" }}>
+                  Restricted — you don't have access to this item's linked provider context.
+                </span>
+              ) : task.external_url ? (
+                <a href={task.external_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
+                  Open the linked provider item ↗
+                </a>
+              ) : (
+                <span style={{ color: "var(--text-muted)" }}>Imported external work.</span>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
           {transitions.map((target) => (
@@ -1329,7 +1422,7 @@ export default function TaskDetailPage() {
       {/* Two-column issue layout (artifact .issue: 1fr / 300px, stacks
           below 900px). LEFT = the document column (plan/oracle/contract/…
           intact); RIGHT = the Details + Connections rail. */}
-      <div className="grid grid-cols-1 min-[900px]:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
+      <div className="grid grid-cols-1 gap-6 items-start">
       <div className="space-y-6 min-w-0">
 
       {/* Doc-column tab strip (artifact .itabs): Overview / Trace. The Trace
@@ -1712,9 +1805,13 @@ export default function TaskDetailPage() {
           <PlanView
             diagram={task.plan_diagram}
             doc={task.plan_doc}
-            prototypeSrc={task.has_prototype ? `/api/tasks/${id}/prototype` : undefined}
+            prototypeSrc={task.has_prototype
+              ? `/api/tasks/${id}/prototype?project=${encodeURIComponent(project)}`
+              : undefined}
             reduced={reduced}
             pinTests={pinTests}
+            runningTests={runningTests}
+            onRunTests={runTests}
             gateReadiness={gateReadiness}
             onMintEvidence={mintEvidence}
             tabRequest={tabRequest}
@@ -2086,7 +2183,7 @@ export default function TaskDetailPage() {
 
       </div>{/* end left doc column */}
 
-      <aside className="space-y-3.5 min-w-0 min-[900px]:sticky min-[900px]:top-6">
+      <aside className="grid grid-cols-1 min-[720px]:grid-cols-2 gap-3.5 items-start min-w-0">
         <RailCard title="Details">
           <Field k="Status"><Lozenge tone={statusLoz(taskStatus)}>{taskStatus.replace(/_/g, " ")}</Lozenge></Field>
           {task.workflow_step && <Field k="Step"><Lozenge tone="neutral">{task.workflow_step}</Lozenge></Field>}

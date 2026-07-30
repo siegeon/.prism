@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Brain, Eye, FolderTree, Info,
-  Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
+  KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -57,7 +57,7 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Activity",
     items: [
-      { to: "/tasks", label: "Tasks", icon: ListChecks },
+      { to: "/tasks", label: "Work", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       { to: "/retrievals", label: "Retrievals", icon: Search },
     ],
@@ -82,8 +82,13 @@ const SETTINGS_SECTIONS: Section[] = [
   {
     label: "Settings",
     items: [
+      { to: "/settings/access-key", label: "Access key", icon: KeyRound },
       { to: "/settings/projects", label: "Projects", icon: FolderTree },
-      { to: "/settings/connections", label: "Claude auth", icon: Plug },
+      // Connectors is the ONE home for every integration, Claude included.
+      // Claude's own credentials and source registration live on its card
+      // here, not behind a second nav entry — one subject, one door
+      // (owner 2026-07-28, task c89edbeb).
+      { to: "/settings/connectors", label: "Connectors", icon: Plug },
       { to: "/settings/activity", label: "Background activity", icon: Activity },
       { to: "/settings/logs", label: "Logs", icon: ScrollText },
       { to: "/settings/service", label: "Service", icon: Info },
@@ -106,9 +111,18 @@ function useStaleness(project: string): Staleness {
         .then((s) => { if (!cancel) setStale(s); })
         .catch(() => { /* leave last good state */ });
     };
+    // Only poll a tab someone is looking at (task c38ef597) — this ran every
+    // 5s in every background tab. Refetch on focus so the badge is current
+    // the moment it is seen.
+    const tick = () => { if (!cancel && !document.hidden) load(); };
     load();
-    const t = setInterval(load, 5000);
-    return () => { cancel = true; clearInterval(t); };
+    const t = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      cancel = true;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [project]);
   return stale;
 }

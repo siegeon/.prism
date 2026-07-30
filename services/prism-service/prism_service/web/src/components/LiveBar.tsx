@@ -91,7 +91,18 @@ export default function LiveBar() {
       .finally(() => setPolled(true));
   }, [project]);
 
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  // Poll only while the tab is actually being looked at (task c38ef597).
+  // /api/conductor/state is the heaviest call on the board — it carries the
+  // whole board plus every managed task's 40-point burn series (~29KB with ONE
+  // task) — and it ran every 5s in background tabs forever. Refetch
+  // immediately on focus so the bar is never stale when it is visible.
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) load(); };
+    load();
+    const t = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [load]);
   useEffect(() => {
     const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);
     return () => clearInterval(t);

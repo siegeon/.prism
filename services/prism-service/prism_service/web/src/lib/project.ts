@@ -13,6 +13,7 @@
  * pages look broken until the user manually clicked the dropdown.
  */
 import { useEffect, useState } from "react";
+import { fetchJSON } from "@/lib/api";
 
 const KEY = "prism.project";
 const listeners = new Set<(p: string) => void>();
@@ -72,10 +73,12 @@ export async function resolveInitialProject(): Promise<void> {
   if (_readUrlProject()) return;
   if (localStorage.getItem(KEY)) return;
   try {
-    const res = await fetch("/api/projects");
-    if (!res.ok) return;
-    const data: { projects?: string[]; task_counts?: Record<string, number> } =
-      await res.json();
+    // Through the api chokepoint, never a raw fetch (task c38ef597): every
+    // call has to learn to carry a credential, and a bare fetch() here is
+    // exactly the one that gets forgotten and then silently 401s.
+    const data = await fetchJSON<{
+      projects?: string[]; task_counts?: Record<string, number>;
+    }>("/api/projects");
     const counts = data.task_counts || {};
     let best: string | null = null;
     let bestCount = 0;

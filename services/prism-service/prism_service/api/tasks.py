@@ -170,6 +170,10 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     spec_summary, domain_errors = validate_for_authoring(
         oracle=body.oracle, proof_type=body.proof_type,
         verify=body.verify, likely_misfire=body.likely_misfire,
+        # allowed_files feeds the unwired-slice check (task 597839d9): a slice
+        # that creates a module nothing constructs is refused here, not
+        # discovered after the epic ships green and dead.
+        allowed_files=body.allowed_files,
     )
     if domain_errors:
         raise HTTPException(422, domain_errors[0])
@@ -472,6 +476,41 @@ def _git(repo: str, *args: str) -> tuple[int, str]:
         return 1, ""
 
 
+def _resolve_delivery_branch(repo: str, task_id: str) -> tuple[str, str]:
+    """(branch, revision-to-search) for this task's [task:...] commits.
+
+    PREREQUISITE FIX (task cb1dc6f4): this used to be the project source
+    checkout's CURRENT branch (`git rev-parse --abbrev-ref HEAD`) — whatever
+    the shared checkout happened to have checked out, never the task's OWN
+    branch. A task's real, tagged commits live on its own
+    `prism/ws/<task_id>` worktree branch (task_workspace.ensure_workspace),
+    so whenever the checkout sat on unrelated work the search ran against
+    the wrong ref and reported "no commits found" for tasks that plainly had
+    them (live repro 2026-07-29: task a4c1bf03 reported
+    branch="fix/decision-packet-visual-evidence" with 0 commits while
+    prism/ws/a4c1bf03... held 2 tagged commits).
+
+    Prefer the task's workspace branch when task_workspace still has a
+    record for it AND the branch ref still resolves (a torn-down workspace
+    deletes its branch too); fall back to the checkout's current branch
+    otherwise — the old behavior, which still matters for tasks that never
+    got a per-task worktree or whose workspace was already cleaned up after
+    landing on main."""
+    branch = ""
+    try:
+        from prism_service.services import task_workspace
+        ws = task_workspace.workspace_for(task_id)
+        cand = str((ws or {}).get("branch") or "")
+        if cand and _git(repo, "rev-parse", "--verify", "-q", cand)[0] == 0:
+            branch = cand
+    except Exception:
+        branch = ""
+    if branch:
+        return branch, branch
+    _, cur = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    return cur, "HEAD"
+
+
 @router.get("/{task_id}/delivery")
 def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     """WHERE the task's work lives and what's left to ship (owner 2026-07-16:
@@ -501,11 +540,11 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
         pass
 
     commits: list[dict] = []
-    branch = ""
+    branch, rev = "", "HEAD"
     if repo:
-        _, branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+        branch, rev = _resolve_delivery_branch(repo, task_id)
         rc, log = _git(repo, "log", "--grep", f"task:{task_id[:8]}",
-                       "--format=%h%x09%s", "-n", "20", "HEAD")
+                       "--format=%h%x09%s", "-n", "20", rev)
         if rc == 0 and log:
             main_ref = "origin/main"
             if _git(repo, "rev-parse", "--verify", "-q", main_ref)[0] != 0:
@@ -566,7 +605,16 @@ def get_task_prototype(
     path = prototype_file(task_id)
     if not path.exists():
         raise HTTPException(404, "no prototype for this task")
-    return FileResponse(str(path), media_type="text/html")
+    # NEVER cache a prototype. A design is ITERATED — the reviewer's feedback
+    # is applied and the same URL then serves different content. FileResponse
+    # sends only ETag/Last-Modified, so the browser was free to keep showing
+    # the previous draft inside the iframe: the owner asked for changes, the
+    # changes landed on disk, and they still saw the old design (owner
+    # 2026-07-22). Stale here is not a stale asset, it is a stale DECISION.
+    return FileResponse(
+        str(path), media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate, no-cache"},
+    )
 
 
 # Evidence media a drive cites in its proof, or that the trusted-runner
@@ -580,7 +628,29 @@ _EVIDENCE_MEDIA = {
     ".webp": "image/webp",
     ".mp4": "video/mp4",
     ".webm": "video/webm",
+    # TEXT EVIDENCE (task 939756eb). A test log, a diff, or a receipt IS
+    # evidence — before this the store took images/video only, so the only way
+    # to show a passing run was to render a terminal to a PNG (unreadable and
+    # unsearchable). Types are listed EXPLICITLY, never a catch-all, and every
+    # one is inert: `text/html` is deliberately absent because an
+    # attacker-supplied .html served same-origin from the evidence store would
+    # be stored XSS. Anything unmapped (.html, .exe, …) still 400s.
+    ".txt": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+    ".diff": "text/plain; charset=utf-8",
+    ".patch": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".json": "application/json",
 }
+
+
+def _evidence_kind(media: str) -> str:
+    """Which renderer the SPA should use for an artifact."""
+    if media.startswith("video/"):
+        return "video"
+    if media.startswith("image/"):
+        return "image"
+    return "text"
 
 
 @router.get("/{task_id}/evidence")
@@ -621,7 +691,7 @@ def list_task_evidence(task_id: str, project: str = Query("default")) -> dict:
                 f"?project={quote(project, safe='')}"
             ),
             "media_type": _EVIDENCE_MEDIA[ext],
-            "kind": "video" if _EVIDENCE_MEDIA[ext].startswith("video/") else "image",
+            "kind": _evidence_kind(_EVIDENCE_MEDIA[ext]),
             "size_bytes": st.st_size,
             "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
             "cited": p.name in cited,
@@ -910,6 +980,22 @@ def get_task_tests(task_id: str, run: bool = Query(False),
             else str(checkout_root.parent.parent.parent))
     except Exception:
         _src_sha = ""
+    # PERSIST + HYDRATE (task f3e8d477). A run used to be computed and thrown
+    # away with the response, so the tab printed NOT RUN forever and the
+    # evidence package could never answer "did the tests run?". Now a real run
+    # is recorded against the tree it ran on, and EVERY read (including the
+    # cheap run=false page load, which still never spawns pytest) stamps each
+    # row from that record. A record from another tree is marked stale; a test
+    # with no record stays not-run.
+    try:
+        from prism_service.services import test_run_store as _trs
+        _store = _trs.get_test_run_store()
+        if ran:
+            _store.record_run(task_id, _src_sha, results)
+        results = _trs.hydrate(_store, task_id, results, _src_sha)
+    except Exception:
+        pass  # best-effort: never fail the tab over its own evidence store
+
     return {"tests": results, "ran": ran, "receipt": receipt_info,
             "source": ("workspace" if _use_ws else "checkout"),
             "source_sha": _src_sha}
@@ -1061,6 +1147,13 @@ def get_task_gate_evidence(task_id: str, project: str = Query("default")) -> dic
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
+    # A task's DESCRIPTION was settable at create and then frozen forever —
+    # neither this route nor mcp task_update could touch it. When a design is
+    # corrected mid-flight (owner reversed the whole access model on 6cef97ec,
+    # 2026-07-22) the description keeps asserting the retired premise, which is
+    # the first thing any reader sees. TaskService.update already accepts
+    # arbitrary fields; only this model was blocking it.
+    description: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[int] = None
     # tags were settable at create but never updatable over the API — the

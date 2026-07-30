@@ -11,7 +11,7 @@
 // full-page view reads identically to the inline ones. The ![img](url)
 // legacy markdown path below stays for hand-authored proof text, extended to
 // render a real <video controls> when the cited file is a .mp4/.webm.
-import { type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { highlight } from "@/components/Markdown";
 import { GateEvidenceBlock } from "@/components/conductor/TaskActivityGantt";
 
@@ -38,6 +38,52 @@ function renderInline(s: string): ReactNode[] {
 
 function isVideoSrc(src: string): boolean {
   return /\.(mp4|webm)(\?.*)?$/i.test(src);
+}
+
+// TEXT EVIDENCE (task 939756eb). A cited .txt/.log/.diff/.patch/.md/.json is a
+// real artifact — a pytest log, a diff, a receipt. Render it INLINE as readable
+// text instead of a broken <img> or a download, so the proof is legible on the
+// ticket rather than a picture of a terminal.
+function isTextSrc(src: string): boolean {
+  return /\.(txt|log|diff|patch|md|json)(\?.*)?$/i.test(src);
+}
+
+function TextEvidence({ src, label }: { src: string; label?: string }) {
+  const [body, setBody] = useState<string>("");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(src)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => { if (!cancelled) setBody(t); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [src]);
+  if (failed) {
+    return (
+      <a href={src} className="text-2xs underline" style={{ color: "var(--accent-teal-fg)" }}>
+        {label || "evidence"} (open)
+      </a>
+    );
+  }
+  return (
+    <figure className="rounded-md border border-[color:var(--border-default)] overflow-hidden">
+      {label && (
+        <figcaption
+          className="px-3 py-1.5 text-2xs font-mono border-b border-[color:var(--border-default)]"
+          style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+        >
+          {label}
+        </figcaption>
+      )}
+      <pre
+        className="m-0 p-3 text-[12px] leading-relaxed overflow-x-auto whitespace-pre-wrap"
+        style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
+      >
+        {body || "loading…"}
+      </pre>
+    </figure>
+  );
 }
 
 export default function EvidenceView({ text, taskId, project, proofType }: {
@@ -67,6 +113,8 @@ export default function EvidenceView({ text, taskId, project, proofType }: {
               controls
               className="max-w-full rounded-md border border-[color:var(--border-default)]"
             />
+          ) : isTextSrc(src) ? (
+            <TextEvidence key={`txt${i}`} src={src} label={alt} />
           ) : (
             <img
               key={`img${i}`}

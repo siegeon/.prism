@@ -43,6 +43,14 @@ class ExpertiseEntry:
     adr_status: str = ""  # proposed | accepted | superseded | "" (non-ADR)
     supersedes: str = ""  # mx-XXXXXX id of the ADR this one supersedes
 
+    # Scope (task e8059640, decisions mx-935cc2 / mx-43606b). Empty = SHARED
+    # project memory (everyone with access). Set = PRIVATE to that user, only
+    # they can read or write it. In the product this is inherited from the
+    # source connection (a private connection like your email stamps its
+    # owner on everything it produces). Default empty keeps every existing
+    # entry shared, so the field is purely additive.
+    owner_user_id: str = ""
+
 
 @dataclass
 class RecallLogEntry:

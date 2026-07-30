@@ -62,10 +62,18 @@ def test_tile_autofill_grid_widens_and_gaps_for_progress_bar():
     assert "minmax(220px" not in src, \
         "tile auto-fill min must widen past 220px for the progress bar"
     import re
-    m = re.search(r"auto-fill,minmax\(max\((\d+)px,calc\(\(100%-3rem\)/4\)\)", src)
+    # The floor is what this AC is really about: a tile has to be wide enough
+    # to seat the ring hero, the LABELED 10-step timeline and the burn graph.
+    # It used to pin the exact 4-across expression
+    # minmax(max(280px,calc((100%-3rem)/4)),1fr), which made the literal track
+    # the contract instead of the legibility it exists to protect — so widening
+    # the tiles (owner 2026-07-22: "wide screen please, not portrait") failed a
+    # test whose own reasoning asks for exactly that. Pin the floor, not the
+    # arithmetic.
+    m = re.search(r"auto-fill,minmax\((?:max|min)\([^)]*?(\d+)px", src)
     assert m, \
-        "tile grid must use the container-relative auto-fill minmax(max(<n>px," \
-        "calc((100%-3rem)/4)) ...) track (4-across, min floor)"
+        "tile grid must use a container-relative auto-fill minmax(...) track " \
+        "with an explicit px floor"
     assert int(m.group(1)) >= 280, \
         "tile auto-fill floor must be >=280px to seat the ring hero + labeled timeline"
     # The tile grid gap was gap-2; open it so tiles don't feel cluttered.

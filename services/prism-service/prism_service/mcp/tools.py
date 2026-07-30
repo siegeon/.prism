@@ -4045,6 +4045,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 proof_type=arguments.get("proof_type", ""),
                 verify=arguments.get("verify"),
                 likely_misfire=arguments.get("likely_misfire", ""),
+                # Same unwired-slice check as the REST path (task 597839d9) —
+                # if only one path enforced it, the other would be the way
+                # around it.
+                allowed_files=arguments.get("allowed_files"),
             )
             if _domain_errors:
                 return [TextContent(type="text", text=_json({

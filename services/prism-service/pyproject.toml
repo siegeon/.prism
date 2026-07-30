@@ -25,7 +25,13 @@ classifiers = [
 ]
 dependencies = [
   "fastapi>=0.115",
-  "mcp>=1.0",
+  # mcp 2.0.0 (released 2026-07) REMOVED Server.list_tools, which
+  # prism_service/mcp/server.py:116 decorates with — an unbounded ">=1.0"
+  # let CI install 2.0.0 and every PR went red on a collection error
+  # ("'Server' object has no attribute 'list_tools'") that no branch caused.
+  # Pin to the 1.x line the code is written against; moving to 2.x is a real
+  # migration, not a resolver accident. Dev venv runs 1.27.1.
+  "mcp>=1.0,<2",
   "uvicorn[standard]>=0.30",
   "model2vec>=0.3",
   # sqlite-vec is pre-1.0 with storage-format risk: pin to the 0.1.x series

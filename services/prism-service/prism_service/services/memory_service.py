@@ -137,6 +137,8 @@ class MemoryService:
             effectiveness=data.get("effectiveness", 0.0),
             adr_status=data.get("adr_status", ""),
             supersedes=data.get("supersedes", ""),
+            # Absent on legacy entries -> "" -> shared (task e8059640, additive).
+            owner_user_id=data.get("owner_user_id", ""),
         )
 
     @staticmethod
@@ -164,6 +166,7 @@ class MemoryService:
             "effectiveness": entry.effectiveness,
             "adr_status": entry.adr_status,
             "supersedes": entry.supersedes,
+            "owner_user_id": entry.owner_user_id,
         }
 
     def _read_entries(self, domain: str) -> list[ExpertiseEntry]:
@@ -212,8 +215,13 @@ class MemoryService:
         memory_type: str = "semantic",
         adr_status: str = "",
         supersedes: str = "",
+        owner_user_id: str = "",
     ) -> ExpertiseEntry:
         """Create and persist a new expertise entry.
+
+        owner_user_id (task e8059640): "" = SHARED project memory (the default);
+        a user id = PRIVATE to that user. In the product this is inherited from
+        the source connection, never guessed here.
 
         Temporal dedup: if an active entry with the same name or >85%
         description similarity exists, the OLD entry is invalidated
@@ -269,6 +277,7 @@ class MemoryService:
             generation=next_generation,
             adr_status=adr_status,
             supersedes=supersedes,
+            owner_user_id=owner_user_id,
         )
         entries.append(entry)
         self._write_entries(domain, entries)
@@ -366,8 +375,14 @@ class MemoryService:
         domain: Optional[str] = None,
         limit: int = 5,
         session_id: str = "",
+        caller_user_id: str = "",
     ) -> list[ExpertiseEntry]:
         """Search expertise entries using Brain FTS5 with keyword fallback.
+
+        SCOPE (task e8059640): returns SHARED entries (owner_user_id "") plus
+        the CALLER's own private entries (owner == caller_user_id), and NEVER
+        another user's private memory. In local/single-user the caller is the
+        one owner, so they see shared + their own, exactly as before.
 
         Primary: routes through Brain's hybrid search (BM25 + graph)
         filtered to domain='expertise'. This handles natural language
@@ -396,6 +411,14 @@ class MemoryService:
             if e.status == "active" and not e.invalid_at
         ]
 
+        # SCOPE filter (task e8059640): shared (owner "") OR the caller's own.
+        # A peer's private memory is never returned. This is enforced HERE, in
+        # the service every read path goes through, not in the UI.
+        results = [
+            e for e in results
+            if not e.owner_user_id or e.owner_user_id == caller_user_id
+        ]
+
         # Domain filter (Brain search may return cross-domain)
         if domain:
             results = [e for e in results if e.domain == domain]
@@ -407,6 +430,8 @@ class MemoryService:
             extras = [
                 e for e in self._read_entries(domain)
                 if e.status == "active" and not e.invalid_at and e.id not in seen_ids
+                # same scope rule as above — the fallback must not leak a peer's private
+                and (not e.owner_user_id or e.owner_user_id == caller_user_id)
             ]
             results.extend(extras)
 

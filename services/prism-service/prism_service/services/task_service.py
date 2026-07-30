@@ -406,6 +406,41 @@ class TaskService:
         self._store_embedding(task.id, task.title, task.description)
         return task
 
+    def ensure_external_intake(
+        self,
+        task_id: str,
+        title: str,
+        description: str = "",
+        tags: Optional[list[str]] = None,
+        priority: int = 0,
+    ) -> Optional[Task]:
+        """Idempotently materialize a LOCAL pending intake task for an imported
+        external work item (task fddfd75a).
+
+        The id is deterministic (UUIDv5 of the canonical provider tuple), so a
+        repeated import or a crash-retry converges on ONE row. If the task
+        already exists it is returned UNCHANGED — a later pull must never
+        clobber a user-edited local title/status/assignment/workflow. The row
+        is created ``pending`` with an empty workflow_step and gate_state='none'
+        and NO linked session: remote status never enters the conductor.
+        """
+        existing = self.get(task_id)
+        if existing is not None:
+            return existing
+        now = datetime.now(timezone.utc).isoformat()
+        # INSERT OR IGNORE (not a bare INSERT) so two concurrent same-id pulls
+        # converge on one row instead of racing to an IntegrityError.
+        self._db.execute(
+            "INSERT OR IGNORE INTO tasks "
+            "(id, title, description, status, priority, created_at, tags, "
+            "workflow_step, gate_state) "
+            "VALUES (?, ?, ?, 'pending', ?, ?, ?, '', 'none')",
+            (task_id, title, description, priority, now, json.dumps(tags or [])),
+        )
+        self._db.commit()
+        self._record_history(task_id, "external_intake", f"title={title!r}")
+        return self.get(task_id)
+
     def get(self, task_id: str) -> Optional[Task]:
         """Fetch a single task by ID, or None."""
         row = self._db.execute(

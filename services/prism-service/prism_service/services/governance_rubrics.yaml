@@ -30,6 +30,17 @@ plan_coverage:
   # principles BEFORE code; zero seeded principles never pass.
   require_principles: true
 
+premise_grounded:
+  # (task 3a63190b / github issue #222) review_previous_notes: the ticket's
+  # load-bearing claims must be checked, not just the story's FORM. Every
+  # claim bullet under claims_section carries EITHER a citation (file:line,
+  # a run/PR/commit/issue id, or backtick command output) OR an explicit
+  # REFUTED/UNVERIFIED marker — never neither. Checked at the
+  # review_previous_notes step itself (ConductorService.advance_task), not
+  # a downstream gate — draft_story's story_complete already shadows any
+  # validation placed on review_previous_notes through gate inheritance.
+  claims_section: Premises
+
 green_outcome:
   # (task 3eb67fb3) the terminal green_gate ORACLE tooth. A green close must
   # EVIDENCE the task's oracle, not merely report tests-green — the hard

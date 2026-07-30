@@ -1,0 +1,26 @@
+{
+  "issues": [
+    {
+      "id": "10001",
+      "key": "PROJ-1",
+      "fields": {
+        "summary": "Login is broken on Safari",
+        "status": {"name": "In Progress"},
+        "assignee": {"displayName": "Ada Lovelace", "accountId": "acc-1"},
+        "updated": "2026-07-01T10:00:00.000+0000"
+      }
+    },
+    {
+      "id": "10002",
+      "key": "PROJ-2",
+      "fields": {
+        "summary": "Add single sign-on",
+        "status": {"name": "Done"},
+        "assignee": null,
+        "updated": "2026-07-02T10:00:00.000+0000"
+      }
+    }
+  ],
+  "nextPageToken": null,
+  "isLast": true
+}

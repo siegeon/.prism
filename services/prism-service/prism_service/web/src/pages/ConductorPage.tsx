@@ -7,6 +7,7 @@ import { Lozenge } from "@/components/Lozenge";
 import { domainTone } from "@/lib/domainTone";
 import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
+import TokenTurns from "@/components/conductor/TokenTurns";
 
 type ManagedTask = {
   id: string;
@@ -119,10 +120,13 @@ export default function ConductorPage() {
         {managed.length === 0 ? (
           <Empty>No tasks under conductor management. Call conductor_work() to pull the next task and start the loop.</Empty>
         ) : (
-          // Up to 4 tiles per row, container-relative so it fills to 4 on a wide
-          // board and drops to 3/2/1 as width shrinks — independent of viewport/DPR
-          // (each column is at least a 4-across share, min 280px).
-          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(max(280px,calc((100%-3rem)/4)),1fr))]">
+          // WIDE, not portrait (owner 2026-07-22). The old rule packed up to 4
+          // tiles per row — minmax(max(280px, (100%-3rem)/4), 1fr) — so every
+          // tile was a ~280px portrait card whose 10-step timeline truncated to
+          // "Revie / Implem / Verify" and whose burn graph had no room. Tiles
+          // are now at least 560px and landscape: one full-width tile on a
+          // normal board, two side by side only when there is genuinely room.
+          <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr))]">
             {managed.map((t) => (
               <TaskTile key={t.id} task={t} reduced={reduced} sinceFetchS={sinceFetchS} onClick={() =>
                 navigate(`/tasks/${t.id}`, { state: { from: "/conductor" } })
@@ -202,6 +206,18 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       <TileHero task={task} />
       {/* the 10-step SDLC timeline with gate diamonds + roles */}
       <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
+      {/* BURN — tok/s per turn off the live transcript. The component and the
+          server data (phase_progress.token_turns, tokens_source, turns) both
+          existed; nothing ever rendered it, so a tile mid-drive looked static
+          even while a driver was burning tokens (owner 2026-07-22). */}
+      <TokenTurns
+        turns={task.phase_progress?.token_turns}
+        total={task.phase_progress?.turns}
+        live={actWorking}
+        reduced={reduced}
+        tokens_source={task.phase_progress?.tokens_source}
+        state={actState}
+      />
       {/* HANDOFF strip — which worker is on deck for the current step. */}
       <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-4 py-3 flex items-center gap-3 min-w-0">
         <span className="font-mono text-2xs uppercase tracking-wider text-[color:var(--text-muted)] shrink-0">Handoff</span>

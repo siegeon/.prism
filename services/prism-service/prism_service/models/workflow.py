@@ -11,8 +11,17 @@ from dataclasses import dataclass, field
 # rubrics REACHABLE end-to-end: both are scored by pure YAML-rubric
 # functions (services/arc_governance.py) — no override required on a
 # compliant drive.
+#
+# review_previous_notes's premise_grounded (task 3a63190b / issue #222) is
+# DIFFERENT: because draft_story sits directly after it and already owns
+# validation="story_complete", gate inheritance would always resolve
+# story_gate to story_complete first — premise_grounded can never reach a
+# gate that way. It is instead checked AT the review_previous_notes step
+# itself, by ConductorService.advance_task (see _VERIFIER_RULES's
+# "check_at_step" flag), before the review_previous_notes -> draft_story
+# transition is allowed.
 WORKFLOW_STEPS = [
-    {"id": "review_previous_notes", "agent": "sm", "type": "agent", "validation": None},
+    {"id": "review_previous_notes", "agent": "sm", "type": "agent", "validation": "premise_grounded"},
     {"id": "draft_story", "agent": "sm", "type": "agent", "validation": "story_complete"},
     {"id": "story_gate", "agent": None, "type": "gate", "validation": None},
     {"id": "verify_plan", "agent": "sm", "type": "agent", "validation": "plan_coverage"},

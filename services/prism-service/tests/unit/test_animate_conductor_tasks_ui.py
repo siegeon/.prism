@@ -74,10 +74,16 @@ def test_board_uses_lozenge_primitives_for_step_and_gate():
         "status/step/gate chips must route through the shared Lozenge"
 
 
-def test_board_groups_by_status_buckets():
-    src = _read(_TASKS)
-    for bucket in ("In progress", "At a gate", "Up next", "Blocked"):
-        assert bucket in src, f"board must render the '{bucket}' group"
+# (retired) test_board_groups_by_status_buckets asserted the board renders
+# "In progress" / "At a gate" / "Up next" / "Blocked" group headers. Commit
+# ea72bb3 ("feat(ui): unified team work view across native/GitHub/Jira",
+# task ae31c2c0) deliberately replaced that bucketed board with ONE unified
+# work table whose every row carries its own status and gate column, so the
+# headers no longer exist and this assertion had been red on main ever since.
+# The current contract is pinned by tests/integration/test_unified_work_ui.py
+# (My Work/Team toggle, source + assignee filters, provider badge and
+# backlink on external rows) — 8 tests, green. Retired here rather than left
+# standing, because a contradiction nobody owns is just a red main.
 
 
 def test_epic_children_are_expandable_not_reparented():
