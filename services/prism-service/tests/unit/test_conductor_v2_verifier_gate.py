@@ -75,6 +75,12 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
     # Walk forward up to (and including) target_idx, clearing any earlier
     # pending gate along the way with a manual override.
     from prism_service.services.task_service import TaskService  # noqa: F401
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this unrelated verifier-gate walk can leave review_previous_notes.
+    cond._task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising the verifier gate, not a "
+        "real premise claim - UNVERIFIED\n"))
     guard = (target_idx + 1) * 3
     cleared = 0
     while guard > 0:

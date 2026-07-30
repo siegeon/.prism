@@ -1,29 +1,26 @@
-"""RED scaffold — premise_grounded gate on review_previous_notes
-(task 3a63190b / github issue #222).
+"""premise_grounded on review_previous_notes (task 3a63190b / github issue
+#222), UNCONDITIONAL follow-up (task 3928b7ac / issue #222 continued).
 
-The conductor gates whether a story is WELL-FORMED (required sections, AC
-ids + oracles) but never whether it is TRUE. `review_previous_notes` is the
-only WORKFLOW_STEPS entry with `validation: None`
-(prism_service/models/workflow.py). This pins issue #222 proposal (a): a
-`premise_grounded` rubric that REFUSES the review_previous_notes report when
-a load-bearing claim carries neither a citation (file:line, a run/PR/
-commit/issue id, or backtick command output) nor an explicit REFUTED/
-UNVERIFIED marker — and the refusal NAMES the offending claim.
+3a63190b shipped the rubric OPT-IN: it only engaged once a report opened a
+'## Premises' heading; a report with none had "nothing to ground" and
+passed. That scoping was forced by a real collision — task.completion_proof
+is a SHARED field also read by the green_gate oracle tooth
+(score_green_outcome), and several existing suites stage green-proof-shaped
+content there on a fresh task as unrelated fixture setup. Gating
+unconditionally on that SAME field broke those suites.
 
-Recorded task.likely_misfire, both teeth pinned here:
-  (1) CITATION THEATRE — a bare path with no line number ('src/foo.py')
-      must NOT be accepted as a citation.
-  (2) WIRING — a test that only calls score_premise_grounded directly is
-      not evidence the gate exists on a real drive: the kind must be
-      registered in conductor_service._VERIFIER_RULES and actually consulted
-      by ConductorService.advance_task, the SAME chokepoint every real
-      conductor_work report passes through. The wiring tests below never
-      import arc_governance and never call the scorer directly — they
-      drive advance_task end to end.
+This task gives review_previous_notes its OWN field (task.premise_notes)
+and RETIRES the opt-in escape hatch: an absent or empty premise report is
+now REFUSED, not passed, closing the exact gap issue #222 named — a driver
+who never considers citing evidence, not one who declines to. The dedicated
+field means the shared-field collision cannot recur: score_premise_grounded
+now reads ONLY task.premise_notes (via ConductorService._verify_rubric_gate),
+never task.completion_proof, so unrelated content staged in completion_proof
+for a later gate never satisfies (and never falsely blocks) this one.
 
-FAILS today: WORKFLOW_STEPS['review_previous_notes']['validation'] is None,
-conductor_service._VERIFIER_RULES has no 'premise_grounded' entry, and
-arc_governance has no score_premise_grounded.
+FAILS today (pre-implementation): task.premise_notes does not exist yet,
+_verify_rubric_gate still reads completion_proof, and score_premise_grounded
+still returns ok=True on a missing/empty section.
 """
 
 from __future__ import annotations
@@ -74,7 +71,7 @@ def test_premise_grounded_rubric_is_yaml_data():
     assert "premise_grounded" in rub
 
 
-# ── pure scorer (AC-2, AC-3, AC-4) ───────────────────────────────────────
+# ── pure scorer (AC-2) ───────────────────────────────────────────────────
 
 def test_compliant_notes_score_ok():
     res = _gov().score_premise_grounded(
@@ -90,29 +87,34 @@ def test_bare_path_without_line_number_is_citation_theatre():
         "a bare path with no line number must not satisfy the rubric")
 
 
-def test_missing_premises_section_fails():
+def test_missing_premises_section_now_refused_unconditionally():
+    """SUPERSEDED (task 3928b7ac / issue #222): the old opt-in behavior
+    ("nothing to ground -> pass") is retired. review_previous_notes now
+    has its OWN dedicated field (task.premise_notes), so completion_proof
+    staged for an unrelated LATER purpose (e.g. a green_gate proof set
+    early in a test fixture) can never even reach this scorer's evidence —
+    the shared-field collision this test used to guard against cannot
+    recur. With that guard no longer needed, a missing '## Premises'
+    section is a real gap (AC-2): REFUSED, not passed."""
     res = _gov().score_premise_grounded(
         {"notes_md": NO_SECTION_NOTES}, _rubric())
-    # SCOPE (regression guard): a report that never engages the '##
-    # Premises' convention has nothing to ground - it must PASS, not
-    # refuse, so completion_proof staged for an unrelated LATER purpose
-    # (e.g. a green_gate proof set early in a test fixture) never blocks
-    # review_previous_notes -> draft_story.
-    assert res["ok"] is True, res
+    assert res["ok"] is False, res
 
 
 def test_empty_premises_section_fails():
-    """Unlike a MISSING section (nothing to ground -> pass), a PRESENT but
-    empty section means the driver opened the convention and wrote
-    nothing under it - that still fails."""
+    """A PRESENT but empty section means the driver opened the convention
+    and wrote nothing under it - that still fails (unchanged by 3928b7ac)."""
     res = _gov().score_premise_grounded(
         {"notes_md": EMPTY_SECTION_NOTES}, _rubric())
     assert res["ok"] is False
 
 
-def test_empty_notes_pass_nothing_to_ground():
+def test_empty_notes_now_refused_unconditionally():
+    """SUPERSEDED (task 3928b7ac / issue #222): empty notes_md used to pass
+    ("nothing to ground"). AC-2: unconditional means empty is refused too —
+    a driver must record at least one grounded premise claim."""
     res = _gov().score_premise_grounded({"notes_md": ""}, _rubric())
-    assert res["ok"] is True, res
+    assert res["ok"] is False, res
 
 
 def test_refusal_names_the_offending_claim():
@@ -177,6 +179,18 @@ def test_story_gate_inheritance_is_unaffected():
         "a validation kind")
 
 
+# ── task.premise_notes: the dedicated field (AC-1) ───────────────────────
+
+def test_premise_notes_round_trips_through_task_service(tmp_path):
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="premise notes round-trip")
+    assert t.premise_notes == "", "premise_notes must default to ''"
+    task_svc.update(t.id, premise_notes=COMPLIANT_NOTES)
+    t2 = task_svc.get(t.id)
+    assert t2.premise_notes == COMPLIANT_NOTES
+
+
 # ── end-to-end wiring through the REAL advance_task chokepoint ──────────
 # (the exact path conductor_flow.flow_report calls for every non-gate step
 # report) — no arc_governance import here, so a scorer-only test cannot
@@ -198,7 +212,8 @@ def test_advance_task_refuses_ungrounded_notes_through_the_real_wiring(
     res0 = cond.advance_task(t.id)  # '' -> review_previous_notes
     assert res0["to_step"] == "review_previous_notes", res0
 
-    task_svc.update(t.id, completion_proof=THEATRE_NOTES)
+    # AC-3: evidence comes from the DEDICATED field, not completion_proof.
+    task_svc.update(t.id, premise_notes=THEATRE_NOTES)
     res1 = cond.advance_task(t.id)
     assert res1["ok"] is False, (
         "advance_task must REFUSE review_previous_notes -> draft_story on "
@@ -213,31 +228,34 @@ def test_advance_task_advances_on_compliant_notes(tmp_path):
     task_svc, cond = _services(tmp_path)
     t = task_svc.create(title="premise gate wiring: compliant notes")
     cond.advance_task(t.id)  # -> review_previous_notes
-    task_svc.update(t.id, completion_proof=COMPLIANT_NOTES)
+    task_svc.update(t.id, premise_notes=COMPLIANT_NOTES)
     res = cond.advance_task(t.id)
     assert res["ok"] is True, res
     assert res["to_step"] == "draft_story", res
 
 
-def test_unrelated_preset_completion_proof_does_not_block_the_step(
+def test_unrelated_completion_proof_without_premise_notes_is_now_refused(
         tmp_path):
-    """Regression guard for a real break this rubric caused on first pass:
-    task.completion_proof is a SHARED field also read at the green_gate
-    oracle tooth (score_green_outcome) — several existing suites
-    (e.g. test_gate_receipt_precedence.py) stage a green-proof-shaped
-    string on a FRESH task before walking it through advance_task from
-    step 0, purely as fixture setup unrelated to review_previous_notes.
-    That value carries no '## Premises' heading, so it must NOT block the
-    advance."""
+    """SUPERSEDED (task 3928b7ac / issue #222): this used to be named
+    test_unrelated_preset_completion_proof_does_not_block_the_step and
+    pinned the OPT-IN regression guard — an unrelated green-proof-shaped
+    string staged in completion_proof (for a LATER, unrelated gate) had to
+    not block review_previous_notes, because at the time notes_md WAS
+    completion_proof. Now notes_md is task.premise_notes, a dedicated
+    field completion_proof never reaches — so staging content ONLY in
+    completion_proof (premise_notes left at its '' default) no longer
+    resembles a premise report at all. Under the new unconditional rule
+    (AC-2) that is refused, exactly like any other missing premise_notes
+    case; the two fields are fully decoupled, not merely opt-in-decoupled."""
     task_svc, cond = _services(tmp_path)
     t = task_svc.create(title="premise gate: unrelated preset proof")
     task_svc.update(t.id, completion_proof=(
         "full suite green: 1447 passed in 150s - pytest tests -q; "
         "screenshot on file"))
     cond.advance_task(t.id)  # '' -> review_previous_notes
-    res = cond.advance_task(t.id)  # must NOT be refused
-    assert res["ok"] is True, res
-    assert res["to_step"] == "draft_story", res
+    res = cond.advance_task(t.id)  # premise_notes is still '' -> refused
+    assert res["ok"] is False, res
+    assert task_svc.get(t.id).workflow_step == "review_previous_notes"
 
 
 def test_refusal_reason_is_recorded_on_the_task_for_self_diagnosis(
@@ -249,7 +267,7 @@ def test_refusal_reason_is_recorded_on_the_task_for_self_diagnosis(
     task_svc, cond = _services(tmp_path)
     t = task_svc.create(title="premise gate wiring: reason on task")
     cond.advance_task(t.id)
-    task_svc.update(t.id, completion_proof=THEATRE_NOTES)
+    task_svc.update(t.id, premise_notes=THEATRE_NOTES)
     cond.advance_task(t.id)
     t2 = task_svc.get(t.id)
     assert getattr(t2, "gate_reason", ""), (
@@ -265,9 +283,9 @@ def test_advance_task_clears_stale_reason_on_a_later_compliant_report(
     task_svc, cond = _services(tmp_path)
     t = task_svc.create(title="premise gate wiring: reason clears")
     cond.advance_task(t.id)
-    task_svc.update(t.id, completion_proof=THEATRE_NOTES)
+    task_svc.update(t.id, premise_notes=THEATRE_NOTES)
     cond.advance_task(t.id)  # refused, gate_reason set
-    task_svc.update(t.id, completion_proof=COMPLIANT_NOTES)
+    task_svc.update(t.id, premise_notes=COMPLIANT_NOTES)
     res = cond.advance_task(t.id)  # now compliant -> advances
     assert res["ok"] is True, res
     t2 = task_svc.get(t.id)
@@ -275,3 +293,25 @@ def test_advance_task_clears_stale_reason_on_a_later_compliant_report(
     assert not (getattr(t2, "gate_reason", "") or ""), (
         "a stale premise_grounded refusal reason must not linger once "
         f"the task has advanced past the step: {t2.gate_reason!r}")
+
+
+# ── MCP report path dual-writes premise_notes + completion_proof (AC-4) ──
+
+def test_mcp_report_routes_review_previous_notes_proof_to_premise_notes():
+    """Source-reading test (not a call-through — the MCP dispatcher needs a
+    live server/project context this unit suite does not stand up): parses
+    the conductor_work report branch in mcp/tools.py and asserts the
+    review_previous_notes case is routed to BOTH task.premise_notes (the
+    new dedicated field the gate reads) and task.completion_proof (kept for
+    backward-compatible rendering — TaskDetailPage renders completion_proof
+    generically today)."""
+    tools_path = (_SERVICE_ROOT / "prism_service" / "mcp" / "tools.py")
+    src = tools_path.read_text(encoding="utf-8")
+    idx = src.find('if _cur["id"] in ("draft_story", "verify_plan"):')
+    assert idx != -1, "conductor_work proof-routing branch not found"
+    window = src[idx:idx + 800]
+    assert '"review_previous_notes"' in window, (
+        "review_previous_notes must have its own routing arm in the "
+        f"proof router: {window}")
+    assert "premise_notes=str(_proof)" in window, (
+        f"review_previous_notes must route proof to premise_notes: {window}")

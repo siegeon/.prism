@@ -242,6 +242,12 @@ def _services(tmp_path):
 
 
 def _drive_to_green_gate(task_svc, cond, t):
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this unrelated seedable-gates walk can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising seedable gates, not a real "
+        "premise claim - UNVERIFIED\n"))
     guard = 0
     cleared = 0
     while task_svc.get(t.id).workflow_step != "green_gate" and guard < 30:
