@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.7.0"
+PRISM_VERSION = "7.7.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.7.1: PINNED TESTS REPORT WHAT ACTUALLY RAN [task 9f3c57dc]. The "
+    "Tests tab could show a confident '0 / N' when nothing had actually run: "
+    "a pytest collection failure (one pinned file missing from the run root) "
+    "parsed to an empty dict, not None, so the caller stamped every row "
+    "not-run and called it a real result. Each pinned file now runs against "
+    "the ROOT it was actually discovered in (workspace or checkout) instead "
+    "of pooling every file into one fixed root, so one uncollectable file "
+    "never zeroes out a file that passes elsewhere; a total collection "
+    "failure now reports could_not_run=true instead of a numeric 0 / N. "
+    "Discovery also no longer attributes a file to a task on a bare prose "
+    "mention (\"reviewing task X's gate\") with no declared \"(task <id>)\" "
+    "owner in its docstring. "
     "v7.7.0: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
     "had no search: a short id like e696d952 or part of a title had to be "
     "found by scanning 49+ rows by eye. An always-visible filter box above "
