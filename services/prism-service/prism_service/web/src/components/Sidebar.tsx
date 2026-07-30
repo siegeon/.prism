@@ -135,8 +135,10 @@ export default function Sidebar() {
   const version = useVersion();
   // The footer's hover tooltip is the one consumer of the full changelog —
   // fetched via the explicit `?notes=true` opt-in (task 842248bd), never
-  // riding the lean default `useVersion()` response or its 15s poll.
-  const versionNotes = useVersionNotes();
+  // riding the lean default `useVersion()` response or its 15s poll. Task
+  // d5465a25: the fetch is deferred until the row is actually hovered or
+  // focused (wired below), not fired on every Sidebar mount.
+  const { notes: versionNotes, ensureLoaded: loadVersionNotes } = useVersionNotes();
   const [theme, setTheme] = useState(currentTheme());
   const { pathname } = useLocation();
   const inSettings = pathname.startsWith("/settings");
@@ -260,6 +262,8 @@ export default function Sidebar() {
         <div
           className="px-5 py-3 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] border-t border-[color:var(--nav-line)] flex items-center gap-2"
           title={versionNotes}
+          onMouseEnter={loadVersionNotes}
+          onFocus={loadVersionNotes}
         >
           <button
             type="button"

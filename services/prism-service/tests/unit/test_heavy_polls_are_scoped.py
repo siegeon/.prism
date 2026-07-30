@@ -42,14 +42,7 @@ def _read(rel: str) -> str:
     return p.read_text(encoding="utf-8")
 
 
-def _brace_body(src: str, marker: str) -> str:
-    """Return the brace-balanced body of whatever `{...}` immediately
-    follows the FIRST occurrence of `marker`, walking open/close braces by
-    COUNT rather than searching for a hoped-for closing token — a stray
-    brace inside an earlier string/comment can't truncate or overrun this,
-    unlike a fixed-offset slice."""
-    i = src.index(marker)
-    brace = src.index("{", i)
+def _walk_braces(src: str, brace: int) -> str:
     depth = 0
     j = brace
     while j < len(src):
@@ -60,7 +53,29 @@ def _brace_body(src: str, marker: str) -> str:
             if depth == 0:
                 return src[brace:j + 1]
         j += 1
-    raise AssertionError(f"unbalanced braces scanning from marker {marker!r}")
+    raise AssertionError(f"unbalanced braces scanning from index {brace}")
+
+
+def _brace_body(src: str, marker: str) -> str:
+    """Return the brace-balanced body of whatever `{...}` immediately
+    follows the FIRST occurrence of `marker`, walking open/close braces by
+    COUNT rather than searching for a hoped-for closing token — a stray
+    brace inside an earlier string/comment can't truncate or overrun this,
+    unlike a fixed-offset slice."""
+    i = src.index(marker)
+    return _walk_braces(src, src.index("{", i))
+
+
+def _fn_body_from_signature_line(src: str, marker: str) -> str:
+    """Same as `_brace_body`, but for a signature carrying an inline TS
+    return-type object annotation on the SAME line as `marker`
+    (`function f(): { a: T } {` — two brace groups on one line). The FIRST
+    `{` after `marker` would grab the return-type annotation, not the
+    actual function body, so this opens from the LAST `{` on the
+    signature's own line — the real body start — before balancing."""
+    i = src.index(marker)
+    eol = src.index("\n", i)
+    return _walk_braces(src, src.rindex("{", i, eol))
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +158,7 @@ def test_state_default_still_carries_board_keys(monkeypatch):
 
 def test_use_version_notes_no_longer_autofetches_on_mount():
     src = _read("lib/version.ts")
-    body = _brace_body(src, "export function useVersionNotes(")
+    body = _fn_body_from_signature_line(src, "export function useVersionNotes(")
     assert "useEffect(" not in body, (
         "useVersionNotes must no longer auto-fetch inside a mount useEffect "
         "— the changelog fetch must be triggered explicitly (hover/focus), "
@@ -155,7 +170,7 @@ def test_use_version_notes_no_longer_autofetches_on_mount():
 
 def test_ensure_loaded_short_circuits_when_already_cached():
     src = _read("lib/version.ts")
-    hook_body = _brace_body(src, "export function useVersionNotes(")
+    hook_body = _fn_body_from_signature_line(src, "export function useVersionNotes(")
     fn_body = _brace_body(hook_body, "ensureLoaded")
     assert "notesCached !== null" in fn_body, (
         "ensureLoaded must short-circuit when notesCached is already "
