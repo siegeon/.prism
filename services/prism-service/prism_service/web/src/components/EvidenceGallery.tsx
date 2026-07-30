@@ -47,7 +47,7 @@ function TextArtifact({ url, full }: { url: string; full?: boolean }) {
       className={"m-0 p-2 font-mono whitespace-pre-wrap break-words " +
         (full
           ? "text-[12px] leading-relaxed max-h-[80vh] overflow-auto"
-          : "text-[9px] leading-snug h-full overflow-hidden")}
+          : "text-2xs leading-snug h-full overflow-hidden")}
       style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
     >
       {body || "loading…"}

@@ -591,7 +591,7 @@ function ProofText({ src, full }: { src: string; full?: boolean }) {
       className={"m-0 p-3 font-mono whitespace-pre-wrap break-words rounded-md border border-[color:var(--border-default)] " +
         (full
           ? "text-[12px] leading-relaxed max-h-[88vh] overflow-auto"
-          : "text-[10px] leading-snug max-h-[380px] overflow-hidden")}
+          : "text-2xs leading-snug max-h-[380px] overflow-hidden")}
       style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
     >
       {body || "loading…"}
