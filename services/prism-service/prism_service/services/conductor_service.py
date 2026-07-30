@@ -1447,6 +1447,41 @@ class ConductorService:
                 ),
             }
 
+        # AGENT-STEP rubric validation (task 3a63190b / issue #222): a
+        # validation kind whose _VERIFIER_RULES entry carries
+        # check_at_step=True is scored HERE, at the step's OWN report,
+        # rather than deferred to a downstream gate — premise_grounded on
+        # review_previous_notes is the first such kind (draft_story's own
+        # story_complete validation would otherwise shadow it for
+        # story_gate's inheritance; see _validation_for_gate). A failing
+        # score refuses the advance in place and records an actionable
+        # gate_reason so a driver polling conductor_work/task_list can
+        # self-diagnose, exactly like a pending rubric gate does.
+        if current_step is not None and current_step.get("type") == "agent":
+            step_validation = current_step.get("validation")
+            rule = (self._VERIFIER_RULES.get(step_validation)
+                    if step_validation else None)
+            if rule and rule.get("rubric") and rule.get("check_at_step"):
+                check = self._verify_rubric_gate(task, step_validation)
+                if check.get("verified") is not True:
+                    reason = (check.get("reason", "")
+                              or f"{step_validation}: not verified")
+                    self._task_svc.update(task_id, gate_reason=reason)
+                    self._task_svc.record_history(
+                        task_id, action="advance_refused",
+                        details=(f"step={current_id}; "
+                                 f"validation={step_validation}; "
+                                 f"reason={reason}"),
+                        actor=session_id or "")
+                    return {
+                        "ok": False,
+                        "task_id": task_id,
+                        "from_step": current_id,
+                        "to_step": current_id,
+                        "gate_state": task.gate_state,
+                        "reason": reason,
+                    }
+
         current_index = self._step_index(current_id)
         next_index = current_index + 1
         if next_index >= len(steps):
@@ -1676,6 +1711,24 @@ class ConductorService:
                 "plan_coverage is rubric-verified: every story AC id is "
                 "covered, plan_diagram parses, and no Brain-stored "
                 "principle is violated"
+            ),
+        },
+        "premise_grounded": {
+            "rubric": "premise_grounded",
+            # (task 3a63190b / issue #222) UNLIKE story_complete/
+            # plan_coverage — which are only ever consulted through a
+            # downstream GATE's inheritance — premise_grounded must be
+            # checked at the review_previous_notes AGENT step itself
+            # (draft_story's own validation always shadows it for
+            # story_gate's inheritance). check_at_step tells advance_task
+            # to consult this rubric BEFORE letting the current step
+            # advance, not just at a gate.
+            "check_at_step": True,
+            "expectation": (
+                "premise_grounded is rubric-verified: every load-bearing "
+                "claim in review_previous_notes carries a citation "
+                "(file:line, run/PR/commit/issue id, or command output) "
+                "or an explicit REFUTED/UNVERIFIED marker"
             ),
         },
     }
@@ -2444,9 +2497,16 @@ class ConductorService:
                 "story_md": getattr(task, "plan_doc", "") or "",
                 "plan_doc": getattr(task, "plan_doc", "") or "",
                 "plan_diagram": getattr(task, "plan_diagram", "") or "",
+                # premise_grounded (task 3a63190b): review_previous_notes'
+                # report lands in completion_proof (it is not draft_story/
+                # verify_plan, so the MCP tool routes it there, not
+                # plan_doc).
+                "notes_md": getattr(task, "completion_proof", "") or "",
             }
             if validation == "story_complete":
                 res = gov.score_story_complete(evidence, rubric)
+            elif validation == "premise_grounded":
+                res = gov.score_premise_grounded(evidence, rubric)
             else:
                 principles = (gov.load_principles(self._memory_svc)
                               if self._memory_svc is not None else [])
