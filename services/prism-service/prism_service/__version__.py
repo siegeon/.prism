@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.6.3"
+PRISM_VERSION = "7.6.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.6.4: FIND A TASK ON WORK BY TYPING PART OF IT [task a4c1bf03]. Work "
+    "had no search: a short id like e696d952 or part of a title had to be "
+    "found by scanning 49+ rows by eye. An always-visible filter box above "
+    "the table now narrows the list as you type, matching id prefix, full "
+    "id, title, or tag, case-insensitively, across native and GitHub/Jira "
+    "mirrored rows alike. Clearing it restores the full board. "
+)
+PRISM_VERSION_NOTES += (
     "v7.6.0: GITHUB ISSUES BECOME PRISM TASKS [task 900a4fb9]. Track a repo "
     "as owner/repo on the GitHub connector and press Sync now: its open "
     "issues arrive as ordinary PRISM tasks, each recording the issue it "
