@@ -402,6 +402,18 @@ async def lifespan(_app: FastAPI):
             file=_sys.stderr, flush=True,
         )
     _sqlite_maint_task = None
+    # Task 27e543e0 — the task->issue mirror's PRODUCTION registration. Its own
+    # try/except, and FIRST, on purpose: folding it into the big block below
+    # would let an unrelated failure earlier in that block skip it silently,
+    # which is exactly the shape of the bug this closes (a feature that looks
+    # shipped, is wired nowhere, and says nothing about why). A failure here is
+    # recorded and non-fatal — the mirror is optional, PRISM's own tasks are
+    # the work of record (mx-639efa).
+    try:
+        from prism_service.services import task_mirror
+        task_mirror.install()
+    except Exception:
+        _log.warning("task mirror not installed", exc_info=True)
     try:
         _LOCK_FILE.write_text(str(threading.get_ident()))
         _install_stackdump_handler()

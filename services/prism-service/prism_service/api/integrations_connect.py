@@ -458,6 +458,24 @@ def connector_status(principal: Principal = Depends(current_principal)) -> dict:
     return {"connectors": rows}
 
 
+@router.get("/mirror")
+def mirror_status(principal: Principal = Depends(current_principal)) -> dict:
+    """Is a new task actually reaching GitHub? (task 27e543e0)
+
+    Reports the wiring LINK BY LINK — mirror switch, observer registered by
+    startup, adapters the process really holds, sync consent, tracked repos —
+    rather than one green boolean. Three tasks previously reached DONE on this
+    capability while nothing was wired in production, because every check that
+    existed could be satisfied with an injected collaborator. This endpoint
+    reads the LIVE process, so "it is wired" stops being a claim and becomes
+    something a person (or a gate) can look at.
+    """
+    coerce_principal(principal)
+    from prism_service.services import task_mirror
+
+    return task_mirror.status()
+
+
 @router.get("/{provider}/start")
 def start_connect(provider: str,
                   principal: Principal = Depends(current_principal)) -> dict:

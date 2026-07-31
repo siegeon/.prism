@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.1"
+PRISM_VERSION = "7.10.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.2: A TASK YOU CREATE NOW REACHES GITHUB [task 27e543e0]. The "
+    "outbound mirror was complete and unwired: the adapter registered, the "
+    "repo was tracked, the sync switch was on, and push_task_creation "
+    "answered 'would create' for tasks made hours earlier -- because nothing "
+    "ever called it outside a hand-written POST. TaskService now publishes "
+    "'a task was created' to observers (the one chokepoint the REST route "
+    "and the MCP verb already share) and services/task_mirror.py turns that "
+    "into ONE push for THAT task, off-thread, never a sweep of the backlog. "
+    "On by default (PRISM_TASK_MIRROR=off to stop it) per the owner's "
+    "nothing-ships-disabled rule; the per-provider sync switch still decides "
+    "first. A mirrored task records the issue URL and provider tag, so the "
+    "board's existing link-out badge lights up instead of a second parallel "
+    "affordance nobody renders. GET /api/integrations/connect/mirror and a "
+    "line in the GitHub connector report the wiring LINK BY LINK, so 'it is "
+    "wired' is checkable rather than claimed -- three tasks previously went "
+    "DONE on this capability while production registered nothing.\n"
     "v7.10.1: A SECOND MACHINE CAN REACH YOUR PRISM [task b064db4e]. The "
     "first-run screen now offers a second door, 'connect to an existing "
     "PRISM', beside 'claim this one', so a fresh install stops inviting you "
