@@ -347,6 +347,17 @@ def seed_project(client: Client) -> None:
             "assigned_agent": "dev",
         },
     )
+    # A task cannot enter the conductor without a linked session (the
+    # session<->task binding contract). task_update(status='in_progress')
+    # is REFUSED without one, and this bench predates that requirement:
+    # unlinked, the "active" task silently stayed `pending`, `in_progress`
+    # came back empty, and next_task() then returned THIS priority-100 task
+    # instead of the priority-90 follow-up — so NEXT_CONTEXT_TASK never
+    # appeared and task_recall sat at 0.500. Link first, then activate.
+    client.call("task_link_session", {
+        "task_id": active["id"],
+        "session_id": "bench-contextpack-seed",
+    })
     client.call("task_update", {"id": active["id"], "status": "in_progress"})
     client.call(
         "task_create",

@@ -1,0 +1,80 @@
+{
+  "_comment": "Ground truth transcribed from the NanoNets/Graft README (github.com/NanoNets/Graft, v0.8.2, MIT), 'Tested on your popular repos' section, retrieved 2026-07-30. Graft publishes these tasks and the files the maintainers actually touched, but ships NO harness to run them. This file lets PRISM replay Graft's own published benchmark against PRISM retrieval, scored on file localization against the same ground truth.",
+  "source": {
+    "repo": "https://github.com/NanoNets/Graft",
+    "readme_section": "Tested on your popular repos",
+    "retrieved": "2026-07-30",
+    "graft_version": "0.8.2"
+  },
+  "targets": [
+    {
+      "id": "pocketbase",
+      "repo": "https://github.com/pocketbase/pocketbase",
+      "language": "go",
+      "approx_files": 350,
+      "graft_reported": {
+        "cost_standard_usd": 13.91,
+        "cost_graft_usd": 11.02,
+        "cost_delta_pct": -21,
+        "wallclock_standard_s": 2044,
+        "wallclock_graft_s": 1762,
+        "wallclock_delta_pct": -14,
+        "prs_reproduced_standard": "5/5",
+        "prs_reproduced_graft": "5/5"
+      },
+      "pr_tasks": [
+        {
+          "pr": 6744,
+          "type": "feat",
+          "what": "Generate and serve WebP thumbnails",
+          "gold_files": ["apis/file.go", "tools/filesystem/filesystem.go"]
+        },
+        {
+          "pr": 6947,
+          "type": "fix",
+          "what": "Uniform char distribution in regex random strings",
+          "gold_files": ["tools/security/random_by_regex.go"]
+        },
+        {
+          "pr": 6690,
+          "type": "refactor",
+          "what": "Patreon OAuth2 to use x/oauth2/endpoints",
+          "gold_files": ["tools/auth/patreon.go"]
+        },
+        {
+          "pr": 2726,
+          "type": "perf",
+          "what": "Drop a redundant admin-count query on a hot middleware path",
+          "gold_files": ["apis/middlewares.go"]
+        },
+        {
+          "pr": 3192,
+          "type": "fix",
+          "what": "Restore prior API rules on automigration rollback",
+          "gold_files": ["plugins/migratecmd/templates.go"]
+        }
+      ],
+      "questions": [
+        {"id": "q1", "kind": "orientation", "q": "Give me a map of PocketBase's architecture: the main subsystems and how an HTTP request flows through to the database."},
+        {"id": "q2", "kind": "entry_point_trace", "q": "Trace end-to-end what happens when a client creates a record via the REST API, from route handler to database write."},
+        {"id": "q3", "kind": "feature_location", "q": "I want to add a brand-new collection field type. Where do I hook it in, and which pieces must change?"},
+        {"id": "q4", "kind": "bug_localization", "q": "Realtime subscriptions silently stop delivering events after a while. Where would you start looking, and why?"},
+        {"id": "q5", "kind": "blast_radius", "q": "If I change the signature of the record-validation logic, what depends on it and what could break?"},
+        {"id": "q6", "kind": "cross_file_synthesis", "q": "How does auth work across OAuth2 providers: where are tokens issued, validated, stored, and refreshed?"},
+        {"id": "q7", "kind": "extensibility", "q": "How do I use PocketBase as a Go framework to register a custom route plus an on-record-create hook?"},
+        {"id": "q8", "kind": "security_discovery", "q": "Where is user input validated, and where are collection API access rules enforced before a query runs?"},
+        {"id": "q9", "kind": "public_api", "q": "As an external app, how do I authenticate and then list and filter records over the REST API?"},
+        {"id": "q10", "kind": "test_verification", "q": "Where are the tests for the record CRUD API, and what do they assert about access rules?"}
+      ]
+    }
+  ],
+  "scoring": {
+    "pr_localization": "For each PR task, run PRISM retrieval on the PR's `what` text against the repo indexed at the PR base commit. Score file-localization recall@k and precision against gold_files. This is deterministic and needs no agent loop, so it is cheap and reproducible - the property Graft's own numbers lack.",
+    "questions": "Questions have no published gold files in Graft's README (they graded by hand: 'whether the answer pointed to the right files and functions'). Treat them as UNSCORED by default. Do not invent gold answers and then claim a win against them."
+  },
+  "honesty_notes": [
+    "Graft's published figures are NOT reproducible: the repo contains zero benchmark/eval/harness files. Any PRISM-vs-Graft comparison must therefore compare PRISM against Graft's CLAIMED numbers, or re-run both arms locally. Never present Graft's README numbers as independently verified.",
+    "The 10 questions were graded by a human rubric Graft did not publish. Scoring PRISM against a rubric we author ourselves and then declaring victory is the candidate-controls-judge failure. Keep them unscored unless an independent grader is wired.",
+    "PR-task ground truth (the files maintainers touched) IS objective and public, so the pr_localization arm is the only leg that supports a claim without an independent judge."
+  ]
+}
