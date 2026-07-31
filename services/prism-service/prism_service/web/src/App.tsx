@@ -2,8 +2,9 @@ import { useEffect, useState, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { AnimatePresence } from "motion/react";
 import { resolveInitialProject } from "@/lib/project";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import ClaimPage from "@/pages/ClaimPage";
+import KeyGatePage from "@/pages/KeyGatePage";
 import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
@@ -39,26 +40,54 @@ export default function App() {
   // animate out. The single flex-1 overflow-y-auto scroll container is
   // preserved as the wrapper, and the two <Navigate> redirects are untouched.
   const location = useLocation();
+  // Bumped after a successful sign-in so the boot probe re-runs with the key.
+  const [authAttempt, setAuthAttempt] = useState(0);
   // CLAIM GATE (task fa52ba9e): the first time PRISM opens after auto-updating
   // from a credential-free build, the instance is UNCLAIMED — show only the
   // claim screen until the existing owner claims it. `null` = still checking.
   const [claimed, setClaimed] = useState<boolean | null>(null);
+  // REMOTE SIGN-IN (task 4367c12f): reached across the network, the server
+  // answers 401 until this browser proves the owner's access key. That is the
+  // ONLY thing that raises this flag — on the machine running PRISM the server
+  // trusts loopback and nobody is ever asked.
+  const [needsKey, setNeedsKey] = useState(false);
   useEffect(() => {
     let cancel = false;
     api.get<{ claimed: boolean }>("/api/auth/claim-status")
-      .then((s) => { if (!cancel) setClaimed(!!s.claimed); })
-      // Fail OPEN so a status glitch never locks the owner out of their own
-      // instance — the worst case is the app loads (data safety over a gate).
-      .catch(() => { if (!cancel) setClaimed(true); });
+      .then((s) => { if (!cancel) { setNeedsKey(false); setClaimed(!!s.claimed); } })
+      .catch((err) => {
+        if (cancel) return;
+        // A 401 is not a glitch, it is the server asking who you are.
+        if (err instanceof ApiError && err.status === 401) {
+          setNeedsKey(true);
+          setClaimed(true);
+          return;
+        }
+        // Anything else fails OPEN so a status glitch never locks the owner
+        // out of their own instance (data safety over a gate).
+        setClaimed(true);
+      });
     return () => { cancel = true; };
-  }, []);
+  }, [authAttempt]);
   // Cold-start resolver (v6.3.23): on first mount with no persisted project
   // and no ?project= deep-link, land on the busiest non-'default' project so
   // /conductor opens on real work instead of the empty 'default' blank state.
-  useEffect(() => { if (claimed) void resolveInitialProject(); }, [claimed]);
+  // Must wait for a SIGNED-IN state, not merely a claimed one. Signing in
+  // remotely does not change `claimed` (the key gate already set it true), so
+  // keying this on `claimed` alone left the resolver's 401'd first attempt as
+  // the only one — and the app landed on the empty 'default' project looking
+  // exactly like the blank dashboard this whole change set out to fix.
+  useEffect(() => {
+    if (claimed && !needsKey) void resolveInitialProject();
+  }, [claimed, needsKey, authAttempt]);
 
   if (claimed === null) {
     return <div className="h-full w-full bg-[color:var(--background-base)]" />;
+  }
+  // Ahead of the claim gate: without a credential the server will not tell us
+  // whether the instance is claimed, so there is nothing to decide yet.
+  if (needsKey) {
+    return <KeyGatePage onAuthed={() => setAuthAttempt((n) => n + 1)} />;
   }
   if (!claimed) {
     return <ClaimPage onClaimed={() => setClaimed(true)} />;

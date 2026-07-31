@@ -135,6 +135,13 @@ def _make_task(task_svc, cond, oracle: str, **kw):
                         likely_misfire=kw.pop("likely_misfire", _MISFIRE),
                         proof_type=kw.pop("proof_type", "test"),
                         completion_proof=kw.pop("completion_proof", ""), **kw)
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this oracle-receipt walk (unrelated to premise content) can
+    # leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising the oracle EvidenceReceipt "
+        "tooth, not a real premise claim - UNVERIFIED\n"))
     _walk_to_green_gate(cond, t.id)
     return t
 

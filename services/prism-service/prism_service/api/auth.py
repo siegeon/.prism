@@ -48,7 +48,10 @@ def current_principal(request: Request) -> Principal:
     if isinstance(resolved, Principal):
         return resolved
     try:
-        resolved = _auth().resolve_principal(request.headers.get("authorization"))
+        resolved = _auth().resolve_principal(
+            request.headers.get("authorization"),
+            client_host=(request.client.host if request.client else None),
+        )
         request.state.principal = resolved
         return resolved
     except AuthenticationRequired as exc:

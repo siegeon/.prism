@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import secrets
 from typing import Optional
@@ -223,16 +224,79 @@ class AuthService:
     def revoke_token(self, token_id: str, user_id: Optional[str] = None) -> bool:
         return self._service.revoke_token(token_id, user_id=user_id)
 
-    def resolve_principal(self, authorization: Optional[str]) -> Principal:
+    LOOPBACK_ALIASES = frozenset({"localhost", "ip6-localhost"})
+    # Starlette's in-process TestClient reports its peer as the literal
+    # "testclient" — never a real socket, so it cannot be a remote caller.
+    # Named explicitly rather than trusting every unparseable host, so the
+    # rule below can fail CLOSED on anything unexpected.
+    NON_SOCKET_HOSTS = frozenset({"testclient"})
+
+    @classmethod
+    def is_loopback(cls, client_host: Optional[str]) -> bool:
+        """True when the caller is on the machine running PRISM.
+
+        ``None``/empty means "no peer information" — a direct in-process call,
+        not a socket — and stays trusted so local-mode callers keep working.
+        Anything that is neither loopback nor a known in-process harness is
+        treated as REMOTE, including a hostname we cannot parse: a security
+        rule that guesses "probably local" is not a rule. In production
+        ``request.client.host`` comes straight off the socket and is always an
+        IP address, so the parse only fails under a test harness.
+        """
+        if client_host is None:
+            return True
+        host = client_host.strip().lower()
+        if not host:
+            return True
+        if host in cls.LOOPBACK_ALIASES or host in cls.NON_SOCKET_HOSTS:
+            return True
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        mapped = getattr(addr, "ipv4_mapped", None)
+        if mapped is not None:
+            addr = mapped
+        return addr.is_loopback
+
+    def _local_owner_principal(self) -> Principal:
+        return Principal(
+            user_id=self.LOCAL_USER_ID,
+            email=self.LOCAL_EMAIL,
+            display_name=self.LOCAL_DISPLAY_NAME,
+            mode="local",
+            role="owner",
+        )
+
+    def resolve_principal(
+        self,
+        authorization: Optional[str],
+        client_host: Optional[str] = None,
+    ) -> Principal:
         mode = self.mode
         if mode == "local":
-            return Principal(
-                user_id=self.LOCAL_USER_ID,
-                email=self.LOCAL_EMAIL,
-                display_name=self.LOCAL_DISPLAY_NAME,
-                mode="local",
-                role="owner",
-            )
+            # The machine running PRISM is unchanged: no credential needed.
+            if self.is_loopback(client_host):
+                return self._local_owner_principal()
+            # Anywhere else IS a remote caller. The daemon binds 0.0.0.0, so
+            # without this every peer on the network resolved to the owner.
+            # The credential is the key already surfaced at /api/auth/my-key.
+            secret = self._bearer_secret(authorization)
+            if secret is None:
+                raise AuthenticationRequired(
+                    "this PRISM is being reached over the network, so it needs "
+                    "your access key. Send it as 'Authorization: Bearer <key>' "
+                    "— copy the key from Settings on the machine running PRISM."
+                )
+            token_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+            user = self._service.user_for_token_hash(token_hash)
+            if user is None or user.id != self.LOCAL_USER_ID:
+                raise AuthenticationRequired(
+                    "that access key is not valid for this PRISM. Copy a fresh "
+                    "one from Settings on the machine running PRISM, or rotate "
+                    "it there if it may have leaked."
+                )
+            return self._local_owner_principal()
 
         secret = self._bearer_secret(authorization)
         if secret is None:

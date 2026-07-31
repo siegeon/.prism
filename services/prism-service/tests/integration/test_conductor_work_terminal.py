@@ -53,6 +53,13 @@ def _drive_to_done(cond, task_svc, task_id: str) -> None:
     test-shaped proof (satisfies the proof-carrying artifact tooth)."""
     from prism_service.models.workflow import WORKFLOW_STEPS
 
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this terminal/`done`-contract walk (unrelated to premise
+    # content) can leave review_previous_notes.
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising the terminal/`done` "
+        "contract, not a real premise claim - UNVERIFIED\n"))
     proof = "independent re-run: pytest -q -> 3 passed / 0 failed (all green)"
     guard = len(WORKFLOW_STEPS) * 3
     seat = 0

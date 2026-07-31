@@ -92,6 +92,13 @@ def _drive_to_red_gate(task_svc, cond, task_id):
     """Walk a fresh task up to the red_gate step (gate_state='pending'),
     clearing the earlier story/plan gates (task 8579d49e) with a plain
     approve (no verifier attached -> trust-caller)."""
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this admin-surface walk (unrelated to premise content) can
+    # leave review_previous_notes.
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising the conductor gate/advance "
+        "admin surfaces, not a real premise claim - UNVERIFIED\n"))
     for _ in range(20):
         t = task_svc.get(task_id)
         if t.workflow_step == "red_gate":

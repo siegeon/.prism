@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.9.2"
+PRISM_VERSION = "7.10.0"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.0: YOU CAN SIGN IN FROM ANOTHER MACHINE, AND A STRANGER CANNOT "
+    "[task 4367c12f]. The daemon binds 0.0.0.0, so 'local mode' never meant "
+    "'only reachable locally' - it meant EVERY caller resolved to the owner "
+    "without presenting anything, so any peer on the network could read and "
+    "change everything, while the owner's own access key was never consulted "
+    "and there was nothing to sign in WITH. Now: the machine running PRISM is "
+    "unchanged (loopback needs no credential), and any other peer must send "
+    "the access key from Settings. Enforced at the app boundary, because only "
+    "5 of 34 api modules took the per-route principal dependency - tasks, "
+    "brain, memory and conductor did not. The MCP endpoint is closed the same "
+    "way. The SPA now shows a sign-in screen instead of failing blank. "
+    "UPGRADE NOTE: if you reach PRISM over the network, copy your key from "
+    "Settings on the machine running it. "
     "v7.9.0: TEN FIXES FOR THE WORK LOOP. Pull requests no longer arrive as tasks, an imported issue carries its real body, a finished task can close its GitHub issue, and PRISM tasks can become issues. Gates got honest: pinned tests report what actually ran instead of a fabricated 0/N, the gate headline stops claiming evidence it lacks, a visual oracle no longer passes on a probe that cannot see it, and a judge running uncommitted policy code says so. Plus: a task worktree can run the real typecheck, test order cannot leak a null adapter, and mcp is capped below 2.0 so CI installs a working SDK. "
     "v7.8.2: REMOVING A TASK WORKTREE NO LONGER DESTROYS node_modules "
     "[task 0384b04d]. remove_workspace's `git worktree remove --force` "

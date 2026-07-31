@@ -56,6 +56,13 @@ def _task_svc(pid):
 def test_advance_into_draft_story_returns_rubric(tmp_path, monkeypatch):
     pid = _isolated_project(tmp_path, monkeypatch)
     tid = _call("task_create", {"title": "feature"}, pid)["id"]
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this rubric-on-advance walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    _task_svc(pid).update(tid, premise_notes=(
+        "## Premises\n- fixture walk exercising the rubric-on-advance "
+        "response shape, not a real premise claim - UNVERIFIED\n"))
     _call("conductor_advance", {"id": tid, "session_id": "test-sid"}, pid)
     res = _call("conductor_advance", {"id": tid, "session_id": "test-sid"}, pid)
     assert res["to_step"] == "draft_story"
