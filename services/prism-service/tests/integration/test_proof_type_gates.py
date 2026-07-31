@@ -74,6 +74,13 @@ def _walk_to(cond, task_svc, task_id, target_gate, override=False):
     override=True a DISTINCT actor per clear avoids the self-override guard
     (verifier-driven path). Stops with target_gate pending."""
     from prism_service.models.workflow import WORKFLOW_STEPS
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this proof_type walk (unrelated to premise content) can leave
+    # review_previous_notes.
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising proof_type-aware gate "
+        "dispatch, not a real premise claim - UNVERIFIED\n"))
     target_idx = next(i for i, s in enumerate(WORKFLOW_STEPS)
                       if s["id"] == target_gate)
     guard, n = (target_idx + 1) * 3, 0

@@ -56,6 +56,13 @@ def test_advance_writes_agent_run_with_role_model_tokens(tmp_path):
 
     task_svc, cond, scores_db = _services(tmp_path)
     t = task_svc.create(title="attribute the driver")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this role/model/token attribution walk (unrelated to premise
+    # content) can leave review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising role/model/token "
+        "attribution, not a real premise claim - UNVERIFIED\n"))
 
     # Two transitions so a real (non-empty) step is both entered and left.
     r1 = cond.advance_task(t.id, session_id="S-attr", model="test-model-x")
@@ -88,6 +95,13 @@ def test_every_written_run_role_matches_its_step(tmp_path):
 
     task_svc, cond, scores_db = _services(tmp_path)
     t = task_svc.create(title="role matches step")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this walk (unrelated to premise content) can leave
+    # review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising role/model/token "
+        "attribution, not a real premise claim - UNVERIFIED\n"))
     for _ in range(3):
         res = cond.advance_task(t.id, session_id="S-attr", model="test-model-x")
         if not res.get("ok"):
@@ -109,6 +123,13 @@ def test_per_role_aggregate_groups_the_roles(tmp_path):
 
     task_svc, cond, scores_db = _services(tmp_path)
     t = task_svc.create(title="per-role rollup")
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this walk (unrelated to premise content) can leave
+    # review_previous_notes.
+    task_svc.update(t.id, premise_notes=(
+        "## Premises\n- fixture walk exercising role/model/token "
+        "attribution, not a real premise claim - UNVERIFIED\n"))
     for _ in range(3):
         res = cond.advance_task(t.id, session_id="S-attr", model="test-model-x")
         if not res.get("ok"):

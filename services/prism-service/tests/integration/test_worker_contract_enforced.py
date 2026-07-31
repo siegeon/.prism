@@ -64,6 +64,13 @@ def _drive_to_step(cf, task_svc, task_id, project, target_step,
     start = cf.flow_start(cf.Ident(task_id=task_id, session_id=builder),
                           project=project)
     assert start["ok"] is True, start
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this contract-enforcement walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising worker-contract "
+        "enforcement, not a real premise claim - UNVERIFIED\n"))
     seat = 0
     guard = 40
     while True:

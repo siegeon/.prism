@@ -50,6 +50,13 @@ def _walk_to_gate(cond, task_id: str, gate_id: str) -> None:
     """Advance to `gate_id` (pending), clearing intermediate gates with a
     DISTINCT throwaway actor each (a reused actor would itself trip the
     same-actor guard on the next gate)."""
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this gate role-enforcement walk (unrelated to premise
+    # content) can leave review_previous_notes.
+    cond._task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising distinct-actor gate "
+        "enforcement, not a real premise claim - UNVERIFIED\n"))
     target_idx = next(i for i, s in enumerate(_workflow()) if s["id"] == gate_id)
     guard = (target_idx + 1) * 3
     cleared = 0
