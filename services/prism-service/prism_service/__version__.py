@@ -13,11 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.0"
+PRISM_VERSION = "7.10.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "v7.10.0: YOU CAN SIGN IN FROM ANOTHER MACHINE, AND A STRANGER CANNOT "
+    "v7.10.1: A SECOND MACHINE CAN REACH YOUR PRISM [task b064db4e]. The "
+    "first-run screen now offers a second door, 'connect to an existing "
+    "PRISM', beside 'claim this one', so a fresh install stops inviting you "
+    "to claim a second empty instance instead of reaching the one holding "
+    "your work. Connect navigates this browser to the address you type; the "
+    "target instance's own sign-in screen still takes the key, so no second "
+    "credential path and no new exposure. An install that is genuinely empty "
+    "now SAYS it is new and empty and that nothing is missing, instead of "
+    "painting 0/0/0, 'No activity yet.' and 'All indexes current.'. "
+    "v7.10.0:YOU CAN SIGN IN FROM ANOTHER MACHINE, AND A STRANGER CANNOT "
     "[task 4367c12f]. The daemon binds 0.0.0.0, so 'local mode' never meant "
     "'only reachable locally' - it meant EVERY caller resolved to the owner "
     "without presenting anything, so any peer on the network could read and "

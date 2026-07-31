@@ -6,6 +6,7 @@ import { Page, Card, SectionLabel, Empty, Skeleton } from "@/components/ui";
 import { Lozenge } from "@/components/Lozenge";
 import { PlotFigure, Sparkline, TONE, plotBase } from "@/components/Chart";
 import { fmtTokens } from "@/lib/format";
+import ConnectExistingPrism from "@/components/ConnectExistingPrism";
 
 type State = {
   health: {
@@ -74,7 +75,7 @@ type Drift = { understand?: boolean; graph?: boolean; brain?: boolean };
 // Drift / staleness card: shows which source-derived indexes have fallen
 // behind the project's pinned SHA, with a re-sync action wired to
 // POST /api/staleness/resync (rebuilds the graph + advances last_analyzed_sha).
-function StalenessCard({ project }: { project: string }) {
+function StalenessCard({ project, nothingIndexed = false }: { project: string; nothingIndexed?: boolean }) {
   const [drift, setDrift] = useState<Drift>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -127,9 +128,31 @@ function StalenessCard({ project }: { project: string }) {
         <Row label="brain" v={drift.brain ? 1 : 0} bad={Boolean(drift.brain)} />
       </div>
       <div className="text-2xs opacity-60 mt-2">
-        {note ?? (anyStale ? "Some indexes are behind the pinned SHA — re-sync to rebuild." : "All indexes current.")}
+        {note ?? (nothingIndexed
+          ? "Nothing is indexed on this install yet, so there is nothing to be behind."
+          : anyStale ? "Some indexes are behind the pinned SHA — re-sync to rebuild." : "All indexes current.")}
       </div>
     </Card>
+  );
+}
+
+/**
+ * The honest zero-state (task b064db4e, AC-4).
+ *
+ * A hydrated install with nothing in it used to render 0/0/0 and "No activity
+ * yet.", which is indistinguishable from "your work vanished". That ambiguity
+ * cost the owner an hour on a second machine. When we KNOW the instance is
+ * genuinely empty, say which of the two it is, and offer the way out.
+ */
+function FreshInstallPanel() {
+  return (
+    <div className="rounded-md border border-dashed border-[color:var(--border-default)] px-5 py-6">
+      <div className="text-[15px] font-bold mb-2">This PRISM is new and empty.</div>
+      <p className="text-[14px] leading-relaxed text-[color:var(--text-secondary)] max-w-[52ch]">
+        Nothing is missing. This install has never indexed a project or recorded a task, so there is no history to show yet. If your work lives on another machine, reach that PRISM instead of building a second one here.
+      </p>
+      <ConnectExistingPrism compact />
+    </div>
   );
 }
 
@@ -224,6 +247,15 @@ export default function DashboardPage() {
     } as Plot.PlotOptions;
   }, [act]);
 
+  // Is this install genuinely EMPTY, as opposed to not-fetched-yet? Derived
+  // from the HYDRATED counts api/dashboard.py returns, never from `data`
+  // being null, which is the "we don't know" state the skeletons cover.
+  const instanceEmpty = useMemo(() => {
+    const k = data?.kpis;
+    if (!k) return false;
+    return (k.brain_docs + k.entities + k.memories + k.tasks_active) === 0;
+  }, [data]);
+
   const health = data?.health;
   const q = act?.queries;
   const zeroPct = q && q.total ? Math.round((q.zero / q.total) * 100) : 0;
@@ -234,17 +266,20 @@ export default function DashboardPage() {
     <Page>
       {/* Hero — the brain's pulse over time */}
       <Card raised>
+        {/* Skeleton ONLY while unhydrated; once the flags flip the real state
+            must show through, genuine emptiness included (never mask it).
+            Three states, not two: unknown, empty-and-new, and has-history. */}
         <SectionLabel>Brain activity · last 14 days</SectionLabel>
-        {/* Skeleton ONLY while unhydrated; once actLoaded flips the real
-            empty state must show through (never mask true emptiness). */}
-        {!actLoaded
+        {!actLoaded || !stateLoaded
           ? <Skeleton className="h-[210px] w-full" />
-          : pulse
-            ? <PlotFigure options={pulse} className="w-full" />
-            : <Empty>No activity yet.</Empty>}
+          : instanceEmpty
+            ? <FreshInstallPanel />
+            : pulse
+              ? <PlotFigure options={pulse} className="w-full" />
+              : <Empty>No activity yet.</Empty>}
       </Card>
 
-      <StalenessCard project={project} />
+      <StalenessCard project={project} nothingIndexed={instanceEmpty} />
 
       {/* Trend KPIs — movement, not static inventory */}
       <section className="flex flex-wrap gap-3">

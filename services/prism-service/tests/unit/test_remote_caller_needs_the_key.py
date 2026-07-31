@@ -148,3 +148,36 @@ def test_remote_boot_routes_stay_reachable(path):
 def test_loopback_is_unchanged_by_the_guard(path):
     assert _guard(path, "127.0.0.1") == 200, \
         "the machine running PRISM must keep working with no credential"
+
+
+# ---------------------------------------------------------------------------
+# Task b064db4e — "A second machine can reach your PRISM".
+#
+# That slice ships DISCOVERY (a connect door on the first-run screen) on top of
+# the guard above. Discovery must never soften the guard, so the NEGATIVE half
+# of its oracle is asserted here, in the same run as the positive: the blank
+# credential a person actually produces (an empty field, a "Bearer " with
+# nothing after it) is refused exactly like a missing one, and the only thing
+# the connect path is allowed to rely on is the un-protected SPA shell.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("header", ["", " ", "Bearer", "Bearer ", "Bearer  ",
+                                    "bearer ", "Basic hunter2"])
+def test_a_blank_or_malformed_credential_is_refused_like_a_missing_one(header):
+    # An empty address/key field is the most likely thing a person submits by
+    # accident. "Sent a header" must never read as "proved the key".
+    assert _guard("/api/tasks", "10.1.10.42", header) == 401, (
+        f"Authorization={header!r} carries no key, so it must be refused just "
+        "like no header at all")
+
+
+def test_the_connect_door_relies_only_on_the_unprotected_spa_shell():
+    """Connect = point machine B's browser at machine A (plan OQ-1), which
+    works ONLY because the shell itself is not a protected path
+    (_protected_path, api/security.py:67-73) while every data route is. If this
+    ever flips, the connect affordance ships a dead end."""
+    assert _guard("/", "10.1.10.42") == 200, (
+        "machine A's SPA shell must load for a remote browser, or there is no "
+        "screen on which to ask for the key")
+    assert _guard("/api/dashboard/state", "10.1.10.42") == 401, (
+        "and the data behind it must still be refused until the key is proved")
