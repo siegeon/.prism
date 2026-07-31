@@ -72,7 +72,14 @@ export default function App() {
   // Cold-start resolver (v6.3.23): on first mount with no persisted project
   // and no ?project= deep-link, land on the busiest non-'default' project so
   // /conductor opens on real work instead of the empty 'default' blank state.
-  useEffect(() => { if (claimed) void resolveInitialProject(); }, [claimed]);
+  // Must wait for a SIGNED-IN state, not merely a claimed one. Signing in
+  // remotely does not change `claimed` (the key gate already set it true), so
+  // keying this on `claimed` alone left the resolver's 401'd first attempt as
+  // the only one — and the app landed on the empty 'default' project looking
+  // exactly like the blank dashboard this whole change set out to fix.
+  useEffect(() => {
+    if (claimed && !needsKey) void resolveInitialProject();
+  }, [claimed, needsKey, authAttempt]);
 
   if (claimed === null) {
     return <div className="h-full w-full bg-[color:var(--background-base)]" />;
