@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.2"
+PRISM_VERSION = "7.10.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.3: THE TWO FLAGS THAT SHIPPED DISABLED ARE DECIDED [task "
+    "19e4e7f7]. Owner rule: a capability that ships disabled by default is "
+    "not shipped, so each flag got measured and then either flipped on or "
+    "deleted -- staying off was not an allowed outcome. PRISM_RERANK is now "
+    "'auto': on wherever sentence-transformers is installed, off where it is "
+    "not, so a default install is unchanged (torch is a second OpenMP "
+    "runtime, GH #162) while anyone who installed the [neural] extra finally "
+    "gets what they installed. It is the largest retrieval win available and "
+    "had never been measured: PocketBase r@5 0.5217->0.6275 (p=0.0075), "
+    "FullStackHero 0.4874->0.6401 (p=0.0009). PRISM_RERANK_TOPN was never "
+    "actually a cap -- max(inner, pool_n) raised any request to limit*6, so "
+    "asking for 50 reranked 120 -- and is one now, which is what bounds the "
+    "cost enough to default it on. PRISM_QUERY_DECOMP is REMOVED, not "
+    "switched off: it lost or tied on three corpora including LongMemEval, "
+    "the test built for it, because with no connective present it split any "
+    "query over 12 tokens at its MIDPOINT. The README's '0.94-0.98' front "
+    "page claim (a 50-question smoke crediting that disabled stage) is now "
+    "0.900 on 120 questions of shipped defaults.\n"
     "v7.10.2: A TASK YOU CREATE NOW REACHES GITHUB [task 27e543e0]. The "
     "outbound mirror was complete and unwired: the adapter registered, the "
     "repo was tracked, the sync switch was on, and push_task_creation "

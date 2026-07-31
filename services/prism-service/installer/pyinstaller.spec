@@ -54,7 +54,6 @@ hiddenimports = [
     "prism_service.engines.brain_engine",
     "prism_service.engines.conductor_engine",
     "prism_service.engines.understand_engine",
-    "prism_service.engines.query_decomposer",
     "prism_service.engines.mulch",
     "prism_service.mcp.server",
     "prism_service.mcp.tools",

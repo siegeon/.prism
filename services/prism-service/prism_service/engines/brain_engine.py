@@ -2867,65 +2867,38 @@ class Brain:
         # fused list so there are enough candidates left after dedupe.
         inner = limit * 6 if aggregate else limit * 2
 
-        # PRISM_QUERY_DECOMP (default off): rules-based query decomposition
-        # for candidate generation. When on, run each sub-query through the
-        # same per-index helpers, union per index by best (lowest) rank per
-        # doc_id, then RRF once across the unioned per-index lists. Off-path
-        # is byte-identical to the pre-change behavior. See PLAT-0042.
-        decomp_env = (
-            _os.environ.get("PRISM_QUERY_DECOMP", "off").strip().lower()
-        )
-        decomp_on = decomp_env in ("on", "1", "true", "yes")
-        if decomp_on:
-            from prism_service.engines.query_decomposer import decompose_query
-            sub_queries = decompose_query(query)
-        else:
-            sub_queries = [query]
-
-        def _union_by_best_rank(per_query: list[list[dict]]) -> list[dict]:
-            best: dict[str, tuple[int, dict]] = {}
-            for hits in per_query:
-                for rank, hit in enumerate(hits):
-                    did = hit.get("doc_id")
-                    if did is None:
-                        continue
-                    cur = best.get(did)
-                    if cur is None or rank < cur[0]:
-                        best[did] = (rank, hit)
-            return [item for _, item in sorted(best.values(), key=lambda x: x[0])]
-
+        # QUERY DECOMPOSITION WAS REMOVED HERE (task 19e4e7f7, PLAT-0042
+        # retired). PRISM_QUERY_DECOMP shipped defaulting to "off" and was
+        # measured on three independent corpora before being deleted rather
+        # than left off forever, per the owner's rule that a flag may exist so
+        # a user can turn something OFF, never so they can turn something ON:
+        #
+        #   PocketBase code search   n=115  r@5 -0.0014  McNemar p=1.0
+        #   FullStackHero code search n=119 r@5 +0.0042  McNemar p=1.0
+        #   LongMemEval questions    n=120  r@5 -0.0167  McNemar p=0.7266
+        #
+        # LongMemEval is the test it deserved -- 66% of those questions
+        # decomposed, against 21% of the commit subjects -- and it still lost.
+        # The mechanism is why: with no connective, "decomposition" was a blind
+        # MIDPOINT SPLIT of any query over 12 tokens, so "How many amateur
+        # comedians did I watch perform at the open mic night?" became "How
+        # many amateur comedians did I" + "watch perform at the open mic
+        # night?". Those fragments do widen the candidate pool (pool_recall@50
+        # +0.0333) and then dilute the ranking, which is exactly the shape of
+        # the loss: more gold in the pool, less gold in the top 5.
+        #
+        # Worth keeping if anyone revisits this: the POOL gain was real. A
+        # decomposer that splits on meaning rather than on token count could
+        # convert it. The rules-based v1 could not.
         if mode == "vector" and self.vector_enabled:
-            per_q = [
-                self._vector_search(sq, domain, inner, domains=domains)
-                for sq in sub_queries
-            ]
-            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+            fused = self._vector_search(query, domain, inner, domains=domains)
         elif mode == "bm25":
-            per_q = [
-                self._fts5_search(sq, domain, inner, domains=domains)
-                for sq in sub_queries
-            ]
-            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+            fused = self._fts5_search(query, domain, inner, domains=domains)
         else:
-            bm25_lists = [
-                self._fts5_search(sq, domain, inner, domains=domains)
-                for sq in sub_queries
-            ]
-            vec_lists = (
-                [
-                    self._vector_search(sq, domain, inner, domains=domains)
-                    for sq in sub_queries
-                ]
-                if self.vector_enabled
-                else [[] for _ in sub_queries]
-            )
-            graph_lists = [self._graph_search(sq, inner) for sq in sub_queries]
-            if decomp_on:
-                bm25 = _union_by_best_rank(bm25_lists)
-                vec = _union_by_best_rank(vec_lists) if self.vector_enabled else []
-                graph = _union_by_best_rank(graph_lists)
-            else:
-                bm25, vec, graph = bm25_lists[0], vec_lists[0], graph_lists[0]
+            bm25 = self._fts5_search(query, domain, inner, domains=domains)
+            vec = (self._vector_search(query, domain, inner, domains=domains)
+                   if self.vector_enabled else [])
+            graph = self._graph_search(query, inner)
             fused = reciprocal_rank_fusion(
                 [bm25, vec, graph] if self.vector_enabled else [bm25, graph]
             )

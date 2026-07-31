@@ -64,9 +64,9 @@ Same harness, **LongMemEval R@5** (recall@5 — did the gold memory land in the 
 | Stack | R@5 | Scope |
 |---|---|---|
 | vanilla single-vector RAG **baseline** (potion-base-32M) | **0.524** | full 500 Q |
-| PRISM's current multi-granular + query-decomp stack | **0.94–0.98** | 50-Q smoke (pool@50 = 1.000) |
+| PRISM's shipped multi-granular hybrid stack | **0.900** | 120-Q stratified (pool@50 = 0.900) |
 
-So a vanilla setup scores ~0.52; PRISM's retrieval pipeline lifts that to **0.94–0.98** on the smoke set. PRISM does **not yet** claim to beat the best public coding agents (SWE-bench Verified etc. are not yet officially scored). Full table, the cross-system landscape, and caveats below.
+So a vanilla setup scores ~0.52; PRISM's retrieval pipeline lifts that to **0.90**. That number is what the **defaults** score — nothing to switch on, no environment variables. It replaces an earlier "0.94–0.98" claim that was a 50-question smoke and credited a query-decomposition stage that shipped *disabled*; measured properly, that stage did not help and has been removed (task 19e4e7f7, see `benchmarks/EXPERIMENTS.md`). PRISM does **not yet** claim to beat the best public coding agents (SWE-bench Verified etc. are not yet officially scored). Full table, the cross-system landscape, and caveats below.
 
 ---
 

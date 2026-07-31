@@ -51,7 +51,7 @@ def _make_brain(tmp_path, n_docs: int = 40):
 
 @pytest.fixture
 def clean_env(monkeypatch):
-    for k in ("PRISM_QUERY_DECOMP", "PRISM_SEARCH_MODE", "PRISM_RERANK",
+    for k in ("PRISM_SEARCH_MODE", "PRISM_RERANK",
               "PRISM_RERANK_TOPN", "PRISM_CHUNK_AGG"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("PRISM_FEEDBACK_WEIGHT", "off")
@@ -146,6 +146,42 @@ def test_ac2b_topn_never_exceeds_the_candidates_that_exist(
 
     assert seen and max(seen) <= 5
     assert isinstance(results, list)
+
+
+# ── AC-4: query decomposition is gone, not merely switched off ────────────
+def test_ac4_query_decomposition_is_deleted_not_left_off():
+    """"Staying off" was not an allowed outcome for this flag.
+
+    PRISM_QUERY_DECOMP was measured on three independent corpora and lost or
+    tied on every one (PocketBase n=115 r@5 -0.0014 p=1.0; FullStackHero n=119
+    +0.0042 p=1.0; LongMemEval n=120 -0.0167 p=0.7266), so the code path was
+    removed rather than left as a switch nobody should flip. A flag that
+    survives "off forever" is the exact thing the rule forbids, and a deleted
+    module that something still imports is a crash waiting for a caller.
+    """
+    import importlib.util as ilu
+
+    assert ilu.find_spec("prism_service.engines.query_decomposer") is None, (
+        "query_decomposer still importable; the flag was switched off rather "
+        "than the code path removed")
+
+    source = Path(
+        _SERVICE_ROOT / "prism_service" / "engines" / "brain_engine.py"
+    ).read_text(encoding="utf-8")
+    live = "\n".join(line for line in source.splitlines()
+                     if not line.lstrip().startswith("#"))
+    for gone in ("decompose_query", "_union_by_best_rank", "sub_queries",
+                 'environ.get("PRISM_QUERY_DECOMP"'):
+        assert gone not in live, f"decomposition leftover in search path: {gone}"
+
+
+def test_ac4b_search_still_returns_results_after_the_removal(
+        tmp_path, clean_env):
+    """The single-query path is now the ONLY path — prove it still searches."""
+    brain = _make_brain(tmp_path)
+    hits = brain.search("authentication failure", limit=5)
+    assert hits, "search returned nothing after the decomposition removal"
+    assert all("doc_id" in h for h in hits)
 
 
 # ── AC-3: off still means off ─────────────────────────────────────────────
