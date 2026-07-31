@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import Backdrop from "@/components/Backdrop";
+import ConnectExistingPrism from "@/components/ConnectExistingPrism";
 
 type Claimed = { key: string; id: string; label: string; created_at: string };
 
@@ -83,6 +84,10 @@ export default function ClaimPage({ onClaimed }: { onClaimed: () => void }) {
               </button>
               <span className="text-[12.5px] text-[color:var(--text-muted)] max-w-[20ch]">You won't be asked to sign in again on your own instance.</span>
             </div>
+
+            <hr className="my-7 border-[color:var(--border-default)]" />
+
+            <ConnectExistingPrism />
 
             <hr className="my-7 border-[color:var(--border-default)]" />
 
