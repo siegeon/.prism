@@ -18,6 +18,7 @@ FAILS today because:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _WEB = (Path(__file__).resolve().parent.parent.parent
@@ -108,11 +109,23 @@ def test_detail_description_uses_markdown_not_pre():
         or "components/Markdown" in src, \
         "FR-4: TaskDetailPage must import the shared <Markdown>"
     assert "<Markdown" in src, "FR-4: TaskDetailPage must render <Markdown>"
-    # AC-4: grep for `<pre` no longer matches the description block. The whole
-    # raw whitespace-pre-wrap description <pre> must be gone.
-    assert "whitespace-pre-wrap" not in src, \
-        "AC-4: raw <pre whitespace-pre-wrap> description block must be removed"
-    assert "<pre" not in src, "AC-4: no <pre tag may remain in TaskDetailPage"
+    # AC-4: the DESCRIPTION must not be a raw <pre> dump.
+    #
+    # (narrowed) This pair used to read `"whitespace-pre-wrap" not in src` and
+    # `"<pre" not in src` — a file-WIDE ban on the string. That was only ever
+    # a proxy for "the description block is gone", and it held right up until
+    # the page grew a second, legitimate <pre>: the inline text-artifact
+    # viewer (~L597) that fetches a log/receipt and shows it as monospace
+    # text. A log viewer SHOULD be a <pre whitespace-pre-wrap>; that is the
+    # correct tag for preformatted output. So the old assertions failed on
+    # code that is right, while the actual contract (L1886 renders
+    # <Markdown text={task.description} />) was satisfied the whole time.
+    # Pin the contract itself: no <pre> may wrap the description.
+    assert "<Markdown text={task.description}" in src, \
+        "AC-4: the description must render through <Markdown>, not a raw <pre>"
+    for block in re.findall(r"<pre\b.*?</pre>", src, flags=re.S):
+        assert "task.description" not in block, \
+            "AC-4: the description must not be dumped inside a <pre> block"
 
 
 # ---- FR-5 / AC-5: TaskTextPage description route + /tasks list use Markdown --
