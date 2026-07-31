@@ -29,7 +29,15 @@ REQUIRED_INTERACTIVE = {
     "brain_call_chain",
     "memory_recall",
     "task_next",
-    "workflow_state",
+    # NOT workflow_state. The server-driven queue (task 7b219546) made
+    # `conductor_work` the single loop verb the calling model uses, and
+    # DEMOTED the four driver-pushed verbs it supersedes — workflow_state,
+    # workflow_advance, conductor_advance, conductor_gate — to
+    # tool_profile=all so the default surface stays small. See the comment
+    # on INTERACTIVE_TOOL_NAMES in prism_service/mcp/tools.py. Requiring
+    # workflow_state here contradicted that shipped decision and was the
+    # sole reason this gate failed; conductor_work is what a driver needs.
+    "conductor_work",
     "context_bundle",
     "prism_status",
 }
