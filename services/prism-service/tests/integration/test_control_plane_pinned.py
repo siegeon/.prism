@@ -120,6 +120,13 @@ def _services(tmp_path):
 
 def _advance_to(cond, task_id: str, gate_id: str) -> None:
     """Advance (no gates precede story_gate) until sitting on gate_id."""
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this control-plane walk (unrelated to premise content) can
+    # leave review_previous_notes.
+    cond._task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising control-plane policy "
+        "pinning, not a real premise claim - UNVERIFIED\n"))
     for _ in range(30):
         snap = cond._task_svc.get(task_id)
         if snap.workflow_step == gate_id and snap.gate_state == "pending":
@@ -130,6 +137,13 @@ def _advance_to(cond, task_id: str, gate_id: str) -> None:
 
 def _walk_to_green_gate(cond, task_id: str) -> None:
     from prism_service.models.workflow import WORKFLOW_STEPS
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this control-plane walk (unrelated to premise content) can
+    # leave review_previous_notes.
+    cond._task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising control-plane policy "
+        "pinning, not a real premise claim - UNVERIFIED\n"))
     target = next(i for i, s in enumerate(WORKFLOW_STEPS)
                   if s["id"] == "green_gate")
     guard, cleared = (target + 1) * 3, 0

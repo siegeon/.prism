@@ -45,6 +45,13 @@ def _fresh_task_on_first_step():
     svc.advance_task(task.id, session_id="prep")
     task = svc._task_svc.get(task.id)
     assert task.workflow_step == "review_previous_notes"
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so a "success"/"pass" report on this queue-transition probe
+    # (unrelated to premise content) can leave review_previous_notes.
+    svc._task_svc.update(task.id, premise_notes=(
+        "## Premises\n- fixture probe exercising queue transition "
+        "contracts, not a real premise claim - UNVERIFIED\n"))
     return project, svc, task.id, "review_previous_notes"
 
 

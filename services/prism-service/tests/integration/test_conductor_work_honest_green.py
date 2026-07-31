@@ -94,6 +94,14 @@ def test_bare_loop_drives_real_task_to_done_on_machine_verified_green():
         proof_type="metric",
     )
     task_id = task.id
+    # task 3928b7ac (issue #222 continued): premise_grounded is now
+    # unconditional on its own dedicated task.premise_notes field — seed it
+    # once so this honest-green loop walk (unrelated to premise content)
+    # can leave review_previous_notes.
+    task_svc.update(task_id, premise_notes=(
+        "## Premises\n- fixture walk exercising the bare loop driving a "
+        "task to machine-verified done, not a real premise claim - "
+        "UNVERIFIED\n"))
     seat = 0
 
     try:
