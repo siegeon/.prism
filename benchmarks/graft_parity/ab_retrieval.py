@@ -38,6 +38,7 @@ import argparse
 import asyncio
 import importlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -202,6 +203,17 @@ def mcnemar(a: list[bool], b: list[bool]) -> dict:
             "significant": p < 0.05}
 
 
+def parse_env(pairs: list[str]) -> list[tuple[str, str]]:
+    """['PRISM_RERANK=bge-v2'] -> [('PRISM_RERANK', 'bge-v2')]."""
+    out = []
+    for raw in pairs:
+        name, sep, value = raw.partition("=")
+        if not sep or not name.strip():
+            raise SystemExit(f"--env must be NAME=VALUE, got {raw!r}")
+        out.append((name.strip(), value))
+    return out
+
+
 def load_candidate(spec: str):
     """'package.module:function' -> the function replacing Brain._graph_search."""
     mod_name, _, fn_name = spec.partition(":")
@@ -224,6 +236,14 @@ def main() -> int:
     r = sub.add_parser("run", help="baseline, or A/B against a candidate")
     r.add_argument("--repo", type=Path, required=True)
     r.add_argument("--cases", type=Path, required=True)
+    # ENV-FLIP A/B (task 19e4e7f7). --candidate can only swap a Brain method,
+    # which cannot reach a feature selected by an environment variable
+    # (PRISM_QUERY_DECOMP, PRISM_RERANK). Both are read PER SEARCH CALL inside
+    # Brain.search (brain_engine.py:2841, :2903), so flipping os.environ
+    # between the two arms of ONE process is a true paired comparison over the
+    # SAME index -- the arms differ only in the flag under test.
+    r.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
+                   help="env var applied to the CANDIDATE arm only; repeatable")
     r.add_argument("--candidate", default="",
                    help="module:function replacing Brain._graph_search")
     r.add_argument("--suffix", default=".go")
@@ -262,15 +282,29 @@ def main() -> int:
     print("BASELINE " + json.dumps(base["recall"]) +
           f" top5={base['any_gold_top5']}/{base['n']}")
 
-    if args.candidate:
-        from prism_service.engines.brain_engine import Brain
+    env_overrides = dict(parse_env(args.env))
+    if args.candidate or env_overrides:
         per_base = h.arm(cases, args.limit)  # re-run under identical state
-        original = Brain._graph_search
-        Brain._graph_search = load_candidate(args.candidate)
+        original = None
+        if args.candidate:
+            from prism_service.engines.brain_engine import Brain
+            original = Brain._graph_search
+            Brain._graph_search = load_candidate(args.candidate)
+        prior = {k: os.environ.get(k) for k in env_overrides}
+        os.environ.update(env_overrides)
         try:
             per_cand = h.arm(cases, args.limit)
         finally:
-            Brain._graph_search = original
+            if original is not None:
+                from prism_service.engines.brain_engine import Brain
+                Brain._graph_search = original
+            for k, v in prior.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        if env_overrides:
+            payload["candidate_env"] = env_overrides
         cand = summarize(per_cand)
         test = mcnemar(
             [bool(p["first"] and p["first"] <= 5) for p in per_base],
