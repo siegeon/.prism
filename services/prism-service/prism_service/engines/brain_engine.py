@@ -263,6 +263,41 @@ _RERANKER_PRESETS = {
 }
 
 
+_AUTO_RERANK_PRESET: Optional[str] = None
+
+# What PRISM_RERANK=auto resolves to when the machine can actually run it.
+# ms-marco-MiniLM-L-6-v2 and not bge-v2 because this is the one that was
+# MEASURED (task 19e4e7f7) and it is ~6M params against bge-v2's 570M; the
+# default has to be the configuration whose cost is known.
+_AUTO_RERANK_MODEL = "ms-marco-minilm"
+
+
+def _auto_rerank_preset() -> str:
+    """Resolve PRISM_RERANK=auto once per process.
+
+    WHY auto IS THE DEFAULT (task 19e4e7f7, owner doctrine mx-71dc57): a flag
+    may exist so a user can turn something OFF, never so they have to turn
+    something ON. PRISM_RERANK defaulted to "off", so even a user who had
+    deliberately installed the [neural] extra got no reranking unless they
+    also discovered an environment variable -- while the measurement says
+    reranking is the single largest retrieval win available (r@5 +0.106 on
+    PocketBase p=0.0075, +0.153 on FullStackHero p=0.0009).
+
+    It resolves to "off" when sentence-transformers is absent, which is the
+    DEFAULT install: torch brings a second OpenMP runtime, threadpoolctl's
+    documented unrecoverable deadlock case (GH #162), so it stays an opt-in
+    extra. Deciding here rather than inside _load_reranker keeps that case
+    silent -- the alternative logs "not installed" on every single search.
+    """
+    global _AUTO_RERANK_PRESET
+    if _AUTO_RERANK_PRESET is None:
+        import importlib.util as _ilu
+        _AUTO_RERANK_PRESET = (
+            _AUTO_RERANK_MODEL
+            if _ilu.find_spec("sentence_transformers") is not None else "off")
+    return _AUTO_RERANK_PRESET
+
+
 def _load_reranker(preset: str):
     """Return a cached CrossEncoder for ``preset``, or None on failure.
 
@@ -2895,19 +2930,30 @@ class Brain:
                 [bm25, vec, graph] if self.vector_enabled else [bm25, graph]
             )
 
-        # Optional cross-encoder reranker (PRISM_RERANK=bge-v2|jina-v2|
+        # Cross-encoder reranker (PRISM_RERANK=auto|bge-v2|jina-v2|
         # ms-marco-minilm|off). Rescores the top PRISM_RERANK_TOPN candidates
         # by feeding (query, chunk_content) pairs through a cross-encoder,
         # then replaces that slice of ``fused`` with the reranked order.
+        # DEFAULT auto (task 19e4e7f7): on wherever it can run, off where it
+        # cannot, never a capability the user has to know an env var to reach.
         rerank_preset = (
-            _os.environ.get("PRISM_RERANK", "off").strip().lower()
+            _os.environ.get("PRISM_RERANK", "auto").strip().lower()
         )
+        if rerank_preset == "auto":
+            rerank_preset = _auto_rerank_preset()
         if rerank_preset not in ("", "off", "none") and fused:
             try:
                 pool_n = int(_os.environ.get("PRISM_RERANK_TOPN", "50"))
             except ValueError:
                 pool_n = 50
-            pool_n = max(inner, pool_n)
+            # PRISM_RERANK_TOPN is a CAP, not a floor (task 19e4e7f7). It used
+            # to be raised to ``inner`` (= limit*6 when aggregating), so asking
+            # for 50 silently reranked 120 at limit=20 and the only knob for
+            # the single most expensive step in search did nothing. Candidates
+            # past the cap keep their RRF order, which is the ordinary
+            # rerank-a-pool design; the cap is what makes the cost bounded and
+            # therefore defaultable.
+            pool_n = max(1, min(pool_n, len(fused)))
             pool = fused[:pool_n]
             reranked = self._rerank_candidates(query, pool, rerank_preset)
             if reranked is not None:

@@ -43,6 +43,14 @@ ARMS: list[tuple[str, dict]] = [
     ("rerank_minilm", {"PRISM_RERANK": "ms-marco-minilm"}),
     ("rerank_bge", {"PRISM_RERANK": "bge-v2"}),
     ("both", {"PRISM_QUERY_DECOMP": "on", "PRISM_RERANK": "ms-marco-minilm"}),
+    # Pool sweep (task 19e4e7f7). Reranking is the single most expensive step
+    # in search, and its cost is linear in the pool. "Turn it on by default"
+    # is only an honest proposal if there is a pool size that keeps most of
+    # the recall win at a latency a person will accept, so measure the curve
+    # instead of picking 50 because it was already the written default.
+    ("rerank_top12", {"PRISM_RERANK": "ms-marco-minilm", "PRISM_RERANK_TOPN": "12"}),
+    ("rerank_top25", {"PRISM_RERANK": "ms-marco-minilm", "PRISM_RERANK_TOPN": "25"}),
+    ("rerank_top50", {"PRISM_RERANK": "ms-marco-minilm", "PRISM_RERANK_TOPN": "50"}),
 ]
 
 
