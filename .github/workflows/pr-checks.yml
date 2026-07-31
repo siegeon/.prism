@@ -60,8 +60,11 @@ jobs:
         # for 26 minutes before it was cancelled by hand, and the log told
         # us nothing because logs are unavailable mid-run).
         timeout-minutes: 12
-        # --faulthandler-timeout dumps the stack of EVERY thread when a
-        # single test overruns, so a hang names itself instead of leaving
-        # a percentage to guess from. Built into pytest; no new dependency.
-        # 120s is ~50x the slowest test in this suite (whole run is ~145s).
-        run: python -m pytest tests/unit -q --faulthandler-timeout=120
+        # faulthandler_timeout dumps the stack of EVERY thread when a single
+        # test overruns, so a hang names itself instead of leaving a
+        # percentage to guess from. Built into pytest; no new dependency.
+        # In pytest 9 it is an INI option, so it must be passed with -o, not
+        # as --faulthandler-timeout (that spelling exits 4, "unrecognized
+        # arguments" — verified on this runner).
+        # 120s is ~50x the slowest test here; the whole suite is ~145s.
+        run: python -m pytest tests/unit -q -o faulthandler_timeout=120
