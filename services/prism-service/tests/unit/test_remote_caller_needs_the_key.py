@@ -89,3 +89,62 @@ def test_a_rotated_key_locks_the_old_one_out(local_auth):
     assert who.user_id == AuthService.LOCAL_USER_ID
     with pytest.raises(AuthenticationRequired):
         local_auth.resolve_principal(f"Bearer {stale}", client_host="10.1.10.42")
+
+
+# --- the guard must cover EVERY route, not the 5 that opt in ---------------
+# Only 5 of 34 api modules take the current_principal dependency; tasks,
+# brain, memory and conductor do not, and those are the ones holding the
+# data. So the rule is pinned at the app boundary, through real requests.
+
+def _guard(path: str, peer: str, authorization: str | None = None):
+    """Run the real app-level dependency against one request.
+
+    Exercised directly rather than through TestClient because the app's MCP
+    lifespan may only start once per process, so a test cannot stand up
+    several clients with different peer addresses.
+    """
+    import asyncio
+
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from prism_service.api.security import enforce_team_boundary
+
+    headers = []
+    if authorization is not None:
+        headers.append((b"authorization", authorization.encode()))
+    scope = {
+        "type": "http", "http_version": "1.1", "method": "GET",
+        "path": path, "raw_path": path.encode(), "root_path": "",
+        "scheme": "http", "query_string": b"", "headers": headers,
+        "client": (peer, 51000), "server": ("10.1.10.136", 8888),
+    }
+    try:
+        asyncio.run(enforce_team_boundary(Request(scope)))
+    except HTTPException as exc:
+        return exc.status_code
+    return 200
+
+
+@pytest.mark.parametrize("path", [
+    "/api/tasks",          # the board — no current_principal dependency
+    "/api/brain/search",   # project knowledge
+    "/api/auth/my-key",    # must never hand out the key to prove the key
+    "/sse/sessions",       # the event stream leaks activity too
+])
+def test_remote_data_routes_refuse_an_unauthenticated_caller(path):
+    assert _guard(path, "10.1.10.42") == 401, (
+        f"{path} must not serve a remote caller that has not proved the key")
+
+
+@pytest.mark.parametrize("path", ["/api/version", "/api/auth/mode"])
+def test_remote_boot_routes_stay_reachable(path):
+    # The SPA on the second machine must load far enough to ASK for a key.
+    assert _guard(path, "10.1.10.42") == 200, \
+        f"{path} must stay reachable so the login screen can boot"
+
+
+@pytest.mark.parametrize("path", ["/api/tasks", "/api/auth/my-key"])
+def test_loopback_is_unchanged_by_the_guard(path):
+    assert _guard(path, "127.0.0.1") == 200, \
+        "the machine running PRISM must keep working with no credential"

@@ -79,6 +79,14 @@ _PUBLIC_PATHS = {
     "/api/auth/bootstrap",
     "/sse/live",
 }
+# What a REMOTE caller may reach in local mode before proving the key. Kept to
+# the minimum the SPA needs to boot far enough to ASK for a key: which build is
+# running, and which auth mode. Deliberately NOT /api/auth/my-key — that hands
+# the key out, and a key you can fetch without a key is not a credential.
+_REMOTE_PUBLIC_PATHS = {
+    "/api/version",
+    "/api/auth/mode",
+}
 _AUTH_ONLY_PREFIXES = {
     "/api/auth",
     "/api/workspaces",
@@ -168,19 +176,45 @@ async def enforce_team_boundary(request: Request):
 
     auth = AuthService(get_workspace_service())
     try:
-        if auth.mode != "team":
-            return None
+        mode = auth.mode
     except AuthenticationRequired as exc:
         raise HTTPException(401, str(exc) or "authentication required")
 
     path = request.url.path.rstrip("/") or "/"
+
+    if mode != "team":
+        # LOCAL MODE, REMOTE CALLER (task 4367c12f). The daemon binds 0.0.0.0,
+        # so "local mode" never meant "only reachable locally" — it meant
+        # "everyone is the owner", and every peer on the network got the
+        # owner's data. Enforced HERE rather than per-route because only 5 of
+        # 34 api modules take the current_principal dependency; tasks, brain,
+        # memory and conductor do not, and those hold the data.
+        if request.method == "OPTIONS" or not _protected_path(path):
+            return None
+        if path in _REMOTE_PUBLIC_PATHS:
+            return None
+        client_host = request.client.host if request.client else None
+        if AuthService.is_loopback(client_host):
+            return None  # the machine running PRISM is unchanged
+        try:
+            request.state.principal = auth.resolve_principal(
+                request.headers.get("authorization"), client_host=client_host)
+        except AuthenticationRequired as exc:
+            raise HTTPException(
+                401, str(exc) or "authentication required",
+                headers={"WWW-Authenticate": "Bearer"})
+        return None
+
     if request.method == "OPTIONS" or not _protected_path(path):
         return None
     if path in _PUBLIC_PATHS:
         return None
 
     try:
-        principal = auth.resolve_principal(request.headers.get("authorization"))
+        principal = auth.resolve_principal(
+            request.headers.get("authorization"),
+            client_host=(request.client.host if request.client else None),
+        )
     except AuthenticationRequired as exc:
         raise HTTPException(
             401,

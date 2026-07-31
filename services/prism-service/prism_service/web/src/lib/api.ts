@@ -4,17 +4,39 @@
  * Same-origin in prod (FastAPI serves the SPA). Vite dev proxies /api,
  * /sse, /graph to the PRISM service via vite.config.ts.
  */
+import { authHeaders } from "@/lib/auth";
+// Carries an HTTP status so callers can tell "not signed in" (401) apart from
+// a genuine failure. Without it every error was an opaque string and the shell
+// could not know to ask for the access key.
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function fetchJSON<T = unknown>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { accept: "application/json", ...(init?.headers ?? {}) },
+    // authHeaders() is empty on the machine running PRISM (the server trusts
+    // loopback) and carries the bearer key when reached across the network.
+    headers: {
+      accept: "application/json",
+      ...authHeaders(),
+      ...(init?.headers ?? {}),
+    },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+    throw new ApiError(
+      res.status,
+      `${res.status} ${res.statusText}: ${text.slice(0, 200)}`,
+    );
   }
   return res.json() as Promise<T>;
 }

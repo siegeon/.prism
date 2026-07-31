@@ -270,13 +270,19 @@ async def handle_mcp(scope, receive, send):
         if key.lower() == b"authorization":
             authorization = value.decode("latin-1")
             break
+    # The MCP endpoint is bound on the same 0.0.0.0 socket as /api, so it needs
+    # the SAME remote rule: loopback trusted, anyone else presents the key.
+    # Closing /api alone would have left this wide open (ASGI gives the peer as
+    # scope["client"] = (host, port); a missing entry means no peer info).
+    peer = scope.get("client") or None
+    client_host = peer[0] if peer else None
     try:
         principal = AuthService(get_workspace_service()).resolve_principal(
-            authorization or None
+            authorization or None, client_host=client_host
         )
-    except AuthenticationRequired:
+    except AuthenticationRequired as exc:
         await JSONResponse(
-            {"error": "authentication required"},
+            {"error": str(exc) or "authentication required"},
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )(scope, receive, send)
