@@ -3284,7 +3284,38 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 session_id=_ask_sid,
                 task_id=_ask_tid,
             )
-            return [TextContent(type="text", text=_json(results))]
+            _body = _json(results)
+            # Honest retrieval savings (task 7ee022cc). Emitted as a
+            # SEPARATE content block so block 0 stays exactly the results
+            # JSON every existing consumer parses, and only when there is
+            # something true to claim -- retrieval_savings returns None
+            # for an unresolvable baseline or a payload that is not
+            # actually smaller than the files it covers.
+            from prism_service.services import retrieval_savings as _rs
+            from prism_service.services.claude_transcripts import (
+                _project_source_path,
+            )
+            # OSError only: a missing/unreadable source root must degrade
+            # to silence, but a coding error here must NOT be swallowed --
+            # a blanket except once hid a NameError and made this feature
+            # look like an honest "nothing to claim".
+            try:
+                _root = _project_source_path(project_id) or ""
+            except OSError:
+                _root = ""
+            _savings = _rs.savings_for(
+                len(_body),
+                _rs.baseline_for(
+                    [r.get("source_file") for r in results
+                     if isinstance(r, dict)],
+                    root=str(_root) or None,
+                ),
+            )
+            if _savings:
+                return [TextContent(type="text", text=_body),
+                        TextContent(type="text",
+                                    text=_json({"savings": _savings}))]
+            return [TextContent(type="text", text=_body)]
 
         if name == "brain_understand":
             from prism_service.services import understand_view
