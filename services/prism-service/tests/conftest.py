@@ -112,6 +112,28 @@ def _prism_data_dir_isolation(request):
 
 
 @pytest.fixture(autouse=True)
+def _pin_reranker_off():
+    """Tests must not inherit whether THIS machine can run a cross-encoder.
+
+    PRISM_RERANK defaults to ``auto`` (task 19e4e7f7): on wherever
+    sentence-transformers is installed, off where it is not. That is right for
+    a product and wrong for a suite -- it would make every search test load a
+    cross-encoder on a dev box with the [neural] extra and skip it in CI,
+    so the same assertion would measure two different pipelines. Pin it off;
+    the tests that are ABOUT reranking set it themselves.
+    """
+    prior = os.environ.get("PRISM_RERANK")
+    os.environ["PRISM_RERANK"] = "off"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("PRISM_RERANK", None)
+        else:
+            os.environ["PRISM_RERANK"] = prior
+
+
+@pytest.fixture(autouse=True)
 def _integration_adapter_registry_isolation():
     """Snapshot/restore api.integrations._adapters around every test
     (task c23e2e7b). That registry is a module-level global that

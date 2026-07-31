@@ -36,11 +36,11 @@ in `services/bench-service/docker-compose.yml`.
 |---|---|---|---|
 | `PRISM_EMBEDDER` | `minilm` | `minilm`, `bge-small`, `jina-code`, `potion`, … | Vector embedder. |
 | `PRISM_SEARCH_MODE` | `hybrid` | `hybrid`, `vector`, `bm25` | Which sub-indexes contribute candidates. |
-| `PRISM_RERANK` | `off` | `bge-v2`, `jina-v2`, `ms-marco-minilm`, `off` | Cross-encoder re-rank of top-N RRF candidates. |
-| `PRISM_RERANK_TOPN` | `50` | int | Pool size for reranker. |
+| `PRISM_RERANK` | `auto` | `auto`, `bge-v2`, `jina-v2`, `ms-marco-minilm`, `off` | Cross-encoder re-rank of top-N RRF candidates. **Task 19e4e7f7** flipped the default from `off` to `auto` — on wherever `sentence-transformers` is installed (the `[neural]` extra), off where it is not, so the capability is never gated behind knowing a variable name. Measured, two corpora built from real git history: PocketBase r@5 0.5217→0.6275 (**+0.1058**, McNemar p=0.0075), FullStackHero r@5 0.4874→0.6401 (**+0.1527**, p=0.0009). Largest retrieval win currently available, and it costs latency — see `PRISM_RERANK_TOPN`. |
+| `PRISM_RERANK_TOPN` | `50` | int | Pool size for the reranker, and a **cap** since task 19e4e7f7 — it used to be raised to `limit*6`, so the only knob on the most expensive step in search did nothing (asking for 50 reranked 120 at `limit=20`). Cost is linear in the pool; recall tracks the number of DISTINCT FILES in it, not chunks (PocketBase: pool 12→5.3 files, 25→9.7, 120→44.8 at 5.5 chunks/file). Hence pool 12 is *worse* than no reranking (−0.0087) while pool 120 is +0.1058. Task 61666a4f proposes de-duplicating the pool by file to buy the same coverage ~2.7× cheaper. |
 | `PRISM_FEEDBACK_WEIGHT` | `0.002` | float, `off` | Up/down-vote weight applied to RRF score. |
 | `PRISM_CHUNK_AGG` | `on` | `on`, `off` | Collapse same-source-file chunks to best per file. |
-| `PRISM_QUERY_DECOMP` | `off` | `on`, `off`, `0`, `1` | **PLAT-0042.** Rules-based query decomposition for candidate generation. Splits compound questions on " and ", " then ", `;` and decomposes long (>12 token) queries; runs each sub-query through every per-index helper, unions per index, then RRF fuses once. Off-path is byte-identical to pre-change behavior. Disable if latency-sensitive — expect ~1.3-1.6× median latency. |
+| ~~`PRISM_QUERY_DECOMP`~~ | *removed* | — | **PLAT-0042, RETIRED by task 19e4e7f7.** Measured on three independent corpora and it never won: PocketBase code search n=115 r@5 −0.0014 (p=1.0), FullStackHero n=119 +0.0042 (p=1.0), LongMemEval n=120 questions −0.0167 (p=0.7266). LongMemEval was the fair test — 66% of those questions decomposed against 21% of commit subjects — and it still lost, at 2.2× the latency. Mechanism: with no connective present, "decomposition" was a blind **midpoint split** of any query over 12 tokens, so *"How many amateur comedians did I watch perform at the open mic night?"* became *"How many amateur comedians did I"* + *"watch perform at the open mic night?"*. The row above it (`plat0042-on-v2-smoke50`, +0.040) is a **50-question smoke, i.e. 2 questions**, and is superseded. One real signal survives the retirement: pool_recall@50 went **+0.0333**, so decomposition genuinely widened the candidate pool and then diluted the ranking. A decomposer that split on meaning rather than token count could convert that; the rules-based v1 could not. |
 
 ## Log entries
 
@@ -137,7 +137,49 @@ in `services/bench-service/docker-compose.yml`.
 - Kept as opt-in env var. Will re-evaluate if we ever build a code-retrieval bench where
   the cross-encoder should have room to move numbers.
 
+### 2026-07-31 — flags that shipped disabled (task 19e4e7f7)
+- Owner rule: a capability that ships disabled by default is not shipped.
+  Audited `prism_service` for flags defaulting to off, found exactly two, and
+  measured both rather than leaving either off. Harness: `graft_parity/
+  flag_ab.py` and `longmemeval/flag_ab.py` — one index per corpus, every arm
+  against that SAME index in the SAME process, flipping only `os.environ`.
+- **`PRISM_RERANK`: off → `auto`.** The largest retrieval win available, and
+  it had never been measured at all. PocketBase r@5 **0.5217 → 0.6275**
+  (+0.1058, McNemar p=0.0075, top-5 hits 63→75/115); FullStackHero r@5
+  **0.4874 → 0.6401** (+0.1527, p=0.0009, 73→90/119). `auto` = on wherever
+  `sentence-transformers` is installed, off where it is not, so the default
+  install is unchanged (torch is a second OpenMP runtime, GH #162).
+- **`PRISM_RERANK_TOPN` was never a cap.** `pool_n = max(inner, pool_n)`
+  raised any requested pool to `limit*6`, so asking for 50 reranked 120. Fixed.
+  Cost is linear in the pool; recall tracks **distinct files** in it, not
+  chunks (PocketBase 5.5 chunks/file → pool 12 = 5.3 files, 25 = 9.7,
+  50 = 18.6, 120 = 44.8). Hence pool 12 is *worse* than no reranking
+  (−0.0087) while pool 50 gets 93% of the full win (+0.0986, p=0.0074).
+  Task 61666a4f: de-duplicate the pool by file for the same coverage ~2.7×
+  cheaper.
+- **What it costs, on the real PRISM corpus, measured not estimated.** Same
+  brain.db, same queries, only the flag changed: `off` mean **0.02 s**,
+  `auto` mean **1.92 s** (2.10 / 1.67 / 1.98). Through the HTTP API a warm
+  reranked `/api/brain/search` is 3.2–4.5 s. That is the price of the recall,
+  and it is the single reason to think twice about this default. Cost scales
+  with `min(TOPN, candidates found)`, so a narrow domain with few candidates
+  stays ~free; a full code corpus does not. `PRISM_RERANK=off` restores the
+  old behaviour exactly, and task 61666a4f is the fix that would bring this to
+  roughly 0.7 s without giving up recall.
+- **`PRISM_QUERY_DECOMP`: removed.** Never won on three corpora — see the
+  flags table above. Supersedes `plat0042-on-v2-smoke50` below, which is 50
+  questions (its +0.040 is 2 questions).
+- NOT measured, stated plainly rather than implied: the Jellyfin corpus and
+  the FullStackHero leg of the pool sweep were both stopped before finishing
+  (machine saturation), and the 401-question LongMemEval run was abandoned
+  after ingest throughput collapsed to ~4 MB/min at ~7.8k of 19.2k sessions.
+  So the rerank decision rests on two corpora and the pool curve on one.
+
 ### 2026-04-25 — plat0042-on-v2-smoke50
+- **SUPERSEDED 2026-07-31 (task 19e4e7f7): query decomposition was removed.**
+  This entry's +0.040 is a 50-question smoke — two questions. Re-measured at
+  n=120 on the same dataset it came out **−0.0167 (p=0.7266)**, and it lost or
+  tied on two code corpora as well. Read the entry as history, not guidance.
 - Query decomposition on the multi-granular + contextual-prefix stack, with
   `PRISM_QUERY_DECOMP=on`. Added a deterministic temporal-name fallback so personal
   memory questions like "What did I do with Rachel on the Wednesday two months ago?"
@@ -146,7 +188,8 @@ in `services/bench-service/docker-compose.yml`.
   pool_recall@50 = 0.980 (49/50), median_ms = 1756.5.
 - Decomp v2 (`plat0042-on-v2-smoke50`): **R@5 = 0.980** (49/50),
   pool_recall@50 = 1.000 (50/50), median_ms = 2576.9 (1.47x baseline).
-- Gate: `benchmarks/assert_thresholds.py` passed. The pool-delta check is now
+- Gate: `benchmarks/assert_thresholds.py` passed — that script existed only to
+  gate this experiment and was deleted with the feature. The pool-delta check is now
   ceiling-aware: it still requires +2 pool sessions when possible, but if the baseline
   has only one miss left, fixing that miss satisfies the gate.
 - Per-type: temporal-reasoning moved from 0.875 to 1.000; multi-session stayed at 1.000

@@ -207,6 +207,28 @@ export async function listConnectorStatus(): Promise<Connector[]> {
   return d.connectors ?? [];
 }
 
+/** Is a NEW PRISM task actually reaching GitHub? (task 27e543e0)
+ *
+ *  Reported link by link, not as one boolean, because the failure this
+ *  closes was a feature that LOOKED shipped and was wired nowhere: when a
+ *  task does not appear on GitHub, the settings page has to be able to say
+ *  which link is missing rather than just "off". */
+export type MirrorStatus = {
+  enabled: boolean;
+  env: string;
+  observer_installed: boolean;
+  adapters: string[];
+  adapter_errors: Record<string, string>;
+  scope: string;
+  sync_enabled: boolean;
+  tracking: string[];
+  ready: boolean;
+};
+
+export async function getMirrorStatus(): Promise<MirrorStatus> {
+  return api.get<MirrorStatus>("/api/integrations/connect/mirror");
+}
+
 /** Begin the OAuth round trip; returns the provider authorize URL to open. */
 export async function startConnect(provider: string): Promise<string> {
   const d = await api.get<{ authorize_url: string }>(

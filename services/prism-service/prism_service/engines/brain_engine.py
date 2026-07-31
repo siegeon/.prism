@@ -263,6 +263,41 @@ _RERANKER_PRESETS = {
 }
 
 
+_AUTO_RERANK_PRESET: Optional[str] = None
+
+# What PRISM_RERANK=auto resolves to when the machine can actually run it.
+# ms-marco-MiniLM-L-6-v2 and not bge-v2 because this is the one that was
+# MEASURED (task 19e4e7f7) and it is ~6M params against bge-v2's 570M; the
+# default has to be the configuration whose cost is known.
+_AUTO_RERANK_MODEL = "ms-marco-minilm"
+
+
+def _auto_rerank_preset() -> str:
+    """Resolve PRISM_RERANK=auto once per process.
+
+    WHY auto IS THE DEFAULT (task 19e4e7f7, owner doctrine mx-71dc57): a flag
+    may exist so a user can turn something OFF, never so they have to turn
+    something ON. PRISM_RERANK defaulted to "off", so even a user who had
+    deliberately installed the [neural] extra got no reranking unless they
+    also discovered an environment variable -- while the measurement says
+    reranking is the single largest retrieval win available (r@5 +0.106 on
+    PocketBase p=0.0075, +0.153 on FullStackHero p=0.0009).
+
+    It resolves to "off" when sentence-transformers is absent, which is the
+    DEFAULT install: torch brings a second OpenMP runtime, threadpoolctl's
+    documented unrecoverable deadlock case (GH #162), so it stays an opt-in
+    extra. Deciding here rather than inside _load_reranker keeps that case
+    silent -- the alternative logs "not installed" on every single search.
+    """
+    global _AUTO_RERANK_PRESET
+    if _AUTO_RERANK_PRESET is None:
+        import importlib.util as _ilu
+        _AUTO_RERANK_PRESET = (
+            _AUTO_RERANK_MODEL
+            if _ilu.find_spec("sentence_transformers") is not None else "off")
+    return _AUTO_RERANK_PRESET
+
+
 def _load_reranker(preset: str):
     """Return a cached CrossEncoder for ``preset``, or None on failure.
 
@@ -2832,82 +2867,66 @@ class Brain:
         # fused list so there are enough candidates left after dedupe.
         inner = limit * 6 if aggregate else limit * 2
 
-        # PRISM_QUERY_DECOMP (default off): rules-based query decomposition
-        # for candidate generation. When on, run each sub-query through the
-        # same per-index helpers, union per index by best (lowest) rank per
-        # doc_id, then RRF once across the unioned per-index lists. Off-path
-        # is byte-identical to the pre-change behavior. See PLAT-0042.
-        decomp_env = (
-            _os.environ.get("PRISM_QUERY_DECOMP", "off").strip().lower()
-        )
-        decomp_on = decomp_env in ("on", "1", "true", "yes")
-        if decomp_on:
-            from prism_service.engines.query_decomposer import decompose_query
-            sub_queries = decompose_query(query)
-        else:
-            sub_queries = [query]
-
-        def _union_by_best_rank(per_query: list[list[dict]]) -> list[dict]:
-            best: dict[str, tuple[int, dict]] = {}
-            for hits in per_query:
-                for rank, hit in enumerate(hits):
-                    did = hit.get("doc_id")
-                    if did is None:
-                        continue
-                    cur = best.get(did)
-                    if cur is None or rank < cur[0]:
-                        best[did] = (rank, hit)
-            return [item for _, item in sorted(best.values(), key=lambda x: x[0])]
-
+        # QUERY DECOMPOSITION WAS REMOVED HERE (task 19e4e7f7, PLAT-0042
+        # retired). PRISM_QUERY_DECOMP shipped defaulting to "off" and was
+        # measured on three independent corpora before being deleted rather
+        # than left off forever, per the owner's rule that a flag may exist so
+        # a user can turn something OFF, never so they can turn something ON:
+        #
+        #   PocketBase code search   n=115  r@5 -0.0014  McNemar p=1.0
+        #   FullStackHero code search n=119 r@5 +0.0042  McNemar p=1.0
+        #   LongMemEval questions    n=120  r@5 -0.0167  McNemar p=0.7266
+        #
+        # LongMemEval is the test it deserved -- 66% of those questions
+        # decomposed, against 21% of the commit subjects -- and it still lost.
+        # The mechanism is why: with no connective, "decomposition" was a blind
+        # MIDPOINT SPLIT of any query over 12 tokens, so "How many amateur
+        # comedians did I watch perform at the open mic night?" became "How
+        # many amateur comedians did I" + "watch perform at the open mic
+        # night?". Those fragments do widen the candidate pool (pool_recall@50
+        # +0.0333) and then dilute the ranking, which is exactly the shape of
+        # the loss: more gold in the pool, less gold in the top 5.
+        #
+        # Worth keeping if anyone revisits this: the POOL gain was real. A
+        # decomposer that splits on meaning rather than on token count could
+        # convert it. The rules-based v1 could not.
         if mode == "vector" and self.vector_enabled:
-            per_q = [
-                self._vector_search(sq, domain, inner, domains=domains)
-                for sq in sub_queries
-            ]
-            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+            fused = self._vector_search(query, domain, inner, domains=domains)
         elif mode == "bm25":
-            per_q = [
-                self._fts5_search(sq, domain, inner, domains=domains)
-                for sq in sub_queries
-            ]
-            fused = _union_by_best_rank(per_q) if decomp_on else per_q[0]
+            fused = self._fts5_search(query, domain, inner, domains=domains)
         else:
-            bm25_lists = [
-                self._fts5_search(sq, domain, inner, domains=domains)
-                for sq in sub_queries
-            ]
-            vec_lists = (
-                [
-                    self._vector_search(sq, domain, inner, domains=domains)
-                    for sq in sub_queries
-                ]
-                if self.vector_enabled
-                else [[] for _ in sub_queries]
-            )
-            graph_lists = [self._graph_search(sq, inner) for sq in sub_queries]
-            if decomp_on:
-                bm25 = _union_by_best_rank(bm25_lists)
-                vec = _union_by_best_rank(vec_lists) if self.vector_enabled else []
-                graph = _union_by_best_rank(graph_lists)
-            else:
-                bm25, vec, graph = bm25_lists[0], vec_lists[0], graph_lists[0]
+            bm25 = self._fts5_search(query, domain, inner, domains=domains)
+            vec = (self._vector_search(query, domain, inner, domains=domains)
+                   if self.vector_enabled else [])
+            graph = self._graph_search(query, inner)
             fused = reciprocal_rank_fusion(
                 [bm25, vec, graph] if self.vector_enabled else [bm25, graph]
             )
 
-        # Optional cross-encoder reranker (PRISM_RERANK=bge-v2|jina-v2|
+        # Cross-encoder reranker (PRISM_RERANK=auto|bge-v2|jina-v2|
         # ms-marco-minilm|off). Rescores the top PRISM_RERANK_TOPN candidates
         # by feeding (query, chunk_content) pairs through a cross-encoder,
         # then replaces that slice of ``fused`` with the reranked order.
+        # DEFAULT auto (task 19e4e7f7): on wherever it can run, off where it
+        # cannot, never a capability the user has to know an env var to reach.
         rerank_preset = (
-            _os.environ.get("PRISM_RERANK", "off").strip().lower()
+            _os.environ.get("PRISM_RERANK", "auto").strip().lower()
         )
+        if rerank_preset == "auto":
+            rerank_preset = _auto_rerank_preset()
         if rerank_preset not in ("", "off", "none") and fused:
             try:
                 pool_n = int(_os.environ.get("PRISM_RERANK_TOPN", "50"))
             except ValueError:
                 pool_n = 50
-            pool_n = max(inner, pool_n)
+            # PRISM_RERANK_TOPN is a CAP, not a floor (task 19e4e7f7). It used
+            # to be raised to ``inner`` (= limit*6 when aggregating), so asking
+            # for 50 silently reranked 120 at limit=20 and the only knob for
+            # the single most expensive step in search did nothing. Candidates
+            # past the cap keep their RRF order, which is the ordinary
+            # rerank-a-pool design; the cap is what makes the cost bounded and
+            # therefore defaultable.
+            pool_n = max(1, min(pool_n, len(fused)))
             pool = fused[:pool_n]
             reranked = self._rerank_candidates(query, pool, rerank_preset)
             if reranked is not None:

@@ -64,6 +64,10 @@ class ProjectContext:
             self._task_svc = TaskService(
                 db_path=str(self._data_dir / "tasks.db"),
                 scores_db=str(self._data_dir / "scores.db"),
+                # Named so a create observer (task 27e543e0) is told WHICH
+                # project the new task belongs to; every mirror lookup
+                # downstream is project-scoped.
+                project=self.project_id,
             )
         return self._task_svc
 

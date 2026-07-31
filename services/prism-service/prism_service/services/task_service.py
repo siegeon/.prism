@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from prism_service.services import sqlite_db
 import threading
@@ -95,6 +96,41 @@ CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
 """
 
 
+# ── create observers (task 27e543e0) ──────────────────────────────────────
+#
+# TaskService is the ONE chokepoint every creation path already goes through:
+# the REST route (api/tasks.py:214) and the MCP task_create verb
+# (mcp/tools.py:4095) both land here. Anything that must happen when a task is
+# born therefore belongs on this list rather than being duplicated at each call
+# site, where the next new caller would silently miss it.
+#
+# Deliberately PROVIDER-NEUTRAL: this module must not learn what GitHub is. It
+# publishes "a task was created"; services/task_mirror.py decides what that is
+# worth. An observer that raises is logged and skipped -- creating a task must
+# never fail because a downstream mirror is unhappy.
+_CREATE_OBSERVERS: list = []
+
+
+def add_create_observer(fn) -> bool:
+    """Register ``fn(project, task)``. Idempotent; True if newly added."""
+    if fn in _CREATE_OBSERVERS:
+        return False
+    _CREATE_OBSERVERS.append(fn)
+    return True
+
+
+def remove_create_observer(fn) -> bool:
+    if fn in _CREATE_OBSERVERS:
+        _CREATE_OBSERVERS.remove(fn)
+        return True
+    return False
+
+
+def create_observers() -> list:
+    """Point-in-time copy — lets a caller ASSERT what production registered."""
+    return list(_CREATE_OBSERVERS)
+
+
 # Columns added by LL-01 (learning-loop schema migration). Applied via
 # ALTER TABLE on existing DBs so older task rows don't need rewriting.
 _LL_TASK_COLUMNS: list[tuple[str, str]] = [
@@ -137,8 +173,13 @@ class TaskService:
 
     def __init__(
         self, db_path: str, embed_fn: Optional[EmbedFn] = None,
-        scores_db: Optional[str] = None,
+        scores_db: Optional[str] = None, project: str = "",
     ) -> None:
+        # Which project this store belongs to. Carried so a create observer
+        # (task 27e543e0) can name the project it was told about — every
+        # downstream lookup is project-scoped, and a service that cannot say
+        # which project it is cannot hand that on.
+        self.project = project
         # THREAD-SAFE STORAGE (task 0584addb, PR #196 follow-up): one
         # sqlite connection PER THREAD via a thread-local factory — the
         # old single shared handle (check_same_thread=False) let
@@ -414,7 +455,24 @@ class TaskService:
         # has something to search over. Silent on embedder-offline —
         # the row still exists, just without a vector.
         self._store_embedding(task.id, task.title, task.description)
+        self._notify_created(task)
         return task
+
+    def _notify_created(self, task: Task) -> None:
+        """Publish "a task was created" to every registered observer.
+
+        AFTER the commit, so an observer always sees a row that really exists,
+        and each observer is isolated: a failing mirror must never turn a
+        successful task creation into an error the user sees.
+        """
+        for observer in list(_CREATE_OBSERVERS):
+            try:
+                observer(self.project, task)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "task create observer %r failed for %s",
+                    getattr(observer, "__name__", observer), task.id,
+                    exc_info=True)
 
     def ensure_external_intake(
         self,

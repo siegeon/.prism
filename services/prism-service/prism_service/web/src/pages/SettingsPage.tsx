@@ -12,7 +12,9 @@ import {
   trackConnectorRepo,
   runConnectorSync,
   startConnect,
+  getMirrorStatus,
   type Connector,
+  type MirrorStatus,
 } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import type { ScanJob } from "@/lib/scan-activity";
@@ -3371,6 +3373,49 @@ function SyncSwitch({ connector, noun, onChanged }: { connector: Connector; noun
 
 /** Choose a repository and pull its issues in as PRISM tasks. No team
  *  workspace needed: this is the local, personal scope (task 900a4fb9). */
+// Does a task created in PRISM actually turn into an issue? (task 27e543e0)
+//
+// This line exists because the answer used to be "no" while every surface
+// said "Connected": the push existed, nothing called it, and there was
+// nowhere a person could look to find that out. So it never renders a bare
+// "off" — when the mirror is not live it names the ONE link that is missing,
+// which is the difference between a status and a diagnosis.
+function MirrorLine({ connector }: { connector: Connector }) {
+  const [mirror, setMirror] = useState<MirrorStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getMirrorStatus().then((m) => { if (alive) setMirror(m); }).catch(() => {});
+    return () => { alive = false; };
+  }, [connector.sync_enabled, connector.tracking?.length]);
+
+  if (!mirror) return null;
+  const missing =
+    !mirror.enabled ? `${mirror.env} is turned off`
+    : !mirror.observer_installed ? "PRISM has not finished starting up"
+    : !mirror.adapters.includes("github")
+      ? (mirror.adapter_errors.github ?? "the GitHub adapter did not load")
+    : !mirror.sync_enabled ? "syncing is turned off above"
+    : mirror.tracking.length === 0 ? "no repository is tracked yet"
+    : "";
+
+  return (
+    <div>
+      <SectionLabel>New tasks</SectionLabel>
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        {mirror.ready ? (
+          <>Every task you create here becomes an issue in{" "}
+            <span className="font-mono" style={{ color: "var(--text-secondary)" }}>
+              {mirror.tracking.join(", ")}
+            </span>, and the task links back to it. Tasks that already existed
+            stay local until you push them.</>
+        ) : (
+          <>New tasks are not reaching GitHub yet, because {missing}.</>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function RepoSync({ connector, project, onChanged }:
   { connector: Connector; project: string; onChanged: () => void }) {
   const [repo, setRepo] = useState("");
@@ -3414,6 +3459,7 @@ function RepoSync({ connector, project, onChanged }:
           </ul>
         )}
       </div>
+      {connector.provider === "github" && <MirrorLine connector={connector} />}
       <div className="flex items-center gap-2">
         <input value={repo} onChange={(e) => setRepo(e.target.value)}
           placeholder="owner/repo"
