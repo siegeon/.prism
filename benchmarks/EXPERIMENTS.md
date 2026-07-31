@@ -157,6 +157,15 @@ in `services/bench-service/docker-compose.yml`.
   (−0.0087) while pool 50 gets 93% of the full win (+0.0986, p=0.0074).
   Task 61666a4f: de-duplicate the pool by file for the same coverage ~2.7×
   cheaper.
+- **What it costs, on the real PRISM corpus, measured not estimated.** Same
+  brain.db, same queries, only the flag changed: `off` mean **0.02 s**,
+  `auto` mean **1.92 s** (2.10 / 1.67 / 1.98). Through the HTTP API a warm
+  reranked `/api/brain/search` is 3.2–4.5 s. That is the price of the recall,
+  and it is the single reason to think twice about this default. Cost scales
+  with `min(TOPN, candidates found)`, so a narrow domain with few candidates
+  stays ~free; a full code corpus does not. `PRISM_RERANK=off` restores the
+  old behaviour exactly, and task 61666a4f is the fix that would bring this to
+  roughly 0.7 s without giving up recall.
 - **`PRISM_QUERY_DECOMP`: removed.** Never won on three corpora — see the
   flags table above. Supersedes `plat0042-on-v2-smoke50` below, which is 50
   questions (its +0.040 is 2 questions).
