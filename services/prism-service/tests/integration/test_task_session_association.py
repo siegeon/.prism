@@ -342,21 +342,30 @@ def test_implement_locate_links_session_to_task():
     )
 
 
-def test_implement_threads_session_into_conductor_advance():
-    """implement.js advanceInstr() must thread session_id=SID into the
-    emitted conductor_advance call (guarded: omitted when SID empty), so
-    every non-gate step refreshes the task<->session link."""
+def test_implement_threads_session_into_the_drive_verb():
+    """The drive must tie every step it reports back to the driving session,
+    so the task<->session link stays fresh across the whole SDLC.
+
+    SUPERSEDED ANCHOR (2026-08-01): this asserted an `advanceInstr()` helper
+    that threaded session_id=SID into an emitted `conductor_advance(...)`
+    call. The conductor_work rewrite deleted both - the drive no longer names
+    a step, and conductor_advance is a superseded admin verb it must not use.
+    The INVARIANT is unchanged, so it is re-anchored onto the verb that
+    replaced them: the session is threaded once at Locate via
+    task_link_session(session_id=SID) and carried by conductor_work for every
+    subsequent report.
+    """
     src = _implement_src()
-    # Find the advanceInstr helper body and assert it threads SID into the
-    # emitted conductor_advance(...) call.
-    assert "advanceInstr" in src, "implement.js advanceInstr helper missing"
-    marker = "function advanceInstr"
-    idx = src.index(marker)
-    body = src[idx:idx + 600]
-    assert "conductor_advance" in body, "advanceInstr no longer emits conductor_advance"
-    assert "session_id" in body and "SID" in body, (
-        "advanceInstr() does not thread session_id=SID into the emitted "
-        "conductor_advance call — the per-step auto-writer link is lost"
+    assert "advanceInstr" not in src and "conductor_advance(" not in src, (
+        "implement.js still hand-drives conductor_advance - the drive must "
+        "loop on conductor_work and let the server own the step sequence"
+    )
+    assert "conductor_work" in src, "implement.js no longer drives conductor_work"
+    # The session must reach the task through the explicit link call, guarded
+    # on SID, rather than falling back to the request_id default path.
+    assert "task_link_session" in src and "${SID}" in src, (
+        "implement.js does not thread the driving session into the task - "
+        "the task<->session link would resolve to the request_id default"
     )
 
 

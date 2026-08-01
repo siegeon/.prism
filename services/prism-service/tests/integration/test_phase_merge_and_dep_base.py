@@ -41,7 +41,12 @@ def _implement_src() -> str:
 
 def _locate_block(src: str) -> str:
     start = src.index("phase('Locate')")
-    end = src.index("Per-step handler prompts", start)
+    # SUPERSEDED ANCHOR (2026-08-01): the drive used to end its Locate phase at a
+    # "Per-step handler prompts" section that built one closure per step. The
+    # conductor_work rewrite deleted that section (the server hands back each
+    # job), so the Locate phase now ends where the Graph phase begins. The base
+    # SAFETY invariant these tests pin is unchanged and still required.
+    end = src.index("-- Phase: Graph", start)
     return src[start:end]
 
 
