@@ -194,7 +194,7 @@ function telemetryInstr(stepId, role) {
   if (DRY) return ''
   role = role || 'agent'
   const tid = (typeof locate !== 'undefined' && locate.task_id) || TASK_ID
-  return `\n\nTELEMETRY (step contract - REQUIRED LAST ACTION): POST your agent-run row with Bash curl (use 127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/agent-runs/ingest?project=prism' -H 'Content-Type: application/json' -d '<ROW>'\` where <ROW> is the JSON object {"run_id":"${RUN_ID}","workflow_name":"implement","task_id":"${tid}","session_id":"${SID}","agent_id":"${RUN_ID}:${stepId}","role":"${role}","step":"${stepId}","ok":<your step ok, true|false>,"gate_state":"<final gate_state, or null>","verdict_summary":"<one-line validation/evidence summary>"}. The response must be {"ok":true,...} - quote that receipt in evidence. A failed POST is non-fatal: note it and continue (timing is stamped server-side on ingest).`
+  return `\n\nTELEMETRY (step contract - REQUIRED LAST ACTION): POST your agent-run row with Bash curl (use 127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/agent-runs/ingest?project=prism' -H 'Content-Type: application/json' -d '<ROW>'\` where <ROW> is the JSON object {"run_id":"${RUN_ID}","workflow_name":"implement","task_id":"${tid}","session_id":"${SID}","agent_id":"${RUN_ID}:${stepId}","role":"${role}","step":"${stepId}","ok":<your step ok, true|false>,"verdict_summary":"<one-line validation/evidence summary>"}. The response must be {"ok":true,...} - quote that receipt in evidence. A failed POST is non-fatal: note it and continue (timing is stamped server-side on ingest).\n\nDO NOT add a "gate_state" field to that row, and NEVER send "gate_state":"passed". You are a PRODUCING actor: the gate state belongs to the conductor, and a producer POSTing a passing gate state into the audit spine is self-approval by another route - the exact hole task 682b7e48 exists to close, and it trips the self-approval classifier. Telemetry records what YOU did, never a verdict.`
 }
 
 // -- Agent-run telemetry emitter (task f4498190) -------------------------
@@ -225,7 +225,9 @@ async function postAgentRun(res, meta) {
     tokens: meta.tokens != null ? meta.tokens : null,
     tool_uses: meta.tool_uses != null ? meta.tool_uses : null,
     ok: res ? res.ok === true : null,
-    gate_state: (res && res.gate_state) || meta.gate_state || null,
+    // NO gate_state: a producing actor never records a verdict, only what it
+    // did. A producer-written 'passed' in the audit spine is self-approval by
+    // another route (task 682b7e48). The conductor owns the gate state.
     verdict_summary: (res && (res.validation || res.evidence)) || meta.verdict_summary || null,
     evidence_ref: (res && res.evidence) ? String(res.evidence).slice(0, 200) : null,
   }
@@ -370,6 +372,7 @@ const STEP_EXTRA = {
     'GRAPH RUNG (blast radius, and this is what makes green honest): for each symbol the plan will change, run brain_call_chain(entity=<symbol>, direction="callers", depth=2) and brain_find_references(name=<symbol>). The callers you find are the BLAST RADIUS. Two consequences, both mandatory: (1) allowed_files must cover what you will actually touch, and (2) every NEIGHBOURING suite that pins a caller must be listed and run at verify_green - task.verify is the gate\'s evidence, NEVER the blast radius. Two live tasks went machine-green on their own file while main sat red with three contradictory tests.',
     'If the plan DELETES or CHANGES a contract an existing test pins, retire those assertions IN THIS SLICE with a comment naming what superseded them. A contradiction left standing is a red main.',
     'CHECK control_plane.POLICY_FILES: if the slice would touch a gate-policy file, it will fail its own gates on the candidate-controls-judge tooth. Split the consumer into a non-policy file and say so in the plan.',
+    'PROACTIVE RESEARCH RUNG (size-gated, grounding-gated): classify each non-trivial approach in the plan. If an approach is UNGROUNDED in BOTH Brain and grep - neither brain_search/memory_recall (the WHY) nor a disk Grep/Read of existing source (the HOW) can ground the technique, i.e. it is a NEW practice not yet present in this codebase - then this step BLOCKS. Do NOT pass verify_plan until a cited WebSearch / best-practice pass exists for it: set ok:false and name the ungrounded approach in halt_reason UNLESS you have run a WebSearch and can cite the source (url/title) that validates the practice. SIZE GATE: a trivial, one-line, or pattern-already-in-repo approach is grounded by grep and needs NO web rung - only an ungrounded, non-trivial NEW practice triggers the blocking research requirement. Set source_tier="web" only when this rung actually fired.',
   ].join('\n'),
   write_failing_tests: [
     'Write the SMALLEST set of tests that pin the acceptance criteria and FAIL today, in the task worktree.',
@@ -390,6 +393,10 @@ const STEP_EXTRA = {
     'TESTS-PASS IS NOT FEATURE-WORKS. If the ticket names a user-reachable surface, exercise it for real (curl the running daemon / drive the page) and LOOK at the result before claiming it.',
     'EVIDENCE GOES INTO PRISM, never an external host: write screenshots/artifacts to <data_dir>/evidence/<task_id>/ and cite them in the proof as `![](/api/tasks/<task_id>/evidence/<file>)`. Read <data_dir> from prism_status.',
     'Reporting SUCCESS here is what MINTS the green EvidenceReceipt (svc.mint_green_evidence runs on this report, from the task worktree). That receipt is what the green_gate seat decides on - so the quality of this step is the quality of the whole gate.',
+  ].join('\n'),
+  green_gate: [
+    'MANDATORY WHY-CAPTURE ON SUCCESS: a clean terminal pass is a DECISION, and the WHY must be written back to the source of truth, not just on failure (the SELF-HEAL ladder covers only failures). Once this gate is decided green, call memory_store(type="decision", ...) carrying the full WHY contract: the DECISION made, its RATIONALE, the REJECTED ALTERNATIVES (what you did NOT do, and why), and concrete file:line refs to the change. memory_recall must surface this decision memory after a clean drive - a terminal success that records completion_proof but no decision memory has NOT written the WHY back.',
+    'This is a WRITE-BACK, not a gate action: it records why the change is what it is. It never approves anything, and it must not be skipped just because the machine seat decided the gate for you.',
   ].join('\n'),
 }
 
@@ -429,6 +436,7 @@ function gatePrompt(job) {
     `   - a readiness saying receipt_ok:true with "your review is the sign-off" means the Approve is ALREADY clean and enabled. Say that, rather than telling a human they are blocked.`,
     '',
     'NEVER report a gate as machine-decided without reading its receipt first. A pass is a claim about evidence: open the evidence, quote the adapter and the tree sha, and confirm the tree is THIS task\'s.',
+    (STEP_EXTRA[step] ? `\nSTEP SPECIFICS:\n${STEP_EXTRA[step]}` : ''),
     telemetryInstr(step, 'gate'),
   ].join('\n')
 }

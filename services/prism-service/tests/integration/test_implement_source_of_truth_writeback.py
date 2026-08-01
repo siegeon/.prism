@@ -54,39 +54,52 @@ def _implement_src() -> str:
 
 
 def _handler_block(src: str, handler: str) -> str:
-    """The per-step HANDLERS entry for `handler` — from its key up to the
-    next handler key (or the end of the HANDLERS object). This is the seam
-    that carries the prompt the step agent actually receives."""
-    handlers_start = src.index("const HANDLERS = {")
+    """The per-step prompt block for `handler` - the seam that carries the
+    text the step agent actually receives.
+
+    SUPERSEDED ANCHOR (2026-08-01): implement.js used to build one closure per
+    step inside `const HANDLERS = {`. That map was a second copy of
+    models/workflow.py:WORKFLOW_STEPS and drifted from it, so the rewrite to
+    the server-driven `conductor_work` loop deleted it: the server now hands
+    back each job and the per-step prose lives in `const STEP_EXTRA = {`,
+    keyed by the same step ids. The CAPABILITIES these tests pin are unchanged
+    and still required - only the container was renamed, so this helper reads
+    STEP_EXTRA instead of HANDLERS.
+    """
+    block_start = src.index("const STEP_EXTRA = {")
     keys = [
         "review_previous_notes", "draft_story", "verify_plan",
         "write_failing_tests", "red_gate", "implement_tasks",
         "verify_green_state", "green_gate",
     ]
-    # Locate the handler's definition (key followed by a role-default arrow).
-    needle = f"\n  {handler}: (role"
-    start = src.index(needle, handlers_start)
-    # End at the next handler key, else the close of the HANDLERS object.
+    needle = f"\n  {handler}: ["
+    start = src.index(needle, block_start)
     end = len(src)
     for k in keys:
         if k == handler:
             continue
-        nxt = src.find(f"\n  {k}: (role", start + len(needle))
+        nxt = src.find(f"\n  {k}: [", start + len(needle))
         if nxt != -1:
             end = min(end, nxt)
     return src[start:end]
 
 
 def _step_schema_block(src: str) -> str:
-    """The STEP_SCHEMA object — the per-step structured-output contract that
-    every non-locate step returns. AC7's source_tier field belongs here."""
-    start = src.index("const STEP_SCHEMA = {")
-    # implement.js banner comments are ASCII-clean ("-- Phase: ..."); older
-    # revisions used box-drawing dashes ("── Phase: ...") — accept both so
-    # this helper doesn't false-fail on a byte-clean workflow file.
+    """The per-step structured-output contract every driven step returns.
+    AC7's source_tier field belongs here.
+
+    SUPERSEDED ANCHOR (2026-08-01): this was `const STEP_SCHEMA`, whose
+    to_step/validation fields described a drive that named its own next step.
+    The conductor_work rewrite replaced it with `const JOB_RESULT_SCHEMA`
+    (next_step/next_kind/next_role come from the server's job). source_tier is
+    carried forward unchanged, so AC7 is still pinned here.
+    """
+    start = src.index("const JOB_RESULT_SCHEMA = {")
     end = src.find("// -- Phase: Pre-flight", start)
     if end == -1:
-        end = src.index("// ── Phase: Pre-flight", start)
+        end = src.find("// -- Phase:", start)
+    if end == -1:
+        end = len(src)
     return src[start:end]
 
 
