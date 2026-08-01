@@ -89,7 +89,12 @@ def test_serial_loop_emits_after_each_step():
     # Locate the deterministic drive loop and assert the emitter fires
     # inside it (between the handler call and the next iteration).
     assert "trace.push(res)" in src, "serial drive loop shape changed"
-    loop_start = src.index("for (let i = startIdx")
+    # SUPERSEDED ANCHOR (2026-08-01): the loop used to index a client-side
+    # ORDER array ("for (let i = startIdx"). The conductor_work rewrite
+    # deleted that array - the server hands back the next job - so the pull
+    # loop is now bounded by MAX_JOBS. The INVARIANT is unchanged: the
+    # emitter must still fire inside the loop after each agent() returns.
+    loop_start = src.index("for (let i = 0; i < MAX_JOBS")
     loop_body = src[loop_start:loop_start + 900]
     assert ("postAgentRun" in loop_body or "emitAgentRun" in loop_body
             or "/api/agent-runs/ingest" in loop_body), (
