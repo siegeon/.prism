@@ -32,7 +32,19 @@ router = APIRouter()
 _ROLE = {"sm": "Steward", "qa": "Verifier", "dev": "Builder"}
 
 _GUIDE = {
-    "review_previous_notes": "Review prior notes/decisions for this task.",
+    # The premise step is scored by the premise_grounded rubric
+    # (services/arc_governance.py:286-337), so the instruction STATES that
+    # contract instead of leaving a driver to be refused by a rule it was
+    # never told. Wording tracks claims_section (governance_rubrics.yaml:42)
+    # and the four grounding regexes at arc_governance.py:267-276.
+    "review_previous_notes":
+        "Review prior notes/decisions for this task and report them as a "
+        "'## Premises' section listing each load-bearing claim as a bullet "
+        "grounded by a citation: a file:line with a real line number, a "
+        "run/PR/commit/issue id, or backtick-quoted command output, or else "
+        "the explicit marker UNVERIFIED or REFUTED. A missing section, an "
+        "empty one, or any ungrounded claim is refused and the step does "
+        "not advance.",
     "draft_story": "Author the story: Summary/Requirements/Acceptance "
                    "Criteria with AC ids + oracles.",
     "verify_plan": "Verify the plan covers the story (plan_coverage).",
