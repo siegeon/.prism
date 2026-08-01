@@ -1,9 +1,11 @@
 """Agent-run telemetry API (task f4498190).
 
 POST /ingest persists one per-agent/step telemetry row to scores.db
-(idempotent on (run_id, agent_id, step)); GET / reads rows back with
-filtering. Resolves scores_db via get_project(project)._data_dir — the
-exact pattern api/learning.py uses — so a row POSTed here is readable
+(idempotent on (run_id, agent_id, step)) UNLESS the row claims a passing
+gate verdict, which is refused by name (task 682b7e48); GET / reads rows
+back with filtering, annotated with the gate_source provenance of any
+passing verdict. Resolves scores_db via get_project(project)._data_dir —
+the exact pattern api/learning.py uses — so a row POSTed here is readable
 back through a SEPARATE GET (on-disk persistence, not in-memory).
 """
 
@@ -13,7 +15,9 @@ from fastapi import APIRouter, Body, Query
 
 from prism_service.project_context import get_project
 from prism_service.services.agent_runs_data import (
+    PRODUCER_GATE_VERDICT_REFUSAL,
     get_agent_runs,
+    producer_gate_verdict_reason,
     upsert_agent_run,
 )
 
@@ -29,8 +33,26 @@ def ingest(
     project: str = Query("default"),
     row: dict = Body(...),
 ) -> dict:
-    """Persist one agent-run telemetry row. Re-POSTing the same
-    (run_id, agent_id, step) UPDATES the existing row."""
+    """Persist one agent-run telemetry row, UNLESS it claims a passing
+    gate verdict. Re-POSTing the same (run_id, agent_id, step) UPDATES the
+    existing row, so refusing the write outright is also what stops a
+    producer from overwriting a genuine machine row at that same key.
+
+    This door is by construction a NON-machine caller: the conductor's own
+    seat builds its row in-process and calls upsert_agent_run directly,
+    never over the wire. So the refusal below reads the verdict being
+    claimed and never the identity typed into the payload — a
+    workflow_name=="conductor" check would block only the honest.
+
+    The refusal answers 200 with ok:false, not 4xx: authorization already
+    owns the 4xx band on this route, and a content refusal must not blur
+    that contract.
+    """
+    refusal = producer_gate_verdict_reason(row)
+    if refusal:
+        return {"ok": False, "refused": PRODUCER_GATE_VERDICT_REFUSAL,
+                "reason": refusal, "run_id": row.get("run_id"),
+                "agent_id": row.get("agent_id"), "step": row.get("step")}
     upsert_agent_run(_scores_db(project), row)
     return {"ok": True, "run_id": row.get("run_id"),
             "agent_id": row.get("agent_id"), "step": row.get("step")}

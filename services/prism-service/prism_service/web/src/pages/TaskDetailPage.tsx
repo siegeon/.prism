@@ -179,6 +179,10 @@ type TraceStep = {
   model?: string | null;
   tokens: number;
   gate_state?: string | null;
+  // Provenance of a PASSING gate_state, derived server-side: "machine" (the
+  // conductor's own seat, server-clock stamped) vs "unattributed" (written
+  // by a producing actor before the ingest refusal landed).
+  gate_source?: string | null;
   ts?: string | null;
 };
 type TraceSession = {
@@ -562,6 +566,11 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
         <span className="font-mono text-2xs text-[color:var(--text-muted)] truncate max-w-[140px] shrink-0" title={step.model}>{step.model}</span>
       )}
       {gate && <Lozenge tone={gateLoz(gate)}>{gate}</Lozenge>}
+      {step.gate_source && (
+        <Lozenge tone={step.gate_source === "machine" ? "info" : "warn"} className="shrink-0">
+          {step.gate_source === "machine" ? "machine seat" : "unattributed"}
+        </Lozenge>
+      )}
       <span className="flex items-center gap-2 flex-1 min-w-[110px]">
         <span className="h-[5px] flex-1 rounded-[3px]" style={{ background: tokens > 0 ? "var(--surface-3)" : "transparent" }}>
           {tokens > 0 && (

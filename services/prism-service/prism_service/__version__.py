@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.6"
+PRISM_VERSION = "7.10.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.7: AGENT RUNS CANNOT POST THEIR OWN GATE PASS [task 682b7e48]. "
+    "POST /api/agent-runs/ingest took the row unvalidated, so any HTTP "
+    "caller could assert gate_state=passed for any task/step. It is now "
+    "refused by name (producer_cannot_record_gate_verdict) with a reason "
+    "that says the conductor owns gate state. The guard reads the verdict, "
+    "never the caller's identity, so spoofing workflow_name=conductor buys "
+    "nothing; the conductor's own seat writes in-process and is untouched. "
+    "Ordinary telemetry (none/pending/failed) is unaffected, no history is "
+    "deleted, and the Trace tab now marks a passing row 'machine seat' or "
+    "'unattributed' so a reader can tell a real decision from a written one. "
     "v7.10.3: THE TWO FLAGS THAT SHIPPED DISABLED ARE DECIDED [task "
     "19e4e7f7]. Owner rule: a capability that ships disabled by default is "
     "not shipped, so each flag got measured and then either flipped on or "

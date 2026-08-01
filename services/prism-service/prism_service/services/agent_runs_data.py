@@ -26,6 +26,79 @@ _COLS = (
 # Filterable GET params -> agent_runs columns.
 _FILTERS = ("task_id", "session_id", "workflow_name", "role", "step")
 
+# gate_state values that READ AS A PASS to whoever judges the row. Live data
+# also carries compound "<gate>:<state>" forms ("story_gate:pending"), so the
+# trailing verdict segment is checked too.
+_PASSING_GATE_STATES = frozenset({
+    "passed", "pass", "passing", "approved", "approve",
+    "green", "greenlit", "ok", "success", "succeeded",
+})
+
+# Machine-readable name for the refusal below, so a driver that gets turned
+# away can self-diagnose instead of guessing.
+PRODUCER_GATE_VERDICT_REFUSAL = "producer_cannot_record_gate_verdict"
+
+
+def is_passing_gate_state(value) -> bool:
+    """True when ``value`` reads as a PASSING gate verdict.
+
+    Deliberately NARROW: absent/None/""/"none"/"pending"/"failed" and
+    compound forms like "story_gate:pending" are ordinary telemetry and
+    must keep flowing untouched (the shared fixture at
+    tests/unit/test_api_agent_runs.py:62 posts "none" on all 10 of its
+    tests). Only pass-shaped values are treated as a claimed verdict.
+    """
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if not text:
+        return False
+    verdict = text.rsplit(":", 1)[-1].strip()
+    return text in _PASSING_GATE_STATES or verdict in _PASSING_GATE_STATES
+
+
+def producer_gate_verdict_reason(row: dict) -> str:
+    """"" when the row is acceptable telemetry, else a NAMED sentence
+    saying why it is refused.
+
+    Same shape as the conductor's distinct-actor refusal: a reason string
+    rather than a silent drop, because a tooth that computes a refusal and
+    throws it away has only half-shipped.
+
+    It reads ONLY the verdict being claimed, never who the caller says it
+    is. Identity in a payload is a string the caller types, so keying on
+    it would block only the honest. The real foothold is structural: the
+    conductor's own seat builds its row in-process and calls
+    upsert_agent_run directly, so it never arrives through this door.
+    """
+    if not is_passing_gate_state((row or {}).get("gate_state")):
+        return ""
+    return (
+        "a producing actor cannot record a gate verdict: gate state is "
+        "owned by the conductor, which writes its own seat's decision "
+        "in-process. Re-post this telemetry row without a passing "
+        "gate_state -- telemetry records what you did, never a verdict."
+    )
+
+
+def gate_source_for_row(row) -> str | None:
+    """How a PASSING verdict got into the spine, so a reader can tell a
+    genuine machine decision from a producer-written one without squinting
+    at null timings by hand.
+
+    "machine" carries the server-clock signature only the conductor's
+    in-process writer stamps (a real start instant AND a measured
+    duration); "unattributed" is a pass with no such signature -- the
+    shape of every producer-written row predating the ingest refusal,
+    which stays readable and is annotated rather than deleted. None for
+    ordinary telemetry, which claims no verdict at all.
+    """
+    if not is_passing_gate_state(row.get("gate_state")):
+        return None
+    started = str(row.get("started_at") or "").strip()
+    measured = row.get("duration_ms")
+    return "machine" if started and measured is not None else "unattributed"
+
 
 def _connect(scores_db: str) -> sqlite3.Connection:
     conn = sqlite_db.connect(scores_db, timeout=5.0)
@@ -86,6 +159,9 @@ def get_agent_runs(scores_db: str, limit: int = 500, **filters) -> list[dict]:
     for r in rows:
         d = dict(r)
         d["ok"] = bool(d.get("ok")) if d.get("ok") is not None else None
+        # Derived at READ time, never stored: history stays byte-for-byte
+        # as it was written, and every reader gets the provenance.
+        d["gate_source"] = gate_source_for_row(d)
         out.append(d)
     return out
 
@@ -240,7 +316,7 @@ def build_task_trace(
     agent_runs grouped session -> SDLC step, token counts on every row.
 
     Shape: ``{"sessions": [{session_id, tokens_total,
-    steps: [{step, role, model, tokens, gate_state, ts}]}],
+    steps: [{step, role, model, tokens, gate_state, gate_source, ts}]}],
     "totals": {tokens, steps, sessions}}``. Sessions appear in first-activity
     order; steps within a session stay time-ordered. Zero rows returns empty
     arrays so the tab renders an honest empty state (cross-task totals live on
@@ -257,7 +333,8 @@ def build_task_trace(
     try:
         rows = conn.execute(
             "SELECT run_id, agent_id, session_id, step, role, model, tokens, "
-            "       gate_state, started_at, ended_at, recorded_at "
+            "       gate_state, duration_ms, started_at, ended_at, "
+            "       recorded_at "
             "FROM agent_runs WHERE task_id = ? "
             "ORDER BY started_at ASC, recorded_at ASC",
             (task_id,),
@@ -283,6 +360,7 @@ def build_task_trace(
             "model": r["model"],
             "tokens": tok,
             "gate_state": r["gate_state"],
+            "gate_source": gate_source_for_row(dict(r)),
             "ts": r["started_at"] or r["recorded_at"],
             # Private keys for the backfill (stripped before return): the
             # UPDATE needs the upsert triple + the row's time window.

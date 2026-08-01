@@ -82,24 +82,38 @@ def test_emitter_threads_plumbed_session_id_as_session_id():
 
 
 def test_serial_loop_emits_after_each_step():
-    """The serial drive loop must call the emitter after each handler
-    returns — the loop body (HANDLERS[stepId]() -> trace.push) is where
-    the per-step telemetry POST belongs."""
+    """The serial drive loop must call the emitter after each step result
+    is recorded — `trace.push(res)` is where the per-step telemetry POST
+    belongs.
+
+    RE-ANCHORED (task 682b7e48): this used to locate the loop by
+    `src.index("for (let i = startIdx")`, a loop shape that no longer
+    exists — the drive is now the server-driven conductor_work job loop
+    (`for (let i = 0; i < MAX_JOBS; i++)` at implement.js:660), which
+    pushes the result and emits at :681-682. The old index() raised
+    ValueError: substring not found. The assertion now anchors to
+    `trace.push(res)` itself, which is the actual seam the emit must
+    follow, and is therefore loop-shape independent."""
     src = _implement_src()
-    # Locate the deterministic drive loop and assert the emitter fires
-    # inside it (between the handler call and the next iteration).
-    assert "trace.push(res)" in src, "serial drive loop shape changed"
     # SUPERSEDED ANCHOR (2026-08-01): the loop used to index a client-side
     # ORDER array ("for (let i = startIdx"). The conductor_work rewrite
     # deleted that array - the server hands back the next job - so the pull
-    # loop is now bounded by MAX_JOBS. The INVARIANT is unchanged: the
-    # emitter must still fire inside the loop after each agent() returns.
+    # loop is now bounded by MAX_JOBS. The INVARIANT is unchanged.
+    anchor = "trace.push(res)"
+    assert anchor in src, "serial drive loop shape changed"
     loop_start = src.index("for (let i = 0; i < MAX_JOBS")
-    loop_body = src[loop_start:loop_start + 900]
-    assert ("postAgentRun" in loop_body or "emitAgentRun" in loop_body
-            or "/api/agent-runs/ingest" in loop_body), (
+    after = src[src.index(anchor, loop_start) + len(anchor):]
+    # The emit must be the NEXT thing that happens to the result, not merely
+    # present somewhere in the file (a whole-file check passes on the
+    # helper's own definition). Bound the region by the next agent() call
+    # rather than a fixed character window - a character window silently
+    # drifts the moment a comment is added above the emit.
+    nxt = after.find("await agent(")
+    window = after if nxt == -1 else after[:nxt]
+    assert ("postAgentRun" in window or "emitAgentRun" in window
+            or "/api/agent-runs/ingest" in window), (
         "serial loop does not emit an agent-run telemetry row after each "
-        "step's agent() returns"
+        f"step's agent() returns; window after trace.push(res): {window!r}"
     )
 
 
