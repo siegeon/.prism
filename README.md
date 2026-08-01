@@ -94,8 +94,8 @@ the old "0.98" claim survived as long as it did.
 | **PRISM's shipped defaults, measured properly** | **0.900** | **120** | **what you install** |
 | ~~+ rules-based query decomposition~~ | ~~0.980~~ | ~~50~~ | **RETIRED — see below** |
 
-The 0.900 row is the honest headline: shipped defaults, no environment
-variables, 120 stratified questions.
+The 0.900 row is the headline: shipped defaults, no environment variables,
+120 stratified questions.
 
 **Why the 0.980 row is struck through.** `PRISM_QUERY_DECOMP` shipped defaulting
 to *off*, so no installed user ever ran it — and the number crediting it was a
