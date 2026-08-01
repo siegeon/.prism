@@ -37,11 +37,20 @@ def _guide_text():
 
 
 def _playbook_section():
-    """The "Working tasks the PRISM way" section text, isolated from the rest
-    of the guide (so version-notes mentions of the same tokens don't count)."""
-    g = _guide_text()
-    assert _TITLE in g, "guide lacks the 'Working tasks the PRISM way' playbook"
-    return g[g.index(_TITLE):]
+    """The "Working tasks the PRISM way" playbook, rendered ON ITS OWN.
+
+    SUPERSEDED IMPLEMENTATION (task f1e7e228): this used to be
+    ``g[g.index(_TITLE):]`` over the whole guide, which sliced to END OF
+    STRING — so tokens from the `roles` and `examples` sections, which render
+    AFTER this one, counted as playbook text and every assertion below could
+    pass vacuously. Rendering the section directly is the same isolation
+    test_prism_guide_matches_the_real_workflow.py uses.
+    """
+    result = _call("prism_guide", {"section": "orchestration"})
+    assert len(result) >= 1
+    s = " ".join(result[0].text.split()).lower()
+    assert _TITLE in s, "guide lacks the 'Working tasks the PRISM way' playbook"
+    return s
 
 
 # ----------------------------------------------------------------------
@@ -130,8 +139,11 @@ def test_playbook_teaches_proof_type_driven_gates():
 
 
 # ----------------------------------------------------------------------
-# AC-7 (v6.7.7) — author to the rubric BEFORE the gate: conductor_advance
-# into draft_story/verify_plan returns result['rubric'].
+# AC-7 (v6.7.7) — author to the rubric BEFORE the gate. The BEHAVIOUR is
+# unchanged and still required; only the verb that surfaces it moved:
+# `conductor_advance` into draft_story/verify_plan was SUPERSEDED by
+# `conductor_work`, which hands the same result['rubric'] back with the job
+# (task f1e7e228, matching mcp/instructions.py:19-29).
 # ----------------------------------------------------------------------
 
 
@@ -143,8 +155,11 @@ def test_playbook_teaches_rubric_on_advance():
 
 
 # ----------------------------------------------------------------------
-# AC-8 (v6.7.7) — keep conductor responses LEAN: fields projection on
-# conductor_advance/conductor_gate/task_list + parent_id epic scope.
+# AC-8 (v6.7.7) — keep conductor responses LEAN: the same from_step/to_step/
+# gate_state `fields` projection + parent_id epic scope. SUPERSEDED VERBS
+# (task f1e7e228): the projection used to be documented on
+# conductor_advance/conductor_gate; `conductor_work` took over the drive and
+# carries the identical `fields` argument, so the assertion stands as-is.
 # ----------------------------------------------------------------------
 
 

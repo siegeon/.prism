@@ -140,7 +140,7 @@ def doctrine() -> str:
         "PRISM assigns every SDLC step a role with a capability TIER and a "
         "reasoning EFFORT. PRISM never forces a model — map the tier to "
         "whatever model you have, and report the model you used on each "
-        "conductor_advance/conductor_gate call so PRISM can attribute cost.",
+        "conductor_work call so PRISM can attribute cost.",
         "",
     ]
     for rid, r in ROLES.items():

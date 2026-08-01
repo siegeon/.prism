@@ -1917,58 +1917,41 @@ surfaces (plus Tasks + Workflow), all accessed via this MCP endpoint:
 - **Workflow** — SDLC state machine (planning → RED → GREEN → review) with
   per-step gates.
 
-Everything is scoped per project via `?project=<slug>` on this URL. Data lives
-in SQLite inside the container's /data volume — no network, no API keys.
+Everything is scoped per project via `?project=<slug>` on this URL. PRISM runs
+natively (pip / pipx) on your own machine: data lives in SQLite under the PRISM
+data dir, `<data dir>/projects/<slug>/` — no network, no API keys.
 
-# First contact — do this at session start if the project isn't initialized
+# First contact — at session start
 
-1. `project_list` — is this project already onboarded?
-2. `prism_status` — are Brain and Graph in sync? Returns `stale: true` with
-   concrete reasons if anything drifted (e.g. docs ingested before graphify
-   was wired up, or schema migrations not applied). **If stale, call
-   `prism_sync` to self-heal.**
-3. If project is not onboarded: `project_onboard(project_name="...",
-   sub_projects=[...])` returns a 7-step Architect checklist. Walk it:
-   discover structure, identify tech stack, map entry points, discover
-   conventions, index key files via `brain_index_doc`, call
-   `graph_rebuild` once after the batch, store initial conventions via
-   `memory_store`.
-4. If already onboarded and in sync: `context_bundle(persona="dev")` to
-   load the deterministic role card/rules/template packet plus current
-   tasks, workflow, Brain context, and recent memory.
+1. `prism_status` — are Brain and Graph in sync? It returns `stale: true`
+   with concrete reasons when anything drifted. **If stale, `prism_sync`
+   self-heals it in one call.**
+2. Not onboarded yet? `prism_onboard` seeds identity + the default
+   architecture principles (so plan_gate is satisfiable) and hands back a
+   checklist; `project_onboard` is the admin-profile equivalent.
+3. Onboarded and in sync? `context_bundle(persona="dev")` loads the role
+   card, rules, current tasks, workflow state, Brain context and recent
+   memory in one deterministic packet.
 
-## Keeping in sync as you go
-
-- Every `brain_index_doc` with a code-suffix path (.py/.ts/.js/.cs/.go/etc)
-  auto-stages the file for graphify. You do NOT need to re-stage manually.
-- After a BATCH of ingests, call `graph_rebuild` once. Don't call per file.
-- `graph_rebuild` auto-backfills from the Brain docs table if staging is
-  empty — so you can't get "graph frozen behind Brain" for long.
-- If `prism_status` reports staleness, `prism_sync` fixes it in one call
-  (backfill + rebuild).
-
-Only call `prism_guide` (this tool) once per session — the guide doesn't
-change between calls. Cache it.
+Keeping in sync as you go: every `brain_index_doc` on a code path auto-stages
+the file for graphify, so call `graph_rebuild` ONCE after a batch, never per
+file. Call `prism_guide` (this tool) once per session and cache it — it does
+not change between calls.
 """,
     "tools": """\
 # All tools — what they do and when to call them
 
 ## Project lifecycle + sync health (CALL THESE FIRST)
-- `project_list()` — list all projects with data in this instance. Check if
-  the current slug is already onboarded.
-- `project_create(project_id)` — create a new isolated project. Rarely needed
-  manually; the service auto-creates on first MCP hit with a new slug.
-- **`project_onboard(project_name, sub_projects?, conventions?)`** — THE
-  initialization route. Returns a 7-step checklist. If you're a fresh
-  coding agent in a brand-new PRISM project, call this BEFORE doing
-  anything else. It seeds project identity + sub-project map into memory
-  so later sessions know the layout.
-- **`prism_status()`** — sync health check. Returns doc counts, staged-file
-  count, graph entity/relationship count, graphify coverage, and a list of
-  staleness reasons. Call at session start.
-- **`prism_sync()`** — idempotent self-heal. Backfills graphify staging
-  from the Brain docs table, then runs `graph_rebuild`. Use when
-  `prism_status` reports `stale: true`.
+- **`prism_onboard()`** — THE initialization route for a fresh project. Seeds
+  identity, the sub-project map and the default architecture principles, and
+  returns a checklist plus the .mcp.json snippet. Call it BEFORE anything
+  else. (`project_list` / `project_create` / `project_onboard` are the
+  admin-profile equivalents.)
+- **`prism_status()`** — sync health check: doc counts, staged files, graph
+  entity/relationship counts, graphify coverage, staleness reasons. Call at
+  session start.
+- **`prism_sync()`** — idempotent self-heal. Backfills graphify staging, then
+  runs `graph_rebuild`. Use when `prism_status` reports `stale: true`.
 
 ## Brain (indexed knowledge)
 - `brain_index_doc(path, content, domain)` — **you read the file on the
@@ -1977,6 +1960,13 @@ change between calls. Cache it.
 - `brain_search(query, limit, domain?, domains?)` — hybrid RRF search
   (BM25 + vector + graph). Returns ranked docs with content + rrf_score.
   Default limit 5.
+- `brain_find_symbol(name)` / `brain_outline(path)` /
+  `brain_find_references(name)` / `brain_call_chain(entity, direction)` —
+  precise navigation over the code graph: locate a definition, outline a
+  file's symbols, list every reference, and trace callers/callees for blast
+  radius. Reach for these BEFORE grepping the disk.
+- `brain_understand(question)` — a code-level answer synthesized across the
+  graph, when you want the explanation rather than the ranked hits.
 - `brain_list(domain?, limit?)` — list indexed docs. Useful for a sanity
   check after bulk ingest.
 - `brain_graph(entity, relation?, limit?)` — query the code graph by
@@ -1997,6 +1987,8 @@ change between calls. Cache it.
     memories are nearly useless.
 - `memory_recall(query, domain?, limit?)` — FTS search. Returns active,
   temporally valid entries sorted by importance.
+- `memory_invalidate(id, reason)` — mark an entry no longer true. Nothing is
+  deleted; the entry stops being recalled and keeps its history.
 
 ## Understand (the unified wiki over Memory)
 Curated memory is browsable as ONE Understand wiki — memory entries projected
@@ -2019,51 +2011,72 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
   (test|metric|artifact|demo|…) to pick the gate's oracle shape; `test` is the
   TDD default. `tags` REPLACES the tag list when passed; omit it to leave
   existing tags untouched (never blanked).
-- `conductor_advance(id, validation?, fields?)` /
-  `conductor_gate(id, action, reason, fields?, override?)` — drive the per-task
-  SDLC. Pass `fields=["from_step","to_step","gate_state"]` for a lean response
-  that omits the echoed task object.
+- `task_link_session(task_id, session_id?)` — bind this session to a task so
+  PRISM attributes your steps and token cost to it.
 
-## Workflow
-- `workflow_state()` — current step, progress, session info.
-- `workflow_advance(validation?, gate_action?)` — move to next step. For
-  gate steps, pass `gate_action="approve"` or `"reject"`.
+## Workflow — ONE verb
+- **`conductor_work(id?, outcome?, proof?, fields?)`** — THE drive verb, and
+  the only one you need. Omit `id` and the server picks the next task. It
+  returns that task's CURRENT step with `instructions` (do exactly this) and
+  `expected_proof` (produce exactly this); report back with
+  `outcome="pass"|"fail"` and `proof=<artifact>` to get the next job. Loop
+  until it returns `done`. The server owns the step sequence, so you never
+  name a step. `fields=["from_step","to_step","gate_state","rubric"]` returns
+  a LEAN response that drops the echoed task object.
+
+## Admin / debug only — NOT on the default surface
+- `conductor_advance()` / `conductor_gate()` / `workflow_state()` /
+  `workflow_advance()` — the superseded hand-drive verbs. `conductor_work`
+  replaced all four; they are kept for admin and debug inspection only and
+  are reachable exclusively behind `tool_profile=all`. If you are driving a
+  task and reaching for one of these, you are on the wrong path.
 
 ## Context + help
 - `context_bundle(persona?, story_file?)` — deterministic MCP-side context
   packet. Preserves the legacy brain/memory/tasks/workflow/health fields and
   adds `context_pack` with role card, rules, template, asset digests, and the
   same relevant context nested for model-agnostic clients.
+- `register_claude_source(path?)` — tell PRISM where this client's session
+  transcripts live, so per-task token and cost attribution works.
+- `janitor_check()` / `janitor_submit(...)` / `janitor_abandon(...)` — the
+  memory-consolidation loop: fetch a pending brief, submit a verdict, or drop
+  it. Fired when a session start advertises a pending candidate.
 - `prism_guide(section?)` — this tool. Sections: overview | tools |
-  workflow | orchestration | memory | graph | examples.
+  workflow | orchestration | memory | graph | roles | examples.
 """,
     "workflow": """\
 # Daily workflow loop (coding agent)
 
 ## Once per project (first session ever)
-1. `project_list` — confirm this slug is/isn't already onboarded.
-2. `project_onboard(project_name, sub_projects?)` — returns 7-step
-   checklist. Walk it: read README/package.json/tsconfig/etc., discover
-   tech stack, pick key source files, `brain_index_doc` each, `memory_store`
-   each convention you find, then `graph_rebuild` at the end.
+`prism_onboard()` → walk the checklist it returns: read
+README/package.json/pyproject, `brain_index_doc` the key source files,
+`memory_store` each convention, `graph_rebuild()` once at the end.
 
 ## Once per session
 1. `prism_guide` (this tool) → cache the result.
 2. `context_bundle(persona="dev")` → loads tasks + recent memory + workflow.
-3. `workflow_state()` if a workflow is in progress.
+3. `conductor_work()` if a task is in flight — the server hands back the step
+   it wants next, so you never have to work out where you left off.
 
 ## Per task
-1. **Gather context** — `brain_search` with the task description. Read top
-   3-5 results. For structural questions use `brain_graph(entity=<name>)`.
-2. **Recall conventions** — `memory_recall("testing")`, `memory_recall("
-   error handling")`, etc. Pick up project-specific rules BEFORE writing.
+1. **Gather context** — `brain_search` the task description; read the top
+   3-5. For structural questions use `brain_find_references` /
+   `brain_call_chain`.
+2. **Recall conventions** — `memory_recall("testing")` etc. Pick up
+   project-specific rules BEFORE writing.
 3. **Write code**.
-4. **Learn something** — if you discovered a convention, bug pattern, or
-   architectural reason, `memory_store(...)` so future sessions inherit it.
+4. **Learn something** — a convention, bug pattern or architectural reason
+   goes to `memory_store(...)` so future sessions inherit it.
 5. **New/changed source files** — `brain_index_doc` each, then
    `graph_rebuild()` once after the batch.
-6. **Track progress** — `task_update(status=...)`. `task_next` for the
-   next unblocked item.
+6. **Track progress** — `task_update(status=...)`; `task_next` for the next
+   unblocked item.
+
+## Real work goes through the conductor
+Anything you would call in-progress belongs to a task driven by
+`conductor_work` — claim a job, do exactly its `instructions`, report
+`outcome` + `proof`, repeat. See the orchestration section for the gate
+evidence each step expects.
 """,
     "memory": """\
 # Memory — the killer feature for coding agents
@@ -2086,66 +2099,58 @@ incident learnings across sessions.
 
 ## Good vs bad
 BAD:  description="Use minimal APIs"
-GOOD: description="Endpoints use ASP.NET Minimal APIs with TypedResults
-      (not controllers). Routes in Features/*/Endpoints.cs, each delegating
-      to a Handler.cs. Example: Features/Matches/MatchesEndpoints.cs maps
+GOOD: description="Endpoints use ASP.NET Minimal APIs with TypedResults (not
+      controllers). Routes in Features/*/Endpoints.cs, each delegating to a
+      Handler.cs. Example: Features/Matches/MatchesEndpoints.cs maps
       GET /api/matches to GetMatchesHandler.Handle."
 
-Always set `type` (pattern|convention|failure|decision) and
-`classification` (tactical|foundational|strategic).
+Always set `type` (pattern|convention|failure|decision) and `classification`
+(tactical|foundational|strategic). `memory_invalidate` retires one that
+stopped being true.
 """,
     "graph": """\
 # Code graph — what it's for
 
-Brain's graph layer is powered by graphify (tree-sitter + Leiden clustering).
-It's populated by calling `graph_rebuild()` after bulk-ingesting source.
+Brain's graph layer is graphify (tree-sitter + Leiden clustering), populated
+by `graph_rebuild()` after bulk-ingesting source.
 
-## Query patterns
-- `brain_graph(entity="MatchesHandler")` — list methods, callers,
-  containers of a known class/function.
-- Community IDs cluster related entities. Entities in the same community
-  are structurally/semantically adjacent.
-- Edges have confidence: `EXTRACTED` (tree-sitter direct, conf 1.0),
-  `INFERRED` (best-effort), `AMBIGUOUS` (flagged).
-
-## When it helps
-- "Who calls X across the repo?" → traverse the graph.
-- "What files are in the same module as X?" → check X's community.
-- "What's the shape of this class?" → brain_graph returns methods.
-
-## When it doesn't help
-- Free-text / conversational queries — those go through vector + BM25.
-- Brand-new files not yet in a graph_rebuild batch.
+- Structural questions go to the graph: `brain_find_symbol` (where is it
+  defined), `brain_find_references` (who names it), `brain_call_chain` (blast
+  radius), `brain_outline` (a file's shape).
+- Entities carry a community ID; same community = structurally adjacent.
+  Edges carry confidence: `EXTRACTED` (tree-sitter, 1.0), `INFERRED`,
+  `AMBIGUOUS`.
+- It does NOT help with free-text questions (those go to `brain_search`'s
+  vector + BM25), or with files not yet in a `graph_rebuild` batch.
 """,
     "examples": """\
 # Example flows
 
 ## Onboarding a brand-new project (FIRST session)
-Requires a maintenance profile such as `?tool_profile=all`.
+Indexing needs a maintenance profile: `?tool_profile=all`.
 
-1. `project_list` → confirm slug unknown.
-2. `project_onboard(project_name="My App", sub_projects=[
-     {"name": "api", "tech": "C#/.NET", "path": "/home/me/api"},
-     {"name": "client", "tech": "React/TS", "path": "/home/me/client"}])`
-   → returns a 7-step Architect checklist.
-3. Walk it: read README, package.json, pyproject.toml, etc. For every
-   important source file, `brain_index_doc(path=<rel>, content=<text>,
-   domain="code")`.
-4. After the batch: `graph_rebuild()` — builds the code graph in one shot.
-5. For each convention you discovered:
-   `memory_store(domain="conventions", name="minimal-apis",
-    description="Endpoints use Minimal APIs at Features/*/Endpoints.cs...",
-    type="convention", classification="foundational",
-    evidence={"file_paths": ["src/Features/Matches/MatchesEndpoints.cs"]})`.
+1. `prism_onboard()` → identity, seeded principles, a checklist.
+2. Walk it: read README / package.json / pyproject.toml, then
+   `brain_index_doc(path=<rel>, content=<text>, domain="code")` per important
+   source file.
+3. After the batch: `graph_rebuild()` — the whole code graph in one shot.
+4. Per convention discovered: `memory_store(domain="conventions",
+   name="minimal-apis", description="Endpoints use Minimal APIs at
+   Features/*/Endpoints.cs...", type="convention",
+   classification="foundational",
+   evidence={"file_paths": ["src/Features/Matches/MatchesEndpoints.cs"]})`.
 
 ## Daily "implement a feature" loop
 1. `context_bundle(persona="dev")` → tasks + recent memory.
 2. `brain_search("user authentication flow", limit=5)` → relevant files.
 3. `memory_recall("auth", limit=5)` → project auth rules.
-4. Write code.
-5. Let the installed edit-learn hooks ingest changed files; use
+4. `job = conductor_work()` → the server picks the task and the step, and
+   returns `instructions` + `expected_proof`.
+5. Do EXACTLY `job["instructions"]`, produce `job["expected_proof"]`, then
+   `conductor_work(id=job["task_id"], outcome="pass", proof=<artifact>)`.
+   Repeat until the reply says `done`. Never guess the next step.
+6. Let the installed edit-learn hooks ingest changed files; use
    `prism_status()` to check drift and `prism_sync()` if the graph is stale.
-6. `task_update(id=..., status="done")`.
 
 ## Debugging an incident
 1. `memory_recall("similar failure", limit=10)` — seen it before?
@@ -2158,29 +2163,31 @@ Requires a maintenance profile such as `?tool_profile=all`.
     classification="foundational", importance=8)`.
 
 ## Picking up after a crash
-1. `workflow_state()` — which step was active?
-2. `task_list(status="in_progress")` — what was I doing?
+1. `conductor_work(id="<task id>")` — the ONE call that resumes you. The
+   server re-issues the step the task actually sits on, with its
+   `instructions` and `expected_proof`. Omit `id` to let it pick.
+2. `task_list(status="in_progress", fields=["id","title","workflow_step"])` —
+   only if you don't know which task you were on.
 3. `context_bundle()` — full picture.
-4. Resume from the last known-good state.
+4. Do the job it handed you and report `outcome` + `proof`. Do NOT try to
+   reconstruct the step sequence by hand; the server already knows it.
 """,
     "orchestration": """\
 # Working tasks the PRISM way
 
-PRISM does NOT auto-run your work — YOU (the calling agent) orchestrate the
-conductor through the `task_*` / `conductor_*` MCP tools. MAXIMIZE FAN-OUT:
+PRISM does NOT auto-run your work — YOU (the calling agent) drive it, through
+`task_*` plus the SINGLE loop verb `conductor_work`. MAXIMIZE FAN-OUT:
 decompose wide, run subtasks IN PARALLEL, verify with a distinct actor.
 
 ## 0. Bootstrap once with prism_onboard
 On a fresh project call `prism_onboard` FIRST: it seeds the default
-architecture principles (so plan_gate is satisfiable), and returns the
-.mcp.json snippet + ports + version + a pointer back here. Then `prism_guide`.
+architecture principles (so plan_gate is satisfiable) and returns the
+.mcp.json snippet, ports and version. Then `prism_guide`.
 STAY CURRENT: your MCP client caches the tool list at connect time, so after a
-PRISM upgrade NEW endpoints stay invisible until you RECONNECT — run `/mcp`
-(reconnect `prism`) or restart, then re-call `prism_guide`. Compare
-`prism_status.prism_version` to the version you onboarded on to detect drift.
-Maintenance/legacy endpoints (brain_index_doc, graph_rebuild, the legacy
-understand_* family, …) live behind `?tool_profile=all` — reconnect with the
-`mcp_url_all` that `prism_onboard` returns to use them.
+PRISM upgrade new endpoints stay invisible until you RECONNECT (`/mcp`, then
+re-call `prism_guide`). Maintenance and legacy endpoints live behind
+`?tool_profile=all` — reconnect with the `mcp_url_all` that `prism_onboard`
+returns to reach them.
 
 ## 1. Frame an EPIC as a ROOT task, decompose into demonstrable subtasks
 - `task_create(title=..., parent_id="")` — a ROOT task (empty parent_id) is an
@@ -2190,24 +2197,33 @@ understand_* family, …) live behind `?tool_profile=all` — reconnect with the
   `task_create(..., parent_id="<epic_id>")` — the parent_id hierarchy is what
   the conductor renders. Title = the feature; mechanics go in the description.
   For SAFE parallel fan-out give each child two things: (1) DISJOINT
-  `allowed_files` — the hard collision boundary so concurrent dev agents never
-  touch the same file (if two slices must share a file they are NOT independent:
-  merge them, or sequence them with `dependencies`); (2) its own `proof_type` +
+  `allowed_files` — the collision boundary, so concurrent agents never touch
+  the same file (two slices that must share a file are NOT independent: merge
+  or sequence them with `dependencies`); (2) its own `proof_type` +
   `oracle` matched to how THAT slice is proven (test|metric|artifact|demo) so
   each child clears its OWN gate shape without override. Don't over-decompose —
   a single demonstrable feature stays ONE task.
 
-## 2. Drive each task through the conductor SDLC state machine
+## 2. Drive each task with ONE verb — `conductor_work`
 review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
--> green_gate, via `conductor_advance` / `conductor_gate`.
+-> green_gate. You do NOT step through these yourself. The server owns the
+sequence and dispenses it, so you never name a step:
+
+    job = conductor_work()            # omit id -> server picks the next task
+    while not job["done"]:
+        # do EXACTLY job["instructions"], produce job["expected_proof"]
+        job = conductor_work(id=job["task_id"], outcome="pass", proof=<artifact>)
+
 - story_gate / plan_gate are RUBRIC-VERIFIED: the plan_doc needs a Summary,
   Requirements, Acceptance Criteria (AC-ids WITH oracles), plus a mermaid
   `plan_diagram` — a thin plan scores red. `principles_seed` (or
   `prism_onboard`) must have run so plan_gate's principle check is satisfiable.
-  DON'T discover the format by failing the gate: when you `conductor_advance`
-  INTO draft_story / verify_plan, the result carries `rubric` — the exact
-  required sections, the `AC-<n>` id pattern, and the `oracle:` marker the
-  scorer wants. Read it and shape plan_doc to match BEFORE you approve.
+  DON'T discover the format by failing the gate: the job you receive FOR
+  draft_story / verify_plan carries `rubric` — the exact required sections, the
+  `AC-<n>` id pattern, and the `oracle:` marker the scorer wants. Read it and
+  shape the doc to match BEFORE you report. Pass the FULL story/plan markdown
+  as `proof=`: it OVERWRITES `plan_doc`, so a `task_update(plan_doc=...)` you
+  made beforehand is clobbered by the very next report.
 - red_gate / green_gate are PROOF-CARRYING, and the proof SHAPE is driven by the
   task's `proof_type` — declare it up front (on task_create / task_update) so
   the gate checks the RIGHT oracle instead of always demanding a failing test:
@@ -2221,58 +2237,83 @@ review -> story_gate -> plan_gate -> red (write FAILING tests) -> implement
   proof_type it's judged on THAT oracle's shape — the tag no longer silently
   forces a screenshot. green_gate stays terminal: clear it with a DISTINCT
   actor (no self-override); the proof_type just picks WHICH artifact counts.
+  A green_gate whose proof_type is `demo` or `review` is HUMAN-ONLY BY DESIGN:
+  the machine seat deliberately declines it, because judging a screenshot is
+  the one thing it cannot do honestly. Do NOT "unblock" one by swapping the
+  proof_type or bolting a loadable URL onto the oracle — that games the
+  distinct-actor rule. Make the human's click GROUNDED (live URL, durable
+  screenshots in the evidence store, a green machine-checkable verify), then
+  let them click.
 
-## 3. FAN OUT with subagents — and verify with a DISTINCT actor
+## 3. The evidence a gate actually wants (this is where drivers get stuck)
+- Declare the `oracle` and the `likely_misfire` AT CREATION, not at the gate.
+  The oracle names the ONE command or user-reachable surface that settles it;
+  `likely_misfire` names the false-green you expect (the way this could pass
+  while being wrong). A gate with no oracle parks waiting for a human.
+- `task.verify` must be WORKSPACE-ROOT-RELATIVE — `services/app/tests/x.py`,
+  never `cd services/app && pytest tests/x.py`. Get this wrong and red_gate
+  parks with "no tests ran" (rc=4) while the gate wanted rc==1.
+- At the red step commit the failing tests as a TESTS-ONLY commit whose
+  message carries the `[task:<id>]` trailer, BEFORE any implementation commit.
+  The red machine seat ANCHORS to that commit; bundling tests and
+  implementation together makes red undemonstrable and strands the gate.
+- Evidence lives IN PRISM, never on an external host: write files under
+  `<data dir>/evidence/<task_id>/` (`data_dir/evidence/<task_id>/`) and cite
+  them from `completion_proof` as `![](/api/tasks/<id>/evidence/<file>)`. The
+  reviewer reads the evidence where the gate is.
+- To find out whether a gate is really blocked, READ THE LIVE READINESS:
+  `GET /api/conductor/gate/readiness?task_id=&project=`. Do NOT quote
+  `task.gate_reason` — it is a STORED SNAPSHOT and goes stale, so it will tell
+  you a gate is blocked long after readiness says the approval is clean.
+- A gate is decided by a DISTINCT actor: the session that produced the work
+  cannot clear its own gate. That actor may be a machine seat on a fresh
+  passing receipt; the human always keeps visibility, reject and override.
+- A red test is YOURS. There is no "pre-existing failure" — root-cause it in
+  the task you are on.
+
+## 4. FAN OUT with subagents — and verify with a DISTINCT actor
 - A dev/qa subagent builds the slice. Parallelize INDEPENDENT subtasks across
   subagents (fan-out) to move the epic faster — spawn them concurrently.
-- SAFE-FAN-OUT INVARIANT: parallelize ONLY children with DISJOINT `allowed_files`
-  (the collision boundary), and gate EACH on its declared `proof_type` — a metric
-  slice on a count-delta, a ui slice on an artifact, a test slice on a red/green
-  trace — so heterogeneous slices clear their own gates instead of override-all.
 - Track the whole cohort LEANLY: `task_list(parent_id="<epic_id>", fields=[...])`
-  and `conductor_advance/​conductor_gate(..., fields=["from_step","to_step",
-  "gate_state"])` return just what you need and DROP the echoed task object —
-  that lean read is what lets you fan out WIDE without the driver's own context
-  blowing (the verbosity tax is the real ceiling on fan-out width).
+  and `conductor_work(..., fields=["from_step","to_step","gate_state"])` return
+  just what you need and DROP the echoed task object — that lean read is what
+  lets you fan out WIDE without the driver's own context blowing (the verbosity
+  tax is the real ceiling on fan-out width).
 - An INDEPENDENT subagent (a DISTINCT actor — NO self-override) clears
   red_gate/green_gate with REAL artifacts: it produces the proof_type's proof
   (test trace / count-delta / artifact path / screenshot), then a distinct actor
   verifies. A gate override by the SAME actor that produced the work is rejected.
 
-## 4. Roll child proofs up to the EPIC green_gate (child roll-up)
-Don't re-prove the epic itself. When every non-cancelled child is done with a
-STRONG completion_proof, the children ARE the parent's proof — the epic's
-green_gate does a child roll-up and passes WITHOUT override (a weak/incomplete
-child fails with a concrete reason). Approve the parent once subtasks are green.
+## 5. Roll child proofs up to the EPIC green_gate
+Don't re-prove the epic. Once every non-cancelled child is done with a STRONG
+completion_proof, the children ARE the parent's proof: the epic's green_gate
+rolls them up and passes without override (a weak child fails with a reason).
 
-## 5. Write the WHY back to memory at green_gate
+## 6. Write the WHY back to memory at green_gate
 On green, `memory_store(type="decision", ...)` the DECISION + rationale +
-rejected alternatives + the file:line it lives at. It resurfaces in the
-Understand wiki so the next agent inherits the reasoning, not just the diff.
+rejected alternatives + the file:line it lives at, so the next agent inherits
+the reasoning and not just the diff.
 
-## 6. Browse what you already know — the OKF / Understand wiki
-Before re-deriving anything, read the unified Understand wiki: `okf_index`
-(manifest) -> `okf_get(path)` (one concept + cross-links/backlinks) ->
-`okf_graph` (the concept graph). `brain_understand` answers a code-level
-question across the graph. Memory you WRITE (`memory_store`) surfaces here.
+## 6. Browse what you already know before re-deriving it
+`okf_index` (manifest) -> `okf_get(path)` (one concept + cross-links) ->
+`okf_graph`. Memory you WRITE surfaces here.
 
 ## 7. Keep conductor responses LEAN — don't drown in echoed task objects
-Driving a task is many small steps, and by default every `conductor_advance` /
-`conductor_gate` echoes the WHOLE task (plan_doc, diagram, all fields) you just
-wrote, while an unscoped `task_list` can blow the token budget on a big board.
+Driving a task is many small steps, and by default every `conductor_work`
+report echoes the WHOLE task (plan_doc, diagram, all fields) you just wrote,
+while an unscoped `task_list` can blow the token budget on a big board.
 Two projections, used by default, cut that:
-- `fields=["from_step","to_step","gate_state"]` on `conductor_advance` /
-  `conductor_gate` returns ONLY those keys and OMITS the task object — request
-  the full task only when you actually need to re-read it. The same `fields`
-  projects `task_list` rows.
+- `fields=["from_step","to_step","gate_state","rubric"]` on `conductor_work`
+  returns ONLY those keys and OMITS the task object — request the full task
+  only when you actually need to re-read it. The same `fields` projects
+  `task_list` rows.
 - `parent_id="<epic_id>"` on `task_list` returns ONLY that epic's children
   (or `parent_id=""` for root tasks) — scope to the epic you're driving instead
   of dumping every task.
 
 ## Prefer the skills
-- `implement` (workflow) DRIVES one task through this whole conductor SDLC.
-- `prototype` (workflow) PLANS one task (research -> PRD-style plan).
-Reach for them instead of hand-stepping every gate.
+- `implement` DRIVES one task through this whole conductor SDLC.
+- `prototype` PLANS one task (research -> PRD-style plan).
 """,
 }
 
@@ -2287,8 +2328,12 @@ def _roles_guide_section() -> str:
     for step, rid in _roles.registry()["step_roles"].items():
         lines.append(f"- {step}: {rid} ({_roles.ROLES[rid].label})")
     lines += ["", "Read the full registry at GET /api/roles. Report the model "
-              "you used on conductor_advance/conductor_gate so PRISM can "
-              "attribute per-role token cost."]
+              "you used on each `conductor_work` report so PRISM can attribute "
+              "per-role token cost.",
+              "",
+              "You never pick the step yourself: `conductor_work` hands you the "
+              "step, and with it the role PRISM expects for that step. Drive "
+              "with it and the routing above happens on its own."]
     return "\n".join(lines)
 
 
