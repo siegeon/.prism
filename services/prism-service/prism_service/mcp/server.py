@@ -119,10 +119,40 @@ async def list_tools():
     return tools_for_profile(get_request_context().tool_profile)
 
 
+def _record_tool_call(name: str, ctx, result) -> None:
+    """Count one dispatched call for the tool-usage ledger (task f1e7e228).
+
+    Wrapped in a blanket try/except ON PURPOSE: telemetry must never be able
+    to fail a tool call. A write that cannot land is simply no evidence.
+    """
+    try:
+        from prism_service.project_context import get_project
+        from prism_service.services.tool_usage_data import record_tool_call
+
+        record_tool_call(
+            str(get_project(ctx.project_id)._data_dir / "scores.db"),
+            tool=name,
+            project=ctx.project_id,
+            tool_profile=ctx.tool_profile or "interactive",
+            ok=not bool(getattr(result, "isError", False)),
+        )
+    except Exception:
+        pass
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
-    """Dispatch a tool call to the handler, scoped to the current project."""
+    """Dispatch a tool call to the handler, scoped to the current project,
+    and record per-tool telemetry for EVERY outcome — including the
+    profile-rejected ones, which are the ledger's most interesting signal."""
     ctx = get_request_context()
+    result = await _dispatch_tool(name, arguments, ctx)
+    _record_tool_call(name, ctx, result)
+    return result
+
+
+async def _dispatch_tool(name: str, arguments: dict, ctx):
+    """The dispatch body: authorize, profile-check, team-scope, hand off."""
     authorized = _authorize_tool(name, ctx)
     if isinstance(authorized, CallToolResult):
         return authorized
