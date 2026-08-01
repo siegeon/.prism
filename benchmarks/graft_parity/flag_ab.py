@@ -54,6 +54,18 @@ ARMS: list[tuple[str, dict]] = [
 ]
 
 
+# What the BASELINE arm means, pinned explicitly (task 19e4e7f7).
+#
+# The baseline used to be "no overrides", i.e. whatever the shipped default
+# happened to be. That silently broke the moment this very task flipped
+# PRISM_RERANK from "off" to "auto": on a machine with the [neural] extra the
+# baseline arm started reranking too, so a FullStackHero run compared auto
+# against auto and reported d(r@5) = +0.0000 with zero discordant pairs. The
+# harness has to say what it is comparing AGAINST rather than inherit it, or
+# every future default change quietly nulls out its own measurement.
+BASELINE_ENV: dict = {"PRISM_RERANK": "off"}
+
+
 def run_arm(harness, cases, limit, overrides: dict):
     """One measured pass with ``overrides`` applied, then restored exactly."""
     prior = {k: os.environ.get(k) for k in overrides}
@@ -99,7 +111,7 @@ def main() -> int:
     print(f"[{args.label}] indexed {idx['indexed']} files "
           f"({time.perf_counter() - t0:.0f}s); {len(cases)} cases", flush=True)
 
-    per_base, base_sec = run_arm(harness, cases, args.limit, {})
+    per_base, base_sec = run_arm(harness, cases, args.limit, BASELINE_ENV)
     base = summarize(per_base)
     print(f"[{args.label}] BASELINE {json.dumps(base['recall'])} "
           f"top5={base['any_gold_top5']}/{base['n']} ({base_sec}s)", flush=True)
@@ -112,6 +124,10 @@ def main() -> int:
         "cases": len(cases),
         "index": idx,
         "baseline": base,
+        # Recorded so a reader can never wonder what the arms were compared
+        # against — the bug this guards was an implicit baseline drifting with
+        # the shipped default.
+        "baseline_env": dict(BASELINE_ENV),
         "baseline_sec": base_sec,
         "arms": {},
     }

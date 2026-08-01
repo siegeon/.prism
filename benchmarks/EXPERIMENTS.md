@@ -157,6 +157,30 @@ in `services/bench-service/docker-compose.yml`.
   (−0.0087) while pool 50 gets 93% of the full win (+0.0986, p=0.0074).
   Task 61666a4f: de-duplicate the pool by file for the same coverage ~2.7×
   cheaper.
+- **THE SHIPPED CONFIGURATION, measured as shipped.** The numbers above were
+  taken at an effective pool of 120 (before `TOPN` became a real cap). What
+  users actually get is `auto` + `TOPN=50`, so it was re-measured in that exact
+  shape against the OLD default on both corpora:
+
+  | corpus | n | r@5 off → auto | Δ r@5 | r@10 off → auto | Δ r@10 | McNemar p |
+  |---|---|---|---|---|---|---|
+  | PocketBase | 115 | 0.5217 → 0.6203 | **+0.0986** | 0.6275 → 0.6580 | +0.0305 | 0.0074 |
+  | FullStackHero | 119 | 0.4874 → 0.5910 | **+0.1036** | 0.5700 → 0.6429 | +0.0729 | 0.0015 |
+
+  **Pooled McNemar** (exact binomial, discordant pairs summed across both
+  corpora): n=36, **5** favour the old default, **31** favour the new,
+  two-sided **p = 1.3e-05**. Not worse on r@5 or r@10 in either corpus.
+
+- **A harness bug this exposed, worth knowing before trusting any future A/B.**
+  `flag_ab.py`'s baseline arm was "no env overrides", i.e. whatever the shipped
+  default happened to be. Flipping `PRISM_RERANK` to `auto` therefore made the
+  BASELINE rerank too, and the first FullStackHero re-run compared auto against
+  auto: `d(r@5) = +0.0000`, `p=1.0`, zero discordant pairs, with the baseline
+  silently drifted from 0.4874 to 0.5910. A default change had nulled out its
+  own measurement. The baseline is now pinned explicitly (`BASELINE_ENV =
+  {"PRISM_RERANK": "off"}`) and recorded in the result JSON as `baseline_env`,
+  so an arm always states what it was compared against.
+
 - **What it costs, on the real PRISM corpus, measured not estimated.** Same
   brain.db, same queries, only the flag changed: `off` mean **0.02 s**,
   `auto` mean **1.92 s** (2.10 / 1.67 / 1.98). Through the HTTP API a warm
