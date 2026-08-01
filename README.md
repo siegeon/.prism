@@ -1,6 +1,8 @@
 <!-- PRISM repository index. Agent-first: this is the page an AI agent reads
      to install PRISM, wire up its MCP, and start working tasks. Keep the
-     version line in sync with prism_service/__version__.py on each release. -->
+     numbers here reproducible: every benchmark row names its N and links the
+     runner that produces it. The version badge tracks the GitHub release
+     directly, so there is no version number in this file to keep in sync. -->
 
 <div align="center">
 
@@ -10,7 +12,7 @@
 
 Durable project memory, a navigable knowledge wiki, a code graph, and a gated SDLC task conductor — so your agent builds with continuity instead of starting cold every session.
 
-[![version](https://img.shields.io/badge/version-v6.7.4-6E7FD7)](./services/prism-service/prism_service/__version__.py)
+[![version](https://img.shields.io/github/v/release/siegeon/.prism?color=6E7FD7&label=version)](https://github.com/siegeon/.prism/releases)
 [![python](https://img.shields.io/badge/python-3.12-3776AB)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](#license)
 [![MCP](https://img.shields.io/badge/MCP-for%20coding%20agents-555)](https://modelcontextprotocol.io/)
@@ -166,12 +168,12 @@ pipx install prism-service                    # isolated; recommended
 prism start --daemon                          # web → :7778 · MCP → :7777
 prism status                                  # confirm it's up
 prism logs --follow                           # tail logs
-curl http://localhost:7778/api/version        # → {"version": "6.7.4", ...}
+curl http://localhost:7778/api/version        # → {"version": "...", ...}
 ```
 
 Lifecycle: `prism start [--daemon]` · `prism status` · `prism logs` · `prism stop` · `prism update` · `prism version`.
 
-**Web UI** — `http://localhost:7778/` — a React SPA: **Dashboard · Brain (graph) · Understand (wiki) · Tasks · Conductor · Sessions · Consolidation · Learning**. The footer shows the build + theme (e.g. *Slate Blue · v6.7.4*).
+**Web UI** — `http://localhost:7778/` — a React SPA: **Dashboard · Brain (graph) · Understand (wiki) · Tasks · Conductor · Sessions · Consolidation · Learning**. The footer shows the build + theme (e.g. *Slate Blue · v7.10.3*).
 
 **Run from source (contributors):**
 
@@ -190,7 +192,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for repo conventions and layout, and the MCP `pri
 <details>
 <summary><b>Status & license</b></summary>
 
-Active development — `prism_service/__version__.py` is the canonical version + changelog (`PRISM_VERSION_NOTES`). Current: **v6.7.4** (clean quickstart numbering, cross-system comparison table, Understand-wiki hero screenshot).
+Active development — `prism_service/__version__.py` is the canonical version + changelog (`PRISM_VERSION_NOTES`), and the version badge above tracks the latest GitHub release directly rather than a number copied into this file (it had drifted 90 releases behind).
 
 <a name="license"></a>**License:** Apache-2.0.
 
