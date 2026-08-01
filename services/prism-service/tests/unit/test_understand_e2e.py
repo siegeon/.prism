@@ -32,6 +32,7 @@ import pytest
 from prism_service import config
 from prism_service.mcp import understand_tools as ut
 from prism_service.services import source_service as ss
+from prism_service.services import understand_artifact_store as store
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -126,21 +127,26 @@ def test_full_e2e_no_claude_subprocess(
         }
         assert refresh2["data"]["enqueued"] == 0
 
-        # Read-side tools return the cached artifacts.
-        for tool, expect_kind in (
-            ("understand_get_tour", "schema"),
-            ("understand_get_layers", "schema"),
-            ("understand_get_domains", "schema"),
-            ("understand_get_onboarding", "markdown"),
+        # The cached artifacts are readable at the stored SHA.
+        #
+        # Task 4899173a retired the understand_get_* MCP read tools
+        # (SUPERSEDED BY the okf_* Understand wiki: okf_index / okf_get /
+        # okf_graph), so this reads the artifact store directly rather than
+        # through those tools. The coverage intent is unchanged and is the
+        # point of this e2e: store_result must actually have cached each
+        # analyzer's payload against `sha`.
+        for analyzer, expect_kind in (
+            ("tour_builder", "schema"),
+            ("architecture_analyzer", "schema"),
+            ("domain_analyzer", "schema"),
+            ("onboarding_writer", "markdown"),
         ):
-            env = _call(tool)
-            data = env["data"]
-            assert data is not None, f"{tool}: cache miss after store_result"
+            data = store.get("demo", sha, analyzer)
+            assert data is not None, f"{analyzer}: cache miss after store_result"
             if expect_kind == "schema":
                 assert data["status"] == "complete"
             else:
                 assert data.startswith("#")
-            assert env["meta"]["sha"] == sha
 
         # status reports last_analyzed_sha matches our build.
         status = _call("understand_status")

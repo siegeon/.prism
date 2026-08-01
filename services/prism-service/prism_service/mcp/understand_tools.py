@@ -5,13 +5,22 @@ stays roughly readable. The main `tools.py` imports
 `UNDERSTAND_TOOLS`, `UNDERSTAND_TOOL_NAMES`, and `dispatch` and
 splices them into its registration list + dispatcher.
 
-Two surfaces:
+Four tools remain, all load-bearing:
 
 * **Trigger / write** — `understand_refresh`, `understand_drain_queue`,
-  `understand_store_result`, `understand_bootstrap`.
-* **Read** — `understand_status`, `understand_get_tour`,
-  `understand_get_layers`, `understand_get_domains`,
-  `understand_get_onboarding`.
+  `understand_store_result`.
+* **Read** — `understand_status`.
+
+`understand_refresh` and `understand_status` are called by
+`assets/stop_record_hook.py` over the automation profile; drain_queue and
+store_result back the analyzer worker path.
+
+Task 4899173a retired the other six (`understand_bootstrap`,
+`understand_configure`, `understand_get_tour`, `understand_get_layers`,
+`understand_get_domains`, `understand_get_onboarding`) — the v5.1 analysis
+queue's cold-start and artifact-read half, superseded by the okf_* Understand
+wiki (`okf_index` / `okf_get` / `okf_graph`). None had a consumer outside its
+own tests; see the RETIRE rows of `docs/mcp-tool-usage-ledger.md`.
 
 Every response is wrapped in an envelope:
 
@@ -102,64 +111,17 @@ UNDERSTAND_TOOLS: list[Tool] = [
             "required": ["job_id", "analyzer", "target_sha", "payload"],
         },
     ),
-    Tool(
-        name="understand_bootstrap",
-        description=(
-            "Full cold-start refresh. Refuses unless confirm=true to avoid "
-            "accidental large spend. Same effect as understand_refresh with "
-            "no cached ancestors."
-        ),
-        inputSchema=_project_schema({
-            "confirm": {"type": "boolean", "default": False},
-        }),
-    ),
-    Tool(
-        name="understand_configure",
-        description=(
-            "Point a project at an upstream git remote. Clones into "
-            "data/projects/<name>/source/ (filter=blob:none). Persists "
-            "remote_url + tracked_ref in understand_state.json so future "
-            "refreshes know which ref to advance. Idempotent: re-running "
-            "with the same remote_url fetches; with a different one is "
-            "refused so accidental repointing can't happen silently."
-        ),
-        inputSchema=_project_schema({
-            "remote_url": {
-                "type": "string",
-                "description": "https:// or ssh git URL (or file:// for local).",
-            },
-            "tracked_ref": {
-                "type": "string", "default": "origin/main",
-                "description": "Ref to pin (default origin/main).",
-            },
-        }),
-    ),
 ]
 
 
-_READ_TOOLS: list[Tool] = [
-    Tool(
-        name="understand_get_tour",
-        description="Return tour.json for the project's latest cached SHA.",
-        inputSchema=_project_schema({"sha": {"type": "string"}}),
-    ),
-    Tool(
-        name="understand_get_layers",
-        description="Return layers.json for the project's latest cached SHA.",
-        inputSchema=_project_schema({"sha": {"type": "string"}}),
-    ),
-    Tool(
-        name="understand_get_domains",
-        description="Return domains.json for the project's latest cached SHA.",
-        inputSchema=_project_schema({"sha": {"type": "string"}}),
-    ),
-    Tool(
-        name="understand_get_onboarding",
-        description="Return onboarding.md text for the project's latest cached SHA.",
-        inputSchema=_project_schema({"sha": {"type": "string"}}),
-    ),
-]
-UNDERSTAND_TOOLS.extend(_READ_TOOLS)
+# RETIRED (task 4899173a): understand_get_tour / _get_layers / _get_domains /
+# _get_onboarding were the read half of the v5.1 analysis queue, superseded by
+# the okf_* Understand wiki (okf_index / okf_get / okf_graph). Retired together
+# with understand_bootstrap / understand_configure per the RETIRE rows of
+# docs/mcp-tool-usage-ledger.md — none had a consumer outside its own tests.
+# The four tools that remain below are load-bearing: refresh/status are called
+# by assets/stop_record_hook.py over the automation profile, and
+# drain_queue/store_result back the analyzer worker path.
 
 # v6.6.x — the four-page knowledge model collapsed to TWO surfaces (Brain =
 # code-graph viz; Understand = ONE unified wiki over curated memory). The
@@ -177,13 +139,6 @@ UNDERSTAND_TOOLS = [
 
 UNDERSTAND_TOOL_NAMES: set[str] = {t.name for t in UNDERSTAND_TOOLS}
 
-
-_ARTIFACT_BY_TOOL = {
-    "understand_get_tour": "tour_builder",
-    "understand_get_layers": "architecture_analyzer",
-    "understand_get_domains": "domain_analyzer",
-    "understand_get_onboarding": "onboarding_writer",
-}
 
 
 def _envelope(data, sha: str, built_at: float = 0.0) -> dict:
@@ -294,82 +249,5 @@ def dispatch(
             "meta": {"sha": target_sha, "built_at": time.time(),
                      "age_seconds": 0},
         }))]
-
-    if name == "understand_bootstrap":
-        if not arguments.get("confirm"):
-            return [TextContent(type="text", text=_json({
-                "data": {"refused": True, "reason":
-                         "bootstrap requires confirm=true"},
-                "meta": {"sha": "", "built_at": time.time(),
-                         "age_seconds": 0},
-            }))]
-        # Same engine entry — the cold-start path is just a refresh with
-        # no cached ancestors. Surfacing it as a distinct tool lets the
-        # CLI / Stop-hook treat it as foreground-required.
-        result = eng.refresh()
-        return [TextContent(type="text", text=_json({
-            "data": {
-                "status": result.status, "current_sha": result.target_sha,
-                "queued": result.queued, "job_ids": result.job_ids,
-                "budget_used": result.budget_used,
-                "budget_limit": result.budget_limit,
-            },
-            "meta": {"sha": result.target_sha, "built_at": time.time(),
-                     "age_seconds": 0},
-        }))]
-
-    if name == "understand_configure":
-        from prism_service.services import source_service as _ss
-        remote_url = (arguments.get("remote_url") or "").strip()
-        tracked_ref = arguments.get("tracked_ref") or "origin/main"
-        if not remote_url:
-            return [TextContent(type="text", text=_json({
-                "data": {"configured": False,
-                         "error": "remote_url is required"},
-                "meta": {"sha": "", "built_at": time.time(),
-                         "age_seconds": 0},
-            }))]
-        try:
-            state_obj = _ss.ensure_cloned(project, remote_url, tracked_ref)
-        except _ss.SourceUnavailable as e:
-            return [TextContent(type="text", text=_json({
-                "data": {"configured": False, "error": str(e)},
-                "meta": {"sha": "", "built_at": time.time(),
-                         "age_seconds": 0},
-            }))]
-        # Persist remote_url + tracked_ref in understand_state.json so
-        # the operator can see the configuration via understand_status.
-        state = ue._read_state(project)
-        state["remote_url"] = remote_url
-        state["tracked_ref"] = tracked_ref
-        ue._write_state(project, state)
-        return [TextContent(type="text", text=_json({
-            "data": {
-                "configured": True,
-                "remote_url": remote_url,
-                "tracked_ref": tracked_ref,
-                "head_sha": state_obj.head_sha,
-                "advanced": state_obj.advanced,
-            },
-            "meta": {"sha": state_obj.head_sha, "built_at": time.time(),
-                     "age_seconds": 0},
-        }))]
-
-    if name in _ARTIFACT_BY_TOOL:
-        analyzer = _ARTIFACT_BY_TOOL[name]
-        sha = arguments.get("sha") or _latest_sha(project)
-        if not sha:
-            return [TextContent(type="text", text=_json({
-                "data": None,
-                "meta": {"sha": "", "built_at": 0, "age_seconds": None,
-                         "miss_reason": "no cached SHAs for this project"},
-            }))]
-        payload = store.get(project, sha, analyzer)
-        manifest = ue._read_state(project)
-        built_at = (manifest.get("analyzers", {}).get(analyzer, {})
-                    .get("written_at") or 0.0)
-        return [TextContent(type="text", text=_json(
-            _envelope(payload, sha=sha, built_at=built_at)
-        ))]
 
     return None

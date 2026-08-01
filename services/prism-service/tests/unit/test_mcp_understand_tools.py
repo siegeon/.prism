@@ -3,11 +3,14 @@
 Drives `understand_tools.dispatch(...)` directly with mocked engine
 state. Covers:
 
-  * Tool registration: all 9 tools present, in interactive profile
+  * Tool registration: the four surviving tools, none in interactive
   * Refresh path (no_source / queued / complete)
   * Drain → store_result → cache + queue completion round trip
-  * Bootstrap refuses without confirm=true
-  * Get_* reads return data with meta envelope
+
+Task 4899173a retired the bootstrap / configure / get_* half of this surface
+(superseded by the okf_* Understand wiki), so the dispatch tests for those
+are gone; their absence is pinned by
+test_retired_understand_tools_are_gone.py.
 """
 
 from __future__ import annotations
@@ -62,12 +65,15 @@ def _call(name: str, **args) -> dict:
 
 
 def test_all_tools_registered():
+    # Task 4899173a retired the other six (bootstrap, configure, get_tour,
+    # get_layers, get_domains, get_onboarding) — the v5.1 analysis queue's
+    # cold-start and artifact-read half, SUPERSEDED BY the okf_* Understand
+    # wiki (okf_index / okf_get / okf_graph). The four below are load-bearing
+    # and stay. Absence of the six is pinned by
+    # test_retired_understand_tools_are_gone.py.
     expected = {
         "understand_refresh", "understand_status", "understand_drain_queue",
-        "understand_store_result", "understand_bootstrap",
-        "understand_configure",
-        "understand_get_tour", "understand_get_layers",
-        "understand_get_domains", "understand_get_onboarding",
+        "understand_store_result",
     }
     assert ut.UNDERSTAND_TOOL_NAMES == expected
 
@@ -120,16 +126,6 @@ def test_drain_then_store_result_round_trip(cloned_proj_with_sha):
     assert store.get("proj-a", sha, job["analyzer"]) is not None
 
 
-def test_bootstrap_refuses_without_confirm(cloned_proj_with_sha):
-    env = _call("understand_bootstrap")
-    assert env["data"]["refused"] is True
-
-
-def test_bootstrap_with_confirm_runs(cloned_proj_with_sha):
-    env = _call("understand_bootstrap", confirm=True)
-    assert env["data"]["status"] in ("queued", "complete")
-
-
 def test_status_reports_queue_and_sha(cloned_proj_with_sha):
     _call("understand_refresh")
     env = _call("understand_status")
@@ -137,36 +133,9 @@ def test_status_reports_queue_and_sha(cloned_proj_with_sha):
     assert env["data"]["current_sha"] == cloned_proj_with_sha
 
 
-def test_get_tour_returns_envelope_on_hit(cloned_proj_with_sha):
-    sha = cloned_proj_with_sha
-    store.put("proj-a", sha, "tour_builder", {"steps": [{"ordinal": 1}]})
-    # Mark analyzed so latest_sha resolution works.
-    ue._write_state("proj-a", {"last_analyzed_sha": sha})
-
-    env = _call("understand_get_tour")
-    assert env["data"]["steps"][0]["ordinal"] == 1
-    assert env["meta"]["sha"] == sha
-
-
-def test_get_layers_returns_none_on_miss(cloned_proj_with_sha):
-    env = _call("understand_get_layers")
-    # No cached state → data is None, meta carries miss_reason.
-    assert env["data"] is None
-    assert "miss_reason" in env["meta"]
-
-
-def test_get_onboarding_returns_markdown(cloned_proj_with_sha):
-    sha = cloned_proj_with_sha
-    store.put("proj-a", sha, "onboarding_writer", "# Hello\n")
-    ue._write_state("proj-a", {"last_analyzed_sha": sha})
-
-    env = _call("understand_get_onboarding")
-    assert env["data"] == "# Hello\n"
-
-
-def test_configure_requires_remote_url(cloned_proj_with_sha):
-    """understand_configure rejects empty remote_url with a clear message."""
-    env = ut.dispatch("understand_configure", {"project": "proj-a", "remote_url": ""}, "proj-a")
-    body = json.loads(env[0].text)
-    assert body["data"]["configured"] is False
-    assert "remote_url is required" in body["data"]["error"]
+# RETIRED (task 4899173a): the bootstrap / configure / get_tour / get_layers /
+# get_domains / get_onboarding dispatch tests were removed together with the
+# tools they exercised. SUPERSEDED BY the okf_* Understand wiki (okf_index /
+# okf_get / okf_graph); their absence is now pinned by
+# test_retired_understand_tools_are_gone.py. The refresh / status /
+# drain_queue / store_result tests above are unaffected and still run.
