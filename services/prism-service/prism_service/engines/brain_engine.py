@@ -2926,11 +2926,56 @@ class Brain:
             # past the cap keep their RRF order, which is the ordinary
             # rerank-a-pool design; the cap is what makes the cost bounded and
             # therefore defaultable.
-            pool_n = max(1, min(pool_n, len(fused)))
-            pool = fused[:pool_n]
+            #
+            # SUPERSEDED by task 61666a4f: the cap now bounds DISTINCT FILES,
+            # not chunks. Multi-granular chunking gives one source file many
+            # docs (path::__file__ + win_N windows + one per function) and the
+            # ``seen_files`` collapse below returns ONE row per file anyway --
+            # so the most expensive step in search was scoring the same file
+            # three to five times for one row of output. The pool is therefore
+            # collapsed to one representative per source_file BEFORE the cap.
+            pool_n = max(1, pool_n)
+            # The representative is the file's BEST RRF-RANKED chunk, i.e. its
+            # first appearance in ``fused`` -- the (-score, doc_id) order from
+            # reciprocal_rank_fusion -- never document order, never chunk id.
+            # source_file is not on the fused items (the legs return only
+            # {doc_id, score}), so join it the same way the result build does.
+            ranked_ids = [c["doc_id"] for c in fused]
+            _ph = ",".join("?" * len(ranked_ids))
+            file_of = {
+                r["id"]: r["source_file"] for r in self._brain.execute(
+                    f"SELECT id, source_file FROM docs WHERE id IN ({_ph})",
+                    ranked_ids,
+                ).fetchall()
+            }
+            pool: list[dict] = []
+            slot_of: dict[str, int] = {}
+            picked_files: set[str] = set()
+            for slot, cand in enumerate(fused):
+                # Docs with no source_file (legacy expertise/memory rows) are
+                # their own group, exactly as ``seen_files`` below treats them.
+                group_key = file_of.get(cand["doc_id"]) or cand["doc_id"]
+                if group_key in picked_files:
+                    continue
+                picked_files.add(group_key)
+                slot_of[cand["doc_id"]] = slot
+                pool.append(cand)
+                if len(pool) >= pool_n:
+                    break
             reranked = self._rerank_candidates(query, pool, rerank_preset)
             if reranked is not None:
-                fused = reranked + fused[pool_n:]
+                # Expand back: the rescored representatives go into the slots
+                # they were taken from, so non-representative chunks keep
+                # their RRF position and candidates past the cap keep their
+                # RRF order, exactly as the old ``fused[pool_n:]`` splice did.
+                # Slots are taken from the returned set only -- a candidate
+                # whose content row vanished is dropped by
+                # ``_rerank_candidates`` and must not leave a duplicate here.
+                slots = sorted(slot_of[c["doc_id"]] for c in reranked
+                               if c["doc_id"] in slot_of)
+                fused = list(fused)
+                for slot, cand in zip(slots, reranked):
+                    fused[slot] = cand
 
         # PRISM_FEEDBACK_WEIGHT (default 0.002; "off" disables): close the
         # feedback loop by nudging rrf_score by accumulated past thumbs on

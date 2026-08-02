@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.8"
+PRISM_VERSION = "7.10.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.9: SEARCH RERANKS THE FILES, NOT THE SAME FILE FIVE TIMES [task "
+    "61666a4f]. Multi-granular chunking gives one source file many chunks, "
+    "and search already returns one row per file, so the cross-encoder -- the "
+    "most expensive step in a search -- was scoring the same file three to "
+    "five times to produce one result. The rerank pool now keeps ONE "
+    "representative per file, that file's best RRF-ranked chunk, chosen "
+    "before PRISM_RERANK_TOPN is applied, so the cap now bounds distinct "
+    "files instead of chunks and the budget is spent on breadth. Results are "
+    "unchanged: the rescored representatives go back into the positions they "
+    "came from, every other chunk keeps its rank, and PRISM_RERANK=off is "
+    "untouched. "
     "v7.10.7: AGENT RUNS CANNOT POST THEIR OWN GATE PASS [task 682b7e48]. "
     "POST /api/agent-runs/ingest took the row unvalidated, so any HTTP "
     "caller could assert gate_state=passed for any task/step. It is now "
