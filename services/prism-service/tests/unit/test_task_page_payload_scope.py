@@ -1,45 +1,50 @@
 """Task detail page stops hiding behind a poll loop (task 2d480b08).
 
-Today the open /tasks/:id tab is a polling machine:
-  - TaskDetailPage.tsx:959 `setInterval(load, 5000)` re-pulls GET
-    /api/tasks/<id> (+ the child-task GET riding the same load()) forever,
-    whether or not anything changed.
-  - LiveBar.tsx:102 `setInterval(tick, 5000)` re-pulls GET
-    /api/conductor/state (~29KB with ONE managed task, per task c38ef597's
-    own docstring) on every tab that mounts the app shell, /tasks/:id
-    included.
-  - lib/version.ts:59 `setInterval(poll, 15000)` re-pulls GET /api/version
-    unconditionally, even though /sse/live already pushes the same fact.
+Design pinned here matches this task's OWN plan_doc (D-1..D-6), already
+recorded on the task before this step ran:
+
+  D-1  TaskService.update() publishes {project, type:"task.changed",
+       task_id, fields:{...changed scalars...}, updated_at} to
+       prism_service.events.bus, ONLY when something real changed (after
+       the :596 no-op early return) and NEVER the full row.
+  D-2  The publish can never break a write — a bus/serialization failure
+       must be swallowed, the task write still commits.
+  D-3  A task_id-scoped SSE route, GET /sse/tasks?project=&task_id=,
+       mirrors sse_sessions's existing project filter (routes/sse.py).
+  D-4  The client PATCHES local state from the pushed event's `fields`;
+       the onmessage handler never calls load()/api.get() — that would be
+       the SessionsPage.tsx:80 `es.onmessage = () => load();`
+       refetch-everything anti-pattern named in this task's own
+       likely_misfire.
+  D-6  Where a poll survives (lib/version.ts's /api/version fallback,
+       LiveBar.tsx's /api/conductor/state poll) it must be GATED on SSE
+       health, not fire unconditionally on a bare interval — dropping the
+       poll outright would repeat the PR #257 mistake of losing a real
+       safety property (a throttled tab whose SSE stalled) along with the
+       code around it.
 
 FAILS TODAY because:
-  - none of the three intervals above have been replaced by a push
-    subscription: TaskDetailPage.tsx has no EventSource at all, LiveBar.tsx
-    has no EventSource at all, and version.ts's fallback poll fires on a
-    bare interval rather than only as an SSE-failure fallback.
-  - prism_service/services/task_service.py's TaskService.update() has no
-    call into prism_service.events.bus — no task-lifecycle event exists to
-    subscribe to (the task's own likely_misfire: events.py is published to
-    only for session_outcome/skill_usage today).
+  - TaskService.update() has no call into prism_service.events.bus at all
+    (the task's own likely_misfire: events.py is published to only for
+    session_outcome/skill_usage today).
+  - routes/sse.py has no /tasks route.
+  - TaskDetailPage.tsx still 5s-polls GET /api/tasks/<id>
+    (`setInterval(load, 5000)`) and has no EventSource at all.
+  - LiveBar.tsx still 5s-polls GET /api/conductor/state
+    (`setInterval(tick, 5000)`) unconditionally.
+  - lib/version.ts's fallback poll (`setInterval(poll, 15000)`) fires
+    unconditionally at watchdog start, not gated on SSE health.
 
 The SPA ships no JS test runner, so the TSX/TS-facing acceptance criteria
 are pinned by asserting the ACTUAL source, brace-balanced from each
 construct's own start (never a fixed character window or a comment),
-matching the convention in test_heavy_polls_are_scoped.py and
-test_conductor_page_animated_cleanup_ui.py.
-
-Scoped push, not the SessionsPage.tsx:80 anti-pattern: that page's
-`es.onmessage = () => load();` refetches its FULL list on literally any
-bus event, project-matched or not otherwise filtered. The fix here filters
-BEFORE refetching (TaskDetailPage checks the event names ITS OWN task id;
-LiveBar checks the event is actually a task lifecycle event) and the
-published event itself stays lean — board-live fields only, never the
-heavy long-text columns (description/plan_doc/completion_proof/
-premise_notes) — so a keystroke-sized field edit never blasts a big
-string to every open tab.
+matching the convention in test_heavy_polls_are_scoped.py.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 _HERE = Path(__file__).resolve()
@@ -79,7 +84,7 @@ def _fn_body_from_signature_line(src: str, marker: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Backend: TaskService.update() must publish a LEAN task-lifecycle event
+# Backend seam: TaskService.update() publishes a LEAN, real bus event (D-1/D-2)
 # ---------------------------------------------------------------------------
 
 def _svc(tmp_path):
@@ -87,117 +92,185 @@ def _svc(tmp_path):
     return TaskService(str(tmp_path / "tasks.db"), project="prism")
 
 
-def test_task_update_publishes_scoped_task_event(tmp_path, monkeypatch):
-    from prism_service import events as events_mod
+async def _drain_after(coro_body):
+    """Subscribe to the REAL prism_service.events.bus (no injected double,
+    per the plan's own 'seam test' note), run `coro_body(q)`, and return
+    whatever landed on the queue."""
+    from prism_service.events import bus
 
-    captured = []
-    monkeypatch.setattr(events_mod.bus, "publish", lambda e: captured.append(e))
+    q = bus.subscribe()
+    try:
+        await coro_body(q)
+        await asyncio.sleep(0)  # let call_soon_threadsafe callbacks land
+        out = []
+        while not q.empty():
+            out.append(q.get_nowait())
+        return out
+    finally:
+        bus.unsubscribe(q)
 
-    svc = _svc(tmp_path)
-    task = svc.create(title="poll fix", description="d1")
-    captured.clear()  # ignore whatever create-time publishing exists today
 
-    long_description = "a much longer description body " * 20
-    svc.update(task.id, status="in_progress", description=long_description)
+def test_task_update_publishes_task_changed_on_the_real_bus(tmp_path):
+    async def body(q):
+        svc = _svc(tmp_path)
+        task = svc.create(title="poll fix")
+        while not q.empty():
+            q.get_nowait()  # drop whatever create-time publishing exists today
+        svc.update(task.id, status="in_progress")
+        body.task = task
 
-    assert captured, (
-        "TaskService.update() must publish a task-lifecycle event to "
-        "prism_service.events.bus so /sse/sessions has something for the "
-        "open task page to subscribe to — no event fired")
-    evt = captured[-1]
+    events = asyncio.run(_drain_after(body))
+    task = body.task
+
+    assert events, (
+        "TaskService.update() must publish a task.changed event to the "
+        "REAL prism_service.events.bus so GET /sse/tasks has something to "
+        "deliver — no event landed on the bus")
+    evt = events[-1]
     assert evt.get("project") == "prism", f"event must carry project scope; got {evt!r}"
-    assert evt.get("type") == "task_updated", f"event must be typed task_updated; got {evt!r}"
+    assert evt.get("type") == "task.changed", f"event must be typed task.changed (D-1); got {evt!r}"
     assert evt.get("task_id") == task.id, f"event must name the task that changed; got {evt!r}"
-    assert evt.get("status") == "in_progress", (
-        f"scoped event must carry live-board fields (status); got {evt!r}")
-    assert "description" not in evt, (
-        "the task_updated event must stay LEAN (board-live fields only) — "
-        "shipping the full changed description over the bus defeats the "
-        f"payload-scope fix and blasts a big string to every open tab; got {evt!r}")
+    fields = evt.get("fields")
+    assert isinstance(fields, dict) and fields.get("status") == "in_progress", (
+        f"scoped event must carry changed scalars under `fields` (D-1); got {evt!r}")
 
 
-def test_task_update_with_no_real_change_does_not_publish(tmp_path, monkeypatch):
+def test_no_event_published_when_nothing_changed(tmp_path):
+    async def body(q):
+        svc = _svc(tmp_path)
+        task = svc.create(title="poll fix")
+        while not q.empty():
+            q.get_nowait()
+        svc.update(task.id, status=task.status)  # same value — update()'s own no-op guard
+
+    events = asyncio.run(_drain_after(body))
+    assert not events, (
+        f"a no-op update() (nothing actually changed, per the :596 early "
+        f"return) must not publish; got {events!r}")
+
+
+def test_task_update_still_commits_when_the_bus_raises(tmp_path, monkeypatch):
     from prism_service import events as events_mod
 
-    captured = []
-    monkeypatch.setattr(events_mod.bus, "publish", lambda e: captured.append(e))
+    def _boom(_event):
+        raise RuntimeError("bus is down")
+
+    monkeypatch.setattr(events_mod.bus, "publish", _boom)
 
     svc = _svc(tmp_path)
-    task = svc.create(title="poll fix", description="d1")
-    captured.clear()
+    task = svc.create(title="poll fix")
+    updated = svc.update(task.id, status="in_progress")
 
-    # Re-sending the SAME status is a no-op per update()'s own
-    # `old_value == value` skip — must not fire a phantom event.
-    svc.update(task.id, status=task.status)
+    assert updated is not None and updated.status == "in_progress", (
+        "a raising bus.publish() must never break the task write (D-2) — "
+        f"the write must still commit; got {updated!r}")
+    refetched = svc.get(task.id)
+    assert refetched is not None and refetched.status == "in_progress", (
+        "the status change must be durably committed even though the "
+        f"publish raised; got {refetched!r}")
 
-    assert not captured, (
-        f"a no-op update() (no field actually changed) must not publish; got {captured!r}")
+
+# ---------------------------------------------------------------------------
+# Backend: GET /sse/tasks scopes to project + task_id (D-3)
+# ---------------------------------------------------------------------------
+
+class _FakeRequest:
+    def __init__(self):
+        self.disconnected = False
+
+    async def is_disconnected(self):
+        return self.disconnected
+
+
+def test_sse_tasks_route_filters_by_task_id():
+    from prism_service.events import bus
+    from prism_service.routes import sse as sse_mod
+
+    assert hasattr(sse_mod, "sse_tasks"), (
+        "routes/sse.py must expose sse_tasks — a task_id-scoped SSE "
+        "endpoint (GET /sse/tasks?project=&task_id=) mirroring "
+        "sse_sessions's existing project filter (D-3)")
+
+    async def _run():
+        req = _FakeRequest()
+        resp = await sse_mod.sse_tasks(req, project="prism", task_id="mine")
+        it = resp.body_iterator
+        first = await asyncio.wait_for(it.__anext__(), timeout=2.0)
+        assert b"connected" in first, f"expected an initial connect comment frame; got {first!r}"
+
+        # A foreign task's event must never be delivered...
+        bus.publish({"project": "prism", "type": "task.changed", "task_id": "other", "fields": {}})
+        # ...only a matching task_id is.
+        bus.publish({"project": "prism", "type": "task.changed", "task_id": "mine", "fields": {"status": "done"}})
+
+        chunk = await asyncio.wait_for(it.__anext__(), timeout=2.0)
+        payload = json.loads(chunk.decode("utf-8").split("data: ", 1)[1].strip())
+        assert payload.get("task_id") == "mine", (
+            "GET /sse/tasks must filter to the requested task_id — a "
+            f"foreign task's event must not be the one delivered; got {payload!r}")
+        req.disconnected = True
+
+    asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
 # Frontend source contracts — no JS test runner, ACTUAL TSX/TS source parsed.
 # ---------------------------------------------------------------------------
 
-def test_task_detail_page_no_longer_polls_on_interval():
+def test_task_detail_page_has_no_setinterval_poll():
     src = _read("pages/TaskDetailPage.tsx")
     assert "setInterval(load, 5000)" not in src, (
         "TaskDetailPage must not re-pull GET /api/tasks/<id> on a 5s "
-        "setInterval at idle — replace with a push subscription")
+        "setInterval at idle — replaced by the /sse/tasks push (D-3/D-4)")
 
 
-def test_task_detail_page_subscribes_to_scoped_task_events():
+def test_sse_handler_patches_state_and_never_refetches():
     src = _read("pages/TaskDetailPage.tsx")
-    assert "new EventSource(" in src and "/sse/sessions" in src, (
-        "TaskDetailPage must open an EventSource against /sse/sessions to "
-        "receive task-lifecycle push updates")
-    assert "es.onmessage = () => load();" not in src, (
-        "the onmessage handler must not be the SessionsPage.tsx:80 "
-        "refetch-everything-on-every-event anti-pattern (named in this "
-        "task's own likely_misfire) — it must filter to THIS task's id "
-        "before refetching anything")
-    assert "task_id" in src, (
-        "the onmessage handler must check the pushed event's task_id "
-        "against THIS page's id before refetching — got no task_id "
-        "reference in TaskDetailPage.tsx at all")
+    assert "new EventSource(" in src and "/sse/tasks" in src, (
+        "TaskDetailPage must open an EventSource against "
+        "/sse/tasks?project=&task_id= (D-3) — no task-scoped SSE "
+        "subscription found")
+    assert "es.onmessage" in src, (
+        "TaskDetailPage must wire an onmessage handler on the /sse/tasks EventSource")
+    handler_body = _brace_body(src, "es.onmessage = (")
+    assert "load(" not in handler_body and "api.get(" not in handler_body, (
+        "the onmessage handler must PATCH local task state from the "
+        "pushed event's `fields` (D-4), never call load()/api.get() — "
+        "that is the SessionsPage.tsx:80 `es.onmessage = () => load();` "
+        "refetch-everything anti-pattern named in this task's own "
+        f"likely_misfire; got handler body: {handler_body!r}")
+    assert "fields" in handler_body, (
+        "the handler must read the pushed event's `fields` payload to "
+        f"patch state (D-1/D-4); got handler body: {handler_body!r}")
 
 
-def test_livebar_no_longer_polls_conductor_state_on_interval():
+def test_livebar_no_longer_polls_conductor_state_unconditionally():
     src = _read("components/LiveBar.tsx")
     assert "setInterval(tick, 5000)" not in src, (
-        "LiveBar must not re-pull GET /api/conductor/state on a 5s "
-        "setInterval at idle (it ran on every activity-context tab, "
-        "including /tasks/:id) — replace with a push subscription")
+        "LiveBar must not re-pull GET /api/conductor/state on an "
+        "unconditional 5s setInterval at idle (it ran on every "
+        "activity-context tab, including /tasks/:id) — gate it on SSE "
+        "health instead, same treatment as lib/version.ts (D-6)")
 
 
-def test_livebar_subscribes_to_scoped_task_events():
+def test_livebar_subscribes_to_sse():
     src = _read("components/LiveBar.tsx")
-    assert "new EventSource(" in src and "/sse/sessions" in src, (
-        "LiveBar must open an EventSource against /sse/sessions to receive "
-        "task-lifecycle push updates instead of polling the whole board")
-    assert "es.onmessage = () => load();" not in src, (
-        "LiveBar's onmessage handler must not be the "
-        "refetch-everything-on-every-event anti-pattern — it must check "
-        "the event actually names a task-lifecycle change before "
-        "re-fetching /api/conductor/state")
-    assert "task_updated" in src, (
-        "LiveBar's onmessage handler must filter on the task_updated "
-        "event type before refetching")
+    assert "new EventSource(" in src, (
+        "LiveBar must open an EventSource so its poll can be gated on "
+        "real SSE health (D-6) rather than firing unconditionally")
 
 
-def test_version_watchdog_poll_is_sse_failure_fallback_only():
+def test_version_poll_is_gated_on_sse_health():
     src = _read("lib/version.ts")
     fn_body = _fn_body_from_signature_line(src, "function startLiveWatchdog(")
-    assert "es.onerror" in fn_body, (
-        "startLiveWatchdog must react to SSE failure (es.onerror) — "
-        "otherwise there is no honest justification left for keeping any "
-        f"fallback poll at all; got body: {fn_body!r}")
-    onerror_body = _brace_body(fn_body, "es.onerror")
-    top_level = fn_body.split("es.onerror", 1)[0]
+    assert ("es.onerror" in fn_body) or ("readyState" in fn_body), (
+        "startLiveWatchdog must gate its fallback poll on SSE health "
+        "(es.onerror / es.readyState) per D-6 — otherwise there is no "
+        f"honest justification for keeping any poll at all; got: {fn_body!r}")
+    marker = "es.onerror" if "es.onerror" in fn_body else "readyState"
+    top_level = fn_body.split(marker, 1)[0]
     assert "setInterval(poll, 15000)" not in top_level, (
         "the /api/version fallback poll must not run unconditionally at "
-        "module-watchdog-start — /sse/live already pushes the version on "
-        "connect and on reconnect; a poll that ALSO always runs defeats "
-        f"the payload-scope fix. Top-level body: {top_level!r}")
-    assert "setInterval(poll" in onerror_body or "poll(" in onerror_body, (
-        "the fallback poll must be reachable from the es.onerror handler "
-        f"(SSE-failure path only); got onerror body: {onerror_body!r}")
+        "watchdog start — /sse/live already pushes the version on connect "
+        "and reconnect; an ALWAYS-ON poll defeats the payload-scope fix "
+        f"(D-6). Top-level body before the health gate: {top_level!r}")
