@@ -576,6 +576,10 @@ class TaskService:
 
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []
+        # D-1: only SCALAR changed fields ride the push event — never the
+        # full row (lists/markdown blobs stay off the wire; the client
+        # already holds those and doesn't need them re-pushed).
+        changed_fields: dict[str, object] = {}
 
         for key, value in kwargs.items():
             if not hasattr(task, key) or key == "id":
@@ -591,6 +595,8 @@ class TaskService:
                 continue
             setattr(task, key, value)
             changes.append(f"{key}: {old_value!r} -> {value!r}")
+            if value is None or isinstance(value, (str, int, float, bool)):
+                changed_fields[key] = value
 
         if not changes:
             return task
@@ -643,6 +649,22 @@ class TaskService:
         )
         self._db.commit()
         self._record_history(task.id, "updated", "; ".join(changes))
+        # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
+        # it — the write already committed above, so a publish failure
+        # (bus down, serialization) must never surface as a write failure.
+        try:
+            from prism_service.events import bus
+
+            bus.publish({
+                "project": self.project,
+                "type": "task.changed",
+                "task_id": task.id,
+                "fields": changed_fields,
+                "updated_at": task.updated_at,
+            })
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task.changed publish failed for %s", task.id, exc_info=True)
         # LL-03: re-embed only when the title or description changed.
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:

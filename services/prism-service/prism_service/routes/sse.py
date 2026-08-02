@@ -54,6 +54,46 @@ async def sse_sessions(request: Request, project: str = "default"):
     )
 
 
+@router.get("/tasks")
+async def sse_tasks(request: Request, project: str = "default", task_id: str = ""):
+    """Stream task-lifecycle events for ONE task as SSE (task 2d480b08).
+
+    Mirrors sse_sessions's project filter, plus a task_id filter so the
+    task detail page gets scoped/incremental pushes instead of polling.
+    """
+
+    async def gen():
+        q = bus.subscribe()
+        try:
+            yield b": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield b": keepalive\n\n"
+                    continue
+                if event.get("project") != project:
+                    continue
+                if event.get("type") != "task.changed" or event.get("task_id") != task_id:
+                    continue
+                payload = json.dumps(event, separators=(",", ":"))
+                yield f"data: {payload}\n\n".encode("utf-8")
+        finally:
+            bus.unsubscribe(q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/live")
 async def sse_live(request: Request):
     """Emit the running build's version so the SPA can detect a

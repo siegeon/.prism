@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.8"
+PRISM_VERSION = "7.10.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4063,6 +4063,18 @@ PRISM_VERSION_NOTES += (
     "viewable. Widened the whitelist to admit '@' (traversal guard and "
     "leading-alphanumeric rule unchanged) so the 6 existing on-disk "
     "recordings now serve as playable video, without renaming anything."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.9: THE TASK PAGE STOPS POLLING AT IDLE [task 2d480b08]. "
+    "TaskService.update() now publishes a lean task.changed event to the "
+    "real event bus (scalars only, never the full row), and GET "
+    "/sse/tasks?project=&task_id= streams it. The open task detail page "
+    "drops its 5s setInterval poll of GET /api/tasks/<id> for that push, "
+    "patching local state from the event's fields instead of refetching. "
+    "LiveBar's /api/conductor/state poll and the version watchdog's "
+    "/api/version fallback poll are now gated on SSE health (an "
+    "EventSource, not a bare interval) instead of firing unconditionally "
+    "on every activity-context tab, including /tasks/:id."
 )
 
 
