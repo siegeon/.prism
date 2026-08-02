@@ -1,16 +1,20 @@
 export const meta = {
   name: 'implement',
-  description: 'Drive one PRISM task to a genuinely-evidenced green_gate as a SERVER-DRIVEN QUEUE: loop on the single verb conductor_work, do exactly job["instructions"], produce job["expected_proof"]. The server owns WORKFLOW_STEPS - this script never names a step and never clears a gate (distinct-actor). Work lands in the task\'s OWN git worktree (the path the gate verifier reads), the call graph sets the blast radius, and an oversized slice decomposes into conductor-driven CHILD tasks. The build-half companion to the `prototype` planning workflow.',
+  description: 'Drive one PRISM task to a genuinely-evidenced green_gate as a SERVER-DRIVEN QUEUE: loop on the single verb conductor_work, do exactly job["instructions"], produce job["expected_proof"]. The server owns WORKFLOW_STEPS - this script never names a step and never clears a gate (distinct-actor). Work lands in the task\'s OWN git worktree (the path the gate verifier reads), the call graph sets the blast radius, and an oversized slice decomposes into conductor-driven CHILD tasks (skeleton first, then the disjoint slices concurrently). Every step runs at the capability tier PRISM assigns its role, so frontier reasoning is spent on planning and gate judgment rather than on fetch-and-report. The build-half companion to the `prototype` planning workflow.',
   whenToUse: 'Run to actually WORK a task through PRISM\'s conductor. Invoke as Workflow({name:"implement", args:{task_id:"<uuid>"}}). Omit task_id to let the server pull the next unblocked task. Pass {dry_run:true} to trace read-only (no conductor mutations, no writes), {stop_after:"red_gate"} to halt at a named step, {max_children:N} to cap plan-time decomposition (0 disables it), or {gate_wait_s:N} to change how long a gate waits for a distinct seat before reporting who must act (default 240). A non-default topology passes api_base pointing at its own web port; the default is the canonical release port.',
+  // Each phase declares the MODEL it runs at, so the tier is visible in the
+  // progress UI instead of being a silent choice inside the script. PRISM
+  // publishes a tier per SDLC role (Steward=frontier, Verifier=balanced,
+  // Builder=fast); frontier is spent only where the work is judgment.
   phases: [
-    { title: 'Pre-flight', detail: 'Fail fast: branch, clock, daemon identity, deps' },
-    { title: 'Locate', detail: 'Task + conductor state; brain-first context; claim the task worktree' },
-    { title: 'Graph', detail: 'Call-graph blast radius -> allowed_files + neighbouring suites' },
-    { title: 'Decompose', detail: 'Oversized slice -> disjoint child tasks, skeleton first' },
-    { title: 'Children', detail: 'Each child driven through its own conductor loop' },
-    { title: 'Drive', detail: 'conductor_work loop: do the job, report the proof' },
-    { title: 'Gate', detail: 'Produce evidence, then WAIT for the distinct seat' },
-    { title: 'Settle', detail: 'Terminal receipt read back from the server' },
+    { title: 'Pre-flight', detail: 'Fail fast: branch, clock, daemon identity, deps', model: 'haiku' },
+    { title: 'Locate', detail: 'Task + conductor state; brain-first context; claim the task worktree', model: 'sonnet' },
+    { title: 'Graph', detail: 'Call-graph blast radius -> allowed_files + neighbouring suites', model: 'sonnet' },
+    { title: 'Decompose', detail: 'Oversized slice -> disjoint child tasks, skeleton first', model: 'opus' },
+    { title: 'Children', detail: 'Skeleton first, then the disjoint slices CONCURRENTLY', model: 'sonnet' },
+    { title: 'Drive', detail: 'conductor_work loop: do the job, report the proof (model per job.role)' },
+    { title: 'Gate', detail: 'Produce evidence, then WAIT for the distinct seat', model: 'opus' },
+    { title: 'Settle', detail: 'Terminal receipt read back from the server', model: 'haiku' },
   ],
 }
 
