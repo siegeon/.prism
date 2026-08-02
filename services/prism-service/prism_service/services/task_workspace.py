@@ -267,6 +267,62 @@ def remove_workspace(task_id: str) -> dict:
     return {"ok": True, "removed": rec}
 
 
+def _unmerged_commits(ws: Path, base: str) -> list[str]:
+    """Commits on the worktree's HEAD with NO equivalent on `base`.
+
+    `git cherry` compares by PATCH, not by sha, so a change that reached the
+    base via cherry-pick or squash counts as landed and does not block a
+    reap. Lines starting '+' are the ones that exist nowhere upstream.
+    """
+    out = _git_out(ws, "cherry", base, "HEAD")
+    return [ln for ln in out.splitlines() if ln.startswith("+")]
+
+
+def reap_if_settled(task_id: str, base: Optional[str] = None) -> dict:
+    """Delete a finished task's worktree, but ONLY when nothing is lost.
+
+    remove_workspace() runs `git branch -D`, so reaping a worktree that
+    still holds unique commits DESTROYS them - and the task is already
+    marked done, so nobody would look again. Measured 2026-08-02: of 91
+    worktrees left behind by finished tasks, 16 held commits absent from
+    origin/main and 3 held uncommitted changes. This guard is the reason
+    wiring the reaper is safe at all.
+
+    FAILS CLOSED: any error probing the worktree keeps it. A leaked
+    directory costs disk; a wrongly-reaped one costs work.
+    """
+    rec = workspace_for(task_id)
+    if rec is None:
+        return {"reaped": False, "reason": "no workspace on file for task"}
+    ws = Path(rec.get("path") or "")
+    try:
+        if base is None:
+            # Resolve the base in the MAIN checkout, never in the worktree.
+            # A literal "HEAD" would resolve to the worktree's OWN tip, so
+            # `git cherry HEAD HEAD` is always empty and every worktree
+            # would look settled - the guard would pass on exactly the
+            # unmerged work it exists to protect.
+            base = _git_out(Path(rec.get("repo_root") or ""),
+                            "rev-parse", "HEAD")
+        if _git_out(ws, "status", "--porcelain").strip():
+            return {"reaped": False,
+                    "reason": "uncommitted changes in the worktree",
+                    "path": str(ws)}
+        ahead = _unmerged_commits(ws, base)
+        if ahead:
+            return {"reaped": False,
+                    "reason": (f"{len(ahead)} commit(s) not on {base} - "
+                               "reaping would delete the branch carrying them"),
+                    "path": str(ws)}
+    except (RuntimeError, OSError) as exc:
+        return {"reaped": False,
+                "reason": f"could not verify the worktree, keeping it: {exc}",
+                "path": str(ws)}
+    res = remove_workspace(task_id)
+    return {"reaped": bool(res.get("ok")), "reason": res.get("reason", ""),
+            "path": str(ws)}
+
+
 def workspace_for(task_id: str) -> Optional[dict]:
     rec = _load_index().get(task_id)
     if rec and Path(rec["path"]).exists():

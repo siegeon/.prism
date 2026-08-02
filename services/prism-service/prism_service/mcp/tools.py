@@ -4506,6 +4506,19 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     task_svc.update(_task_id, status="done")
                 except Exception:
                     pass
+                # REAP the task's worktree now that it is terminal. Nothing
+                # called this before, so finished tasks left their worktrees
+                # behind forever: 91 directories / 2.39 GB measured
+                # 2026-08-02, every one belonging to a finished task.
+                # reap_if_settled REFUSES on uncommitted changes or commits
+                # not yet on the base, because remove_workspace runs
+                # `git branch -D` and would destroy them. Best-effort: a
+                # failure to reap must never affect the drive's result.
+                try:
+                    from prism_service.services import task_workspace as _tw
+                    _tw.reap_if_settled(_task_id)
+                except Exception:
+                    pass
             else:
                 # Still mid-drive: keep the tile 'working' (honest activity).
                 _mark_in_progress(task_svc, _t2, _done, _sid)
