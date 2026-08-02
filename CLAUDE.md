@@ -54,6 +54,9 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 - NEVER quote `task.gate_reason` as a gate's CURRENT state — it is a stored snapshot, and `GET /api/conductor/gate/readiness?task_id=&project=` is the live truth built for exactly this (`api/conductor.py:85`). On b064db4e I relayed a stale "oracle not evidenced / manual_evidence_required" to the owner for three turns while readiness already said `receipt_ok:true, adapter=human, "your review is the sign-off; Approve to release"` — the Approve was clean and enabled the whole time. Read readiness BEFORE telling a human they are blocked.
 - When a change DELETES a named structure, `grep -rln "<the file>" tests/` and run EVERY suite that reads it, BEFORE the PR - the call graph will not find them. Source-reading tests index by literal string (`const HANDLERS = {`, `for (let i = startIdx`), so they are invisible to `brain_call_chain` and to the neighbouring-suite rung. The implement.js rewrite (PR #257) shipped a RED main because I fixed the one suite I happened to find and assumed it was the set; five more assertions across four suites were still pinning deleted structures, and the next drive's green_gate is what caught it. Re-anchor each with a comment naming what superseded it, and check whether the assertion encodes a real INVARIANT that must move rather than die: the dropped "base must not be behind origin/main" guard was a genuine safety property, because `ensure_workspace` defaults base_ref to the repo's CURRENT HEAD, so a stale checkout silently yields a stale worktree.
 - A `proof_type=demo`/`review` green_gate is HUMAN-ONLY by owner rule eaafdf75 — `adjudicate_green_gate` returns `None` for them deliberately, because the machine seat once false-greened 7cc4f0cf and a1e4120f and ate the single sign-off. So do NOT "unblock" one by adding a loadable URL to the oracle or flipping `proof_type`; that games the distinct-actor rule. The driver's job is to make the owner's click GROUNDED (live demo URL + durable screenshots in the PRISM evidence store + a green machine-checkable verify), then let them click. Consult memory (mx-438645, mx-df396b) before inventing a gate workaround.
+- A SHARED code path is the right home for new behaviour only when every provider/consumer it serves has actually been exercised — otherwise gate it by name. On 0a9b511f I put the inbound status reconcile in `work_item_sync._import_one` with no provider gate, so Jira inherited it and I rewrote `test_jira_work_import.py`'s real contract for an adapter that is not even registered in production (`/api/integrations/connect/mirror` reports `adapters:["github"]`). "Provider-neutral" is an architecture argument, never a licence to change contracts for integrations that do not exist yet. And note the actual failure: I flagged the breadth TWICE in chat and committed it anyway — noticing an overreach is not the same as not shipping it, so raise it as a question before the commit, not as a caveat after (owner: "we have not done jira yet, just github").
+- ASK PRISM BEFORE BUILDING, not just before grepping. On 2026-08-02 I profiled a slow drive with Bash grep + file reads, then hand-edited `.claude/workflows/implement.js` and committed it, with no task, no oracle and no test. One `task_list(tag="conductor")` would have returned `dcbd284f` "A drive halts instead of retrying forever" - priority 80, oracle written, test path pinned - already sitting there for the adjacent half of the problem. The owner's question was "why do you skip reaching out to PRISM to get the plan in the context for the implementation details". THE STRUCTURAL REASON: the `implement` workflow's `locate` step is REQUIRED to call `context_bundle` and go brain-first, but when I work in the MAIN thread there is no such step, so the context fetch is discretionary and I default to grep. Treat brain_search + task_list as the mandatory first move of any main-thread work on this repo, exactly as `locate` treats it. Retrofitting a task onto the finished edit afterwards (f4043364) does not undo it - the red_gate is already unwinnable, which is the same lesson as 19e4e7f7.
+- When the owner scopes a review ("review my skills for building PRISM"), report only what touches that scope — a generic checklist will hand me account-level or other-project items (claude.ai connectors, growwise/csregs skills) and turning those into ACTION ITEMS makes the owner do the filtering I was asked to do. Out-of-scope findings go in one line or not at all.
 
 ## Key Conventions
 
@@ -62,23 +65,6 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 - **Hooks**: Advisory only (exit 0), never block tool execution
 - **Citations**: Read before you reference — never cite unread sources
 - **Destructive ops**: Never inline PowerShell, always validate paths, never -ErrorAction SilentlyContinue
-
-## Structure
-
-```
-.prism/
-  plugins/prism-devtools/                  # Claude Code plugin (skills, commands, hooks, agents)
-  services/prism-service/                  # MCP server + React SPA (pip package: prism-service)
-    pyproject.toml                         # installable via pip / pipx (version = __version__.py PRISM_VERSION)
-    prism_service/main.py                  # FastAPI + uvicorn entrypoint
-    prism_service/cli/prism_cli.py         # `prism` CLI (start/stop/status/logs/update/version)
-    prism_service/api/                     # JSON /api/* endpoints backing the SPA
-    prism_service/routes/                  # SSE + graph viewer (non-API routes)
-    prism_service/web/                     # Vite + React 19 + Tailwind v4 + @nous-research/ui
-    prism_service/web_dist/                # SPA build output (gitignored, shipped as package_data)
-  docs/stories/                            # Story files
-  .mcp.json                                # repo-default MCP config -> 7777 (release); ~/.claude.json overrides to 8887 (dev)
-```
 
 ## Service ports
 
@@ -89,16 +75,6 @@ Two instances live on this machine — never mix them:
 
 **Dev on this machine**: use the `prism-dev` skill — editable install from `E:\.prism\.venvs\dev`, source-run on 8887/8888, Edge `--app` window. Never docker/pipx/Tauri for local dev; any path >30s build/install is wrong. Patch-bump `PRISM_VERSION` on every user-visible change and bounce the daemon.
 
-End-user / server paths (not for dev):
-```bash
-pipx install prism-service        # isolated; recommended for end-users
-prism start --daemon              # detach + pidfile under the data dir
-prism status / prism logs --follow / prism stop / prism update
-cd services/prism-service && docker compose up -d   # server / CI deploys
-```
+The `prism` CLI and `services/prism-service/docker-compose.yml` are end-user / server paths, never dev paths.
 
-Iterate on the UI with HMR (hits the running API):
-```bash
-cd services/prism-service/prism_service/web && npm install && npm run dev
-# then open http://localhost:5173
-```
+UI HMR runs on 5173 (`npm run dev` under `prism_service/web`) and hits the running API, not its own backend.
