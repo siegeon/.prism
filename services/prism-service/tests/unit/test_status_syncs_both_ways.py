@@ -203,3 +203,21 @@ def test_ac8b_marking_done_twice_closes_once(wired):
     _settle()
 
     assert fake.closed == [4242], "the closure leg wrote twice for one task"
+
+
+# ── scope: GitHub only, until another provider's round trip is exercised ──
+def test_inbound_reconcile_is_github_only(tmp_path):
+    """Owner 2026-08-02: "we have not done jira yet, just github".
+
+    The first cut of this slice put the reconcile in the shared _import_one
+    with no provider gate, which silently rewrote test_jira_work_import's
+    contract for a provider that is not even registered in production
+    (/api/integrations/connect/mirror reports adapters:["github"]). This pins
+    the gate so widening it has to be a deliberate edit with its own evidence.
+    """
+    from prism_service.services.work_item_sync import STATUS_RECONCILE_PROVIDERS
+
+    assert "github" in STATUS_RECONCILE_PROVIDERS
+    assert "jira" not in STATUS_RECONCILE_PROVIDERS, (
+        "jira is not built yet; reconciling it changes a contract on "
+        "speculation")

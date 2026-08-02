@@ -36,6 +36,16 @@ from prism_service.models.integration import (
 # data to match against.
 NON_INTAKE_ENTITY_KINDS = frozenset({"pull_request"})
 
+# Providers whose remote `done` completes the mirrored task on import
+# (task 0a9b511f). GitHub ONLY, deliberately: the owner's decision was about
+# the GitHub mirror, and Jira is not built yet (its adapter is not registered
+# in production -- /api/integrations/connect/mirror reports adapters:["github"]).
+# Reconciling a provider nobody has connected would be changing a contract on
+# speculation, and it silently rewrote test_jira_work_import's assertion the
+# first time this shipped. Add a provider here when its round trip is actually
+# exercised, not before.
+STATUS_RECONCILE_PROVIDERS = frozenset({"github"})
+
 
 @dataclass
 class PulledPage:
@@ -269,6 +279,8 @@ class WorkItemSyncService:
         allowed to make is readable in isolation. Returns silently on every
         path that must not act, rather than nesting the import in conditions.
         """
+        if provider not in STATUS_RECONCILE_PROVIDERS:
+            return
         if getattr(entity_input, "status_category", "") != "done":
             return
         task = self._intake.get(task_id)
