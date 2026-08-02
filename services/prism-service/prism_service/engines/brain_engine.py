@@ -2952,13 +2952,27 @@ class Brain:
             slot_of: dict[str, int] = {}
             picked_files: set[str] = set()
             for slot, cand in enumerate(fused):
+                cid = cand["doc_id"]
+                if cid not in file_of:
+                    # No docs row for this candidate at all -- e.g. a
+                    # ``_graph_search`` pseudo-id (brain_engine.py:2783),
+                    # which names a file but carries no content.
+                    # ``_rerank_candidates`` drops anything with no text
+                    # (brain_engine.py:3288-3290), so a pseudo-id can never
+                    # be scored -- and it must not be allowed to claim a
+                    # real file's representative slot ahead of an actual
+                    # chunk (it usually ranks first: graph legs are short,
+                    # so a pseudo-id sits at RRF rank 1 for its list). Sit
+                    # it out of the dedup/pool entirely; it stays wherever
+                    # RRF placed it in ``fused`` and is dropped downstream.
+                    continue
                 # Docs with no source_file (legacy expertise/memory rows) are
                 # their own group, exactly as ``seen_files`` below treats them.
-                group_key = file_of.get(cand["doc_id"]) or cand["doc_id"]
+                group_key = file_of[cid] or cid
                 if group_key in picked_files:
                     continue
                 picked_files.add(group_key)
-                slot_of[cand["doc_id"]] = slot
+                slot_of[cid] = slot
                 pool.append(cand)
                 if len(pool) >= pool_n:
                     break

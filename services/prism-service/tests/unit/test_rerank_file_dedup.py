@@ -384,6 +384,50 @@ def test_ac7_collapse_does_not_leak_into_the_non_rerank_path(
         f"the collapse leaked outside the rerank pool construction: {files}")
 
 
+# ── Regression: a graph pseudo-id must not shadow a real chunk ────────────
+def test_graph_pseudo_id_does_not_shadow_a_real_chunk(
+        tmp_path, monkeypatch, clean_env, counting_reranker):
+    """Pin for the verify_green_state blocker (mx-3a4ef2).
+
+    ``_graph_search`` (brain_engine.py:2763-2786) emits pseudo-ids that name
+    a file but carry no ``docs`` row. On a real corpus the pseudo-id usually
+    lands ahead of that file's own chunks in RRF order -- graph legs are
+    short, so a single hit sits at rank 1 while a real chunk has to earn its
+    rank against the whole corpus -- confirmed empirically for every file in
+    this fixture. If the dedup keyed a contentless candidate's group by its
+    own doc_id (the file path), that pseudo-id would claim the file's
+    representative slot, be dropped by ``_rerank_candidates`` for having no
+    text (brain_engine.py:3288-3290), and the file's REAL content would
+    never reach the cross-encoder at all -- even though every other file
+    still does, so a naive per-file assertion would not catch it.
+    """
+    brain = _make_multichunk_brain(tmp_path)
+    target = _FILES[3]  # a cold (non-hot) file -- where the collision bites
+    brain._graph.execute(
+        "INSERT OR IGNORE INTO entities (name, kind, file, line) "
+        "VALUES (?, ?, ?, ?)",
+        ("authentication_handler", "function", target, 1),
+    )
+    brain._graph.commit()
+
+    monkeypatch.setenv("PRISM_RERANK", "ms-marco-minilm")
+    monkeypatch.setenv("PRISM_RERANK_TOPN", "50")
+    monkeypatch.setenv("PRISM_CHUNK_AGG", "on")
+
+    brain.search(QUERY, limit=5)
+
+    by_content = _doc_id_by_content()
+    scored = [by_content[text] for _q, text in counting_reranker.pairs]
+    files = [d.split("::")[0] for d in scored]
+    assert target in files, (
+        f"{target}'s real content never reached the cross-encoder -- a "
+        f"graph pseudo-id shadowed it: {files}")
+    assert sorted(files) == sorted(_FILES), (
+        "expected one pair per distinct source_file even with a graph "
+        f"pseudo-id present, got {files}")
+    assert len(files) == len(set(files)), f"a file was scored twice: {files}"
+
+
 # ── AC-8: through the surface a person actually reaches ───────────────────
 def test_ac8_the_saving_holds_through_the_brain_search_verb(
         tmp_path, monkeypatch, clean_env, counting_reranker):

@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.9"
+PRISM_VERSION = "7.10.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.10: FILE DEDUP NO LONGER STARVES REAL CONTENT BEHIND A GRAPH "
+    "PSEUDO-ID [task 61666a4f]. _graph_search emits {doc_id: <file path>, "
+    "score: 1.0} rows that name a file but have no docs row. On a real "
+    "corpus that pseudo-id usually lands ahead of the file's own chunks in "
+    "RRF order (a short graph leg puts a single hit at rank 1), so the "
+    "v7.10.9 file-dedup keyed its group by cand['doc_id'] and let the "
+    "pseudo-id claim the representative slot -- it has no content, gets "
+    "dropped by _rerank_candidates, and the file's REAL chunk never reaches "
+    "the cross-encoder at all. Measured on a real 108-doc/31-file PRISM "
+    "index: 3 of 5 real queries lost a file from cross-encoder coverage. "
+    "Fixed by skipping any candidate with no docs row when building the "
+    "rerank pool -- it cannot be scored anyway, so it no longer blocks the "
+    "real chunk for its file. Pinned by "
+    "test_graph_pseudo_id_does_not_shadow_a_real_chunk, whose fixture "
+    "populates graph.db so the collision is exercised for real. "
     "v7.10.9: SEARCH RERANKS THE FILES, NOT THE SAME FILE FIVE TIMES [task "
     "61666a4f]. Multi-granular chunking gives one source file many chunks, "
     "and search already returns one row per file, so the cross-encoder -- the "
