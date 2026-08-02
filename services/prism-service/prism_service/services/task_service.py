@@ -131,6 +131,47 @@ def create_observers() -> list:
     return list(_CREATE_OBSERVERS)
 
 
+# Status observers (task 0a9b511f). The SAME chokepoint argument as creation:
+# every caller that moves a task's status -- the REST route, the MCP
+# task_update verb, and the conductor -- goes through TaskService.update, so a
+# listener here cannot be bypassed by a caller that forgot to opt in.
+#
+# This existed for creation and NOT for status, which is exactly why the mirror
+# could open a GitHub issue but never close one: push_task_closure was written
+# and tested, and nothing but a hand-POSTed endpoint could reach it.
+#
+# Provider-neutral for the same reason as above: this module publishes "a task's
+# status changed", and task_mirror decides what that is worth.
+_STATUS_OBSERVERS: list = []
+
+
+def add_status_observer(fn) -> bool:
+    """Register ``fn(project, task, old_status)``. Idempotent; True if added.
+
+    ``old_status`` is passed rather than left for the observer to look up: by
+    the time it runs the row already holds the new value, so the previous one is
+    otherwise unrecoverable.
+    """
+    if fn in _STATUS_OBSERVERS:
+        return False
+    _STATUS_OBSERVERS.append(fn)
+    return True
+
+
+def remove_status_observer(fn) -> bool:
+    if fn in _STATUS_OBSERVERS:
+        _STATUS_OBSERVERS.remove(fn)
+        return True
+    return False
+
+
+def status_observers() -> list:
+    """Point-in-time copy — lets a caller ASSERT what production registered."""
+    return list(_STATUS_OBSERVERS)
+
+
+
+
 # Columns added by LL-01 (learning-loop schema migration). Applied via
 # ALTER TABLE on existing DBs so older task rows don't need rewriting.
 _LL_TASK_COLUMNS: list[tuple[str, str]] = [
@@ -474,6 +515,23 @@ class TaskService:
                     getattr(observer, "__name__", observer), task.id,
                     exc_info=True)
 
+    def _notify_status(self, task: Task, old_status: str) -> None:
+        """Publish "a task's status changed" to every registered observer.
+
+        Same contract as _notify_created and for the same reasons: AFTER the
+        commit, so an observer never sees a status the database does not hold,
+        and isolated per observer, so a provider outage cannot turn a
+        successful task_update into an error the user sees.
+        """
+        for observer in list(_STATUS_OBSERVERS):
+            try:
+                observer(self.project, task, old_status)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "task status observer %r failed for %s",
+                    getattr(observer, "__name__", observer), task.id,
+                    exc_info=True)
+
     def ensure_external_intake(
         self,
         task_id: str,
@@ -574,6 +632,11 @@ class TaskService:
         if task is None:
             return None
 
+        # Captured BEFORE the mutation loop below, which writes the new value
+        # onto this same object (task 0a9b511f). Observers need the previous
+        # status to tell a real transition from a no-op re-write.
+        old_status = task.status
+
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []
 
@@ -647,6 +710,13 @@ class TaskService:
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:
             self._store_embedding(task.id, task.title, task.description)
+        # Publish the transition LAST, after the row is committed and its audit
+        # row written, and ONLY when the status actually moved (task 0a9b511f).
+        # The `changes` early-return above already drops no-op writes; this
+        # second guard is what keeps a title or priority edit from reaching a
+        # provider at all, rather than relying on the observer to filter.
+        if task.status != old_status:
+            self._notify_status(task, old_status)
         return task
 
     # ------------------------------------------------------------------

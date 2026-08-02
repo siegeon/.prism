@@ -27,6 +27,21 @@ if str(_SERVICE_ROOT) not in sys.path:
 REPO = "siegeon/.prism"
 
 
+def _settle():
+    """Wait for the mirror's off-thread close to finish.
+
+    The observer deliberately runs on its own thread so a provider timeout can
+    never make task_update look like PRISM hanging. Tests therefore JOIN that
+    thread — they must not call close_task directly, because a direct call is
+    exactly the hand-run trigger this slice exists to remove.
+    """
+    import threading
+
+    for t in threading.enumerate():
+        if t.name.startswith("task-mirror-close-"):
+            t.join(timeout=10)
+
+
 class _FakeGitHub:
     """Fake network, never fake wiring. Records every close so AC-8 can count."""
 
@@ -154,6 +169,7 @@ def test_ac1_marking_a_task_done_closes_its_mirrored_issue(wired):
 
     task_mirror.install()
     svc.update(task.id, status="done")
+    _settle()
 
     assert fake.closed == [4242], (
         "a done task did not close its issue through the observer path")
@@ -169,6 +185,7 @@ def test_ac8_a_non_status_edit_writes_nothing_to_the_provider(wired):
     task_mirror.install()
 
     svc.update(task.id, priority=7, title="renamed")
+    _settle()
 
     assert fake.closed == [], "a non-status edit reached the provider"
 
@@ -183,5 +200,6 @@ def test_ac8b_marking_done_twice_closes_once(wired):
 
     svc.update(task.id, status="done")
     svc.update(task.id, status="done")
+    _settle()
 
     assert fake.closed == [4242], "the closure leg wrote twice for one task"

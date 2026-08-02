@@ -77,8 +77,11 @@ _STATUS_MAP = {
 def normalize_status_category(raw_status: str) -> str:
     """Map a raw provider status onto open|in_progress|done|unknown.
 
-    The raw value is stored separately; this only feeds filtering. It never
-    enters the conductor state machine.
+    The raw value is stored separately. This feeds filtering, and since task
+    0a9b511f a ``done`` category also completes the mirrored task on import
+    (owner 2026-08-02, both directions). It still never enters the conductor
+    STATE MACHINE: workflow_step and gate_state are never driven from remote,
+    so a closed issue cannot manufacture a passed gate.
     """
     return _STATUS_MAP.get((raw_status or "").strip().casefold(), "unknown")
 

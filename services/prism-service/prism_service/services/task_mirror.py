@@ -187,6 +187,65 @@ def mirror_task(project: str, task_id: str, provider: str = "github",
     return outcome
 
 
+def close_task(project: str, task_id: str, provider: str = "github",
+               dry_run: bool = False) -> MirrorOutcome:
+    """Close ONE task's provider counterpart. The synchronous core of the
+    outbound STATUS leg (task 0a9b511f).
+
+    ``push_task_closure`` already existed and worked; its only caller was the
+    hand-POSTed connect/push endpoint, so marking a task done in PRISM left
+    GitHub untouched. This is the missing call, not a new capability, and it
+    deliberately reuses the SAME guards ``mirror_task`` applies so the two legs
+    can never diverge on who is allowed to write.
+
+    ``IMPORTED_TAGS`` is NOT applied here, unlike the create leg. A task that
+    came FROM GitHub is exactly the task whose issue should close when it
+    completes; refusing those is what would break the round trip.
+    """
+    outcome = MirrorOutcome(task_id=task_id)
+    if not mirror_enabled():
+        outcome.reason = f"{MIRROR_ENV} is off"
+        return outcome
+
+    scope = personal_scope()
+    if scope is None:
+        outcome.reason = "no local scope; closure stays explicit in team mode"
+        return outcome
+
+    from prism_service import project_context
+    from prism_service.api.integrations import _adapters
+    from prism_service.services.integration_outbox import get_outbox
+    from prism_service.services.integration_store import get_integration_store
+    from prism_service.services.sync_prefs import get_sync_preferences
+    from prism_service.services.work_item_sync import push_task_closure
+
+    task_svc = project_context.get_project(project).task_svc
+    task = task_svc.get(task_id)
+    if task is None:
+        outcome.reason = "task no longer exists"
+        return outcome
+
+    outcome.attempted = True
+    result = push_task_closure(
+        get_integration_store(), get_outbox(), _adapters,
+        get_sync_preferences().enabled,
+        scope, task_id, getattr(task, "status", "") == "done",
+        provider=provider, dry_run=dry_run)
+
+    outcome.created = bool(getattr(result, "closed", False))
+    outcome.reason = result.reason
+    outcome.url = result.url
+    outcome.issue = result.issue
+    outcome.repo = result.repo
+
+    if outcome.created:
+        task_svc.record_history(
+            task_id, "mirror_closed",
+            details=f"{provider} {result.issue} {result.url}".strip(),
+            actor=f"{provider}-mirror")
+    return outcome
+
+
 def _on_task_created(project: str, task) -> None:
     """The observer TaskService fires. Never raises, never blocks.
 
@@ -215,6 +274,37 @@ def _on_task_created(project: str, task) -> None:
                      daemon=True).start()
 
 
+def _on_task_status_changed(project: str, task, old_status: str) -> None:
+    """The status observer TaskService fires. Never raises, never blocks.
+
+    Only a transition INTO done is actionable today; every other move is
+    ignored here rather than filtered downstream, so a rename or a priority
+    bump can never reach a provider (task 0a9b511f, AC-8).
+    """
+    if not mirror_enabled():
+        return
+    task_id = getattr(task, "id", "")
+    if not task_id:
+        return
+    if getattr(task, "status", "") != "done" or old_status == "done":
+        return
+
+    def _run() -> None:
+        try:
+            outcome = close_task(project, task_id)
+        except Exception as exc:  # pragma: no cover - never surface here
+            log.warning("task mirror close failed for %s: %s", task_id, exc)
+            return
+        if outcome.created:
+            log.info("closed mirrored issue for task %s -> %s",
+                     task_id, outcome.url)
+        elif outcome.attempted:
+            log.info("task %s not closed: %s", task_id, outcome.reason)
+
+    threading.Thread(target=_run, name=f"task-mirror-close-{task_id[:8]}",
+                     daemon=True).start()
+
+
 def install() -> bool:
     """Register the create observer with TaskService. Idempotent.
 
@@ -226,7 +316,12 @@ def install() -> bool:
     """
     from prism_service.services import task_service
 
-    return task_service.add_create_observer(_on_task_created)
+    created = task_service.add_create_observer(_on_task_created)
+    # BOTH legs, from the one call production already makes (main.py:413-414).
+    # Registering only creation is how the mirror ended up able to open an
+    # issue and never close one (task 0a9b511f).
+    closed = task_service.add_status_observer(_on_task_status_changed)
+    return bool(created or closed)
 
 
 def status() -> dict:
@@ -245,6 +340,11 @@ def status() -> dict:
         "enabled": mirror_enabled(),
         "env": MIRROR_ENV,
         "observer_installed": _on_task_created in task_service.create_observers(),
+        # Reported SEPARATELY from the create leg, because they can be wired
+        # independently and "the mirror is on" was never a fine enough answer
+        # to "why did my done task not close its issue" (task 0a9b511f).
+        "closure_observer_installed": (
+            _on_task_status_changed in task_service.status_observers()),
         "adapters": sorted(_adapters),
         "adapter_errors": dict(adapter_registration_errors),
         "scope": scope or "",
@@ -264,6 +364,7 @@ def status() -> dict:
             for k in store.list_containers(scope, c.id)]
     info["ready"] = bool(
         info["enabled"] and info["observer_installed"]
+        and info["closure_observer_installed"]
         and "github" in info["adapters"] and info["sync_enabled"]
         and info["tracking"])
     return info

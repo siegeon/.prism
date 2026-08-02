@@ -199,8 +199,11 @@ class WorkItemSyncService:
 
         link = store.claim_import_link(workspace_id, entity.id, task_id)
         title = entity_input.title or entity_input.display_key or entity_input.remote_id
-        # Create only a LOCAL pending intake; remote status never enters the
-        # conductor and a later pull never clobbers a user-edited local row.
+        # Create a LOCAL pending intake, and a later pull never clobbers a
+        # user-edited local row. Remote status reconciles ONE way only, into
+        # `done`, attributed, via _reconcile_remote_status below (task
+        # 0a9b511f, owner 2026-08-02) - it still never drives workflow_step or
+        # gate_state, so a closed issue cannot manufacture a passed gate.
         # Record WHERE it came from, on the task itself. The deterministic id
         # already links the two, but a person reading the Work page could not
         # see it, and the push slice needs the counterpart to be legible rather
@@ -237,11 +240,48 @@ class WorkItemSyncService:
                 and pre_existing.description == provenance
                 and body):
             self._intake.update(task_id, description=f"{body}\n\n{provenance}")
+        # INBOUND STATUS RECONCILE (task 0a9b511f). Owner 2026-08-02: "when we
+        # mark a task done then github should mark it done and such, both ways.
+        # otherwise this sync to github feature does not do much."
+        #
+        # Narrow on purpose, and the narrowness IS the safety property:
+        #   - only the done direction, never re-opening a locally finished task;
+        #   - only status, so a hand-edited title or description is untouched
+        #     and the no-clobber contract above still holds;
+        #   - NEVER workflow_step or gate_state, so a closed issue can still
+        #     not manufacture a passed gate. That was the real invariant inside
+        #     the assertion this task retired, and it survives intact.
+        #   - ATTRIBUTED, because an anonymous auto-done is indistinguishable
+        #     from a human decision (the defect behind task 5025e97a).
+        self._reconcile_remote_status(task_id, entity_input, connection.provider,
+                                      origin)
         store.activate_link(workspace_id, link.id)
         store.append_receipt(
             workspace_id, run_id, entity.id,
             OUTCOME_CREATED if created else OUTCOME_UPDATED)
         return 1
+
+    def _reconcile_remote_status(self, task_id: str, entity_input,
+                                 provider: str, origin: str) -> None:
+        """Move a task to done when its remote counterpart closed.
+
+        Split out of _import_one so the ONE state transition this sync is
+        allowed to make is readable in isolation. Returns silently on every
+        path that must not act, rather than nesting the import in conditions.
+        """
+        if getattr(entity_input, "status_category", "") != "done":
+            return
+        task = self._intake.get(task_id)
+        if task is None or getattr(task, "status", "") == "done":
+            return  # idempotent: a second identical pull writes nothing
+
+        self._intake.update(task_id, status="done")
+        record = getattr(self._intake, "record_history", None)
+        if record is not None:
+            record(task_id, "remote_closed",
+                   details=(f"{provider} {origin} closed upstream; "
+                            f"task moved to done by the mirror"),
+                   actor=f"{provider}-mirror")
 
 
 # ── push: the walking skeleton for the OTHER direction (task ae67ed5c) ─────

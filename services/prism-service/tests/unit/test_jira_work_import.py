@@ -111,7 +111,19 @@ def test_identical_keys_across_sites_do_not_collide(tmp_path):
     assert len({e.id for e in store.list_entities(WS_A)}) == 2
 
 
-def test_remote_status_stays_out_of_conductor(tmp_path):
+def test_remote_done_completes_the_task_but_stays_out_of_conductor(tmp_path):
+    """SUPERSEDES test_remote_status_stays_out_of_conductor (task 0a9b511f).
+
+    Its `assert task.status == "pending"  # NOT done` was reversed by the owner
+    on 2026-08-02 ("both ways"). The reconcile lives in the shared
+    work_item_sync._import_one, so Jira inherits it rather than getting a
+    provider-specific path; that is intentional, since a second code path is a
+    second thing to keep honest.
+
+    The conductor half of the old name still holds, and is the reason this is a
+    rewrite and not a deletion: workflow_step and gate_state are still never
+    driven from remote state.
+    """
     client = _FakeJiraClient({"cloud-1": _fixture()})
     store = _store(tmp_path)
     tasks = _task_svc(tmp_path)
@@ -124,7 +136,8 @@ def test_remote_status_stays_out_of_conductor(tmp_path):
     assert done_issue.status_category == "done"        # normalized
     link = store.list_links(WS_A, entity_id=done_issue.id)[0]
     task = tasks.get(link.task_id)
-    assert task.status == "pending"                    # NOT done
+    assert task.status == "done"                       # reversed contract
+    # UNCHANGED: remote state still never drives the conductor.
     assert task.workflow_step == "" and task.gate_state == "none"
 
 
