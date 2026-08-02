@@ -10,6 +10,7 @@ import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
 import LiveBar from "@/components/LiveBar";
+import { Skeleton } from "@/components/ui";
 
 // Route-level code splitting (v6.3.40). Every page used to be a static import,
 // so the graph/Sigma, conductor animation, settings, and mermaid-adjacent code
@@ -105,7 +106,22 @@ export default function App() {
         <div className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
           <Suspense
-            fallback={<div className="p-8 text-sm opacity-50">Loading…</div>}
+            fallback={
+              // Route-level fallback (task c3f4cf12): shared by every lazy
+              // route (/tasks, /tasks/:id, /conductor, ...) so a cold-cache
+              // navigation paints a page-shaped placeholder instead of a
+              // bare one-line text node — a header row plus card-shaped
+              // rows, composed from the existing Skeleton primitive
+              // (ui.tsx:172).
+              <div aria-hidden className="p-8 space-y-6 w-full min-w-[720px]">
+                <Skeleton className="h-8 w-64" />
+                <div className="space-y-3">
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                  <Skeleton className="h-24 w-full" />
+                </div>
+              </div>
+            }
           >
           <Routes location={location} key={location.pathname}>
             <Route path="/" element={<DashboardPage />} />
