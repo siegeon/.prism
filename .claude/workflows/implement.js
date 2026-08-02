@@ -94,6 +94,30 @@ const GATE_STEPS = ['story_gate', 'plan_gate', 'red_gate', 'green_gate']
 // only stops a pathological ping-pong (a step that never advances).
 const MAX_JOBS = 24
 
+// -- Model tiering (task: drive cost) ------------------------------------
+// PRISM assigns every SDLC step a ROLE with a capability TIER and states the
+// mapping on every MCP connection: Steward(sm)=frontier, Verifier(qa)=balanced,
+// Builder(dev)=fast. This script used to ignore it entirely - every agent()
+// inherited the session model, so a measured run (wf_15798a7d-99a, 2026-08-02)
+// put ALL 11 agents on claude-opus-5 for 74.7 min and 1.25M tokens on a
+// two-file change. Honouring the tier PRISM already publishes is the single
+// largest lever on drive cost, and it is not a quality trade: the frontier
+// model is kept for exactly the two things that need judgment - planning and
+// deciding a gate.
+const TIER_MODEL = { frontier: 'opus', balanced: 'sonnet', fast: 'sonnet', mechanical: 'haiku' }
+const ROLE_TIER = { sm: 'frontier', qa: 'balanced', dev: 'fast' }
+// Steps whose work is fetch-and-report, not judgment. A read-back of server
+// state or a git log does not need a frontier turn.
+const MECHANICAL_STEPS = ['pre-flight', 'settle']
+function modelFor(role, step, isGate) {
+  // A gate is a JUDGMENT call and the one place a cheap model would actually
+  // cost something - never tier it down.
+  if (isGate) return TIER_MODEL.frontier
+  if (MECHANICAL_STEPS.includes(step)) return TIER_MODEL.mechanical
+  const tier = ROLE_TIER[String(role || '').toLowerCase()]
+  return TIER_MODEL[tier] || TIER_MODEL.balanced
+}
+
 // -- Shared agent preamble ----------------------------------------------
 const PRISM_TOOLS = 'You have PRISM MCP tools via ToolSearch. Load them in ONE call, e.g. ToolSearch("select:mcp__prism__conductor_work,mcp__prism__brain_search,mcp__prism__brain_call_chain,mcp__prism__brain_find_references,mcp__prism__brain_understand,mcp__prism__memory_recall,mcp__prism__memory_store,mcp__prism__task_list,mcp__prism__task_update"). Project slug is "prism". `conductor_work` is THE drive verb - conductor_advance, conductor_gate and workflow_state are superseded admin verbs and must not be used on a drive.'
 
@@ -283,7 +307,7 @@ const PREFLIGHT_SCHEMA = {
 phase('Pre-flight')
 const preflight = await agent(
   `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD - run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 - a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap - the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. datenow_clean=false on ANY match - PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' ${API_BASE}/api/version\` must be 200 - the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n4. DEPENDENCY PRESENCE: read this task's \`depends_on\` via task_list (the dependencies/depends_on field). For EACH depends_on dep that is DONE, confirm its substrate is present: its [conductor:<dep8>] commit (first 8 chars of the dep id) must be reachable from the chosen base OR carried by some branch - \`git -C E:/.prism log --all --grep "conductor:<dep8>" -n1\` must hit, and that commit must be an ancestor of origin/main OR of a branch returned by \`git -C E:/.prism branch -a --contains <sha>\`. deps_present=false ONLY when a DONE dep's commit is unreachable from the base AND no branch carries it. (No deps, or all dep commits reachable, => deps_present=true.)\n5. MCP-DAEMON IDENTITY MATCH: the reachability check (step 3) proves the CONDUCTOR daemon is up, but NOT that YOUR MCP tools point at that same daemon - a duplicate ~/.claude.json key can bind mcp__prism__* to a DIFFERENT daemon (a fork, or another port) while the conductor HTTP endpoint (${API_BASE}) is the store you think you're driving. Call \`prism_status\` (MCP) and read its \`prism_version\` (mcp_ver); \`curl -s -m5 ${API_BASE}/api/version\` and read that \`version\` (http_ver). identity_ok=false if mcp_ver !== http_ver - your MCP is bound to a different daemon than the conductor and the whole drive would mutate the WRONG store. Also compare \`prism_status.data_dir\` against the expected store when known.${DRY ? ' (DRY-RUN: a dead daemon can not answer either endpoint; treat identity as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean AND deps_present${DRY ? '' : ' AND daemon_ok AND identity_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main - rebase or branch fresh off main", "client clock in <file>:<line> - PRISM server-stamps time, remove it (mx-9945f2)", "conductor daemon down at ${API_BASE} - start it before driving", "MCP daemon <mcp_ver> != conductor daemon <http_ver> - /mcp reconnect prism to the daemon serving ${API_BASE} (or restart the session) before driving", or "dep <id> done but not merged to main and no branch carries it - merge it first".`,
-  { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA })
+  { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA, model: modelFor('', 'pre-flight', false) })
 if (!preflight.ok) {
   throw new Error(`PRE-FLIGHT HALT - ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok} deps_present=${preflight.deps_present} identity_ok=${preflight.identity_ok}]`)
 }
@@ -297,7 +321,7 @@ const pick = TASK_ID
 
 const locate = await agent(
   `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list - each item independently testable.\n- PUSH-INJECT CONVENTIONS (task 0c811636): call \`context_bundle(persona="dev")\` ONCE and return its \`conventions\` array verbatim as the \`conventions\` field - this is PRISM's importance-ranked, top-N-capped living feedback doctrine (the domain="feedback" conventions - render policy, gate enforcement, board hygiene, etc.) that the drive injects into EVERY subsequent step agent's preamble. If the bundle has no \`conventions\` key or it is empty, return \`[]\` (the drive falls back to the static procedural spine + memory_recall self-heal).\n- CLAIM THE TASK WORKTREE (this REPLACES cutting a feature branch in the shared checkout). ${DRY ? 'Report the workspace path you WOULD claim (data_dir/task_workspaces/<task_id>) without calling conductor_work.' : 'Call `conductor_work(id="<the task id>")` with NO outcome - that is the idempotent START/PEEK: it enters the flow, runs task_workspace.ensure_workspace(), and returns `workspace` {path, branch, baseline, repo_root} together with the first self-describing `job`. Report workspace.path as `workspace`, workspace.branch as `branch`, the job\'s `step` as current_step, and its gate_state.'} EVERY later edit, test run and commit for this task happens with \`git -C <workspace.path>\` or cwd=<workspace.path> - the gate verifier reads exactly that path, and work left in the shared E:/.prism checkout is invisible to it. A conductor_work ok:false carrying a workspace error is a HARD stop (it fails closed on purpose so two tasks can never share a branch): put it in halt_reason and do not proceed.\n- BRANCH: BASE SAFETY. The server cuts the worktree for you, but \`ensure_workspace\` defaults its base_ref to the repo's CURRENT HEAD - NOT origin/main - so a stale shared checkout silently yields a stale worktree, and the slice would be built on code that is behind. Verify it rather than assume: \`git -C "<workspace.path>" fetch -q origin main && git -C "<workspace.path>" rev-list --count HEAD..origin/main\` MUST return 0. If the worktree base is BEHIND origin/main, STOP and say so in halt_reason (name the count) - do not drive a slice onto a stale base.${DRY ? ' In DRY-RUN, report the base you WOULD verify and the depends_on you WOULD check, without claiming a workspace.' : ''}\n- DEPENDENCY CHECK (do NOT pick a base - the server already cut the worktree): read this task's \`depends_on\`. For each dep that is DONE, confirm its \`[task:<dep8>]\` / \`[conductor:<dep8>]\` commit is reachable from the worktree baseline (\`git -C <workspace.path> log --grep "<dep8>" -n1\`, falling back to \`git -C E:/.prism log --all --grep "<dep8>" -n1\`). A dep that is NOT done means this task is BLOCKED: report that in halt_reason and do not drive.\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") - do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id - never the request_id default).` : ''}\n\nReturn the structured locate result.`,
-  { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA })
+  { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA, model: TIER_MODEL.balanced })
 
 if (locate.halt_reason && String(locate.halt_reason).trim()) {
   throw new Error(`LOCATE HALT - ${locate.halt_reason}`)
@@ -537,7 +561,7 @@ const graph = await agent(
     '',
     'Read before you cite: every file you name must be one you actually opened.',
   ].join('\n'),
-  { label: 'graph-blast-radius', phase: 'Graph', schema: GRAPH_SCHEMA })
+  { label: 'graph-blast-radius', phase: 'Graph', schema: GRAPH_SCHEMA, model: TIER_MODEL.balanced })
 
 GRAPH_BRIEF = [
   '',
@@ -676,7 +700,8 @@ for (let i = 0; i < MAX_JOBS; i++) {
   phase(phaseName)
   const res = await agent(
     isGate ? gatePrompt(job) : workerPrompt(job),
-    { label: job.step || 'peek', phase: phaseName, schema: JOB_RESULT_SCHEMA })
+    { label: job.step || 'peek', phase: phaseName, schema: JOB_RESULT_SCHEMA,
+      model: modelFor(job.role, job.step, isGate) })
   trace.push(res)
   await postAgentRun(res, { role: job.role || '', step: job.step })
 
@@ -702,27 +727,37 @@ for (let i = 0; i < MAX_JOBS; i++) {
       && job.step === 'verify_plan' && Number(graph.slice_count) > 1) {
     phase('Decompose')
     decomposition = await agent(decomposePrompt(),
-      { label: 'decompose', phase: 'Decompose', schema: DECOMPOSE_SCHEMA })
+      { label: 'decompose', phase: 'Decompose', schema: DECOMPOSE_SCHEMA, model: TIER_MODEL.frontier })
     const kids = (decomposition.children || []).slice(0, MAX_CHILDREN)
     if (kids.length === 0) {
       log(`Decomposition declined: ${decomposition.rationale}. Driving as one slice.`)
     } else {
       log(`Decomposed into ${kids.length} child slice(s), skeleton first: ${kids.map((k) => k.title).join(' | ')}`)
       phase('Children')
-      // Children are driven SEQUENTIALLY on purpose: the skeleton must prove
-      // the real wiring before any slice builds on it, and each child mutates
-      // its own worktree off the current substrate.
-      const childResults = []
-      for (let c = 0; c < kids.length; c++) {
-        const cres = await agent(childDriverPrompt(kids[c], c),
-          { label: `child:${kids[c].task_id.slice(0, 8)}`, phase: 'Children', schema: JOB_RESULT_SCHEMA })
-        childResults.push({ child: kids[c], result: cres })
-        await postAgentRun(cres, { role: 'dev', step: `child:${kids[c].task_id.slice(0, 8)}` })
+      // SKELETON FIRST, THEN FAN OUT. The skeleton (kids[0]) must prove the
+      // REAL wiring end-to-end before anything builds on it - that is the
+      // 0784729f lesson, where 5 slices went green with every collaborator
+      // mocked and assembled into a feature that could not run at all. But
+      // that rationale only justifies the skeleton being FIRST. Slices 2..N
+      // are disjoint by construction (the decomposer's contract) and each
+      // drives its OWN worktree, so serializing them bought nothing and cost
+      // the wall clock of the whole tail.
+      const driveChild = async (kid, idx) => {
+        const cres = await agent(childDriverPrompt(kid, idx),
+          { label: `child:${kid.task_id.slice(0, 8)}`, phase: 'Children',
+            schema: JOB_RESULT_SCHEMA, model: TIER_MODEL.fast })
+        await postAgentRun(cres, { role: 'dev', step: `child:${kid.task_id.slice(0, 8)}` })
         if (!cres || cres.ok !== true) {
-          log(`Child "${kids[c].title}" did not reach green: ${(cres && cres.halt_reason) || 'no reason given'}. The parent's own oracle still needs its own receipt - continuing the parent drive so the epic is not reported delivered on unexercised children.`)
+          log(`Child "${kid.title}" did not reach green: ${(cres && cres.halt_reason) || 'no reason given'}. The parent's own oracle still needs its own receipt - continuing the parent drive so the epic is not reported delivered on unexercised children.`)
         }
+        return { child: kid, result: cres }
       }
-      decomposition.results = childResults
+      const skeleton = await driveChild(kids[0], 0)
+      const rest = kids.length > 1
+        ? await parallel(kids.slice(1).map((k, i) => () => driveChild(k, i + 1)))
+        : []
+      if (kids.length > 1) log(`Skeleton settled; drove the remaining ${kids.length - 1} disjoint slice(s) CONCURRENTLY.`)
+      decomposition.results = [skeleton, ...rest.filter(Boolean)]
     }
   }
 
@@ -777,7 +812,7 @@ const settle = DRY ? null : await agent(
     '',
     'DONE MEANS SHIPPED: a passed green_gate is "verified", not released. If the commits sit on an unpushed worktree branch, say so - never report the task as shipped.',
   ].filter(Boolean).join('\n'),
-  { label: 'settle', phase: 'Settle', schema: SETTLE_SCHEMA })
+  { label: 'settle', phase: 'Settle', schema: SETTLE_SCHEMA, model: modelFor('', 'settle', false) })
 
 // -- Report ---------------------------------------------------------------
 return {
