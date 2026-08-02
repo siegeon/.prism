@@ -576,6 +576,10 @@ class TaskService:
 
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []
+        # Bare field names (not the "key: old -> new" strings above) for the
+        # task_updated bus event (child 792ebf6f of epic 2d480b08) — a
+        # subscriber cares WHICH fields moved, not the diff text.
+        changed_fields: list[str] = []
 
         for key, value in kwargs.items():
             if not hasattr(task, key) or key == "id":
@@ -591,6 +595,7 @@ class TaskService:
                 continue
             setattr(task, key, value)
             changes.append(f"{key}: {old_value!r} -> {value!r}")
+            changed_fields.append(key)
 
         if not changes:
             return task
@@ -647,7 +652,28 @@ class TaskService:
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:
             self._store_embedding(task.id, task.title, task.description)
+        self._publish_task_updated(task.id, changed_fields)
         return task
+
+    def _publish_task_updated(self, task_id: str, fields: list[str]) -> None:
+        """Push a task_updated event so an open /tasks/:id page (or any
+        other SSE subscriber) can refetch instead of polling (child
+        792ebf6f, epic 2d480b08). AFTER commit, so a subscriber never
+        observes an event for a row it can't yet read. Lazy import +
+        broad except: a bus failure (no loop, closed queue, etc.) must
+        never turn a successful task write into an error the caller sees
+        — mirrors the isolation _notify_created already uses above."""
+        try:
+            from prism_service.events import bus
+            bus.publish({
+                "project": self.project,
+                "type": "task_updated",
+                "task_id": task_id,
+                "fields": fields,
+            })
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task_updated publish failed for %s", task_id, exc_info=True)
 
     # ------------------------------------------------------------------
     # Next-task algorithm

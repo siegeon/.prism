@@ -954,9 +954,30 @@ export default function TaskDetailPage() {
     }
   }, [id, project]);
 
-  // Poll every 5s so the SDLC progress bar, child checklist, and token-effort
-  // label update in real-time as the conductor advances the task.
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  // Load once, then react to server-pushed changes instead of polling
+  // (child 792ebf6f, epic 2d480b08). TaskService.update publishes a
+  // task_updated event on every real (non-no-op) write, over the same
+  // /sse/sessions stream SessionsPage already consumes. Filter on BOTH
+  // the event type AND this route's own task id — a blanket
+  // `onmessage = () => load()` (the SessionsPage.tsx anti-pattern) would
+  // refetch on every unrelated event for the project, which is a poll
+  // with extra steps.
+  useEffect(() => {
+    load();
+    const es = new EventSource(`/sse/sessions?project=${project}`);
+    es.onmessage = (ev) => {
+      let data: { type?: string; task_id?: string } = {};
+      try {
+        data = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (data.type === "task_updated" && data.task_id === id) {
+        load();
+      }
+    };
+    return () => es.close();
+  }, [load, project, id]);
 
   // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
   // (run=false — AST scan only), readiness, delivery. The old shape awaited

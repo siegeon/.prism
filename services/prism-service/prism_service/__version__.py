@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.8"
+PRISM_VERSION = "7.10.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4063,6 +4063,15 @@ PRISM_VERSION_NOTES += (
     "viewable. Widened the whitelist to admit '@' (traversal guard and "
     "leading-alphanumeric rule unchanged) so the 6 existing on-disk "
     "recordings now serve as playable video, without renaming anything."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.9: the task detail page updates itself without polling "
+    "[task 792ebf6f]. TaskService.update now publishes a task_updated "
+    "event on the existing SSE bus after every real (non-no-op) write, "
+    "reusing /sse/sessions with no new endpoint. TaskDetailPage.tsx "
+    "drops its 5s setInterval poll for a single EventSource whose "
+    "onmessage refetches only when the event names THIS task, never a "
+    "blanket refetch on every project event."
 )
 
 
