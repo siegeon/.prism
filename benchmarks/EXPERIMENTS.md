@@ -292,6 +292,14 @@ in `services/bench-service/docker-compose.yml`.
   revisit.
 - **Decision: PRISM_RERANK=off is the permanent default.** Already the compose default;
   no code change required. Keep the reranker wiring (opt-in for future models).
+- > **SUPERSEDED 2026-08-01 (task 763ee039).** This decision no longer holds. The
+  > reranker defaults **on**: `brain_engine.py:2913` reads
+  > `environ.get("PRISM_RERANK", "auto")` and `_auto_rerank_preset()` resolves `auto`
+  > to `ms-marco-minilm` wherever sentence-transformers imports, `off` only where it
+  > cannot run. Flipped under task 19e4e7f7 on r@5 +0.106 (PocketBase, p=0.0075) and
+  > +0.153 (FullStackHero, p=0.0009) — measured on code-search corpora, where the
+  > SWE-bench result above was measured on issue statements. Reading this entry as
+  > current is how task 763ee039's own oracle came to cite pre-rerank baselines.
 
 ### 2026-04-20 — operator notes (cold-start behavior)
 - **Community summary prose-enrichment requires function/class docs.** The new
@@ -308,5 +316,42 @@ in `services/bench-service/docker-compose.yml`.
   ``searches`` table regardless of env vars; opt-out would need a new flag. Table
   size grows ~1 row per query; no retention policy yet. Check size periodically
   if the service runs unattended for weeks.
+
+### 2026-08-01 — graph leg: ranked, capped, in the docs.id space (task 763ee039)
+
+**Change.** `Brain._graph_search` now delegates to the module-level
+`graph_search_ranked` (`brain_engine.py`), and `_traverse_graph` was fixed in the same
+commit. Three things changed together, because the first alone is known to lose:
+
+1. **id space.** The leg emitted `entities.file`; RRF fuses on `doc_id` and hydration
+   looks that id up in `docs`, so every graph hit was silently dropped (0/437 overlap,
+   memory mx-60d462). It now resolves each entity file to one `docs.id` — the chunk
+   carrying the matched entity, else the earliest in the file.
+2. **order.** Uniform `score: 1.0` meant the leg's ORDER was arbitrary, and RRF only
+   reads order. Ranking is now exact entity-name match > casefold-exact > prefix >
+   substring, then `entities.centrality` (the PageRank column, `graph_service.py:63`)
+   descending. Emitted scores decay by rank; nothing is uniform.
+3. **cap.** `search` hands the leg `inner = limit * 6` (120 at limit=20). A `LIKE
+   '%token%'` name match filling 120 slots is the weakest evidence in the system
+   presenting as a third full-strength ranking — the mechanism behind the pooled
+   p=0.0078 loss of mx-58339a. `_GRAPH_LEG_CAP = 8`, a small absolute constant.
+
+No env flag: the ranked leg is the default path (owner rule mx-71dc57), pinned by
+`test_ac8_the_ranked_leg_needs_no_environment_variable`.
+
+**Harness tightened in the same slice.** The old `candidate_is_better` used `>=` (a tie
+printed "NOT worse on the headline metrics"), tested one cut-off, and had no pooled
+path. Retired and superseded by `verdict()`, plus `pool_mcnemar()`, `tail_guard()`, and
+a `pool` subcommand. The bar is now: strict `>` on BOTH r@5 and r@10 on at least two of
+three corpora, a pooled paired McNemar over all cases that does not favour the shipped
+arm, and zero golds made unreachable. Every cut-off (r@1/3/5/10/20) prints its own
+p-value.
+
+**Measurement.** Deltas are NOT recorded here yet, deliberately. The shipped-arm
+baselines in this task's oracle predate the `PRISM_RERANK=auto` default flip (see the
+SUPERSEDED note above), so a fresh three-corpus baseline on this HEAD is a prerequisite
+before any candidate delta is honest. That run (PocketBase 115 / FullStackHero 134 /
+Jellyfin 490 = 739 cases, both arms, pooled) is the green_gate's evidence and is
+appended when it lands. A single-corpus gain is not a result.
 
 <!-- Append new entries below; keep human-readable and dated. -->

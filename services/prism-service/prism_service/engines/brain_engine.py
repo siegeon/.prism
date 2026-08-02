@@ -661,6 +661,119 @@ def _detect_structural_query(query: str) -> tuple[Optional[str], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Graph leg (task 763ee039)
+# ---------------------------------------------------------------------------
+#
+# The leg used to emit ``{"doc_id": <entities.file>, "score": 1.0}``. RRF fuses
+# on ``doc_id`` and hydration looks that id up in ``docs``, so a file path was
+# not a weak hit but a DELETED one -- measured inert at 0/437 overlap (memory
+# mx-60d462). Naively repairing the id space alone LOSES: pooled McNemar 66/38
+# for the old arm, p=0.0078 over 739 cases (mx-58339a), because a uniform score
+# on a ``LIKE '%token%'`` name match let the weakest evidence in the system fill
+# ``limit * 6`` slots and read as a third full-strength ranking.
+#
+# So the leg carries a real signal or nothing: resolvable ids, an ORDER (exact
+# name match over substring, then entity centrality), and a small ABSOLUTE cap.
+_GRAPH_LEG_CAP = 8
+
+
+def _match_tier(name: str, token: str) -> int:
+    """0 exact, 1 exact-casefold, 2 prefix, 3 substring. Lower ranks first."""
+    if name == token:
+        return 0
+    low_n, low_t = name.lower(), token.lower()
+    if low_n == low_t:
+        return 1
+    return 2 if low_n.startswith(low_t) else 3
+
+
+def _has_centrality(conn) -> bool:
+    """entities.centrality is a migration (graph_service.py:63), not base schema."""
+    try:
+        return any(r[1] == "centrality"
+                   for r in conn.execute("PRAGMA table_info(entities)"))
+    except Exception:
+        return False
+
+
+def _emit_doc_hits(brain, ranked: list[tuple], limit: int) -> list[dict]:
+    """Ranked (entity file, entity name) -> one docs.id each, capped.
+
+    ``docs`` is chunked, so a file has several rows; the chunk carrying the
+    matched entity is the one worth surfacing, else the earliest in the file.
+    """
+    cap = max(1, min(_GRAPH_LEG_CAP, limit))
+    ranked = ranked[:cap * 4]
+    files = [f for f, _ in ranked]
+    if not files:
+        return []
+    ph = ",".join("?" * len(files))
+    try:
+        rows = brain._brain.execute(
+            "SELECT id, source_file, entity_name, line_start FROM docs "
+            f"WHERE source_file IN ({ph})", files,
+        ).fetchall()
+    except Exception:
+        return []
+    by_file: dict[str, list] = {}
+    for r in rows:
+        by_file.setdefault(r["source_file"], []).append(r)
+    out: list[dict] = []
+    for f, ent in ranked:
+        cands = by_file.get(f)
+        if not cands:
+            continue
+        pick = min(cands, key=lambda r: (
+            0 if (r["entity_name"] or "") == ent else 1,
+            r["line_start"] if r["line_start"] is not None else 1 << 30,
+            r["id"],
+        ))
+        # Decaying, never uniform: the leg's own confidence in its own order.
+        out.append({"doc_id": pick["id"], "score": round(1.0 / (1 + len(out)), 4)})
+        if len(out) >= cap:
+            break
+    return out
+
+
+def graph_search_ranked(brain, query: str, limit: int) -> list[dict]:
+    """The shipped graph leg AND the arm ab_retrieval.py --candidate measures.
+
+    Module level on purpose: ``load_candidate`` (ab_retrieval.py:217) resolves
+    ``module:function`` and cannot address a bound method, so measuring one
+    code object and shipping another is not possible here.
+    """
+    entity_name, relation = _detect_structural_query(query)
+    if entity_name:
+        return brain._traverse_graph(entity_name, relation, limit)
+
+    tokens = [t for t in re.split(r"\W+", query) if len(t) > 3]
+    if not tokens:
+        return []
+    pool = _GRAPH_LEG_CAP * 6
+    cent = "COALESCE(centrality, 0.0)" if _has_centrality(brain._graph) else "0.0"
+    best: dict[str, tuple] = {}
+    for token in tokens[:8]:
+        try:
+            rows = brain._graph.execute(
+                f"SELECT name, file, {cent} AS c FROM entities "
+                "WHERE name LIKE ? "
+                f"ORDER BY (LOWER(name) = LOWER(?)) DESC, {cent} DESC LIMIT ?",
+                (f"%{token}%", token, pool),
+            ).fetchall()
+        except Exception:
+            continue
+        for r in rows:
+            f = r["file"]
+            if not f:
+                continue
+            key = (_match_tier(r["name"], token), -(r["c"] or 0.0), r["name"])
+            if f not in best or key < best[f][0]:
+                best[f] = (key, r["name"])
+    order = sorted(best.items(), key=lambda kv: (kv[1][0], kv[0]))
+    return _emit_doc_hits(brain, [(f, meta[1]) for f, meta in order], limit)
+
+
+# ---------------------------------------------------------------------------
 # Brain class
 # ---------------------------------------------------------------------------
 
@@ -2761,55 +2874,37 @@ class Brain:
             return []
 
     def _graph_search(self, query: str, limit: int) -> list[dict]:
-        entity_name, relation = _detect_structural_query(query)
-        if entity_name:
-            return self._traverse_graph(entity_name, relation, limit)
-
-        tokens = [t for t in re.split(r"\W+", query) if len(t) > 3]
-        if not tokens:
-            return []
-        seen: set[str] = set()
-        results: list[dict] = []
-        for token in tokens[:8]:
-            try:
-                rows = self._graph.execute(
-                    "SELECT DISTINCT file FROM entities WHERE name LIKE ? LIMIT ?",
-                    (f"%{token}%", limit),
-                ).fetchall()
-                for row in rows:
-                    f = row["file"]
-                    if f and f not in seen:
-                        seen.add(f)
-                        results.append({"doc_id": f, "score": 1.0})
-            except Exception:
-                pass
-        return results[:limit]
+        # Delegates so the shipped default and the A/B candidate arm are ONE
+        # code object (see graph_search_ranked above).
+        return graph_search_ranked(self, query, limit)
 
     def _traverse_graph(
         self, entity_name: str, relation: Optional[str], limit: int
     ) -> list[dict]:
+        """Structural half of the graph leg — same id space, order and cap.
+
+        Reached from graph_search_ranked whenever _STRUCTURAL_PATTERNS match.
+        It carried the IDENTICAL uniform-score file-path emission, so fixing
+        only the token half is the exact half-fix memory mx-58339a warns about.
+        """
         try:
             ent = self._graph.execute(
                 "SELECT id FROM entities WHERE name = ? LIMIT 1", (entity_name,)
             ).fetchone()
             if not ent:
                 return []
-            eid = ent["id"]
-            if relation:
-                rows = self._graph.execute(
-                    "SELECT e.file FROM relationships r "
-                    "JOIN entities e ON e.id = r.target_id "
-                    "WHERE r.source_id = ? AND r.relation = ? LIMIT ?",
-                    (eid, relation, limit),
-                ).fetchall()
-            else:
-                rows = self._graph.execute(
-                    "SELECT e.file FROM relationships r "
-                    "JOIN entities e ON e.id = r.target_id "
-                    "WHERE r.source_id = ? LIMIT ?",
-                    (eid, limit),
-                ).fetchall()
-            return [{"doc_id": r["file"], "score": 1.0} for r in rows if r["file"]]
+            cent = ("COALESCE(e.centrality, 0.0)"
+                    if _has_centrality(self._graph) else "0.0")
+            where = "r.source_id = ?" + (" AND r.relation = ?" if relation else "")
+            params: list = [ent["id"]] + ([relation] if relation else [])
+            rows = self._graph.execute(
+                f"SELECT e.name, e.file, {cent} AS c FROM relationships r "
+                "JOIN entities e ON e.id = r.target_id "
+                f"WHERE {where} ORDER BY c DESC, e.name ASC LIMIT ?",
+                (*params, max(limit, _GRAPH_LEG_CAP * 4)),
+            ).fetchall()
+            return _emit_doc_hits(
+                self, [(r["file"], r["name"]) for r in rows if r["file"]], limit)
         except Exception:
             return []
 

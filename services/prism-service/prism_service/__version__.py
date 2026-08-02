@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.7"
+PRISM_VERSION = "7.10.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4072,3 +4072,17 @@ PRISM_VERSION_NOTES += (
 
 
 
+
+PRISM_VERSION_NOTES += (
+    "\n\nv7.10.8 — search's graph leg now carries a real signal instead of "
+    "being silently discarded. It emitted an entities.file path at a uniform "
+    "score while RRF fuses on docs.id, so every graph hit was dropped at "
+    "hydration: a symbol PRISM had indexed could return zero results. The leg "
+    "now emits resolvable docs ids, ranks exact entity-name matches over "
+    "substring ones and then by graph centrality, and is capped at 8 hits so "
+    "the weakest evidence in the system cannot outvote BM25 and the vector "
+    "leg. On by default, no env var. The A/B harness was tightened in the "
+    "same change: pooled McNemar across corpora, a tail guard for golds made "
+    "unreachable, and a strict verdict replacing a check that read a tie as "
+    "a win."
+)

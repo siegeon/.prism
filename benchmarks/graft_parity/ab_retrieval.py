@@ -203,6 +203,80 @@ def mcnemar(a: list[bool], b: list[bool]) -> dict:
             "significant": p < 0.05}
 
 
+def _hit(first, k: int) -> bool:
+    """Did any gold file land at or above cut-off k for this case?"""
+    return bool(first) and first <= k
+
+
+def pool_mcnemar(corpora: list[dict], k: int = 5) -> dict:
+    """One paired test over EVERY case in EVERY corpus, at cut-off k.
+
+    A per-corpus p-value cannot answer "did this help overall?". The misfire
+    this guards is on record: a 5-case run once doubled r@1 for a candidate
+    that lost significantly at 739 cases, and the graph-leg patch of mx-58339a
+    was only refused because 66/38 pooled to p=0.0078.
+    """
+    base, cand = [], []
+    for c in corpora:
+        for p in c.get("per_case") or []:
+            base.append(_hit(p.get("base_first"), k))
+            cand.append(_hit(p.get("cand_first"), k))
+    return mcnemar(base, cand)
+
+
+def tail_guard(per_base: list[dict], per_cand: list[dict]) -> dict:
+    """Unreachable is a different harm from merely lower-ranked.
+
+    Any reordering can push a gold from 20 to 21. Nothing may make a file the
+    prior arm found impossible to reach at any depth, however much r@1 rises.
+    """
+    lost, regressed = [], []
+    for b, c in zip(per_base, per_cand):
+        bf, cf = b.get("first"), c.get("first")
+        if bf and not cf:
+            lost.append(b.get("query"))
+        elif bf and cf and cf > bf:
+            regressed.append(b.get("query"))
+    return {"lost_entirely": len(lost), "rank_regressions": len(regressed),
+            "lost_queries": lost[:20], "regressed_queries": regressed[:20]}
+
+
+def verdict(corpora: list[dict]) -> dict:
+    """The decision rule the oracle actually asks for, in one place.
+
+    STRICT (a tie is not a win) on BOTH r@5 and r@10, on at least two of the
+    three corpora; a pooled paired test that does not favour the prior arm;
+    and no gold file made unreachable. Supersedes the ``>=`` headline check
+    that printed "NOT worse on the headline metrics" — it read a tie as a
+    pass, tested one cut-off, and had no pooled path at all.
+    """
+    won = []
+    for c in corpora:
+        b, cd = c["baseline"]["recall"], c["candidate"]["recall"]
+        if cd["r@5"] > b["r@5"] and cd["r@10"] > b["r@10"]:
+            won.append(c.get("repo") or "?")
+    pooled = {f"r@{k}": pool_mcnemar(corpora, k=k) for k in K_VALUES}
+    p5 = pooled["r@5"]
+    lost = sum((c.get("tail") or {}).get("lost_entirely", 0) for c in corpora)
+
+    why = []
+    if len(won) < 2:
+        why.append(f"strict r@5 AND r@10 win on only {len(won)}/{len(corpora)} "
+                   "corpora (two required; a single-corpus gain is an anecdote)")
+    if p5["favours_baseline"] > p5["favours_candidate"]:
+        why.append(f"pooled McNemar@5 favours the shipped arm "
+                   f"{p5['favours_baseline']}/{p5['favours_candidate']}, "
+                   f"p={p5['p']}")
+    if lost:
+        why.append(f"{lost} gold file(s) became unreachable at any depth")
+    return {"ship": not why, "corpora_won": won, "pooled": pooled,
+            "lost_entirely": lost,
+            "reason": "; ".join(why) if why
+            else (f"strict win on {len(won)}/{len(corpora)} corpora, pooled "
+                  f"{p5['favours_candidate']}/{p5['favours_baseline']} for the "
+                  f"candidate (p={p5['p']}), no gold lost")}
+
+
 def parse_env(pairs: list[str]) -> list[tuple[str, str]]:
     """['PRISM_RERANK=bge-v2'] -> [('PRISM_RERANK', 'bge-v2')]."""
     out = []
@@ -251,7 +325,28 @@ def main() -> int:
     r.add_argument("--limit", type=int, default=max(K_VALUES))
     r.add_argument("--output", type=Path, default=None)
 
+    p = sub.add_parser("pool", help="pooled verdict over every corpus's result")
+    p.add_argument("results", type=Path, nargs="+")
+
     args = ap.parse_args()
+
+    if args.cmd == "pool":
+        corpora = [json.loads(f.read_text(encoding="utf-8"))
+                   for f in args.results]
+        for c in corpora:
+            b, cd = c["baseline"]["recall"], c["candidate"]["recall"]
+            print(f"{c.get('repo_name') or c.get('repo')}  n={c['cases']}")
+            for k in K_VALUES:
+                t = c.get("mcnemar", {}).get(f"r@{k}", {})
+                print(f"  r@{k:<2} {b[f'r@{k}']:.4f} -> {cd[f'r@{k}']:.4f} "
+                      f"({cd[f'r@{k}'] - b[f'r@{k}']:+.4f})  p={t.get('p')}")
+        v = verdict(corpora)
+        n = sum(c["cases"] for c in corpora)
+        print(f"\nPOOLED over {n} cases:")
+        for k in K_VALUES:
+            print(f"  r@{k:<2} {json.dumps(v['pooled'][f'r@{k}'])}")
+        print(("SHIP" if v["ship"] else "DO NOT SHIP") + ": " + v["reason"])
+        return 0 if v["ship"] else 1
 
     if args.cmd == "cases":
         cases = build_cases(args.repo, args.suffix, args.limit,
@@ -306,28 +401,38 @@ def main() -> int:
         if env_overrides:
             payload["candidate_env"] = env_overrides
         cand = summarize(per_cand)
-        test = mcnemar(
-            [bool(p["first"] and p["first"] <= 5) for p in per_base],
-            [bool(p["first"] and p["first"] <= 5) for p in per_cand],
-        )
+        # PER-CASE, BOTH ARMS. Written out so `pool` can run one paired test
+        # across all three corpora; a per-corpus p-value cannot decide.
+        per_case = [{"query": b["query"],
+                     "base_first": b["first"], "cand_first": c["first"]}
+                    for b, c in zip(per_base, per_cand)]
         payload.update({"candidate_spec": args.candidate,
-                        "candidate": cand, "mcnemar": test,
+                        "repo_name": args.repo.name,
+                        "baseline": summarize(per_base),
+                        "candidate": cand,
+                        "per_case": per_case,
+                        "tail": tail_guard(per_base, per_cand),
+                        "mcnemar": {f"r@{k}": mcnemar(
+                            [_hit(p["base_first"], k) for p in per_case],
+                            [_hit(p["cand_first"], k) for p in per_case])
+                            for k in K_VALUES},
                         "deltas": {f"r@{k}": round(
                             cand["recall"][f"r@{k}"]
                             - base["recall"][f"r@{k}"], 4)
                             for k in K_VALUES}})
         print("CANDIDATE " + json.dumps(cand["recall"]) +
               f" top5={cand['any_gold_top5']}/{cand['n']}")
+        # Every cut-off carries its own p-value: a delta printed bare is how
+        # noise gets read as a win.
         for k in K_VALUES:
-            print(f"  r@{k:<2} delta={payload['deltas'][f'r@{k}']:+.4f}")
-        print("MCNEMAR " + json.dumps(test))
-        better = (cand["recall"]["r@5"] >= base["recall"]["r@5"]
-                  and cand["recall"]["r@10"] >= base["recall"]["r@10"]
-                  and cand["any_gold_top5"] >= base["any_gold_top5"])
-        payload["candidate_is_better"] = better
-        print("VERDICT: candidate is "
-              + ("NOT worse on the headline metrics" if better
-                 else "WORSE -- do not ship"))
+            t = payload["mcnemar"][f"r@{k}"]
+            print(f"  r@{k:<2} delta={payload['deltas'][f'r@{k}']:+.4f}"
+                  f"  McNemar p={t['p']} "
+                  f"({t['favours_candidate']}+/{t['favours_baseline']}-)")
+        print("TAIL " + json.dumps({k: v for k, v in payload["tail"].items()
+                                    if not k.endswith("_queries")}))
+        print("VERDICT: ONE corpus decides nothing. Run all three, then: "
+              f"python {Path(__file__).name} pool <result.json ...>")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = args.output or (RESULTS_DIR / "ab_latest.json")
