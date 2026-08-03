@@ -901,6 +901,21 @@ export default function TaskDetailPage() {
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
   const [gateOverride, setGateOverride] = useState(false);
+  // Pre-fill a truthful suggested reason INSIDE the expanded panel body
+  // (task c7ce0fc3) — a render-time effect of the panel being open, never a
+  // side effect of the banner's own expand-click. Approve stays one click
+  // in the ready case regardless (its disabled-check never requires a
+  // reason there); this only saves typing. Never claim a "passing receipt"
+  // for the bare-entitlement case. The owner edits or replaces it at will.
+  useEffect(() => {
+    if (!gatePanelOpen || gateReason.trim()) return;
+    setGateReason(isAwaitingReview
+      ? "Approving on my own review — no machine evidence exists at this tree; my read of the artifacts is the sign-off."
+      : gateReadiness?.receipt_ok
+        ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
+        : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gatePanelOpen]);
   // Inline title rename (customer bug 11040b39): click the title to edit.
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -1512,26 +1527,11 @@ export default function TaskDetailPage() {
         <div className="rounded-md border overflow-hidden" style={{ borderColor: `var(--accent-${bannerTone}-ring)` }}>
           <button
             type="button"
-            onClick={() => {
-              setGatePanelOpen((v) => !v);
-              // Pre-fill a truthful suggested reason so Approve is clickable
-              // immediately — the owner edits or replaces at will. Never
-              // claim a "passing receipt" for the bare-entitlement case.
-              if (!gateReason.trim()) {
-                setGateReason(isAwaitingReview
-                  ? "Approving on my own review — no machine evidence exists at this tree; my read of the artifacts is the sign-off."
-                  : gateReadiness?.receipt_ok
-                    ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
-                    : "");
-              }
-              // When the machine verifier already refused DESPITE passing
-              // evidence (the known blind-verifier defect 68e5c699), guide
-              // to the working path: pre-check the audited override.
-              if (gateReadiness?.receipt_ok
-                  && (task.gate_reason || "").includes("verifier rejected")) {
-                setGateOverride(true);
-              }
-            }}
+            // INSPECT vs OVERRIDE (task c7ce0fc3): this bare expand-click is a
+            // pure toggle — no reason pre-fill, no override auto-arm. Looking
+            // at the gate must never itself arm a recovery decision; those
+            // live as separate controls inside the expanded panel below.
+            onClick={() => setGatePanelOpen((v) => !v)}
             className="w-full text-left px-4 py-3 text-[13px] leading-relaxed flex items-center gap-3 flex-wrap"
             style={{
               background: `var(--accent-${bannerTone}-bg)`,
@@ -1548,7 +1548,7 @@ export default function TaskDetailPage() {
                   : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
-              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "recover with override, or fix & re-run"}
+              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence below"}
               <span className="ml-2">{gatePanelOpen ? "▾" : "▸"}</span>
             </span>
           </button>

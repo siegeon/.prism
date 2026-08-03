@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.9"
+PRISM_VERSION = "7.10.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4075,6 +4075,17 @@ PRISM_VERSION_NOTES += (
     "/api/version fallback poll are now gated on SSE health (an "
     "EventSource, not a bare interval) instead of firing unconditionally "
     "on every activity-context tab, including /tasks/:id."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.10: STALE GATE BANNER SEPARATES INSPECT FROM OVERRIDE "
+    "[task c7ce0fc3]. The gate notification banner's expand-click used to "
+    "silently pre-fill the reason and (on the known blind-verifier defect "
+    "68e5c699) auto-arm the override checkbox, so merely looking at a "
+    "blocked gate could arm a recovery decision. The onClick is now a pure "
+    "gatePanelOpen toggle; the reason pre-fill moved to a useEffect keyed "
+    "on the panel opening, and override-arming is manual only (tick the "
+    "existing Override checkbox). The banner's own summary text no longer "
+    "calls itself 'override recovery'."
 )
 
 
