@@ -932,7 +932,9 @@ export default function TaskDetailPage() {
       // the SDLC bar, the honest work-state pill, the prototype iframe, and
       // the Spend panel all read them off task.*.
       setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null } : d.task);
-      setHistory(d.history ?? []);
+      // `history` is NOT populated here (task f77d3e94: it's the expensive
+      // part of this payload) — see the separate loadHistory() opt-in fetch
+      // below, which is the one that calls setHistory.
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
       setError(null);
@@ -957,6 +959,24 @@ export default function TaskDetailPage() {
   // Poll every 5s so the SDLC progress bar, child checklist, and token-effort
   // label update in real-time as the conductor advances the task.
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+
+  // Task f77d3e94: SEPARATE explicit include_history=true fetch (mirrors
+  // conductor.py's include_outcomes / version.ts's notes=true) — fired
+  // independently of load() so the lean default payload never blocks first
+  // paint. Feeds the Timeline card (tsx:2219-2222) and the gate audit-detail
+  // disclosure (gateEvidenceLines(history), tsx:1756-1761).
+  const loadHistory = useCallback(async () => {
+    if (!id) return;
+    try {
+      const d = await api.get<{ history: HistoryRow[] }>(
+        `/api/tasks/${id}?project=${project}&include_history=true`,
+      );
+      setHistory(d.history ?? []);
+    } catch {
+      /* best-effort — Timeline/audit-detail stay empty on failure */
+    }
+  }, [id, project]);
+  useEffect(() => { loadHistory(); const t = setInterval(loadHistory, 5000); return () => clearInterval(t); }, [loadHistory]);
 
   // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
   // (run=false — AST scan only), readiness, delivery. The old shape awaited
