@@ -91,17 +91,33 @@ export default function LiveBar() {
       .finally(() => setPolled(true));
   }, [project]);
 
-  // Poll only while the tab is actually being looked at (task c38ef597).
-  // /api/conductor/state is the heaviest call on the board — it carries the
-  // whole board plus every managed task's 40-point burn series (~29KB with ONE
-  // task) — and it ran every 5s in background tabs forever. Refetch
-  // immediately on focus so the bar is never stale when it is visible.
+  // SSE health signal (task 2d480b08 D-6): reuse the app's existing
+  // /sse/live connection purely as a "is push alive" heartbeat — no new
+  // backend route needed. The fallback poll below only fires while this
+  // reads unhealthy, same treatment as lib/version.ts's watchdog.
+  const sseHealthy = useRef(true);
   useEffect(() => {
-    const tick = () => { if (!document.hidden) load(); };
+    const es = new EventSource("/sse/live");
+    es.onopen = () => { sseHealthy.current = true; };
+    es.onerror = () => { sseHealthy.current = false; };
+    return () => es.close();
+  }, []);
+
+  // Poll only while the tab is visible AND the SSE channel looks down (task
+  // c38ef597 + 2d480b08 D-6). /api/conductor/state is the heaviest call on
+  // the board — it carries the whole board plus every managed task's
+  // 40-point burn series (~29KB with ONE task) — so it must not run
+  // unconditionally on a bare 5s interval; that ran even on a healthy tab,
+  // including /tasks/:id, and was the single biggest idle-transfer offender
+  // named in this task. Refetch immediately on focus so the bar is never
+  // stale when it is visible, and the poll still covers a stalled SSE
+  // connection (the safety property PR #257 lost by dropping a poll outright).
+  useEffect(() => {
+    const poll = () => { if (!document.hidden && !sseHealthy.current) load(); };
     load();
-    const t = setInterval(tick, 5000);
-    document.addEventListener("visibilitychange", tick);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+    const t = setInterval(poll, 5000);
+    document.addEventListener("visibilitychange", poll);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", poll); };
   }, [load]);
   useEffect(() => {
     const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);

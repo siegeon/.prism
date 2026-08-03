@@ -954,9 +954,27 @@ export default function TaskDetailPage() {
     }
   }, [id, project]);
 
-  // Poll every 5s so the SDLC progress bar, child checklist, and token-effort
-  // label update in real-time as the conductor advances the task.
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { load(); }, [load]);
+
+  // Real-time push (task 2d480b08): subscribe to THIS task's /sse/tasks
+  // stream and PATCH local state from the pushed event's `fields` (D-4) so
+  // the SDLC progress bar, child checklist, and token-effort label update
+  // within ~1s of a backend change — never refetch on every event, that
+  // is the SessionsPage.tsx:80 `es.onmessage = () => load();`
+  // refetch-everything anti-pattern this task's likely_misfire names.
+  useEffect(() => {
+    if (!id) return;
+    const es = new EventSource(`/sse/tasks?project=${project}&task_id=${id}`);
+    es.onmessage = (ev) => {
+      try {
+        const payload = JSON.parse(ev.data) as { task_id?: string; fields?: Partial<Task> };
+        if (payload.task_id !== id || !payload.fields) return;
+        const fields = payload.fields;
+        setTask((prev) => (prev ? { ...prev, ...fields } : prev));
+      } catch { /* ignore malformed payloads */ }
+    };
+    return () => es.close();
+  }, [id, project]);
 
   // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
   // (run=false — AST scan only), readiness, delivery. The old shape awaited

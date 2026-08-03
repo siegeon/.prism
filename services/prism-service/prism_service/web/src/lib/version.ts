@@ -34,6 +34,9 @@ function startLiveWatchdog() {
   if (watchdogStarted || typeof window === "undefined") return;
   watchdogStarted = true;
   let initial: string | null = null;
+  // D-6 (task 2d480b08): the 15s fallback poll below only fires while this
+  // reads false — an always-on poll defeats the whole payload-scope fix.
+  let sseHealthy = false;
   const onVersion = (v: string | undefined) => {
     if (!v) return;
     if (initial === null) initial = v;
@@ -43,14 +46,19 @@ function startLiveWatchdog() {
   try {
     const es = new EventSource("/sse/live");
     es.onmessage = (ev) => {
+      sseHealthy = true;
       try { onVersion((JSON.parse(ev.data) as { version?: string }).version); }
       catch { /* ignore malformed payloads */ }
     };
+    es.onerror = () => { sseHealthy = false; };
   } catch { /* EventSource unavailable — polling still covers it */ }
-  // Robust fallback: poll every 15s so a throttled/suspended tab whose SSE
-  // stalled still picks up a new build without a manual hard-refresh. Also
+  // Robust fallback: poll every 15s, but ONLY while the SSE channel above
+  // looks unhealthy — /sse/live already pushes the version on connect and
+  // reconnect, so this still covers a throttled/suspended tab whose SSE
+  // stalled, without running a redundant fetch on every healthy tab. Also
   // re-checks on refocus, when a backgrounded tab wakes up.
   const poll = () => {
+    if (sseHealthy) return;
     fetch("/api/version", { cache: "no-store" })
       .then((r) => r.json())
       .then((r: { version?: string }) => onVersion(r.version))
