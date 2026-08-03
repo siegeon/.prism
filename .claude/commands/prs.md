@@ -31,5 +31,8 @@ what changed:
 4. One line for everything else (advanced / unlinked / deferred / orphan tasks).
 
 A tick with nothing to do returns `mode: "quiet_tick"` - report that in a single
-line and stop. Do not re-run the workflow in the same turn, and never merge a PR
+line and stop. When it also carries `unchanged: true`, the workflow's pulse check
+found the PR and task state identical to the last tick and deliberately skipped
+the full survey; say so in that one line rather than implying it looked closely.
+Pass `force` -> `{force:true}` to survey anyway. Do not re-run the workflow in the same turn, and never merge a PR
 by hand that the workflow declined to merge.

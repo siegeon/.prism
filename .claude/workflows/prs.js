@@ -1,7 +1,7 @@
 export const meta = {
   name: 'prs',
   description: 'Operate every open PR to conclusion through PRISM: join each PR to its [task:<id>] owner, let the TASK GATE (not CI) authorize the merge, land it, then write the merge receipt back so "done" and "merged" stop drifting apart. Reports the reverse drift too - tasks PRISM calls done whose commits never reached main. Idempotent per tick, so it is safe to /loop.',
-  whenToUse: 'Run on a loop to keep the PR queue converging: `/loop 20m /prs`, or one-shot as Workflow({name:"prs", args:{api_base:"http://127.0.0.1:8888"}}). Pass {dry_run:true} to survey and classify without touching anything, {merge:false} to stop short of merging, {close_stale_drafts:true} to also close abandoned drafts, {stale_days:N} to change what counts as abandoned (default 21), {max_prs:N} to cap the per-tick fan-out (default 6), {merge_method:"merge"|"squash"|"rebase"} (default squash).',
+  whenToUse: 'Run on a loop to keep the PR queue converging: `/loop 20m /prs`, or one-shot as Workflow({name:"prs", args:{api_base:"http://127.0.0.1:8888"}}). Pass {dry_run:true} to survey and classify without touching anything, {merge:false} to stop short of merging, {close_stale_drafts:true} to also close abandoned drafts, {stale_days:N} to change what counts as abandoned (default 21), {max_prs:N} to cap the per-tick fan-out (default 6), {merge_method:"merge"|"squash"|"rebase"} (default squash). On a loop most ticks change nothing, so a cheap pulse agent fingerprints the PR/task state first and returns immediately when it matches the last tick; pass {force:true} to survey regardless.',
   phases: [
     { title: 'Survey', detail: 'Join every open PR to its PRISM task; classify the drift', model: 'sonnet' },
     { title: 'Operate', detail: 'One agent per actionable PR, carries it to conclusion', model: 'sonnet' },
@@ -67,6 +67,14 @@ const ACTIONABLE = ['ship', 'conflicted', 'red', 'stale']
 const BLOCK_LIMIT = Number.isFinite(Number(_in.block_limit))
   ? Math.max(0, Math.min(10, Number(_in.block_limit))) : 2
 const BLOCK_STATE = 'prism-prs-blocked.json'
+// Fingerprint of the last tick's world. On a loop most ticks change nothing,
+// and re-deriving that with the full survey costs ~65k tokens to print the
+// same digest again. A cheap pulse agent hashes the few facts every verdict
+// actually depends on - PR set, mergeable, check conclusion, linked task
+// status - and when it matches the stored one the tick returns immediately.
+// {force:true} always runs the full survey; so does any DRY run.
+const PULSE_STATE = 'prism-prs-pulse.txt'
+const FORCE = _in.force === true || _in.force === 'true'
 
 const SURVEY_SCHEMA = {
   type: 'object',
@@ -129,6 +137,50 @@ const OPERATE_SCHEMA = {
 
 // -- Survey -------------------------------------------------------------
 phase('Survey')
+
+// -- Pulse: has anything changed since the last tick? --------------------
+const PULSE_SCHEMA = {
+  type: 'object',
+  required: ['changed', 'fingerprint', 'summary'],
+  properties: {
+    changed: { type: 'boolean', description: 'true when the fingerprint differs from the stored one, or no fingerprint was stored' },
+    fingerprint: { type: 'string' },
+    summary: { type: 'string', description: 'one line naming the open PRs and their state' },
+    open_prs: { type: 'array', items: { type: 'integer' } },
+  },
+}
+
+const pulse = (DRY || FORCE) ? null : await agent(`Decide, as cheaply as you can, whether this repo's PR situation has changed
+since the last tick. Do NOT survey, classify or fix anything. READ ONLY, and touch nothing
+inside the git repo.
+
+1. \`gh pr list --state open --limit 100 --json number,mergeable,updatedAt,isDraft\`
+2. For each open PR: \`gh pr view <n> --json statusCheckRollup\` and reduce it to a single
+   conclusion string (SUCCESS / FAILURE / PENDING / NONE).
+3. For each PR whose TITLE carries a \`[task:<id>]\` trailer, read that task's status from
+   \`${API_BASE}/api/tasks?project=prism&status=all\` (match the 8-char id as a PREFIX of the
+   full uuid) and note \`status\` and \`gate_state\`.
+4. Build \`fingerprint\` as one line: for every open PR, sorted by number,
+   \`<n>:<isDraft>:<mergeable>:<checks>:<updatedAt>:<taskStatus>/<gateState>\` joined by "|".
+   These are exactly the facts a verdict depends on, so anything that could change a verdict
+   changes the fingerprint, and nothing else does.
+5. Compare against \`"$(dirname "$(mktemp -u)")/${PULSE_STATE}"\`. Set \`changed\` true if the
+   file is absent, unreadable, or differs. THEN overwrite that file with the new fingerprint.
+6. If the daemon does not answer, treat that as changed:true - never report "nothing changed"
+   from missing data.`,
+  { label: 'pulse:changed?', phase: 'Survey', schema: PULSE_SCHEMA, model: 'haiku' })
+
+if (pulse && !pulse.changed) {
+  log(`nothing changed since the last tick - skipping the full survey. ${pulse.summary}`)
+  return {
+    ok: true,
+    mode: 'quiet_tick',
+    unchanged: true,
+    headline: `No change since the last tick. ${pulse.summary}`,
+    open_prs: pulse.open_prs || [],
+    note: 'The full survey was deliberately not run. Pass {force:true} to survey anyway.',
+  }
+}
 
 const survey = await agent(`You are surveying the OPEN PULL REQUESTS of this repo and joining each one
 to the PRISM task that owns it. READ ONLY - you make no changes at all.
