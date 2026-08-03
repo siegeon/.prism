@@ -275,6 +275,61 @@ def next_task(project: str = Query("default")) -> dict:
     return {"next": _svc(project).next_task()}
 
 
+def _is_shipped_on_main(repo: str, task_id: str) -> bool:
+    """Squash-safe shipped-ness: does a commit MESSAGE on origin/main carry
+    the `[task:<id8>]` trailer? Reads commit messages on origin/main
+    directly, so a squash-merged commit (which shares no parent chain with
+    the task's own branch tip -- a sibling, not a descendant) still counts
+    as shipped.
+
+    Deliberately NOT a SHA parent-chain walk: that is what
+    `get_task_delivery`'s existing "merged" stage uses (tasks.py:591) and it
+    false-negatives on exactly this squash case. Fixing that endpoint is
+    task 499ba9c9's job, not this helper's -- this helper must not inherit
+    that bug, and must not be mistaken for fixing it."""
+    needle = f"[task:{task_id[:8]}]"
+    rc, out = _git(repo, "log", "--fixed-strings", "--grep", needle,
+                   "-n", "1", "--format=%H", "origin/main")
+    return rc == 0 and bool(out)
+
+
+@router.get("/stranded")
+def get_stranded_work(project: str = Query("default")) -> dict:
+    """DONE means SHIPPED (owner 2026-07-16) -- merged and validated on
+    main, not merely gate-passed. Scans every status=done task and reports
+    the ones whose [task:<id8>] trailer is not (yet) reachable on
+    origin/main, so a "done" task stuck on an unmerged branch surfaces on
+    the Dashboard instead of silently vanishing."""
+    rows: list[dict] = []
+    repo = ""
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        repo = _project_source_path(project) or ""
+    except Exception:
+        repo = ""
+    if repo and _git(repo, "rev-parse", "--verify", "-q", "origin/main")[0] == 0:
+        for t in _svc(project).list(status="done"):
+            tid = str(getattr(t, "id", "") or "")
+            if not tid or _is_shipped_on_main(repo, tid):
+                continue
+            branch, rev = _resolve_delivery_branch(repo, tid)
+            _, count_s = _git(repo, "rev-list", "--count", f"origin/main..{rev}")
+            try:
+                commits_ahead = int(count_s)
+            except ValueError:
+                commits_ahead = 0
+            branch_on_origin = bool(branch) and _git(
+                repo, "rev-parse", "--verify", "-q", f"origin/{branch}")[0] == 0
+            rows.append({
+                "task_id": tid,
+                "title": str(getattr(t, "title", "") or ""),
+                "commits_ahead": commits_ahead,
+                "branch_on_origin": branch_on_origin,
+                "state": "pushed_unmerged" if branch_on_origin else "local_only",
+            })
+    return {"stranded": rows}
+
+
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
