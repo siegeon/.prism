@@ -9,3 +9,6 @@
 # "script"; a CR (0x0d) trips its control-character check and blocks the
 # Workflow tool on Windows checkouts. Force LF so autocrlf never re-adds CRs.
 .claude/workflows/*.js text eol=lf
+# Slash-command bodies are fed to the harness the same way; keep them LF too
+# so a Windows checkout never introduces CRs or whole-file CRLF diffs.
+.claude/commands/*.md text eol=lf
