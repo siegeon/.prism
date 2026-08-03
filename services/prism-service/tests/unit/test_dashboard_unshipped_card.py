@@ -104,8 +104,11 @@ def _wire(monkeypatch, repo: Path, tasks: list, ws_map: dict | None = None):
 
 
 def _rows(project: str = "prism") -> list[dict]:
+    # Field/response-shape names below follow the APPROVED plan_doc for this
+    # task (response key "stranded", row field "branch_on_origin") so the
+    # implementation step has one unambiguous contract to build against.
     from prism_service.api.tasks import get_stranded_work
-    return get_stranded_work(project=project)["rows"]
+    return get_stranded_work(project=project)["stranded"]
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +152,7 @@ def test_a_squash_merged_done_task_is_not_reported_stranded(tmp_path, monkeypatc
 
 # ---------------------------------------------------------------------------
 # AC-2 -- a done task whose trailer is ABSENT from origin/main IS stranded,
-# with a full row: task_id, title, commits_ahead, branch_exists_on_origin
+# with a full row: task_id, title, commits_ahead, branch_on_origin
 # ---------------------------------------------------------------------------
 
 def test_a_done_task_with_no_trailer_on_origin_main_is_stranded_with_full_row(
@@ -174,7 +177,7 @@ def test_a_done_task_with_no_trailer_on_origin_main_is_stranded_with_full_row(
     assert row is not None, f"expected {task_id} to be reported stranded: {rows}"
     assert row["title"] == "Ship the thing"
     assert row["commits_ahead"] == 2, row
-    assert row["branch_exists_on_origin"] is True, row
+    assert row["branch_on_origin"] is True, row
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +213,8 @@ def test_local_only_branch_is_differentiable_from_pushed_but_unmerged(
 
     rows = {r["task_id"]: r for r in _rows()}
     assert local_id in rows and pushed_id in rows, rows
-    assert rows[local_id]["branch_exists_on_origin"] is False, rows[local_id]
-    assert rows[pushed_id]["branch_exists_on_origin"] is True, rows[pushed_id]
+    assert rows[local_id]["branch_on_origin"] is False, rows[local_id]
+    assert rows[pushed_id]["branch_on_origin"] is True, rows[pushed_id]
     assert rows[local_id]["state"] != rows[pushed_id]["state"], (
         "a never-pushed (data-loss-risk) branch must carry a DIFFERENT "
         f"`state` than a pushed-but-unmerged one: {rows}")
@@ -292,17 +295,28 @@ def test_shipped_check_is_squash_safe_and_credits_the_ancestry_bug_owner():
 # function (the affordance a browser/UI fetch actually hits)
 # ---------------------------------------------------------------------------
 
-def test_stranded_endpoint_is_registered_on_the_tasks_router():
+def test_stranded_endpoint_is_registered_before_the_task_id_catch_all():
+    """Starlette matches routes in registration order -- a literal path is
+    only reachable if it is registered BEFORE a same-shape `/{task_id}`
+    parametrized route (the existing `/next` precedent, tasks.py:273-275).
+    Registered after, `GET /api/tasks/stranded` would be swallowed by
+    `/{task_id}` with task_id="stranded" and 404/error instead of listing."""
     from prism_service.api.tasks import router
-    hits = [
-        (r.path, sorted(r.methods)) for r in router.routes
-        if hasattr(r, "methods") and hasattr(r, "path")
-        and r.path.rstrip("/").endswith("stranded")
-    ]
-    assert any("GET" in methods for _p, methods in hits), (
-        f"a GET route ending in /stranded must be registered on the tasks "
-        f"router (found matching paths: {hits}; all routes: "
-        f"{[r.path for r in router.routes if hasattr(r, 'path')]})")
+    all_paths = [r.path for r in router.routes if hasattr(r, "path")]
+    stranded_idx = next(
+        (i for i, p in enumerate(all_paths) if p.rstrip("/").endswith("stranded")),
+        None)
+    assert stranded_idx is not None, (
+        f"no route ending in /stranded registered on the tasks router: {all_paths}")
+    stranded_route = router.routes[stranded_idx]
+    assert "GET" in getattr(stranded_route, "methods", set()), (
+        f"the /stranded route must accept GET: {stranded_route}")
+    task_id_idx = next(
+        (i for i, p in enumerate(all_paths) if p == "/{task_id}"), None)
+    assert task_id_idx is not None, "expected the existing /{task_id} route"
+    assert stranded_idx < task_id_idx, (
+        "GET /stranded must be registered BEFORE /{task_id} or it is "
+        f"swallowed by the catch-all: order={all_paths}")
 
 
 # ---------------------------------------------------------------------------
@@ -333,20 +347,24 @@ def test_ac_ui1_dashboard_fetches_stranded_work_with_a_hydration_flag():
 
 
 def test_ac_ui2_stranded_section_renders_a_deep_link_per_row():
+    """Per the approved plan_doc: a real `<a href>` (copyable, pasteable,
+    middle-clickable deep link -- precedent UnderstandPage.tsx:509,
+    TaskDetailPage.tsx:1462), never a bare identifier or a click handler with
+    no href. Matches the RENDERED TAG, not a comment describing one."""
     src = _read(_DASH)
     m = re.search(r"stranded[\w.?]*\.map\(", src)
     assert m, (
         "expected a `.map(` over the stranded rows to render one row each "
         f"(no such map found in source)")
     window = src[m.start():m.start() + 900]
-    assert re.search(r"<Link\b", window), (
-        f"each stranded row must render a <Link> (the rendered tag, not just "
-        f"the import) to the task deep link: {window!r}")
+    assert re.search(r"<a\b[^>]*\bhref=\{", window), (
+        f"each stranded row must render an <a href={{...}}> (the rendered "
+        f"tag), not just link-shaped text: {window!r}")
     href_re = re.compile(
-        r"to=\{`/tasks/\$\{[\w.]*task_id\}\?project=")
+        r"href=\{`/tasks/\$\{[\w.]*task_id\}\?project=")
     assert href_re.search(window), (
-        "the Link's `to` must be the deep link `/tasks/${task_id}?project=...` "
-        f"the owner explicitly asked for: {window!r}")
+        "the anchor's href must be the deep link `/tasks/${task_id}"
+        f"?project=...` the owner explicitly asked for: {window!r}")
 
 
 def test_ac_ui3_empty_state_reads_calm_no_alarm_words():
