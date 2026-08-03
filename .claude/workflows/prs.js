@@ -56,6 +56,18 @@ const MAX_PRS = Number.isFinite(Number(_in.max_prs))
 //   stale           untouched > stale_days and going nowhere -> propose close
 const ACTIONABLE = ['ship', 'conflicted', 'red', 'stale']
 
+// A PR whose operator keeps coming back empty - refused for want of consent
+// (the #225 rebase+force-push), or dying on a terminal error - costs a full
+// agent EVERY tick to fail the same way. After this many consecutive blocked
+// ticks the loop stops spawning an operator for it and just keeps reporting
+// it, so quiet ticks settle back to roughly one survey agent. The count lives
+// in a small file under the OS temp dir (the script itself cannot do I/O);
+// deleting that file, or a tick where the PR is worked successfully, resets
+// it. 0 disables the skip and restores retry-every-tick.
+const BLOCK_LIMIT = Number.isFinite(Number(_in.block_limit))
+  ? Math.max(0, Math.min(10, Number(_in.block_limit))) : 2
+const BLOCK_STATE = 'prism-prs-blocked.json'
+
 const SURVEY_SCHEMA = {
   type: 'object',
   required: ['prs', 'orphan_tasks', 'headline'],
@@ -80,6 +92,7 @@ const SURVEY_SCHEMA = {
           signed_off: { type: 'boolean', description: 'true only when the PRISM task actually cleared its green_gate' },
           gate_reason: { type: 'string', description: 'the task gate receipt, verbatim, when there is one' },
           verdict: { type: 'string', enum: ['ship', 'awaiting_prism', 'conflicted', 'red', 'unlinked', 'stale'] },
+          blocked_count: { type: 'integer', description: 'consecutive prior ticks whose operator for this PR came back empty; 0 when absent from the state file' },
           why: { type: 'string', description: 'one line: the evidence behind this verdict' },
         },
       },
@@ -156,6 +169,11 @@ to the PRISM task that owns it. READ ONLY - you make no changes at all.
    workspace branch, \`git log origin/main..<branch> --oneline\` has commits AND no open PR
    above carries that branch. Skip this step entirely if it takes more than ~60s.
 
+6. BLOCKED-TICK COUNTS. Read \`"$(dirname "$(mktemp -u)")/${BLOCK_STATE}"\` if it exists - a
+   JSON object of {"<pr number>": <consecutive blocked ticks>} written by earlier ticks.
+   Set \`blocked_count\` per PR from it (0 when the file or the key is absent). This is the
+   ONE file you may read outside the repo; do not write it, a later stage owns that.
+
 SCRATCH FILES: this checkout is SHARED with other live sessions and this workflow runs on a
 LOOP. Never write intermediate files into the repo (no tasks_dump.json, no id lists in the
 working tree) - a tick that leaves a 2MB dump behind does it again every 20 minutes and
@@ -183,6 +201,14 @@ const drift = all.filter(p => p.task_status === 'done' && p.verdict !== 'ship')
 const staleQueue = CLOSE_STALE ? all.filter(p => p.verdict === 'stale').slice(0, 25) : []
 let queue = all.filter(p => ACTIONABLE.includes(p.verdict) && p.verdict !== 'stale')
 if (!MERGE) queue = queue.filter(p => p.verdict !== 'ship')
+// Park the PRs whose operator has come back empty BLOCK_LIMIT ticks running.
+// Still reported every tick - parked is not forgotten - just not re-attempted.
+const skippedBlocked = BLOCK_LIMIT
+  ? queue.filter(p => (p.blocked_count || 0) >= BLOCK_LIMIT) : []
+if (skippedBlocked.length) {
+  queue = queue.filter(p => (p.blocked_count || 0) < BLOCK_LIMIT)
+  log(`parking ${skippedBlocked.length} PR(s) after ${BLOCK_LIMIT} blocked tick(s): ${skippedBlocked.map(p => '#' + p.number).join(', ')} - still reported, no operator spawned. A human decision or {block_limit:0} resumes them.`)
+}
 // Ship first (it retires work), then conflicts, then red.
 const RANK = { ship: 0, conflicted: 1, red: 2 }
 queue.sort((a, b) => (RANK[a.verdict] - RANK[b.verdict]) || (a.number - b.number))
@@ -216,6 +242,7 @@ if (DRY || (!queue.length && !staleQueue.length)) {
     orphan_tasks: survey.orphan_tasks || [],
     stale: all.filter(p => p.verdict === 'stale')
       .map(p => ({ number: p.number, title: p.title, age_days: p.age_days })),
+    parked: skippedBlocked.map(p => ({ number: p.number, verdict: p.verdict, blocked_count: p.blocked_count })),
     would_work: DRY
       ? queue.map(p => ({ number: p.number, verdict: p.verdict }))
         .concat(staleQueue.map(p => ({ number: p.number, verdict: 'stale' })))
@@ -342,6 +369,21 @@ const lost = queue.filter((p, i) => !((worked || [])[i]))
 if (lost.length) {
   log(`${lost.length} operator(s) returned nothing - refused or died: ${lost.map(p => '#' + p.number).join(', ')}. NOT silently dropped; see blocked[].`)
 }
+
+// Persist the blocked counts so the NEXT tick can park a PR that keeps
+// failing the same way. Worked PRs have their count cleared, so a PR that
+// starts succeeding is never parked on stale history.
+if (queue.length && BLOCK_LIMIT) {
+  await agent(`Update this loop's blocked-tick counts. The file is \`"$(dirname "$(mktemp -u)")/${BLOCK_STATE}"\`,
+a JSON object of {"<pr number>": <consecutive blocked ticks>}. Create it if absent.
+
+  INCREMENT by 1 (or set to 1 if the key is absent): ${JSON.stringify(lost.map(p => p.number))}
+  DELETE these keys entirely (they were worked this tick): ${JSON.stringify(results.map(r => r.number))}
+
+Leave every other key untouched. Write valid JSON and read it back to confirm it parses.
+Touch nothing inside the git repo. Return the resulting file contents on one line.`,
+    { label: 'state:blocked-counts', phase: 'Reconcile', model: 'haiku' })
+}
 const merged = results.filter(r => r.action_taken === 'merged' && r.ok)
 const halted = results.filter(r => r.action_taken === 'halted' || !r.ok)
 
@@ -355,6 +397,8 @@ return {
   advanced: results.filter(r => r.ok && r.action_taken !== 'merged')
     .map(r => ({ number: r.number, action: r.action_taken, detail: r.detail })),
   halted: halted.map(r => ({ number: r.number, detail: r.detail, needs_human: r.needs_human })),
+  parked: skippedBlocked.map(p => ({ number: p.number, verdict: p.verdict, blocked_count: p.blocked_count,
+    note: `no operator spawned - came back empty ${p.blocked_count} tick(s) running. Needs a human decision; {block_limit:0} forces a retry.` })),
   blocked: lost.map(p => ({ number: p.number, verdict: p.verdict,
     note: 'the operator returned nothing - refused (e.g. consent needed to rewrite remote history) or died. Re-runs next tick and will keep costing a tick until a human decides.' })),
   closed_stale: staleQueue.length ? { count: staleQueue.length, numbers: staleQueue.map(p => p.number), report: sweep } : null,
