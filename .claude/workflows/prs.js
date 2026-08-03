@@ -160,10 +160,18 @@ inside the git repo.
 3. For each PR whose TITLE carries a \`[task:<id>]\` trailer, read that task's status from
    \`${API_BASE}/api/tasks?project=prism&status=all\` (match the 8-char id as a PREFIX of the
    full uuid) and note \`status\` and \`gate_state\`.
-4. Build \`fingerprint\` as one line: for every open PR, sorted by number,
-   \`<n>:<isDraft>:<mergeable>:<checks>:<updatedAt>:<taskStatus>/<gateState>\` joined by "|".
-   These are exactly the facts a verdict depends on, so anything that could change a verdict
-   changes the fingerprint, and nothing else does.
+4. Build \`fingerprint\` as: \`main=<origin/main sha, 7 chars>\` (from
+   \`git ls-remote origin refs/heads/main\` - do NOT fetch or touch the checkout) followed by,
+   for every open PR sorted by number, \`<n>:<isDraft>:<checks>:<updatedAt>:<taskStatus>/<gateState>\`,
+   all joined by "|".
+   DELIBERATELY EXCLUDING \`mergeable\`: GitHub computes mergeability lazily, so bulk
+   \`gh pr list\` returns UNKNOWN for the same PR that \`gh pr view\` calls MERGEABLE. Putting a
+   value that flaps into the fingerprint would make every tick look changed and defeat this
+   check entirely. Nothing is lost - a PR cannot silently become conflicted without EITHER
+   its own branch moving (which moves updatedAt) OR main moving (which moves the sha above),
+   and both are in the fingerprint.
+   Everything here is a fact some verdict depends on, so anything that could change a
+   verdict changes the fingerprint, and nothing else does.
 5. Compare against \`"$(dirname "$(mktemp -u)")/${PULSE_STATE}"\`. Set \`changed\` true if the
    file is absent, unreadable, or differs. THEN overwrite that file with the new fingerprint.
 6. If the daemon does not answer, treat that as changed:true - never report "nothing changed"
