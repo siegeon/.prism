@@ -175,6 +175,19 @@ def _fn_body(js: str, name: str) -> str:
     raise AssertionError(f"unbalanced braces in {name}()")
 
 
+def _outside_block(src: str) -> str:
+    """Source with the step-budget block cut out, comments then stripped.
+
+    Splits on the RAW markers first, deliberately: _strip_comments would
+    delete the marker comments themselves, and a split on the stripped text
+    would then find no marker, return the WHOLE file, and make every
+    "outside the block" assertion vacuously true.
+    """
+    head = src.split(_OPEN, 1)[0]
+    tail = src.split(_CLOSE, 1)[-1] if _CLOSE in src else ""
+    return _strip_comments(head + "\n" + tail)
+
+
 def test_ac1_budget_reads_args_and_defaults_to_a_finite_value(block):
     """AC-1: read from args, finite positive default."""
     assert "_in.step_budget_s" in block, (
@@ -278,13 +291,16 @@ def test_ac6_a_budget_halt_is_a_halt_not_a_failed_run(block, src):
             f"a budget halt must not carry a {banned!r} field; it is a halt "
             "over work that may be committed and green, not a failed run"
         )
-    stripped = _strip_comments(src)
-    assert "budgetHalt(" in stripped.split(_OPEN)[0] + stripped.split(
-        _CLOSE, 1)[-1], (
+    outside = _outside_block(src)
+    assert "budgetHalt(" in outside, (
         "the drive loop must actually CALL budgetHalt(); a helper defined "
         "and never invoked halts nothing"
     )
-    assert "halted," in stripped or "halted:" in stripped, (
+    assert "stepBudgetFor(" in outside, (
+        "the loop must resolve the step's own budget when it halts, so the "
+        "reason names the allowance that step actually had"
+    )
+    assert "halted," in outside, (
         "the halt must be returned in the workflow result alongside the "
         "drive's trace, so the report still carries what was produced"
     )
