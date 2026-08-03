@@ -156,6 +156,12 @@ to the PRISM task that owns it. READ ONLY - you make no changes at all.
    workspace branch, \`git log origin/main..<branch> --oneline\` has commits AND no open PR
    above carries that branch. Skip this step entirely if it takes more than ~60s.
 
+SCRATCH FILES: this checkout is SHARED with other live sessions and this workflow runs on a
+LOOP. Never write intermediate files into the repo (no tasks_dump.json, no id lists in the
+working tree) - a tick that leaves a 2MB dump behind does it again every 20 minutes and
+pollutes everyone else's \`git status\`. Spill anything you need under the OS temp dir
+(\`mktemp -d\`) and leave the checkout exactly as you found it.
+
 Be exact and terse. \`why\` is one line of evidence per PR, not a paragraph.`,
   { label: 'survey:open-prs', phase: 'Survey', schema: SURVEY_SCHEMA, model: 'sonnet' })
 
