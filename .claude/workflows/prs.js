@@ -332,6 +332,16 @@ const [worked, sweep] = await parallel([
 ])
 
 const results = (worked || []).filter(Boolean)
+// An operator that DIED or was REFUSED (safety classifier, terminal API error)
+// resolves to null, and filter(Boolean) would drop it from the digest - so the
+// tick would report halted:[] and read like a clean run. Index-align against
+// the queue and surface them by name: a PR nobody could work is exactly what a
+// human needs to see. Observed live on #225, where the rebase+force-push was
+// refused for want of explicit consent to rewrite a remote branch.
+const lost = queue.filter((p, i) => !((worked || [])[i]))
+if (lost.length) {
+  log(`${lost.length} operator(s) returned nothing - refused or died: ${lost.map(p => '#' + p.number).join(', ')}. NOT silently dropped; see blocked[].`)
+}
 const merged = results.filter(r => r.action_taken === 'merged' && r.ok)
 const halted = results.filter(r => r.action_taken === 'halted' || !r.ok)
 
@@ -345,6 +355,8 @@ return {
   advanced: results.filter(r => r.ok && r.action_taken !== 'merged')
     .map(r => ({ number: r.number, action: r.action_taken, detail: r.detail })),
   halted: halted.map(r => ({ number: r.number, detail: r.detail, needs_human: r.needs_human })),
+  blocked: lost.map(p => ({ number: p.number, verdict: p.verdict,
+    note: 'the operator returned nothing - refused (e.g. consent needed to rewrite remote history) or died. Re-runs next tick and will keep costing a tick until a human decides.' })),
   closed_stale: staleQueue.length ? { count: staleQueue.length, numbers: staleQueue.map(p => p.number), report: sweep } : null,
   // Carried every tick so the loop keeps reporting the gap even when it can
   // do nothing about it - these are the PRs only a PRISM gate can release.
