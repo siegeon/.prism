@@ -1,6 +1,6 @@
 export const meta = {
   name: 'implement',
-  description: 'Drive one PRISM task to a genuinely-evidenced green_gate as a SERVER-DRIVEN QUEUE: loop on the single verb conductor_work, do exactly job["instructions"], produce job["expected_proof"]. The server owns WORKFLOW_STEPS - this script never names a step and never clears a gate (distinct-actor). Work lands in the task\'s OWN git worktree (the path the gate verifier reads), the call graph sets the blast radius, and an oversized slice decomposes into conductor-driven CHILD tasks (skeleton first, then the disjoint slices concurrently). Every step runs at the capability tier PRISM assigns its role, so frontier reasoning is spent on planning and gate judgment rather than on fetch-and-report. The build-half companion to the `prototype` planning workflow.',
+  description: 'Drive one PRISM task to a genuinely-evidenced green_gate as a SERVER-DRIVEN QUEUE: loop on the single verb conductor_work, do exactly job["instructions"], produce job["expected_proof"]. The server owns WORKFLOW_STEPS - this script never names a step and never clears a gate (distinct-actor). Work lands in the task\'s OWN git worktree (the path the gate verifier reads), the call graph sets the blast radius, and an oversized slice decomposes into conductor-driven CHILD tasks (skeleton first, then the disjoint slices concurrently) whose shared seam is named ONCE up front and which the parent then assembles rather than rebuilds. Every step runs at the capability tier PRISM assigns its role, so frontier reasoning is spent on planning and gate judgment rather than on fetch-and-report. The build-half companion to the `prototype` planning workflow.',
   whenToUse: 'Run to actually WORK a task through PRISM\'s conductor. Invoke as Workflow({name:"implement", args:{task_id:"<uuid>"}}). Omit task_id to let the server pull the next unblocked task. Pass {dry_run:true} to trace read-only (no conductor mutations, no writes), {stop_after:"red_gate"} to halt at a named step, {max_children:N} to cap plan-time decomposition (0 disables it), or {gate_wait_s:N} to change how long a gate waits for a distinct seat before reporting who must act (default 240). Pass {step_budget_s:N} to change the wall-clock ceiling on a SINGLE step (default 1800, clamped 60..14400; known-slow steps such as verify_green_state get a multiple of it) - on exhaustion the drive halts itself and reports the step, the budget and how long it actually ran, keeping any work already committed. A non-default topology passes api_base pointing at its own web port; the default is the canonical release port.',
   // Each phase declares the MODEL it runs at, so the tier is visible in the
   // progress UI instead of being a silent choice inside the script. PRISM
@@ -10,11 +10,11 @@ export const meta = {
     { title: 'Pre-flight', detail: 'Fail fast: branch, clock, daemon identity, deps', model: 'haiku' },
     { title: 'Locate', detail: 'Task + conductor state; brain-first context; claim the task worktree', model: 'sonnet' },
     { title: 'Graph', detail: 'Call-graph blast radius -> allowed_files + neighbouring suites', model: 'sonnet' },
-    { title: 'Decompose', detail: 'Oversized slice -> disjoint child tasks, skeleton first', model: 'opus' },
+    { title: 'Decompose', detail: 'Oversized slice -> disjoint child tasks, one named seam, skeleton first', model: 'opus' },
     { title: 'Children', detail: 'Skeleton first, then the disjoint slices CONCURRENTLY', model: 'sonnet' },
     { title: 'Drive', detail: 'conductor_work loop: do the job, report the proof (model per job.role)' },
     { title: 'Gate', detail: 'Produce evidence, then WAIT for the distinct seat', model: 'opus' },
-    { title: 'Settle', detail: 'Terminal receipt read back from the server', model: 'haiku' },
+    { title: 'Settle', detail: 'Terminal receipt, evidence citations, and whether it actually shipped', model: 'haiku' },
   ],
 }
 
@@ -519,8 +519,19 @@ function workerPrompt(job) {
   const verify = (c.verify || []).join(' ; ')
   const stopIf = (c.stop_if || []).join(' ; ')
   const extra = STEP_EXTRA[job.step] || ''
+  // THE PARENT STOPS BUILDING once children exist (epic 2d480b08). Its job
+  // becomes the one thing no child can do: prove the ASSEMBLED product works
+  // through the real wiring, which is also the epic's own oracle receipt.
+  const assembleOnly = childrenOwnTheBuild ? [
+    '',
+    'CHILDREN OWN THE IMPLEMENTATION. This task was decomposed and its slices have already been driven in their own worktrees.',
+    'DO NOT re-implement anything a child owns. If you find yourself writing the feature, you are duplicating a slice that is already green, and two implementations of one seam cannot both be merged.',
+    'Your work here is ASSEMBLY AND PROOF: integrate what the children shipped, verify the whole thing end-to-end through the REAL production path (not an injected collaborator), run every neighbouring suite, and fill only genuine gaps NO child covered - naming the gap explicitly in your evidence.',
+    'If the assembled product already satisfies this task\'s oracle with no new code, say exactly that and report the step with the assembly evidence. Writing nothing is the correct outcome when the children already delivered.',
+  ] : []
   return [
     preamble(job.role || 'dev'),
+    ...assembleOnly,
     '',
     `STEP ${job.step} (role ${job.role || '-'} / ${job.role_label || '-'}). The SERVER chose this step - you never pick one.`,
     '',
@@ -661,6 +672,19 @@ const DECOMPOSE_SCHEMA = {
       },
     },
     rationale: { type: 'string' },
+    // ONE CONTRACT, FIXED HERE (epic 2d480b08, 2026-08-02). Two children of
+    // that epic each invented their own name for the SAME event - one shipped
+    // `task.changed` with a dict of scalar values on a dedicated /sse/tasks
+    // route, the other `task_updated` with a list of field names over the
+    // shared /sse/sessions stream. Both went green, both edited the same two
+    // files, and merging both would have produced a red main because each
+    // pinned its own name in its own test. Disjoint ALLOWLISTS do not make
+    // slices independent when they meet at a seam; the seam has to be named
+    // once, up here, before any child is created.
+    shared_contract: {
+      type: 'string',
+      description: 'The exact names crossing the seam between children - event/type names, route paths, payload shape, function signatures - written once and quoted verbatim into EVERY child description. Empty only if the children touch no shared seam at all.',
+    },
   },
 }
 
@@ -682,6 +706,7 @@ function decomposePrompt() {
     '- allowed_files MUST be DISJOINT across children (parallel workers are only safe with disjoint allowlists), and must include the child\'s own test file. Never put a control_plane.POLICY_FILES entry in a child\'s allowlist - that child would fail its own gates on the candidate-controls-judge tooth; put policy consumers in a separate non-policy file.',
     '- `verify` entries are WORKSPACE-ROOT-RELATIVE paths (e.g. `services/prism-service/tests/unit/test_x.py`), never `cd ... && pytest ...`. A non-relative verify makes the red check exit 4 "no tests ran".',
     '- Set stop_if: needs a file outside allowed_files; behavior ambiguous; verification fails twice.',
+    '- NAME THE SEAM ONCE. If two children meet at a seam (an event type, a route path, a payload shape, a function signature), decide those exact names HERE, return them in `shared_contract`, and quote that text verbatim into EVERY child\'s description as a contract they must consume and must NOT redesign. Epic 2d480b08 skipped this: one child shipped `task.changed` (dict of scalar values, dedicated /sse/tasks route), its sibling shipped `task_updated` (list of field names, shared /sse/sessions stream), both went green on their own test, and merging both would have made main red. Disjoint allowlists did not save it, because the collision was in the NAMES, not the files.',
     '',
     `CREATE them with task_create(parent_id="${tid}", title=..., description=..., oracle=..., proof_type=..., allowed_files=[...], verify=[...], stop_if=[...], likely_misfire=<how this slice could pass but be WRONG>). Return the created ids in drive order, skeleton first.`,
     'If, having thought it through, ONE slice is genuinely the right shape after all, return children:[] and say why. Splitting has real cost and a wrong split is worse than none.',
@@ -716,6 +741,13 @@ phase('Drive')
 const trace = []
 let halted = null
 let decomposition = null
+// Set the moment real children exist. After that the PARENT STOPS BUILDING:
+// its remaining steps assemble and verify what the children shipped. Epic
+// 2d480b08 had no such flag, so it drove its own implement_tasks to a
+// complete implementation AND spawned children that rebuilt the same seam a
+// different way - 1.85M tokens, 105 minutes, and two incompatible versions of
+// one feature that could not both be merged.
+let childrenOwnTheBuild = false
 let done = false
 let job = {
   step: locate.current_step || '',
@@ -799,6 +831,7 @@ for (let i = 0; i < MAX_JOBS; i++) {
       log(`Decomposition declined: ${decomposition.rationale}. Driving as one slice.`)
     } else {
       log(`Decomposed into ${kids.length} child slice(s), skeleton first: ${kids.map((k) => k.title).join(' | ')}`)
+      childrenOwnTheBuild = true
       phase('Children')
       // SKELETON FIRST, THEN FAN OUT. The skeleton (kids[0]) must prove the
       // REAL wiring end-to-end before anything builds on it - that is the
@@ -861,6 +894,14 @@ const SETTLE_SCHEMA = {
     receipt_summary: { type: 'string', description: 'the receipt as it actually reads: adapter, tree sha, and whether that tree is THIS task\'s. Quote it; never paraphrase a pass.' },
     commits: { type: 'string', description: 'the [task:<id8>] commits in the task worktree, oneline - or "none"' },
     owner_action: { type: 'string', description: 'exactly what the human must do now, with the task URL - or "none, the server decided it" ' },
+    // DONE MEANS SHIPPED. Epic 2d480b08 passed green_gate and closed with
+    // status=done, full_outcome_complete=true, while its PR sat open and main
+    // never contained a line of it. The epic-rollup adapter counts CHILD
+    // STATUS and has no shipping tooth, so nothing in the gate could catch it.
+    // The drive reports it instead of inheriting the lie.
+    shipped: { type: 'boolean', description: 'TRUE only if this task\'s commits are ancestors of origin/main. A passed gate is "verified", never "shipped".' },
+    shipping_state: { type: 'string', description: 'where the work actually is: branch, PR number and state, whether origin/main contains it, and what still has to happen to release it' },
+    evidence_cited: { type: 'string', description: 'every file from /api/tasks/<id>/evidence with its cited flag. An UNCITED file does not reach the gate card - the owner signs without seeing it.' },
   },
 }
 phase('Settle')
@@ -875,8 +916,12 @@ const settle = DRY ? null : await agent(
     `3. OPEN THE RECEIPT before calling anything green: quote the adapter and the tree sha, and confirm that tree is THIS task's worktree${WS ? ` (\`git -C "${WS}" rev-parse HEAD\`)` : ''}. A green receipt naming another task's tree is not a pass - say so plainly if you find one.`,
     WS ? `4. \`git -C "${WS}" log --oneline -8\` -> the commits this drive actually produced. A drive that reports done with no [task:<id8>] commit produced nothing.` : '',
     `5. owner_action: if the gate is decided, "none, the server decided it". If a human must click, give the one sentence they need and the URL ${API_BASE}/tasks/${locate.task_id}?project=prism. If readiness already says the review IS the sign-off and the Approve is clean, say THAT - do not tell a human they are blocked when they are not.`,
+    `6. EVIDENCE MUST BE CITED, not merely written. curl -s -m10 "${API_BASE}/api/tasks/${locate.task_id}/evidence?project=prism" and report every file WITH its \`cited\` flag. A file sitting there with cited=false never reaches the gate card, so the owner signs off without ever seeing it - that happened on epic 2d480b08 and was caught only because the owner pushed back. If anything is uncited, that is an owner_action, not a footnote: cite it from completion_proof.`,
+    `7. SHIPPING, decided by git and not by the gate: \`git -C "${WS || '.'}" log --oneline -1\`, then check whether those commits are ancestors of origin/main (\`git merge-base --is-ancestor <sha> origin/main\`), and look for an open PR (\`gh pr list --head <branch>\`). Set shipped=true ONLY if origin/main actually contains the work.`,
     '',
-    'DONE MEANS SHIPPED: a passed green_gate is "verified", not released. If the commits sit on an unpushed worktree branch, say so - never report the task as shipped.',
+    'DONE MEANS SHIPPED, AND THIS IS THE DONE GATE - WAIT HERE. A passed green_gate is "verified", not released.',
+    'Epic 2d480b08 went status=done with full_outcome_complete=true while its PR sat open and main had none of it: the epic-rollup adapter counts child status and has no shipping tooth, so the gate could not catch it and the board showed a delivered feature that did not exist anywhere a user could reach.',
+    'So: never report a task as done or shipped while its commits sit on an unmerged branch. Say plainly that it is VERIFIED BUT NOT RELEASED, give the exact remaining action, and let the human decide. Reporting "done" on unmerged work is the single failure this step exists to prevent.',
   ].filter(Boolean).join('\n'),
   { label: 'settle', phase: 'Settle', schema: SETTLE_SCHEMA, model: modelFor('', 'settle', false) })
 
@@ -887,7 +932,14 @@ return {
   workspace: WS,
   branch: locate.branch,
   dry_run: DRY,
+  // `done` is the SERVER's terminal-gate answer. It is NOT "shipped" - keep
+  // the two separate at the top level so a caller cannot read one as the
+  // other, which is exactly how epic 2d480b08 got reported as delivered while
+  // origin/main contained none of it.
   done,
+  shipped: !!(settle && settle.shipped === true),
+  verified_not_released: !!(done && settle && settle.shipped !== true),
+  shipping_state: (settle && settle.shipping_state) || '(not checked)',
   started_at_step: locate.current_step || '(not entered)',
   ended_at_step: (settle && settle.workflow_step) || (trace.length ? trace[trace.length - 1].next_step : locate.current_step),
   graph: {
