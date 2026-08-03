@@ -1,7 +1,7 @@
 export const meta = {
   name: 'implement',
   description: 'Drive one PRISM task to a genuinely-evidenced green_gate as a SERVER-DRIVEN QUEUE: loop on the single verb conductor_work, do exactly job["instructions"], produce job["expected_proof"]. The server owns WORKFLOW_STEPS - this script never names a step and never clears a gate (distinct-actor). Work lands in the task\'s OWN git worktree (the path the gate verifier reads), the call graph sets the blast radius, and an oversized slice decomposes into conductor-driven CHILD tasks (skeleton first, then the disjoint slices concurrently). Every step runs at the capability tier PRISM assigns its role, so frontier reasoning is spent on planning and gate judgment rather than on fetch-and-report. The build-half companion to the `prototype` planning workflow.',
-  whenToUse: 'Run to actually WORK a task through PRISM\'s conductor. Invoke as Workflow({name:"implement", args:{task_id:"<uuid>"}}). Omit task_id to let the server pull the next unblocked task. Pass {dry_run:true} to trace read-only (no conductor mutations, no writes), {stop_after:"red_gate"} to halt at a named step, {max_children:N} to cap plan-time decomposition (0 disables it), or {gate_wait_s:N} to change how long a gate waits for a distinct seat before reporting who must act (default 240). A non-default topology passes api_base pointing at its own web port; the default is the canonical release port.',
+  whenToUse: 'Run to actually WORK a task through PRISM\'s conductor. Invoke as Workflow({name:"implement", args:{task_id:"<uuid>"}}). Omit task_id to let the server pull the next unblocked task. Pass {dry_run:true} to trace read-only (no conductor mutations, no writes), {stop_after:"red_gate"} to halt at a named step, {max_children:N} to cap plan-time decomposition (0 disables it), or {gate_wait_s:N} to change how long a gate waits for a distinct seat before reporting who must act (default 240). Pass {step_budget_s:N} to change the wall-clock ceiling on a SINGLE step (default 1800, clamped 60..14400; known-slow steps such as verify_green_state get a multiple of it) - on exhaustion the drive halts itself and reports the step, the budget and how long it actually ran, keeping any work already committed. A non-default topology passes api_base pointing at its own web port; the default is the canonical release port.',
   // Each phase declares the MODEL it runs at, so the tier is visible in the
   // progress UI instead of being a silent choice inside the script. PRISM
   // publishes a tier per SDLC role (Steward=frontier, Verifier=balanced,
@@ -42,6 +42,46 @@ const MAX_CHILDREN = Number.isFinite(Number(_in.max_children))
 const GATE_WAIT_S = Number.isFinite(Number(_in.gate_wait_s))
   ? Math.max(30, Math.min(900, Number(_in.gate_wait_s)))
   : 240
+// <step-budget>
+// WALL-CLOCK BOUND FOR ONE STEP (task dcbd284f). The stall guard in the drive
+// loop counts HAND-BACKS and is evaluated BEFORE the awaited step call, so a
+// step whose subprocess wedges keeps the loop on its first iteration and is
+// structurally invisible to it. That is how a drive burned 3.9h, ~2.5 of them
+// inside one wedged step, with nothing telling it to stop.
+// This script has NO clock: Date.now/new Date( are banned in
+// .claude/workflows/*.js (the pre-flight below fails the drive on any match)
+// and the runtime throws on them because they break resume. So the number is
+// DECLARED here and ENFORCED BY THE STEP AGENT, which has a real clock through
+// bash - exactly the shape GATE_WAIT_S already uses for a gate seat. Seconds.
+// Kept pure and side-effect free: the pinned suite executes this block under
+// node with a stubbed `_in` and asserts the values it returns.
+const STEP_BUDGET_S = Number.isFinite(Number(_in.step_budget_s))
+  ? Math.max(60, Math.min(14400, Number(_in.step_budget_s)))
+  : 1800
+// Steps that run a REAL suite need more room than a step that just reports.
+// Named explicitly so the escalation lives in the code path that picks the
+// number rather than in an unused constant.
+const SLOW_STEPS = { verify_green_state: 3, implement_tasks: 2 }
+function stepBudgetFor(step) {
+  return Math.min(14400, STEP_BUDGET_S * (SLOW_STEPS[step] || 1))
+}
+// A budget halt is a HALT, never a failed run: work already committed may be
+// green, and the caller still gets steps_driven + trace beside this object.
+// It deliberately carries no status/error field for that reason.
+function budgetHalt(step, budgetS, elapsedS, retries) {
+  const r = Number(retries) || 0
+  return {
+    at: step,
+    kind: 'agent',
+    reason: `step budget exhausted: "${step}" ran ${elapsedS}s against a `
+      + `budget of ${budgetS}s`
+      + (r ? `, retrying ${r}x inside the step` : '')
+      + '. The drive stopped itself instead of waiting longer. Anything '
+      + 'already committed is kept and reported below.',
+    gate_state: '',
+  }
+}
+// </step-budget>
 // The DRIVING Claude session id - sourced by the orchestrator from
 // CLAUDE_CODE_SESSION_ID and passed in via args (workflow JS has no
 // env/process access). Threaded into task_link_session + conductor_advance
@@ -496,6 +536,12 @@ function workerPrompt(job) {
     (verify ? `WORKER CONTRACT - verify (the command that proves this slice): ${verify}` : ''),
     (stopIf ? `WORKER CONTRACT - stop_if (HALT, do not push through): ${stopIf}` : ''),
     '',
+    `STEP BUDGET - ${stepBudgetFor(job.step)}s (task dcbd284f). This drive script has no clock, so YOU enforce this deadline: note the time at your FIRST command and track elapsed as you go. A drive once ran 3.9 HOURS, ~2.5 of them inside a single step whose subprocess had wedged, because nothing told it to stop.`,
+    `- If a command you started is still running as the deadline passes, KILL it and any child process you spawned, then STOP. Do not relaunch it a third time hoping it clears.`,
+    `- Then return ok:false with budget_exceeded:true, elapsed_s set to the seconds you actually ran, and step_retries set to how many times you re-ran a command inside this step. Put in halt_reason what you were waiting on and what you did produce.`,
+    `- Work you already COMMITTED is kept and reported, so stopping at the deadline never throws away green work. Report the commit shas in evidence.`,
+    `- Finishing early is always fine. This is a ceiling, not a target: never pad a step to fill it.`,
+    '',
     ctx,
     GRAPH_BRIEF,
     WORKSPACE_RULE,
@@ -522,6 +568,9 @@ const JOB_RESULT_SCHEMA = {
     evidence: { type: 'string', description: 'what you did, with file:line and the exact command + result' },
     source_tier: { type: 'string', enum: ['brain', 'grep', 'web'], description: 'which tier answered this step: brain=WHY, grep=HOW, web=NEW-PRACTICE (cited). A step citing nothing, or the wrong tier, is a mis-tiered cite - reject it.' },
     halt_reason: { type: 'string', description: 'set ONLY on a genuine failure or an undecided gate; name the unsatisfied tooth and what a human must do' },
+    budget_exceeded: { type: 'boolean', description: 'true ONLY when you stopped because this step passed its wall-clock budget (task dcbd284f). The drive turns this into a budget halt that KEEPS your committed work, rather than a failure.' },
+    elapsed_s: { type: 'number', description: 'seconds this step actually ran, measured by you from your first command. Required to be honest when budget_exceeded is true: "over budget" without a duration cannot tell a slow step from a wedged one.' },
+    step_retries: { type: 'number', description: 'how many times you re-ran a command INSIDE this step (e.g. killed a wedged subprocess and relaunched it). The 3.9h incident retried twice and the drive had no idea.' },
   },
 }
 
@@ -708,6 +757,19 @@ for (let i = 0; i < MAX_JOBS; i++) {
       model: modelFor(job.role, job.step, isGate) })
   trace.push(res)
   await postAgentRun(res, { role: job.role || '', step: job.step })
+
+  // BUDGET HALT (task dcbd284f) - checked BEFORE the generic ok:false branch
+  // so a step that ran out of time is reported as a bounded stop with its
+  // duration, not as an anonymous failure over work that may be committed.
+  if (res && res.budget_exceeded === true) {
+    halted = budgetHalt(
+      job.step, stepBudgetFor(job.step),
+      Number(res.elapsed_s) || 0, res.step_retries,
+    )
+    if (res.halt_reason) halted.reason += ` The step was waiting on: ${res.halt_reason}`
+    halted.result = res
+    break
+  }
 
   if (!res || res.ok !== true) {
     halted = {
