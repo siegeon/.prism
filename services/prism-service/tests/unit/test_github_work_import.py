@@ -100,9 +100,21 @@ def test_issue_import_is_idempotent_by_node_id(tmp_path):
 
     issues2 = [e for e in store.list_entities(WS_A) if e.entity_kind == "issue"]
     assert len(issues2) == 2
-    # one pending intake task per imported entity, none advanced into workflow
+    # One intake task per imported entity, none advanced into the workflow.
+    #
+    # The status half of this assertion was `t.status == "pending"` until task
+    # 0a9b511f: the owner reversed it on 2026-08-02 so a closed issue completes
+    # its task ("both ways"). An OPEN issue is still pending, which is what
+    # this fixture holds, so the check now names the remote state it depends on
+    # instead of assuming every import is pending forever.
+    #
+    # The workflow_step half is UNCHANGED and is the real invariant: importing
+    # never advances a task into the conductor.
     imported = [t for t in tasks.list() if "external" in t.tags]
-    assert all(t.status == "pending" and t.workflow_step == "" for t in imported)
+    assert all(t.workflow_step == "" for t in imported)
+    open_issues = {e.remote_id for e in issues2 if e.status_category != "done"}
+    still_pending = [t for t in imported if t.status == "pending"]
+    assert len(still_pending) == len(open_issues)
 
 
 # ── AC-2: pull requests are NOT imported as issues ─────────────────────

@@ -115,7 +115,19 @@ def test_repeated_sync_is_idempotent(tmp_path):
     assert all(link.state == "active" for link in links)
 
 
-def test_remote_status_never_enters_the_conductor(tmp_path):
+def test_remote_done_completes_the_task_but_never_the_conductor(tmp_path):
+    """SUPERSEDES test_remote_status_never_enters_the_conductor (task 0a9b511f).
+
+    That test asserted `task.status == "pending"  # NOT "done"`, which was the
+    right call while the mirror was create-only. Owner 2026-08-02 reversed it:
+    "when we mark a task done then github should mark it done and such, both
+    ways. otherwise this sync to github feature does not do much."
+
+    The SAFETY PROPERTY inside the old test survives verbatim and is the whole
+    reason this is a rewrite rather than a deletion: remote state reconciles
+    the task's STATUS only. It still never touches workflow_step or gate_state,
+    so a closed issue can never manufacture a passed gate.
+    """
     store = _store(tmp_path)
     tasks = _task_svc(tmp_path)
     conn = store.ensure_connection(WS_A, "github", "install-1")
@@ -133,9 +145,38 @@ def test_remote_status_never_enters_the_conductor(tmp_path):
     assert entity.status_category == "done"          # normalized preserved
     link = store.list_links(WS_A, entity_id=entity.id)[0]
     task = tasks.get(link.task_id)
-    assert task.status == "pending"                  # NOT "done"
+    assert task.status == "done"                     # the reversed contract
+    # UNCHANGED SAFETY PROPERTY: the conductor is still not driven from remote.
     assert task.workflow_step == ""
     assert task.gate_state == "none"
+
+
+def test_remote_done_is_attributable_never_anonymous(tmp_path):
+    """A mirror-completed task must be distinguishable from a gated one.
+
+    Task 5025e97a was filed because a status transition with actor='' cannot be
+    attributed. An inbound auto-done that looked identical to a human decision
+    would be that defect shipped on purpose, so attribution is the standing
+    condition on the owner's decision.
+    """
+    store = _store(tmp_path)
+    tasks = _task_svc(tmp_path)
+    conn = store.ensure_connection(WS_A, "github", "install-1")
+    cont = store.ensure_container(WS_A, conn.id, "repository", "repo-1")
+    adapter = _scripted_adapter(
+        "github",
+        [{"entities": [{"remote_id": "gh-10", "title": "closed upstream",
+                        "remote_status": "closed", "status_category": "done"}]}],
+    )
+    svc = _sync(store, tasks, adapter)
+    svc.pull_container(WS_A, conn, cont)
+
+    link = store.list_links(WS_A)[0]
+    rows = [r for r in tasks.history(link.task_id)
+            if "done" in f"{r.action} {r.details}"]
+    assert rows, "no history row records the inbound completion"
+    assert any((r.actor or "").endswith("-mirror") for r in rows), (
+        "the inbound completion is anonymous; it must name the mirror seat")
 
 
 def test_later_pull_does_not_clobber_local_edit(tmp_path):
