@@ -4342,18 +4342,24 @@ class ConductorService:
         children_total = 0
         if self._task_svc is not None:
             try:
-                for t in self._task_svc.list():
-                    if (getattr(t, "parent_id", "") or "") == task_id:
-                        st = (getattr(t, "status", "") or "")
-                        # CANCELLED children (e.g. the implement workflow's
-                        # disposable ephemeral-fixture tasks) are abandoned, not
-                        # pending work — counting them in the denominator dragged
-                        # a green-gated parent's tile to 0% (task 7bdb5701).
-                        if st == "cancelled":
-                            continue
-                        children_total += 1
-                        if st == "done":
-                            children_done += 1
+                # INDEX-SUPPORTED (task 93d6c6f3): ask the db the question we
+                # actually have. This used to be `list()` — a full table load
+                # planning as `SCAN tasks` — with parent_id compared in Python.
+                # `list(parent_id=...)` builds `WHERE parent_id = ?`
+                # (task_service.py:611-613), which plans onto idx_tasks_parent
+                # (task_service.py:95) as `SEARCH tasks USING INDEX`. An index
+                # existing is not the check; this path planning onto it is.
+                for t in self._task_svc.list(parent_id=task_id):
+                    st = (getattr(t, "status", "") or "")
+                    # CANCELLED children (e.g. the implement workflow's
+                    # disposable ephemeral-fixture tasks) are abandoned, not
+                    # pending work — counting them in the denominator dragged
+                    # a green-gated parent's tile to 0% (task 7bdb5701).
+                    if st == "cancelled":
+                        continue
+                    children_total += 1
+                    if st == "done":
+                        children_done += 1
             except Exception:
                 children_total = 0
 
