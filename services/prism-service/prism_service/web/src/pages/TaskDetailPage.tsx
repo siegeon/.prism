@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
@@ -794,7 +794,14 @@ export default function TaskDetailPage() {
   // `from` is the path the back button returns to. A child opened from its
   // parent's detail carries from=/tasks/<parentId>, so back goes up to the
   // parent rather than all the way out to the board.
-  const fromState = (location.state as { from?: string } | null)?.from;
+  // Task 93d6c6f3 (AC-3): the board row Link now carries the clicked row's
+  // own lean fields as `item` alongside `from` (TasksPage.tsx). `item.id`
+  // is read here, NOT the WorkItem's `assignee` alias, so this stays a
+  // partial Task-shaped seed.
+  type BoardRowSeed = { id?: string; title?: string; status?: string; workflow_step?: string; gate_state?: string; priority?: number | string; parent_id?: string; tags?: string[] };
+  const routeState = location.state as { from?: string; item?: BoardRowSeed } | null;
+  const fromState = routeState?.from;
+  const seedItem = routeState?.item;
   const from = fromState || "/tasks";
   const backLabel = from === "/conductor"
     ? "back to conductor"
@@ -936,11 +943,25 @@ export default function TaskDetailPage() {
     prevStatus.current = taskStatusValue;
   }, [taskStatusValue]);
 
+  // Task 93d6c6f3 (AC-1/AC-2): synchronous reset/seed on `id` change, fired
+  // BEFORE load()'s fetch resolves — the stale-frame bug this replaces left
+  // `task` holding the PREVIOUS task for the whole 0.2-1.8s request (the
+  // `useEffect(() => { load(); }, [load])` below never reset `task`). Seeds
+  // from the board row when the click carried one (AC-3: the very first
+  // open of a never-before-opened task paints instantly too, not only a
+  // revisit); otherwise clears to null so the Loading skeleton shows
+  // instead of stale data. useLayoutEffect so the seed commits before the
+  // browser paints the new URL.
+  useLayoutEffect(() => {
+    setTask(seedItem ? { ...seedItem } : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const load = useCallback(async () => {
     if (!id) return;
     try {
       const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null }>(
-        `/api/tasks/${id}?project=${project}`,
+        `/api/tasks/${id}?project=${project}&include_history=true`,
       );
       // phase_progress + activity + has_prototype + spend ride at the TOP
       // LEVEL of the response (not nested in task) — merge onto the task so

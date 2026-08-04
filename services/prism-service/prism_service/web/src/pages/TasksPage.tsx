@@ -373,7 +373,11 @@ function WorkRow({ item, focused, started, onStart }: {
           ) : item.id ? (
             <Link
               to={`/tasks/${item.id}`}
-              state={{ from: "/tasks" }}
+              // Task 93d6c6f3 (AC-3): carry the lean row itself, not just
+              // `from`, so TaskDetailPage can seed its header (title/status/
+              // workflow_step/gate_state) synchronously on the FIRST-EVER
+              // open of a task, not only a revisit.
+              state={{ from: "/tasks", item }}
               className="truncate min-w-0 font-medium hover:underline decoration-dotted underline-offset-2"
               style={{ color: "var(--text-primary)" }}
             >

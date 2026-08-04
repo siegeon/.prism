@@ -408,11 +408,22 @@ def _build_timeline(history: list, sessions: list) -> dict:
 
 
 @router.get("/{task_id}")
-def get_task(task_id: str, project: str = Query("default")) -> dict:
+def get_task(task_id: str, project: str = Query("default"),
+             include_history: bool = Query(False)) -> dict:
     svc = _svc(project)
     t = svc.get(task_id)
     if not t:
         raise HTTPException(404, "task not found")
+    # Task 93d6c6f3 / f77d3e94 (commit 2e7c816, reused here — not
+    # reimplemented, AC-6): `history` (per-turn token attach + spend) was
+    # ~93% of a measured 130KB detail payload. Mirrors the include_outcomes
+    # opt-in already shipped on api/conductor.py:19-48 (task d5465a25):
+    # `timeline`/`sessions` stay unconditional (test_task_activity_gantt.py
+    # pins timeline as always-present), only the raw history rows + the
+    # per-turn-token/spend attach work that depends on them gate on opt-in.
+    # TaskDetailPage.tsx's load() now explicitly passes include_history=true
+    # (AC-7/NFR-1) so this page's own views are unchanged; other callers
+    # (the board list, SSE) never asked for history and now skip the cost.
     # history() yields TaskHistory dataclasses — convert to plain dicts here so
     # _attach_turn_tokens can read timestamps and stamp `turn_tokens` (a
     # dataclass has no .get/__setitem__, and a setattr'd non-field attribute
@@ -427,20 +438,25 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # session_outcomes metrics. Empty list when nothing is linked.
     out = {
         "task": t,
-        "history": history,
+        "history": history if include_history else [],
         "sessions": svc.sessions_for_task(task_id),
     }
-    # Attribute per-turn token spend (output_tokens bucketed into each turn's
-    # (prev, this] wall-clock window) onto the history rows. Best-effort.
-    _attach_turn_tokens(out["history"], out["sessions"], project)
-    # Honest per-field, per-turn-model dollar spend, split main-vs-background
-    # (SpendPanel on the task-detail page). Best-effort.
-    try:
-        _attach_spend(out, out["sessions"], project)
-    except Exception:
-        pass
+    if include_history:
+        # Attribute per-turn token spend (output_tokens bucketed into each
+        # turn's (prev, this] wall-clock window) onto the history rows.
+        # Best-effort. Skipped by default — this is the heavy per-transcript
+        # work the opt-in exists to avoid.
+        _attach_turn_tokens(history, out["sessions"], project)
+        # Honest per-field, per-turn-model dollar spend, split main-vs-background
+        # (SpendPanel on the task-detail page). Best-effort.
+        try:
+            _attach_spend(out, out["sessions"], project)
+        except Exception:
+            pass
     # Way 1 — typed activity Gantt (real session lanes + gate markers).
-    out["timeline"] = _build_timeline(out["history"], out["sessions"])
+    # Always built from the full (unattached) `history` list regardless of
+    # include_history — it's a compact derived summary, not the raw rows.
+    out["timeline"] = _build_timeline(history, out["sessions"])
     # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
     # reads the blended current-step fill. Best-effort — never break the
     # detail route if conductor is unavailable.

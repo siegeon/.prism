@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.13"
+PRISM_VERSION = "7.10.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.14: TASK SWITCH PAINTS FROM THE BOARD ROW INSTEAD OF A STALE "
+    "FRAME [task 93d6c6f3, slice A]. TaskDetailPage.tsx's `task` state was "
+    "reset only by load()'s post-fetch assignment, so clicking a different "
+    "board row rendered the PREVIOUS task's title/status/step under the "
+    "NEW URL for the whole request. A synchronous useLayoutEffect now "
+    "seeds `task` from the clicked row (carried as router state by "
+    "TasksPage.tsx's Link, so the FIRST-EVER open of a task is seeded too) "
+    "or clears it, before load()'s fetch resolves. GET /api/tasks/{id} "
+    "also gains an include_history opt-in (mirrors task f77d3e94's commit "
+    "2e7c816: history + per-turn-token/spend attach skip unless "
+    "include_history=true) -- load() passes it explicitly so no rendered "
+    "field disappears. "
     "v7.10.13: DELIVERY PIPELINE DETECTS SQUASH/REBASE MERGES [task "
     "499ba9c9]. get_task_delivery's 'merged' stage only checked SHA "
     "ancestry, so squash and rebase merges (which preserve no ancestor "
