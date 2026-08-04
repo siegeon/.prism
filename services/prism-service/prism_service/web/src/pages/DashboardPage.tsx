@@ -16,6 +16,11 @@ type State = {
   kpis: { brain_docs: number; entities: number; relationships: number; communities: number; memories: number; tasks_active: number };
 };
 
+type StrandedRow = {
+  task_id: string; title: string; commits_ahead: number;
+  branch_on_origin: boolean; state: "local_only" | "pushed_unmerged";
+};
+
 type Recent = { q: string; n_results: number; latency_ms: number; ts: string };
 type Activity = {
   days: string[];
@@ -167,6 +172,8 @@ export default function DashboardPage() {
   // "we know now"), and gate the skeletons below.
   const [stateLoaded, setStateLoaded] = useState(false);
   const [actLoaded, setActLoaded] = useState(false);
+  const [stranded, setStranded] = useState<StrandedRow[]>([]);
+  const [strandedLoaded, setStrandedLoaded] = useState(false);
 
   const load = useCallback(() => {
     api.get<State>(`/api/dashboard/state?project=${project}`)
@@ -175,6 +182,10 @@ export default function DashboardPage() {
     api.get<Activity>(`/api/dashboard/activity?project=${project}&days=14`)
       .then(setAct).catch(() => setAct(null))
       .finally(() => setActLoaded(true));
+    // Unshipped-done scan (task b22576bb): "done" that never merged to main.
+    api.get<{ stranded: StrandedRow[] }>(`/api/tasks/stranded?project=${project}`)
+      .then((r) => setStranded(r.stranded ?? [])).catch(() => setStranded([]))
+      .finally(() => setStrandedLoaded(true));
   }, [project]);
 
   useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -277,6 +288,37 @@ export default function DashboardPage() {
             : pulse
               ? <PlotFigure options={pulse} className="w-full" />
               : <Empty>No activity yet.</Empty>}
+      </Card>
+
+      {/* Stranded work: DONE tasks whose commits are not (yet) reachable
+          from origin/main (owner 2026-07-16: done means SHIPPED). Reachable
+          the instant a person lands on Dashboard -- no extra click needed. */}
+      <Card raised>
+        <SectionLabel>Stranded work</SectionLabel>
+        {!strandedLoaded ? (
+          <Skeleton className="h-[92px] w-full" />
+        ) : stranded.length ? (
+          <ul className="space-y-1.5 mt-2">
+            {stranded.map((r) => (
+              <li key={r.task_id} className="flex items-center gap-2 text-sm">
+                <Lozenge tone={r.state === "local_only" ? "danger" : "warn"} className="shrink-0">
+                  {r.state === "local_only" ? "local only" : "unmerged"}
+                </Lozenge>
+                <a
+                  href={`/tasks/${r.task_id}?project=${encodeURIComponent(project)}`}
+                  className="truncate text-[color:var(--text-secondary)] hover:underline"
+                >
+                  {r.title || r.task_id}
+                </a>
+                <span className="ml-auto shrink-0 text-2xs text-[color:var(--text-muted)] tabular-nums">
+                  {r.commits_ahead} commit{r.commits_ahead === 1 ? "" : "s"} ahead
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <Empty>Every finished task has landed on main. Nothing here is waiting to ship.</Empty>
+        )}
       </Card>
 
       <StalenessCard project={project} nothingIndexed={instanceEmpty} />
