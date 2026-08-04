@@ -81,13 +81,21 @@ def test_ac3_write_stamps_gate_reason_and_keeps_pending():
     assert ctx.task_svc.updates  # a write actually happened
 
 
-def test_ac4_approvable_gate_has_no_decline_reason():
+def test_ac4_approvable_story_gate_has_no_decline_reason():
     """AC-4: when the rubric verdict IS verified, there is no decline reason to
-    write, so the approval path's own reason is never overwritten."""
+    write, so the approval path's own reason is never overwritten.
+
+    SUPERSEDED for plan_gate by task c016667f (2026-08-03): a plan_gate whose
+    rubric verifies True can still lack a recorded design-packet owner
+    approval, so _pending_decline_reason now names THAT as a non-empty
+    reason instead of returning "" (see test_pending_decline_reason_names_
+    missing_approval in tests/unit/test_design_packet_plan_gate.py). This
+    case moves to story_gate, which grew no such tooth and keeps the
+    original contract."""
     svc = _FakeSvc({"verified": True,
-                    "reason": "plan_coverage: 5 AC id(s) covered"})
-    r = ga._pending_decline_reason(svc, _Task(workflow_step="plan_gate"),
-                                   "plan_gate", "prism")
+                    "reason": "story_complete: 5 AC id(s) covered"})
+    r = ga._pending_decline_reason(svc, _Task(workflow_step="story_gate"),
+                                   "story_gate", "prism")
     assert r == ""
 
 
