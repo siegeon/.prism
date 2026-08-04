@@ -56,6 +56,10 @@ function waitFor(ts?: string): string {
 // else (Explore/Understand/Sessions/Learning/Settings) renders no bar.
 const ACTIVITY_ROUTES = ["/", "/tasks", "/conductor"];
 
+// Fallback-sweep staleness threshold (task 4d399e0a) — the sweep only
+// refetches once a fetch is genuinely this old, never on a bare interval.
+const STALE_AFTER_MS = 15_000;
+
 function inActivityContext(pathname: string): boolean {
   return ACTIVITY_ROUTES.some(
     (r) => pathname === r || (r !== "/" && pathname.startsWith(r + "/")),
@@ -91,33 +95,33 @@ export default function LiveBar() {
       .finally(() => setPolled(true));
   }, [project]);
 
-  // SSE health signal (task 2d480b08 D-6): reuse the app's existing
-  // /sse/live connection purely as a "is push alive" heartbeat — no new
-  // backend route needed. The fallback poll below only fires while this
-  // reads unhealthy, same treatment as lib/version.ts's watchdog.
-  const sseHealthy = useRef(true);
+  // Push refresh (task 4d399e0a): subscribe to the project's real event bus
+  // (same route SessionsPage.tsx already uses) rather than /sse/live, which
+  // only ever emits one connect payload plus ": keepalive" comment lines and
+  // can never fire onmessage. TaskService.update publishes task.changed on
+  // every conductor step/gate write, so this reaches load() on real motion
+  // -- not merely on "the socket is open" like the retired sseHealthy did.
   useEffect(() => {
-    const es = new EventSource("/sse/live");
-    es.onopen = () => { sseHealthy.current = true; };
-    es.onerror = () => { sseHealthy.current = false; };
+    const es = new EventSource(`/sse/sessions?project=${project}`);
+    es.onmessage = () => { load(); };
     return () => es.close();
-  }, []);
+  }, [project, load]);
 
-  // Poll only while the tab is visible AND the SSE channel looks down (task
-  // c38ef597 + 2d480b08 D-6). /api/conductor/state is the heaviest call on
-  // the board — it carries the whole board plus every managed task's
-  // 40-point burn series (~29KB with ONE task) — so it must not run
-  // unconditionally on a bare 5s interval; that ran even on a healthy tab,
-  // including /tasks/:id, and was the single biggest idle-transfer offender
-  // named in this task. Refetch immediately on focus so the bar is never
-  // stale when it is visible, and the poll still covers a stalled SSE
-  // connection (the safety property PR #257 lost by dropping a poll outright).
+  // Fallback sweep only (task 4d399e0a): the SSE subscribe above is the
+  // primary refresh path now, so this never gates on connection health --
+  // gating a "is push alive" flag was the exact bug (onopen fires once,
+  // stays true forever, load() never runs again). It gates on tab
+  // visibility + genuine STALENESS instead, a safety net for the case push
+  // itself observes nothing to say (ConductorService.activity_for decays
+  // working -> adrift -> stalled purely on elapsed time, no bus event).
   useEffect(() => {
-    const poll = () => { if (!document.hidden && !sseHealthy.current) load(); };
+    const sweep = () => {
+      if (!document.hidden && performance.now() - fetchedAt.current >= STALE_AFTER_MS) load();
+    };
     load();
-    const t = setInterval(poll, 5000);
-    document.addEventListener("visibilitychange", poll);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", poll); };
+    const t = setInterval(sweep, 2000);
+    document.addEventListener("visibilitychange", sweep);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", sweep); };
   }, [load]);
   useEffect(() => {
     const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);
@@ -156,7 +160,7 @@ export default function LiveBar() {
   const stateLabel = state === "loading" ? "Connecting…"
     : state === "live" ? "Live" : state === "gated" ? "Awaiting review"
       : state === "inflow" ? "In flow" : "Idle";
-  const heartbeat = `poll ${Math.floor(sinceFetchS)}s · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
+  const heartbeat = `updated ${Math.floor(sinceFetchS)}s ago · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
 
   // Legible chip: the task TITLE (truncated), never a bare uuid — the full
   // id rides in the tooltip (owner: "it's hard to see what 401811b8 is").

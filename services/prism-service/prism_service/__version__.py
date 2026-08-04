@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.11"
+PRISM_VERSION = "7.10.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.12: LIVE BAR NO LONGER FREEZES ON A HEALTHY CONNECTION [task "
+    "4d399e0a]. LiveBar's /sse/live subscription only ever emits one connect "
+    "payload plus keepalive comments, so onopen fired once and its inverted "
+    "sseHealthy flag stayed true forever, silencing the 5s fallback poll for "
+    "good. It now subscribes to /sse/sessions (task.changed on every "
+    "conductor write) with onmessage reaching load() directly; the retired "
+    "fallback sweep gates on tab visibility + a named staleness threshold "
+    "(STALE_AFTER_MS) instead of connection health. "
     "v7.10.11: plan_gate NO LONGER CLEARS ON THE RUBRIC ALONE [task "
     "c016667f]. A server-assembled DESIGN PACKET (plan_diagram + plan_doc + "
     "prototype bytes + oracle + likely_misfire) now needs a recorded, "
