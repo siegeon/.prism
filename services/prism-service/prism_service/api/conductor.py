@@ -74,6 +74,44 @@ def decision_packet_route(task_id: str, project: str = Query("default")) -> dict
     return decision_packet.assemble_packet(project, task_id, task)
 
 
+@router.get("/design-packet")
+def design_packet_route(task_id: str, project: str = Query("default")) -> dict:
+    """FR-1/FR-2/FR-3 (task c016667f): the ONE assembled, addressable design
+    packet for the Plan card - plan_doc + plan_diagram + prototype bytes +
+    oracle + likely_misfire + the order report, plus the live approval
+    status (never a stored flag) so the card and the gate agree."""
+    from prism_service.services import design_packet as dp
+    s = _svc(project)
+    task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, "unknown task")
+    packet = dp.assemble_packet(project, task_id, task)
+    packet["approval"] = dp.approval_status(project, task_id, task)
+    return packet
+
+
+@router.post("/design-packet/approve")
+def design_packet_approve(task_id: str = Body(..., embed=True),
+                          approver: str = Body(..., embed=True),
+                          project: str = Query("default")) -> dict:
+    """FR-6/FR-7: the ONLY way a design-packet approval is recorded - an
+    explicit owner write action, never a render/browser receipt (design_
+    packet.record_approval raises ValueError on a non-owner_explicit method,
+    which this route surfaces as 400 rather than silently accepting it)."""
+    from prism_service.services import design_packet as dp
+    s = _svc(project)
+    task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, "unknown task")
+    try:
+        appr = dp.record_approval(project, task_id, task, approver=approver,
+                                  method="owner_explicit")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "approver": appr.approver,
+            "packet_hash": appr.packet_hash, "approved_at": appr.approved_at}
+
+
 @router.post("/gate/mint")
 def gate_mint(task_id: str = Body(..., embed=True),
               project: str = Query("default")) -> dict:
@@ -127,6 +165,27 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                 "receipt": {"adapter": "control-plane", "passed": True,
                             "status": "judge_dirty_caveat", "ended_at": "",
                             "reason": _dirty_reason}}
+    # PLAN-GATE READINESS (task c016667f, FR-10): the design-packet approval
+    # status IS the live parked reason - self-diagnosable without a stale
+    # gate_reason relay, mirroring the red_gate branch below.
+    if getattr(task, "workflow_step", "") == "plan_gate":
+        from prism_service.services import design_packet as dp
+        _status = dp.approval_status(project, task_id, task)
+        if _status.get("approved"):
+            return {"receipt_ok": True, "receipt_refusal": "",
+                    "manual_review": True,
+                    "receipt": {"adapter": "design-packet", "passed": True,
+                                "status": "approved", "ended_at": "",
+                                "reason": ("design packet approved - "
+                                           "Approve to release the gate")}}
+        _reason = str(_status.get("reason", "") or
+                      "design packet needs an explicit owner approval")
+        return {"receipt_ok": False, "receipt_refusal": _reason,
+                "manual_review": True,
+                "receipt": {"adapter": "design-packet", "passed": False,
+                            "status": ("stale" if _status.get("stale")
+                                      else "pending"),
+                            "ended_at": "", "reason": _reason}}
     # RED-GATE READINESS (task a5e8d877, owner 2026-07-16): a red gate was
     # judged with the GREEN oracle tooth, so every test-proof red gate read
     # 'evidence not on file' with no possible action — a dead-end. Judge RED

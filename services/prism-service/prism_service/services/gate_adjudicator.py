@@ -64,9 +64,19 @@ def _pending_decline_reason(svc, task, step, project) -> str:
             if not validation:
                 return ""
             check = svc._verify_rubric_gate(task, validation)
-            if check.get("verified") is True:
-                return ""
-            return str(check.get("reason") or "")
+            if check.get("verified") is not True:
+                return str(check.get("reason") or "")
+            if step == "plan_gate":
+                # task c016667f, AC-5 third seat: a rubric-verified plan is
+                # not enough — this used to `return ""` here (the exact
+                # empty-reason class of failure e0149f1f closed), leaving a
+                # driving agent with nothing to act on.
+                from prism_service.services import design_packet as dp
+                status = dp.approval_status(project, getattr(task, "id", ""),
+                                            task)
+                if not status.get("approved"):
+                    return str(status.get("reason") or "")
+            return ""
         if step == "red_gate":
             from prism_service.services import oracle_spec as osp
             rc = osp.latest_receipt(project, getattr(task, "id", "") or "")

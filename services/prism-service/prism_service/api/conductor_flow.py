@@ -228,6 +228,22 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
             except Exception:
                 pass
         return None
+    if step["id"] == "plan_gate":
+        # FR-4/FR-5 (task c016667f): the rubric alone is no longer enough —
+        # a design-packet owner approval must be on file too, unconditionally
+        # (AC-10: no ui-tag narrowing). A missing/stale approval parks the
+        # gate pending with an actionable reason instead of clearing.
+        from prism_service.services import design_packet as dp
+        project = svc._project_name or "default"
+        status = dp.approval_status(project, task_id, task)
+        if not status.get("approved"):
+            _r = str(status.get("reason", "") or "")
+            if _r and _r != (getattr(task, "gate_reason", "") or ""):
+                try:
+                    svc._task_svc.update(task_id, gate_reason=_r)
+                except Exception:
+                    pass
+            return None
     return svc.gate_decide(
         task_id, "approve",
         reason=("auto-clear: machine check passed — "
