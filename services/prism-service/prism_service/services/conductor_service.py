@@ -4169,17 +4169,81 @@ class ConductorService:
         except Exception:
             return None
 
+    def _advance_corpus(self) -> Optional[list]:
+        """Every advance_task history row as (task_id, ts, to_step), in ONE
+        query, ordered so per-task runs are contiguous.
+
+        WHY (task 93d6c6f3): `_median_step_s` and `_per_step_typical` each did
+        `list()` + `history(t.id)` PER TASK — roughly 884 queries per request —
+        to compute two GLOBAL corpus medians that do not depend on task_id at
+        all. Every task detail view paid for a corpus-wide statistic identical
+        for all of them; measured at 111-442ms, up to 80% of GET /api/tasks/{id}.
+
+        Memoized on MAX(timestamp) from task_history, NEVER a bare TTL: a new
+        history row changes the key and invalidates the cache, so a step that
+        completes elsewhere can never serve a stale ETA. That key is itself an
+        indexed read (SEARCH task_history USING COVERING INDEX
+        idx_task_history_task_ts).
+
+        Returns None when the connection is not reachable (e.g. an injected
+        test double), so callers fall back to the original per-task path and
+        keep identical returned values.
+        """
+        svc = self._task_svc
+        db = getattr(svc, "_db", None) if svc is not None else None
+        if db is None:
+            return None
+        try:
+            key = db.execute(
+                "SELECT MAX(timestamp) FROM task_history").fetchone()[0]
+            if key is not None and key == getattr(self, "_corpus_key", None):
+                cached = getattr(self, "_corpus_rows", None)
+                if cached is not None:
+                    return cached
+            rows = db.execute(
+                "SELECT task_id, timestamp, details FROM task_history "
+                "WHERE action = 'advance_task' ORDER BY task_id, timestamp"
+            ).fetchall()
+        except Exception:
+            return None
+        import re as _re
+        out: list = []
+        for r in rows:
+            ts = self._parse_iso((r[1] or ""))
+            if ts is None:
+                continue
+            m = _re.search(r"to=(\w+)", (r[2] or ""))
+            out.append(((r[0] or ""), ts, m.group(1) if m else ""))
+        self._corpus_key = key
+        self._corpus_rows = out
+        return out
+
     def _median_step_s(self) -> float:
         """Median gap between consecutive advance_task rows across all task
         history — the empirical 'typical' time a task dwells in one step.
         Falls back to a positive constant when there is no history yet."""
         if self._task_svc is None:
             return self._TYPICAL_S_FALLBACK
+        gaps: list[float] = []
+        corpus = self._advance_corpus()
+        if corpus is not None:
+            prev_tid = None
+            prev_ts = None
+            for tid, ts, _step in corpus:
+                if tid == prev_tid and prev_ts is not None and ts > prev_ts:
+                    gaps.append(ts - prev_ts)
+                prev_tid, prev_ts = tid, ts
+            if not gaps:
+                return self._TYPICAL_S_FALLBACK
+            gaps.sort()
+            n = len(gaps)
+            mid = n // 2
+            med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
+            return med if med > 0 else self._TYPICAL_S_FALLBACK
         try:
             tasks = self._task_svc.list()
         except Exception:
             return self._TYPICAL_S_FALLBACK
-        gaps: list[float] = []
         for t in tasks:
             try:
                 rows = self._task_svc.history(t.id)
@@ -4210,11 +4274,34 @@ class ConductorService:
         counts: dict = {}
         if self._task_svc is None:
             return out, counts
+        buckets: dict = {}
+        # Single-query corpus (task 93d6c6f3) — same pairing logic as the
+        # per-task path below, fed from one ordered read instead of ~442
+        # history() calls. Rows whose details carry no `to=` are dropped here
+        # exactly as the original did, so returned medians stay identical.
+        corpus = self._advance_corpus()
+        if corpus is not None:
+            per_task: dict = {}
+            for tid, ts, step in corpus:
+                if step:
+                    per_task.setdefault(tid, []).append((ts, step))
+            for advs in per_task.values():
+                for (a_ts, a_step), (b_ts, _b) in zip(advs, advs[1:]):
+                    if b_ts > a_ts:
+                        buckets.setdefault(a_step, []).append(b_ts - a_ts)
+            for step, gaps in buckets.items():
+                gaps.sort()
+                n = len(gaps)
+                mid = n // 2
+                med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
+                if med > 0:
+                    out[step] = med
+                    counts[step] = n
+            return out, counts
         try:
             tasks = self._task_svc.list()
         except Exception:
             return out, counts
-        buckets: dict = {}
         for t in tasks:
             try:
                 rows = self._task_svc.history(t.id)
