@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.12"
+PRISM_VERSION = "7.10.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.13: DELIVERY PIPELINE DETECTS SQUASH/REBASE MERGES [task "
+    "499ba9c9]. get_task_delivery's 'merged' stage only checked SHA "
+    "ancestry, so squash and rebase merges (which preserve no ancestor "
+    "SHA on origin/main) always false-negatived to 'no PR merged yet' "
+    "even though the work shipped. Additive OR-fallback onto the existing "
+    "ancestry check: also true when a commit on origin/main carries the "
+    "[task:<id8>] trailer (_is_shipped_on_main, tasks.py:278); true merge "
+    "commits still resolve via the untouched ancestry fast path. "
     "v7.10.12: LIVE BAR NO LONGER FREEZES ON A HEALTHY CONNECTION [task "
     "4d399e0a]. LiveBar's /sse/live subscription only ever emits one connect "
     "payload plus keepalive comments, so onopen fired once and its inverted "
