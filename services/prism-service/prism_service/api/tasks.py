@@ -654,6 +654,14 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     def _all(flag: str) -> bool:
         return bool(commits) and all(c[flag] for c in commits)
 
+    # Additive OR-fallback (task 499ba9c9): SHA-ancestry (_all("merged_to_main"))
+    # stays the fast path for a true merge commit (FR-2, untouched). A squash
+    # or rebase merge preserves no ancestor SHA, so also check for the
+    # [task:<id8>] trailer directly on origin/main via _is_shipped_on_main
+    # (tasks.py:278), which matches the delimited trailer only -- never a
+    # bare/prefix-collision substring (FR-5).
+    merged_ok = _all("merged_to_main") or (bool(repo) and _is_shipped_on_main(repo, task_id))
+
     stage_states = [
         ("verified", "verified", verified,
          "green gate passed on live evidence" if verified else "gate not passed yet"),
@@ -662,8 +670,8 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
          else "no [task:…]-tagged commits found"),
         ("pushed", "pushed", _all("pushed"),
          "on a remote ref" if _all("pushed") else "branch not pushed"),
-        ("merged", "merged to main", _all("merged_to_main"),
-         "reachable from main" if _all("merged_to_main") else "no PR merged yet"),
+        ("merged", "merged to main", merged_ok,
+         "reachable from main" if merged_ok else "no PR merged yet"),
         ("released", "released", _all("released_in"),
          (commits and commits[0].get("released_in")) or "no release tag contains this work"),
     ]
