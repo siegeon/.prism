@@ -31,6 +31,12 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 _WEB_SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
 _PLANVIEW = _WEB_SRC / "components" / "plan" / "PlanView.tsx"
+# Task c016667f moved the Design tab's assembled rendering (prototype +
+# diagram + doc as ONE card, not one-at-a-time sub-tabs) out of PlanView.tsx
+# and into its own component — the lazy Mermaid boundary this file pins
+# moved with it. Both are checked below; the invariant (lazy-loaded, still
+# renders, still Suspense-wrapped) is unchanged, only its file moved.
+_DESIGN_PACKET = _WEB_SRC / "components" / "plan" / "DesignPacket.tsx"
 _DIST = _SERVICE_ROOT / "prism_service" / "web_dist" / "assets"
 
 # The pre-change TaskDetailPage chunk. The fix must come in materially under it.
@@ -46,20 +52,25 @@ def _read(p: Path) -> str:
 # ── AC-1 / AC-3: the diagram renderer is reached lazily, not statically ─
 
 def test_planview_imports_mermaid_lazily():
-    src = _read(_PLANVIEW)
-    assert not re.search(r'^import\s+Mermaid\s+from\s+["\']\./Mermaid["\']',
-                         src, re.M), (
-        "PlanView must NOT statically import Mermaid — that edge is what drags "
-        "the whole mermaid stack into the task page chunk")
+    # task c016667f: the lazy boundary now lives wherever the Design card
+    # renders the diagram (DesignPacket.tsx), so both are read and the
+    # invariant is checked against whichever one carries it.
+    src = _read(_PLANVIEW) + "\n" + _read(_DESIGN_PACKET)
+    for p in (_PLANVIEW, _DESIGN_PACKET):
+        assert not re.search(r'^import\s+Mermaid\s+from\s+["\']\./Mermaid["\']',
+                             _read(p), re.M), (
+            f"{p.name} must NOT statically import Mermaid — that edge is "
+            "what drags the whole mermaid stack into the task page chunk")
     assert re.search(r'lazy\(\s*\(\)\s*=>\s*import\(\s*["\']\./Mermaid["\']',
                      src), (
-        "PlanView must obtain Mermaid via lazy(() => import('./Mermaid'))")
+        "the task page must obtain Mermaid via lazy(() => import('./Mermaid'))")
 
 
 def test_no_static_mermaid_package_import_on_the_task_page_path():
     """Nothing PlanView/TaskDetailPage pull in may import the package itself."""
     offenders = []
-    for p in (_WEB_SRC / "pages" / "TaskDetailPage.tsx", _PLANVIEW):
+    for p in (_WEB_SRC / "pages" / "TaskDetailPage.tsx", _PLANVIEW,
+             _DESIGN_PACKET):
         if re.search(r'^import\s+[^;\n]*\bfrom\s+["\']mermaid["\']',
                      _read(p), re.M):
             offenders.append(p.name)
@@ -71,7 +82,9 @@ def test_no_static_mermaid_package_import_on_the_task_page_path():
 # ── AC-2: the tab still renders a diagram (not an empty box) ───────────
 
 def test_the_diagram_still_renders_behind_a_suspense_boundary():
-    src = _read(_PLANVIEW)
+    # task c016667f: the Diagram render site moved into DesignPacket.tsx
+    # (the Design tab's ONE assembled card); pin it there.
+    src = _read(_DESIGN_PACKET)
     assert "<Mermaid" in src, (
         "the Diagram tab must still RENDER the diagram — removing it is a "
         "regression, not a fix")
