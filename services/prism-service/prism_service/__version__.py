@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.10"
+PRISM_VERSION = "7.10.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.11: plan_gate NO LONGER CLEARS ON THE RUBRIC ALONE [task "
+    "c016667f]. A server-assembled DESIGN PACKET (plan_diagram + plan_doc + "
+    "prototype bytes + oracle + likely_misfire) now needs a recorded, "
+    "content-hashed owner-approval receipt before any of the three deciding "
+    "seats (entry autoclear, rubric re-sweep, pending-decline reason) may "
+    "advance plan_gate -- a render/browser receipt never counts, and "
+    "editing any part after approval reports it stale and re-parks the "
+    "gate. The Plan tab's Design card is now ONE assembled, interactable "
+    "object (prototype + diagram + doc + an explicit Approve action) "
+    "instead of three one-at-a-time sub-tabs. "
     "v7.10.7: AGENT RUNS CANNOT POST THEIR OWN GATE PASS [task 682b7e48]. "
     "POST /api/agent-runs/ingest took the row unvalidated, so any HTTP "
     "caller could assert gate_state=passed for any task/step. It is now "

@@ -2337,6 +2337,22 @@ class ConductorService:
         check = self._verify_rubric_gate(task, validation)
         if check.get("verified") is not True:
             return None
+        if step == "plan_gate":
+            # FR-4/FR-5 (task c016667f): the re-sweep seat withholds too — the
+            # rubric alone no longer clears plan_gate, unconditionally (AC-10:
+            # no ui-tag narrowing). Mirrors the entry-time autoclear check in
+            # api/conductor_flow.py so every seat consults the same ledger.
+            from prism_service.services import design_packet as dp
+            project = self._project_name or "default"
+            status = dp.approval_status(project, task_id, task)
+            if not status.get("approved"):
+                _r = str(status.get("reason", "") or "")
+                if _r and _r != (getattr(task, "gate_reason", "") or ""):
+                    try:
+                        self._task_svc.update(task_id, gate_reason=_r)
+                    except Exception:
+                        pass
+                return None
         try:
             from prism_service.services import control_plane as _cp
             if _cp.candidate_controls_judge_reason(task):

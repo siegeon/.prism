@@ -407,13 +407,72 @@ def test_red_step_sha_backfills_from_task_trailer(pinned_world, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_pending_rubric_gate_is_resweepable(pinned_world, tmp_path,
-                                            monkeypatch):
+def test_story_gate_pending_rubric_is_resweepable(pinned_world, tmp_path,
+                                                   monkeypatch):
+    """story_gate keeps the original rubric-alone-clears contract; only
+    plan_gate grew the design-approval tooth below (task c016667f)."""
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="stranded story", oracle="oracle: tests pass",
+                        proof_type="test")
+    task_svc.update(t.id, workflow_step="story_gate", gate_state="pending")
+    cond = _conductor(tmp_path, task_svc)
+    monkeypatch.setattr(
+        cond, "_verify_rubric_gate",
+        lambda task, validation: {"verified": True,
+                                  "reason": "stub rubric green",
+                                  "verifier": None,
+                                  "validation": validation})
+    res = cond.adjudicate_rubric_gate(t.id)
+    assert res is not None and res.get("ok") is True, res
+    assert task_svc.get(t.id).workflow_step != "story_gate"
+
+
+def test_pending_plan_gate_stays_pending_without_design_approval(
+        pinned_world, tmp_path, monkeypatch):
+    """SUPERSEDES the old test_pending_rubric_gate_is_resweepable for
+    plan_gate (task c016667f, 2026-08-03): score_plan_coverage verified=True
+    is no longer sufficient on its own — a plan_gate re-sweep must also find
+    a recorded, content-matching design-packet owner approval. A stub
+    rubric-green plan_gate with NO approval on file stays pending."""
     from prism_service.services.task_service import TaskService
     task_svc = TaskService(str(tmp_path / "tasks.db"))
     t = task_svc.create(title="stranded plan", oracle="oracle: tests pass",
-                        proof_type="test")
-    task_svc.update(t.id, workflow_step="plan_gate", gate_state="pending")
+                        proof_type="demo")
+    task_svc.update(t.id, workflow_step="plan_gate", gate_state="pending",
+                    plan_doc="AC-1 covered",
+                    plan_diagram="stateDiagram-v2\n[*] --> A")
+    cond = _conductor(tmp_path, task_svc)
+    monkeypatch.setattr(
+        cond, "_verify_rubric_gate",
+        lambda task, validation: {"verified": True,
+                                  "reason": "stub rubric green",
+                                  "verifier": None,
+                                  "validation": validation})
+    res = cond.adjudicate_rubric_gate(t.id)
+    assert res is None, res
+    after = task_svc.get(t.id)
+    assert after.workflow_step == "plan_gate"
+    assert after.gate_state == "pending"
+
+
+def test_pending_plan_gate_clears_after_design_approval(pinned_world,
+                                                         tmp_path,
+                                                         monkeypatch):
+    """Companion to the above: once an explicit owner approval receipt with
+    a matching packet content hash is recorded, the SAME re-sweep seat
+    clears plan_gate (task c016667f AC-6)."""
+    from prism_service.services import design_packet as dp
+    from prism_service.services.task_service import TaskService
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    t = task_svc.create(title="approved plan", oracle="oracle: tests pass",
+                        proof_type="demo")
+    task_svc.update(t.id, workflow_step="plan_gate", gate_state="pending",
+                    plan_doc="AC-1 covered",
+                    plan_diagram="stateDiagram-v2\n[*] --> A")
+    task = task_svc.get(t.id)
+    dp.record_approval("testproj", t.id, task, approver="owner",
+                       method="owner_explicit")
     cond = _conductor(tmp_path, task_svc)
     monkeypatch.setattr(
         cond, "_verify_rubric_gate",

@@ -1,19 +1,15 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Empty } from "@/components/ui";
-import Markdown from "@/components/Markdown";
-// LAZY BY DESIGN (task 14d266a1). Mermaid.tsx does a top-level
-// `import mermaid from "mermaid"`, which drags cytoscape, katex and every
-// diagram pack with it. Statically importing it here put ~646 kB in the task
-// page's critical path for the Diagram TAB — which is not the default tab and
-// is usually never opened. Owner rule: anything behind a collapsed box or an
-// inactive tab is a lazy load, so this edge stays dynamic.
-const Mermaid = lazy(() => import("./Mermaid"));
+// Mermaid/Markdown rendering for the design tab now lives INSIDE
+// DesignPacket.tsx (task c016667f) — it fetches the assembled packet and
+// lazy-loads Mermaid itself, so PlanView no longer imports either directly.
 import SdlcProgress, { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import StepRail, { type StepTurn } from "@/components/conductor/StepRail";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { stepLabel } from "@/lib/workflowChips";
 import { useTaskEvidence } from "@/components/EvidenceGallery";
+import DesignPacket from "./DesignPacket";
 
 /**
  * The task's work panel, as TABS in one slot — Prototype (clickable mock,
@@ -296,16 +292,6 @@ export default function PlanView({
     setActive(["prototype", "diagram", "doc"].includes(req) ? "design" : req);
   }, [tabRequest?.n, tabRequest?.tab]);
 
-  // Design sub-tabs — the package's three parts, one at a time.
-  const designParts: { key: string; label: string }[] = [];
-  if (hasProto) designParts.push({ key: "proto", label: "Prototype" });
-  if (hasDiagram) designParts.push({ key: "diagram", label: "Diagram" });
-  if (hasDoc) designParts.push({ key: "doc", label: "Proposed change" });
-  const [designPart, setDesignPart] = useState(designParts[0]?.key ?? "proto");
-  const curPart = designParts.some((p) => p.key === designPart)
-    ? designPart
-    : designParts[0]?.key ?? "proto";
-
   // Tests tab: which pin is expanded to show its actual assertion source —
   // a reviewer must be able to EVALUATE a pin, not just read its name.
   const [openTest, setOpenTest] = useState<string | null>(null);
@@ -338,7 +324,7 @@ export default function PlanView({
             {t.label}
           </button>
         ))}
-        {cur === "design" && curPart === "proto" && hasProto && (
+        {cur === "design" && hasProto && (
           <a
             href={prototypeSrc}
             target="_blank"
@@ -351,48 +337,14 @@ export default function PlanView({
       </div>
 
       {cur === "design" && (
-        <div className="space-y-3">
-          {/* The three parts are SUB-TABS of Design, not one long scroll
-              (owner 2026-07-22): a reviewer compares them, they do not read
-              them end to end. */}
-          <div className="flex items-center gap-1">
-            {designParts.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => setDesignPart(p.key)}
-                className={
-                  "px-2.5 py-1 rounded text-2xs uppercase tracking-wider transition-colors " +
-                  (curPart === p.key
-                    ? "bg-[color:var(--midground-base)]/15 text-[color:var(--text-primary)]"
-                    : "text-[color:var(--text-muted)] hover:text-[color:var(--text-secondary)]")
-                }
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {curPart === "proto" && hasProto && (
-            <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
-              <iframe
-                title="prototype"
-                src={prototypeSrc}
-                className="w-full block"
-                style={{ height: "80vh", background: "var(--background-base)" }}
-              />
-            </div>
-          )}
-          {curPart === "diagram" && hasDiagram && (
-            <div className="rounded-lg p-4 bg-[color:var(--midground-base)]/5">
-              {/* The diagram chunk is fetched HERE, the moment the tab opens. */}
-              <Suspense fallback={<div className="text-xs opacity-50 py-6 text-center">Loading diagram…</div>}>
-                <Mermaid chart={diagram!} />
-              </Suspense>
-            </div>
-          )}
-          {curPart === "doc" && hasDoc && (
-            <Markdown text={doc!} className="space-y-4 max-w-none" />
-          )}
-        </div>
+        // ONE assembled, interactable card (task c016667f, FR-3) — the
+        // prototype, diagram and proposed change used to be three sub-tabs
+        // seen one at a time (owner 2026-07-22 killed the FIRST split into a
+        // fifth top-level tab; 2026-08-03 killed this second split too: a
+        // reviewer could "approve" a design having seen only whichever
+        // sub-tab happened to be open). DesignPacket fetches the SAME
+        // server-assembled packet + approval status the gate itself reads.
+        <DesignPacket taskId={taskId ?? ""} project={project} prototypeSrc={prototypeSrc} />
       )}
 
       {cur === "tests" && hasTests && (
