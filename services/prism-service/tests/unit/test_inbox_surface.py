@@ -155,3 +155,28 @@ def test_the_real_app_exposes_the_inbox_route():
     assert r.status_code != 404, (
         "the assembled app does not serve /api/inbox - the include_router in "
         "api/__init__.py is missing")
+
+
+def test_a_subtask_gate_never_reaches_the_inbox(tmp_path, monkeypatch):
+    """OWNER RULE (2026-08-06): subtasks are the driver's business and are
+    "beneath the notice of the human" — they must never be surfaced as
+    something the owner has to act on. The Inbox is the surface where that
+    rule is most easily broken, because a child parked at a gate looks
+    exactly like a root parked at a gate. Only ROOT tasks reach it; a
+    child's gate is resolved by whoever is driving it."""
+    client = _client(tmp_path, monkeypatch)
+    from prism_service.project_context import get_project
+
+    svc = get_project("default").task_svc
+    epic = svc.create(title="an epic the owner watches")
+    child = svc.create(title="a slice the owner should never see", parent_id=epic.id)
+    for t in (epic, child):
+        svc.update(t.id, workflow_step="green_gate", gate_state="pending",
+                   status="in_progress")
+
+    body = client.get("/api/inbox?project=default").json()
+    ids = {i["task_id"] for i in body["needs_you"]}
+    assert epic.id in ids, "a root task's gate must still reach the inbox"
+    assert child.id not in ids, (
+        "a subtask's gate reached the owner's inbox — subtasks are the "
+        "driver's to resolve")

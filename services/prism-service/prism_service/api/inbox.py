@@ -62,7 +62,14 @@ def get_inbox(project: str = Query("default")) -> dict:
         parent_id = getattr(t, "parent_id", "") or ""
         url = f"/tasks/{task_id}"
 
-        if gate_state == "pending":
+        # ROOT TASKS ONLY in "needs you". A subtask parked at a gate looks
+        # identical to a root parked at a gate, and surfacing it would put
+        # the driver's own decomposition in front of the owner — owner rule
+        # 2026-08-06: subtasks are "beneath the notice of the human" and are
+        # resolved by whoever drives them, never handed back. Activity below
+        # is unaffected: seeing that a child is mid-step is information, not
+        # a demand for action.
+        if gate_state == "pending" and not parent_id:
             needs_you.append({
                 "task_id": task_id,
                 "title": title,
