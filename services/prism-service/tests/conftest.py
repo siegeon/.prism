@@ -155,3 +155,24 @@ def _integration_adapter_registry_isolation():
         yield
     finally:
         integrations.restore_adapters(before)
+
+
+@pytest.fixture(autouse=True)
+def _collaboration_registry_isolation():
+    """Same guarantee for the COLLABORATION registry (epic 0784729f).
+
+    services/collaboration.py carries a module-level registry that
+    api/collaboration.py populates once at import time, exactly like the
+    work-item one above. It is given the same snapshot/restore fixture on
+    day one rather than after an incident: the leak that produced the
+    fixture above (task c23e2e7b) was latent for months and only detonated
+    when file ordering changed, and a registry whose emptiness is invisible
+    until some later test expects the production adapter is precisely how
+    this epic shipped a feature that could not run (task f4dd3687)."""
+    from prism_service.services import collaboration
+
+    before = collaboration.adapters_snapshot()
+    try:
+        yield
+    finally:
+        collaboration.restore_adapters(before)
