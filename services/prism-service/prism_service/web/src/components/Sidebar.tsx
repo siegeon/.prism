@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Activity, AppWindow, Brain, Eye, FolderTree, Info,
+  Activity, AppWindow, Brain, Eye, FolderTree, Inbox, Info,
   KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { Lozenge } from "@/components/Lozenge";
 import { useProject } from "@/lib/project";
 import { useScanActivity } from "@/lib/scan-activity";
 import { currentTheme, toggleTheme } from "@/lib/theme";
@@ -20,6 +21,9 @@ type Item = {
   label: string;
   icon: LucideIcon;
   staleKey?: StaleKey;
+  // Inbox launch only (task 0784729f) — a one-off "NEW" chip, not a
+  // reusable mechanism; no other item sets this.
+  isNew?: boolean;
 };
 
 type Section = { label?: string; items: Item[] };
@@ -57,6 +61,10 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Activity",
     items: [
+      // Inbox sits above Work deliberately (task 0784729f): Work is the
+      // full list you go and query (with its own My Work / Team toggle,
+      // TasksPage.tsx:54); Inbox is only what needs you, and it empties.
+      { to: "/inbox", label: "Inbox", icon: Inbox, isNew: true },
       { to: "/tasks", label: "Work", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       { to: "/retrievals", label: "Retrievals", icon: Search },
@@ -173,7 +181,7 @@ export default function Sidebar() {
                 {section.label}
               </div>
             )}
-            {section.items.map(({ to, label, icon: Icon, staleKey }) => {
+            {section.items.map(({ to, label, icon: Icon, staleKey, isNew }) => {
               const isStale = staleKey ? stale[staleKey] : false;
               // While the drainer has work in flight, the surfaces it
               // populates (Brain, Graph, Understand — every item with a
@@ -208,6 +216,7 @@ export default function Sidebar() {
                 >
                   <Icon className="w-4 h-4" />
                   <span className="flex-1">{label}</span>
+                  {isNew && <Lozenge tone="new">New</Lozenge>}
                   {isScanning ? (
                     <span
                       className="w-2 h-2 rounded-full bg-sky-300 shadow-[0_0_8px_3px_rgba(125,211,252,0.6)]"

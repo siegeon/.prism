@@ -135,3 +135,23 @@ def test_reading_the_inbox_never_mints_work(tmp_path, monkeypatch):
         assert client.get("/api/inbox?project=default").status_code == 200
     after = [(t.id, t.status, t.workflow_step) for t in svc.list()]
     assert after == before, "reading the inbox changed task state"
+
+
+def test_the_real_app_exposes_the_inbox_route():
+    """The tests above mount the router into a bare FastAPI, which proves the
+    handler works and proves NOTHING about whether the app wires it — the
+    same shape as an adapter that only exists when a test injects it. This
+    asserts the assembled application, so forgetting the include_router in
+    api/__init__.py fails here rather than in a browser."""
+    from fastapi.testclient import TestClient
+
+    from prism_service.main import app
+
+    # Through TestClient, not app.routes: the app mounts its routers during
+    # STARTUP, so an import-time scan of app.routes reports nothing and would
+    # fail on a correctly-wired app. Ask it the way a browser does.
+    with TestClient(app) as client:
+        r = client.get("/api/inbox?project=default")
+    assert r.status_code != 404, (
+        "the assembled app does not serve /api/inbox - the include_router in "
+        "api/__init__.py is missing")
