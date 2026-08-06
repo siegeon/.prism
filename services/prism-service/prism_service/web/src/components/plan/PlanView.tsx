@@ -288,7 +288,14 @@ export default function PlanView({
   // pending gate now wins the landing tab; a settled flow still opens on
   // Implementation (the live status), and everything else on the first
   // artifact tab.
-  const awaitingDesign = !!conductor && conductor.gateState === "pending" && hasDesign;
+  // Scoped to the PLAN gate on purpose. "any pending gate wins Design" is
+  // wrong and reintroduces the very bug this fixes one gate later: at
+  // green_gate the approve control lives in the Implementation tab's
+  // Resolve-gate block, so sending the reviewer to Design would hide THAT
+  // decision instead. Each gate must land on the tab that carries its own
+  // affordance.
+  const awaitingDesign = !!conductor && conductor.gateState === "pending"
+    && conductor.step === "plan_gate" && hasDesign;
   const [active, setActive] = useState(
     awaitingDesign ? "design" : hasImpl ? "implementation" : tabs[0]?.key ?? "design");
 

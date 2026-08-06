@@ -174,3 +174,8 @@ def test_plan_gate_lands_on_the_design_tab(planview: str) -> None:
         guard = decl.group(1)
     assert "gateState" in guard and "pending" in guard, \
         f"the Design tab is not selected by a PENDING gate: {guard!r}"
+    # Scoped to plan_gate: "any pending gate lands on Design" would hide
+    # green_gate's OWN approve control, which lives in the Implementation
+    # tab's Resolve-gate block. Caught live on this very task at green_gate.
+    assert "plan_gate" in guard, \
+        f"every pending gate lands on Design, hiding green_gate's approve: {guard!r}"
