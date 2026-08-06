@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from prism_service.api.auth import authorize_project_request
 from prism_service.data_dir import evidence_dir, prototype_file
 from prism_service.project_context import get_project
+from prism_service.services.actor_service import get_actor_service
 from prism_service.services.task_service import SESSION_GATE_FIX
 
 router = APIRouter(dependencies=[Depends(authorize_project_request)])
@@ -422,6 +423,19 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
         dataclasses.asdict(h) if dataclasses.is_dataclass(h) else dict(h)
         for h in svc.history(task_id)
     ]
+    # Resolved identity per row (models/actor.py), additive alongside the
+    # raw `actor` string — resolve once per distinct actor, never let a
+    # resolver problem break the detail route.
+    try:
+        actor_svc = get_actor_service()
+        resolved: dict = {}
+        for row in history:
+            raw = row.get("actor")
+            if raw not in resolved:
+                resolved[raw] = dataclasses.asdict(actor_svc.resolve(raw))
+            row["actor_identity"] = resolved[raw]
+    except Exception:
+        pass
     # `sessions` rides the EXISTING task-detail route (no parallel
     # top-level route) — the linked Claude sessions JOINed with their
     # session_outcomes metrics. Empty list when nothing is linked.
