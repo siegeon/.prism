@@ -27,6 +27,8 @@ type DesignPacketData = {
   approval: { approved: boolean; stale: boolean; reason: string };
 };
 
+type Me = { user?: { id: string; email: string; display_name: string } };
+
 export default function DesignPacket({
   taskId,
   project = "default",
@@ -38,8 +40,23 @@ export default function DesignPacket({
 }) {
   const [data, setData] = useState<DesignPacketData | null>(null);
   const [approving, setApproving] = useState(false);
-  const [approver, setApprover] = useState("");
+  const [me, setMe] = useState<Me["user"] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // THE SYSTEM TRACKS THE APPROVER, THE OWNER DOES NOT TYPE IT (task
+  // 7feed0c8). Same endpoint and same display_name||email precedence as the
+  // page header's IdentityChip (PageHeader.tsx:32-55), so the name on the
+  // receipt is the name in the header. The server resolves it again from the
+  // principal, and design_packet.record_approval still raises ValueError on
+  // an empty approver — this SUPPLIES the identity, it never stops requiring
+  // one.
+  useEffect(() => {
+    let cancel = false;
+    api.get<Me>("/api/auth/me")
+      .then((r) => { if (!cancel) setMe(r.user ?? null); })
+      .catch(() => { if (!cancel) setMe(null); });
+    return () => { cancel = true; };
+  }, []);
 
   const load = useCallback(() => {
     api
@@ -50,17 +67,18 @@ export default function DesignPacket({
 
   useEffect(() => { load(); }, [load]);
 
+  const signedInAs = (me?.display_name || me?.email || "").trim();
+
   const doApprove = useCallback(() => {
-    if (!approver.trim()) { setErr("name yourself as the approver"); return; }
     setApproving(true);
     setErr(null);
     api
       .post(`/api/conductor/design-packet/approve?project=${project}`,
-           { task_id: taskId, approver: approver.trim() })
+           { task_id: taskId, approver: signedInAs })
       .then(() => load())
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setApproving(false));
-  }, [taskId, project, approver, load]);
+  }, [taskId, project, signedInAs, load]);
 
   if (!data) return null;
 
@@ -80,6 +98,43 @@ export default function DesignPacket({
         {orderOk
           ? `highest order on file: ${order.actual} (this feature admits ${order.admits})`
           : `below order: this feature admits an interactive ${order.admits}, but the packet only carries a ${order.actual}`}
+      </div>
+
+      {/* DECISION FIRST (task 7feed0c8). The reviewer lands on the decision
+          and the visual artifact; the prose stays in full BELOW them, never
+          collapsed behind a toggle — c016667f exists to stop approval
+          without reading, and hiding the design would reintroduce it. */}
+      <div className="rounded-md px-3 py-2.5 border border-[color:var(--border-default)] space-y-2">
+        {approval.approved ? (
+          <div className="text-[12px]" style={{ color: "var(--accent-sage-fg)" }}>
+            ✓ design packet approved — plan_gate can clear
+          </div>
+        ) : (
+          <>
+            <div className="text-[12px] text-[color:var(--text-secondary)]">
+              {approval.stale
+                ? "the design packet changed since it was approved — re-approval is required"
+                : approval.reason || "this design packet needs an explicit owner approval before plan_gate can clear"}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                disabled={approving}
+                onClick={doApprove}
+                className="text-2xs font-semibold px-2.5 py-1 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                style={{ color: "var(--accent-teal-fg)" }}
+              >
+                {approving ? "Approving…" : "Approve design"}
+              </button>
+              {signedInAs && (
+                <span className="text-[11px] text-[color:var(--text-muted)]">
+                  approving as {signedInAs}
+                </span>
+              )}
+            </div>
+            {err && <div className="text-[12px] text-[color:var(--accent-rose-fg,#c33)]">{err}</div>}
+          </>
+        )}
       </div>
 
       {data.prototype.exists && prototypeSrc && (
@@ -125,42 +180,6 @@ export default function DesignPacket({
         </div>
       )}
 
-      {/* FR-6/FR-7: the ONLY approval affordance — an explicit owner write
-          action, never a render/browser receipt. */}
-      <div className="rounded-md px-3 py-2.5 border border-[color:var(--border-default)] space-y-2">
-        {approval.approved ? (
-          <div className="text-[12px]" style={{ color: "var(--accent-sage-fg)" }}>
-            ✓ design packet approved — plan_gate can clear
-          </div>
-        ) : (
-          <>
-            <div className="text-[12px] text-[color:var(--text-secondary)]">
-              {approval.stale
-                ? "the design packet changed since it was approved — re-approval is required"
-                : approval.reason || "this design packet needs an explicit owner approval before plan_gate can clear"}
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={approver}
-                onChange={(e) => setApprover(e.target.value)}
-                placeholder="your name"
-                className="text-[12px] px-2 py-1 rounded border border-[color:var(--border-default)] bg-transparent"
-              />
-              <button
-                type="button"
-                disabled={approving}
-                onClick={doApprove}
-                className="text-2xs font-semibold px-2.5 py-1 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
-                style={{ color: "var(--accent-teal-fg)" }}
-              >
-                {approving ? "Approving…" : "Approve design"}
-              </button>
-            </div>
-            {err && <div className="text-[11px] text-[color:var(--accent-rose-fg,#c33)]">{err}</div>}
-          </>
-        )}
-      </div>
     </div>
   );
 }

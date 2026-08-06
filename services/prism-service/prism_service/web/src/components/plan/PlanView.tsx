@@ -279,9 +279,18 @@ export default function PlanView({
   if (hasImpl) tabs.push({ key: "implementation", label: "Implementation" });
   if (hasTests) tabs.push({ key: "tests", label: "Tests" });
 
-  // Default to Implementation when the conductor is engaged (the live status),
-  // else the first available artifact tab.
-  const [active, setActive] = useState(hasImpl ? "implementation" : tabs[0]?.key ?? "design");
+  // YOU LAND ON THE DECISION, YOU DO NOT HUNT FOR IT (task 7feed0c8).
+  // Defaulting to Implementation whenever the conductor is engaged hid the
+  // approval card exactly when it was needed: a PENDING gate is precisely
+  // what makes hasImpl true, so the reviewer landed on Implementation while
+  // the "Approve design" control sat on a Design tab they never opened. The
+  // owner hit this three times and could not approve their own plan. A
+  // pending gate now wins the landing tab; a settled flow still opens on
+  // Implementation (the live status), and everything else on the first
+  // artifact tab.
+  const awaitingDesign = !!conductor && conductor.gateState === "pending" && hasDesign;
+  const [active, setActive] = useState(
+    awaitingDesign ? "design" : hasImpl ? "implementation" : tabs[0]?.key ?? "design");
 
   // Honor an external tab request (e.g. the oracle "N RED" summary click).
   // Keyed on the nonce so clicking again after a manual tab change re-fires.

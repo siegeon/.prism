@@ -86,11 +86,17 @@ def test_do_approve_does_not_refuse_on_local_state(packet: str) -> None:
 def test_approver_comes_from_the_session(packet: str) -> None:
     """Same source the page header's IdentityChip reads (PageHeader.tsx:36)."""
     assert "/api/auth/me" in packet, "the card never resolves the session identity"
-    body = re.search(r"design-packet/approve[^)]*\)\s*,\s*(\{[^}]*\})", packet, flags=re.S)
+    body = re.search(r"design-packet/approve.*?,\s*(\{.*?\})", packet, flags=re.S)
     assert body, "could not find the approve POST body"
-    assert "approver" in body.group(1)
-    assert "approver: approver" not in body.group(1), \
-        "the POST body still reads a bare useState string"
+    posted = body.group(1)
+    assert "approver" in posted, f"the POST body sends no approver: {posted!r}"
+    # The value must trace back to the /api/auth/me fetch, not to a text box.
+    val = re.search(r"approver:\s*([A-Za-z0-9_.?|\s()\"']+?)\s*[,}]", posted)
+    assert val, f"could not read the approver value: {posted!r}"
+    src_expr = val.group(1).strip()
+    assert "setApprover" not in packet
+    assert re.search(rf"(const|let)\s+{re.escape(src_expr)}\s*=", packet), \
+        f"approver value {src_expr!r} is not derived from the resolved identity"
 
 
 def test_server_resolves_the_approver_from_the_principal() -> None:
@@ -150,7 +156,21 @@ def test_plan_gate_lands_on_the_design_tab(planview: str) -> None:
     A gate parks the task, which makes hasImpl true, which used to auto-open
     the Implementation tab - hiding the approval card behind a tab the
     reviewer never lands on. At a PENDING gate the Design tab must win."""
-    init = re.search(r"useState\(\s*(has\w+[^)]*)\)", planview)
+    init = re.search(r"\[active,\s*setActive\]\s*=\s*useState\((.*?)\);",
+                     planview, flags=re.S)
     assert init, "could not find the active-tab initialiser"
-    assert "gateState" in init.group(1) or "awaitingDesign" in init.group(1), \
-        f"the landing tab still ignores the gate: {init.group(1)!r}"
+    expr = init.group(1).strip()
+    # A pending gate must SELECT Design, not merely leave it as the last
+    # fallback: the old `hasImpl ? "implementation" : tabs[0]?.key ?? "design"`
+    # mentioned both a gate-derived flag and "design" and still landed the
+    # reviewer on Implementation every single time.
+    picks = re.search(r"([A-Za-z_][\w.]*)\s*\?\s*[\"']design[\"']", expr)
+    assert picks, f"nothing selects the Design tab: {expr!r}"
+    guard = picks.group(1)
+    if "gateState" not in guard:
+        decl = re.search(rf"(?:const|let)\s+{re.escape(guard)}\s*=\s*([^;]+);",
+                         planview, flags=re.S)
+        assert decl, f"cannot resolve the landing-tab guard {guard!r}"
+        guard = decl.group(1)
+    assert "gateState" in guard and "pending" in guard, \
+        f"the Design tab is not selected by a PENDING gate: {guard!r}"

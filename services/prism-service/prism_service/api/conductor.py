@@ -1,8 +1,9 @@
 """Conductor API — prompt variants, scores, session outcomes, and SDLC state."""
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from prism_service.api.auth import coerce_principal, current_principal
 from prism_service.project_context import get_project
 from prism_service.services.conductor_service import board_health
 
@@ -92,8 +93,9 @@ def design_packet_route(task_id: str, project: str = Query("default")) -> dict:
 
 @router.post("/design-packet/approve")
 def design_packet_approve(task_id: str = Body(..., embed=True),
-                          approver: str = Body(..., embed=True),
-                          project: str = Query("default")) -> dict:
+                          approver: str = Body("", embed=True),
+                          project: str = Query("default"),
+                          principal=Depends(current_principal)) -> dict:
     """FR-6/FR-7: the ONLY way a design-packet approval is recorded - an
     explicit owner write action, never a render/browser receipt (design_
     packet.record_approval raises ValueError on a non-owner_explicit method,
@@ -103,6 +105,16 @@ def design_packet_approve(task_id: str = Body(..., embed=True),
     task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
     if task is None:
         raise HTTPException(404, "unknown task")
+    # THE SYSTEM TRACKS THE APPROVER (task 7feed0c8). The owner should never
+    # type their own name, so a blank body approver is filled from the
+    # authenticated principal — the same identity /api/auth/me serves the
+    # header. Never a constant: if the principal has no name either, the
+    # value stays empty and record_approval's ValueError still fires, which
+    # is the point. An approval signed by nobody is the false-green this
+    # gate exists to prevent.
+    if not (approver or "").strip():
+        p = coerce_principal(principal)
+        approver = (getattr(p, "display_name", "") or getattr(p, "email", "") or "").strip()
     try:
         appr = dp.record_approval(project, task_id, task, approver=approver,
                                   method="owner_explicit")
