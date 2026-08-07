@@ -20,7 +20,6 @@ import { Skeleton } from "@/components/ui";
 // because it's the default route — lazy-loading it would only add a flash.
 import DashboardPage from "@/pages/DashboardPage";
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
-const InboxPage = lazy(() => import("@/pages/InboxPage"));
 const TasksPage = lazy(() => import("@/pages/TasksPage"));
 const CompletedTasksPage = lazy(() => import("@/pages/CompletedTasksPage"));
 const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
@@ -141,7 +140,6 @@ export default function App() {
               element={<MemoryConceptRedirect />}
             />
             <Route path="/okf" element={<Navigate to="/understand" replace />} />
-            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             {/* Completed work lives on its own surface, off the active board
                 (feedback: done-tasks-off-board). Static segment ranks above
