@@ -4383,6 +4383,10 @@ class ConductorService:
         # read the LIVE transcript on disk and take the larger of the two, so
         # a running session ("seeing ourselves") shows a real, growing number.
         tokens = 0
+        # Tokens inside the CURRENT step's window (see the scoping
+        # note below). Initialised here so an unreadable transcript
+        # yields an honest 0 rather than an undefined name.
+        step_tokens = 0
         # Per-turn burn series (oldest..newest) merged across the task's live
         # sessions — the conductor tile's "work getting done" graph. Each entry
         # is {out, dt_s, tok_s}; complementary to the cumulative `tokens_since_
@@ -4422,7 +4426,24 @@ class ConductorService:
                 # task's live sessions; total_turns is computed off the UNCAPPED
                 # series so `turns` stays honest even past the 40-turn tail cap.
                 live_events: list[tuple[float, int]] = []
-                for s in self._task_svc.sessions_for_task(task_id):
+                # AGGREGATE THE CHILDREN. A subtask is the driver's own
+                # decomposition and never renders as a peer tile, but its
+                # spend IS the parent's spend — an epic with three lanes
+                # running underneath it must not read "0 tok/s" (owner
+                # 2026-08-06). Deduped by session id, because a session
+                # linked to both a child and its parent would otherwise be
+                # counted twice.
+                _seen_sids: set = set()
+                _rows = [row
+                         for _tid in ([task_id] + self._child_task_ids(task_id))
+                         for row in self._task_svc.sessions_for_task(_tid)]
+                for s in _rows:
+                    _sid = (s.get("session_id") if isinstance(s, dict)
+                            else getattr(s, "session_id", "")) or ""
+                    if _sid and _sid in _seen_sids:
+                        continue
+                    if _sid:
+                        _seen_sids.add(_sid)
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
                     outcome_tok = int(used or 0)
@@ -4456,6 +4477,20 @@ class ConductorService:
                     full_turns = turns_from(live_events)
                     total_turns = len(full_turns)
                     token_turns = full_turns[-40:]
+                # SCOPE THE STEP READOUT TO THE STEP (owner 2026-08-06:
+                # "this seems crazy"). `tokens` above is the task total across
+                # every linked session's LIFETIME; rendering it beside the
+                # current step produced "review previous notes - 7.5M tok -
+                # 49s" (~153k tok/s, which no model produces) and "411M tok"
+                # on a task open since July. The duration was real; the number
+                # beside it described something else. Bucket the same event
+                # timeline into the current step's window. The task total is
+                # kept, under a name that says what it is.
+                from prism_service.services.claude_transcripts import (
+                    tokens_in_window as _tokens_in_window,
+                )
+                step_tokens = _tokens_in_window(
+                    live_events, self._now_epoch() - in_step_s)
             except Exception:
                 tokens = 0
 
@@ -4475,8 +4510,13 @@ class ConductorService:
             # no disposable units) — powers the "N/M agents back" chip.
             "fanout_dispatched": fanout_dispatched,
             "fanout_returned": fanout_returned,
-            # Task-total linked-session tokens (see note above).
-            "tokens_since_step": tokens,
+            # Tokens burned WITHIN the current step's window. Was the task
+            # total across every linked session's lifetime, which is what
+            # made a 49-second step read as 7.5M tokens.
+            "tokens_since_step": step_tokens,
+            # The lifetime total, named for what it actually is so nobody
+            # renders it against a step again.
+            "tokens_task_total": tokens,
             # Per-turn burn rate series + honest total turn count.
             "token_turns": token_turns,
             "turns": total_turns,
@@ -4491,6 +4531,26 @@ class ConductorService:
     # ------------------------------------------------------------------
     # activity — the HONEST per-task work state (not the raw status)
     # ------------------------------------------------------------------
+    def _child_task_ids(self, task_id: str) -> list[str]:
+        """Ids of tasks parented to `task_id` (one level).
+
+        Subtasks are the driver's own decomposition and deliberately do not
+        render as peers on the board — but their WORK is the parent's work.
+        Without this, an epic with three lanes burning underneath it has no
+        motion and no tokens of its own and reads "paused - 0 tok/s" exactly
+        when the most is happening (owner 2026-08-06).
+        """
+        if self._task_svc is None or not task_id:
+            return []
+        try:
+            return [str(getattr(c, "id", "") or "")
+                    for c in self._task_svc.list()
+                    if str(getattr(c, "parent_id", "") or "") == task_id
+                    and str(getattr(c, "status", "")) not in (
+                        "cancelled", "deleted")]
+        except Exception:
+            return []
+
     def _task_motion_s(self, task) -> Optional[float]:
         """Seconds since the last CONDUCTOR TRANSITION on this task: the newest
         advance_task/gate_decide row in task_history (both written by
@@ -4499,9 +4559,14 @@ class ConductorService:
         neither resolves."""
         latest: Optional[float] = None
         tid = getattr(task, "id", "") or ""
+        # A transition on a CHILD is motion on the parent (see
+        # _child_task_ids): the epic itself may not advance for hours while
+        # its slices move constantly.
+        scan_ids = ([tid] + self._child_task_ids(tid)) if tid else []
         if self._task_svc is not None and tid:
             try:
-                for r in self._task_svc.history(tid):
+                for r in [row for i in scan_ids
+                          for row in self._task_svc.history(i)]:
                     if getattr(r, "action", "") in ("advance_task", "gate_decide"):
                         ts = self._parse_iso(getattr(r, "timestamp", "") or "")
                         if ts is not None and (latest is None or ts > latest):
