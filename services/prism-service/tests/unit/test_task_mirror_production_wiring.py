@@ -69,50 +69,11 @@ def _isolate_observers():
         task_service._STATUS_OBSERVERS[:] = status
 
 
-@pytest.fixture
-def quiet_boot(monkeypatch):
-    """Boot the REAL lifespan without its periodic workers.
-
-    The registration under test is the FIRST thing lifespan does and sits in
-    its own try/except (main.py), precisely so an unrelated worker failure
-    cannot skip it — so silencing the timers here removes noise and port
-    contention with a running dev daemon WITHOUT weakening the assertion.
-    """
-    for name, value in (("PRISM_WATCHDOG", "off"),
-                        ("PRISM_DRIFT_INTERVAL", "0"),
-                        ("PRISM_GATE_ADJUDICATOR_INTERVAL", "0"),
-                        ("PRISM_EVENT_POOL_INTERVAL", "0"),
-                        ("PRISM_GRAPH_ENRICH_WORKER", "off"),
-                        ("PRISM_SQLITE_MAINT_INTERVAL_S", "0")):
-        monkeypatch.setenv(name, value)
-
-    # Setting intervals to 0 was NOT enough: the threads still START, and on
-    # Linux CI this suite then hung for 26 minutes. The faulthandler dump named
-    # it exactly — AC-3 blocked forever in sqlite_db.connect at
-    # `PRAGMA journal_mode=WAL`, in a process left full of worker threads doing
-    # their own SQLite work after an earlier test booted the real lifespan.
-    #
-    # main.py registers the mirror at ~L413 in its OWN try/except, deliberately
-    # BEFORE the big `try:` at L417 that starts every worker. So failing that
-    # block's very first statement (`_LOCK_FILE.write_text`) skips all nine-plus
-    # starters — MCP server, drift timer, understand drainer, trash sweeper,
-    # auto-updater, transcript importer, maintenance clock, watchdog, gate
-    # adjudicator — while the registration under test has already happened.
-    #
-    # This does not weaken the assertion. It strengthens it: main.py's comment
-    # claims the mirror survives an unrelated startup failure, and this now
-    # exercises exactly that.
-    class _RefuseLock:
-        def exists(self) -> bool:
-            return False
-
-        def write_text(self, *_a, **_k):
-            raise OSError("workers deliberately not started under test")
-
-        def unlink(self, *_a, **_k) -> None:
-            return None
-
-    monkeypatch.setattr("prism_service.main._LOCK_FILE", _RefuseLock())
+# `quiet_boot` (real lifespan, workers silenced) now lives in the shared
+# tests/conftest.py — task 0784729f generalized it there so every unit
+# test booting prism_service.main.app for real gets the same protection.
+# See that fixture's docstring for the full story (including the 26-minute
+# CI hang and the thread-count leak into test_lifespan_lock_recovery.py).
 
 
 # ── AC-1: production startup registers the create observer ────────────────

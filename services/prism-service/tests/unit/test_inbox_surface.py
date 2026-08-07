@@ -148,12 +148,16 @@ def test_reading_the_inbox_never_mints_work(tmp_path, monkeypatch):
     assert after == before, "reading the inbox changed task state"
 
 
-def test_the_real_app_exposes_the_inbox_route():
+def test_the_real_app_exposes_the_inbox_route(quiet_boot):
     """The tests above mount the router into a bare FastAPI, which proves the
     handler works and proves NOTHING about whether the app wires it — the
     same shape as an adapter that only exists when a test injects it. This
     asserts the assembled application, so forgetting the include_router in
-    api/__init__.py fails here rather than in a browser."""
+    api/__init__.py fails here rather than in a browser.
+
+    `quiet_boot` (shared, tests/conftest.py) silences the real lifespan's
+    background workers so booting the assembled app here doesn't leak
+    daemon threads into the rest of the pytest process (task 0784729f)."""
     from fastapi.testclient import TestClient
 
     from prism_service.main import app

@@ -32,12 +32,19 @@ _WEB = _SERVICE_ROOT / "prism_service" / "web" / "src"
 # API: per-surface detail, through the ASSEMBLED app
 # ----------------------------------------------------------------------
 
-def test_surfaces_endpoint_reports_detail_through_the_assembled_app():
+def test_surfaces_endpoint_reports_detail_through_the_assembled_app(quiet_boot):
     """Mounted the way a browser reaches it - not a bare router in a test
     FastAPI(), which proves the handler works and nothing about whether
     api/__init__.py actually wires it in (the exact gap
     test_inbox_surface.py::test_the_real_app_exposes_the_inbox_route
-    exists to catch on its own surface)."""
+    exists to catch on its own surface).
+
+    `quiet_boot` (shared, tests/conftest.py) silences the real lifespan's
+    background workers - booting the assembled app is the point, letting
+    its daemon threads run unmanaged for the rest of the process is not
+    (task 0784729f: an earlier version of this test leaked exactly those
+    threads and broke test_lifespan_lock_recovery.py's thread-count
+    assertion)."""
     from fastapi.testclient import TestClient
 
     from prism_service.main import app
