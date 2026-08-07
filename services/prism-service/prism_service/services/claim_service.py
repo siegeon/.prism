@@ -29,6 +29,7 @@ from uuid import uuid4
 from prism_service.models.claim import Claim
 from prism_service.models.roles import normalize_role, role_for_step
 from prism_service.models.workspace import role_allows
+from prism_service.services import sqlite_db
 from prism_service.services.task_service import TaskService
 from prism_service.services.workspace_service import WorkspaceService
 
@@ -75,10 +76,7 @@ class ClaimService:
     def _db(self) -> sqlite3.Connection:
         conn = getattr(self._tlocal, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self._db_path, timeout=5.0)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn = sqlite_db.connect(self._db_path)
             self._tlocal.conn = conn
         return conn
 
