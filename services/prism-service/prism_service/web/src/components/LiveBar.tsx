@@ -87,12 +87,29 @@ export default function LiveBar() {
   // honest-liveness trick the conductor tiles use.
   const fetchedAt = useRef(0);
   const [sinceFetchS, setSinceFetchS] = useState(0);
+  // child task id -> parent task id, for rolling driven slices up to the epic.
+  const [parentOf, setParentOf] = useState<Record<string, string>>({});
 
   const load = useCallback(() => {
     api.get<{ managed_tasks?: ManagedTask[] }>(`/api/conductor/state?project=${project}`)
       .then((d) => { setManaged(d.managed_tasks ?? []); fetchedAt.current = performance.now(); setSinceFetchS(0); })
       .catch(() => setManaged([]))
       .finally(() => setPolled(true));
+    // PARENTAGE, fetched separately because managed_tasks does not carry it
+    // (ConductorService.managed_tasks selects on workflow_step alone and emits
+    // no parent_id, so a driven CHILD is indistinguishable from a root epic
+    // here). Without this the bar renders a driver's own decomposition as
+    // peers of the epic the owner is watching — owner 2026-08-06: "those are
+    // sub tasks ... they are your details, you do not have me conduct them
+    // for you". Lean projection, same shape TasksPage.tsx already requests.
+    api.get<{ tasks?: { id: string; parent_id?: string }[] }>(
+      `/api/tasks?project=${project}&fields=id,parent_id`)
+      .then((d) => {
+        const map: Record<string, string> = {};
+        for (const t of d.tasks ?? []) if (t.parent_id) map[t.id] = t.parent_id;
+        setParentOf(map);
+      })
+      .catch(() => { /* leave parentage as-is; never blank a known map */ });
   }, [project]);
 
   // Push refresh (task 4d399e0a): subscribe to the project's real event bus
@@ -129,14 +146,23 @@ export default function LiveBar() {
   }, []);
   useEffect(() => { api.get<{ version: string }>(`/api/version`).then((d) => setVersion(d.version)).catch(() => {}); }, []);
 
-  const working = managed.filter((m) => m.activity?.state === "working");
-  const gated = managed.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
+  // ROOTS ONLY on this bar. A driven CHILD is the driver's own decomposition;
+  // it rolls up into its epic's row as a slice count instead of claiming a row
+  // of its own, and its gate never turns the bar amber — the owner is not the
+  // reviewer for a subtask. Falls back to showing everything until the
+  // parentage map has loaded, so nothing vanishes on a slow fetch.
+  const roots = managed.filter((m) => !parentOf[m.id]);
+  const slicesUnder = (rootId: string) =>
+    managed.filter((m) => parentOf[m.id] === rootId).length;
+
+  const working = roots.filter((m) => m.activity?.state === "working");
+  const gated = roots.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
   // Managed, mid-flow, but neither moving nor at a gate (between reports,
   // adrift, stalled). The bar used to DROP these and claim "queue is quiet"
   // while a drive was literally in progress (owner 2026-07-16: "it says no
   // task being driven ??" during a live fleet drive). Never green — honest
   // activity doctrine paints work only on real motion — but never invisible.
-  const inflow = managed.filter(
+  const inflow = roots.filter(
     (m) => (m.workflow_step ?? "") !== ""
       && !working.some((w) => w.id === m.id)
       && !gated.some((g) => g.id === m.id));
@@ -219,6 +245,9 @@ export default function LiveBar() {
             <EntityChip kind="task" label={chipLabel(m)} />
             {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
             <Lozenge tone="ok">working</Lozenge>
+            {slicesUnder(m.id) > 0 && (
+              <Lozenge tone="info">{`${slicesUnder(m.id)} slice${slicesUnder(m.id) === 1 ? "" : "s"} running`}</Lozenge>
+            )}
             <span className="text-2xs font-mono tabular-nums" style={{ color: "var(--text-muted)" }}>
               {m.assigned_agent || "claude-code"}
             </span>
