@@ -32,6 +32,28 @@ SESSION_GATE_FIX = (
 )
 
 
+# The task page's GET /api/tasks/{id} embeds every TaskHistory row verbatim
+# (no pagination — see history() below), so a full-fidelity repr() of a
+# changed plan_doc/plan_diagram/description dumps BOTH the entire old and
+# entire new text into one row on every edit; a task with several such
+# edits ships hundreds of KB of stale text on every page load for no UI
+# benefit — PlanView's Timeline only ever shows a short summary until a
+# row is manually expanded. Cap the preview here instead: short scalar
+# diffs (status/priority/... — always well under the cap) are unaffected,
+# so PlanView's `field:'from'->'to'` pill parsing still sees the exact
+# values it expects.
+_HISTORY_VALUE_PREVIEW_CHARS = 200
+
+
+def _history_value_repr(value: object, limit: int = _HISTORY_VALUE_PREVIEW_CHARS) -> str:
+    """Bounded repr for a history diff entry — full repr for short values,
+    a capped preview plus an elided-character count for long ones."""
+    if isinstance(value, str) and len(value) > limit:
+        elided = len(value) - limit
+        return f"{value[:limit]!r}...(+{elided} chars)"
+    return repr(value)
+
+
 _CREATE_TASKS_SQL = """
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -657,7 +679,9 @@ class TaskService:
             if old_value == value:
                 continue
             setattr(task, key, value)
-            changes.append(f"{key}: {old_value!r} -> {value!r}")
+            changes.append(
+                f"{key}: {_history_value_repr(old_value)} -> {_history_value_repr(value)}"
+            )
             if value is None or isinstance(value, (str, int, float, bool)):
                 changed_fields[key] = value
 
