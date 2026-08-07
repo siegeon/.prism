@@ -4383,6 +4383,10 @@ class ConductorService:
         # read the LIVE transcript on disk and take the larger of the two, so
         # a running session ("seeing ourselves") shows a real, growing number.
         tokens = 0
+        # Tokens inside the CURRENT step's window (see the scoping
+        # note below). Initialised here so an unreadable transcript
+        # yields an honest 0 rather than an undefined name.
+        step_tokens = 0
         # Per-turn burn series (oldest..newest) merged across the task's live
         # sessions — the conductor tile's "work getting done" graph. Each entry
         # is {out, dt_s, tok_s}; complementary to the cumulative `tokens_since_
@@ -4456,6 +4460,20 @@ class ConductorService:
                     full_turns = turns_from(live_events)
                     total_turns = len(full_turns)
                     token_turns = full_turns[-40:]
+                # SCOPE THE STEP READOUT TO THE STEP (owner 2026-08-06:
+                # "this seems crazy"). `tokens` above is the task total across
+                # every linked session's LIFETIME; rendering it beside the
+                # current step produced "review previous notes - 7.5M tok -
+                # 49s" (~153k tok/s, which no model produces) and "411M tok"
+                # on a task open since July. The duration was real; the number
+                # beside it described something else. Bucket the same event
+                # timeline into the current step's window. The task total is
+                # kept, under a name that says what it is.
+                from prism_service.services.claude_transcripts import (
+                    tokens_in_window as _tokens_in_window,
+                )
+                step_tokens = _tokens_in_window(
+                    live_events, self._now_epoch() - in_step_s)
             except Exception:
                 tokens = 0
 
@@ -4475,8 +4493,13 @@ class ConductorService:
             # no disposable units) — powers the "N/M agents back" chip.
             "fanout_dispatched": fanout_dispatched,
             "fanout_returned": fanout_returned,
-            # Task-total linked-session tokens (see note above).
-            "tokens_since_step": tokens,
+            # Tokens burned WITHIN the current step's window. Was the task
+            # total across every linked session's lifetime, which is what
+            # made a 49-second step read as 7.5M tokens.
+            "tokens_since_step": step_tokens,
+            # The lifetime total, named for what it actually is so nobody
+            # renders it against a step again.
+            "tokens_task_total": tokens,
             # Per-turn burn rate series + honest total turn count.
             "token_turns": token_turns,
             "turns": total_turns,

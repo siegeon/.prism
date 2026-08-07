@@ -1499,3 +1499,26 @@ def current_session_id(
         return ""
     newest = max(paths, key=lambda p: p.stat().st_mtime)
     return _session_id_of(newest) or newest.stem
+
+
+def tokens_in_window(events: list[tuple[float, int]],
+                     start_epoch: float) -> int:
+    """Sum token events at or after `start_epoch`.
+
+    The conductor's per-step readout used to show the sum of every linked
+    session's ENTIRE lifetime (conductor_service.phase_progress), under a
+    field named `tokens_since_step` - so a task open since July rendered
+    "411M tok" beside a step that had run for 49 seconds, and a 49s step
+    read as 153k tokens/second. The duration was real; the number beside it
+    described something else entirely.
+
+    Pure and window-scoped so the step readout can mean what it says. Note
+    the events themselves are BILLABLE tokens (output + input + cache_read +
+    cache_creation, see _sum_billable_tokens), and cache_read re-counts the
+    whole context every turn, so even a correctly-scoped figure is dominated
+    by cache reads rather than generated text.
+    """
+    if not events:
+        return 0
+    return sum(int(tok or 0) for ts, tok in events
+               if float(ts) >= float(start_epoch))
