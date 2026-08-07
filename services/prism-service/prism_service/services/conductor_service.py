@@ -4426,7 +4426,24 @@ class ConductorService:
                 # task's live sessions; total_turns is computed off the UNCAPPED
                 # series so `turns` stays honest even past the 40-turn tail cap.
                 live_events: list[tuple[float, int]] = []
-                for s in self._task_svc.sessions_for_task(task_id):
+                # AGGREGATE THE CHILDREN. A subtask is the driver's own
+                # decomposition and never renders as a peer tile, but its
+                # spend IS the parent's spend — an epic with three lanes
+                # running underneath it must not read "0 tok/s" (owner
+                # 2026-08-06). Deduped by session id, because a session
+                # linked to both a child and its parent would otherwise be
+                # counted twice.
+                _seen_sids: set = set()
+                _rows = [row
+                         for _tid in ([task_id] + self._child_task_ids(task_id))
+                         for row in self._task_svc.sessions_for_task(_tid)]
+                for s in _rows:
+                    _sid = (s.get("session_id") if isinstance(s, dict)
+                            else getattr(s, "session_id", "")) or ""
+                    if _sid and _sid in _seen_sids:
+                        continue
+                    if _sid:
+                        _seen_sids.add(_sid)
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
                     outcome_tok = int(used or 0)
@@ -4514,6 +4531,26 @@ class ConductorService:
     # ------------------------------------------------------------------
     # activity — the HONEST per-task work state (not the raw status)
     # ------------------------------------------------------------------
+    def _child_task_ids(self, task_id: str) -> list[str]:
+        """Ids of tasks parented to `task_id` (one level).
+
+        Subtasks are the driver's own decomposition and deliberately do not
+        render as peers on the board — but their WORK is the parent's work.
+        Without this, an epic with three lanes burning underneath it has no
+        motion and no tokens of its own and reads "paused - 0 tok/s" exactly
+        when the most is happening (owner 2026-08-06).
+        """
+        if self._task_svc is None or not task_id:
+            return []
+        try:
+            return [str(getattr(c, "id", "") or "")
+                    for c in self._task_svc.list()
+                    if str(getattr(c, "parent_id", "") or "") == task_id
+                    and str(getattr(c, "status", "")) not in (
+                        "cancelled", "deleted")]
+        except Exception:
+            return []
+
     def _task_motion_s(self, task) -> Optional[float]:
         """Seconds since the last CONDUCTOR TRANSITION on this task: the newest
         advance_task/gate_decide row in task_history (both written by
@@ -4522,9 +4559,14 @@ class ConductorService:
         neither resolves."""
         latest: Optional[float] = None
         tid = getattr(task, "id", "") or ""
+        # A transition on a CHILD is motion on the parent (see
+        # _child_task_ids): the epic itself may not advance for hours while
+        # its slices move constantly.
+        scan_ids = ([tid] + self._child_task_ids(tid)) if tid else []
         if self._task_svc is not None and tid:
             try:
-                for r in self._task_svc.history(tid):
+                for r in [row for i in scan_ids
+                          for row in self._task_svc.history(i)]:
                     if getattr(r, "action", "") in ("advance_task", "gate_decide"):
                         ts = self._parse_iso(getattr(r, "timestamp", "") or "")
                         if ts is not None and (latest is None or ts > latest):
