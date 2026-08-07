@@ -63,6 +63,51 @@ def test_cancelled_child_excluded_from_progress(tmp_path):
 
 
 # ----------------------------------------------------------------------
+# A soft-deleted child must not count either — same exclusion as cancelled.
+# _child_task_ids (services/conductor_service.py:4549) already excludes both
+# ("cancelled", "deleted"); phase_progress's own children loop only excluded
+# "cancelled", so an epic's tile (children_total) could disagree with its own
+# epic_rollup_verdict (which also only names "cancelled" — deleted rows are
+# the gap both must close together).
+# ----------------------------------------------------------------------
+def test_deleted_child_excluded_from_progress(tmp_path):
+    task_svc, cond = _conductor(tmp_path)
+    parent = task_svc.create(title="parent in flight")
+    task_svc.update(parent.id, workflow_step="implement_tasks")
+    fixture = task_svc.create(title="removed", parent_id=parent.id)
+    task_svc.update(fixture.id, status="deleted")
+
+    pp = cond.phase_progress(parent.id)
+    assert pp["children_total"] == 0, pp
+    assert pp["basis"] != "children", pp
+
+
+def test_children_total_excludes_cancelled_and_deleted_together(tmp_path):
+    """Real shape from epic 0784729f: 15 child rows (7 done, 2 cancelled, 6
+    live) read 7/13 on epic_rollup_verdict but 7/14 or 7/18 on the tile
+    whenever a cancelled/deleted row slips into the denominator. Both must
+    agree: 7/13."""
+    task_svc, cond = _conductor(tmp_path)
+    parent = task_svc.create(title="epic")
+    task_svc.update(parent.id, workflow_step="implement_tasks")
+    for i in range(7):
+        c = task_svc.create(title=f"done-{i}", parent_id=parent.id)
+        task_svc.update(c.id, status="done")
+    for i in range(2):
+        c = task_svc.create(title=f"cancelled-{i}", parent_id=parent.id)
+        task_svc.update(c.id, status="cancelled")
+    for i in range(3):
+        c = task_svc.create(title=f"deleted-{i}", parent_id=parent.id)
+        task_svc.update(c.id, status="deleted")
+    for i in range(6):
+        task_svc.create(title=f"live-{i}", parent_id=parent.id)
+
+    pp = cond.phase_progress(parent.id)
+    assert pp["children_total"] == 13, pp
+    assert pp["children_done"] == 7, pp
+
+
+# ----------------------------------------------------------------------
 # #1b — a DONE task reports 100%, never 0%, regardless of child bookkeeping.
 # ----------------------------------------------------------------------
 def test_done_task_reports_full_progress(tmp_path):

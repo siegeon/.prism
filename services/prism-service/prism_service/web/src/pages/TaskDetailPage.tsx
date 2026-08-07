@@ -60,6 +60,9 @@ type Task = {
   // Honest per-field, per-turn-model dollar spend — rides top-level too
   // (see load()). null/undefined = no linked-session transcript usage yet.
   spend?: SpendData | null;
+  // Server-scoped per-step token totals (api.tasks._step_token_totals),
+  // windowed to each step's own [entry, exit) span — rides top-level too.
+  step_tokens?: Record<string, number>;
 };
 
 // One PINNING/RED test surfaced next to the oracle: the committed test whose
@@ -939,14 +942,15 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number> }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + activity + has_prototype + spend ride at the TOP
-      // LEVEL of the response (not nested in task) — merge onto the task so
-      // the SDLC bar, the honest work-state pill, the prototype iframe, and
-      // the Spend panel all read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null } : d.task);
+      // phase_progress + activity + has_prototype + spend + step_tokens ride
+      // at the TOP LEVEL of the response (not nested in task) — merge onto
+      // the task so the SDLC bar, the honest work-state pill, the prototype
+      // iframe, the Spend panel, and the StepRail's per-step tokens all read
+      // them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {} } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
@@ -1893,6 +1897,7 @@ export default function TaskDetailPage() {
               activity: task.activity,
               timeline,
               turns: history,
+              stepTokens: task.step_tokens,
             } : null}
             gate={null /* the gate DECISION lives in the top-level action
               panel on Overview now (owner: notifications must be top-level

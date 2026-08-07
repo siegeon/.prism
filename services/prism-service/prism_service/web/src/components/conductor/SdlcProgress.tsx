@@ -153,9 +153,13 @@ export default function SdlcProgress({
   // driving it at all — must still read as still, not animated.
   const live = state === "working" || state === "adrift";
 
-  // Overall task progress toward DONE: completed steps + current phase fraction.
+  // Overall task progress toward DONE: completed steps + current phase
+  // fraction. PURE — a function of the server's phase.pct + curIdx only, so
+  // it changes exactly when the server reports a new value and never in
+  // between. This is the number rendered in the caption below; it must never
+  // creep on its own (see the 'children'/'time' comment on liveFraction —
+  // that estimate drives the segment WIDTH tween, never the printed %).
   const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
-  const [liveLabel, setLiveLabel] = useState(overallSeed * 100);
   // The step clock measures EXECUTION time, not wall time (owner 2026-07-14:
   // 'when the ball is in our court it shouldn't be running'). It ticks while the
   // task is actually being WORKED — "working" AND "adrift", since on `adrift`
@@ -185,7 +189,6 @@ export default function SdlcProgress({
     anchor.current.t0 = performance.now();
   }, [phase]);
 
-  const lastPctAt = useRef(0);
   const lastClockAt = useRef(0);
   useAnimationFrame((t) => {
     if (!phase || curIdx < 0) return;
@@ -197,17 +200,17 @@ export default function SdlcProgress({
       if (t - lastClockAt.current > 500) {
         lastClockAt.current = t;
         setLiveInStep(frozenInStep);
-        setLiveLabel(((curIdx + wf) / steps.length) * 100);
       }
       return;
     }
     const elapsedS = (performance.now() - anchor.current.t0) / 1000;
     const wf = liveFraction(phase, elapsedS);
+    // Segment WIDTH may tween toward this live estimate (cosmetic fill of
+    // the current step) — but the PRINTED percentage never reads it; that
+    // was the bug (owner: server pct=0.538 rendered 77.62%, then climbed
+    // 78->86->95% on zero real progress). overallSeed (pure, server-only)
+    // is what the caption renders below.
     segFill.set(wf);
-    if (t - lastPctAt.current > 120) {
-      lastPctAt.current = t;
-      setLiveLabel(((curIdx + wf) / steps.length) * 100);
-    }
     if (t - lastClockAt.current > 500) {
       lastClockAt.current = t;
       setLiveInStep((phase.in_step_s ?? 0) + elapsedS);
@@ -266,7 +269,7 @@ export default function SdlcProgress({
         <>
           <div className="mt-1 flex items-center justify-between text-2xs font-mono text-[color:var(--text-muted)]">
             <span className="uppercase tracking-wider truncate">
-              {stepLabel(steps[curIdx].id)} · {liveLabel.toFixed(2)}%
+              {stepLabel(steps[curIdx].id)} · {(overallSeed * 100).toFixed(2)}%
               {basis === "children" && phase?.children_total ? ` · ${phase.children_done}/${phase.children_total}` : ""}
               {(basis === "fanout" || (phase?.fanout_dispatched ?? 0) > 0)
                 ? ` · ${phase?.fanout_returned ?? 0}/${phase?.fanout_dispatched ?? 0} back`

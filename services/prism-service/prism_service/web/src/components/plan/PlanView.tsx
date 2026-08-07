@@ -34,6 +34,10 @@ export type ConductorInfo = {
   // can DRILL DOWN into the turns that happened on it — the implementation
   // view and the timeline are one thing, disclosed hierarchically.
   turns?: StepTurn[];
+  // Server-scoped per-step token totals (api.tasks._step_token_totals),
+  // windowed to each step's own [entry, exit) span — see StepRail's prop
+  // comment for why this can't be derived from summing turns[].turn_tokens.
+  stepTokens?: Record<string, number>;
 };
 export type GateControls = {
   reason: string;
@@ -515,6 +519,7 @@ export default function PlanView({
             activity={c.status === "done" ? null : c.activity}
             gates={c.timeline?.gates ?? []}
             turns={c.turns ?? []}
+            stepTokens={c.stepTokens}
             reduced={reduced}
             evidence={evidence}
             proofType={proofType}

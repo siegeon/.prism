@@ -31,6 +31,17 @@ def _scores_db(project: str) -> str:
     return str(get_project(project)._data_dir / "scores.db")
 
 
+def _history_epoch(ts: str) -> Optional[float]:
+    """Parse a history row's ISO timestamp to a unix epoch, or None. Shared
+    by _attach_turn_tokens (per-turn) and _step_token_totals (per-step) so
+    both read the same clock the same way."""
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
     """Best-effort: stamp each history turn with `turn_tokens` = the
     output_tokens spent in the window (previous_turn, this_turn], summed across
@@ -40,8 +51,6 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
     if not history:
         return
     try:
-        from datetime import datetime
-
         from prism_service.services.claude_transcripts import (
             _project_source_path,
             live_token_events_for_session,
@@ -52,14 +61,8 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
         if not src:
             return
 
-        def _epoch(ts: str) -> float | None:
-            try:
-                return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
-            except (ValueError, TypeError):
-                return None
-
         # Sorted turn boundaries (skip rows with an unparseable timestamp).
-        bounds = [(_epoch(h.get("timestamp", "")), i) for i, h in enumerate(history)]
+        bounds = [(_history_epoch(h.get("timestamp", "")), i) for i, h in enumerate(history)]
         bounds = [b for b in bounds if b[0] is not None]
         if len(bounds) < 2:
             return
@@ -104,6 +107,57 @@ def _attach_turn_tokens(history: list, sessions: list, project: str) -> None:
                 h["turn_tokens"] = sums[i]
     except Exception:
         pass
+
+
+def _step_token_totals(history: list, sessions: list, project: str) -> dict:
+    """Real per-step token totals for the StepRail's CLOSED-step rows,
+    windowed to each step's own [entry, exit) span.
+
+    _attach_turn_tokens stamps a history ROW with the tokens in (prev_row,
+    this_row] — correct per turn, but the row that ADVANCES INTO a step
+    absorbs whatever gap preceded it (hours of prior idle/other work), so
+    summing turn_tokens by step (the StepRail's old approach) misattributed
+    that gap to the step being entered ('review previous notes' read 7.5M tok
+    for a 49s step — ~153k tok/s, which no model produces). This instead
+    walks this task's OWN advance_task history to find each step's real
+    [entry, exit) span and sums the token-event stream via tokens_in_window
+    bounded to just that span, the same primitive phase_progress uses for
+    the current (open) step. Returns {} — never a guessed figure — when
+    there is no linked-session transcript to read.
+    """
+    import re
+
+    from prism_service.services.claude_transcripts import (
+        _project_source_path, live_token_events_for_session, tokens_in_window,
+    )
+    out: dict = {}
+    try:
+        src = _project_source_path(project)
+        if not src:
+            return out
+        advs = []
+        for h in history or []:
+            if h.get("action") != "advance_task":
+                continue
+            ts = _history_epoch(h.get("timestamp", ""))
+            m = re.search(r"to=(\w+)", h.get("details", "") or "")
+            if ts is not None and m:
+                advs.append((ts, m.group(1)))
+        if len(advs) < 2:
+            return out
+        events: list = []
+        for s in sessions or []:
+            sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
+            if sid:
+                events.extend(live_token_events_for_session(sid, src))
+        if not events:
+            return out
+        for (a_ts, a_step), (b_ts, _b) in zip(advs, advs[1:]):
+            if b_ts > a_ts:
+                out[a_step] = out.get(a_step, 0) + tokens_in_window(events, a_ts, b_ts)
+    except Exception:
+        return {}
+    return out
 
 
 # The board never renders raw `description` (task 842248bd: it is 22% of a
@@ -433,6 +487,13 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
     # (prev, this] wall-clock window) onto the history rows. Best-effort.
     _attach_turn_tokens(out["history"], out["sessions"], project)
+    # Per-step token totals for the StepRail's closed-step rows, windowed to
+    # each step's own [entry, exit) span (never the row-summing shortcut
+    # above, which misattributes a step-entry row's preceding idle gap).
+    try:
+        out["step_tokens"] = _step_token_totals(out["history"], out["sessions"], project)
+    except Exception:
+        out["step_tokens"] = {}
     # Honest per-field, per-turn-model dollar spend, split main-vs-background
     # (SpendPanel on the task-detail page). Best-effort.
     try:
