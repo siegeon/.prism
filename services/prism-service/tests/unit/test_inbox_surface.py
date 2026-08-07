@@ -84,6 +84,17 @@ def test_the_page_reads_live_state_not_a_fixture():
     assert "/api/inbox" in src, "InboxPage does not call the inbox API"
 
 
+def test_the_page_shows_whose_inbox_it_is():
+    """AC-6: two different people at the same URL must be able to tell
+    their views apart, so the page renders the signed-in identity the
+    /api/inbox response already carries — not just the two task lists."""
+    src = (_WEB / "pages" / "InboxPage.tsx").read_text(encoding="utf-8")
+    assert "viewer" in src, (
+        "InboxPage never reads the viewer identity off the inbox response")
+    assert "display_name" in src, (
+        "InboxPage never renders the signed-in display name")
+
+
 def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("PRISM_AUTH_MODE", "local")
     monkeypatch.setenv("PRISM_DATA_DIR", str(tmp_path / "data"))

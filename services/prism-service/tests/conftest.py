@@ -175,4 +175,19 @@ def _collaboration_registry_isolation():
     try:
         yield
     finally:
-        collaboration.restore_adapters(before)
+        after = collaboration.adapters_snapshot()
+        # The builtin adapters register when api/collaboration is IMPORTED,
+        # which may happen for the first time DURING a test (anything that
+        # imports prism_service.main). Blindly restoring a snapshot taken
+        # before that import wiped github for every later test - the same
+        # leak this fixture family exists to prevent (c23e2e7b), just with
+        # the roles reversed. So only restore when there is something to
+        # restore, or when the test left the registry no better than it
+        # found it; never erase what production populated mid-test.
+        #
+        # Importing the api module here instead was the obvious fix and is
+        # WRONG: it drags the whole API package into every test and starts
+        # its background threads, which broke the lifespan thread-count
+        # assertions (test_lifespan_lock_recovery: assert 30 == 10).
+        if before or not after:
+            collaboration.restore_adapters(before)

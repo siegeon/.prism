@@ -31,9 +31,16 @@ type ActivityItem = {
   url: string;
 };
 
+type Viewer = {
+  user_id: string;
+  email: string;
+  display_name: string;
+};
+
 type InboxState = {
   needs_you: NeedsYouItem[];
   activity: ActivityItem[];
+  viewer: Viewer;
 };
 
 export default function InboxPage() {
@@ -50,9 +57,20 @@ export default function InboxPage() {
 
   const needsYou = data?.needs_you ?? [];
   const activity = data?.activity ?? [];
+  const viewer = data?.viewer;
 
   return (
     <Page>
+      {viewer && (
+        // AC-6: two people at this same URL must be able to tell their
+        // views apart — this is a personal inbox, not a shared board.
+        <div className="text-2xs text-[color:var(--text-muted)]">
+          Signed in as{" "}
+          <span className="text-[color:var(--text-primary)] font-medium">
+            {viewer.display_name || viewer.email}
+          </span>
+        </div>
+      )}
       <Card>
         <SectionLabel>Needs you</SectionLabel>
         <p className="text-2xs opacity-60 mt-1 mb-3">
