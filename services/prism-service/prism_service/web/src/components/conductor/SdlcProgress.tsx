@@ -159,7 +159,16 @@ export default function SdlcProgress({
   // between. This is the number rendered in the caption below; it must never
   // creep on its own (see the 'children'/'time' comment on liveFraction —
   // that estimate drives the segment WIDTH tween, never the printed %).
-  const overallSeed = curIdx >= 0 ? (curIdx + seed) / steps.length : seed;
+  const overallSeed = basis === "children"
+    // basis="children": the server's pct IS the epic's progress
+    // (7/13 = 0.538462), not a position inside the current step.
+    // Folding it into a step index printed "77.62% - 7/13" on the
+    // same line: one measure, rendered twice, contradicting itself
+    // (owner 2026-08-06: "9/11 ?!? it says 7/13 still").
+    ? seed
+    // For time/fanout the pct really does describe the CURRENT step,
+    // so blending it with the step position is the right reading.
+    : (curIdx >= 0 ? (curIdx + seed) / steps.length : seed);
   // The step clock measures EXECUTION time, not wall time (owner 2026-07-14:
   // 'when the ball is in our court it shouldn't be running'). It ticks while the
   // task is actually being WORKED — "working" AND "adrift", since on `adrift`
