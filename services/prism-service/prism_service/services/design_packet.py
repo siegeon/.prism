@@ -180,7 +180,25 @@ def approval_status(project: str, task_id: str, task) -> dict:
     """FR-4/FR-5/FR-8: {approved, stale, reason} recomputed on READ every
     time (never a stored flag) against the packet's CURRENT content hash -
     so editing plan_doc/plan_diagram/prototype after approval is caught here,
-    not by a flag someone forgot to clear."""
+    not by a flag someone forgot to clear.
+
+    ROOT TASKS ONLY. Owner 2026-08-06: "the children sub-tasks can not be
+    blocked, as only you can do the work, and you need to validate sub
+    tasks, you only involve me at parent task level."
+
+    A child slice belongs to the driver, so waiting there waits on someone
+    who never intended to look at it. Three children of epic 0784729f sat on
+    "no approval is on file yet" while that epic's progress - counted in
+    children DONE - stayed at 7/13 through a dozen commits of finished work.
+    Root tasks are untouched and still park below.
+
+    This changes WHO IS ASKED, never who may answer: `record_approval` still
+    accepts only `owner_explicit`, so no driver can record a sign-off in the
+    owner's name.
+    """
+    if str(getattr(task, "parent_id", "") or "").strip():
+        return {"approved": True, "stale": False, "reason": ""}
+
     latest = latest_approval(project, task_id)
     if latest is None:
         return {"approved": False, "stale": False, "reason": (
