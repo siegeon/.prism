@@ -520,24 +520,83 @@ def gate_artifact_reason(gate_step_id: str, completion_proof: object,
     return ""
 
 
+def _resolve_actor_identity(raw: str):
+    """Resolve `raw` to an Actor via the identity resolver introduced by the
+    team-work-hub epic (models/actor.py, services/actor_service.py, task
+    0784729f, branch prism/ws/0784729f-5e34-4195-87db-5b54f8ad91cc). A real
+    module-not-found here means that branch has not merged into this
+    checkout yet — callers must treat that as ImportError specifically (see
+    same_actor_override_reason), never swallow it here. This is its own
+    function (rather than inlined) so tests can monkeypatch the seam without
+    the real resolver existing."""
+    from prism_service.services.actor_service import get_actor_service
+    return get_actor_service().resolve(raw)
+
+
 def same_actor_override_reason(override_actor: object,
                                work_actors: object) -> str:
-    """NO SELF-OVERRIDE (task 3826dac3). A gate cannot be cleared by the
-    SAME actor that produced the work — the driver overriding its own gate
-    is forbidden. Override is demoted to a distinct-actor exception: an
-    independent verifier sub-agent (fresh context) must be the one to
-    override. Returns a REJECTION reason when override_actor is among the
-    work-producing actors, else "" (a distinct actor is allowed)."""
-    actor = str(override_actor or "").strip().lower()
-    if not actor:
+    """NO SELF-OVERRIDE (task 3826dac3), joined on IDENTITY not text (task
+    a4e41c35). A gate cannot be cleared by the SAME actor that produced the
+    work — the driver overriding its own gate is forbidden. Override is
+    demoted to a distinct-actor exception: an independent verifier
+    sub-agent (fresh context) must be the one to override. Returns a
+    REJECTION reason when override_actor resolves to the same Actor as a
+    work-producing actor, else "" (a distinct actor is allowed).
+
+    Two DIFFERENT raw strings (a session id vs. that same actor's email, or
+    two aliases logged by two callers) can be the SAME real actor — a plain
+    text compare lets that same-actor override slip through as "distinct".
+    _resolve_actor_identity() joins on prism_service.models.actor.Actor.id
+    when the epic's resolver is wired into this checkout; when it is not
+    (ImportError, checked ONCE per call pair, not per-row) this falls back
+    to the exact pre-join case-insensitive string compare for BOTH sides —
+    never a per-row fallback, which would defeat the join for precisely the
+    case it exists to catch. Once the resolver IS wired, an unexpected
+    resolve() failure (it is documented to never raise, but should one ever
+    happen) fails CLOSED — refuses the override — rather than falling back
+    to a string compare that could read a same-actor bypass as "distinct"
+    (the exact regression this join exists to prevent)."""
+    actor_raw = str(override_actor or "").strip()
+    if not actor_raw:
         return ""
-    produced = {str(a or "").strip().lower() for a in (work_actors or [])}
-    produced.discard("")
-    if actor in produced:
-        return (f"same-actor override forbidden: actor {override_actor!r} "
-                "produced the work on this task and cannot clear its own "
-                "gate — an independent verifier (distinct actor) must "
-                "re-run the claimed command and override")
+    produced_raw = [s for s in (str(a or "").strip() for a in (work_actors or []))
+                    if s]
+    if not produced_raw:
+        return ""
+
+    try:
+        overriding_identity = _resolve_actor_identity(actor_raw)
+    except ImportError:
+        # STRUCTURAL: the resolver module is not present in this checkout
+        # (epic branch not merged) — the identity join cannot run at all,
+        # so use the untouched legacy string compare for the whole call.
+        produced_l = {a.lower() for a in produced_raw}
+        if actor_raw.lower() in produced_l:
+            return (f"same-actor override forbidden: actor {override_actor!r} "
+                    "produced the work on this task and cannot clear its "
+                    "own gate — an independent verifier (distinct actor) "
+                    "must re-run the claimed command and override")
+        return ""
+    except Exception:
+        return (f"same-actor override forbidden: identity of actor "
+                f"{override_actor!r} could not be verified as distinct "
+                "(actor lookup failed) — refusing rather than risk a "
+                "same-actor bypass")
+
+    for raw in produced_raw:
+        try:
+            producer_identity = _resolve_actor_identity(raw)
+        except Exception:
+            return (f"same-actor override forbidden: identity of producer "
+                    f"{raw!r} could not be verified as distinct (actor "
+                    "lookup failed) — refusing rather than risk a "
+                    "same-actor bypass")
+        if producer_identity.id == overriding_identity.id:
+            return (f"same-actor override forbidden: actor {override_actor!r} "
+                    f"resolves to the same identity as producer {raw!r} "
+                    f"({overriding_identity.display_name!r}) and cannot "
+                    "clear its own gate — an independent verifier (distinct "
+                    "actor) must re-run the claimed command and override")
     return ""
 
 
