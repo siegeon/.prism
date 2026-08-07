@@ -68,10 +68,6 @@ function stageDurations(turns: StepTurn[]): Record<string, number> {
   }
   return out;
 }
-function stepTokens(rows: StepTurn[]): number {
-  return (rows ?? []).reduce((a, r) => a + (typeof r.turn_tokens === "number" ? r.turn_tokens : 0), 0);
-}
-
 // Per-stage metric rendered as a RELATIVE bar (filled vs the heaviest stage)
 // with the numbers tucked underneath — fills the row's empty middle and lets
 // you eyeball where the tokens/time went across the run. The bar tracks tokens
@@ -165,7 +161,7 @@ function TurnList({ rows }: { rows: StepTurn[] }) {
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, turns, reduced, proofType, completion,
+  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion,
 }: {
   step?: string;
   gateState?: string;
@@ -175,6 +171,13 @@ export default function StepRail({
   activity?: Activity | null;
   gates: GanttGate[];
   turns?: StepTurn[];
+  // Server-scoped per-step token totals (api.tasks._step_token_totals),
+  // windowed to each step's own [entry, exit) span — keyed by step id. NOT
+  // derived from summing turns[].turn_tokens by step: that let a step-entry
+  // row absorb whatever idle gap preceded it ("review previous notes" read
+  // 7.5M tok for a 49s step). A step missing from this map renders no token
+  // figure rather than a guessed one.
+  stepTokens?: Record<string, number>;
   reduced?: boolean | null;
   // Superseded by the RECEIPT-driven GateEvidenceBlock (task 25a25d84), which
   // fetches GET /api/tasks/:id/gate_evidence directly off `completion.taskId`
@@ -193,7 +196,7 @@ export default function StepRail({
   // Bar scale: the heaviest stage across the run (so bars are relative to it).
   let maxTokens = 0, maxDur = 0;
   for (const s of steps) {
-    const tk = stepTokens(byStep[s.id] ?? []);
+    const tk = stepTokens?.[s.id] ?? 0;
     if (tk > maxTokens) maxTokens = tk;
     const d = durByStep[s.id] ?? 0;
     if (d > maxDur) maxDur = d;
@@ -297,7 +300,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} maxTokens={maxTokens} maxDur={maxDur} proofType={proofType} completion={completion} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} proofType={proofType} completion={completion} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -334,7 +337,7 @@ export default function StepRail({
                               {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
                             </span>
                           )}
-                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens(stepTurns)} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
+                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
                           {cur && hasTurns && (
                             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
                           )}
@@ -478,8 +481,8 @@ function GateCompletionBlock({ c }: { c: GateCompletion }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur, proofType, completion }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; maxTokens: number; maxDur: number; proofType?: string; completion?: GateCompletion;
+function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDur, proofType, completion }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; tokens: number; maxTokens: number; maxDur: number; proofType?: string; completion?: GateCompletion;
 }) {
   const [receipt, setReceipt] = useState(false);
   const [project] = useProject();
@@ -518,7 +521,7 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, maxTokens, maxDur, proof
             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
-          <StepMeta durMs={durMs} tokens={stepTokens(turns ?? [])} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+          <StepMeta durMs={durMs} tokens={tokens} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
         )}
       </button>
       {open && g && (

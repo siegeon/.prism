@@ -1502,8 +1502,11 @@ def current_session_id(
 
 
 def tokens_in_window(events: list[tuple[float, int]],
-                     start_epoch: float) -> int:
-    """Sum token events at or after `start_epoch`.
+                     start_epoch: float,
+                     end_epoch: float | None = None) -> int:
+    """Sum token events at or after `start_epoch` (and, when given, strictly
+    before `end_epoch`) — two-sided so a CLOSED step's own [entry, exit) span
+    can be summed, not just an open-ended "since" window.
 
     The conductor's per-step readout used to show the sum of every linked
     session's ENTIRE lifetime (conductor_service.phase_progress), under a
@@ -1521,4 +1524,5 @@ def tokens_in_window(events: list[tuple[float, int]],
     if not events:
         return 0
     return sum(int(tok or 0) for ts, tok in events
-               if float(ts) >= float(start_epoch))
+               if float(ts) >= float(start_epoch)
+               and (end_epoch is None or float(ts) < float(end_epoch)))

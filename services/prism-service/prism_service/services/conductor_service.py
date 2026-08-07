@@ -4349,7 +4349,12 @@ class ConductorService:
                         # disposable ephemeral-fixture tasks) are abandoned, not
                         # pending work — counting them in the denominator dragged
                         # a green-gated parent's tile to 0% (task 7bdb5701).
-                        if st == "cancelled":
+                        # DELETED children are the same kind of abandoned row —
+                        # excluded here to match _child_task_ids and keep the
+                        # tile's N/M agreeing with epic_rollup_verdict's own
+                        # active-child count (both must reach the same verdict
+                        # about the same epic).
+                        if st in ("cancelled", "deleted"):
                             continue
                         children_total += 1
                         if st == "done":
