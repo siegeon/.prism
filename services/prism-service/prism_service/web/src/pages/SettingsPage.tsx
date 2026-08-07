@@ -13,10 +13,8 @@ import {
   runConnectorSync,
   startConnect,
   getMirrorStatus,
-  listCollaborationSurfaces,
   type Connector,
   type MirrorStatus,
-  type CollaborationSurface,
 } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
 import type { ScanJob } from "@/lib/scan-activity";
@@ -3648,78 +3646,6 @@ function ConnectorsSection({ project }: { project: string }) {
         </Card>
       );
       })}
-      <CollaborationConnectorCard />
     </div>
-  );
-}
-
-// A DIFFERENT registry from the provider rows above: not "sync issues from
-// this provider" but "reach a person who is not at this machine to decide
-// a gate" (services/collaboration.py). Reads the live registry - a surface
-// renders only when production code actually registered or attempted it,
-// never a fixture standing in for one (task f4dd3687's whole point).
-function CollaborationConnectorCard() {
-  const [rows, setRows] = useState<CollaborationSurface[]>([]);
-  const [err, setErr] = useState<string>("");
-
-  useEffect(() => {
-    listCollaborationSurfaces().then(setRows)
-      .catch((e) => setErr(String((e as Error).message ?? e)));
-  }, []);
-
-  const NAME: Record<string, string> = { github: "GitHub" };
-  const TONE: Record<string, string> = {
-    connected: "var(--accent-sage-fg)",
-    unavailable: "var(--accent-amber-fg)",
-  };
-  const LABEL: Record<string, string> = {
-    connected: "Connected",
-    unavailable: "Unavailable",
-  };
-
-  return (
-    <Card className="p-5">
-      <div className="flex items-start gap-3">
-        <span
-          className="shrink-0 grid place-items-center w-9 h-9 rounded-md font-semibold text-sm"
-          style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
-          aria-hidden
-        >
-          Co
-        </span>
-        <div className="min-w-0 flex-1">
-          <span className="font-semibold" style={{ color: "var(--text-primary)" }}>
-            Collaboration
-          </span>
-          <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
-            Where a gate can reach someone who is not at this machine.
-          </p>
-          {err && <ErrorBanner>{err}</ErrorBanner>}
-          {!err && rows.length === 0 && (
-            <p className="text-2xs mt-2" style={{ color: "var(--text-muted)" }}>
-              Not configured. Nothing has registered a surface here yet.
-            </p>
-          )}
-          {rows.map((r) => (
-            <div key={r.surface} className="flex items-center gap-2 mt-2">
-              <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
-                {NAME[r.surface] ?? r.surface}
-              </span>
-              <span
-                className="text-2xs uppercase tracking-wider font-semibold"
-                style={{ color: TONE[r.state] ?? "var(--text-muted)" }}
-              >
-                {LABEL[r.state] ?? r.state}
-              </span>
-              {r.state === "unavailable" && r.detail && (
-                <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
-                  {r.detail}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </Card>
   );
 }
