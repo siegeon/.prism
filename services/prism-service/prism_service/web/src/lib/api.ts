@@ -229,6 +229,23 @@ export async function getMirrorStatus(): Promise<MirrorStatus> {
   return api.get<MirrorStatus>("/api/integrations/connect/mirror");
 }
 
+// ── Collaboration surfaces (epic 0784729f) ─────────────────────────────
+// A DIFFERENT registry from the Connectors above: not "sync issues from
+// this provider" but "reach a person who is not at this machine to decide
+// a gate". A provider can appear in both for unrelated reasons.
+
+export type CollaborationSurface = {
+  surface: string;
+  state: "connected" | "unavailable";
+  detail: string;
+};
+
+export async function listCollaborationSurfaces(): Promise<CollaborationSurface[]> {
+  const d = await api.get<{ detail: CollaborationSurface[] }>(
+    "/api/collaboration/surfaces");
+  return d.detail ?? [];
+}
+
 /** Begin the OAuth round trip; returns the provider authorize URL to open. */
 export async function startConnect(provider: string): Promise<string> {
   const d = await api.get<{ authorize_url: string }>(

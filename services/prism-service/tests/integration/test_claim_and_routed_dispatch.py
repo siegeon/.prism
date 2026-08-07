@@ -1,0 +1,160 @@
+"""Oracle for task 0097a8a8 ("Work finds the right teammate").
+
+Two runners polling concurrently must never receive the same task, an
+expired lease must requeue rather than strand the work, and a dispensing
+call scoped to a workspace member must return only role-matching work.
+
+Every fixture here is a REAL collaborator: a real file-backed TaskService,
+a real file-backed WorkspaceService, and a real ClaimService against its
+own file-backed sqlite claims store — AC-1's concurrency is driven by real
+threads racing real sqlite connections, not two fakes agreeing with each
+other.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass
+
+import pytest
+
+from prism_service.services.claim_service import ClaimService
+from prism_service.services.task_service import TaskService
+from prism_service.services.workspace_service import WorkspaceService
+
+
+@dataclass
+class Rig:
+    claims: ClaimService
+    tasks: TaskService
+    workspaces: WorkspaceService
+    workspace_id: str
+    owner_id: str
+    member_id: str
+    viewer_id: str
+
+
+@pytest.fixture
+def rig(tmp_path):
+    tasks = TaskService(str(tmp_path / "tasks.db"))
+    workspaces = WorkspaceService(tmp_path / "workspace.db")
+    claims = ClaimService(str(tmp_path / "claims.db"), tasks, workspaces)
+
+    owner = workspaces.create_user("owner@example.test", user_id="user-owner")
+    member = workspaces.create_user("member@example.test", user_id="user-member")
+    viewer = workspaces.create_user("viewer@example.test", user_id="user-viewer")
+    workspace = workspaces.create_workspace("Crew", owner.id, workspace_id="workspace-crew")
+    workspaces.add_membership(workspace.id, member.id, "member")
+    workspaces.add_membership(workspace.id, viewer.id, "viewer")
+
+    return Rig(
+        claims=claims,
+        tasks=tasks,
+        workspaces=workspaces,
+        workspace_id=workspace.id,
+        owner_id=owner.id,
+        member_id=member.id,
+        viewer_id=viewer.id,
+    )
+
+
+def test_two_runners_polling_concurrently_never_double_claim(rig):
+    """AC-1: N real threads race claim_next() for the SAME single pending
+    task against one shared file-backed store; exactly one wins it."""
+    task = rig.tasks.create(title="Only one task in the queue")
+
+    holders = [f"runner-{i}" for i in range(8)]
+    for holder_id in holders:
+        rig.workspaces.create_user(f"{holder_id}@example.test", user_id=holder_id)
+        rig.workspaces.add_membership(rig.workspace_id, holder_id, "member")
+
+    winners: list = []
+    lock = threading.Lock()
+
+    def poll(holder_id: str) -> None:
+        claim = rig.claims.claim_next(rig.workspace_id, holder_id, "dev", ttl_s=300)
+        with lock:
+            winners.append((holder_id, claim))
+
+    threads = [threading.Thread(target=poll, args=(h,)) for h in holders]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    claimants = [
+        holder for holder, claim in winners
+        if claim is not None and claim.task_id == task.id
+    ]
+    assert len(claimants) == 1, f"expected exactly one winner, got {claimants}"
+
+
+def test_expired_lease_requeues_instead_of_stranding(rig):
+    """AC-2: a lease past its expires_at is not honored as active — the
+    task it names is dispensed to a new holder instead of staying
+    stranded behind a crashed runner."""
+    task = rig.tasks.create(title="Held by a runner that then vanished")
+
+    first = rig.claims.claim_next(rig.workspace_id, rig.member_id, "dev", ttl_s=0.05)
+    assert first is not None
+    assert first.task_id == task.id
+
+    # No third-party release call exists — this genuinely stands in for a
+    # crashed runner: the holder simply never comes back.
+    time.sleep(0.15)
+
+    second = rig.claims.claim_next(rig.workspace_id, "user-owner", "dev", ttl_s=300)
+    assert second is not None
+    assert second.task_id == task.id
+    assert second.holder_id == "user-owner"
+
+
+def test_lease_requires_a_positive_expiry(rig):
+    """AC-3: ttl_s<=0 or None is refused outright — a lease that can
+    never expire is exactly the strand this task exists to prevent."""
+    rig.tasks.create(title="Never eligible for a zero-ttl lease")
+
+    with pytest.raises(ValueError):
+        rig.claims.claim_next(rig.workspace_id, rig.member_id, "dev", ttl_s=0)
+
+    with pytest.raises(ValueError):
+        rig.claims.claim_next(rig.workspace_id, rig.member_id, "dev", ttl_s=None)
+
+    with pytest.raises(ValueError):
+        rig.claims.claim_next(rig.workspace_id, rig.member_id, "dev", ttl_s=-5)
+
+
+def test_member_scoped_dispatch_returns_role_matching_work(rig):
+    """AC-4: dispensing scoped to a member's requested role returns only
+    tasks whose current SDLC role (role_for_step) matches — never a task
+    that belongs to a different role."""
+    dev_task = rig.tasks.create(title="A builder-stage task")
+    qa_task = rig.tasks.create(title="A verifier-stage task")
+    rig.tasks.update(qa_task.id, workflow_step="write_failing_tests")
+    # dev_task keeps workflow_step="" -> role_for_step defaults to "dev".
+
+    qa_claim = rig.claims.claim_next(rig.workspace_id, rig.member_id, "qa", ttl_s=300)
+    assert qa_claim is not None
+    assert qa_claim.task_id == qa_task.id
+    assert qa_claim.task_id != dev_task.id
+
+    dev_claim = rig.claims.claim_next(rig.workspace_id, rig.member_id, "dev", ttl_s=300)
+    assert dev_claim is not None
+    assert dev_claim.task_id == dev_task.id
+
+
+def test_non_member_and_viewer_are_fail_closed_from_dispensing(rig):
+    """AC-5: a caller with no membership row, and a caller holding only
+    `viewer`, are both fail-closed out of dispensing even though eligible
+    role-matching work exists — never a task, never an exception leaking
+    the task's existence."""
+    rig.tasks.create(title="Eligible dev-role work sitting in the queue")
+
+    stranger_claim = rig.claims.claim_next(
+        rig.workspace_id, "user-does-not-exist", "dev", ttl_s=300
+    )
+    assert stranger_claim is None
+
+    viewer_claim = rig.claims.claim_next(rig.workspace_id, rig.viewer_id, "dev", ttl_s=300)
+    assert viewer_claim is None

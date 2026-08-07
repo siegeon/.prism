@@ -8,16 +8,28 @@ is injected so imports are deterministic and network-free in tests.
 
 from __future__ import annotations
 
+import json
 import urllib.parse
+import urllib.request
 
 
 class JiraClientError(RuntimeError):
     """A Jira request failed. The message is sanitized — never a token."""
 
 
+class _UrllibTransport:
+    """Real network transport (task 33798164). Production registration wires
+    this in by default; tests always inject their own fake instead."""
+
+    def get(self, url: str, headers: dict) -> dict:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+
 class JiraClient:
-    def __init__(self, transport) -> None:
-        self._transport = transport
+    def __init__(self, transport=None) -> None:
+        self._transport = transport or _UrllibTransport()
 
     def _api_base(self, cloud_id: str) -> str:
         return f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3"

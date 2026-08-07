@@ -13,10 +13,12 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from prism_service.models.integration import (
+    ADAPTER_ERROR,
     ExternalEntityInput,
     normalize_status_category,
 )
-from prism_service.services.work_item_sync import PulledPage
+from prism_service.services.jira_client import JiraClientError
+from prism_service.services.work_item_sync import AdapterError, PulledPage
 
 
 def _assignees(fields: dict) -> tuple[str, ...]:
@@ -57,9 +59,23 @@ class JiraWorkAdapter:
     def pull_page(self, connection, container, cursor, page_token) -> PulledPage:
         cloud_id = connection.remote_scope
         project_key = container.remote_id or container.display_key
-        access_token = self._token(connection)
+        # A token or network failure must degrade to a canonical, sanitized
+        # AdapterError (never a raw exception through pull_container) - task
+        # 33798164. The token callable can raise anything (expired refresh,
+        # no store row); JiraClientError already sanitizes transport errors,
+        # but its message could still be provider text, so it is re-wrapped
+        # too rather than left to surface verbatim.
+        try:
+            access_token = self._token(connection)
+        except Exception as exc:  # noqa: BLE001 - sanitize, never leak the cause
+            raise AdapterError(
+                ADAPTER_ERROR, f"jira token unavailable: {type(exc).__name__}") from None
+
         jql = f'project="{project_key}" ORDER BY updated ASC'
-        resp = self._client.search_jql(cloud_id, access_token, jql, page_token)
+        try:
+            resp = self._client.search_jql(cloud_id, access_token, jql, page_token)
+        except JiraClientError as exc:
+            raise AdapterError(ADAPTER_ERROR, str(exc)) from None
 
         issues = resp.get("issues") or []
         entities = [_issue_input(i) for i in issues]

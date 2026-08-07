@@ -155,3 +155,92 @@ def _integration_adapter_registry_isolation():
         yield
     finally:
         integrations.restore_adapters(before)
+
+
+@pytest.fixture
+def quiet_boot(monkeypatch):
+    """Boot the REAL lifespan (prism_service.main.app) without its periodic
+    workers starting.
+
+    Shared home (task 0784729f): originally local to
+    test_task_mirror_production_wiring.py, moved here so every unit test
+    that needs `with TestClient(app) as client:` on the ACTUAL production
+    app - to prove a route or registration is really wired, not merely
+    reachable on a bare test FastAPI() - gets the same protection instead
+    of re-deriving it. Skipping this is not cosmetic: a unit test that boots
+    the real lifespan and lets its ~10 daemon threads run leaves them alive
+    for the REST of the pytest process (main.py's shutdown only stops the
+    watchdog + sqlite maintenance task, nothing else). The leaked
+    maintenance-clock thread's first tick fires almost immediately (no
+    prior-run timestamp gates it) and shells out real `git` subprocesses,
+    whose Popen.communicate() spawns reader threads via threading.Thread -
+    which test_lifespan_lock_recovery.py's mock of the GLOBAL
+    threading.Thread class then miscounts as its OWN lifespan's threads
+    (assert 40 == 10 / assert 44 == 10, task 0784729f). Setting the
+    intervals to 0 was NOT enough on its own: the threads still START, and
+    on Linux CI this once hung the suite for 26 minutes with a whole
+    process full of worker threads still doing their own SQLite work.
+    """
+    for name, value in (("PRISM_WATCHDOG", "off"),
+                        ("PRISM_DRIFT_INTERVAL", "0"),
+                        ("PRISM_GATE_ADJUDICATOR_INTERVAL", "0"),
+                        ("PRISM_EVENT_POOL_INTERVAL", "0"),
+                        ("PRISM_GRAPH_ENRICH_WORKER", "off"),
+                        ("PRISM_SQLITE_MAINT_INTERVAL_S", "0")):
+        monkeypatch.setenv(name, value)
+
+    # main.py registers whatever the FIRST try/except does (e.g. the task
+    # mirror observer) BEFORE the big `try:` that starts every worker - so
+    # failing that block's very first statement (`_LOCK_FILE.write_text`)
+    # skips all nine-plus starters (MCP server, drift timer, understand
+    # drainer, trash sweeper, auto-updater, transcript importer,
+    # maintenance clock, watchdog, gate adjudicator) while anything wired
+    # ahead of it still runs, and the app is still fully assembled and
+    # routable through TestClient.
+    class _RefuseLock:
+        def exists(self) -> bool:
+            return False
+
+        def write_text(self, *_a, **_k):
+            raise OSError("workers deliberately not started under test")
+
+        def unlink(self, *_a, **_k) -> None:
+            return None
+
+    monkeypatch.setattr("prism_service.main._LOCK_FILE", _RefuseLock())
+
+
+@pytest.fixture(autouse=True)
+def _collaboration_registry_isolation():
+    """Same guarantee for the COLLABORATION registry (epic 0784729f).
+
+    services/collaboration.py carries a module-level registry that
+    api/collaboration.py populates once at import time, exactly like the
+    work-item one above. It is given the same snapshot/restore fixture on
+    day one rather than after an incident: the leak that produced the
+    fixture above (task c23e2e7b) was latent for months and only detonated
+    when file ordering changed, and a registry whose emptiness is invisible
+    until some later test expects the production adapter is precisely how
+    this epic shipped a feature that could not run (task f4dd3687)."""
+    from prism_service.services import collaboration
+
+    before = collaboration.adapters_snapshot()
+    try:
+        yield
+    finally:
+        after = collaboration.adapters_snapshot()
+        # The builtin adapters register when api/collaboration is IMPORTED,
+        # which may happen for the first time DURING a test (anything that
+        # imports prism_service.main). Blindly restoring a snapshot taken
+        # before that import wiped github for every later test - the same
+        # leak this fixture family exists to prevent (c23e2e7b), just with
+        # the roles reversed. So only restore when there is something to
+        # restore, or when the test left the registry no better than it
+        # found it; never erase what production populated mid-test.
+        #
+        # Importing the api module here instead was the obvious fix and is
+        # WRONG: it drags the whole API package into every test and starts
+        # its background threads, which broke the lifespan thread-count
+        # assertions (test_lifespan_lock_recovery: assert 30 == 10).
+        if before or not after:
+            collaboration.restore_adapters(before)
