@@ -494,6 +494,14 @@ async def lifespan(_app: FastAPI):
         )
         start_gate_adjudicator()
 
+        # Epic 0784729f, AC-4 — the terminal-less task-drive seat: a task
+        # advances even when no human's Claude Code session is looping on
+        # conductor_work. NEVER decides a gate (gate_adjudicator's seat).
+        # Own thread (same footprint as gate_adjudicator); default OFF —
+        # PRISM_TASK_RUNNER_INTERVAL=<seconds> opts an environment in.
+        from prism_service.services.task_runner import start_task_runner
+        start_task_runner()
+
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
