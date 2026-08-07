@@ -12,12 +12,13 @@ The team-work-hub epic (task 0784729f, commits 411df03/efbd08f on branch
 prism/ws/0784729f-5e34-4195-87db-5b54f8ad91cc) introduces the real join:
 ``prism_service.services.actor_service.ActorService.resolve()`` ->
 ``prism_service.models.actor.Actor`` (kinds human/agent/machine/unknown).
-That branch has NOT merged into this checkout (see
-test_actor_resolver_dependency_is_undeclared_here below, which pins the
-absence honestly) so this suite injects a FAKE resolver via the seam
+That branch has now merged into this checkout, so most of this suite
+injects a FAKE resolver via the seam
 ``conductor_service._resolve_actor_identity`` to prove the JOIN LOGIC itself
--- compare by ``Actor.id``, never by the raw string -- independent of
-whether the real resolver module exists yet in this tree.
+-- compare by ``Actor.id``, never by the raw string -- independent of any
+one resolver implementation, and
+test_the_real_resolver_is_now_live_end_to_end (below) additionally proves
+the real module wires all the way through.
 """
 
 from __future__ import annotations
@@ -25,8 +26,6 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-import pytest
 
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
@@ -207,25 +206,48 @@ def test_a_failed_lookup_never_silently_accepts_a_same_actor_override(
 
 
 # ---------------------------------------------------------------------
-# Pins the actual state of THIS checkout: the epic branch that introduces
-# services/actor_service.py has not merged here, so the real import fails
-# and same_actor_override_reason must fall back to its pre-join string
-# compare WHOLESALE (never per-call) rather than crash. This is the honest
-# "depends on prism/ws/0784729f-5e34-4195-87db-5b54f8ad91cc landing" signal
-# -- if this test ever goes red because the import starts succeeding, that
-# is good news (the epic branch merged) and this test should be deleted.
+# Supersedes test_actor_resolver_dependency_is_undeclared_here (deleted):
+# that test pinned the ABSENCE of services/actor_service.py and said, in
+# its own docstring, "if this test ever goes red because the import
+# starts succeeding, that is good news (the epic branch merged) and this
+# test should be deleted." The epic (task 0784729f) has now merged into
+# this checkout, so this proves the join is actually LIVE end to end --
+# the real module, the real Actor dataclass, a real (tmp-backed, never
+# the process singleton's real data) WorkspaceService -- not the fake
+# resolver the tests above inject to pin the join logic in isolation.
 # ---------------------------------------------------------------------
 
 
-def test_actor_resolver_dependency_is_undeclared_here():
-    with pytest.raises(ImportError):
-        import prism_service.services.actor_service  # noqa: F401
+def test_the_real_resolver_is_now_live_end_to_end(tmp_path, monkeypatch):
+    import prism_service.services.actor_service as actor_service_module
+    from prism_service.services.workspace_service import WorkspaceService
 
-    # With the resolver absent, the pre-join string-compare path must still
-    # do its job for the exact same/distinct cases it always has.
-    assert cs.same_actor_override_reason("S1", ["S1"]) != ""
-    assert cs.same_actor_override_reason("S1", ["S2"]) == ""
-    assert cs.same_actor_override_reason("S1", ["s1"]) != "", (
-        "legacy case-insensitive compare must be unchanged while the "
-        "resolver is not wired"
+    # The real import must succeed now (it used to raise ImportError).
+    import prism_service.services.actor_service  # noqa: F401
+
+    ws = WorkspaceService(tmp_path / "workspace.db")
+    alice = ws.create_user("alice@example.com", display_name="Alice")
+
+    # Swap the process singleton for one rooted in a throwaway store, so
+    # this exercises the REAL resolver without touching real user data.
+    real_service = actor_service_module.ActorService(workspaces=ws)
+    monkeypatch.setattr(actor_service_module, "get_actor_service",
+                         lambda: real_service)
+
+    # Two different raw strings for the SAME real human (id vs. email)
+    # must join to one Actor and refuse the override -- the exact bypass
+    # this whole task exists to close.
+    reason = cs.same_actor_override_reason(alice.id, ["alice@example.com"])
+    assert reason, (
+        "the real resolver must join alice's id and email to the same "
+        f"Actor and refuse the override, got: {reason!r}"
+    )
+
+    # A genuinely different (unresolvable) actor stays distinct.
+    distinct = cs.same_actor_override_reason(
+        "bob-has-no-account", ["alice@example.com"]
+    )
+    assert distinct == "", (
+        f"an unrelated actor must remain distinct through the real "
+        f"resolver, got: {distinct!r}"
     )
