@@ -113,10 +113,14 @@ def _settings_src() -> str:
 def _connectors_section_body() -> str:
     src = _settings_src()
     start = src.index("function ConnectorsSection(")
+    # The parameter list is itself destructured ({ project }: { ... }), so
+    # the first "{" after `start` is a param brace, not the function body -
+    # skip past the parameter list's closing ")" first.
+    params_end = src.index(")", start)
     # Balance braces from the function's opening one, so the slice is the
     # WHOLE function body and nothing past its own closing brace.
     depth = 0
-    i = src.index("{", start)
+    i = src.index("{", params_end)
     body_start = i
     for j in range(i, len(src)):
         if src[j] == "{":

@@ -64,7 +64,22 @@ def collaboration_surfaces() -> list:
     return collaboration.surfaces()
 
 
+def collaboration_surface_detail() -> list[dict]:
+    """One row per surface PRISM actually knows about right now: `connected`
+    for everything production code constructed, `unavailable` (with the
+    recorded reason) for everything it tried and failed to. Never invents a
+    row for a surface nothing attempted - the Settings card renders "not
+    configured" itself when this list comes back empty, rather than this
+    module fabricating a placeholder surface name."""
+    rows = [{"surface": s, "state": "connected", "detail": ""}
+            for s in collaboration.surfaces()]
+    rows += [{"surface": s, "state": "unavailable", "detail": reason}
+             for s, reason in collaboration_registration_errors.items()]
+    return rows
+
+
 @router.get("/surfaces")
 def get_surfaces() -> dict:
     return {"surfaces": collaboration_surfaces(),
-           "errors": dict(collaboration_registration_errors)}
+           "errors": dict(collaboration_registration_errors),
+           "detail": collaboration_surface_detail()}
