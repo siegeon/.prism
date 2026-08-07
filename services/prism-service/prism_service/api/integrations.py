@@ -90,6 +90,36 @@ def register_builtin_adapters() -> None:
         logging.getLogger(__name__).warning(
             "github adapter not registered, syncs will fail: %s", exc)
 
+    try:
+        from prism_service.services.jira_auth import get_jira_auth_store
+        from prism_service.services.jira_client import JiraClient
+        from prism_service.services.jira_work import JiraWorkAdapter
+
+        def _jira_access_token(connection):
+            import time
+
+            def _refresh(_refresh_token: str) -> dict:
+                # No OAuth network transport is wired in production yet (the
+                # same gap integrations_connect.py's own health-check
+                # `_no_refresh` accepts today) - an expired token surfaces as
+                # a clean adapter error via jira_work.pull_page rather than a
+                # silent hang or a raw exception (task 33798164).
+                raise RuntimeError(
+                    "jira token refresh is not configured on this instance")
+
+            return get_jira_auth_store().access_token(
+                connection.workspace_id, connection.remote_scope,
+                now=int(time.time()), refresh=_refresh)
+
+        register_adapter(JiraWorkAdapter(
+            client=JiraClient(),
+            access_token_provider=_jira_access_token,
+        ))
+    except Exception as exc:  # pragma: no cover - a broken provider is not fatal
+        adapter_registration_errors["jira"] = f"{type(exc).__name__}: {exc}"
+        logging.getLogger(__name__).warning(
+            "jira adapter not registered, syncs will fail: %s", exc)
+
 
 register_builtin_adapters()
 

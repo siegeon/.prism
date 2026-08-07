@@ -27,6 +27,8 @@ from prism_service.models.integration import (
     ExternalContainer,
     ExternalEntity,
     ExternalEntityInput,
+    ExternalMessage,
+    ExternalMessageInput,
     IntegrationConnection,
     SyncReceipt,
     SyncRun,
@@ -35,6 +37,7 @@ from prism_service.models.integration import (
     container_id_for,
     entity_id_for,
     link_id_for,
+    message_id_for,
     normalize_status_category,
 )
 
@@ -90,6 +93,25 @@ CREATE TABLE IF NOT EXISTS external_entities (
         REFERENCES external_containers (id, workspace_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS external_messages (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL DEFAULT '',
+    sender TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    remote_created_at TEXT NOT NULL DEFAULT '',
+    last_seen_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE (workspace_id, connection_id, provider, remote_id),
+    UNIQUE (id, workspace_id),
+    FOREIGN KEY (connection_id, workspace_id)
+        REFERENCES integration_connections (id, workspace_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS work_item_external_links (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
@@ -140,6 +162,8 @@ CREATE INDEX IF NOT EXISTS idx_containers_ws_conn
     ON external_containers (workspace_id, connection_id);
 CREATE INDEX IF NOT EXISTS idx_entities_ws_container
     ON external_entities (workspace_id, container_id);
+CREATE INDEX IF NOT EXISTS idx_messages_ws_connection
+    ON external_messages (workspace_id, connection_id);
 CREATE INDEX IF NOT EXISTS idx_links_ws_task
     ON work_item_external_links (workspace_id, task_id);
 CREATE INDEX IF NOT EXISTS idx_runs_ws_container
@@ -338,6 +362,65 @@ class IntegrationStore:
         sql += " ORDER BY e.created_at, e.id"
         return [self._entity(r) for r in self._db.execute(sql, params).fetchall()]
 
+    # ── messages (sibling of entities; NEVER touches intake, task 33798164) ──
+    def upsert_message(
+        self, workspace_id: str, connection_id: str, provider: str,
+        message: ExternalMessageInput,
+    ) -> tuple[ExternalMessage, bool]:
+        """Upsert by exact opaque identity. Returns (message, created).
+
+        Deliberately independent of external_entities/upsert_entity: no
+        container, no WorkItemExternalLink, and no intake call anywhere in
+        this method — a message can never mint a local task.
+        """
+        ws = _require(workspace_id, "workspace_id")
+        if self.get_connection(ws, connection_id) is None:
+            raise ValueError("connection does not belong to this workspace")
+        mid = message_id_for(ws, connection_id, provider, message.remote_id)
+        now = _now()
+        with self._db:
+            cur = self._db.execute(
+                "INSERT OR IGNORE INTO external_messages "
+                "(id, workspace_id, connection_id, provider, remote_id, "
+                "thread_id, sender, subject, body, remote_created_at, "
+                "last_seen_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (mid, ws, connection_id, provider, message.remote_id,
+                 message.thread_id, message.sender, message.subject,
+                 message.body, message.remote_created_at, now, now),
+            )
+            created = cur.rowcount == 1
+            if not created:
+                self._db.execute(
+                    "UPDATE external_messages SET thread_id = ?, sender = ?, "
+                    "subject = ?, body = ?, remote_created_at = ?, "
+                    "last_seen_at = ? WHERE id = ? AND workspace_id = ?",
+                    (message.thread_id, message.sender, message.subject,
+                     message.body, message.remote_created_at, now, mid, ws),
+                )
+        got = self.get_message(ws, mid)
+        if got is None:  # pragma: no cover - defensive
+            raise RuntimeError("message write did not persist")
+        return got, created
+
+    def get_message(self, workspace_id: str, message_id: str) -> Optional[ExternalMessage]:
+        row = self._db.execute(
+            "SELECT * FROM external_messages WHERE id = ? AND workspace_id = ?",
+            (message_id, workspace_id),
+        ).fetchone()
+        return self._message(row) if row else None
+
+    def list_messages(
+        self, workspace_id: str, connection_id: Optional[str] = None,
+    ) -> list[ExternalMessage]:
+        sql = "SELECT * FROM external_messages WHERE workspace_id = ?"
+        params: list[str] = [workspace_id]
+        if connection_id is not None:
+            sql += " AND connection_id = ?"
+            params.append(connection_id)
+        sql += " ORDER BY created_at, id"
+        return [self._message(r) for r in self._db.execute(sql, params).fetchall()]
+
     # ── links ─────────────────────────────────────────────────────────
     def claim_import_link(self, workspace_id: str, entity_id: str, task_id: str) -> WorkItemExternalLink:
         ws = _require(workspace_id, "workspace_id")
@@ -502,6 +585,17 @@ class IntegrationStore:
             assignees=json.loads(row["assignees"] or "[]"), revision=row["revision"],
             remote_updated_at=row["remote_updated_at"], last_seen_at=row["last_seen_at"],
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _message(row: sqlite3.Row) -> ExternalMessage:
+        return ExternalMessage(
+            id=row["id"], workspace_id=row["workspace_id"],
+            connection_id=row["connection_id"], provider=row["provider"],
+            remote_id=row["remote_id"], thread_id=row["thread_id"],
+            sender=row["sender"], subject=row["subject"], body=row["body"],
+            remote_created_at=row["remote_created_at"],
+            last_seen_at=row["last_seen_at"], created_at=row["created_at"],
         )
 
     @staticmethod

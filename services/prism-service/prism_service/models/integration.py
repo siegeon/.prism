@@ -63,6 +63,13 @@ def task_id_for(workspace_id: str, connection_id: str, entity_kind: str, remote_
     return _uuid5("task", workspace_id, connection_id, entity_kind, remote_id)
 
 
+def message_id_for(workspace_id: str, connection_id: str, provider: str, remote_id: str) -> str:
+    # A message's own namespace prefix. Deliberately never entity_id_for: a
+    # message is not a WorkItemAdapter entity and must never collide with one
+    # (task 33798164).
+    return _uuid5("message", workspace_id, connection_id, provider, remote_id)
+
+
 # ── Status normalization (raw remote status is always preserved too) ───────
 _STATUS_MAP = {
     "open": "open", "opened": "open", "new": "open", "todo": "open",
@@ -129,6 +136,50 @@ class ExternalEntity:
     remote_updated_at: str = ""
     last_seen_at: str = ""
     created_at: str = ""
+
+
+@dataclass(frozen=True)
+class ExternalMessage:
+    """A provider-neutral inbound MESSAGE (mail, chat) — a sibling of
+    ExternalEntity, never a member of it (task 33798164).
+
+    A message has no status, no assignees, and no lifecycle to reconcile; it
+    is content someone can read, not work someone tracks. It deliberately
+    carries no path into the pull-orchestration/intake machinery in
+    work_item_sync.py, so importing one can never mint a local task —
+    repeating that for a second shape is exactly the 0a9b511f mistake this
+    task exists to avoid.
+    """
+
+    id: str
+    workspace_id: str
+    connection_id: str
+    provider: str
+    remote_id: str
+    thread_id: str = ""
+    sender: str = ""
+    subject: str = ""
+    body: str = ""
+    remote_created_at: str = ""
+    last_seen_at: str = ""
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class ExternalMessageInput:
+    """One normalized message a future mail/channel importer hands back.
+
+    Sanitized, display/identity fields only — never a raw provider payload,
+    credential, header, or response body (same discipline as
+    ExternalEntityInput).
+    """
+
+    remote_id: str
+    thread_id: str = ""
+    sender: str = ""
+    subject: str = ""
+    body: str = ""
+    remote_created_at: str = ""
 
 
 @dataclass(frozen=True)
