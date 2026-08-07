@@ -4639,6 +4639,22 @@ class ConductorService:
                 done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
                 if active:
                     state = "working"
+                elif motion is not None and motion <= 120:
+                    # The EPIC ITSELF just advanced. Driving a parent
+                    # directly was invisible here: this branch only ever
+                    # asked about children, so an epic crossing its own step
+                    # boundaries still reported "paused".
+                    state = "working"
+                elif quiet is not None and quiet <= 90:
+                    # A live linked session: someone IS working this, they
+                    # just have not crossed a step boundary recently - and a
+                    # long step produces none for most of its life. Reported
+                    # as "driver active", never as nothing-happening. The
+                    # owner watched real work read "paused" for hours
+                    # because this signal was consulted only on the
+                    # childless path (owner 2026-08-06: "it still looks like
+                    # its frozen").
+                    state = "adrift"
                 elif done > 0:
                     state = "paused"         # progress made, idle between slices
                 else:
