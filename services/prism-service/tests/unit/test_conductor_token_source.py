@@ -282,10 +282,24 @@ def test_in_progress_task_with_linked_events_still_reports_real_per_task(tmp_pat
         "own per-task burn series — got empty"
     )
     assert pp["turns"] > 0, f"turns must reflect the real series, got {pp['turns']}"
-    assert pp["tokens_since_step"] > 0, (
-        f"tokens_since_step must reflect real linked tokens, "
-        f"got {pp['tokens_since_step']}"
+    # SUPERSEDED 2026-08-06: this used to assert `tokens_since_step`, which
+    # despite its name carried the TASK TOTAL across every linked session's
+    # lifetime. That is what rendered "411M tok" beside a 49-second step, and
+    # "review previous notes - 7.5M tok - 49s" (~153k tok/s, impossible).
+    # `tokens_since_step` is now scoped to the current step's window, so
+    # immediately after an advance_task it is legitimately 0 and can no
+    # longer carry this guard.
+    #
+    # The INVARIANT is unchanged and still worth having: a task with real
+    # linked-session events must never report zero tokens (the historic
+    # "2625 turns / 0 tokens" contradiction). It now rides the field that
+    # actually holds that number.
+    assert pp["tokens_task_total"] > 0, (
+        f"tokens_task_total must reflect real linked tokens, "
+        f"got {pp['tokens_task_total']}"
     )
+    # A step's spend can never exceed the task's lifetime spend.
+    assert pp["tokens_since_step"] <= pp["tokens_task_total"]
 
 
 # ----------------------------------------------------------------------
