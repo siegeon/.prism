@@ -155,7 +155,11 @@ export default function LiveBar() {
   const slicesUnder = (rootId: string) =>
     managed.filter((m) => parentOf[m.id] === rootId).length;
 
-  const working = roots.filter((m) => m.activity?.state === "working");
+  // "working" OR "driving" (task e3b7ebf6): a heartbeat-attributed step past
+  // both the transition and session-quiet windows is genuinely being driven
+  // too — never a call to action, so it rolls up into the same live row.
+  const working = roots.filter((m) =>
+    m.activity?.state === "working" || m.activity?.state === "driving");
   const gated = roots.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
   // Managed, mid-flow, but neither moving nor at a gate (between reports,
   // adrift, stalled). The bar used to DROP these and claim "queue is quiet"
@@ -244,7 +248,10 @@ export default function LiveBar() {
           >
             <EntityChip kind="task" label={chipLabel(m)} />
             {m.workflow_step && <Lozenge tone="info">{stepLabel(m.workflow_step)}</Lozenge>}
-            <Lozenge tone="ok">working</Lozenge>
+            {/* Humanized through the SAME shared map every other activity
+                surface reads (task e3b7ebf6 AC-4) -- never a raw enum or a
+                literal that only ever matched "working". */}
+            <Lozenge tone="ok">{ACTIVITY_META[m.activity?.state ?? "working"]?.label ?? "working"}</Lozenge>
             {slicesUnder(m.id) > 0 && (
               <Lozenge tone="info">{`${slicesUnder(m.id)} slice${slicesUnder(m.id) === 1 ? "" : "s"} running`}</Lozenge>
             )}

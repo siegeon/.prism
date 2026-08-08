@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.13"
+PRISM_VERSION = "7.10.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.14: STALLED MEANS THE OWNER HAS SOMETHING TO DO [task "
+    "e3b7ebf6]. activity_for gained a third input: a task-attributed "
+    "liveness heartbeat (prism_service.services.drive_heartbeat, "
+    "scoped per task_id, monotonic on work_units, refused BY NAME when "
+    "bare). A fresh heartbeat resolves to the new 'driving' state, "
+    "rendered through the shared ACTIVITY_META map and counted as live "
+    "on both the SDLC tile and LiveBar -- so a step running past the "
+    "120s/90s windows with real progress in flight no longer reads as "
+    "stalled/adrift.\n"
     "v7.10.13: DELIVERY PIPELINE DETECTS SQUASH/REBASE MERGES [task "
     "499ba9c9]. get_task_delivery's 'merged' stage only checked SHA "
     "ancestry, so squash and rebase merges (which preserve no ancestor "
