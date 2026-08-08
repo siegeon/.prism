@@ -39,7 +39,12 @@ def _strip_comments(src: str) -> str:
     a source assertion (the repeated failure mode in the lessons)."""
     src = re.sub(r"\{\s*/\*.*?\*/\s*\}", "", src, flags=re.S)
     src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    src = re.sub(r"(?m)(?<!:)//.*$", "", src)
+    # (?<!:) protects https:// in a URL; (?<!\\) protects the tail of an
+    # escaped-slash regex literal such as /^https?:\/\// on
+    # TaskDetailPage.tsx:1574, whose final \ / / otherwise reads as a
+    # comment start and takes the rest of that JSX line - closing ')' and
+    # '}' included - with it. See the AC-1..AC-4 tests below.
+    src = re.sub(r"(?m)(?<!:)(?<!\\)//.*$", "", src)
     return src
 
 
