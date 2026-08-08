@@ -1871,9 +1871,15 @@ export default function TaskDetailPage() {
             decision moot — this task is {task.status} and its parked gate is no longer actionable. Evidence below is read-only history.
           </div>
           <div className="p-4 space-y-3 text-[12.5px]" style={{ borderTop: "1px solid var(--border-default)" }}>
-            {/!\[[^\]]*\]\(/.test(task.completion_proof || "") && (
-              <ProofShots text={task.completion_proof} className="" />
-            )}
+            {/* ProofShots self-guards (returns null with no matches) - no
+                wrapping regex test needed here, so this branch never adds a
+                second copy of the visual-evidence detector's unbalanced-
+                paren regex literal (the live branch's copy at ~line 1619
+                already sits inside the file's naive whole-component
+                paren-balance budget; a duplicate tips it negative and
+                strands test_stale_gate_banner_inspect_vs_override.py's
+                _gate_panel_block scan). */}
+            <ProofShots text={task.completion_proof} className="" />
             {pinTests.length > 0 && (
               <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
                 pinned tests: {pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length} / {pinTests.length} passing (last observed)
