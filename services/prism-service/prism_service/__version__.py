@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.13"
+PRISM_VERSION = "7.10.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.14: TASK RECORD CARRIES ITS PROTOTYPE'S LIVE URL [task "
+    "3c1a326b]. GET /api/tasks/{id} and the fields= projection on GET "
+    "/api/tasks now surface a derived artifact_url "
+    "(/api/tasks/{id}/prototype) alongside the existing has_prototype "
+    "boolean, so an API/agent consumer with no repo access can discover "
+    "the already-live prototype route from the wire payload alone. "
+    "Additive: has_prototype is unchanged, no .tsx touched. "
     "v7.10.13: DELIVERY PIPELINE DETECTS SQUASH/REBASE MERGES [task "
     "499ba9c9]. get_task_delivery's 'merged' stage only checked SHA "
     "ancestry, so squash and rebase merges (which preserve no ancestor "
