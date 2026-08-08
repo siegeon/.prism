@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.14"
+PRISM_VERSION = "7.10.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.15: THE DRIVING HEARTBEAT HAS A PRODUCER [task e3b7ebf6]. "
+    "7.10.14 shipped the consumer half only (activity_for reading a "
+    "store nothing ever wrote to); this adds the ingest door "
+    "(POST /api/drive-heartbeat/beat, api/drive_heartbeat.py, mounted "
+    "in api/__init__.py) and the implement.js mid-step emitter "
+    "(heartbeatInstr), so a real drive can actually populate "
+    "drive_heartbeats. Live-verified on a scratch daemon sourced from "
+    "this worktree: the SDLC tile and LiveBar flip stalled/needs-you -> "
+    "driving on a real beat, and refuse a bare ping BY NAME.\n"
     "v7.10.14: STALLED MEANS THE OWNER HAS SOMETHING TO DO [task "
     "e3b7ebf6]. activity_for gained a third input: a task-attributed "
     "liveness heartbeat (prism_service.services.drive_heartbeat, "
