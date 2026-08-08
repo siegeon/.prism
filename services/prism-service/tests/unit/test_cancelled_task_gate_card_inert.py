@@ -51,10 +51,16 @@ def _read() -> str:
 
 def _strip_comments(src: str) -> str:
     """Drop /* */, {/* */} and // comments so a comment can never satisfy
-    a source assertion (the repeated failure mode in the lessons)."""
+    a source assertion (the repeated failure mode in the lessons).
+
+    The trailing `(?<!\\\\)` guards against a real false positive found in
+    this file: regex literals like `/^https?:\\/\\//` embed an escaped
+    "//" that is not a comment start - without the guard the scan swallows
+    the rest of the line (and every brace on it), which desyncs every
+    balanced-brace scan downstream of that line."""
     src = re.sub(r"\{\s*/\*.*?\*/\s*\}", "", src, flags=re.S)
     src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    src = re.sub(r"(?m)(?<!:)//.*$", "", src)
+    src = re.sub(r"(?m)(?<!:)(?<!\\)//.*$", "", src)
     return src
 
 
