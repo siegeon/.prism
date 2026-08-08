@@ -9,7 +9,7 @@ import { Page, Card, Empty, Pill, toneFromLabel } from "@/components/ui";
 // done-tasks-off-board). Two views over the same data: a time-grouped
 // Timeline (glance at what shipped lately) and a Search & filter table
 // (look something specific up). Ordered by completed_at — the board's
-// priority/created_at sort is exactly why "done" never read as recent.
+// FIFO created_at sort is exactly why "done" never read as recent.
 
 type Task = {
   id?: string;
@@ -71,7 +71,11 @@ export default function CompletedTasksPage() {
 
   const load = useCallback(() => {
     api
-      .get<{ tasks: Task[] }>(`/api/tasks?project=${project}`)
+      // Projected to the fields the timeline and the table render. Unprojected,
+      // this pulled every plan_doc/story/description blob on the board — 2.8MB
+      // to draw a list of titles and dates.
+      .get<{ tasks: Task[] }>(
+        `/api/tasks?project=${project}&fields=id,title,status,priority,tags,completed_at,created_at,parent_id`)
       .then((d) => setTasks(d.tasks ?? []))
       .catch(() => setTasks([]))
       .finally(() => setLoaded(true));
