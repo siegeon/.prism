@@ -13,10 +13,13 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.17"
+PRISM_VERSION = "7.10.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.18: plan_gate banner names the design packet instead of claiming "
+    "'evidence not on file' when it is populated and awaiting owner "
+    "approval [task 0c49c385]. "
     "v7.10.17: THE DRIVING HEARTBEAT HAS A PRODUCER [task e3b7ebf6]. "
     "7.10.16 shipped the consumer half only (activity_for reading a "
     "store nothing ever wrote to); this adds the ingest door "
