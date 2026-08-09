@@ -421,6 +421,106 @@ def push_task(provider: str, body: PushBody, project: str = Query(...),
     }
 
 
+class PushBacklogBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dry_run: bool = True
+    task_ids: list[str] = []
+    assignee: str = ""
+
+
+def _empty_skip_buckets() -> dict:
+    return {"done": [], "cancelled": [], "already_linked": [],
+            "other_status": []}
+
+
+@router.post("/{provider}/push-backlog")
+def push_backlog(provider: str, body: PushBacklogBody,
+                 project: str = Query(...),
+                 principal: Principal = Depends(current_principal)) -> dict:
+    """Preview, then explicitly confirm, pushing the PRE-EXISTING active
+    backlog toward GitHub (task 733af05f - walking skeleton for epic
+    02672417).
+
+    TWO-STEP BY DESIGN (shared-contract clause 5): ``dry_run=True`` (the
+    default) calls only ``scan_active_tasks`` - a pure classifier that
+    cannot reach GitHub - and creates nothing. ``dry_run=False`` calls the
+    existing single-task ``push_task_creation`` once per would-create task,
+    never a bulk board scan by itself; this route is the ONLY caller that
+    may name more than one task_id, and it still goes through the exact
+    same idempotence/sync-switch guards ``push_task`` above already relies
+    on. Nothing here is reachable from ``set_sync`` - that endpoint still
+    only ever writes the preference.
+    """
+    principal = coerce_principal(principal)
+    if provider not in PROVIDERS:
+        raise HTTPException(404, "unknown provider")
+    scope = personal_scope(principal)
+
+    if not get_sync_preferences().enabled(scope, provider):
+        return {"provider": provider, "dry_run": body.dry_run, "scanned": 0,
+                "would_create": [], "created": [],
+                "skipped": _empty_skip_buckets(),
+                "reason": f"syncing with {provider} is turned off"}
+
+    from prism_service import project_context
+    from prism_service.api.integrations import _adapters
+    from prism_service.services.integration_outbox import get_outbox
+    from prism_service.services.work_item_sync import (
+        push_task_creation, scan_active_tasks)
+
+    store = get_integration_store()
+    task_svc = project_context.get_project(project).task_svc
+    tasks = task_svc.list()
+
+    by_id = {t.id: t for t in tasks}
+    rows = []
+    for t in tasks:
+        has_link = any(
+            l.state == "active"
+            for l in store.list_links(scope, task_id=t.id))
+        rows.append((t.id, t.status, has_link))
+
+    report = scan_active_tasks(rows)
+    skipped = {
+        "done": report.skipped_done,
+        "cancelled": report.skipped_cancelled,
+        "already_linked": report.skipped_already_linked,
+        "other_status": report.skipped_other_status,
+    }
+
+    if body.dry_run:
+        return {"provider": provider, "dry_run": True,
+                "scanned": len(rows), "would_create": report.would_create,
+                "created": [], "skipped": skipped, "reason": ""}
+
+    account = body.assignee
+    if not account:
+        from prism_service.services.github_cli_auth import get_cli_credentials
+
+        account = get_cli_credentials().status().get("account", "")
+
+    targets = [tid for tid in (body.task_ids or report.would_create)
+              if tid in report.would_create]
+
+    created = []
+    for task_id in targets:
+        task = by_id.get(task_id)
+        if task is None:
+            continue
+        result = push_task_creation(
+            store, get_outbox(), _adapters, get_sync_preferences().enabled,
+            scope, task_id, task.status,
+            title=task.title, body=task.description,
+            assignee=account, provider=provider, dry_run=False)
+        if result.created:
+            created.append({"task_id": task_id, "issue": result.issue,
+                            "url": result.url})
+
+    return {"provider": provider, "dry_run": False, "scanned": len(rows),
+            "would_create": report.would_create, "created": created,
+            "skipped": skipped, "reason": ""}
+
+
 @router.put("/{provider}/sync")
 def set_sync(provider: str, body: SyncBody,
              principal: Principal = Depends(current_principal)) -> dict:

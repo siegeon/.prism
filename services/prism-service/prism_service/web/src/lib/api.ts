@@ -201,6 +201,32 @@ export async function runConnectorSync(
     + `?project=${encodeURIComponent(project)}`, {});
 }
 
+/** The pre-existing-backlog sweep (task 733af05f). Preview by default —
+ *  dry_run creates nothing; pass dry_run:false with explicit task_ids to
+ *  confirm live. Two calls by design: never a one-click silent sweep. */
+export type BacklogPushReport = {
+  provider: string;
+  dry_run: boolean;
+  scanned: number;
+  would_create: string[];
+  created: { task_id: string; issue: string; url: string }[];
+  skipped: {
+    done: string[]; cancelled: string[];
+    already_linked: string[]; other_status: string[];
+  };
+  reason: string;
+};
+
+export async function pushBacklog(
+  provider: string, project: string,
+  opts: { dryRun: boolean; taskIds?: string[] },
+): Promise<BacklogPushReport> {
+  return api.post<BacklogPushReport>(
+    `/api/integrations/connect/${encodeURIComponent(provider)}/push-backlog`
+    + `?project=${encodeURIComponent(project)}`,
+    { dry_run: opts.dryRun, task_ids: opts.taskIds ?? [] });
+}
+
 export async function listConnectorStatus(): Promise<Connector[]> {
   const d = await api.get<{ connectors: Connector[] }>(
     "/api/integrations/connect/status");
