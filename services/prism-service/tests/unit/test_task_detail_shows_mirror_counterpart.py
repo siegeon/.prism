@@ -194,7 +194,7 @@ def _external_context_branch(src: str) -> str:
     head = src[window_start:marker]
     brace_at = head.rfind("{")
     assert brace_at != -1, "could not locate the enclosing JSX guard"
-    return src[window_start + brace_at: marker + 600]
+    return src[window_start + brace_at: marker + 900]
 
 
 def test_render_guard_is_the_mirror_key_not_the_external_tag():

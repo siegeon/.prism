@@ -16,7 +16,18 @@ import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
 import { fmtTokens } from "@/lib/format";
+import { relativeTime } from "@/lib/relativeTime";
 import SpendPanel, { type SpendData } from "@/components/SpendPanel";
+
+// The task's real counterpart issue (task a7c989c6) — built server-side from
+// the active WorkItemExternalLink, never a client-derived field.
+type TaskMirror = {
+  provider: string;
+  issue: string;
+  url: string;
+  last_synced_at: string;
+  state: string;
+};
 
 // Same status → tone map as TasksPage so the detail-page status chip
 // matches the kanban column header it came from.
@@ -30,7 +41,9 @@ type Task = {
   // the viewer is not authorized to see — the UI shows a Restricted placeholder
   // instead of the metadata, never inferring authorization client-side.
   restricted?: boolean;
-  external_url?: string;
+  // external_url (removed, task a7c989c6): had zero backend producers —
+  // superseded by `mirror` below, built from the real active-link lookup.
+  mirror?: TaskMirror | null;
   assigned_agent?: string;
   description?: string;
   story_file?: string;
@@ -960,15 +973,15 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number> }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number>; mirror?: TaskMirror | null }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + activity + has_prototype + spend + step_tokens ride
-      // at the TOP LEVEL of the response (not nested in task) — merge onto
-      // the task so the SDLC bar, the honest work-state pill, the prototype
-      // iframe, the Spend panel, and the StepRail's per-step tokens all read
-      // them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {} } : d.task);
+      // phase_progress + activity + has_prototype + spend + step_tokens +
+      // mirror ride at the TOP LEVEL of the response (not nested in task) —
+      // merge onto the task so the SDLC bar, the honest work-state pill, the
+      // prototype iframe, the Spend panel, the StepRail's per-step tokens,
+      // and the linked-issue block all read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {}, mirror: d.mirror ?? d.task.mirror ?? null } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
@@ -1476,18 +1489,21 @@ export default function TaskDetailPage() {
               <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
             ))}
           </div>
-          {(task.tags ?? []).includes("external") && (
-            <div data-external-context className="mt-1.5 text-2xs">
+          {task.mirror && (
+            <div data-external-context className="mt-1.5 text-2xs flex items-center gap-1.5">
               {task.restricted ? (
                 <span data-restricted className="italic" style={{ color: "var(--text-disabled)" }}>
                   Restricted — you don't have access to this item's linked provider context.
                 </span>
-              ) : task.external_url ? (
-                <a href={task.external_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
-                  Open the linked provider item ↗
-                </a>
               ) : (
-                <span style={{ color: "var(--text-muted)" }}>Imported external work.</span>
+                <>
+                  <a href={task.mirror.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
+                    {task.mirror.issue || "linked issue"} ↗
+                  </a>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    synced {relativeTime(task.mirror.last_synced_at)} ago
+                  </span>
+                </>
               )}
             </div>
           )}
