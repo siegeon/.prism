@@ -897,14 +897,14 @@ export default function TaskDetailPage() {
   // review; isAwaitingDesignApproval requires real content so a genuinely
   // empty packet still falls through to the missing-content copy.
   const packetParts = [
-    task.plan_doc ? "story/plan" : null,
-    task.plan_diagram ? "diagram" : null,
-    task.has_prototype ? "prototype" : null,
+    task?.plan_doc ? "story/plan" : null,
+    task?.plan_diagram ? "diagram" : null,
+    task?.has_prototype ? "prototype" : null,
   ].filter(Boolean).join(", ");
   const isAwaitingDesignApproval =
     gateReadiness?.receipt?.adapter === "design-packet" &&
     gateReadiness?.receipt?.passed === false &&
-    !!(task.plan_doc || task.plan_diagram);
+    !!(task?.plan_doc || task?.plan_diagram);
   // Calm-but-not-a-pass tone (owner: awaiting-review is a normal, correct
   // state — it must never read as alarming/failed, and must never be
   // visually indistinguishable from a real pass).
