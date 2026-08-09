@@ -635,8 +635,13 @@ class TaskService:
             params.append(parent_id)
 
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # FIFO (owner 2026-08-07: "solve the tasks in the task window in fifo
+        # order"). Oldest-created first, full stop — priority is only a
+        # tiebreak for rows sharing a timestamp, never a way to jump the
+        # queue. This ordering is the board's default reading order AND the
+        # order work is dispensed in (next_task, ClaimService.claim_next).
         rows = self._db.execute(
-            f"SELECT * FROM tasks{where} ORDER BY priority DESC, created_at ASC",
+            f"SELECT * FROM tasks{where} ORDER BY created_at ASC, priority DESC",
             params,
         ).fetchall()
 
@@ -770,12 +775,12 @@ class TaskService:
     # ------------------------------------------------------------------
 
     def next_task(self) -> Optional[dict]:
-        """Return the highest-priority unblocked pending task.
+        """Return the oldest unblocked pending task (FIFO).
 
         Algorithm:
         1. Fetch all pending tasks.
         2. Filter out tasks whose dependencies are not all 'done'.
-        3. Sort by priority DESC, created_at ASC.
+        3. Sort by created_at ASC (FIFO), priority DESC only as a tiebreak.
         4. Return top result with a reason string.
         """
         pending = self.list(status="pending")
@@ -795,14 +800,14 @@ class TaskService:
         if not unblocked:
             return None
 
-        # Already sorted by priority DESC, created_at ASC from list()
+        # Already sorted FIFO (created_at ASC) by list()
         best = unblocked[0]
-        reason_parts = [f"priority={best.priority}"]
+        reason_parts = [f"created {best.created_at}", f"priority={best.priority}"]
         if best.assigned_agent:
             reason_parts.append(f"assigned to {best.assigned_agent}")
         if best.story_file:
             reason_parts.append(f"story={best.story_file}")
-        reason = "Highest priority unblocked task: " + ", ".join(reason_parts)
+        reason = "Oldest unblocked task (FIFO): " + ", ".join(reason_parts)
 
         return {"task": best, "reason": reason}
 
@@ -827,6 +832,27 @@ class TaskService:
             )
             for r in rows
         ]
+
+    def advance_rows_all(self) -> dict[str, list[tuple[str, str]]]:
+        """Every `advance_task` history row in the project, grouped by task id
+        as (timestamp, details) ordered ascending.
+
+        ONE query, for the project-wide step-duration statistics the conductor
+        computes on every task-page render (_median_step_s, _per_step_typical).
+        Those walked `list()` and then called `history(t.id)` PER TASK — 458
+        extra queries per render, ~470 SQL round trips to answer a question
+        that does not even depend on which task is being viewed. The filter
+        rides in SQL so the rows that never mattered are never deserialized.
+        """
+        rows = self._db.execute(
+            "SELECT task_id, timestamp, details FROM task_history "
+            "WHERE action = 'advance_task' ORDER BY task_id, timestamp ASC"
+        ).fetchall()
+        out: dict[str, list[tuple[str, str]]] = {}
+        for r in rows:
+            out.setdefault(r["task_id"], []).append(
+                (r["timestamp"] or "", r["details"] or ""))
+        return out
 
     # ------------------------------------------------------------------
     # Task <-> session association (LL — activates task_sessions)

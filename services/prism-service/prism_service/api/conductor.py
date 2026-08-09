@@ -260,8 +260,9 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     try:
         from prism_service.services.conductor_service import (
             epic_rollup_verdict, ui_artifact_gate_reason, has_captured_evidence)
-        kids = [c for c in s._task_svc.list()
-                if str(getattr(c, "parent_id", "") or "") == task_id]
+        # parent_id-scoped (idx_tasks_parent) rather than a full-table read
+        # filtered in Python — same rows, one indexed query.
+        kids = list(s._task_svc.list(parent_id=task_id))
         if kids:
             ok_roll, why_roll = epic_rollup_verdict(kids)
             # A clean roll-up still has to satisfy the ui-artifact tooth (owner:
