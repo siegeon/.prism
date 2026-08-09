@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.17"
+PRISM_VERSION = "7.10.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.18: THE TASK PAGE STOPS LOADING THE WHOLE BOARD [task 18a2f89f]. "
+    "GET /api/tasks/{id} was 243ms median / 309ms p95 on a 4KB payload, so "
+    "the cost was compute, not transfer. Three causes, all fixed. (1) "
+    "_median_step_s and _per_step_typical computed a PROJECT-WIDE step "
+    "median by walking list() then history() PER TASK - ~470 SQL statements "
+    "to render one page, for a number that does not depend on which task is "
+    "open. Now one indexed query (TaskService.advance_rows_all). (2) Eight "
+    "child lookups loaded every task row (every plan_doc/story blob "
+    "deserialized) to filter parent_id in Python; now parent_id-scoped onto "
+    "idx_tasks_parent. (3) The turn-token wall-clock fallback re-walked "
+    "819 transcript files / 477MB on EVERY request - no task is "
+    "link_session'd, so every page took that path. Now a merged sorted "
+    "index behind a 5s TTL, answered by bisect, warmed at boot. Also: the "
+    "Completed and Explore pages fetched /api/tasks with NO fields= "
+    "projection - now both project. Pinned by "
+    "tests/unit/test_task_views_dont_overfetch.py, which counts SQL "
+    "statements rather than wall-clock so it cannot go flaky on a busy box.\n"
     "v7.10.17: THE DRIVING HEARTBEAT HAS A PRODUCER [task e3b7ebf6]. "
     "7.10.16 shipped the consumer half only (activity_for reading a "
     "store nothing ever wrote to); this adds the ingest door "
