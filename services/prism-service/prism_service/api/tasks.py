@@ -11,8 +11,10 @@ from pydantic import BaseModel
 
 from prism_service.api.auth import authorize_project_request
 from prism_service.data_dir import evidence_dir, prototype_file
+from prism_service.models.workspace import Principal
 from prism_service.project_context import get_project
 from prism_service.services.actor_service import get_actor_service
+from prism_service.services.integration_store import get_integration_store
 from prism_service.services.task_service import SESSION_GATE_FIX
 
 router = APIRouter(dependencies=[Depends(authorize_project_request)])
@@ -183,6 +185,39 @@ def _mirror_url(description: str) -> str:
 def _artifact_url(task_id: str) -> Optional[str]:
     try:
         return f"/api/tasks/{task_id}/prototype" if prototype_file(task_id).exists() else None
+    except Exception:
+        return None
+
+
+# mirror (task 02672417, GAP-B / AC-6): the counterpart issue for a task,
+# for BOTH an imported task (the "external" tag) and an outbound-created
+# native task (GAP-A sweep — PRISM-native, no such tag). Keying on the
+# ACTIVE link is the only thing that generalizes across both directions;
+# no schema change needed — ExternalEntity.url/last_seen_at already exist
+# and upsert_entity stamps last_seen_at on insert AND update either way
+# (models/integration.py, integration_store.py). Best-effort, additive:
+# never break the detail route.
+def _task_mirror(scope: str, task_id: str) -> Optional[dict]:
+    try:
+        store = get_integration_store()
+        links = [l for l in store.list_links(scope, task_id=task_id)
+                if l.state == "active"]
+        if not links:
+            return None
+        link = links[-1]
+        entity = next(
+            (e for e in store.list_entities(scope, task_id=task_id)
+             if e.id == link.entity_id), None)
+        if entity is None:
+            return None
+        connection = store.get_connection(scope, entity.connection_id)
+        provider = connection.provider if connection is not None else ""
+        return {
+            "provider": provider,
+            "issue": entity.display_key or entity.remote_id,
+            "url": entity.url,
+            "last_synced": entity.last_seen_at,
+        }
     except Exception:
         return None
 
@@ -480,7 +515,8 @@ def _build_timeline(history: list, sessions: list) -> dict:
 
 
 @router.get("/{task_id}")
-def get_task(task_id: str, project: str = Query("default")) -> dict:
+def get_task(task_id: str, project: str = Query("default"),
+             principal: Principal = Depends(authorize_project_request)) -> dict:
     svc = _svc(project)
     t = svc.get(task_id)
     if not t:
@@ -559,6 +595,10 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
     # URL string (see _artifact_url above) - additive, has_prototype is
     # unchanged.
     out["artifact_url"] = _artifact_url(task_id)
+    # mirror: see _task_mirror above (task 02672417, AC-6). Additive; the
+    # key is always present, None when there is no counterpart.
+    user_id = (getattr(principal, "user_id", "") or "local-user").strip()
+    out["mirror"] = _task_mirror(f"personal-{user_id}", task_id)
     return out
 
 

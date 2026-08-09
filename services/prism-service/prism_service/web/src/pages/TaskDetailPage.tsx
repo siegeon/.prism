@@ -30,7 +30,11 @@ type Task = {
   // the viewer is not authorized to see — the UI shows a Restricted placeholder
   // instead of the metadata, never inferring authorization client-side.
   restricted?: boolean;
-  external_url?: string;
+  // The counterpart issue for BOTH an imported task and an outbound-created
+  // native task (task 02672417, AC-6). Supersedes external_url (dead: no
+  // backend producer anywhere in the tree) and the old external-tag-only
+  // gate, which hid every outbound-created task.
+  mirror?: { provider: string; issue: string; url: string; last_synced: string } | null;
   assigned_agent?: string;
   description?: string;
   story_file?: string;
@@ -1476,18 +1480,21 @@ export default function TaskDetailPage() {
               <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
             ))}
           </div>
-          {(task.tags ?? []).includes("external") && (
+          {task.mirror && (
             <div data-external-context className="mt-1.5 text-2xs">
               {task.restricted ? (
                 <span data-restricted className="italic" style={{ color: "var(--text-disabled)" }}>
                   Restricted — you don't have access to this item's linked provider context.
                 </span>
-              ) : task.external_url ? (
-                <a href={task.external_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
-                  Open the linked provider item ↗
-                </a>
               ) : (
-                <span style={{ color: "var(--text-muted)" }}>Imported external work.</span>
+                <span className="inline-flex items-center gap-2">
+                  <a href={task.mirror.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
+                    {task.mirror.provider} {task.mirror.issue} ↗
+                  </a>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    synced {task.mirror.last_synced ? new Date(task.mirror.last_synced).toLocaleString() : "just now"}
+                  </span>
+                </span>
               )}
             </div>
           )}
