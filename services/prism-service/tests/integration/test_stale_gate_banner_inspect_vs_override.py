@@ -39,7 +39,12 @@ def _strip_comments(src: str) -> str:
     a source assertion (the repeated failure mode in the lessons)."""
     src = re.sub(r"\{\s*/\*.*?\*/\s*\}", "", src, flags=re.S)
     src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    src = re.sub(r"(?m)(?<!:)//.*$", "", src)
+    # (?<!:) protects https:// in a URL; (?<!\\) protects the tail of an
+    # escaped-slash regex literal such as /^https?:\/\// on
+    # TaskDetailPage.tsx:1574, whose final \ / / otherwise reads as a
+    # comment start and takes the rest of that JSX line - closing ')' and
+    # '}' included - with it. See the AC-1..AC-4 tests below.
+    src = re.sub(r"(?m)(?<!:)(?<!\\)//.*$", "", src)
     return src
 
 
@@ -142,3 +147,106 @@ def test_expanded_panel_has_two_separate_recovery_controls():
     assert rerun.start() != override.start(), (
         "re-run and override must be two distinct rendered elements"
     )
+
+
+# ---------------------------------------------------------------------
+# AC-1..AC-4 (task 3287e8b4) - the comment stripper must not mistake an
+# ESCAPED slash inside a regex literal for the start of a // comment.
+#
+# TaskDetailPage.tsx:1572-1574 carries /(https?:\/\/\S+)/ and
+# .replace(/^https?:\/\//, ""). In /^https?:\/\// the tail is \ / / - an
+# escaped slash followed by the regex's own terminating delimiter, i.e.
+# two ADJACENT '/' whose preceding char is '\', not ':'. The original
+# (?<!:)//.*$ therefore matched and deleted the whole rest of line 1574,
+# which is live JSX carrying real closing ')' and '}' tokens.
+#
+# The paren balance then never recovered: the scan ran off the end of the
+# file and landed on the last stray ')' six characters before EOF. The
+# suite passed on that coincidence, so any edit changing the file's total
+# length re-broke it (parent task e948008a hit exactly this, as
+# "unbalanced () scanning from 52337").
+# ---------------------------------------------------------------------
+
+_OLD_LINE_COMMENT_RE = r"(?m)(?<!:)//.*$"
+_NEW_LINE_COMMENT_RE = r"(?m)(?<!:)(?<!\\)//.*$"
+
+
+def test_escaped_slash_regex_literal_is_not_read_as_a_line_comment():
+    """AC-1. The assertion text sits on the SAME line as the regex,
+    because (?m)//.*$ only eats to the newline - a marker on the next
+    line would survive even the broken stripper and prove nothing."""
+    frag = 'const m = /^https?:\\/\\//; KEEP_ME_ON_THIS_LINE'
+    assert "KEEP_ME_ON_THIS_LINE" in _strip_comments(frag), (
+        "an escaped slash inside a regex literal was mistaken for the "
+        "start of a // line comment, so the rest of the line was deleted"
+    )
+    # ...and on the REAL file: line 1574's tail carries genuine closing
+    # ')' and '}' tokens that the unguarded strip removed.
+    real = _strip_comments(_read())
+    assert "{lead.slice(m.index + m[1].length)}" in real, (
+        "TaskDetailPage.tsx:1574 was truncated by the comment stripper - "
+        "its closing JSX tokens are gone, which is what breaks the "
+        "paren-balance scan below"
+    )
+
+
+def test_gate_panel_block_closes_structurally_not_by_running_off_the_file():
+    """AC-2. A real structural close, not an accidental EOF landing."""
+    src = _strip_comments(_read())
+    block = _gate_panel_block(src)
+    end = src.index(block) + len(block)
+    assert len(src) - end > 1000, (
+        f"the gate-panel block closed {len(src) - end} chars from EOF - "
+        "that is the scan running off the end of the file and landing on "
+        "a stray ')', not the panel's true structural end"
+    )
+    tail = src[end:end + 400]
+    assert "{task.status ===" in tail, (
+        "the text after the panel block should be the sibling "
+        f"{{task.status === \"blocked\"}} JSX; got: {tail[:120]!r}"
+    )
+
+
+def test_gate_panel_block_is_stable_when_the_tsx_changes_length():
+    """AC-3. This task's own regression-proofing clause. The appended
+    block carries a SURVIVING statement as well as a comment: a
+    comment-only append is stripped away and would pass even while
+    broken. Mutation is IN MEMORY - TaskDetailPage.tsx is outside this
+    slice's allowed_files and is never written to."""
+    base = _strip_comments(_read())
+    block_base = _gate_panel_block(base)
+
+    # HONEST NOTE: this assertion is a STABILITY invariant, not a red
+    # test. It passes at the pre-fix baseline too, because a BALANCED
+    # append (any real code or comment) does not move the stray ')' the
+    # broken scan lands on - measured, not assumed. What it locks in is
+    # that the block cannot start tracking file length again later; the
+    # CORRECTNESS of the close is pinned by the AC-2 test above, which
+    # does fail at baseline.
+    throwaway = "\n\n\n// throwaway\n\nconst THROWAWAY_TAIL = fn(1);\n"
+    grown = _strip_comments(_read() + throwaway)
+    block_grown = _gate_panel_block(grown)
+
+    assert block_grown == block_base, (
+        "appending an unrelated block to TaskDetailPage.tsx changed the "
+        "extracted gate-panel block - the close index is tracking the "
+        "file's total length instead of its structure"
+    )
+
+
+def test_the_escaped_slash_guard_does_not_start_missing_real_comments():
+    """AC-4. Discharges this task's recorded likely_misfire with
+    evidence: adding (?<!\\) must not cause a GENUINE // comment to stop
+    being stripped. Every line whose stripping differs between the two
+    patterns must differ because of an escaped slash (a regex literal),
+    never because it was a real comment."""
+    for n, line in enumerate(_read().split("\n"), 1):
+        old = re.sub(_OLD_LINE_COMMENT_RE, "", line)
+        new = re.sub(_NEW_LINE_COMMENT_RE, "", line)
+        if old == new:
+            continue
+        assert "\\/" in line, (
+            f"line {n} strips differently under the guard but carries no "
+            f"escaped slash, so the guard is swallowing a real comment: "
+            f"{line.strip()[:120]!r}"
+        )
