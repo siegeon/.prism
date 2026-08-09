@@ -201,9 +201,16 @@ def test_gate_panel_block_closes_structurally_not_by_running_off_the_file():
         "a stray ')', not the panel's true structural end"
     )
     tail = src[end:end + 400]
-    assert "{task.status ===" in tail, (
-        "the text after the panel block should be the sibling "
-        f"{{task.status === \"blocked\"}} JSX; got: {tail[:120]!r}"
+    # RE-ANCHORED at the e948008a merge: the dead-task inert gate card
+    # (`{conductorOn && ... task.status === "cancelled"`) is now appended
+    # directly after the live panel, pushing the `{task.status === "blocked"`
+    # sibling beyond this window. The invariant is unchanged - the scan must
+    # land on a REAL sibling JSX branch, not run off to EOF - so accept
+    # either known sibling as the structural neighbour.
+    assert "{task.status ===" in tail or "{conductorOn &&" in tail, (
+        "the text after the panel block should be a sibling JSX branch "
+        "(the dead-task inert card or the blocked banner); "
+        f"got: {tail[:120]!r}"
     )
 
 
