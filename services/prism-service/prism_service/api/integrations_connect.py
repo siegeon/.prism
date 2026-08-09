@@ -91,13 +91,25 @@ def personal_scope(principal: Principal) -> str:
     scope = f"personal-{user_id}"
     service = get_workspace_service()
     if service.get_workspace(scope) is None:
+        # Provisioning is check-then-act over a shared db, and two callers
+        # (two requests, or a request racing a background sync thread) can
+        # both pass the None check — the ids are FIXED, so the loser's
+        # INSERT hits the uniqueness constraint. The db is the arbiter:
+        # losing that race means the row exists, which is the outcome we
+        # wanted, so swallow the duplicate and proceed on the winner's row.
         if service.get_user(user_id) is None:
-            service.create_user(
-                getattr(principal, "email", "") or f"{user_id}@localhost",
-                display_name=getattr(principal, "display_name", "") or "You",
-                user_id=user_id,
-            )
-        service.create_workspace("Personal", user_id, workspace_id=scope)
+            try:
+                service.create_user(
+                    getattr(principal, "email", "") or f"{user_id}@localhost",
+                    display_name=getattr(principal, "display_name", "") or "You",
+                    user_id=user_id,
+                )
+            except ValueError:
+                pass  # a concurrent caller created it first
+        try:
+            service.create_workspace("Personal", user_id, workspace_id=scope)
+        except ValueError:
+            pass  # a concurrent caller created it first
     return scope
 
 
@@ -571,22 +583,29 @@ def _fire_backlog_sweep(scope: str, project: str) -> None:
     import threading
 
     from prism_service import project_context
+    from prism_service.api.integrations import _adapters
     from prism_service.services.github_cli_auth import get_cli_credentials
+    from prism_service.services.integration_outbox import get_outbox
+    from prism_service.services.work_item_sync import push_active_backlog
 
     svc = project_context.get_project(project).task_svc
     tasks = svc.list()
     account = get_cli_credentials().status().get("account", "")
+    # Bind EVERY collaborator here, on the request thread — never inside
+    # the spawned thread. A daemon thread that resolves process-global
+    # singletons lazily can outlive the configuration it was fired under
+    # and operate on whatever the globals point to by the time it runs
+    # (the next test's stores under pytest; a reconfigured registry in a
+    # long-lived daemon). The thread below owns only network I/O.
+    store = get_integration_store()
+    outbox = get_outbox()
+    adapters = _adapters
+    sync_enabled = get_sync_preferences().enabled
 
     def _run() -> None:
         try:
-            from prism_service.api.integrations import _adapters
-            from prism_service.services.integration_outbox import get_outbox
-            from prism_service.services.work_item_sync import (
-                push_active_backlog)
-
             push_active_backlog(
-                get_integration_store(), get_outbox(), _adapters,
-                get_sync_preferences().enabled, scope, tasks,
+                store, outbox, adapters, sync_enabled, scope, tasks,
                 provider="github", assignee=account)
         except Exception:
             pass
