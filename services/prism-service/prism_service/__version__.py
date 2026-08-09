@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.19"
+PRISM_VERSION = "7.10.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.20: PUSH YOUR EXISTING BACKLOG TO GITHUB [task 733af05f]. "
+    "scan_active_tasks and push_task_creation existed but nothing swept the "
+    "pre-existing backlog: POST /api/integrations/connect/{provider}/"
+    "push-backlog previews (dry_run, default true, creates nothing, names "
+    "would_create plus every skip bucket: done/cancelled/already_linked/"
+    "other_status) then an explicit confirm creates real issues for the "
+    "named subset, assigned to the connected account, idempotent on repeat, "
+    "refused outright when sync is off. New 'Existing backlog' preview/"
+    "confirm control on the GitHub connector card in Settings, beside "
+    "SyncSwitch/RepoSync. set_sync is untouched -- still pure consent, "
+    "never a trigger.\n"
     "v7.10.19: THE TASK PAGE STOPS LOADING THE WHOLE BOARD [task 18a2f89f]. "
     "GET /api/tasks/{id} was 243ms median / 309ms p95 on a 4KB payload, so "
     "the cost was compute, not transfer. Three causes, all fixed. (1) "

@@ -33,6 +33,21 @@ if str(_SERVICE_ROOT) not in sys.path:
 REPO = "siegeon/.prism"
 PROJECT = "prism-backlog-test"
 ACCOUNT = "siegeon"
+_STATUS_OK = f"""github.com
+  x Logged in to github.com account {ACCOUNT} (keyring)
+  - Token scopes: 'repo'
+"""
+
+
+class _FakeCliRunner:
+    """The `gh` process boundary only (matches test_sync_is_opt_in.py)."""
+
+    def __call__(self, args):
+        if args[:3] == ["gh", "auth", "status"]:
+            return 0, _STATUS_OK, ""
+        if args[:3] == ["gh", "auth", "token"]:
+            return 0, "gho_faketoken\n", ""
+        raise AssertionError(f"unexpected command: {args}")
 
 
 class _FakeGitHub:
@@ -98,7 +113,7 @@ def app(tmp_path, monkeypatch):
     set_outbox(outbox)
     connect.configure_state_db(str(tmp_path / "oauth_states.db"))
     github_cli_auth.set_cli_credentials(
-        github_cli_auth.GithubCliCredentials(runner=lambda a: (0, "", "")))
+        github_cli_auth.GithubCliCredentials(runner=_FakeCliRunner()))
     sync_prefs.set_sync_preferences(
         sync_prefs.SyncPreferences(str(tmp_path / "sync_prefs.db")))
 
@@ -175,7 +190,12 @@ def test_ac6_the_route_exists_on_the_real_production_app(quiet_boot):
     this is the test that notices."""
     from prism_service.main import app as real_app
 
-    paths = {r.path for r in real_app.routes if hasattr(r, "path")}
+    # main.py's own comment: FastAPI's lazy router inclusion keeps
+    # include_router'd paths OUT of the top-level app.routes list (only
+    # /api/sessions/{session_id} is promoted there directly) — .openapi()
+    # walks the real router tree instead, so it sees what a live request
+    # would actually match.
+    paths = set(real_app.openapi()["paths"].keys())
     assert "/api/integrations/connect/{provider}/push-backlog" in paths, (
         "push-backlog is not mounted on the real app; a person pressing "
         "the Settings control would get a 404")
