@@ -20,6 +20,7 @@ route anyone can reach.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -280,15 +281,30 @@ def test_ac5_switch_off_refuses_and_creates_nothing(app):
         "sync off must refuse before any GitHub contact")
 
 
-# ── AC-8: set_sync stays pure consent, never a trigger ──────────────────
+# ── AC-8, SUPERSEDED 2026-08-09 by epic 02672417 AC-4 (owner-approved
+# plan): the switch's False->True edge IS what starts the outbound backlog
+# push. The original "set_sync stays pure consent, never a trigger" claim
+# (shared-contract clause 5) encoded a safety decision the owner then
+# reversed at the epic's plan_gate. What remains invariant, and is pinned
+# here instead: the sweep fires ONLY through the edge-triggered,
+# github-only _fire_backlog_sweep guard — never inline, never on ON->ON,
+# never for another provider. ──────────────────────────────────────────
 
-def test_ac8_set_sync_never_calls_the_backlog_pushers():
+def test_ac8_switch_sweep_is_edge_triggered_and_github_only():
     src = (_SERVICE_ROOT / "prism_service" / "api"
           / "integrations_connect.py").read_text(encoding="utf-8")
     start = src.index("def set_sync")
     end = src.index("\ndef ", start + 1)
     body = src[start:end]
+    # The raw pushers must still never be called inline from set_sync —
+    # the ONLY reachable path is the guarded sweep helper.
     for forbidden in ("push_task_creation(", "scan_active_tasks("):
         assert forbidden not in body, (
-            f"set_sync calls {forbidden} — flipping the switch must never "
-            "itself push the backlog (shared-contract clause 5)")
+            f"set_sync calls {forbidden} inline — the backlog push must go "
+            "through _fire_backlog_sweep's edge/provider guard only")
+    guard = re.search(
+        r'if provider == "github" and not was_enabled and enabled:\s*\n'
+        r'\s*_fire_backlog_sweep\(', body)
+    assert guard, (
+        "set_sync must fire _fire_backlog_sweep ONLY behind the "
+        'github-only False->True edge guard (epic 02672417 AC-4/AC-7/AC-11)')

@@ -559,3 +559,39 @@ def scan_active_tasks(rows) -> PushScanReport:
         else:
             report.skipped_other_status.append(task_id)
     return report
+
+
+# The sweep itself (task 02672417, GAP-A): the ONLY caller allowed to reach
+# GitHub for more than one task at a time. Classifies with scan_active_tasks
+# (no new eligibility logic), then pushes each would-create id through
+# push_task_creation one at a time — every guard (sync switch, ACTIVE_
+# STATUSES, active_links, adapter, outbox) already lives there. The caller
+# (integrations_connect.set_sync) is what makes this edge-triggered
+# (False->True only); ``limit`` is this function's own structural cap so a
+# flip can never balloon the repo (AC-9), independent of the caller.
+BACKLOG_SWEEP_LIMIT = 25
+
+
+def push_active_backlog(
+    store, outbox, registry, sync_enabled_fn,
+    workspace_id: str, tasks, provider: str = "github",
+    assignee: str = "", limit: int = BACKLOG_SWEEP_LIMIT,
+) -> list:
+    """Push pre-existing ACTIVE ``tasks`` (Task objects with .id/.status/
+    .title/.description) toward ``provider``, capped at ``limit``. Returns
+    the list of PushCreateResult, one per task actually attempted."""
+    links = store.list_links(workspace_id)
+    linked_ids = {l.task_id for l in links if l.state == "active"}
+    rows = [(t.id, t.status, t.id in linked_ids) for t in tasks]
+    report = scan_active_tasks(rows)
+
+    by_id = {t.id: t for t in tasks}
+    results = []
+    for task_id in report.would_create[:limit]:
+        task = by_id[task_id]
+        results.append(push_task_creation(
+            store, outbox, registry, sync_enabled_fn, workspace_id,
+            task_id, task.status, title=task.title,
+            body=task.description or "", assignee=assignee,
+            provider=provider))
+    return results

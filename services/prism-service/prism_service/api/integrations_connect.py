@@ -522,20 +522,76 @@ def push_backlog(provider: str, body: PushBacklogBody,
 
 
 @router.put("/{provider}/sync")
-def set_sync(provider: str, body: SyncBody,
+def set_sync(provider: str, body: SyncBody, project: str = Query("prism"),
              principal: Principal = Depends(current_principal)) -> dict:
     """Turn syncing with a provider on or off.
 
     Separate from connecting on purpose (owner 2026-07-28): a working
     credential must never imply consent to sync. Turning this off leaves the
     connection intact.
+
+    Task 02672417 (AC-2/AC-4): flipping GitHub's switch False->True is what
+    starts the outbound push of the pre-existing ACTIVE backlog, ASSIGNED to
+    the connected account. Edge-triggered only (AC-7): an ON->ON write (the
+    common case — re-loading Settings re-PUTs the current value) must never
+    re-fire it. github-only by literal provider check (AC-11): jira is
+    unaffected even though it shares this same endpoint shape.
     """
     principal = coerce_principal(principal)
     if provider not in PROVIDERS and provider != "claude":
         raise HTTPException(404, "unknown provider")
     scope = personal_scope(principal)
-    enabled = get_sync_preferences().set_enabled(scope, provider, body.enabled)
+    prefs = get_sync_preferences()
+    was_enabled = prefs.enabled(scope, provider)
+    enabled = prefs.set_enabled(scope, provider, body.enabled)
+
+    if provider == "github" and not was_enabled and enabled:
+        _fire_backlog_sweep(scope, project)
+
     return {"provider": provider, "sync_enabled": enabled}
+
+
+def _fire_backlog_sweep(scope: str, project: str) -> None:
+    """push_active_backlog (work_item_sync.py) does the real work; this only
+    supplies the candidate tasks and the assignee.
+
+    The TaskService lookup and task snapshot are resolved HERE, synchronously
+    on the request thread — the same, already-safe pattern every other route
+    on this router uses (push_task, run_sync). Deferring that resolution
+    into the spawned thread raced project_context's process-global cache
+    against a concurrent foreground caller (e.g. /sync/run) creating the
+    SAME sqlite-backed TaskService at the same moment: two threads issuing
+    CREATE TABLE on a fresh db file at once, "database is locked"
+    (regression caught by test_ac9_neighbouring_suites_stay_green_together
+    on test_pull_issues_into_tasks.py). Only the actual GitHub network I/O
+    (push_active_backlog) now runs off the request thread, so the switch's
+    own click still never blocks on a slow provider; never raises into the
+    caller, mirroring task_mirror.py's "never raises, never blocks"
+    discipline."""
+    import threading
+
+    from prism_service import project_context
+    from prism_service.services.github_cli_auth import get_cli_credentials
+
+    svc = project_context.get_project(project).task_svc
+    tasks = svc.list()
+    account = get_cli_credentials().status().get("account", "")
+
+    def _run() -> None:
+        try:
+            from prism_service.api.integrations import _adapters
+            from prism_service.services.integration_outbox import get_outbox
+            from prism_service.services.work_item_sync import (
+                push_active_backlog)
+
+            push_active_backlog(
+                get_integration_store(), get_outbox(), _adapters,
+                get_sync_preferences().enabled, scope, tasks,
+                provider="github", assignee=account)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 @router.get("/status")

@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.20"
+PRISM_VERSION = "7.10.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.21: FLIPPING THE SYNC SWITCH ON PUSHES THE BACKLOG, AND THE TASK "
+    "DETAIL PAGE SHOWS THE COUNTERPART [task 02672417]. Two gaps in the "
+    "two-way mirror. (1) PUT .../{provider}/sync False->True now sweeps "
+    "pre-existing ACTIVE tasks to GitHub, ASSIGNED to the connected account "
+    "(work_item_sync.push_active_backlog, reusing push_task_creation's own "
+    "guards entirely) - edge-triggered only (never re-fires ON->ON), capped "
+    "at 25 per flip, github-only (jira untouched). (2) GET /api/tasks/{id} "
+    "now carries a 'mirror' key (provider/issue/url/last_synced) for BOTH "
+    "an imported task and an outbound-created native task - no schema "
+    "change needed, ExternalEntity.url/last_seen_at already existed. "
+    "TaskDetailPage's counterpart block is keyed on task.mirror instead of "
+    "the tags.includes(\"external\") gate that made every outbound-created "
+    "task invisible, and the dead task.external_url field is retired.\n"
     "v7.10.20: PUSH YOUR EXISTING BACKLOG TO GITHUB [task 733af05f]. "
     "scan_active_tasks and push_task_creation existed but nothing swept the "
     "pre-existing backlog: POST /api/integrations/connect/{provider}/"
