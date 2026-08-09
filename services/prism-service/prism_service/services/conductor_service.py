@@ -2006,8 +2006,7 @@ class ConductorService:
             return None
         # Epics stay with a human: their roll-up verdict reads children.
         try:
-            if any(_task_attr(c, "parent_id", "") == task_id
-                   for c in self._task_svc.list()):
+            if self._task_svc.list(parent_id=task_id):
                 return None
         except Exception:
             return None
@@ -3318,8 +3317,7 @@ class ConductorService:
         rollup_reason = ""
         rollup_has_children = False
         if gate_step_id == "green_gate":
-            _kids = [c for c in self._task_svc.list()
-                     if _task_attr(c, "parent_id", "") == task_id]
+            _kids = list(self._task_svc.list(parent_id=task_id))
             rollup_has_children = bool(_kids)
             if _kids:
                 rollup_ok, rollup_reason = epic_rollup_verdict(_kids)
@@ -3681,8 +3679,7 @@ class ConductorService:
             # open children. Append the conditional advisory and set the field
             # truthfully (True only when the outcome is actually mapped).
             try:
-                _children = [c for c in self._task_svc.list()
-                             if c.parent_id == task_id]
+                _children = self._task_svc.list(parent_id=task_id)
                 _incomplete = sum(1 for c in _children
                                   if c.status not in ("done", "cancelled"))
             except Exception:
@@ -4234,19 +4231,17 @@ class ConductorService:
         Falls back to a positive constant when there is no history yet."""
         if self._task_svc is None:
             return self._TYPICAL_S_FALLBACK
+        # ONE query for every advance_task row (task-detail perf, 2026-08-07).
+        # This walked list() and then history() PER TASK — 458 queries — to
+        # compute a PROJECT-WIDE median that does not depend on the task being
+        # rendered, on every GET /api/tasks/{id}. Same rows, same median.
         try:
-            tasks = self._task_svc.list()
+            by_task = self._task_svc.advance_rows_all()
         except Exception:
             return self._TYPICAL_S_FALLBACK
         gaps: list[float] = []
-        for t in tasks:
-            try:
-                rows = self._task_svc.history(t.id)
-            except Exception:
-                continue
-            advs = [self._parse_iso(getattr(r, "timestamp", "") or "")
-                    for r in rows
-                    if getattr(r, "action", "") == "advance_task"]
+        for rows in by_task.values():
+            advs = [self._parse_iso(ts) for ts, _details in rows]
             advs = [a for a in advs if a is not None]
             for a, b in zip(advs, advs[1:]):
                 if b > a:
@@ -4269,22 +4264,18 @@ class ConductorService:
         counts: dict = {}
         if self._task_svc is None:
             return out, counts
+        # ONE query instead of list()-then-history()-per-task — see
+        # _median_step_s. Identical rows, identical per-step medians.
         try:
-            tasks = self._task_svc.list()
+            by_task = self._task_svc.advance_rows_all()
         except Exception:
             return out, counts
         buckets: dict = {}
-        for t in tasks:
-            try:
-                rows = self._task_svc.history(t.id)
-            except Exception:
-                continue
+        for rows in by_task.values():
             advs = []
-            for r in rows:
-                if getattr(r, "action", "") != "advance_task":
-                    continue
-                ts = self._parse_iso(getattr(r, "timestamp", "") or "")
-                m = _re.search(r"to=(\w+)", getattr(r, "details", "") or "")
+            for ts_raw, details in rows:
+                ts = self._parse_iso(ts_raw)
+                m = _re.search(r"to=(\w+)", details or "")
                 if ts is not None and m:
                     advs.append((ts, m.group(1)))
             for (a_ts, a_step), (b_ts, _b) in zip(advs, advs[1:]):
@@ -4401,23 +4392,24 @@ class ConductorService:
         children_total = 0
         if self._task_svc is not None:
             try:
-                for t in self._task_svc.list():
-                    if (getattr(t, "parent_id", "") or "") == task_id:
-                        st = (getattr(t, "status", "") or "")
-                        # CANCELLED children (e.g. the implement workflow's
-                        # disposable ephemeral-fixture tasks) are abandoned, not
-                        # pending work — counting them in the denominator dragged
-                        # a green-gated parent's tile to 0% (task 7bdb5701).
-                        # DELETED children are the same kind of abandoned row —
-                        # excluded here to match _child_task_ids and keep the
-                        # tile's N/M agreeing with epic_rollup_verdict's own
-                        # active-child count (both must reach the same verdict
-                        # about the same epic).
-                        if st in ("cancelled", "deleted"):
-                            continue
-                        children_total += 1
-                        if st == "done":
-                            children_done += 1
+                # parent_id-scoped (idx_tasks_parent) — same rows as the old
+                # full-table load + Python filter, without the 458-row read.
+                for t in self._task_svc.list(parent_id=task_id):
+                    st = (getattr(t, "status", "") or "")
+                    # CANCELLED children (e.g. the implement workflow's
+                    # disposable ephemeral-fixture tasks) are abandoned, not
+                    # pending work — counting them in the denominator dragged
+                    # a green-gated parent's tile to 0% (task 7bdb5701).
+                    # DELETED children are the same kind of abandoned row —
+                    # excluded here to match _child_task_ids and keep the
+                    # tile's N/M agreeing with epic_rollup_verdict's own
+                    # active-child count (both must reach the same verdict
+                    # about the same epic).
+                    if st in ("cancelled", "deleted"):
+                        continue
+                    children_total += 1
+                    if st == "done":
+                        children_done += 1
             except Exception:
                 children_total = 0
 
@@ -4607,10 +4599,11 @@ class ConductorService:
         if self._task_svc is None or not task_id:
             return []
         try:
+            # parent_id-scoped so this plans onto idx_tasks_parent (0.1ms)
+            # instead of loading all 458 rows and filtering in Python (26ms).
             return [str(getattr(c, "id", "") or "")
-                    for c in self._task_svc.list()
-                    if str(getattr(c, "parent_id", "") or "") == task_id
-                    and str(getattr(c, "status", "")) not in (
+                    for c in self._task_svc.list(parent_id=task_id)
+                    if str(getattr(c, "status", "")) not in (
                         "cancelled", "deleted")]
         except Exception:
             return []
@@ -4642,9 +4635,8 @@ class ConductorService:
         # for hours while its slices are actively getting done underneath it.
         if self._task_svc is not None and tid:
             try:
-                for c in self._task_svc.list():
-                    if (getattr(c, "parent_id", "") or "") != tid:
-                        continue
+                # parent_id-scoped (idx_tasks_parent), same rows as before.
+                for c in self._task_svc.list(parent_id=tid):
                     for fld in ("completed_at", "updated_at"):
                         ts = self._parse_iso(getattr(c, fld, "") or "")
                         if ts is not None and (latest is None or ts > latest):
@@ -4663,9 +4655,9 @@ class ConductorService:
         if self._task_svc is None or not tid:
             return []
         try:
-            return [c for c in self._task_svc.list()
-                    if (getattr(c, "parent_id", "") or "") == tid
-                    and (getattr(c, "status", "") or "") != "cancelled"]
+            # parent_id-scoped (idx_tasks_parent), same rows as before.
+            return [c for c in self._task_svc.list(parent_id=tid)
+                    if (getattr(c, "status", "") or "") != "cancelled"]
         except Exception:
             return []
 

@@ -483,6 +483,26 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.watchdog import start_watchdog
         start_watchdog()
 
+        # Absorb the transcript-index cold scan at boot instead of on a task
+        # page (2026-08-07). The per-turn token attribution on
+        # GET /api/tasks/{id} merges every transcript the project has — 819
+        # files / 477MB here, ~4s the first time — so whichever request landed
+        # first wore it, which is what made the first task page opened after a
+        # bounce take 10s. Background threads, best-effort: a failure just
+        # means the index builds lazily on first use, exactly as before.
+        try:
+            from prism_service.project_context import get_all_projects
+            from prism_service.services.claude_transcripts import (
+                _project_source_path, warm_project_event_index,
+            )
+            for _proj in get_all_projects():
+                try:
+                    warm_project_event_index(_project_source_path(_proj) or "")
+                except Exception:
+                    pass
+        except Exception:
+            _log.debug("transcript index warm skipped", exc_info=True)
+
         # Task 1d3322a6 (owner 2026-07-15) — the machine adjudicator seat.
         # Sweeps PENDING green_gates and approves on a fresh passing
         # EvidenceReceipt as 'conductor-adjudicator'; runs the oracle itself
