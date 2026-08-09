@@ -721,7 +721,10 @@ TOOLS: list[Tool] = [
         ),
         inputSchema={"type": "object", "properties": {
             "section": {"type": "string", "description":
-                "Optional: 'overview' | 'tools' | 'workflow' | 'orchestration' "
+                "Optional: 'overview' | 'tools' | 'workflow' | 'conductor' "
+                "(READ BEFORE DRIVING A TASK: the conductor_work loop, the two "
+                "human gates, evidence freshness, why override cannot skip the "
+                "oracle, and filing follow-ups as subtasks) | 'orchestration' "
                 "(the epic fan-out playbook) | 'memory' | 'graph' | 'examples'. "
                 "Omit for the full guide."},
         }},
@@ -1151,7 +1154,11 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="task_next",
-        description="Get the next highest-priority unblocked task to work on",
+        description=(
+            "Get the next unblocked task to work on. The queue is FIFO: the "
+            "OLDEST-created unblocked pending task comes out first, and "
+            "priority only breaks a tie between identical timestamps."
+        ),
         inputSchema={
             "type": "object",
             "properties": {},
@@ -1418,7 +1425,8 @@ TOOLS: list[Tool] = [
                     "type": "string",
                     "description": (
                         "Task ID to work. Omit to let the server pull the "
-                        "next highest-priority unblocked task (kickoff)."
+                        "next unblocked task off the FIFO queue, oldest "
+                        "created first (kickoff)."
                     ),
                 },
                 "outcome": {
@@ -2013,7 +2021,7 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
   — filtered list. `parent_id="<epic>"` scopes to one epic's children (or `""`
   for roots) so a big board doesn't blow the token budget; `fields=[...]`
   projects each row to just those keys.
-- `task_next()` — highest-priority unblocked task.
+- `task_next()` — oldest unblocked task (the queue is FIFO).
 - `task_update(id, status?, priority?, tags?, assigned_agent?, blocked_reason?,
   oracle?, proof_type?, completion_proof?)` — mutate. Set `proof_type`
   (test|metric|artifact|demo|…) to pick the gate's oracle shape; `test` is the
@@ -2064,6 +2072,62 @@ as navigable OKF concepts. Read-only; never writes brain.db / graph.db.
    `graph_rebuild()` once after the batch.
 6. **Track progress** — `task_update(status=...)`. `task_next` for the
    next unblocked item.
+""",
+    "conductor": """\
+# Working a task through the conductor (READ BEFORE DRIVING)
+
+## The loop — one verb
+    job = conductor_work()                  # omit id -> server picks next
+    while not job["done"]:
+        # do EXACTLY job["instructions"], produce job["expected_proof"]
+        job = conductor_work(id=job["task_id"], outcome="pass", proof=...)
+The server owns the step sequence. Never name a step, never hand-drive, and
+never clear a gate you produced — a gate needs a DISTINCT actor.
+
+## Exactly two human stops
+`plan_gate` (approve the plan) and `green_gate` (approve the final state).
+`red_gate` belongs to the machine seat; routing it to a human is a DEFECT to
+fix, never a click to request. A red test is always your fault, never
+"pre-existing".
+
+## Evidence freshness — the #1 cause of a stuck owner
+An EvidenceReceipt is pinned to the task worktree's `tree_sha`. ANY commit
+after the mint invalidates it, including a correct fix. So RE-MINT IN THE SAME
+BREATH as the commit:
+    POST /api/conductor/gate/mint  {"task_id": "..."}      # seconds, not minutes
+Before telling anyone a gate is clear, verify it yourself: the newest receipt's
+`tree_sha` in `data/projects/<proj>/receipts/<task_id>.jsonl` must equal
+`git -C <task worktree> rev-parse HEAD`.
+
+## `readiness` is NOT the decider
+`GET /api/conductor/gate/readiness` is a SEPARATE implementation from
+`gate_decide` and the two can disagree. Readiness has said `receipt_ok:true,
+"Approve to release"` while the decider refused the same gate on a stale
+receipt. Never tell a human "your Approve is clean" on readiness alone —
+check the receipt against HEAD as above. (Stored fields are worse still:
+`task.gate_reason` and `task.workflow_step` are snapshots that go stale the
+moment a drive rewrites its artifact.)
+
+## Override CANNOT skip the oracle
+`gate_decide` re-runs the oracle check even when `override=True`; it forgives
+only a literal `manual_evidence_required` reason backed by a matching manual
+receipt. So against a stale receipt, ticking Override can NEVER succeed no
+matter what is typed, and the refused attempt can drive the gate to `failed`.
+The correct advice to a stuck human is ALWAYS: re-run the oracle, then Approve
+with override UNTICKED. Never "tick override".
+
+## Filing follow-ups — subtasks, not new roots
+Friction, defects and gaps found WHILE driving are CHILDREN of the ticket that
+surfaced them: `task_create(..., parent_id=<originating task>)`. Only work the
+owner actually asked for is a root task. Otherwise the board becomes a wall of
+near-duplicate tickets nobody triages. SEARCH FIRST — `task_list` +
+`brain_search` — the board very often already owns the defect you just
+rediscovered.
+
+## Never close a task without the owner's express permission
+Stop at a validated `green_gate` so they can inspect the evidence. `proof_type`
+`demo`/`review` green gates are human-only by design; do not flip `proof_type`,
+add a loadable URL, or reach for override to "unblock" one.
 """,
     "memory": """\
 # Memory — the killer feature for coding agents
@@ -2296,8 +2360,8 @@ _GUIDE_SECTIONS["roles"] = _roles_guide_section()
 
 
 def _prism_guide(section: str | None) -> str:
-    order = ["overview", "tools", "workflow", "orchestration", "memory",
-             "graph", "roles", "examples"]
+    order = ["overview", "tools", "workflow", "conductor", "orchestration",
+             "memory", "graph", "roles", "examples"]
     if section and section in _GUIDE_SECTIONS:
         return _GUIDE_SECTIONS[section]
     return "\n\n".join(_GUIDE_SECTIONS[s] for s in order)

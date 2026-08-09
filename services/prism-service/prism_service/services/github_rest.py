@@ -163,20 +163,3 @@ class GithubRestClient:
             f"/repos/{_repo_path(connection, container)}/issues",
             token, payload)
 
-    def create_comment(self, connection, container, number: int, body: str,
-                       token: str) -> dict:
-        """POST a comment onto an issue. GitHub serves PR comments through
-        this same issues path, so this also works for mirrored pull requests.
-        Used by the collaboration adapter to publish a decision card (epic
-        0784729f: github_collab.py)."""
-        return self._post(
-            f"/repos/{_repo_path(connection, container)}/issues/{number}/comments",
-            token, {"body": body})
-
-    def issue_comments(self, connection, container, number: int,
-                       token: str) -> list:
-        """GET the comments on an issue, oldest first (GitHub's default
-        order), so the collaboration adapter can read decisions back."""
-        return self._get(
-            f"/repos/{_repo_path(connection, container)}/issues/{number}/comments",
-            token, {"per_page": _PER_PAGE}) or []

@@ -835,6 +835,11 @@ export default function TaskDetailPage() {
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
+  // Who is signing. A design-packet approval is only valid as an EXPLICIT
+  // owner action (design_packet._ALLOWED_METHODS = {"owner_explicit"}), so the
+  // Approve click has to carry a real approver identity, same source as the
+  // header chip.
+  const [approverName, setApproverName] = useState("");
   // Last ↻ re-run outcome, rendered INLINE in the evidence table (owner
   // 2026-07-16: a silent corner toast reads as "the button does not work" —
   // the result must appear where the click happened).
@@ -888,11 +893,24 @@ export default function TaskDetailPage() {
     gateVerdict === "ready" &&
     !!gateReadiness?.manual_review &&
     gateReadiness?.receipt?.adapter === "human";
+  // SIBLING CASE (owner 2026-08-07): a design-packet gate carries receipt_ok
+  // =false until the owner SIGNS it — that is "awaiting your signature", NOT
+  // "evidence not on file". Falling through to the blocked headline told the
+  // owner a plan_gate holding a 21k-char plan_doc + diagram + prototype had
+  // captured nothing, and then demanded an Override to proceed: "if this is a
+  // valid blocked state it should indicate that and allow me to approve".
+  // Keyed on the ADAPTER, never on workflow_step, so the next non-evidence
+  // gate cannot re-inherit the same lie.
+  const isAwaitingDesignApproval =
+    gateVerdict !== "ready" &&
+    gateReadiness?.receipt?.adapter === "design-packet";
   // Calm-but-not-a-pass tone (owner: awaiting-review is a normal, correct
   // state — it must never read as alarming/failed, and must never be
   // visually indistinguishable from a real pass).
   const bannerTone: "sage" | "amber" | "rose" =
-    gateVerdict !== "ready" ? "rose" : isAwaitingReview ? "amber" : "sage";
+    isAwaitingDesignApproval ? "amber"
+      : gateVerdict !== "ready" ? "rose"
+        : isAwaitingReview ? "amber" : "sage";
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
   const [tabRequest, setTabRequest] = useState<{ tab: string; n: number } | null>(null);
@@ -1015,6 +1033,12 @@ export default function TaskDetailPage() {
           `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
         if (!cancelled) setGateReadiness(gr);
       } catch { if (!cancelled) setGateReadiness(null); }
+    })();
+    (async () => {
+      try {
+        const me = await api.get<{ user?: { email: string; display_name: string } }>("/api/auth/me");
+        if (!cancelled) setApproverName(me.user?.display_name || me.user?.email || "");
+      } catch { if (!cancelled) setApproverName(""); }
     })();
     (async () => {
       try {
@@ -1274,6 +1298,17 @@ export default function TaskDetailPage() {
         : "running the machine check — this takes up to a few minutes; stay on this page…",
     });
     try {
+      // A design-packet gate is not "blocked", it is UNSIGNED — and the only
+      // thing that records the signature is the packet-approve route (the sole
+      // caller of design_packet.record_approval). Approving from the gate card
+      // used to be impossible without ticking Override, which asked the owner
+      // to bypass a verifier for a decision that was legitimately theirs to
+      // make (owner 2026-08-07: "if this is a valid approval i should not have
+      // to override"). Sign first, then let the normal gate decision run.
+      if (action === "approve" && isAwaitingDesignApproval) {
+        await api.post(`/api/conductor/design-packet/approve?project=${project}`,
+                       { task_id: id, approver: approverName || "owner" });
+      }
       const r = await fetch(`/api/conductor/gate?project=${project}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1545,14 +1580,18 @@ export default function TaskDetailPage() {
             title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
           >
             <span className="font-semibold">
-              ● {gateVerdict === "ready"
-                  ? (isAwaitingReview
-                      ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
-                      : "READY · evidence passing")
-                  : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
+              ● {isAwaitingDesignApproval
+                  ? "AWAITING YOUR APPROVAL · the design packet is ready to sign"
+                  : gateVerdict === "ready"
+                    ? (isAwaitingReview
+                        ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
+                        : "READY · evidence passing")
+                    : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
-              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence below"}
+              {stepLabel(task.workflow_step ?? "gate")} · {isAwaitingDesignApproval
+                ? "sign it on the Design tab — no override needed"
+                : gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence below"}
               <span className="ml-2">{gatePanelOpen ? "▾" : "▸"}</span>
             </span>
           </button>
@@ -1821,10 +1860,10 @@ export default function TaskDetailPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
                     type="button"
-                    disabled={busy || (gateVerdict !== "ready" && !gateOverride) || (gateOverride && !gateReason.trim())}
+                    disabled={busy || (gateVerdict !== "ready" && !gateOverride && !isAwaitingDesignApproval) || (gateOverride && !gateReason.trim())}
                     onClick={() => gateDecide("approve")}
                     className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
-                    style={gateVerdict === "ready" || gateOverride
+                    style={gateVerdict === "ready" || gateOverride || isAwaitingDesignApproval
                       ? { background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }
                       : { color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
                   >
@@ -1842,11 +1881,13 @@ export default function TaskDetailPage() {
                     </button>
                   )}
                   <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
-                    {gateVerdict === "ready"
-                      ? "Ready: Approve records your decision; the machine check runs first."
-                      : gateOverride
-                        ? "Override armed: Approve releases on your judgment (audited)."
-                        : "Blocked: tick override to recover, or fix the evidence and re-run."}
+                    {isAwaitingDesignApproval
+                      ? "Awaiting your signature: sign the packet on the Design tab. This is not a failure and needs no override."
+                      : gateVerdict === "ready"
+                        ? "Ready: Approve records your decision; the machine check runs first."
+                        : gateOverride
+                          ? "Override armed: Approve releases on your judgment (audited)."
+                          : "Blocked: tick override to recover, or fix the evidence and re-run."}
                   </span>
                 </div>
               </div>

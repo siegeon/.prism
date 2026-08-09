@@ -28,10 +28,12 @@ Public surface:
 
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import re
 import sqlite3
+import threading
 from prism_service.services import sqlite_db
 import sys
 import time
@@ -1400,38 +1402,117 @@ def project_token_events_in_window(
     when no authoritative linked-session events exist. [] when none match.
 
     `override_dir` (v6.3.21): when set, bucket every <override_dir>/**/*.jsonl
-    transcript directly instead of slug-scanning ~/.claude/projects."""
+    transcript directly instead of slug-scanning ~/.claude/projects.
+
+    SERVED FROM A SHORT-TTL MERGED INDEX (task-detail perf, 2026-08-07). This
+    is the hot path of GET /api/tasks/{id}: essentially no task is
+    link_session'd, so every task page fell through to here, and "prune by
+    mtime then filter" still had to WALK the tree first — 819 transcript files
+    / 477MB for this project, re-globbed and re-statted on every single
+    request (~190ms), to return zero events for most tasks. The per-file
+    parse was never the problem (18ms warm, cached on (mtime,size) by
+    _token_events); the repeated filesystem walk was. So the merged, sorted
+    project timeline is memoised for _PROJECT_EVENTS_TTL_S and answered with
+    a binary search. Steady-state cost is a bisect on one list.
+
+    The TTL is deliberate rather than a file-signature check: revalidating
+    the signature means re-walking the tree, which is the exact cost being
+    removed. A few seconds of staleness is correct for this caller — it is a
+    best-effort wall-clock ATTRIBUTION for a display, explicitly documented
+    above as unable to tell two tasks apart in the same window, and live
+    per-turn spend has its own authoritative path
+    (live_token_events_for_session, which is not memoised)."""
     if until <= since:
         return []
-    out: list[tuple[float, int]] = []
+    merged = _project_event_index(project_path, claude_home, override_dir)
+    if not merged:
+        return []
+    # Tuples compare elementwise, so (since,) sorts before any (since, tok)
+    # and (until, inf) after any (until, tok) — an inclusive [since, until]
+    # window, matching the previous filter exactly.
+    lo = bisect.bisect_left(merged, (since,))
+    hi = bisect.bisect_right(merged, (until, float("inf")))
+    return merged[lo:hi]
 
-    def _bucket(f: Path) -> None:
-        try:
-            if f.stat().st_mtime < since:
-                return
-        except OSError:
-            return
-        out.extend((ep, tok) for ep, tok in _token_events(f) if since <= ep <= until)
 
-    if override_dir and override_dir.strip():
-        d = Path(override_dir.strip())
-        if d.is_dir():
-            for f in d.rglob("*.jsonl"):
-                _bucket(f)
+# Merged per-project transcript timeline: key -> (built_at, sorted events).
+_PROJECT_EVENTS_MEMO: dict[str, tuple[float, list[tuple[float, int]]]] = {}
+_PROJECT_EVENTS_TTL_S = 5.0
+_PROJECT_EVENTS_LOCK = threading.Lock()
+_PROJECT_EVENTS_BUILDING: set[str] = set()
+
+
+def _project_event_index(
+    project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> list[tuple[float, int]]:
+    """Every token event for a project, merged and sorted ascending.
+
+    Rebuilt at most once per _PROJECT_EVENTS_TTL_S — see the note in
+    project_token_events_in_window for why the freshness check is time-based
+    rather than a file signature.
+
+    The FIRST build reads every transcript the project has (819 files /
+    477MB here, ~4s cold), so whichever request lands first pays it — that
+    was the 10.5s outlier on the very first task page opened after a daemon
+    bounce. `warm_project_event_index` exists so startup can absorb that on a
+    background thread instead of a user's page load. Kept synchronous here so
+    a caller always gets a complete answer."""
+    od = (override_dir or "").strip()
+    key = f"{od}\x00{project_path or ''}\x00{claude_home or ''}"
+    hit = _PROJECT_EVENTS_MEMO.get(key)
+    if hit is not None and (time.time() - hit[0]) < _PROJECT_EVENTS_TTL_S:
+        return hit[1]
+
+    with _PROJECT_EVENTS_LOCK:
+        # Re-check under the lock: a concurrent caller may have just built it.
+        hit = _PROJECT_EVENTS_MEMO.get(key)
+        if hit is not None and (time.time() - hit[0]) < _PROJECT_EVENTS_TTL_S:
+            return hit[1]
+        out: list[tuple[float, int]] = []
+        for f in _project_transcript_files(project_path, claude_home, od):
+            out.extend(_token_events(f))
         out.sort(key=lambda e: e[0])
+        _PROJECT_EVENTS_MEMO[key] = (time.time(), out)
         return out
+
+
+def warm_project_event_index(project_path: str) -> None:
+    """Build a project's transcript index on a background thread.
+
+    Called at daemon startup so the ~4s cold scan is absorbed before anyone
+    opens a task page, instead of by whoever opens the first one. Silent and
+    best-effort: on any failure the index simply builds lazily as before."""
+    if not project_path:
+        return
+
+    def _run() -> None:
+        try:
+            _project_event_index(project_path)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=_run, name="prism-transcript-index-warm", daemon=True).start()
+
+
+def _project_transcript_files(
+    project_path: str, claude_home: Path | None, override_dir: str,
+) -> list[Path]:
+    """Every transcript file belonging to a project, including the nested
+    workflow-subagent ones (the recursive walk the old bucket loop did)."""
+    if override_dir:
+        d = Path(override_dir)
+        return sorted(d.rglob("*.jsonl")) if d.is_dir() else []
     if not project_path:
         return []
-    claude_home = claude_home or resolve_claude_home()
-    projects_dir = claude_home / "projects"
+    projects_dir = (claude_home or resolve_claude_home()) / "projects"
     if not projects_dir.is_dir():
         return []
+    out: list[Path] = []
     for sub in projects_dir.iterdir():
-        if not sub.is_dir() or not slug_matches(sub.name, project_path):
-            continue
-        for f in sub.rglob("*.jsonl"):
-            _bucket(f)
-    out.sort(key=lambda e: e[0])
+        if sub.is_dir() and slug_matches(sub.name, project_path):
+            out.extend(sub.rglob("*.jsonl"))
     return out
 
 

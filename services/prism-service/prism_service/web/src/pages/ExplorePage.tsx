@@ -254,8 +254,11 @@ export default function ExplorePage() {
         const stored = window.localStorage.getItem(MESH_FOCUS_KEY);
         if (stored) candidates.push(stored);
         try {
+          // Projected to the four fields this probe actually reads. Unprojected,
+          // this pulled the whole board WITH every plan_doc/story blob — 2.8MB
+          // over the wire to pick one focus node id.
           const { tasks } = await api.get<{ tasks: { id: string; status?: string; updated_at?: string; parent_id?: string }[] }>(
-            `/api/tasks?project=${project}`);
+            `/api/tasks?project=${project}&fields=id,status,updated_at,parent_id`);
           const all = (tasks ?? []).filter((t) => t.id);
           const open = all.filter((t) => (t.status ?? "").toLowerCase() !== "done");
           const newest = (pool: typeof all) => pool.length
