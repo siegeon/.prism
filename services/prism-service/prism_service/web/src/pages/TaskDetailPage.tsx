@@ -1045,7 +1045,8 @@ export default function TaskDetailPage() {
     // so no badge stays a non-observation ("not run") on finished work. The
     // receipt already stamps the pinned-oracle rows instantly; this fills the
     // rest with their real pass/fail (one-shot per task).
-    const atGate = step.endsWith("_gate") && task.status !== "done";
+    const atGate = step.endsWith("_gate") && task.status !== "done" &&
+      task.status !== "cancelled" && task.status !== "archived" && task.status !== "deleted";
     const hasUnverified = pinTests.some((t) => !(t.status && t.status.toLowerCase() !== "not-run"));
     const doneWithGaps = task.status === "done" && pinTests.length > 0 && hasUnverified;
     if (!atGate && !doneWithGaps) return;
@@ -1354,7 +1355,8 @@ export default function TaskDetailPage() {
   const receiptsDiverge = !!testReceipt && !gateReadiness?.receipt;
   // The gate panel OWNS the oracle while a gate is up (stop_if #2: it must not
   // render twice on one page); PlanView keeps it for every other state.
-  const gatePanelOwnsOracle = conductorOn && (task.gate_state === "pending" || task.gate_state === "failed");
+  const gatePanelOwnsOracle = conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") &&
+    task.status !== "cancelled" && task.status !== "archived" && task.status !== "deleted";
   // Repo-relative code paths capped at 8 rows with a "N more" expander.
   const CODE_CAP = 8;
   const codeShown = codeExpanded ? codePaths : codePaths.slice(0, CODE_CAP);
@@ -1527,7 +1529,8 @@ export default function TaskDetailPage() {
           top of Overview (owner 2026-07-14: "these are notifications of the
           task, not just the implementation"). Each is clickable and jumps to
           the view where the action lives (the gate form in Implementation). */}
-      {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") && (
+      {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") &&
+        task.status !== "cancelled" && task.status !== "archived" && task.status !== "deleted" && (
         <div className="rounded-md border overflow-hidden" style={{ borderColor: `var(--accent-${bannerTone}-ring)` }}>
           <button
             type="button"
@@ -1852,6 +1855,45 @@ export default function TaskDetailPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+      {/* Dead-task gate card (task e948008a): a cancelled/archived/deleted
+          task parked at a pending/failed gate renders INERT — the decision
+          is moot, so no Approve/Override/re-run — while evidence and gate
+          history keep rendering read-only via this branch's own smaller
+          projection (never the shared helper above; ordering invariant
+          pinned by test_task_oracle_always_visible_ui.py). Appended AFTER
+          the live branch closes; never hides or unmounts it. */}
+      {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") && (task.status === "cancelled" || task.status === "archived" || task.status === "deleted") && (
+        <div className="rounded-md border overflow-hidden" style={{ borderColor: "var(--border-default)" }}>
+          <div className="w-full text-left px-4 py-3 text-[13px] leading-relaxed" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
+            <span className="text-2xs uppercase tracking-wider font-semibold mr-2">{task.status.toUpperCase()}</span>
+            decision moot — this task is {task.status} and its parked gate is no longer actionable. Evidence below is read-only history.
+          </div>
+          <div className="p-4 space-y-3 text-[12.5px]" style={{ borderTop: "1px solid var(--border-default)" }}>
+            {/* ProofShots self-guards (returns null with no matches) - no
+                wrapping regex test needed here, so this branch never adds a
+                second copy of the visual-evidence detector's unbalanced-
+                paren regex literal (the live branch's copy at ~line 1619
+                already sits inside the file's naive whole-component
+                paren-balance budget; a duplicate tips it negative and
+                strands test_stale_gate_banner_inspect_vs_override.py's
+                _gate_panel_block scan). */}
+            <ProofShots text={task.completion_proof} className="" />
+            {pinTests.length > 0 && (
+              <div className="text-2xs" style={{ color: "var(--text-muted)" }}>
+                pinned tests: {pinTests.filter((t) => (t.status || "").toLowerCase() === "passed").length} / {pinTests.length} passing (last observed)
+              </div>
+            )}
+            {(task.gate_reason || gateEvidenceLines(history).length > 0) && (
+              <div className="space-y-1">
+                {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                {gateEvidenceLines(history).slice(0, 4).map((l, i) => (
+                  <div key={i} className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>• {l}</div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
       {task.status === "blocked" && task.blocked_reason && (

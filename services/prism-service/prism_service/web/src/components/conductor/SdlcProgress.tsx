@@ -85,6 +85,11 @@ function fmtEta(s: number): string {
 // normal condition of a healthy 5-10min step. It now says so plainly.
 export const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   working: { label: "in progress", tone: "teal" },
+  // Heartbeat-attributed liveness (task e3b7ebf6): a step running past both
+  // the 120s transition window and the 90s session-quiet window, with a
+  // fresh task-scoped progress ping. Same non-alarm treatment as `working`
+  // — there is nothing for the owner to do.
+  driving: { label: "driving", tone: "teal" },
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
   adrift: { label: "driver active · between step reports", tone: "teal" },
@@ -146,12 +151,14 @@ export default function SdlcProgress({
     : state === "paused" ? `paused · ${phase?.children_done ?? 0}/${phase?.children_total ?? 0} done`
     : meta.label;
   // "live" = the task is genuinely being DRIVEN right now — a real recent
-  // conductor transition ("working") OR a live linked session mid-step
-  // ("adrift"), NEVER raw in_progress. `adrift` is included because a 5-10min
-  // step crosses no boundary for most of its life, so excluding it rendered a
-  // BUILDING task as motionless (owner 2026-07-21). A `stalled` tile — nothing
-  // driving it at all — must still read as still, not animated.
-  const live = state === "working" || state === "adrift";
+  // conductor transition ("working"), a live linked session mid-step
+  // ("adrift"), OR a fresh task-attributed heartbeat past both those windows
+  // ("driving", task e3b7ebf6), NEVER raw in_progress. `adrift` is included
+  // because a 5-10min step crosses no boundary for most of its life, so
+  // excluding it rendered a BUILDING task as motionless (owner 2026-07-21).
+  // A `stalled` tile — nothing driving it at all — must still read as
+  // still, not animated.
+  const live = state === "working" || state === "adrift" || state === "driving";
 
   // Overall task progress toward DONE: completed steps + current phase
   // fraction. PURE — a function of the server's phase.pct + curIdx only, so
@@ -177,7 +184,7 @@ export default function SdlcProgress({
   // task_motion_s (both server-truth). Before this, the execution clock froze
   // DURING execution while the idle clock ticked beside it on the same line —
   // two clocks disagreeing about the same second (owner 2026-07-21).
-  const counting = state === "working" || state === "adrift";
+  const counting = state === "working" || state === "adrift" || state === "driving";
   const frozenInStep = Math.max(
     0, (phase?.in_step_s ?? 0) - (activity?.task_motion_s ?? 0));
   const [liveInStep, setLiveInStep] = useState(

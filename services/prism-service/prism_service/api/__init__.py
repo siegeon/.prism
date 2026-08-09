@@ -20,6 +20,7 @@ from prism_service.api.consolidation import router as consolidation_router
 from prism_service.api.conductor import router as conductor_router
 from prism_service.api.conductor_flow import router as conductor_flow_router
 from prism_service.api.dashboard import router as dashboard_router
+from prism_service.api.drive_heartbeat import router as drive_heartbeat_router
 from prism_service.api.github_auth import router as github_auth_router
 from prism_service.api.graph import router as graph_router
 from prism_service.api.inbox import router as inbox_router
@@ -55,6 +56,7 @@ api_router.include_router(consolidation_router, prefix="/consolidation", tags=["
 api_router.include_router(conductor_router, prefix="/conductor", tags=["conductor"])
 api_router.include_router(conductor_flow_router, prefix="/conductor/flow", tags=["conductor-flow"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(drive_heartbeat_router, prefix="/drive-heartbeat", tags=["drive-heartbeat"])
 api_router.include_router(github_auth_router, prefix="/github-auth", tags=["github-auth"])
 api_router.include_router(graph_router, prefix="/graph", tags=["graph"])
 api_router.include_router(inbox_router, prefix="/inbox", tags=["inbox"])

@@ -175,6 +175,18 @@ def _mirror_url(description: str) -> str:
     return m.group(1) if m else ""
 
 
+# artifact_url (task 3c1a326b): turns the has_prototype boolean (below, and
+# get_task's out["has_prototype"]) into a GET-able URL string so an API/agent
+# consumer with no repo access can discover the existing prototype route from
+# the wire payload alone. Same best-effort, never-raise semantics as
+# has_prototype - a broken disk check must not break the detail/list route.
+def _artifact_url(task_id: str) -> Optional[str]:
+    try:
+        return f"/api/tasks/{task_id}/prototype" if prototype_file(task_id).exists() else None
+    except Exception:
+        return None
+
+
 @router.get("")
 def list_tasks(project: str = Query("default"),
               include_deleted: bool = Query(False),
@@ -202,7 +214,12 @@ def list_tasks(project: str = Query("default"),
         for t in tasks:
             row = {}
             for f in field_list:
-                row[f] = _mirror_url(getattr(t, "description", "") or "") if f == "mirror_url" else getattr(t, f, None)
+                if f == "mirror_url":
+                    row[f] = _mirror_url(getattr(t, "description", "") or "")
+                elif f == "artifact_url":
+                    row[f] = _artifact_url(getattr(t, "id", ""))
+                else:
+                    row[f] = getattr(t, f, None)
             rows.append(row)
         return {"tasks": rows}
     return {"tasks": tasks}
@@ -538,6 +555,10 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
         out["has_prototype"] = prototype_file(task_id).exists()
     except Exception:
         out["has_prototype"] = False
+    # artifact_url: the same fact as has_prototype, expressed as a GET-able
+    # URL string (see _artifact_url above) - additive, has_prototype is
+    # unchanged.
+    out["artifact_url"] = _artifact_url(task_id)
     return out
 
 
