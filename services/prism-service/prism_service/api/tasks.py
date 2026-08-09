@@ -9,10 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from prism_service.api.auth import authorize_project_request
+from prism_service.api.auth import authorize_project_request, coerce_principal, current_principal
+from prism_service.api.integrations_connect import personal_scope
 from prism_service.data_dir import evidence_dir, prototype_file
+from prism_service.models.workspace import Principal
 from prism_service.project_context import get_project
 from prism_service.services.actor_service import get_actor_service
+from prism_service.services.integration_store import get_integration_store
 from prism_service.services.task_service import SESSION_GATE_FIX
 
 router = APIRouter(dependencies=[Depends(authorize_project_request)])
@@ -479,8 +482,39 @@ def _build_timeline(history: list, sessions: list) -> dict:
             "lanes": lanes, "gates": gates}
 
 
+def _mirror_for_task(task_id: str, principal: Principal) -> Optional[dict]:
+    """The task's real counterpart (task a7c989c6, epic 02672417 shared
+    contract): the ACTIVE WorkItemExternalLink for this task, resolved
+    through the one lookup both sides of the mirror use — never a new
+    table/column. `None` on no active link OR any store problem; a resolver
+    failure here must never break the task-detail route (same defensive
+    shape as the actor-identity block above)."""
+    try:
+        scope = personal_scope(coerce_principal(principal))
+        store = get_integration_store()
+        links = store.list_links(scope, task_id=task_id)
+        active = next((link for link in links if link.state == "active"), None)
+        if active is None:
+            return None
+        entity = store.get_entity(scope, active.entity_id)
+        if entity is None:
+            return None
+        conn = store.get_connection(scope, entity.connection_id)
+        provider = conn.provider if conn is not None else ""
+        return {
+            "provider": provider,
+            "issue": entity.display_key or entity.remote_id,
+            "url": entity.url,
+            "last_synced_at": entity.last_seen_at,
+            "state": active.state,
+        }
+    except Exception:
+        return None
+
+
 @router.get("/{task_id}")
-def get_task(task_id: str, project: str = Query("default")) -> dict:
+def get_task(task_id: str, project: str = Query("default"),
+             principal: Principal = Depends(current_principal)) -> dict:
     svc = _svc(project)
     t = svc.get(task_id)
     if not t:
@@ -514,6 +548,7 @@ def get_task(task_id: str, project: str = Query("default")) -> dict:
         "task": t,
         "history": history,
         "sessions": svc.sessions_for_task(task_id),
+        "mirror": _mirror_for_task(task_id, principal),
     }
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
     # (prev, this] wall-clock window) onto the history rows. Best-effort.
