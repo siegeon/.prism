@@ -265,6 +265,23 @@ function telemetryInstr(stepId, role) {
   return `\n\nTELEMETRY (step contract - REQUIRED LAST ACTION): POST your agent-run row with Bash curl (use 127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/agent-runs/ingest?project=prism' -H 'Content-Type: application/json' -d '<ROW>'\` where <ROW> is the JSON object {"run_id":"${RUN_ID}","workflow_name":"implement","task_id":"${tid}","session_id":"${SID}","agent_id":"${RUN_ID}:${stepId}","role":"${role}","step":"${stepId}","ok":<your step ok, true|false>,"verdict_summary":"<one-line validation/evidence summary>"}. The response must be {"ok":true,...} - quote that receipt in evidence. A failed POST is non-fatal: note it and continue (timing is stamped server-side on ingest).\n\nDO NOT add a "gate_state" field to that row, and NEVER send "gate_state":"passed". You are a PRODUCING actor: the gate state belongs to the conductor, and a producer POSTing a passing gate state into the audit spine is self-approval by another route - the exact hole task 682b7e48 exists to close, and it trips the self-approval classifier. Telemetry records what YOU did, never a verdict.`
 }
 
+// -- Drive-liveness heartbeat (task e3b7ebf6) -----------------------------
+// telemetryInstr fires ONCE, at step end - useless for a step that runs
+// past the conductor's 120s/90s alarm windows while genuinely healthy (the
+// "stalled must mean the owner has something to do" regression). This is
+// the mid-step counterpart: instructs the step agent to POST a liveness
+// beat every couple of minutes DURING the step, carrying real progress
+// evidence (a monotonic work_units counter) so a wedged/looping process
+// cannot pass for driving just by re-pinging. Optional and best-effort -
+// a missed beat never blocks the step; activity_for simply falls back to
+// the existing motion/quiet signals.
+function heartbeatInstr(job) {
+  if (DRY) return ''
+  const tid = locate.task_id
+  const step = job.step
+  return `\n\nHEARTBEAT (drive liveness, optional but keeps the SDLC tile/LiveBar honest while a long step runs): every couple of minutes during THIS step, POST \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${tid}","step":"${step}","elapsed_s":<seconds since you started this step>,"last_tool":"<the tool you just ran>","work_units":<a counter you increment each beat, e.g. total tool calls so far>}'\`. work_units MUST strictly increase and reflect REAL progress - two beats with an unchanged counter are treated as a wedged/looping process, not a driving one. A missed or failed beat is non-fatal; never let this block the step.`
+}
+
 // -- Agent-run telemetry emitter (task f4498190) -------------------------
 // ONE shared row builder + POST so the parent pull loop AND the child
 // wrapper emit an IDENTICAL row shape - no telemetry gap between the two
@@ -552,6 +569,7 @@ function workerPrompt(job) {
     `- Then return ok:false with budget_exceeded:true, elapsed_s set to the seconds you actually ran, and step_retries set to how many times you re-ran a command inside this step. Put in halt_reason what you were waiting on and what you did produce.`,
     `- Work you already COMMITTED is kept and reported, so stopping at the deadline never throws away green work. Report the commit shas in evidence.`,
     `- Finishing early is always fine. This is a ceiling, not a target: never pad a step to fill it.`,
+    heartbeatInstr(job),
     '',
     ctx,
     GRAPH_BRIEF,

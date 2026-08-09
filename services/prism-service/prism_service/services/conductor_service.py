@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from prism_service.services import sqlite_db
+from prism_service.services import drive_heartbeat, sqlite_db
 
 
 META_MIN_HOLDOUT_DELTA = 0.03
@@ -4680,6 +4680,16 @@ class ConductorService:
         gate = (getattr(task, "gate_state", "none") or "none")
         motion = self._task_motion_s(task)
         quiet = phase_progress.get("session_quiet_s") if isinstance(phase_progress, dict) else None
+        # Third input (task e3b7ebf6): a task-attributed liveness heartbeat.
+        # A real step routinely runs past both the 120s transition window
+        # and the 90s session-quiet window with nothing wrong -- this is
+        # the owner's "stalled must mean the owner has something to do"
+        # complaint. heartbeat_age_s is scoped per task_id (never global);
+        # a stale/absent heartbeat is None/over-window and changes nothing.
+        heartbeat_age = drive_heartbeat.heartbeat_age_s(
+            self._scores_db, getattr(task, "id", ""))
+        driving = (heartbeat_age is not None
+                   and heartbeat_age <= drive_heartbeat.HEARTBEAT_WINDOW_S)
         if status == "done":
             state = "done"
         elif status == "blocked":
@@ -4704,6 +4714,8 @@ class ConductorService:
                     # asked about children, so an epic crossing its own step
                     # boundaries still reported "paused".
                     state = "working"
+                elif driving:
+                    state = "driving"         # heartbeat-attributed liveness
                 elif quiet is not None and quiet <= 90:
                     # A live linked session: someone IS working this, they
                     # just have not crossed a step boundary recently - and a
@@ -4722,6 +4734,8 @@ class ConductorService:
                 state = "awaiting_gate"      # a WAIT for review, not work
             elif motion is not None and motion <= 120:
                 state = "working"            # a real recent transition on THIS task
+            elif driving:
+                state = "driving"            # heartbeat-attributed liveness
             elif quiet is not None and quiet <= 90:
                 state = "adrift"             # session alive but busy elsewhere
             else:
