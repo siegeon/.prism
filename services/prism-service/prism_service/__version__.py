@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.14"
+PRISM_VERSION = "7.10.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4120,8 +4120,18 @@ PRISM_VERSION_NOTES += (
     "existing Override checkbox). The banner's own summary text no longer "
     "calls itself 'override recovery'."
 )
-
-
+PRISM_VERSION_NOTES += (
+    " v7.10.15: CANCELLED/ARCHIVED/DELETED TASKS STOP PRESENTING A LIVE "
+    "GATE CARD [task e948008a]. TaskDetailPage's gate-card render branch, "
+    "gatePanelOwnsOracle, and the pinned-test auto-run effect guard all "
+    "now exclude task.status in {cancelled, archived, deleted}. A dead "
+    "task parked at a pending/failed gate renders an INERT banner naming "
+    "the status ('CANCELLED, decision moot') with evidence and gate "
+    "history still read-only, appended after the live branch closes; no "
+    "Approve/Override/re-run affordance renders in it, and opening the "
+    "page no longer fires a live pytest run. The live path is unchanged "
+    "for non-dead tasks (Approve, Override, re-run all pinned)."
+)
 
 
 
