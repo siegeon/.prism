@@ -70,8 +70,12 @@ export default function CompletedTasksPage() {
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
 
   const load = useCallback(() => {
+    // Projected to the fields the timeline and the table render. Unprojected,
+    // this pulled every plan_doc/story/description blob on the board — 2.8MB
+    // to draw a list of titles and dates.
     api
-      .get<{ tasks: Task[] }>(`/api/tasks?project=${project}`)
+      .get<{ tasks: Task[] }>(
+        `/api/tasks?project=${project}&fields=id,title,status,priority,tags,completed_at,created_at,parent_id`)
       .then((d) => setTasks(d.tasks ?? []))
       .catch(() => setTasks([]))
       .finally(() => setLoaded(true));

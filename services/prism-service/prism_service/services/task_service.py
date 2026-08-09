@@ -828,6 +828,27 @@ class TaskService:
             for r in rows
         ]
 
+    def advance_rows_all(self) -> dict[str, list[tuple[str, str]]]:
+        """Every `advance_task` history row in the project, grouped by task id
+        as (timestamp, details) ordered ascending.
+
+        ONE query, for the project-wide step-duration statistics the conductor
+        computes on every task-page render (_median_step_s, _per_step_typical).
+        Those walked `list()` and then called `history(t.id)` PER TASK — 458
+        extra queries per render, ~470 SQL round trips to answer a question
+        that does not even depend on which task is being viewed. The filter
+        rides in SQL so the rows that never mattered are never deserialized.
+        """
+        rows = self._db.execute(
+            "SELECT task_id, timestamp, details FROM task_history "
+            "WHERE action = 'advance_task' ORDER BY task_id, timestamp ASC"
+        ).fetchall()
+        out: dict[str, list[tuple[str, str]]] = {}
+        for r in rows:
+            out.setdefault(r["task_id"], []).append(
+                (r["timestamp"] or "", r["details"] or ""))
+        return out
+
     # ------------------------------------------------------------------
     # Task <-> session association (LL — activates task_sessions)
     # ------------------------------------------------------------------
