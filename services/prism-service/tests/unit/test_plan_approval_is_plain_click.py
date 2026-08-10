@@ -322,6 +322,82 @@ def test_caption_awaiting_branch_does_not_say_blocked():
 
 
 # ---------------------------------------------------------------------
+# Clause F - the CHECK section's RESULT cell (the "oracle receipt · ..."
+# row's <td>, TaskDetailPage.tsx ~1710-1725) must not paint a design-
+# packet-awaiting receipt as "stale / failed" with a dead re-run link -
+# there is nothing to re-run, the owner's Approve click below IS the
+# runner (task 5120c7b2). Same isAwaitingDesignApproval flag (line
+# 917-920), a NEW consumer: the CHECK row was task 791602a9's one miss.
+# ---------------------------------------------------------------------
+
+
+def _result_cell_ternary_expr(src: str) -> str:
+    """The RESULT <td>'s `{gateReadiness?.receipt_ok ? ... : ...}` JSX
+    expression, found by brace balance from its unique opening
+    `{gateReadiness?.receipt_ok` (never a fixed character window)."""
+    marker = "{gateReadiness?.receipt_ok"
+    brace_open = src.index(marker)
+    assert src[brace_open] == "{"
+    close = _balanced(src, brace_open, "{", "}")
+    return src[brace_open + 1:close]
+
+
+def test_result_cell_branches_on_awaiting_design_approval():
+    expr = _result_cell_ternary_expr(_tsx())
+    assert "isAwaitingDesignApproval" in expr, (
+        "the CHECK row's RESULT cell ternary never references "
+        "isAwaitingDesignApproval, so a complete-but-unapproved design "
+        "packet still falls into the generic rose 'stale / failed' branch "
+        "(clause F)"
+    )
+
+
+def test_result_cell_awaiting_branch_names_approve_and_avoids_rerun():
+    """The isAwaitingDesignApproval branch must read as calm/actionable
+    (amber, names the Approve button below) and must not offer a re-run
+    link or paint the rose failed pill - nothing can be re-run for an
+    awaiting-approval receipt."""
+    expr = _result_cell_ternary_expr(_tsx())
+    aware_at = expr.index("isAwaitingDesignApproval")
+    manual_at = expr.index('"manual_evidence_required"')
+    assert aware_at < manual_at, (
+        "isAwaitingDesignApproval must be checked BEFORE the "
+        "manual_evidence_required branch, or the awaiting-approval branch "
+        "is unreachable (clause F)"
+    )
+    branch = expr[aware_at:manual_at]
+    assert re.search(r"\bapprove\b", branch, re.I), (
+        "the awaiting-design-approval RESULT pill must name the Approve "
+        "button below as the action (clause F)"
+    )
+    assert "mintEvidence" not in branch, (
+        "the awaiting-design-approval branch must not wire the re-run "
+        "button (mintEvidence) - there is nothing to re-run, the owner's "
+        "Approve click is the runner (clause F)"
+    )
+    assert "stale / failed" not in branch, (
+        "the awaiting-design-approval branch must not fall through to the "
+        "rose 'stale / failed' pill copy (clause F)"
+    )
+    assert "--accent-rose" not in branch, (
+        "the awaiting-design-approval branch must not use the rose/failed "
+        "color token (clause F)"
+    )
+
+
+def test_result_cell_other_branches_survive_the_new_clause():
+    """Regression guard: receipt_ok -> passing, manual_evidence_required ->
+    manual/no-re-run, and the genuine failure -> rose + re-run must all
+    still be present and reachable after the new branch is inserted."""
+    expr = _result_cell_ternary_expr(_tsx())
+    assert "passing" in expr
+    assert '"manual_evidence_required"' in expr
+    assert "manual · your review" in expr
+    assert "stale / failed" in expr
+    assert "mintEvidence" in expr
+
+
+# ---------------------------------------------------------------------
 # stop_if guard - the fix must never reintroduce the forbidden banner copy
 # test_stale_gate_banner_inspect_vs_override.py already pins as absent.
 # ---------------------------------------------------------------------
