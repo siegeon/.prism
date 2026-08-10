@@ -91,13 +91,25 @@ def personal_scope(principal: Principal) -> str:
     scope = f"personal-{user_id}"
     service = get_workspace_service()
     if service.get_workspace(scope) is None:
+        # Provisioning is check-then-act over a shared db, and two callers
+        # (two requests, or a request racing a background sync thread) can
+        # both pass the None check — the ids are FIXED, so the loser's
+        # INSERT hits the uniqueness constraint. The db is the arbiter:
+        # losing that race means the row exists, which is the outcome we
+        # wanted, so swallow the duplicate and proceed on the winner's row.
         if service.get_user(user_id) is None:
-            service.create_user(
-                getattr(principal, "email", "") or f"{user_id}@localhost",
-                display_name=getattr(principal, "display_name", "") or "You",
-                user_id=user_id,
-            )
-        service.create_workspace("Personal", user_id, workspace_id=scope)
+            try:
+                service.create_user(
+                    getattr(principal, "email", "") or f"{user_id}@localhost",
+                    display_name=getattr(principal, "display_name", "") or "You",
+                    user_id=user_id,
+                )
+            except ValueError:
+                pass  # a concurrent caller created it first
+        try:
+            service.create_workspace("Personal", user_id, workspace_id=scope)
+        except ValueError:
+            pass  # a concurrent caller created it first
     return scope
 
 
@@ -421,21 +433,184 @@ def push_task(provider: str, body: PushBody, project: str = Query(...),
     }
 
 
+class PushBacklogBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dry_run: bool = True
+    task_ids: list[str] = []
+    assignee: str = ""
+
+
+def _empty_skip_buckets() -> dict:
+    return {"done": [], "cancelled": [], "already_linked": [],
+            "other_status": []}
+
+
+@router.post("/{provider}/push-backlog")
+def push_backlog(provider: str, body: PushBacklogBody,
+                 project: str = Query(...),
+                 principal: Principal = Depends(current_principal)) -> dict:
+    """Preview, then explicitly confirm, pushing the PRE-EXISTING active
+    backlog toward GitHub (task 733af05f - walking skeleton for epic
+    02672417).
+
+    TWO-STEP BY DESIGN (shared-contract clause 5): ``dry_run=True`` (the
+    default) calls only ``scan_active_tasks`` - a pure classifier that
+    cannot reach GitHub - and creates nothing. ``dry_run=False`` calls the
+    existing single-task ``push_task_creation`` once per would-create task,
+    never a bulk board scan by itself; this route is the ONLY caller that
+    may name more than one task_id, and it still goes through the exact
+    same idempotence/sync-switch guards ``push_task`` above already relies
+    on. Nothing here is reachable from ``set_sync`` - that endpoint still
+    only ever writes the preference.
+    """
+    principal = coerce_principal(principal)
+    if provider not in PROVIDERS:
+        raise HTTPException(404, "unknown provider")
+    scope = personal_scope(principal)
+
+    if not get_sync_preferences().enabled(scope, provider):
+        return {"provider": provider, "dry_run": body.dry_run, "scanned": 0,
+                "would_create": [], "created": [],
+                "skipped": _empty_skip_buckets(),
+                "reason": f"syncing with {provider} is turned off"}
+
+    from prism_service import project_context
+    from prism_service.api.integrations import _adapters
+    from prism_service.services.integration_outbox import get_outbox
+    from prism_service.services.work_item_sync import (
+        push_task_creation, scan_active_tasks)
+
+    store = get_integration_store()
+    task_svc = project_context.get_project(project).task_svc
+    tasks = task_svc.list()
+
+    by_id = {t.id: t for t in tasks}
+    rows = []
+    for t in tasks:
+        has_link = any(
+            l.state == "active"
+            for l in store.list_links(scope, task_id=t.id))
+        rows.append((t.id, t.status, has_link))
+
+    report = scan_active_tasks(rows)
+    skipped = {
+        "done": report.skipped_done,
+        "cancelled": report.skipped_cancelled,
+        "already_linked": report.skipped_already_linked,
+        "other_status": report.skipped_other_status,
+    }
+
+    if body.dry_run:
+        return {"provider": provider, "dry_run": True,
+                "scanned": len(rows), "would_create": report.would_create,
+                "created": [], "skipped": skipped, "reason": ""}
+
+    account = body.assignee
+    if not account:
+        from prism_service.services.github_cli_auth import get_cli_credentials
+
+        account = get_cli_credentials().status().get("account", "")
+
+    targets = [tid for tid in (body.task_ids or report.would_create)
+              if tid in report.would_create]
+
+    created = []
+    for task_id in targets:
+        task = by_id.get(task_id)
+        if task is None:
+            continue
+        result = push_task_creation(
+            store, get_outbox(), _adapters, get_sync_preferences().enabled,
+            scope, task_id, task.status,
+            title=task.title, body=task.description,
+            assignee=account, provider=provider, dry_run=False)
+        if result.created:
+            created.append({"task_id": task_id, "issue": result.issue,
+                            "url": result.url})
+
+    return {"provider": provider, "dry_run": False, "scanned": len(rows),
+            "would_create": report.would_create, "created": created,
+            "skipped": skipped, "reason": ""}
+
+
 @router.put("/{provider}/sync")
-def set_sync(provider: str, body: SyncBody,
+def set_sync(provider: str, body: SyncBody, project: str = Query("prism"),
              principal: Principal = Depends(current_principal)) -> dict:
     """Turn syncing with a provider on or off.
 
     Separate from connecting on purpose (owner 2026-07-28): a working
     credential must never imply consent to sync. Turning this off leaves the
     connection intact.
+
+    Task 02672417 (AC-2/AC-4): flipping GitHub's switch False->True is what
+    starts the outbound push of the pre-existing ACTIVE backlog, ASSIGNED to
+    the connected account. Edge-triggered only (AC-7): an ON->ON write (the
+    common case — re-loading Settings re-PUTs the current value) must never
+    re-fire it. github-only by literal provider check (AC-11): jira is
+    unaffected even though it shares this same endpoint shape.
     """
     principal = coerce_principal(principal)
     if provider not in PROVIDERS and provider != "claude":
         raise HTTPException(404, "unknown provider")
     scope = personal_scope(principal)
-    enabled = get_sync_preferences().set_enabled(scope, provider, body.enabled)
+    prefs = get_sync_preferences()
+    was_enabled = prefs.enabled(scope, provider)
+    enabled = prefs.set_enabled(scope, provider, body.enabled)
+
+    if provider == "github" and not was_enabled and enabled:
+        _fire_backlog_sweep(scope, project)
+
     return {"provider": provider, "sync_enabled": enabled}
+
+
+def _fire_backlog_sweep(scope: str, project: str) -> None:
+    """push_active_backlog (work_item_sync.py) does the real work; this only
+    supplies the candidate tasks and the assignee.
+
+    The TaskService lookup and task snapshot are resolved HERE, synchronously
+    on the request thread — the same, already-safe pattern every other route
+    on this router uses (push_task, run_sync). Deferring that resolution
+    into the spawned thread raced project_context's process-global cache
+    against a concurrent foreground caller (e.g. /sync/run) creating the
+    SAME sqlite-backed TaskService at the same moment: two threads issuing
+    CREATE TABLE on a fresh db file at once, "database is locked"
+    (regression caught by test_ac9_neighbouring_suites_stay_green_together
+    on test_pull_issues_into_tasks.py). Only the actual GitHub network I/O
+    (push_active_backlog) now runs off the request thread, so the switch's
+    own click still never blocks on a slow provider; never raises into the
+    caller, mirroring task_mirror.py's "never raises, never blocks"
+    discipline."""
+    import threading
+
+    from prism_service import project_context
+    from prism_service.api.integrations import _adapters
+    from prism_service.services.github_cli_auth import get_cli_credentials
+    from prism_service.services.integration_outbox import get_outbox
+    from prism_service.services.work_item_sync import push_active_backlog
+
+    svc = project_context.get_project(project).task_svc
+    tasks = svc.list()
+    account = get_cli_credentials().status().get("account", "")
+    # Bind EVERY collaborator here, on the request thread — never inside
+    # the spawned thread. A daemon thread that resolves process-global
+    # singletons lazily can outlive the configuration it was fired under
+    # and operate on whatever the globals point to by the time it runs
+    # (the next test's stores under pytest; a reconfigured registry in a
+    # long-lived daemon). The thread below owns only network I/O.
+    store = get_integration_store()
+    outbox = get_outbox()
+    adapters = _adapters
+    sync_enabled = get_sync_preferences().enabled
+
+    def _run() -> None:
+        try:
+            push_active_backlog(
+                store, outbox, adapters, sync_enabled, scope, tasks,
+                provider="github", assignee=account)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 @router.get("/status")

@@ -13,9 +13,11 @@ import {
   runConnectorSync,
   startConnect,
   getMirrorStatus,
+  pushBacklog,
   listCollaborationSurfaces,
   type Connector,
   type MirrorStatus,
+  type BacklogPushReport,
   type CollaborationSurface,
 } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
@@ -3482,6 +3484,70 @@ function RepoSync({ connector, project, onChanged }:
   );
 }
 
+/** Turn the backlog that predates syncing into GitHub issues (task
+ *  733af05f). Two explicit steps, never a silent sweep: preview names what
+ *  it WOULD do and touches nothing; confirm is a second, separate click. */
+function BacklogPush({ connector, project }: { connector: Connector; project: string }) {
+  const [report, setReport] = useState<BacklogPushReport | null>(null);
+  const [done, setDone] = useState<BacklogPushReport | null>(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+
+  const preview = useCallback(async () => {
+    setErr(""); setDone(null); setBusy("preview");
+    try {
+      setReport(await pushBacklog(connector.provider, project, { dryRun: true }));
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(""); }
+  }, [connector.provider, project]);
+
+  const confirm = useCallback(async () => {
+    if (!report) return;
+    setErr(""); setBusy("confirm");
+    try {
+      const r = await pushBacklog(connector.provider, project,
+        { dryRun: false, taskIds: report.would_create });
+      setDone(r); setReport(null);
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(""); }
+  }, [connector.provider, project, report]);
+
+  return (
+    <div className="mt-4 pt-4 border-t border-[color:var(--border-subtle)]" onClick={(e) => e.stopPropagation()}>
+      <SectionLabel>Existing backlog</SectionLabel>
+      <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>
+        Tasks that existed before you turned syncing on stay local until you push them.
+      </p>
+      <button type="button" onClick={preview} disabled={busy !== ""}
+        className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40">
+        {busy === "preview" ? "Checking…" : "Preview backlog push"}
+      </button>
+      {report && (
+        <div className="mt-2 text-xs space-y-1" style={{ color: "var(--text-secondary)" }}>
+          <p>Would create <b>{report.would_create.length}</b> issue{report.would_create.length === 1 ? "" : "s"}.</p>
+          <p style={{ color: "var(--text-muted)" }}>
+            Skipping {report.skipped.done.length} done, {report.skipped.cancelled.length} cancelled,{" "}
+            {report.skipped.already_linked.length} already linked.
+          </p>
+          {report.would_create.length > 0 ? (
+            <button type="button" onClick={confirm} disabled={busy !== ""}
+              className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+              style={{ color: "var(--accent-teal-fg)" }}>
+              {busy === "confirm" ? "Pushing…" : `Confirm: push ${report.would_create.length} to GitHub`}
+            </button>
+          ) : <p>Nothing to push.</p>}
+        </div>
+      )}
+      {done && (
+        <p className="mt-2 text-xs" style={{ color: "var(--accent-sage-fg)" }}>
+          Created {done.created.length} issue{done.created.length === 1 ? "" : "s"} on GitHub.
+        </p>
+      )}
+      {err && <p className="mt-2 text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
+    </div>
+  );
+}
+
 function ConnectorsSection({ project }: { project: string }) {
   const [rows, setRows] = useState<Connector[]>([]);
   const [err, setErr] = useState<string>("");
@@ -3635,7 +3701,12 @@ function ConnectorsSection({ project }: { project: string }) {
           {c.provider !== "claude" && openDetail === c.provider && (
             <div className="px-5 pb-5 pt-4">
               {c.state === "connected" ? (
-                <RepoSync connector={c} project={project} onChanged={reload} />
+                <>
+                  <RepoSync connector={c} project={project} onChanged={reload} />
+                  {c.provider === "github" && (c.tracking?.length ?? 0) > 0 && (
+                    <BacklogPush connector={c} project={project} />
+                  )}
+                </>
               ) : (
                 <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                   {c.detail} Connecting is optional: PRISM tracks your work on
