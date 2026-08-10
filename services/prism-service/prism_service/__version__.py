@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.25"
+PRISM_VERSION = "7.10.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.26: the design-approve affordance now lives WHERE the design "
+    "packet lives [task 76df7520]. PlanView lands the owner on the Design "
+    "tab (not the empty Implementation view) the moment a populated-but-"
+    "unapproved design packet is waiting, and DesignPacket's Approve button "
+    "calls the SAME approveDesignPacket-then-gate-POST path gateDecide uses "
+    "- the old free-text-name ledger-only doApprove is gone.\n"
     "v7.10.25: CHECK-row RESULT cell stops painting an awaiting-approval "
     "design packet as 'stale / failed' with a dead re-run link [task "
     "5120c7b2]. isAwaitingDesignApproval now gates an amber 'awaiting your "

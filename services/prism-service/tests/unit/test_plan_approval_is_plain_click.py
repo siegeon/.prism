@@ -405,3 +405,185 @@ def test_result_cell_other_branches_survive_the_new_clause():
 
 def test_forbidden_override_banner_copy_stays_absent():
     assert "recover with override, or fix & re-run" not in _tsx()
+
+
+# ---------------------------------------------------------------------
+# Clauses G-J (task 76df7520) - the design-approve affordance lives WHERE
+# the design packet lives (the Design tab), not buried behind a tab
+# defaulted to the empty green-gate-shaped Implementation view, and it is
+# ONE control wired to the SAME two calls gateDecide makes - not a second,
+# forked, ledger-only write path.
+# ---------------------------------------------------------------------
+
+_PLAN_VIEW = _SERVICE_ROOT / "prism_service" / "web" / "src" / "components" / "plan" / "PlanView.tsx"
+_DESIGN_PACKET = _SERVICE_ROOT / "prism_service" / "web" / "src" / "components" / "plan" / "DesignPacket.tsx"
+
+
+def _plan_view() -> str:
+    return _strip_comments(_read(_PLAN_VIEW))
+
+
+def _design_packet() -> str:
+    return _strip_comments(_read(_DESIGN_PACKET))
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+# ---------------------------------------------------------------------
+# Clause G - the owner lands on the Design tab, not Implementation, when a
+# populated-but-unapproved design packet is waiting. gateReadiness (and so
+# isAwaitingDesignApproval) loads AFTER PlanView's first paint, so a
+# useEffect keyed on it - not just the initial useState default - must
+# drive the tab, or the owner is still shown the empty DecisionPacket rows
+# on first render.
+# ---------------------------------------------------------------------
+
+
+def test_planview_prop_signature_names_awaiting_design_approval():
+    assert "isAwaitingDesignApproval" in _plan_view(), (
+        "PlanView.tsx never references isAwaitingDesignApproval - it has "
+        "no way to know a populated-but-unapproved design packet is "
+        "waiting and land the owner on the tab that shows it (clause G)"
+    )
+
+
+def test_planview_switches_active_tab_to_design_when_awaiting_approval():
+    src = _plan_view()
+    found = False
+    for eff in re.finditer(r"useEffect\(\s*\(\)\s*=>\s*\{", src):
+        brace_open = eff.end() - 1
+        close = _balanced(src, brace_open, "{", "}")
+        dep_m = re.match(r"\s*,\s*\[([^\]]*)\]", src[close + 1:close + 200])
+        if not dep_m:
+            continue
+        body = src[brace_open + 1:close]
+        if "isAwaitingDesignApproval" in dep_m.group(1) and 'setActive("design")' in body:
+            found = True
+            break
+    assert found, (
+        "no useEffect depends on isAwaitingDesignApproval and calls "
+        "setActive(\"design\") - the tab default is only computed once at "
+        "mount time, before gateReadiness has loaded, so a task at "
+        "plan_gate still opens on Implementation (clause G)"
+    )
+
+
+# ---------------------------------------------------------------------
+# Clause H - TaskDetailPage forwards isAwaitingDesignApproval and a design-
+# approve callback into <PlanView .../>, and that callback IS
+# gateDecide("approve") - the same approveDesignPacket-then-gate-POST pair,
+# never a forked write.
+# ---------------------------------------------------------------------
+
+
+def _planview_jsx_call(src: str) -> str:
+    marker = "<PlanView"
+    start = src.index(marker)
+    close = src.index("/>", start)
+    return src[start:close]
+
+
+def test_taskdetailpage_passes_awaiting_design_approval_to_planview():
+    call = _norm(_planview_jsx_call(_tsx()))
+    assert "isAwaitingDesignApproval={isAwaitingDesignApproval}" in call, (
+        "TaskDetailPage's <PlanView .../> call never forwards "
+        "isAwaitingDesignApproval - PlanView cannot default the owner onto "
+        "the Design tab (clause H)"
+    )
+
+
+def test_taskdetailpage_passes_gate_decide_approve_as_the_design_approve_callback():
+    call = _norm(_planview_jsx_call(_tsx()))
+    m = re.search(r'onApproveDesign=\{([^}]*)\}', call)
+    assert m, (
+        "TaskDetailPage's <PlanView .../> call never wires an "
+        "onApproveDesign callback - a Design-tab Approve control has "
+        "nothing to call (clause H)"
+    )
+    assert 'gateDecide("approve")' in m.group(1), (
+        "onApproveDesign must call gateDecide(\"approve\") specifically - "
+        "the SAME approveDesignPacket-then-gate-POST path the bottom gate "
+        "panel uses, never a reject or a separately-written call (clause H)"
+    )
+
+
+# ---------------------------------------------------------------------
+# Clause I - PlanView accepts that callback and forwards it into
+# <DesignPacket .../> as onApprove, so the card rendered inside the Design
+# tab can actually trigger it.
+# ---------------------------------------------------------------------
+
+
+def _designpacket_jsx_call(src: str) -> str:
+    marker = "<DesignPacket"
+    start = src.index(marker)
+    close = src.index("/>", start)
+    return src[start:close]
+
+
+def test_planview_signature_accepts_onapprovedesign():
+    assert "onApproveDesign" in _plan_view(), (
+        "PlanView.tsx never declares an onApproveDesign prop - it has "
+        "nothing to forward into DesignPacket (clause I)"
+    )
+
+
+def test_planview_forwards_onapprove_into_designpacket_call():
+    call = _norm(_designpacket_jsx_call(_plan_view()))
+    assert re.search(r"onApprove=\{[^}]*onApproveDesign[^}]*\}", call), (
+        "PlanView's <DesignPacket .../> call never forwards its own "
+        "onApproveDesign prop as onApprove - the Design tab's card has no "
+        "way to trigger the real approve path (clause I)"
+    )
+
+
+# ---------------------------------------------------------------------
+# Clause J - DesignPacket's own approve control calls the onApprove prop
+# directly (no local doApprove), and the second, forked affordance - a
+# free-text approver-name <input> POSTing only to the ledger endpoint - is
+# gone, so it can never drift from gateDecide's own call to the same route.
+# ---------------------------------------------------------------------
+
+
+def test_designpacket_accepts_onapprove_prop():
+    assert "onApprove" in _design_packet(), (
+        "DesignPacket.tsx has no onApprove prop - its Approve control has "
+        "nowhere to call (clause J)"
+    )
+
+
+def test_designpacket_approve_button_wired_to_onapprove_prop():
+    src = _design_packet()
+    assert (
+        "onClick={onApprove}" in src
+        or re.search(r"onClick=\{\s*\(\)\s*=>\s*onApprove", src)
+    ), (
+        "DesignPacket's Approve control is not wired directly to the "
+        "onApprove prop - it still calls a locally-defined handler instead "
+        "of the SAME call gateDecide makes (clause J)"
+    )
+
+
+def test_designpacket_no_longer_calls_the_approve_endpoint_directly():
+    src = _design_packet()
+    assert "/api/conductor/design-packet/approve" not in src, (
+        "DesignPacket.tsx still POSTs directly to "
+        "/api/conductor/design-packet/approve - a second, forked write "
+        "path survives alongside gateDecide's own call to the same route, "
+        "so the ledger and the gate release can still disagree (clause J)"
+    )
+
+
+def test_designpacket_no_free_text_approver_input():
+    src = _design_packet()
+    assert 'placeholder="your name"' not in src, (
+        "DesignPacket.tsx still asks the owner to type their name into a "
+        "free-text <input> before approving - the second, forked approve "
+        "affordance the ticket requires removed (clause J)"
+    )
+    assert not re.search(r"\bconst\s*\[\s*approver\s*,", src), (
+        "DesignPacket.tsx still carries local approver state for the "
+        "removed free-text-name input (clause J)"
+    )

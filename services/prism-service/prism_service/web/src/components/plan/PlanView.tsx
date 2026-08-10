@@ -217,6 +217,8 @@ export default function PlanView({
   completionProof,
   likelyMisfire,
   fullOutcomeComplete,
+  isAwaitingDesignApproval,
+  onApproveDesign,
 }: {
   diagram?: string;
   doc?: string;
@@ -264,6 +266,12 @@ export default function PlanView({
   completionProof?: string;
   likelyMisfire?: string;
   fullOutcomeComplete?: boolean;
+  // A populated-but-unapproved design packet is waiting (task 76df7520) - the
+  // owner must land on the Design tab, never the empty green-gate-shaped
+  // Implementation view, and the packet's Approve control must call the SAME
+  // path the main gate panel does.
+  isAwaitingDesignApproval?: boolean;
+  onApproveDesign?: () => void;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
@@ -295,6 +303,14 @@ export default function PlanView({
     const req = tabRequest.tab;
     setActive(["prototype", "diagram", "doc"].includes(req) ? "design" : req);
   }, [tabRequest?.n, tabRequest?.tab]);
+
+  // gateReadiness (and so isAwaitingDesignApproval) loads AFTER this
+  // component's first paint, so the initial useState default above cannot
+  // see it - land the owner on Design the moment it becomes true, not just
+  // at mount (task 76df7520 clause G).
+  useEffect(() => {
+    if (isAwaitingDesignApproval) setActive("design");
+  }, [isAwaitingDesignApproval]);
 
   // Tests tab: which pin is expanded to show its actual assertion source —
   // a reviewer must be able to EVALUATE a pin, not just read its name.
@@ -348,7 +364,12 @@ export default function PlanView({
         // reviewer could "approve" a design having seen only whichever
         // sub-tab happened to be open). DesignPacket fetches the SAME
         // server-assembled packet + approval status the gate itself reads.
-        <DesignPacket taskId={taskId ?? ""} project={project} prototypeSrc={prototypeSrc} />
+        <DesignPacket
+          taskId={taskId ?? ""}
+          project={project}
+          prototypeSrc={prototypeSrc}
+          onApprove={onApproveDesign}
+        />
       )}
 
       {cur === "tests" && hasTests && (
