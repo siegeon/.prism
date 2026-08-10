@@ -31,15 +31,19 @@ export default function DesignPacket({
   taskId,
   project = "default",
   prototypeSrc,
+  onApprove,
 }: {
   taskId: string;
   project?: string;
   prototypeSrc?: string;
+  // ONE approve control (task 76df7520) - calls the SAME
+  // approveDesignPacket-then-gate-POST path gateDecide("approve") uses on the
+  // main gate panel. No local write path here anymore: a second, forked
+  // approve affordance could record the ledger without ever releasing the
+  // gate, which is exactly the drift this prop closes off.
+  onApprove?: () => void;
 }) {
   const [data, setData] = useState<DesignPacketData | null>(null);
-  const [approving, setApproving] = useState(false);
-  const [approver, setApprover] = useState("");
-  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api
@@ -49,18 +53,6 @@ export default function DesignPacket({
   }, [taskId, project]);
 
   useEffect(() => { load(); }, [load]);
-
-  const doApprove = useCallback(() => {
-    if (!approver.trim()) { setErr("name yourself as the approver"); return; }
-    setApproving(true);
-    setErr(null);
-    api
-      .post(`/api/conductor/design-packet/approve?project=${project}`,
-           { task_id: taskId, approver: approver.trim() })
-      .then(() => load())
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setApproving(false));
-  }, [taskId, project, approver, load]);
 
   if (!data) return null;
 
@@ -140,24 +132,16 @@ export default function DesignPacket({
                 : approval.reason || "this design packet needs an explicit owner approval before plan_gate can clear"}
             </div>
             <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={approver}
-                onChange={(e) => setApprover(e.target.value)}
-                placeholder="your name"
-                className="text-[12px] px-2 py-1 rounded border border-[color:var(--border-default)] bg-transparent"
-              />
               <button
                 type="button"
-                disabled={approving}
-                onClick={doApprove}
+                disabled={!onApprove}
+                onClick={onApprove}
                 className="text-2xs font-semibold px-2.5 py-1 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
                 style={{ color: "var(--accent-teal-fg)" }}
               >
-                {approving ? "Approving…" : "Approve design"}
+                Approve design
               </button>
             </div>
-            {err && <div className="text-[11px] text-[color:var(--accent-rose-fg,#c33)]">{err}</div>}
           </>
         )}
       </div>

@@ -1981,6 +1981,8 @@ export default function TaskDetailPage() {
             completionProof={task.completion_proof}
             likelyMisfire={task.likely_misfire}
             fullOutcomeComplete={task.full_outcome_complete}
+            isAwaitingDesignApproval={isAwaitingDesignApproval}
+            onApproveDesign={() => gateDecide("approve")}
             conductor={conductorOn ? {
               step: task.workflow_step,
               gateState: task.gate_state,
