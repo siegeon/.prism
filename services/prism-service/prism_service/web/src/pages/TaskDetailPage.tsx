@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
-import { api } from "@/lib/api";
+import { api, approveDesignPacket } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
@@ -1306,6 +1306,14 @@ export default function TaskDetailPage() {
         : "running the machine check — this takes up to a few minutes; stay on this page…",
     });
     try {
+      // FR-6 (task 791602a9): a plain plan_gate approve must also record
+      // the design-packet ledger's own approval, or the packet stays
+      // unapproved forever after the gate releases. Runs BEFORE the gate
+      // POST, inside the SAME try{} - a failed design-packet approve
+      // throws and the gate POST below never fires.
+      if (isAwaitingDesignApproval && action === "approve") {
+        await approveDesignPacket(id ?? "", decisionReason, project);
+      }
       const r = await fetch(`/api/conductor/gate?project=${project}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1860,7 +1868,7 @@ export default function TaskDetailPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
                     type="button"
-                    disabled={busy || (gateVerdict !== "ready" && !gateOverride) || (gateOverride && !gateReason.trim())}
+                    disabled={busy || (gateVerdict !== "ready" && !isAwaitingDesignApproval && !gateOverride) || (gateOverride && !gateReason.trim())}
                     onClick={() => gateDecide("approve")}
                     className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
                     style={gateVerdict === "ready" || gateOverride
@@ -1883,9 +1891,11 @@ export default function TaskDetailPage() {
                   <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
                     {gateVerdict === "ready"
                       ? "Ready: Approve records your decision; the machine check runs first."
-                      : gateOverride
-                        ? "Override armed: Approve releases on your judgment (audited)."
-                        : "Blocked: tick override to recover, or fix the evidence and re-run."}
+                      : isAwaitingDesignApproval
+                        ? "Awaiting your approval: Approve records the design-packet sign-off and releases the gate."
+                        : gateOverride
+                          ? "Override armed: Approve releases on your judgment (audited)."
+                          : "Blocked: tick override to recover, or fix the evidence and re-run."}
                   </span>
                 </div>
               </div>
