@@ -294,3 +294,13 @@ export async function startConnect(provider: string): Promise<string> {
     `/api/integrations/connect/${provider}/start`);
   return d.authorize_url;
 }
+
+/** Connect Jira with a site URL + email + Atlassian API token (task
+ *  64ba4755) — no OAuth app needed on this instance. The token never
+ *  round-trips back; only the validated account name does. */
+export async function connectJiraApiToken(
+  siteUrl: string, email: string, apiToken: string,
+): Promise<{ connected: boolean; account: string }> {
+  return api.post("/api/integrations/connect/jira/api-token",
+    { site_url: siteUrl, email, api_token: apiToken });
+}

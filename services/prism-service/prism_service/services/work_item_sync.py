@@ -36,15 +36,28 @@ from prism_service.models.integration import (
 # data to match against.
 NON_INTAKE_ENTITY_KINDS = frozenset({"pull_request"})
 
-# Providers whose remote `done` completes the mirrored task on import
-# (task 0a9b511f). GitHub ONLY, deliberately: the owner's decision was about
-# the GitHub mirror, and Jira is not built yet (its adapter is not registered
-# in production -- /api/integrations/connect/mirror reports adapters:["github"]).
-# Reconciling a provider nobody has connected would be changing a contract on
-# speculation, and it silently rewrote test_jira_work_import's assertion the
-# first time this shipped. Add a provider here when its round trip is actually
-# exercised, not before.
-STATUS_RECONCILE_PROVIDERS = frozenset({"github"})
+# Providers whose remote status reconciles into the local task on import
+# (task 0a9b511f, widened by task 64ba4755 FR-7). GitHub reconciles `done`
+# only. Jira's own read-mostly round trip is now built (FR-1..FR-6), so
+# reconciling it is this slice's own deliberate, evidenced widening — not
+# speculation on a provider nobody has connected, which is what the
+# original github-only comment (superseded here, owner 2026-08-10) guarded
+# against. Add a provider here only once its round trip is actually
+# exercised, exactly as this one was.
+STATUS_RECONCILE_PROVIDERS = frozenset({"github", "jira"})
+
+# Board-wins name map (task 64ba4755, FR-7): statusCategory 'done' wins
+# first (see _board_wins_status below); this is the FALLBACK for jira only,
+# keyed on the raw board status name, casefolded. An unmapped name writes
+# nothing — never guessed. github stays done-only, unaffected by this map.
+_JIRA_BOARD_STATUS_MAP = {
+    "blocked": "blocked",
+    "to do": "pending", "open": "pending", "backlog": "pending",
+    "reopened": "pending",
+    "dev": "in_progress", "in progress": "in_progress",
+    "code review": "in_progress", "in review": "in_progress",
+    "qa": "in_progress", "validation": "in_progress",
+}
 
 
 @dataclass
@@ -271,9 +284,25 @@ class WorkItemSyncService:
             OUTCOME_CREATED if created else OUTCOME_UPDATED)
         return 1
 
+    @staticmethod
+    def _board_wins_status(provider: str, entity_input) -> Optional[str]:
+        """The board-wins target status, or None to write nothing.
+
+        statusCategory 'done' wins first for every reconciled provider;
+        jira then falls back to its own raw-name board map (task 64ba4755,
+        FR-7). github stays done-only, exactly as it always has.
+        """
+        if getattr(entity_input, "status_category", "") == "done":
+            return "done"
+        if provider != "jira":
+            return None
+        raw = (getattr(entity_input, "remote_status", "") or "").strip().casefold()
+        return _JIRA_BOARD_STATUS_MAP.get(raw)
+
     def _reconcile_remote_status(self, task_id: str, entity_input,
                                  provider: str, origin: str) -> None:
-        """Move a task to done when its remote counterpart closed.
+        """Move a task to its board-wins status when its remote counterpart
+        moves.
 
         Split out of _import_one so the ONE state transition this sync is
         allowed to make is readable in isolation. Returns silently on every
@@ -281,18 +310,27 @@ class WorkItemSyncService:
         """
         if provider not in STATUS_RECONCILE_PROVIDERS:
             return
-        if getattr(entity_input, "status_category", "") != "done":
+        target = self._board_wins_status(provider, entity_input)
+        if target is None:
             return
         task = self._intake.get(task_id)
-        if task is None or getattr(task, "status", "") == "done":
+        if task is None:
+            return
+        if getattr(task, "workflow_step", ""):
+            # A task a driver already picked up is never clobbered by
+            # remote status, even when the mirror keeps seeing it move
+            # (task 64ba4755, AC-8).
+            return
+        if getattr(task, "status", "") == target:
             return  # idempotent: a second identical pull writes nothing
 
-        self._intake.update(task_id, status="done")
+        self._intake.update(task_id, status=target)
         record = getattr(self._intake, "record_history", None)
         if record is not None:
-            record(task_id, "remote_closed",
-                   details=(f"{provider} {origin} closed upstream; "
-                            f"task moved to done by the mirror"),
+            action = "remote_closed" if target == "done" else "remote_status_synced"
+            record(task_id, action,
+                   details=(f"{provider} {origin} moved to {target} upstream; "
+                            f"task synced by the mirror"),
                    actor=f"{provider}-mirror")
 
 

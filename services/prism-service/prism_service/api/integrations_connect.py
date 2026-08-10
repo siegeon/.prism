@@ -18,6 +18,7 @@ access token, or refresh token is ever placed in a response body.
 
 from __future__ import annotations
 
+import base64
 import os
 from typing import Optional
 
@@ -224,6 +225,35 @@ def _provider_state(provider: str, scope: str) -> dict:
         # No usable CLI: fall through to the OAuth app path, which still
         # serves server and multi-user installs.
 
+    # Jira needs NO OAuth app registered when an api-token connection
+    # already exists on this instance (task 64ba4755, FR-1) - mirrors
+    # github's pre-_configured CLI-credential branch above, for the same
+    # reason: an unregistered OAuth app must never be the last word once a
+    # working credential is already on file. api_token rows never expire
+    # by this store's clock (JiraAuthStore.access_token short-circuits
+    # them), so no separate health probe is needed here.
+    if provider == "jira":
+        from prism_service.services.jira_auth import get_jira_auth_store
+
+        store = get_integration_store()
+        auth_store = get_jira_auth_store()
+
+        def _is_api_token(c) -> bool:
+            try:
+                return auth_store.auth_kind(scope, c.remote_scope) == "api_token"
+            except Exception:
+                return False
+
+        conns = [c for c in store.list_connections(scope) if c.provider == "jira"]
+        api_token_conn = next((c for c in conns if _is_api_token(c)), None)
+        if api_token_conn is not None:
+            tracking = [k.display_key or k.remote_id
+                        for k in store.list_containers(scope, api_token_conn.id)]
+            return {"provider": provider, "name": name, "state": "connected",
+                    "detail": "Connected.",
+                    "account": api_token_conn.display_name or api_token_conn.remote_scope,
+                    "tracking": tracking}
+
     if not _configured(provider):
         env = ("PRISM_GITHUB_APP_SLUG" if provider == "github"
                else "PRISM_JIRA_CLIENT_ID / PRISM_JIRA_CLIENT_SECRET")
@@ -273,6 +303,75 @@ class TrackBody(BaseModel):
     repo: str
 
 
+class JiraApiTokenBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    site_url: str
+    email: str
+    api_token: str
+
+
+@router.post("/jira/api-token")
+def connect_jira_api_token(
+    body: JiraApiTokenBody, principal: Principal = Depends(current_principal),
+) -> dict:
+    """Connect Jira with a site URL + email + Atlassian API token (task
+    64ba4755, FR-1) — no OAuth app needed on this instance.
+
+    Validated via GET <site>/rest/api/3/myself over HTTP Basic auth; a
+    rejected credential persists nothing. The cloud id is resolved
+    best-effort from <site>/_edge/tenant_info (an UNDOCUMENTED endpoint, so
+    its failure must never fail the whole connect) and falls back to the
+    site URL itself as a stable, unique scope.
+    """
+    principal = coerce_principal(principal)
+    site_url = (body.site_url or "").strip().rstrip("/")
+    email = (body.email or "").strip()
+    token = body.api_token or ""
+    if not site_url or not email or not token:
+        raise HTTPException(422, "site_url, email and api_token are required")
+
+    basic = base64.b64encode(f"{email}:{token}".encode()).decode()
+    auth_header = f"Basic {basic}"
+    transport = _transport("jira")
+    try:
+        myself = transport.get(f"{site_url}/rest/api/3/myself",
+                               headers={"Authorization": auth_header,
+                                        "Accept": "application/json"})
+    except Exception as exc:  # noqa: BLE001 — sanitize, never leak the token
+        raise HTTPException(
+            401, f"could not validate the Jira credential: {type(exc).__name__}") from None
+    if not isinstance(myself, dict) or not myself.get("accountId"):
+        raise HTTPException(401, "could not validate the Jira credential")
+
+    account_name = myself.get("displayName") or myself.get("emailAddress") or email
+    account_email = myself.get("emailAddress") or email
+
+    # Best-effort only (plan research rung: tenant_info is not a documented,
+    # supported Atlassian API) — a failure here must never fail the connect.
+    cloud_id = ""
+    try:
+        tenant = transport.get(f"{site_url}/_edge/tenant_info",
+                               headers={"Authorization": auth_header})
+        if isinstance(tenant, dict):
+            cloud_id = str(tenant.get("cloudId") or "")
+    except Exception:
+        cloud_id = ""
+    if not cloud_id:
+        cloud_id = site_url  # deterministic, unique-per-site fallback scope
+
+    scope = personal_scope(principal)
+    from prism_service.services.jira_auth import get_jira_auth_store
+
+    get_jira_auth_store().set_connection(
+        scope, cloud_id, access_token=token, refresh_token="", expires_at=0,
+        site_url=site_url, auth_kind="api_token",
+        account_email=account_email, account_name=account_name)
+    connection = get_integration_store().ensure_connection(
+        scope, "jira", cloud_id, display_name=account_name)
+    return {"connected": True, "account": account_name,
+            "connection_id": connection.id}
+
+
 @router.post("/{provider}/track")
 def track_repo(provider: str, body: TrackBody,
                principal: Principal = Depends(current_principal)) -> dict:
@@ -286,12 +385,31 @@ def track_repo(provider: str, body: TrackBody,
     principal = coerce_principal(principal)
     if provider not in PROVIDERS:
         raise HTTPException(404, "unknown provider")
+    scope = personal_scope(principal)
+    store = get_integration_store()
+
+    if provider == "jira":
+        # A bare project key (task 64ba4755, FR-4) — attaches to the
+        # connection the connect step already created, never mints a
+        # second, credential-less one. github's owner/repo validation
+        # below is untouched.
+        key = (body.repo or "").strip()
+        if not key:
+            raise HTTPException(422, "a project key is required")
+        conns = [c for c in store.list_connections(scope) if c.provider == "jira"]
+        if not conns:
+            raise HTTPException(409, "connect Jira before tracking a project")
+        connection = conns[0]
+        container = store.ensure_container(
+            scope, connection.id, "jira_project", key,
+            display_key=key, display_name=key)
+        return {"provider": provider, "repo": key,
+                "connection_id": connection.id, "container_id": container.id}
+
     repo = (body.repo or "").strip().strip("/")
     if repo.count("/") != 1 or not all(repo.split("/")):
         raise HTTPException(422, "repository must look like owner/repo")
 
-    scope = personal_scope(principal)
-    store = get_integration_store()
     owner = repo.split("/")[0]
     connection = store.ensure_connection(scope, provider, owner,
                                          display_name=owner)

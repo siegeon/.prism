@@ -8,9 +8,12 @@ is injected so imports are deterministic and network-free in tests.
 
 from __future__ import annotations
 
+import base64
 import json
 import urllib.parse
 import urllib.request
+
+from prism_service.services.jira_auth import JiraCredential
 
 
 class JiraClientError(RuntimeError):
@@ -35,18 +38,31 @@ class JiraClient:
         return f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3"
 
     def search_jql(
-        self, cloud_id: str, access_token: str, jql: str,
+        self, cloud_id: str, access_token, jql: str,
         page_token: str | None = None, max_results: int = 50,
     ) -> dict:
+        """``access_token`` is either a bare bearer-token string (oauth,
+        against the cloud gateway — unchanged) or a ``JiraCredential`` with
+        kind='api_token' (task 64ba4755, FR-3), which targets the SITE
+        directly with HTTP Basic auth instead."""
         params = {"jql": jql, "maxResults": max_results,
                   "fields": "summary,status,assignee,updated"}
         if page_token:
             params["nextPageToken"] = page_token
-        url = f"{self._api_base(cloud_id)}/search/jql?{urllib.parse.urlencode(params)}"
+
+        if isinstance(access_token, JiraCredential) and access_token.kind == "api_token":
+            base = access_token.site_url.rstrip("/") + "/rest/api/3"
+            url = f"{base}/search/jql?{urllib.parse.urlencode(params)}"
+            basic = base64.b64encode(
+                f"{access_token.email}:{access_token.secret}".encode()).decode()
+            headers = {"Authorization": f"Basic {basic}", "Accept": "application/json"}
+        else:
+            url = f"{self._api_base(cloud_id)}/search/jql?{urllib.parse.urlencode(params)}"
+            headers = {"Authorization": f"Bearer {access_token}",
+                       "Accept": "application/json"}
+
         try:
-            data = self._transport.get(
-                url, headers={"Authorization": f"Bearer {access_token}",
-                              "Accept": "application/json"})
+            data = self._transport.get(url, headers=headers)
         except Exception as exc:  # noqa: BLE001 — sanitize, never leak the token
             raise JiraClientError(f"jira request failed: {type(exc).__name__}") from None
         return data if isinstance(data, dict) else {"issues": [], "nextPageToken": None}
