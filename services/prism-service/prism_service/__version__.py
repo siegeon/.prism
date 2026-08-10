@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.26"
+PRISM_VERSION = "7.10.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.27: Connect Jira actually reaches Atlassian [task 64ba4755]. The "
+    "owner's first real connect 503'd ('jira transport is not configured') "
+    "because every test injected the HTTP transport and no production code "
+    "constructed one. The seam now defaults to a real urllib transport "
+    "(GET + POST) when nothing is injected; injected transports still win.\n"
     "v7.10.26: the design-approve affordance now lives WHERE the design "
     "packet lives [task 76df7520]. PlanView lands the owner on the Design "
     "tab (not the empty Implementation view) the moment a populated-but-"

@@ -324,3 +324,44 @@ def test_track_github_owner_repo_validation_is_untouched(app):
     assert resp.status_code == 422, (
         "github tracking must still require owner/repo; jira's bare-key "
         f"branch leaked into github's validation: {resp.text}")
+
+
+# ── Production transport default (owner's live 503, 2026-08-10) ───────────
+# The owner's FIRST real connect attempt returned
+#   503 {"detail":"jira transport is not configured"}
+# because every test in this file INJECTS the transport (set_transport) and
+# no production code ever constructed one — mx-8f4666's built-but-unwired
+# shape, at the seam itself. The seam must default to a REAL transport when
+# nothing is injected; an injected transport still wins.
+
+def test_uninjected_jira_transport_is_real_never_503():
+    from prism_service.api import integrations_connect as ic
+
+    snapshot = dict(ic._transports)
+    try:
+        ic.reset_transports()
+        transport = ic._transport("jira")
+        assert callable(getattr(transport, "get", None)), (
+            "with nothing injected, _transport('jira') must hand back a real "
+            "transport (the owner's live connect 503'd here), not raise")
+        assert callable(getattr(transport, "post", None)), (
+            "the default transport must also speak POST — jira_oauth's "
+            "exchange/refresh path posts through this same seam")
+    finally:
+        ic.reset_transports()
+        ic._transports.update(snapshot)
+
+
+def test_injected_transport_still_wins_over_the_default():
+    from prism_service.api import integrations_connect as ic
+
+    snapshot = dict(ic._transports)
+    sentinel = object()
+    try:
+        ic.set_transport("jira", sentinel)
+        assert ic._transport("jira") is sentinel, (
+            "tests drive the round trip offline via set_transport; the "
+            "production default must never shadow an injected transport")
+    finally:
+        ic.reset_transports()
+        ic._transports.update(snapshot)
