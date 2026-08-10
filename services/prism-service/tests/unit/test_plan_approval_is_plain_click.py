@@ -268,6 +268,60 @@ def test_task_detail_page_imports_approve_design_packet_from_api():
 
 
 # ---------------------------------------------------------------------
+# Clause E - the helper caption BESIDE the Approve/Reject buttons must not
+# call an enabled, plain-click Approve "Blocked". Caught by live
+# verification (Vite HMR against the real dev daemon, task 19c03bbc): the
+# button correctly enables (clause A), but the adjacent caption still fell
+# through to "Blocked: tick override to recover..." for the exact same
+# scenario - tests-pass is not feature-works.
+# ---------------------------------------------------------------------
+
+
+def _caption_ternary_expr(src: str) -> str:
+    """The helper `<span>{...}</span>` caption beside Approve/Reject,
+    found by brace balance from its unique 'Ready: Approve records your
+    decision' string (never a fixed character window)."""
+    marker = "Ready: Approve records your decision"
+    at = src.index(marker)
+    brace_open = src.rfind("{", 0, at)
+    assert brace_open != -1, "no enclosing { found before the caption text"
+    close = _balanced(src, brace_open, "{", "}")
+    return src[brace_open + 1:close]
+
+
+def test_caption_references_awaiting_design_approval_before_the_blocked_fallback():
+    expr = _caption_ternary_expr(_tsx())
+    assert "isAwaitingDesignApproval" in expr, (
+        "the Approve/Reject helper caption never branches on "
+        "isAwaitingDesignApproval, so an enabled plain-click Approve at "
+        "plan_gate still gets captioned by the generic blocked fallback "
+        "(clause E)"
+    )
+    aware_at = expr.index("isAwaitingDesignApproval")
+    blocked_at = expr.index("Blocked: tick override to recover")
+    assert aware_at < blocked_at, (
+        "isAwaitingDesignApproval must be checked BEFORE the generic "
+        "'Blocked: tick override...' fallback in the caption ternary, or "
+        "the honest branch is unreachable (clause E)"
+    )
+
+
+def test_caption_awaiting_branch_does_not_say_blocked():
+    expr = _caption_ternary_expr(_tsx())
+    aware_at = expr.index("isAwaitingDesignApproval")
+    blocked_at = expr.index("Blocked: tick override to recover")
+    # The string literal immediately following the isAwaitingDesignApproval
+    # condition (up to the blocked fallback) must not itself be the
+    # "Blocked" copy - i.e. the branch must say something else.
+    between = expr[aware_at:blocked_at]
+    assert "Blocked: tick override to recover" not in between, (
+        "the isAwaitingDesignApproval branch of the caption still resolves "
+        "to the 'Blocked' copy - an enabled Approve must not be captioned "
+        "as blocked (clause E)"
+    )
+
+
+# ---------------------------------------------------------------------
 # stop_if guard - the fix must never reintroduce the forbidden banner copy
 # test_stale_gate_banner_inspect_vs_override.py already pins as absent.
 # ---------------------------------------------------------------------
