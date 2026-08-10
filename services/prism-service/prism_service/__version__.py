@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.23"
+PRISM_VERSION = "7.10.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.24: THE STEP CLOCK TELLS THE TRUTH WHEN PARKED [task 19c03bbc]. "
+    "fmtClock had no hour rollover (9h40m parked printed '579:43'); it now "
+    "rolls to h:mm:ss at/past 3600s. `counting` was purely activity.state "
+    "(working/adrift/driving) with no token awareness, so the clock and the "
+    "'~Nh left' ETA kept animating beside a '0 tok' readout; it now also "
+    "requires tokens_since_step > 0 OR a COUNT_GRACE_S=90 grace window since "
+    "entering the step. When not counting, the caption renders an honest "
+    "non-animating 'waiting <in_step_s>' label off server truth instead of "
+    "vanishing, and the stale 'clock is HIDDEN when parked' comment is "
+    "corrected.\n"
     "v7.10.23: THE AWAITING-APPROVAL CAPTION STOPS SAYING 'BLOCKED' [task "
     "791602a9]. Caught by live verification against a real parked task "
     "(19c03bbc): the Approve button correctly enabled for an "

@@ -60,9 +60,13 @@ export type Activity = {
 };
 
 function fmtClock(s: number): string {
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${String(sec).padStart(2, "0")}`;
+  const total = Math.max(0, Math.floor(s));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+    : `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 // Coarse remaining-time label for the ETA readout.
@@ -71,6 +75,13 @@ function fmtEta(s: number): string {
   if (s >= 60) return `${Math.round(s / 60)}m`;
   return `${Math.round(s)}s`;
 }
+
+// Grace window: the step clock keeps counting for this many seconds after
+// entering a step even before the first token lands for it (setup/tool
+// calls precede the first assistant turn), so early execution isn't
+// invisible. Matches the 90s session-quiet window session activity itself
+// uses (ACTIVITY_META below).
+const COUNT_GRACE_S = 90;
 
 // Honest activity STATE → label + accent tone. Keyed by activity.state (not the
 // raw status) so a task the conductor isn't driving reads as slate/rose, not a
@@ -184,7 +195,7 @@ export default function SdlcProgress({
   // task_motion_s (both server-truth). Before this, the execution clock froze
   // DURING execution while the idle clock ticked beside it on the same line —
   // two clocks disagreeing about the same second (owner 2026-07-21).
-  const counting = state === "working" || state === "adrift" || state === "driving";
+  const counting = live && (tokens > 0 || (phase?.in_step_s ?? 0) < COUNT_GRACE_S);
   const frozenInStep = Math.max(
     0, (phase?.in_step_s ?? 0) - (activity?.task_motion_s ?? 0));
   const [liveInStep, setLiveInStep] = useState(
@@ -299,13 +310,20 @@ export default function SdlcProgress({
                 transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
               {/* The clock is an EXECUTION metric (owner: for observing and
-                  refining LLM process time). We have no per-step llm-active
-                  duration recorded yet (agent_runs carries tokens only), so
-                  when the task is parked the clock is HIDDEN rather than
-                  showing wall time — tokens are the honest effort figure.
-                  Waiting time lives on the LiveBar chip (· 3H) explicitly. */}
-              {counting && <span>{fmtClock(liveInStep)}</span>}
-              {live && (phase?.eta_s ?? 0) > 5 && (
+                  refining LLM process time). It counts through COUNT_GRACE_S
+                  before the first token lands for a step (setup precedes the
+                  first turn), then gates on real token flow via `counting`.
+                  When NOT counting it still renders — a clock that vanishes
+                  reads as broken, not as "nothing to see" — showing the
+                  server-truth waiting duration (phase.in_step_s) instead of
+                  the animated execution clock, so a long park never prints
+                  the execution timer's minutes:seconds as if work were live. */}
+              {counting ? (
+                <span>{fmtClock(liveInStep)}</span>
+              ) : (
+                <span className="opacity-70">waiting {fmtClock(phase?.in_step_s ?? 0)}</span>
+              )}
+              {counting && (phase?.eta_s ?? 0) > 5 && (
                 <span
                   className="opacity-70"
                   style={{ color: "var(--accent-teal-fg)" }}
