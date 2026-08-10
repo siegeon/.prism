@@ -1710,6 +1710,11 @@ export default function TaskDetailPage() {
                       <td className="py-1.5 pr-3">
                         {gateReadiness?.receipt_ok
                           ? <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }}>passing</span>
+                          : isAwaitingDesignApproval
+                            // A design-packet receipt awaiting your review is not a failure and
+                            // has nothing to re-run — the Approve click below IS the runner
+                            // (task 5120c7b2, the CHECK row was task 791602a9's one miss).
+                            ? <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}>awaiting your approval, use Approve below</span>
                           : gateReadiness?.receipt?.status === "manual_evidence_required"
                             // NOT a failure — the oracle (e.g. a browser/screenshot check) has no
                             // machine runner wired, so it AWAITS your manual review. Painting this

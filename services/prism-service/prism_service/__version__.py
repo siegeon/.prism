@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.24"
+PRISM_VERSION = "7.10.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.25: CHECK-row RESULT cell stops painting an awaiting-approval "
+    "design packet as 'stale / failed' with a dead re-run link [task "
+    "5120c7b2]. isAwaitingDesignApproval now gates an amber 'awaiting your "
+    "approval, use Approve below' pill ahead of the manual/rose branches - "
+    "the Approve click below IS the runner, nothing to re-run.\n"
     "v7.10.24: THE STEP CLOCK TELLS THE TRUTH WHEN PARKED [task 19c03bbc]. "
     "fmtClock had no hour rollover (9h40m parked printed '579:43'); it now "
     "rolls to h:mm:ss at/past 3600s. `counting` was purely activity.state "
