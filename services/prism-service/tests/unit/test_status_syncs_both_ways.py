@@ -205,19 +205,108 @@ def test_ac8b_marking_done_twice_closes_once(wired):
     assert fake.closed == [4242], "the closure leg wrote twice for one task"
 
 
-# ── scope: GitHub only, until another provider's round trip is exercised ──
-def test_inbound_reconcile_is_github_only(tmp_path):
-    """Owner 2026-08-02: "we have not done jira yet, just github".
-
-    The first cut of this slice put the reconcile in the shared _import_one
-    with no provider gate, which silently rewrote test_jira_work_import's
-    contract for a provider that is not even registered in production
-    (/api/integrations/connect/mirror reports adapters:["github"]). This pins
-    the gate so widening it has to be a deliberate edit with its own evidence.
-    """
+# ── scope: github AND jira now, board-wins mapping (task 64ba4755) ────────
+#
+# RETIRED in place under task 64ba4755 (owner 2026-08-10, superseding the
+# 2026-08-02 "we have not done jira yet" scoping): Jira's read-mostly round
+# trip is now built (FR-1..FR-6), so extending the reconcile set past
+# github is no longer speculation — it is this slice's own FR-7. The old
+# name is kept as a comment so the history of what changed stays legible.
+def test_inbound_reconcile_now_includes_jira_with_board_wins_mapping(tmp_path):
     from prism_service.services.work_item_sync import STATUS_RECONCILE_PROVIDERS
 
     assert "github" in STATUS_RECONCILE_PROVIDERS
-    assert "jira" not in STATUS_RECONCILE_PROVIDERS, (
-        "jira is not built yet; reconciling it changes a contract on "
-        "speculation")
+    assert "jira" in STATUS_RECONCILE_PROVIDERS, (
+        "task 64ba4755 FR-7: Jira's own inbound round trip is built, so it "
+        "must join the reconcile set")
+
+
+BOARD_WINS_CASES = [
+    # (raw remote status name, status_category, expected task status)
+    ("Done", "done", "done"),                    # statusCategory done wins first
+    ("Blocked", "unknown", "blocked"),
+    ("To Do", "unknown", "pending"),
+    ("Open", "unknown", "pending"),
+    ("Backlog", "unknown", "pending"),
+    ("Reopened", "unknown", "pending"),
+    ("Dev", "unknown", "in_progress"),
+    ("In Progress", "in_progress", "in_progress"),
+    ("Code Review", "unknown", "in_progress"),
+    ("In Review", "unknown", "in_progress"),
+    ("QA", "unknown", "in_progress"),
+    ("Validation", "unknown", "in_progress"),
+]
+
+
+@pytest.mark.parametrize("raw_name,status_category,expected", BOARD_WINS_CASES)
+def test_ac7_board_wins_mapping_table(tmp_path, raw_name, status_category, expected):
+    """FR-7: statusCategory done wins first; then the board-name map. A
+    table-driven pin over every mapped name (plan AC-7)."""
+    from prism_service.models.integration import ExternalEntityInput
+    from prism_service.services.integration_store import IntegrationStore
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.work_item_sync import PulledPage, WorkItemSyncService
+
+    scope = "workspace-board-wins"
+    store = IntegrationStore(str(tmp_path / "integrations.db"))
+    tasks = TaskService(str(tmp_path / "tasks.db"))
+    conn = store.ensure_connection(scope, "jira", "cloud-1")
+    cont = store.ensure_container(scope, conn.id, "jira_project", "PROJ")
+
+    class _OneIssueAdapter:
+        provider = "jira"
+
+        def pull_page(self, connection, container, cursor, page_token):
+            entity = ExternalEntityInput(
+                entity_kind="jira_issue", remote_id="issue-1", display_key="PROJ-1",
+                title="board case", remote_status=raw_name,
+                status_category=status_category)
+            return PulledPage(entities=[entity])
+
+    svc = WorkItemSyncService(store, intake=tasks)
+    svc.register(_OneIssueAdapter())
+    svc.pull_container(scope, conn, cont)
+
+    entity = store.list_entities(scope)[0]
+    link = store.list_links(scope, entity_id=entity.id)[0]
+    task = tasks.get(link.task_id)
+    assert task.status == expected, (
+        f"{raw_name!r} (status_category={status_category!r}) should map to "
+        f"{expected!r}, got {task.status!r}")
+    assert task.workflow_step == "" and task.gate_state == "none"
+
+
+def test_ac7_an_unmapped_board_name_writes_nothing(tmp_path):
+    """An unrecognized status name (not statusCategory done, not in the
+    board map) must leave the local task exactly as it was — never guess."""
+    from prism_service.models.integration import ExternalEntityInput
+    from prism_service.services.integration_store import IntegrationStore
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.work_item_sync import PulledPage, WorkItemSyncService
+
+    scope = "workspace-board-wins-unmapped"
+    store = IntegrationStore(str(tmp_path / "integrations.db"))
+    tasks = TaskService(str(tmp_path / "tasks.db"))
+    conn = store.ensure_connection(scope, "jira", "cloud-1")
+    cont = store.ensure_container(scope, conn.id, "jira_project", "PROJ")
+
+    class _OneIssueAdapter:
+        provider = "jira"
+
+        def pull_page(self, connection, container, cursor, page_token):
+            entity = ExternalEntityInput(
+                entity_kind="jira_issue", remote_id="issue-2", display_key="PROJ-2",
+                title="unmapped", remote_status="Some Custom Workflow Status",
+                status_category="unknown")
+            return PulledPage(entities=[entity])
+
+    svc = WorkItemSyncService(store, intake=tasks)
+    svc.register(_OneIssueAdapter())
+    svc.pull_container(scope, conn, cont)
+
+    entity = store.list_entities(scope)[0]
+    link = store.list_links(scope, entity_id=entity.id)[0]
+    task = tasks.get(link.task_id)
+    assert task.status == "pending", (
+        "an unmapped board status must never be guessed at; the task's "
+        "original pending status must survive untouched")

@@ -221,15 +221,24 @@ def test_ac5_a_jira_token_failure_degrades_to_a_clean_adapter_error(tmp_path):
         "out of pull_container instead of reaching finish_run at all")
 
 
-# ── AC-6: registering Jira must never extend inbound status-reconcile ─────
+# ── AC-6: retired in place under task 64ba4755 (owner 2026-08-10) ─────────
+#
+# This used to pin STATUS_RECONCILE_PROVIDERS == frozenset({"github"}) as a
+# regression guard against the 0a9b511f mistake (a shared code path silently
+# inheriting a contract change for a provider nobody had connected). Jira's
+# own read-mostly round trip is now built (task 64ba4755 FR-1..FR-6), so its
+# inbound reconcile (FR-7) is this slice's deliberate, evidenced widening,
+# not speculation — the exact case the original guard was written to allow
+# once satisfied. The still-real invariant (github's registration proof
+# above) is untouched; only the exact-equality pin on the frozenset is
+# superseded.
 
-def test_ac6_jira_registration_never_extends_status_reconcile():
-    """Regression pin for the exact 0a9b511f mistake: a shared code path
-    silently inheriting a contract change for a provider nobody had
-    connected yet. Registering Jira here must not touch this set."""
+def test_ac6_jira_registration_extends_status_reconcile_deliberately():
     from prism_service.services.work_item_sync import STATUS_RECONCILE_PROVIDERS
 
-    assert STATUS_RECONCILE_PROVIDERS == frozenset({"github"})
+    assert STATUS_RECONCILE_PROVIDERS == frozenset({"github", "jira"}), (
+        "task 64ba4755 FR-7 deliberately widens the reconcile set to "
+        f"include jira's own built round trip; got {STATUS_RECONCILE_PROVIDERS}")
 
 
 # ── AC-7 / AC-8: ExternalMessage is a real sibling, never an intake path ──
