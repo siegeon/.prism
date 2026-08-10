@@ -1891,9 +1891,11 @@ export default function TaskDetailPage() {
                   <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
                     {gateVerdict === "ready"
                       ? "Ready: Approve records your decision; the machine check runs first."
-                      : gateOverride
-                        ? "Override armed: Approve releases on your judgment (audited)."
-                        : "Blocked: tick override to recover, or fix the evidence and re-run."}
+                      : isAwaitingDesignApproval
+                        ? "Awaiting your approval: Approve records the design-packet sign-off and releases the gate."
+                        : gateOverride
+                          ? "Override armed: Approve releases on your judgment (audited)."
+                          : "Blocked: tick override to recover, or fix the evidence and re-run."}
                   </span>
                 </div>
               </div>
