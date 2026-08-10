@@ -4231,6 +4231,23 @@ PRISM_VERSION_NOTES += (
     "page no longer fires a live pytest run. The live path is unchanged "
     "for non-dead tasks (Approve, Override, re-run all pinned)."
 )
+PRISM_VERSION_NOTES += (
+    " v7.10.25: JIRA API-TOKEN CONNECT + BOARD-WINS INBOUND SYNC "
+    "[task 64ba4755]. POST /api/integrations/connect/jira/api-token "
+    "validates a site URL + email + Atlassian API token against "
+    "/rest/api/3/myself (Basic auth), resolves a cloud id best-effort, and "
+    "persists through JiraAuthStore (auth_kind/account_email columns added "
+    "additively; the raw token is Fernet-encrypted at rest, never a plain "
+    "store dump). JiraClient gains a Basic-auth mode against "
+    "https://<site>/rest/api/3; JiraWorkAdapter scopes JQL to "
+    "assignee=currentUser() AND statusCategory != Done with the project "
+    "key validated before interpolation (closes mx-8f4666), and builds "
+    "issue URLs from the connection's own site_url. "
+    "STATUS_RECONCILE_PROVIDERS now includes jira with a board-wins status "
+    "map (Blocked/To Do/Dev/In Progress/etc.), never clobbering a task "
+    "whose workflow_step is already set. Settings > Connectors' Jira card "
+    "renders the api-token form and a provider-aware project tracker."
+)
 
 
 

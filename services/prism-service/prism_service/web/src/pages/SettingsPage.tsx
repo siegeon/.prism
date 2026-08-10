@@ -12,6 +12,7 @@ import {
   trackConnectorRepo,
   runConnectorSync,
   startConnect,
+  connectJiraApiToken,
   getMirrorStatus,
   pushBacklog,
   listCollaborationSurfaces,
@@ -3428,6 +3429,9 @@ function RepoSync({ connector, project, onChanged }:
   const [err, setErr] = useState("");
   const tracked = connector.tracking ?? [];
 
+  // Jira tracks a bare PROJECT KEY (task 64ba4755, FR-4), never owner/repo.
+  const isJira = connector.provider === "jira";
+
   const track = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     setErr(""); setNote(""); setBusy("track");
@@ -3452,10 +3456,10 @@ function RepoSync({ connector, project, onChanged }:
   return (
     <div className="space-y-3" onClick={(e) => e.stopPropagation()}>
       <div>
-        <SectionLabel>Repositories</SectionLabel>
+        <SectionLabel>{isJira ? "Projects" : "Repositories"}</SectionLabel>
         {tracked.length === 0 ? (
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Nothing tracked yet. Add one as owner/repo.
+            Nothing tracked yet. Add one as {isJira ? "a project key" : "owner/repo"}.
           </p>
         ) : (
           <ul className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>
@@ -3466,7 +3470,7 @@ function RepoSync({ connector, project, onChanged }:
       {connector.provider === "github" && <MirrorLine connector={connector} />}
       <div className="flex items-center gap-2">
         <input value={repo} onChange={(e) => setRepo(e.target.value)}
-          placeholder="owner/repo"
+          placeholder={isJira ? "KEY" : "owner/repo"}
           className="flex-1 text-xs font-mono px-3 py-1.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]" />
         <button type="button" onClick={track} disabled={!repo.trim() || busy !== ""}
           className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40">
@@ -3545,6 +3549,59 @@ function BacklogPush({ connector, project }: { connector: Connector; project: st
       )}
       {err && <p className="mt-2 text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
     </div>
+  );
+}
+
+/** Connect Jira with a site URL + email + Atlassian API token (task
+ *  64ba4755) — this instance has no Atlassian OAuth app registered, so the
+ *  OAuth "Connect" button above has nothing to authorize against. Shown in
+ *  BOTH the not_connected and not_configured branches: an unconfigured
+ *  OAuth app must never be the last word once this path can connect on its
+ *  own. The raw token is never echoed back; only the validated account name. */
+function JiraApiTokenForm({ onConnected }: { onConnected: () => void }) {
+  const [siteUrl, setSiteUrl] = useState("");
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const connect = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(""); setBusy(true);
+    try {
+      await connectJiraApiToken(siteUrl.trim(), email.trim(), token);
+      setToken("");
+      onConnected();
+    } catch (ex) { setErr(String((ex as Error).message ?? ex)); }
+    finally { setBusy(false); }
+  }, [siteUrl, email, token, onConnected]);
+
+  return (
+    <form className="space-y-2" onSubmit={connect} onClick={(e) => e.stopPropagation()}>
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        Connect with an{" "}
+        <a href="https://id.atlassian.com/manage-profile/security/api-tokens"
+          target="_blank" rel="noopener" className="underline">
+          Atlassian API token
+        </a>{" "}— no admin-installed app needed on this instance.
+      </p>
+      <input value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)}
+        placeholder="https://your-site.atlassian.net"
+        className="w-full text-xs font-mono px-3 py-1.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]" />
+      <input value={email} onChange={(e) => setEmail(e.target.value)}
+        placeholder="you@example.com" type="email"
+        className="w-full text-xs font-mono px-3 py-1.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]" />
+      <input value={token} onChange={(e) => setToken(e.target.value)}
+        placeholder="API token" type="password"
+        className="w-full text-xs font-mono px-3 py-1.5 rounded-md bg-[color:var(--surface-2)] border border-[color:var(--border-default)]" />
+      <button type="submit"
+        disabled={busy || !siteUrl.trim() || !email.trim() || !token}
+        className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+        style={{ color: "var(--accent-teal-fg)" }}>
+        {busy ? "Connecting…" : "Connect Jira"}
+      </button>
+      {err && <p className="text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
+    </form>
   );
 }
 
@@ -3708,11 +3765,16 @@ function ConnectorsSection({ project }: { project: string }) {
                   )}
                 </>
               ) : (
-                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  {c.detail} Connecting is optional: PRISM tracks your work on
-                  its own, and {c.name} only adds a place to see work that
-                  already lives there.
-                </p>
+                <div className="space-y-3">
+                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                    {c.detail} Connecting is optional: PRISM tracks your work
+                    on its own, and {c.name} only adds a place to see work
+                    that already lives there.
+                  </p>
+                  {c.provider === "jira"
+                    && (c.state === "not_connected" || c.state === "not_configured")
+                    && <JiraApiTokenForm onConnected={reload} />}
+                </div>
               )}
             </div>
           )}

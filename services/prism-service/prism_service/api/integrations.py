@@ -98,6 +98,14 @@ def register_builtin_adapters() -> None:
         def _jira_access_token(connection):
             import time
 
+            store = get_jira_auth_store()
+            # api_token connections (task 64ba4755, FR-1/FR-3) carry no
+            # refresh grant at all - hand JiraClient the full credential so
+            # it can Basic-auth the site directly, never the oauth refresh
+            # loop below.
+            if store.auth_kind(connection.workspace_id, connection.remote_scope) == "api_token":
+                return store.credential(connection.workspace_id, connection.remote_scope)
+
             def _refresh(_refresh_token: str) -> dict:
                 # No OAuth network transport is wired in production yet (the
                 # same gap integrations_connect.py's own health-check
@@ -107,13 +115,18 @@ def register_builtin_adapters() -> None:
                 raise RuntimeError(
                     "jira token refresh is not configured on this instance")
 
-            return get_jira_auth_store().access_token(
+            return store.access_token(
                 connection.workspace_id, connection.remote_scope,
                 now=int(time.time()), refresh=_refresh)
+
+        def _jira_site_url(connection):
+            return get_jira_auth_store().site_url(
+                connection.workspace_id, connection.remote_scope)
 
         register_adapter(JiraWorkAdapter(
             client=JiraClient(),
             access_token_provider=_jira_access_token,
+            site_url_provider=_jira_site_url,
         ))
     except Exception as exc:  # pragma: no cover - a broken provider is not fatal
         adapter_registration_errors["jira"] = f"{type(exc).__name__}: {exc}"

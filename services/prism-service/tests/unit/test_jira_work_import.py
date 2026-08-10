@@ -111,7 +111,13 @@ def test_identical_keys_across_sites_do_not_collide(tmp_path):
     assert len({e.id for e in store.list_entities(WS_A)}) == 2
 
 
-def test_remote_status_stays_out_of_conductor(tmp_path):
+def test_remote_done_reconciles_board_wins_but_never_touches_the_conductor(tmp_path):
+    """UPDATED under task 64ba4755 (owner 2026-08-10, FR-7): Jira now joins
+    STATUS_RECONCILE_PROVIDERS, so a Done-category issue DOES move its local
+    task to done on import — superseding the old "task.status stays pending"
+    assertion this test carried. The real invariant survives unchanged:
+    remote state still never drives workflow_step or gate_state, so a closed
+    issue can never manufacture a passed gate."""
     client = _FakeJiraClient({"cloud-1": _fixture()})
     store = _store(tmp_path)
     tasks = _task_svc(tmp_path)
@@ -124,8 +130,93 @@ def test_remote_status_stays_out_of_conductor(tmp_path):
     assert done_issue.status_category == "done"        # normalized
     link = store.list_links(WS_A, entity_id=done_issue.id)[0]
     task = tasks.get(link.task_id)
-    assert task.status == "pending"                    # NOT done
-    assert task.workflow_step == "" and task.gate_state == "none"
+    assert task.status == "done", (
+        "board-wins mapping (task 64ba4755, FR-7) must reconcile a Done "
+        "Jira issue to a done local task on import")
+    assert task.workflow_step == "" and task.gate_state == "none", (
+        "the surviving invariant: remote state must still never drive "
+        "workflow_step/gate_state")
+
+
+def test_a_task_with_a_workflow_step_set_is_never_status_clobbered(tmp_path):
+    """AC-8: today only the pre-existing `done` short-circuit protects a
+    mirrored task; this pins the NEW guard the board-wins mapping needs —
+    a task a driver already picked up (non-empty workflow_step) must stay
+    exactly as it is even when the remote issue closes."""
+    client = _FakeJiraClient({"cloud-1": _fixture()})
+    store = _store(tmp_path)
+    tasks = _task_svc(tmp_path)
+    conn = store.ensure_connection(WS_A, "jira", "cloud-1")
+    cont = store.ensure_container(WS_A, conn.id, "jira_project", "PROJ")
+    sync = _sync(store, tasks, _adapter(client))
+    sync.pull_container(WS_A, conn, cont)  # first pull: creates the task
+
+    done_issue = [e for e in store.list_entities(WS_A) if e.remote_id == "10002"][0]
+    link = store.list_links(WS_A, entity_id=done_issue.id)[0]
+    tasks.update(link.task_id, status="in_progress", workflow_step="write_failing_tests")
+
+    sync.pull_container(WS_A, conn, cont)  # second pull: issue is still Done
+
+    task = tasks.get(link.task_id)
+    assert task.status == "in_progress", (
+        "a task with workflow_step set must never be clobbered by remote "
+        "status, even when the mirror keeps seeing it as Done")
+    assert task.workflow_step == "write_failing_tests"
+
+
+def test_jql_is_scoped_to_in_flow_work_and_the_project_key_is_validated(tmp_path):
+    """FR-5: the JQL must scope to the connected user's in-flow work, and the
+    project key is validated against ^[A-Za-z][A-Za-z0-9_]*$ BEFORE
+    interpolation — closing the recorded JQL-injection defect mx-8f4666."""
+    from prism_service.services.jira_work import JiraWorkAdapter
+    from prism_service.services.work_item_sync import AdapterError
+
+    class _CapturingClient:
+        def __init__(self):
+            self.jqls: list[str] = []
+
+        def search_jql(self, cloud_id, access_token, jql, page_token=None, max_results=50):
+            self.jqls.append(jql)
+            return {"issues": [], "nextPageToken": None}
+
+    store = _store(tmp_path)
+    conn = store.ensure_connection(WS_A, "jira", "cloud-1")
+    cont = store.ensure_container(WS_A, conn.id, "jira_project", "PROJ")
+
+    client = _CapturingClient()
+    adapter = JiraWorkAdapter(client, access_token_provider=lambda c: "tok")
+    adapter.pull_page(conn, cont, cursor=None, page_token=None)
+
+    assert len(client.jqls) == 1
+    jql = client.jqls[0]
+    assert 'project = "PROJ"' in jql
+    assert "assignee = currentUser()" in jql
+    assert "statusCategory != Done" in jql
+
+    injector = store.ensure_container(
+        WS_A, conn.id, "jira_project", 'PROJ" OR 1=1 --')
+    bad_client = _CapturingClient()
+    bad_adapter = JiraWorkAdapter(bad_client, access_token_provider=lambda c: "tok")
+    with pytest.raises(AdapterError):
+        bad_adapter.pull_page(conn, injector, cursor=None, page_token=None)
+    assert not bad_client.jqls, (
+        "an invalid project key must never reach JQL interpolation")
+
+
+def test_issue_url_is_built_from_the_connections_site_url(tmp_path):
+    """FR-6: `_issue_input` must build a real browse URL from the connection's
+    stored site_url, replacing the hardcoded url=''."""
+    from prism_service.services.jira_work import _issue_input
+
+    issue = {"id": "10001", "key": "PROJ-1",
+             "fields": {"summary": "x", "status": {"name": "To Do"},
+                        "assignee": None, "updated": "2026-08-01T00:00:00Z"}}
+    entity = _issue_input(issue, "https://acme.atlassian.net")
+    assert entity.url == "https://acme.atlassian.net/browse/PROJ-1"
+
+    # no site_url known yet -> stays empty, never a broken partial URL
+    entity_no_site = _issue_input(issue, "")
+    assert entity_no_site.url == ""
 
 
 def test_secret_access_token_never_reaches_receipts(tmp_path):
