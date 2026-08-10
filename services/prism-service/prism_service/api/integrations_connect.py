@@ -74,8 +74,55 @@ def _states() -> jira_oauth.OAuthStateStore:
     return _state_store
 
 
+class _RealTransport:
+    """Production HTTP transport, the seam's DEFAULT (task 64ba4755).
+
+    The owner's first real connect attempt 503'd \"jira transport is not
+    configured\": every test injects a transport here and nothing in
+    production ever constructed one. Speaks both verbs this seam serves:
+    GET for the api-token validation calls, POST for jira_oauth's
+    exchange/refresh. Errors bubble raw; every caller already wraps them
+    into sanitized HTTP errors that never carry a token.
+    """
+
+    def _round_trip(self, req) -> dict:
+        import json as _json
+        import urllib.request
+
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return _json.loads(resp.read().decode("utf-8"))
+
+    def get(self, url: str, headers: Optional[dict] = None) -> dict:
+        import urllib.request
+
+        return self._round_trip(urllib.request.Request(
+            url, headers=headers or {}, method="GET"))
+
+    def post(self, url: str, json: Optional[dict] = None,
+             headers: Optional[dict] = None) -> dict:
+        import json as _json
+        import urllib.request
+
+        merged = {"Content-Type": "application/json",
+                  "Accept": "application/json", **(headers or {})}
+        return self._round_trip(urllib.request.Request(
+            url, data=_json.dumps(json or {}).encode("utf-8"),
+            headers=merged, method="POST"))
+
+
+_real_transport: Optional[_RealTransport] = None
+
+
 def _transport(provider: str):
     transport = _transports.get(provider)
+    if transport is None and provider == "jira":
+        # Nothing injected -> the real network, lazily. Kept OUT of
+        # _transports so an injection made later still wins and
+        # reset_transports() semantics are unchanged.
+        global _real_transport
+        if _real_transport is None:
+            _real_transport = _RealTransport()
+        return _real_transport
     if transport is None:
         raise HTTPException(503, f"{provider} transport is not configured")
     return transport
