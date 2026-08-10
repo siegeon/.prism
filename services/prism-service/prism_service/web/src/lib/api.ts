@@ -59,6 +59,22 @@ export const api = {
     fetchJSON<T>(p, { method: "DELETE" }),
 };
 
+// A plain plan_gate Approve, when the parked evidence is an unapproved
+// design packet (isAwaitingDesignApproval, TaskDetailPage.tsx), must also
+// record the packet ledger's own approval - or the ledger reads unapproved
+// forever even after the gate itself releases (task 791602a9). Same route
+// DesignPacket.tsx's own explicit approve button already posts to.
+export async function approveDesignPacket(
+  taskId: string,
+  approver: string,
+  project = "default",
+): Promise<{ ok: boolean; approver: string }> {
+  return api.post(`/api/conductor/design-packet/approve?project=${project}`, {
+    task_id: taskId,
+    approver,
+  });
+}
+
 // ── Team-work integration surface (task ae31c2c0) ──────────────────────
 // Thin typed helpers over the provider-neutral integration core
 // (/api/workspaces/{ws}/integrations/*). The Work view merges native tasks

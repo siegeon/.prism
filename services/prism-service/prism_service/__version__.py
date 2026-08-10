@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.21"
+PRISM_VERSION = "7.10.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.22: PLAN_GATE APPROVE IS A PLAIN CLICK AGAIN [task 791602a9]. A "
+    "complete-but-unapproved design packet reports gateVerdict=blocked by "
+    "construction, so the Approve button's disabled expression forced the "
+    "override checkbox + a typed reason even though nothing was wrong. The "
+    "button now also treats isAwaitingDesignApproval as enabled-plain, and "
+    "gateDecide() calls the new approveDesignPacket() (api.ts) BEFORE the "
+    "gate POST so a plain approve records the packet ledger's own approval "
+    "too - a genuinely blocked, non-design verdict still requires override "
+    "+ reason (unchanged).\n"
     "v7.10.21: FLIPPING THE SYNC SWITCH ON PUSHES THE BACKLOG, AND THE TASK "
     "DETAIL PAGE SHOWS THE COUNTERPART [task 02672417]. Two gaps in the "
     "two-way mirror. (1) PUT .../{provider}/sync False->True now sweeps "
