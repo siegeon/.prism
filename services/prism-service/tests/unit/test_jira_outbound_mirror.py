@@ -462,3 +462,41 @@ def test_ac12_mirroring_one_task_never_touches_the_others(wired):
     for other in others:
         links = [l for l in store.list_links(SCOPE, task_id=other.id) if l.state == "active"]
         assert links == [], f"an unrelated task {other.id} was linked as a side effect"
+
+
+# ── Regression (live PRIS-8, 2026-08-11): closure resolves the PROVIDER'S
+# own link. A task mirrored to BOTH github and jira closed its github issue
+# while the jira leg refused with "linked entity is not a jira issue":
+# push_task_closure took active_links[0] regardless of provider. It must
+# select the link whose connection matches the requested provider.
+def test_closure_picks_the_providers_own_link_among_many(wired):
+    from prism_service.api.integrations import _adapters
+    from prism_service.models.integration import ExternalEntityInput
+    from prism_service.services import task_mirror
+    from prism_service.services.work_item_sync import push_task_closure
+
+    svc, store, outbox, transport = wired
+    task = svc.create(title="mirrored to two providers")
+
+    # A github link FIRST, so a provider-blind active_links[0] picks it.
+    gconn = store.ensure_connection(SCOPE, "github", "install-x")
+    gcont = store.ensure_container(SCOPE, gconn.id, "repository", "o/r",
+                                   display_key="o/r")
+    gentity, _ = store.upsert_entity(
+        SCOPE, gconn.id, gcont.id,
+        ExternalEntityInput(entity_kind="issue", remote_id="I_gh1",
+                            display_key="#1"))
+    glink = store.claim_import_link(SCOPE, gentity.id, task.id)
+    store.activate_link(SCOPE, glink.id)
+
+    assert task_mirror.mirror_task(
+        "prism", task.id, provider="jira").created is True
+
+    result = push_task_closure(
+        store, outbox, _adapters, lambda ws, p: True,
+        SCOPE, task.id, True, provider="jira")
+    assert result.closed is True, (
+        f"jira closure must resolve the jira link even when a github link "
+        f"exists and sorts first; refused with: {result.reason}")
+    trans = [c for c in transport.calls if "transitions" in c[1]]
+    assert trans, "the jira transitions endpoint was never called"
