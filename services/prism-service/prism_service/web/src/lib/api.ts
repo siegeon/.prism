@@ -189,13 +189,20 @@ export type LastSync = {
   reason: string;
 };
 
+/** A single tracked collection (repo/project) a connector card links to
+ *  (task a752e76c). url is server-supplied, never client-derived. */
+export type TrackedCollection = {
+  key: string;
+  url: string;
+};
+
 export type Connector = {
   provider: string;
   name: string;
   state: ConnectorState;
   detail?: string;
   account?: string;
-  tracking?: string[];
+  tracking?: TrackedCollection[];
   /** Whether the user asked PRISM to sync with this provider. Separate from
    *  `state`: a working credential is not consent to sync. */
   sync_enabled?: boolean;

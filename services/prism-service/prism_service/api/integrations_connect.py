@@ -265,6 +265,26 @@ def _last_sync_for_containers(store, scope: str, provider: str, containers) -> O
             "reason": reason}
 
 
+def _tracking(provider: str, scope: str, containers, connection=None) -> list:
+    """Each tracked collection as ``{key, url}`` for the connector card's
+    clickable header (task a752e76c). GitHub's url is read verbatim off the
+    stored container (FR-2, set at track time - see the /track route below).
+    Jira's is derived server-side from the connected site (FR-3); an unknown
+    or unresolvable site yields url=="" - JiraAuthStore.site_url already
+    degrades JiraAuthError -> "" (jira_auth.py:208-213), never a raise.
+    """
+    if provider == "jira":
+        from prism_service.services.jira_auth import get_jira_auth_store
+
+        site = (get_jira_auth_store().site_url(scope, connection.remote_scope)
+                if connection is not None else "")
+        return [{"key": k.display_key or k.remote_id,
+                 "url": f"{site}/jira/software/projects/{k.display_key or k.remote_id}"
+                        if site else ""}
+                for k in containers]
+    return [{"key": k.display_key or k.remote_id, "url": k.url} for k in containers]
+
+
 def _provider_state(provider: str, scope: str) -> dict:
     """ONE honest status per connector, decided SERVER-side.
 
@@ -296,7 +316,7 @@ def _provider_state(provider: str, scope: str) -> dict:
                      if c.provider == provider]
             containers = [k for c in conns
                           for k in store.list_containers(scope, c.id)]
-            tracking = [k.display_key or k.remote_id for k in containers]
+            tracking = _tracking(provider, scope, containers)
             last_sync = _last_sync_for_containers(store, scope, provider, containers)
             return {"provider": provider, "name": name, "state": cli["state"],
                     "detail": cli["detail"], "account": cli["account"],
@@ -327,7 +347,7 @@ def _provider_state(provider: str, scope: str) -> dict:
         api_token_conn = next((c for c in conns if _is_api_token(c)), None)
         if api_token_conn is not None:
             containers = store.list_containers(scope, api_token_conn.id)
-            tracking = [k.display_key or k.remote_id for k in containers]
+            tracking = _tracking(provider, scope, containers, connection=api_token_conn)
             last_sync = _last_sync_for_containers(store, scope, provider, containers)
             return {"provider": provider, "name": name, "state": "connected",
                     "detail": "Connected.",
@@ -350,7 +370,7 @@ def _provider_state(provider: str, scope: str) -> dict:
 
     conn = conns[0]
     containers = store.list_containers(scope, conn.id)
-    tracking = [k.display_key or k.remote_id for k in containers]
+    tracking = _tracking(provider, scope, containers, connection=conn)
     last_sync = _last_sync_for_containers(store, scope, provider, containers)
     if provider == "jira":
         # REAL credential health, not row presence.
