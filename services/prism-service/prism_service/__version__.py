@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.27"
+PRISM_VERSION = "7.10.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.28: the Jira/GitHub connector card shows what the sync did "
+    "[task 1c9899d6]. GET /api/integrations/connect/status now surfaces "
+    "each tracked container's LATEST sync_runs row (IntegrationStore."
+    "list_runs' own ordering, never re-derived) as a `last_sync` field; a "
+    "zero-import sync names the in-flow filter instead of vanishing after "
+    "reload, and a non-zero one links to the Work view (/tasks?q=<provider>) "
+    "via a new `q` URL param TasksPage now seeds its search box from.\n"
     "v7.10.27: Connect Jira actually reaches Atlassian [task 64ba4755]. The "
     "owner's first real connect 503'd ('jira transport is not configured') "
     "because every test injected the HTTP transport and no production code "
