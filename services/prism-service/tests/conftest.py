@@ -157,6 +157,38 @@ def _integration_adapter_registry_isolation():
         integrations.restore_adapters(before)
 
 
+@pytest.fixture(autouse=True)
+def _task_observer_registry_isolation():
+    """Snapshot/restore task_service._CREATE_OBSERVERS / _STATUS_OBSERVERS
+    around every test (task 44342d64), mirroring
+    _integration_adapter_registry_isolation above for the identical class
+    of bug on a different registry.
+
+    Those two lists are process-global and production populates them
+    exactly once, from main.py's lifespan calling task_mirror.install()
+    (main.py:406-413) -- nothing on that path ever uninstalls, because a
+    live server is never supposed to remove its own mirror. Any unit test
+    that boots the real lifespan (quiet_boot above) or otherwise calls
+    add_create_observer/add_status_observer directly therefore leaves the
+    observer registered for the rest of the pytest process, so an
+    unrelated TaskService.create()/update() in a LATER file can trip it
+    (tests/unit/test_switch_on_pushes_backlog.py::
+    test_done_and_cancelled_backlog_is_never_exported). Because this
+    fixture lives in the root conftest, pytest sets it up before and
+    tears it down after any test-module-local fixture, so no test -- this
+    suite, a neighbour, or one written next month -- can leave a mutation
+    behind for the next test to inherit."""
+    from prism_service.services import task_service
+
+    created = list(task_service._CREATE_OBSERVERS)
+    status = list(task_service._STATUS_OBSERVERS)
+    try:
+        yield
+    finally:
+        task_service._CREATE_OBSERVERS[:] = created
+        task_service._STATUS_OBSERVERS[:] = status
+
+
 @pytest.fixture
 def quiet_boot(monkeypatch):
     """Boot the REAL lifespan (prism_service.main.app) without its periodic
