@@ -492,6 +492,9 @@ def test_closure_picks_the_providers_own_link_among_many(wired):
     assert task_mirror.mirror_task(
         "prism", task.id, provider="jira").created is True
 
+    transport.transitions_result = {"transitions": [
+        {"id": "31", "name": "Done",
+         "to": {"statusCategory": {"key": "done"}}}]}
     result = push_task_closure(
         store, outbox, _adapters, lambda ws, p: True,
         SCOPE, task.id, True, provider="jira")

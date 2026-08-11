@@ -395,15 +395,25 @@ def push_task_closure(
     if not active_links:
         result.reason = "task has no active external link; never pushed"
         return result
-    link = active_links[0]
 
-    entity = store.get_entity(workspace_id, link.entity_id)
+    # Resolve the link BELONGING TO the requested provider, never merely the
+    # first one: a task mirrored to several providers (github AND jira) has
+    # several active links, and taking active_links[0] made the jira leg
+    # refuse on the github entity (live miss on PRIS-8, task 88a7da0b).
+    entity = container = connection = None
+    for link in active_links:
+        cand = store.get_entity(workspace_id, link.entity_id)
+        if cand is None:
+            continue
+        conn = store.get_connection(workspace_id, cand.connection_id)
+        if conn is None or conn.provider != provider:
+            continue
+        cont = store.get_container(workspace_id, cand.container_id)
+        if cont is None:
+            continue
+        entity, container, connection = cand, cont, conn
+        break
     if entity is None:
-        result.reason = "linked entity no longer exists"
-        return result
-    container = store.get_container(workspace_id, entity.container_id)
-    connection = store.get_connection(workspace_id, entity.connection_id)
-    if container is None or connection is None or connection.provider != provider:
         result.reason = f"linked entity is not a {provider} issue"
         return result
 
