@@ -31,6 +31,28 @@ SITE = "https://bespokelabsllc.atlassian.net"
 SECRET = "atlassian-api-token-SECRET-VALUE"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_observers():
+    """Same discipline as test_task_mirror_production_wiring.py's fixture of
+    the same name: test_ac5 below calls ``task_mirror.install()`` (to
+    exercise a REAL status-change observer), which appends to the
+    MODULE-LEVEL ``task_service._CREATE_OBSERVERS``/``_STATUS_OBSERVERS``
+    lists -- nothing ever removes them. Left unguarded, that leaked observer
+    fires a background thread on every later test's ``svc.create()``/
+    ``svc.update()`` call, and can race into test_ac7b/test_ac7c's
+    monkeypatched ``mirror_task``/``close_task``, appending an extra call
+    the assertion never expects. Snapshot-and-restore around every test."""
+    from prism_service.services import task_service
+
+    created = list(task_service._CREATE_OBSERVERS)
+    status = list(task_service._STATUS_OBSERVERS)
+    try:
+        yield
+    finally:
+        task_service._CREATE_OBSERVERS[:] = created
+        task_service._STATUS_OBSERVERS[:] = status
+
+
 def _join_mirror_threads() -> None:
     """Wait for the observers' off-thread runs (task_mirror.py:262-274,
     292-305) to finish, exactly as test_status_syncs_both_ways._settle()

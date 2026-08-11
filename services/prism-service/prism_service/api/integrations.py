@@ -93,6 +93,7 @@ def register_builtin_adapters() -> None:
     try:
         from prism_service.services.jira_auth import get_jira_auth_store
         from prism_service.services.jira_client import JiraClient
+        from prism_service.services.jira_rest import JiraRestClient
         from prism_service.services.jira_work import JiraWorkAdapter
 
         def _jira_access_token(connection):
@@ -127,6 +128,11 @@ def register_builtin_adapters() -> None:
             client=JiraClient(),
             access_token_provider=_jira_access_token,
             site_url_provider=_jira_site_url,
+            # Task 88a7da0b, FR-10: a SEPARATE write client so create/close
+            # is reachable in the running process, not only in tests --
+            # the recorded failure mode (mx-43374a/mx-14edf5) is green
+            # write verbs nothing in production calls.
+            write_client=JiraRestClient(),
         ))
     except Exception as exc:  # pragma: no cover - a broken provider is not fatal
         adapter_registration_errors["jira"] = f"{type(exc).__name__}: {exc}"

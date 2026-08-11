@@ -41,6 +41,12 @@ log = logging.getLogger(__name__)
 
 MIRROR_ENV = "PRISM_TASK_MIRROR"
 
+# The observers dispatch by this NAMED tuple, never by iterating whatever
+# happens to be registered in _adapters (mx-804f8e's discipline, task
+# 88a7da0b FR-8) -- a stray "gitlab" test double or a future adapter must
+# never silently gain outbound push just by being present in the registry.
+MIRROR_PROVIDERS = ("github", "jira")
+
 # Tasks that came FROM a provider already have a counterpart; pushing one back
 # would mint a second issue for the same work. ensure_external_intake does not
 # route through create(), so this is belt-and-braces rather than the only
@@ -260,15 +266,21 @@ def _on_task_created(project: str, task) -> None:
         return
 
     def _run() -> None:
-        try:
-            outcome = mirror_task(project, task_id)
-        except Exception as exc:  # pragma: no cover - never surface here
-            log.warning("task mirror failed for %s: %s", task_id, exc)
-            return
-        if outcome.created:
-            log.info("mirrored task %s -> %s", task_id, outcome.url)
-        elif outcome.attempted:
-            log.info("task %s not mirrored: %s", task_id, outcome.reason)
+        # FR-8/NFR-6: each provider dispatches by the NAMED tuple, in its
+        # OWN try/except -- a github outage must never prevent the jira leg
+        # (or vice versa) from running.
+        for provider in MIRROR_PROVIDERS:
+            try:
+                outcome = mirror_task(project, task_id, provider=provider)
+            except Exception as exc:  # pragma: no cover - never surface here
+                log.warning("task mirror failed for %s (%s): %s",
+                           task_id, provider, exc)
+                continue
+            if outcome.created:
+                log.info("mirrored task %s -> %s (%s)", task_id, outcome.url, provider)
+            elif outcome.attempted:
+                log.info("task %s not mirrored via %s: %s",
+                        task_id, provider, outcome.reason)
 
     threading.Thread(target=_run, name=f"task-mirror-{task_id[:8]}",
                      daemon=True).start()
@@ -290,16 +302,20 @@ def _on_task_status_changed(project: str, task, old_status: str) -> None:
         return
 
     def _run() -> None:
-        try:
-            outcome = close_task(project, task_id)
-        except Exception as exc:  # pragma: no cover - never surface here
-            log.warning("task mirror close failed for %s: %s", task_id, exc)
-            return
-        if outcome.created:
-            log.info("closed mirrored issue for task %s -> %s",
-                     task_id, outcome.url)
-        elif outcome.attempted:
-            log.info("task %s not closed: %s", task_id, outcome.reason)
+        # FR-8/NFR-6: same per-provider isolation as the create leg.
+        for provider in MIRROR_PROVIDERS:
+            try:
+                outcome = close_task(project, task_id, provider=provider)
+            except Exception as exc:  # pragma: no cover - never surface here
+                log.warning("task mirror close failed for %s (%s): %s",
+                           task_id, provider, exc)
+                continue
+            if outcome.created:
+                log.info("closed mirrored issue for task %s -> %s (%s)",
+                        task_id, outcome.url, provider)
+            elif outcome.attempted:
+                log.info("task %s not closed via %s: %s",
+                        task_id, provider, outcome.reason)
 
     threading.Thread(target=_run, name=f"task-mirror-close-{task_id[:8]}",
                      daemon=True).start()

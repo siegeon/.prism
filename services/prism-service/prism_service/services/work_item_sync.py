@@ -430,7 +430,15 @@ def push_task_closure(
         result.reason = "outbound is disabled for this connection, or this is an echo"
         return result
 
-    closed = adapter.close(connection, container, entity)
+    try:
+        closed = adapter.close(connection, container, entity)
+    except AdapterError as exc:
+        # A provider-specific refusal (task 88a7da0b, FR-7: jira raises when
+        # no done-category transition exists) is a normal, reportable
+        # outcome here -- never an exception a caller must catch. The
+        # message is already sanitized by the adapter (NFR-1).
+        result.reason = str(exc)
+        return result
     remote_updated = ""
     if isinstance(closed, dict):
         remote_updated = str(closed.get("updated_at") or "")
@@ -472,6 +480,25 @@ class PushCreateResult:
     assignee: str = ""
 
 
+def _provider_active_links(store, workspace_id: str, task_id: str, provider: str) -> list:
+    """Active links for ``task_id`` whose entity's OWN connection matches
+    ``provider`` (task 88a7da0b, FR-9). Reuses the same entity->connection
+    resolution ``push_task_closure`` already does above, so a task linked to
+    one provider stays eligible for another rather than being refused by an
+    unrelated link."""
+    matches = []
+    for link in store.list_links(workspace_id, task_id=task_id):
+        if link.state != "active":
+            continue
+        entity = store.get_entity(workspace_id, link.entity_id)
+        if entity is None:
+            continue
+        connection = store.get_connection(workspace_id, entity.connection_id)
+        if connection is not None and connection.provider == provider:
+            matches.append(link)
+    return matches
+
+
 def push_task_creation(
     store,
     outbox,
@@ -509,8 +536,11 @@ def push_task_creation(
             "local (owner 2026-07-29)")
         return result
 
-    active_links = [l for l in store.list_links(workspace_id, task_id=task_id)
-                    if l.state == "active"]
+    # FR-9 (task 88a7da0b): PROVIDER-SCOPED, not "any active link" -- with
+    # both github and jira connected at once, a github-linked task must
+    # still be eligible for its own jira issue. The refusal string stays
+    # byte-identical to before this change.
+    active_links = _provider_active_links(store, workspace_id, task_id, provider)
     if active_links:
         result.reason = "task already has an active external link; not created again"
         return result
@@ -547,7 +577,15 @@ def push_task_creation(
         result.reason = "outbound is disabled for this connection, or this is an echo"
         return result
 
-    entity_input = adapter.create(connection, container, title, body, assignee)
+    try:
+        entity_input = adapter.create(connection, container, title, body, assignee)
+    except AdapterError as exc:
+        # Same discipline as the closure leg above: a provider-specific
+        # create failure (task 88a7da0b) is a normal, reportable outcome,
+        # never an exception a caller must catch. Sanitized by the adapter
+        # (NFR-1) before it ever reaches here.
+        result.reason = str(exc)
+        return result
     entity, _created = store.upsert_entity(
         workspace_id, connection.id, container.id, entity_input)
     marker = f"{entity_input.remote_id}:{entity_input.remote_updated_at}"
