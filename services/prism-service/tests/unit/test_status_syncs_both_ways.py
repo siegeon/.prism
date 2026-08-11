@@ -27,6 +27,30 @@ if str(_SERVICE_ROOT) not in sys.path:
 REPO = "siegeon/.prism"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_observers():
+    """Same discipline as test_task_mirror_production_wiring.py's fixture of
+    the same name (task 88a7da0b): several tests below call
+    ``task_mirror.install()`` to exercise a REAL status-change observer,
+    which appends to the MODULE-LEVEL ``task_service._CREATE_OBSERVERS``/
+    ``_STATUS_OBSERVERS`` lists -- nothing ever removed them. Left
+    unguarded, the leak survives into every OTHER test file that runs
+    afterward in the same process and fires a real background mirror on
+    every unrelated ``TaskService.create()``/``update()`` call, which is
+    exactly what made test_switch_on_pushes_backlog.py's github-call counts
+    flaky once outbound jira dispatch existed to lengthen the race window.
+    Snapshot-and-restore around every test."""
+    from prism_service.services import task_service
+
+    created = list(task_service._CREATE_OBSERVERS)
+    status = list(task_service._STATUS_OBSERVERS)
+    try:
+        yield
+    finally:
+        task_service._CREATE_OBSERVERS[:] = created
+        task_service._STATUS_OBSERVERS[:] = status
+
+
 def _settle():
     """Wait for the mirror's off-thread close to finish.
 

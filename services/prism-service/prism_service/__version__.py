@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.29"
+PRISM_VERSION = "7.10.30"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4267,6 +4267,17 @@ PRISM_VERSION_NOTES += (
     "renders the api-token form and a provider-aware project tracker."
 )
 PRISM_VERSION_NOTES += (
+    " v7.10.30: OUTBOUND JIRA MIRRORING [task 88a7da0b]. New jira_rest.py "
+    "(create_issue/get_transitions/transition_issue, ADF description body, "
+    "DEFAULT_ISSUE_TYPE=Task overridable via PRISM_JIRA_ISSUE_TYPE); "
+    "JiraWorkAdapter gains create()/close() matching GitHubWorkAdapter's "
+    "shape. task_mirror's MIRROR_PROVIDERS=(github,jira) tuple drives both "
+    "create/status observers, each provider isolated in its own "
+    "try/except. push_task_creation's idempotence guard is now "
+    "PROVIDER-SCOPED so a github-linked task stays eligible for its own "
+    "jira issue. register_builtin_adapters wires a real JiraRestClient "
+    "write_client so the verbs are reachable in production, not only in "
+    "tests. The api token never appears in a log/error/receipt."
     " v7.10.29: CONNECTOR CARDS LINK TO THEIR SYNC COLLECTION "
     "[task a752e76c]. GET /api/integrations/connect/status now reports "
     "`tracking` as list[{key,url}] at all three _provider_state branches: "

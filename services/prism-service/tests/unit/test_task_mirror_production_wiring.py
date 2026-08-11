@@ -113,6 +113,29 @@ def test_ac2b_registration_runs_on_import_not_only_when_called():
     assert top_level, "register_builtin_adapters() is never called at import"
 
 
+# ── AC-9 (task 88a7da0b): jira is registered WRITE-CAPABLE, not pull-only ─
+def test_ac9_jira_adapter_is_registered_with_create_and_close():
+    """The recorded failure mode (mx-43374a, mx-14edf5) is green write verbs
+    nothing in production calls. This injects NO adapter -- it reads the
+    REAL registry `register_builtin_adapters()` populates, the same thing
+    AC-2 above already does for github."""
+    from prism_service.api import integrations
+
+    integrations.reset_adapters()
+    integrations.register_builtin_adapters()
+
+    jira = integrations.adapters_snapshot().get("jira")
+    assert jira is not None, (
+        f"no jira adapter after production registration: "
+        f"{integrations.adapter_registration_errors}")
+    assert callable(getattr(jira, "create", None)), (
+        "jira adapter has no create(): task 88a7da0b's outbound create leg "
+        "is unreachable in production")
+    assert callable(getattr(jira, "close", None)), (
+        "jira adapter has no close(): the outbound status leg is unreachable "
+        "in production")
+
+
 # ── AC-3: creating a task publishes it, with the project name ─────────────
 def test_ac3_task_creation_notifies_observers_with_the_project(tmp_path):
     """The ONE chokepoint. Both the REST route and the MCP verb call

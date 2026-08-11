@@ -19,6 +19,7 @@ from prism_service.models.integration import (
     normalize_status_category,
 )
 from prism_service.services.jira_client import JiraClientError
+from prism_service.services.jira_rest import JiraRestError
 from prism_service.services.work_item_sync import AdapterError, PulledPage
 
 # A Jira project KEY, validated BEFORE interpolation into JQL — closes the
@@ -57,14 +58,19 @@ def _issue_input(issue: dict, site_url: str = "") -> ExternalEntityInput:
 
 
 class JiraWorkAdapter:
-    """Pull-only Jira adapter. ``client.search_jql(cloud_id, access_token, jql,
-    page_token)`` returns a raw enhanced-JQL response."""
+    """Jira adapter: pull (import) plus create/close (task 88a7da0b, the
+    outbound mirror). ``client.search_jql(cloud_id, access_token, jql,
+    page_token)`` returns a raw enhanced-JQL response; ``write_client`` is a
+    separate ``JiraRestClient`` used only by create/close (FR-5), so every
+    existing pull-only test keeps constructing this with no write_client at
+    all and simply cannot reach the write path."""
 
     provider = "jira"
 
     def __init__(
         self, client, access_token_provider: Callable,
         site_url_provider: Optional[Callable] = None,
+        write_client=None,
     ) -> None:
         self._client = client
         self._token = access_token_provider
@@ -72,6 +78,7 @@ class JiraWorkAdapter:
         # JiraAuthStore.site_url; tests that don't care about the browse
         # URL simply omit it and get "" (never a broken partial URL).
         self._site_url = site_url_provider or (lambda connection: "")
+        self._write_client = write_client
 
     def pull_page(self, connection, container, cursor, page_token) -> PulledPage:
         cloud_id = connection.remote_scope
@@ -116,3 +123,73 @@ class JiraWorkAdapter:
             next_page_token=resp.get("nextPageToken"),
             next_cursor=next_cursor,
         )
+
+    def create(self, connection, container, title: str, body: str = "",
+              assignee: str = "") -> ExternalEntityInput:
+        """Create a new Jira issue mirroring a PRISM task (task 88a7da0b,
+        FR-5/FR-6). ``assignee`` is accepted to match GitHubWorkAdapter's
+        signature; Jira assignment is not this slice's scope and the value
+        is not sent. Builds the ExternalEntityInput from the THIN create
+        response ({id,key,self}) without re-fetching the issue (FR-6)."""
+        site_url = self._site_url(connection) or ""
+        credential = self._credential(connection)
+        project_key = container.remote_id or container.display_key
+        try:
+            raw = self._write_client.create_issue(
+                site_url, credential, project_key, title, body)
+        except JiraRestError as exc:
+            raise AdapterError(ADAPTER_ERROR, str(exc)) from None
+
+        key = str(raw.get("key", ""))
+        url = f"{site_url.rstrip('/')}/browse/{key}" if site_url and key else ""
+        return ExternalEntityInput(
+            entity_kind="jira_issue",
+            remote_id=str(raw.get("id", "")),
+            display_key=key,
+            title=title,
+            body=body,
+            url=url,
+            status_category="open",
+        )
+
+    def close(self, connection, container, entity) -> dict:
+        """Move the Jira issue mirroring ``entity`` to a done-category status
+        (task 88a7da0b, FR-7). Jira has no simple close verb: fetch the
+        issue's OWN available transitions and pick the one whose
+        ``to.statusCategory.key == 'done'``. Raises a sanitized
+        ``AdapterError`` and posts nothing when no such transition exists --
+        never guesses a workflow path."""
+        site_url = self._site_url(connection) or ""
+        credential = self._credential(connection)
+        issue_key = getattr(entity, "display_key", "") or getattr(entity, "remote_id", "")
+        try:
+            resp = self._write_client.get_transitions(site_url, credential, issue_key)
+        except JiraRestError as exc:
+            raise AdapterError(ADAPTER_ERROR, str(exc)) from None
+
+        done = next(
+            (t for t in (resp.get("transitions") or [])
+             if ((t.get("to") or {}).get("statusCategory") or {}).get("key") == "done"),
+            None)
+        if done is None:
+            raise AdapterError(
+                ADAPTER_ERROR,
+                f"no done-category transition available for {issue_key}")
+
+        try:
+            return self._write_client.transition_issue(
+                site_url, credential, issue_key, done["id"])
+        except JiraRestError as exc:
+            raise AdapterError(ADAPTER_ERROR, str(exc)) from None
+
+    def _credential(self, connection):
+        """The write path always needs the full ``JiraCredential`` for Basic
+        auth (FR-2), never a bare token — ``access_token_provider`` already
+        returns one for api_token connections (api/integrations.py
+        ``_jira_access_token``); a token/lookup failure sanitizes the same
+        way ``pull_page`` does."""
+        try:
+            return self._token(connection)
+        except Exception as exc:  # noqa: BLE001 - sanitize, never leak the cause
+            raise AdapterError(
+                ADAPTER_ERROR, f"jira credential unavailable: {type(exc).__name__}") from None
