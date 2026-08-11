@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   api,
   listWorkspaces,
@@ -148,7 +148,12 @@ export default function TasksPage() {
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   // Owner 2026-07-29: "i need a way to search work for e696d952 a task on
   // this" — id prefix, full uuid, title, or tag, case-insensitive.
+  const [searchParams] = useSearchParams();
   const [query, setQuery] = useState<string>("");
+  useEffect(() => {                       // seed from ?q= (task 1c9899d6)
+    const q = searchParams.get("q");
+    if (q) setQuery(q);
+  }, [searchParams]);
   const [cursor, setCursor] = useState<number>(0);
   const [started, setStarted] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement | null>(null);

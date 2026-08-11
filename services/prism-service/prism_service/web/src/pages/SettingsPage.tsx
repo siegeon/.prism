@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   ChevronDown, ChevronRight, ExternalLink, FolderTree, GitBranch,
   Github, Loader2, Plus, Search, X,
@@ -3482,6 +3482,21 @@ function RepoSync({ connector, project, onChanged }:
           {busy === "sync" ? "Syncing…" : "Sync now"}
         </button>
       </div>
+      {connector.last_sync && (
+        <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+          {connector.last_sync.imported === 0 ? (
+            <>Last sync found nothing new from {connector.last_sync.container}
+              {connector.last_sync.reason ? `: ${connector.last_sync.reason}.` : "."}</>
+          ) : (
+            <>Last sync imported {connector.last_sync.imported} item
+              {connector.last_sync.imported === 1 ? "" : "s"} from {connector.last_sync.container}.{" "}
+              <Link to={`/tasks?q=${encodeURIComponent(connector.provider)}`}
+                className="underline" style={{ color: "var(--accent-teal-fg)" }}>
+                View in Work
+              </Link></>
+          )}
+        </p>
+      )}
       {note && <p className="text-xs" style={{ color: "var(--accent-sage-fg)" }}>{note}</p>}
       {err && <p className="text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
     </div>

@@ -178,6 +178,17 @@ export async function pullContainer(
 export type ConnectorState =
   | "not_configured" | "not_connected" | "connected" | "needs_attention";
 
+/** The connector card's durable "what did the sync do" (task 1c9899d6) -
+ *  the LATEST sync_runs row per tracked container, surfaced server-side
+ *  (integration_store.py's own IntegrationStore.list_runs ordering). null
+ *  when nothing has synced yet - calmly absent, never fabricated. */
+export type LastSync = {
+  container: string;
+  status: string;
+  imported: number;
+  reason: string;
+};
+
 export type Connector = {
   provider: string;
   name: string;
@@ -188,6 +199,7 @@ export type Connector = {
   /** Whether the user asked PRISM to sync with this provider. Separate from
    *  `state`: a working credential is not consent to sync. */
   sync_enabled?: boolean;
+  last_sync?: LastSync | null;
 };
 
 /** Turn syncing with a provider on or off. Leaves the connection intact. */

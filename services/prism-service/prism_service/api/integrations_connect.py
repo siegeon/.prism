@@ -234,6 +234,37 @@ def _claude_state() -> tuple:
     return ("not_connected", "Sign in with the Claude CLI to enable analyzers.", "")
 
 
+def _last_sync_for_containers(store, scope: str, provider: str, containers) -> Optional[dict]:
+    """Latest sync_runs row across ``containers`` - IntegrationStore.list_runs'
+    own ORDER BY started_at DESC ordering (integration_store.py:504-511),
+    never re-derived. The durable "what did the sync do" the connector card
+    surfaces (task 1c9899d6, owner complaint 2026-08-11). None ("calmly
+    absent") when nothing has synced yet - never fabricated.
+    """
+    latest = None
+    latest_container = None
+    for container in containers:
+        runs = store.list_runs(scope, container.id)
+        if not runs:
+            continue
+        run = runs[0]
+        if latest is None or run.started_at > latest.started_at:
+            latest, latest_container = run, container
+    if latest is None:
+        return None
+    reason = ""
+    if latest.items_processed == 0:
+        reason = (
+            "no Jira issues matched the in-flow filter: assigned to you "
+            "and not Done"
+        ) if provider == "jira" else (
+            "no open issues or pull requests were found in the tracked repository"
+        )
+    return {"container": latest_container.display_key or latest_container.remote_id,
+            "status": latest.status, "imported": latest.items_processed,
+            "reason": reason}
+
+
 def _provider_state(provider: str, scope: str) -> dict:
     """ONE honest status per connector, decided SERVER-side.
 
@@ -263,12 +294,13 @@ def _provider_state(provider: str, scope: str) -> dict:
             store = get_integration_store()
             conns = [c for c in store.list_connections(scope)
                      if c.provider == provider]
-            tracking = [k.display_key or k.remote_id
-                        for c in conns
-                        for k in store.list_containers(scope, c.id)]
+            containers = [k for c in conns
+                          for k in store.list_containers(scope, c.id)]
+            tracking = [k.display_key or k.remote_id for k in containers]
+            last_sync = _last_sync_for_containers(store, scope, provider, containers)
             return {"provider": provider, "name": name, "state": cli["state"],
                     "detail": cli["detail"], "account": cli["account"],
-                    "tracking": tracking}
+                    "tracking": tracking, "last_sync": last_sync}
         # No usable CLI: fall through to the OAuth app path, which still
         # serves server and multi-user installs.
 
@@ -294,12 +326,13 @@ def _provider_state(provider: str, scope: str) -> dict:
         conns = [c for c in store.list_connections(scope) if c.provider == "jira"]
         api_token_conn = next((c for c in conns if _is_api_token(c)), None)
         if api_token_conn is not None:
-            tracking = [k.display_key or k.remote_id
-                        for k in store.list_containers(scope, api_token_conn.id)]
+            containers = store.list_containers(scope, api_token_conn.id)
+            tracking = [k.display_key or k.remote_id for k in containers]
+            last_sync = _last_sync_for_containers(store, scope, provider, containers)
             return {"provider": provider, "name": name, "state": "connected",
                     "detail": "Connected.",
                     "account": api_token_conn.display_name or api_token_conn.remote_scope,
-                    "tracking": tracking}
+                    "tracking": tracking, "last_sync": last_sync}
 
     if not _configured(provider):
         env = ("PRISM_GITHUB_APP_SLUG" if provider == "github"
@@ -316,8 +349,9 @@ def _provider_state(provider: str, scope: str) -> dict:
                 "account": "", "tracking": []}
 
     conn = conns[0]
-    tracking = [k.display_key or k.remote_id
-                for k in store.list_containers(scope, conn.id)]
+    containers = store.list_containers(scope, conn.id)
+    tracking = [k.display_key or k.remote_id for k in containers]
+    last_sync = _last_sync_for_containers(store, scope, provider, containers)
     if provider == "jira":
         # REAL credential health, not row presence.
         try:
@@ -334,10 +368,10 @@ def _provider_state(provider: str, scope: str) -> dict:
                     "state": "needs_attention",
                     "detail": "Access was revoked or expired. Reconnect to re-authorize.",
                     "account": conn.display_name or conn.remote_scope,
-                    "tracking": tracking}
+                    "tracking": tracking, "last_sync": last_sync}
     return {"provider": provider, "name": name, "state": "connected",
             "detail": "Connected.", "account": conn.display_name or conn.remote_scope,
-            "tracking": tracking}
+            "tracking": tracking, "last_sync": last_sync}
 
 
 class SyncBody(BaseModel):
