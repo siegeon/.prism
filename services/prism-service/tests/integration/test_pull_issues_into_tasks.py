@@ -153,8 +153,13 @@ def test_tracking_persists_a_real_connection(app):
     assert conns, "tracking must persist a connection; today this list is empty"
     row = {r["provider"]: r for r in
            app.get("/api/integrations/connect/status").json()["connectors"]}["github"]
-    assert REPO in (row.get("tracking") or []), (
-        f"the card must report what it tracks; got {row.get('tracking')!r}")
+    # Retired for task a752e76c: tracking became list[{key,url}] (each entry
+    # a real, clickable destination for Settings > Connectors) instead of a
+    # bare string, so `REPO in tracking` is always False against the new
+    # shape. Check the key field instead.
+    tracking = row.get("tracking") or []
+    assert REPO in [t["key"] for t in tracking], (
+        f"the card must report what it tracks; got {tracking!r}")
 
 
 # ── AC-3 / AC-4 / AC-7: issues become PRISM TASKS ─────────────────────
