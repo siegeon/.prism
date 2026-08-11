@@ -3463,7 +3463,7 @@ function RepoSync({ connector, project, onChanged }:
           </p>
         ) : (
           <ul className="text-xs font-mono" style={{ color: "var(--text-secondary)" }}>
-            {tracked.map((t) => <li key={t}>{t}</li>)}
+            {tracked.map((t) => <li key={t.key}>{t.key}</li>)}
           </ul>
         )}
       </div>
@@ -3706,8 +3706,16 @@ function ConnectorsSection({ project }: { project: string }) {
                 <p className="text-2xs mt-1 font-mono" style={{ color: "var(--text-secondary)" }}>{c.account}</p>
               )}
               {c.tracking && c.tracking.length > 0 && (
-                <p className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>
-                  Tracking: {c.tracking.join(", ")}
+                <p className="text-2xs mt-1 space-x-2" style={{ color: "var(--text-muted)" }}>
+                  <span>Tracking:</span>
+                  {c.tracking.map((t) => (
+                    <a key={t.key} href={t.url} target="_blank" rel="noreferrer"
+                      onClick={function stopPropagationOnly(e) { e.stopPropagation(); }}
+                      className="underline decoration-dotted hover:decoration-solid"
+                      style={{ color: "var(--text-secondary)" }}>
+                      {t.key}
+                    </a>
+                  ))}
                 </p>
               )}
             </div>

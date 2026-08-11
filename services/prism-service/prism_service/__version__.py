@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.28"
+PRISM_VERSION = "7.10.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4265,6 +4265,20 @@ PRISM_VERSION_NOTES += (
     "map (Blocked/To Do/Dev/In Progress/etc.), never clobbering a task "
     "whose workflow_step is already set. Settings > Connectors' Jira card "
     "renders the api-token form and a provider-aware project tracker."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.29: CONNECTOR CARDS LINK TO THEIR SYNC COLLECTION "
+    "[task a752e76c]. GET /api/integrations/connect/status now reports "
+    "`tracking` as list[{key,url}] at all three _provider_state branches: "
+    "GitHub's url is read verbatim off the stored ExternalContainer row "
+    "(never re-derived), Jira's is derived server-side from the connected "
+    "site via JiraAuthStore.site_url (empty string, never a raise, on an "
+    "unresolvable site). Settings > Connectors' card header renders a real "
+    "<a target=\"_blank\"> per tracked collection in place of the old "
+    "dead 'Tracking: ...' text, stopPropagation'd so a link click never "
+    "also toggles the card; RepoSync's expanded tracked list reads the "
+    "same {key,url} shape. MirrorStatus.tracking (a different endpoint) "
+    "stays string[]."
 )
 
 
