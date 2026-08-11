@@ -35,38 +35,18 @@ if str(_SERVICE_ROOT) not in sys.path:
 REPO = "siegeon/.prism"
 
 
-@pytest.fixture(autouse=True)
-def _isolate_observers():
-    """Undo any observer this process registered, around EVERY test here.
-
-    AC-1 below boots the real lifespan, which is the point of that test, and
-    lifespan calls task_mirror.install(). install() appends to the MODULE-LEVEL
-    lists task_service._CREATE_OBSERVERS / _STATUS_OBSERVERS, and nothing ever
-    removes them -- monkeypatch reverts env vars and attributes, never a list
-    append. So the observer survives into every later test in the process.
-
-    That leak is not merely untidy, it makes AC-7b FAIL INTERMITTENTLY. The
-    leaked _on_task_created starts a DAEMON THREAD (task_mirror.py:273) that
-    calls mirror_task against whatever store the current fixture monkeypatched
-    in. When that thread wins the race, `wired.create()` has already minted the
-    external link, so AC-7b's FIRST explicit mirror_task returns
-    created=False / "task already has an active external link" and the
-    assertion blows. Observed on CI runs 30833869760 and again at 014b54d;
-    green on a re-run of the identical commit, and never reproducible locally
-    on demand -- the signature of a thread race, not of test ordering.
-
-    Snapshot-and-restore rather than clear-on-entry: this must not silently
-    swallow a registration a future test deliberately makes and asserts on.
-    """
-    from prism_service.services import task_service
-
-    created = list(task_service._CREATE_OBSERVERS)
-    status = list(task_service._STATUS_OBSERVERS)
-    try:
-        yield
-    finally:
-        task_service._CREATE_OBSERVERS[:] = created
-        task_service._STATUS_OBSERVERS[:] = status
+# The local `_isolate_observers` autouse fixture that used to live here
+# (snapshot/restore of task_service._CREATE_OBSERVERS / _STATUS_OBSERVERS
+# around every test, added for AC-7b's thread-race flake -- CI runs
+# 30833869760 and 014b54d) is SUPERSEDED by
+# tests/conftest.py::_task_observer_registry_isolation (task 44342d64):
+# that root-conftest fixture snapshots/restores the exact same two lists
+# around every test in the whole suite, not just this file, which is what
+# closed the cross-file leak into
+# test_switch_on_pushes_backlog.py::test_done_and_cancelled_backlog_is_never_exported.
+# A local fixture doing the identical reset a second time is harmless but
+# redundant -- removed here rather than reconciled, since pytest already
+# guarantees the root fixture wraps this file's tests outside-in.
 
 
 # `quiet_boot` (real lifespan, workers silenced) now lives in the shared
