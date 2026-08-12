@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.32"
+PRISM_VERSION = "7.10.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.33: task workspaces now FOLLOW their own lane's commits "
+    "[task b9f7bd45]. task_workspace.sync_workspace(task_id) advances a "
+    "worktree's HEAD to its recorded prism/ws/<task_id> branch tip on "
+    "every workspace_for/ensure_workspace call - fast-forward only, "
+    "never main, never another task's branch; a dirty worktree or a "
+    "true divergence is refused with a reason, never silently no-op'd. "
+    "Fixes the false-green class from mx-399f3e/mx-2aff62 where a "
+    "receipt was minted against a stale checkout that never saw the "
+    "lane's own commits.\n"
     "v7.10.32: mirror badges read the integration STORE, not description "
     "prose [task 6fbbec35]. GET /api/tasks?fields=...,mirrors and GET "
     "/api/tasks/{id} now serve a store-derived, PLURAL mirrors list (one "

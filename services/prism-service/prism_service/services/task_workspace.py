@@ -199,6 +199,13 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
         # link. Idempotent no-op once the link exists.
         _link_web_node_modules(Path(rec["path"]),
                                 Path(rec.get("repo_root") or _prism_repo_root()))
+        # Fail-soft: advance to the lane's own branch tip if it moved
+        # elsewhere (mx-399f3e / mx-2aff62). Never strand this fast path
+        # on a sync hiccup.
+        try:
+            sync_workspace(task_id)
+        except Exception:
+            pass
         return rec
 
     root = Path(repo_root) if repo_root else _prism_repo_root()
@@ -323,8 +330,73 @@ def reap_if_settled(task_id: str, base: Optional[str] = None) -> dict:
             "path": str(ws)}
 
 
+def _sync_ws(ws: Path, branch: str) -> dict:
+    """The actual probe/advance, isolated so `sync_workspace` can wrap it
+    in one fail-closed try/except. Raises RuntimeError/OSError on any git
+    failure - the caller catches those."""
+    status = _git_out(ws, "status", "--porcelain")
+    if status.strip():
+        changed = status.strip().splitlines()[:5]
+        return {"state": "dirty",
+                "reason": f"uncommitted changes in {ws}: {changed}"}
+    head = _git_out(ws, "rev-parse", "HEAD")
+    tip = _git_out(ws, "rev-parse", branch)
+    if head == tip:
+        return {"state": "already_current", "head": head}
+    base = _git_out(ws, "merge-base", head, tip)
+    if base == tip:
+        # HEAD already contains the branch tip (worktree is ahead) -
+        # nothing to sync, and NOT a divergence.
+        return {"state": "already_current", "head": head}
+    if base != head:
+        return {"state": "diverged",
+                "reason": f"HEAD {head} and branch {branch} tip {tip} "
+                          "have each diverged from the other"}
+    # merge_base == head: a pure fast-forward along the task's OWN branch.
+    _git_out(ws, "checkout", branch)
+    return {"state": "advanced", "head": _git_out(ws, "rev-parse", "HEAD")}
+
+
+def sync_workspace(task_id: str) -> dict:
+    """Advance a task's worktree HEAD to its OWN branch tip, fail-soft.
+
+    Follows ONLY the task's recorded `prism/ws/<task_id>` branch - never
+    main, never another task's branch - so a receipt minted against this
+    worktree measures the lane's own committed work, not whatever tree
+    happened to be checked out at creation time (mx-399f3e / mx-2aff62,
+    task 5a6837a0).
+
+    Returns {"state": ..., "reason"?: ..., "head"?: ...}:
+      no_record        - nothing registered for this task_id.
+      dirty            - uncommitted changes; nothing touched, reason
+                          names them.
+      already_current  - HEAD already at (or already ahead of) the tip.
+      advanced         - HEAD fast-forwarded to the branch tip.
+      diverged         - HEAD and the branch tip each carry commits the
+                          other lacks; refused, reason names both shas.
+      error            - a git call failed; reason carries the message.
+
+    Never raises: any git/OS failure is caught and reported as
+    state="error" so callers (workspace_for, ensure_workspace) stay
+    fail-soft and never strand on a sync hiccup.
+    """
+    rec = _load_index().get(task_id)
+    if rec is None or not Path(rec["path"]).exists():
+        return {"state": "no_record"}
+    ws = Path(rec["path"])
+    branch = rec.get("branch") or f"prism/ws/{task_id}"
+    try:
+        return _sync_ws(ws, branch)
+    except (RuntimeError, OSError) as exc:
+        return {"state": "error", "reason": str(exc)}
+
+
 def workspace_for(task_id: str) -> Optional[dict]:
     rec = _load_index().get(task_id)
     if rec and Path(rec["path"]).exists():
+        try:
+            sync_workspace(task_id)
+        except Exception:
+            pass
         return rec
     return None
