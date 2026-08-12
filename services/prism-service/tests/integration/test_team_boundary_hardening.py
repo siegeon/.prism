@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
@@ -734,3 +735,187 @@ def test_local_mode_keeps_production_routes_open(real_team, monkeypatch):
         "/api/brain/status", params={"project": "project-a"}
     ).status_code == 200
     assert real_team.client.get("/graph/viewer/project-a").status_code == 200
+
+
+# --- task 74a38571: personal host credentials stay out of team surfaces ---
+
+
+def _assert_no_host_paths(dumped: str) -> None:
+    """Independent oracle - deliberately NOT the production detector
+    (api.security._looks_like_host_path), so a bug in the detector can't
+    launder its own test green. Checks (1) no live runtime host token
+    appears anywhere in the body, (2) no drive-letter or UNC path
+    STRUCTURE appears anywhere - a route string like '/mcp/?project=<n>'
+    never matches either shape, so this is false-positive-free."""
+    from pathlib import Path
+
+    from prism_service.config import DATA_DIR
+    from prism_service.data_dir import resolve_claude_home
+    from prism_service.services import github_auth as gh
+
+    runtime_tokens = [
+        str(Path.home()),
+        Path.home().name,
+        str(DATA_DIR),
+        str(resolve_claude_home()),
+        str(gh.credentials_path()),
+    ]
+    for token in runtime_tokens:
+        if token and len(token) > 1:
+            assert token not in dumped, f"host token {token!r} leaked: {dumped}"
+    assert not re.search(r"[A-Za-z]:[\\/]", dumped), f"drive-letter path leaked: {dumped}"
+    assert not re.search(r"\\\\[^\\/]", dumped), f"UNC path leaked: {dumped}"
+
+
+def test_team_claude_auth_status_serves_no_host_path(real_team):
+    from pathlib import Path
+
+    response = real_team.client.get(
+        "/api/claude-auth/status", headers=real_team.bearer(real_team.alice_token)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    dumped = json.dumps(body)
+    _assert_no_host_paths(dumped)
+    assert Path.home().name not in dumped
+
+
+def test_team_github_auth_status_serves_no_host_path(real_team):
+    response = real_team.client.get(
+        "/api/github-auth/status", headers=real_team.bearer(real_team.alice_token)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_no_host_paths(json.dumps(body))
+    assert "login" in body and "avatar_url" in body
+
+
+def test_team_service_info_serves_no_host_path(real_team):
+    from prism_service.__version__ import PRISM_VERSION
+
+    response = real_team.client.get(
+        "/api/service-info", headers=real_team.bearer(real_team.alice_token)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    _assert_no_host_paths(json.dumps(body))
+    assert body["version"] == PRISM_VERSION
+
+
+def test_team_mode_keeps_the_connection_booleans(real_team):
+    headers = real_team.bearer(real_team.alice_token)
+    claude_body = real_team.client.get("/api/claude-auth/status", headers=headers).json()
+    github_body = real_team.client.get("/api/github-auth/status", headers=headers).json()
+    service_body = real_team.client.get("/api/service-info", headers=headers).json()
+
+    assert isinstance(claude_body["authenticated"], bool)
+    assert isinstance(github_body["authenticated"], bool)
+    assert isinstance(service_body["claude_authenticated"], bool)
+    assert isinstance(service_body["github_authenticated"], bool)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/api/claude-auth/status",
+        "/api/github-auth/status",
+        "/api/service-info",
+    ],
+)
+def test_team_auth_surfaces_reject_anonymous_callers(real_team, url):
+    assert real_team.client.get(url).status_code == 401
+
+
+def test_local_mode_still_serves_the_developer_their_own_paths(real_team, monkeypatch):
+    from prism_service.config import DATA_DIR
+    from prism_service.data_dir import resolve_claude_home
+    from prism_service.services import github_auth as gh
+
+    monkeypatch.setenv("PRISM_AUTH_MODE", "local")
+    claude_body = real_team.client.get("/api/claude-auth/status").json()
+    github_body = real_team.client.get("/api/github-auth/status").json()
+    service_body = real_team.client.get("/api/service-info").json()
+
+    home = resolve_claude_home()
+    assert claude_body["config_dir"] == str(home)
+    assert claude_body["credentials_path"] == str(home / ".credentials.json")
+    assert github_body["credentials_path"] == str(gh.credentials_path())
+    assert service_body["data_dir"] == str(DATA_DIR)
+    assert service_body["claude_config_dir"] == str(home)
+    assert service_body["github_credentials_path"] == str(gh.credentials_path())
+
+
+def test_no_auth_only_get_surface_serves_a_host_path(real_team):
+    """Structural sweep: walk every security._AUTH_ONLY_PREFIXES entry (read
+    from the module, not a copied literal list) plus the two explicitly
+    allowlisted github-auth GETs, so a future prefix or route is swept
+    automatically with no test edit needed.
+
+    Enumeration comes from the OpenAPI schema, NOT `app.routes`: FastAPI's lazy
+    router inclusion parks every `include_router`'d path inside an
+    `_IncludedRouter` whose inner routes carry UNPREFIXED paths (the prefix
+    lives in the include context), so `app.routes` yields 9 entries and
+    `/api/claude-auth/status` and `/api/service-info` are invisible to it.  The
+    `known_surfaces` floor below exists to catch exactly that failure mode
+    (`main.py:617` documents the same lazy-inclusion trap for the SPA's
+    session-detail deep link)."""
+    from prism_service.api.security import _AUTH_ONLY_PREFIXES
+
+    headers = real_team.bearer(real_team.alice_token)
+    prefixes = tuple(_AUTH_ONLY_PREFIXES)
+    schema_paths = real_team.app.openapi()["paths"]
+    candidate_paths = {
+        path
+        for path, operations in schema_paths.items()
+        if "get" in {method.lower() for method in operations}
+        and "{" not in path
+        and any(
+            path == prefix or path.startswith(prefix + "/")
+            for prefix in prefixes
+        )
+    }
+    candidate_paths |= {"/api/github-auth/status", "/api/github-auth/client-id"}
+
+    known_surfaces = {
+        "/api/claude-auth/status",
+        "/api/github-auth/status",
+        "/api/service-info",
+    }
+    reached_known: set[str] = set()
+    for path in sorted(candidate_paths):
+        response = real_team.client.get(path, headers=headers)
+        if response.status_code != 200:
+            continue  # unreachable (needs a selector etc.) is not a leak
+        if path in known_surfaces:
+            reached_known.add(path)
+        _assert_no_host_paths(json.dumps(response.json()))
+
+    assert known_surfaces <= reached_known, (
+        f"sweep never reached the known leaking surfaces: {known_surfaces - reached_known}"
+    )
+
+
+def test_redaction_is_structural_not_a_machine_literal(real_team, monkeypatch, tmp_path):
+    """A fabricated, non-existent absolute path (not this developer's real
+    home) must still be redacted, proving the detector keys on path SHAPE,
+    never a hard-coded machine-specific literal."""
+    import inspect
+
+    from prism_service.api import claude_auth, github_auth, service_info
+
+    fabricated = tmp_path / "fabricated-host" / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fabricated))
+
+    response = real_team.client.get(
+        "/api/claude-auth/status", headers=real_team.bearer(real_team.alice_token)
+    )
+    assert response.status_code == 200
+    dumped = json.dumps(response.json())
+    assert str(fabricated) not in dumped
+    _assert_no_host_paths(dumped)
+
+    for module in (claude_auth, github_auth, service_info):
+        source = inspect.getsource(module)
+        assert not re.search(r"[A-Za-z]:[\\\\]", source), (
+            f"{module.__name__} hard-codes a drive-letter literal"
+        )

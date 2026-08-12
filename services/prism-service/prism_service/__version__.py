@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.33"
+PRISM_VERSION = "7.10.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.34: team mode redacts host filesystem paths from "
+    "/api/claude-auth/status, /api/github-auth/status and "
+    "/api/service-info [task 74a38571]. security.redact_host_paths "
+    "structurally drops any drive-letter/UNC-shaped value before a "
+    "response leaves the process; connection booleans and OAuth identity "
+    "fields (login/avatar_url/scopes) still serve unredacted. Local mode "
+    "is byte-unchanged.\n"
     "v7.10.33: task workspaces now FOLLOW their own lane's commits "
     "[task b9f7bd45]. task_workspace.sync_workspace(task_id) advances a "
     "worktree's HEAD to its recorded prism/ws/<task_id> branch tip on "

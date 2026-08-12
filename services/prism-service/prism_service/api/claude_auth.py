@@ -24,6 +24,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from prism_service.api.security import redact_host_paths, team_mode_active
 from prism_service.config import DATA_DIR
 from prism_service.data_dir import resolve_claude_home
 
@@ -63,7 +64,7 @@ def status() -> dict:
     authenticated = cred.is_file()
     name = _container_name()
     docker = _is_docker()
-    return {
+    body = {
         "authenticated": authenticated,
         "config_dir": str(cfg),
         "credentials_path": str(cred),
@@ -80,3 +81,7 @@ def status() -> dict:
             "should never need to log in again unless you revoke the session."
         ),
     }
+    # Team mode: any authenticated member of any workspace can reach this
+    # route (security._AUTH_ONLY_PREFIXES), so it must not hand out the
+    # host's filesystem layout or (via Path.home()) the host OS account name.
+    return redact_host_paths(body) if team_mode_active() else body
