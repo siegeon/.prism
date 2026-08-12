@@ -8,12 +8,48 @@ canonicalizer without forming an import cycle.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import replace
 
 from fastapi import HTTPException, Request
 
 from prism_service.config import DEFAULT_PROJECT
+
+
+def team_mode_active() -> bool:
+    """True when PRISM_AUTH_MODE selects team mode (mirrors AuthService.mode,
+    without constructing a service - callers are leaf response handlers that
+    only need the mode, not principal resolution)."""
+
+    return os.getenv("PRISM_AUTH_MODE", "local").strip().lower() == "team"
+
+
+# Structural host-path shapes - drive-letter (C:\ or C:/) and UNC (\\host\share).
+# Deliberately SHAPE-based, never a machine-specific literal (this developer's
+# home directory, a specific data_dir), so a fabricated path is caught exactly
+# like a real one and the check survives a change of host or account name.
+_HOST_PATH_PATTERNS = (
+    re.compile(r"[A-Za-z]:[\\/]"),
+    re.compile(r"\\\\[^\\/]"),
+)
+
+
+def _looks_like_host_path(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    return any(pattern.search(value) for pattern in _HOST_PATH_PATTERNS)
+
+
+def redact_host_paths(payload: dict) -> dict:
+    """Drop any top-level value that structurally looks like a host
+    filesystem path. Used by team-mode response handlers so a credentials
+    directory, data dir, or config path never reaches a caller who is not
+    the operator sitting at this machine; connection booleans and identity
+    fields (which never match the path shapes above) pass through untouched.
+    """
+
+    return {k: v for k, v in payload.items() if not _looks_like_host_path(v)}
 
 
 _PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$", re.ASCII)

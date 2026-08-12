@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from prism_service.__version__ import PRISM_VERSION, PRISM_VERSION_NOTES
+from prism_service.api.security import redact_host_paths, team_mode_active
 from prism_service.config import (
     DATA_DIR,
     DRIFT_INTERVAL_SECONDS,
@@ -58,7 +59,7 @@ def _claude_config_dir() -> Path:
 @router.get("")
 def service_info() -> dict:
     cfg = _claude_config_dir()
-    return {
+    body = {
         "version": PRISM_VERSION,
         "notes": PRISM_VERSION_NOTES,
         "runtime": _runtime(),
@@ -74,3 +75,8 @@ def service_info() -> dict:
         "quality_interval_s": QUALITY_INTERVAL_SECONDS,
         "mcp_endpoint": "/mcp/?project=<name>",
     }
+    # Team mode: any authenticated member of any workspace can reach this
+    # route (security._AUTH_ONLY_PREFIXES), so the host's paths must not
+    # leak; version/claude_authenticated/github_authenticated/mcp_endpoint
+    # stay - they are not filesystem locations.
+    return redact_host_paths(body) if team_mode_active() else body

@@ -23,6 +23,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from prism_service.api.security import redact_host_paths, team_mode_active
 from prism_service.services import github_auth as gh
 from prism_service.services import github_oauth as ghoauth
 
@@ -58,7 +59,7 @@ def _status_payload() -> dict:
     authed = gh.is_authenticated()
     meta = ghoauth.read_meta()
     client_id = ghoauth.get_client_id()
-    return {
+    body = {
         "authenticated": authed,
         "credentials_path": str(gh.credentials_path()),
         "fingerprint": gh.token_fingerprint() if authed else "",
@@ -82,6 +83,11 @@ def _status_payload() -> dict:
             "the Client ID below. Or paste a Personal Access Token directly."
         ),
     }
+    # Team mode: any authenticated member of any workspace can GET /status
+    # (security.py's github-auth allowlist), so the host's credentials
+    # directory must not leak; login/avatar_url/scopes stay - they identify
+    # the connected GitHub account, not the host filesystem.
+    return redact_host_paths(body) if team_mode_active() else body
 
 
 @router.get("/status")
