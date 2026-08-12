@@ -15,7 +15,7 @@ import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcPr
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
-import { fmtTokens } from "@/lib/format";
+import { fmtTokens, stripMirrorProvenance } from "@/lib/format";
 import { relativeTime } from "@/lib/relativeTime";
 import SpendPanel, { type SpendData } from "@/components/SpendPanel";
 
@@ -498,6 +498,9 @@ function statusLoz(s: string): LozengeTone {
 function gateLoz(g: string): LozengeTone {
   return g === "passed" ? "ok" : g === "failed" ? "danger" : g === "pending" ? "warn" : "neutral";
 }
+// Mirror-badge title label (task 675dd11a): "GitHub #414" / "Jira PRIS-11"
+// over a bare lowercase provider tag for anything unmapped.
+const PROVIDER_LABEL: Record<string, string> = { github: "GitHub", jira: "Jira" };
 function priorityLoz(p: number | string | undefined): LozengeTone {
   const n = typeof p === "number" ? p : Number(p);
   if (!Number.isFinite(n)) return "neutral";
@@ -1501,26 +1504,24 @@ export default function TaskDetailPage() {
               <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
             ))}
           </div>
+          {/* Every ACTIVE counterpart, not just the first — a task linked to
+              both github and jira shows both (task 6fbbec35). Owner revision
+              2026-08-12 (task 675dd11a): each entry is a titled BUTTON —
+              provider+issue label, external-link arrow, bordered/filled
+              hover affordance — with ALL metadata (incl. the synced-ago
+              stamp) rendered INSIDE the button, nothing floating beside it. */}
           {(task.mirrors ?? []).length > 0 && (
-            // Every ACTIVE counterpart, not just the first — a task linked
-            // to both github and jira shows both (task 6fbbec35, supersedes
-            // the singular task.mirror; that field survives as a read-only
-            // mirrors[0] alias on the wire).
-            <div data-external-context className="mt-1.5 text-2xs flex items-center gap-3 flex-wrap">
+            <div data-external-context className="mt-1.5 flex items-center gap-2 flex-wrap">
               {task.restricted ? (
-                <span data-restricted className="italic" style={{ color: "var(--text-disabled)" }}>
-                  Restricted — you don't have access to this item's linked provider context.
-                </span>
+                <span data-restricted className="italic text-2xs" style={{ color: "var(--text-disabled)" }}>Restricted</span>
               ) : (
                 (task.mirrors ?? []).map((mirror) => (
-                  <span key={mirror.provider + mirror.url} className="flex items-center gap-1.5">
-                    <a href={mirror.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
-                      {mirror.issue || "linked issue"} ↗
-                    </a>
-                    <span style={{ color: "var(--text-muted)" }}>
-                      synced {relativeTime(mirror.last_synced_at)} ago
-                    </span>
-                  </span>
+                  <a key={mirror.provider + mirror.url} target="_blank" rel="noreferrer"
+                    className="flex flex-col gap-0.5 rounded-md border px-2 py-1 text-2xs hover:border-[color:var(--border-strong)]"
+                    href={mirror.url}>
+                    <span style={{ color: "var(--accent-teal-fg)" }}>{PROVIDER_LABEL[mirror.provider] ?? mirror.provider} {mirror.issue || "linked issue"} ↗</span>
+                    <span style={{ color: "var(--text-muted)" }}>synced {relativeTime(mirror.last_synced_at)} ago</span>
+                  </a>
                 ))
               )}
             </div>
@@ -2020,7 +2021,11 @@ export default function TaskDetailPage() {
           <SectionLabel>Description</SectionLabel>
           {task.description ? (
             <div className="mt-2">
-              <Markdown text={task.description} />
+              {/* Render-only strip (task 675dd11a): the STORED description
+                  is never rewritten (legacy _mirror_url derivation stays
+                  intact); this pass just hides "Mirrored to/from ..."
+                  provenance prose + its URL line from the reader. */}
+              <Markdown text={stripMirrorProvenance(task.description)} />
             </div>
           ) : (
             <Empty>No description.</Empty>

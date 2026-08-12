@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.33"
+PRISM_VERSION = "7.10.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4314,6 +4314,20 @@ PRISM_VERSION_NOTES += (
     "also toggles the card; RepoSync's expanded tracked list reads the "
     "same {key,url} shape. MirrorStatus.tracking (a different endpoint) "
     "stays string[]."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.34: MIRROR LINKS ARE BADGES, NOT DESCRIPTION TEXT "
+    "[task 675dd11a]. task_mirror._record_backlink no longer appends a "
+    "'Mirrored to <provider> <issue>.\\n<url>' line to task.description on "
+    "a push mirror (the store-derived task.mirrors[] badge, task 6fbbec35, "
+    "already covers it); the stored description is never rewritten, so "
+    "legacy rows keep deriving their badge via api/tasks.py's _mirror_url. "
+    "New web/src/lib/format.ts stripMirrorProvenance() line-anchored "
+    "regex hides both push/import provenance shapes render-side on "
+    "TaskDetailPage's Description card and TaskTextPage's /description "
+    "route. TaskDetailPage's mirror-badge row is now one titled button "
+    "per active mirror ('GitHub #414', 'Jira PRIS-11') with the "
+    "synced-ago stamp rendered inside the button panel."
 )
 
 

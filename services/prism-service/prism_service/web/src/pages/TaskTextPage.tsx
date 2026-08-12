@@ -8,6 +8,7 @@ import { useProject } from "@/lib/project";
 import { Page, Card, Empty } from "@/components/ui";
 import EvidenceView from "@/components/EvidenceView";
 import Markdown from "@/components/Markdown";
+import { stripMirrorProvenance } from "@/lib/format";
 
 type Task = {
   id?: string;
@@ -66,8 +67,11 @@ export default function TaskTextPage() {
         ) : !meta ? (
           <Empty>Unknown section.</Empty>
         ) : section === "description" ? (
-          // The description is authored markdown → render structured blocks.
-          text ? <Markdown text={text} /> : <Empty>Nothing recorded.</Empty>
+          // The description is authored markdown → render structured
+          // blocks, through the same render-only strip TaskDetailPage
+          // uses (task 675dd11a FR-4): the stored text is untouched, this
+          // route just hides mirror-provenance prose from the reader.
+          text ? <Markdown text={stripMirrorProvenance(text)} /> : <Empty>Nothing recorded.</Empty>
         ) : (
           // Gate validation / completion proof are receipt-style →
           // EvidenceView, threaded with the task id (task 25a25d84) so it

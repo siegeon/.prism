@@ -106,15 +106,20 @@ def personal_scope() -> Optional[str]:
 
 
 def _record_backlink(task_svc, task_id: str, provider: str, result) -> None:
-    """Make the new issue VISIBLE on the task a person is looking at.
+    """Tag the task with its mirror provider.
 
-    The board's link-out badge (TasksPage.tsx ``mirrorOf``) needs two things:
-    a provider tag, and a URL the server can derive from the description
-    (api/tasks.py ``_mirror_url``). The IMPORT direction already produces both.
-    Writing the same two things here means the push direction lights up the
-    SAME affordance instead of shipping a second, parallel one that the board
-    would not render -- the oracle says "the task shows a link to one", and
-    the only link a person can actually click is that badge.
+    The board's link-out badge is STORE-DERIVED (task 6fbbec35 --
+    api/tasks.py's ``_all_mirrors_index`` reads active
+    ``work_item_external_links`` rows into ``task.mirrors[]``), one badge
+    per active mirror, independent of description text. This function
+    used to ALSO append a "Mirrored to {provider} {issue}.\\n{url}" line
+    to ``task.description`` as a second, redundant channel (task
+    675dd11a); that write is removed here. The raw description text on
+    rows written before the store link existed is preserved as LEGACY
+    DERIVATION INPUT ONLY -- ``api/tasks.py``'s ``_mirror_url`` still
+    regexes it for those legacy rows -- but it is never the live badge
+    source going forward, and this function no longer writes prose into
+    it at all.
     """
     task = task_svc.get(task_id)
     if task is None or not result.url:
@@ -122,11 +127,7 @@ def _record_backlink(task_svc, task_id: str, provider: str, result) -> None:
     tags = list(getattr(task, "tags", None) or [])
     if provider not in tags:
         tags.append(provider)
-    description = (getattr(task, "description", "") or "").rstrip()
-    provenance = f"Mirrored to {provider} {result.issue}.\n{result.url}"
-    if result.url not in description:
-        description = f"{description}\n\n{provenance}".strip()
-    task_svc.update(task_id, description=description, tags=tags)
+        task_svc.update(task_id, tags=tags)
 
 
 def mirror_task(project: str, task_id: str, provider: str = "github",

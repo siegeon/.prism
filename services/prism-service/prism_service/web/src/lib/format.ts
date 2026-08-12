@@ -19,3 +19,33 @@ export function fmtTokens(n: number): string {
   if (n >= 999.5) return `${(n / 1e3).toFixed(n >= 99.95e3 ? 0 : 1)}k`;
   return String(Math.round(n));
 }
+
+// Line-anchored: matches a WHOLE line "Mirrored to <provider> <issue>."
+// or "Mirrored from <provider> <source>." (both push and import shapes),
+// never a line that merely CONTAINS the words mid-sentence (task
+// 675dd11a, AC-5 — "We mirrored to github in Q3..." must survive).
+const MIRROR_PROVENANCE_RE = /^Mirrored (to|from) \S+ .*\.$/;
+const BARE_URL_RE = /^https?:\/\/\S+$/;
+
+// Render-side only: strips mirror-provenance prose (and its following
+// bare-URL line, if any) out of a task's description before it reaches
+// <Markdown>. The STORED description is never rewritten — live mirror
+// badges are store-derived (task 6fbbec35) and legacy rows still need
+// the raw text for api/tasks.py's _mirror_url derivation (task 675dd11a
+// FR-6). Collapses any resulting 3+ run of newlines down to 2 so a
+// removed block never leaves a stack of blank lines behind.
+export function stripMirrorProvenance(
+  text: string | null | undefined,
+): string {
+  if (!text) return "";
+  const lines = text.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (MIRROR_PROVENANCE_RE.test(lines[i])) {
+      if (i + 1 < lines.length && BARE_URL_RE.test(lines[i + 1])) i++;
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
