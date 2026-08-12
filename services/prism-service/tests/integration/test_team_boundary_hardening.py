@@ -848,19 +848,29 @@ def test_local_mode_still_serves_the_developer_their_own_paths(real_team, monkey
 def test_no_auth_only_get_surface_serves_a_host_path(real_team):
     """Structural sweep: walk every security._AUTH_ONLY_PREFIXES entry (read
     from the module, not a copied literal list) plus the two explicitly
-    allowlisted github-auth GETs, via the app's REAL route table so a future
-    prefix or route is swept automatically with no test edit needed."""
+    allowlisted github-auth GETs, so a future prefix or route is swept
+    automatically with no test edit needed.
+
+    Enumeration comes from the OpenAPI schema, NOT `app.routes`: FastAPI's lazy
+    router inclusion parks every `include_router`'d path inside an
+    `_IncludedRouter` whose inner routes carry UNPREFIXED paths (the prefix
+    lives in the include context), so `app.routes` yields 9 entries and
+    `/api/claude-auth/status` and `/api/service-info` are invisible to it.  The
+    `known_surfaces` floor below exists to catch exactly that failure mode
+    (`main.py:617` documents the same lazy-inclusion trap for the SPA's
+    session-detail deep link)."""
     from prism_service.api.security import _AUTH_ONLY_PREFIXES
 
     headers = real_team.bearer(real_team.alice_token)
     prefixes = tuple(_AUTH_ONLY_PREFIXES)
+    schema_paths = real_team.app.openapi()["paths"]
     candidate_paths = {
-        route.path
-        for route in real_team.app.routes
-        if "GET" in (getattr(route, "methods", None) or set())
-        and "{" not in route.path
+        path
+        for path, operations in schema_paths.items()
+        if "get" in {method.lower() for method in operations}
+        and "{" not in path
         and any(
-            route.path == prefix or route.path.startswith(prefix + "/")
+            path == prefix or path.startswith(prefix + "/")
             for prefix in prefixes
         )
     }
