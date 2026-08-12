@@ -163,7 +163,17 @@ def test_tasktile_honest_activity_states_render():
     assert "task.activity?.state" in src, (
         "the pill must read the honest task.activity.state, not the raw status"
     )
-    assert "ACT_TILE" in src, "the tile must map activity states via ACT_TILE"
+    # SUPERSEDED (task 40c29b83, FR-7): the tile's own private ACT_TILE map
+    # (no `driving` entry, drifted from what LiveBar showed for the identical
+    # payload) is deleted in favor of the ONE shared vocabulary every activity
+    # surface renders through -- components/conductor/SdlcProgress.tsx's
+    # ACTIVITY_META. test_conductor_panel_single_source_ui.py's FR-7 check
+    # (AC-8) now pins `"ACT_TILE" not in src` as the positive contract; this
+    # suite re-anchors to the successor name so the real invariant (activity
+    # states DO map to a label+tone here) survives the rename.
+    assert "ACTIVITY_META" in src, (
+        "the tile must map activity states via the shared ACTIVITY_META"
+    )
 
 
 # ── AC-5: RETIRED (inverted-flow #4). The AC was "the tile's throughput
