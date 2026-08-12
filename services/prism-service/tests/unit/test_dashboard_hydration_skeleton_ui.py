@@ -158,12 +158,22 @@ def test_ac5_guard_keys_on_the_flag_not_on_data_truthiness():
 # AC-6 — LiveBar must not flash "Idle" before its first poll (likely_misfire)
 # ---------------------------------------------------------------------------
 
+_HOOK = _SRC / "lib" / "useConductorState.ts"
+
+
 def test_ac6_livebar_declares_a_polled_flag():
-    src = _read(_LIVEBAR)
+    # SUPERSEDED 2026-08-12 (task 40c29b83): the `polled` declaration moved
+    # OUT of LiveBar.tsx into the shared lib/useConductorState.ts hook
+    # (FR-1/FR-3) -- LiveBar now CONSUMES the flag (its own
+    # `const state: ... = !polled ? "loading" : ...` expression stays put
+    # and is pinned by test_ac6_idle_state_is_gated_behind_the_first_poll
+    # below), so the DECLARATION check re-anchors to the hook module.
+    assert _HOOK.exists(), f"expected {_HOOK} to declare the polled flag"
+    src = _read(_HOOK)
     assert _FLAG_DECL.search(src), (
-        "AC-6: LiveBar must declare a NAMED polled/hydrated flag — today "
-        "`managed` inits [] (:67) so `state` computes 'idle' before the first "
-        "/api/conductor/state poll resolves.")
+        "AC-6: useConductorState must declare a NAMED polled/hydrated flag — "
+        "today `managed` inits [] so `state` computes 'idle' before the "
+        "first /api/conductor/state poll resolves.")
 
 
 def test_ac6_idle_state_is_gated_behind_the_first_poll():
