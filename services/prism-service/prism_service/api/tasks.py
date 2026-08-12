@@ -201,8 +201,9 @@ def list_tasks(project: str = Query("default"),
                                      "842248bd, FR-7 parity with the MCP "
                                      "task_list tool) - lean board rows "
                                      "instead of the full record. "
-                                     "'mirror_url' is a derived field, not a "
-                                     "raw Task attribute.")) -> dict:
+                                     "'mirror_url'/'mirrors' are derived "
+                                     "fields, not raw Task attributes."),
+              principal: Principal = Depends(current_principal)) -> dict:
     # Soft-deleted tasks stay in the store for audit but must NOT surface on
     # the board / task list — a deleted task is removed, not active work (it
     # was still feeding the AWAITING-REVIEW bar and the kanban). Opt in with
@@ -213,6 +214,10 @@ def list_tasks(project: str = Query("default"),
                  if str(getattr(t, "status", "") or "") != "deleted"]
     if fields:
         field_list = [f.strip() for f in fields.split(",") if f.strip()]
+        # Batched once for the whole board request (AC-8), never per row —
+        # see _all_mirrors_index's docstring for why.
+        mirrors_index = (_all_mirrors_index(principal)
+                          if "mirrors" in field_list else {})
         rows = []
         for t in tasks:
             row = {}
@@ -221,6 +226,8 @@ def list_tasks(project: str = Query("default"),
                     row[f] = _mirror_url(getattr(t, "description", "") or "")
                 elif f == "artifact_url":
                     row[f] = _artifact_url(getattr(t, "id", ""))
+                elif f == "mirrors":
+                    row[f] = mirrors_index.get(getattr(t, "id", ""), [])
                 else:
                     row[f] = getattr(t, f, None)
             rows.append(row)
@@ -482,34 +489,72 @@ def _build_timeline(history: list, sessions: list) -> dict:
             "lanes": lanes, "gates": gates}
 
 
-def _mirror_for_task(task_id: str, principal: Principal) -> Optional[dict]:
-    """The task's real counterpart (task a7c989c6, epic 02672417 shared
-    contract): the ACTIVE WorkItemExternalLink for this task, resolved
-    through the one lookup both sides of the mirror use — never a new
-    table/column. `None` on no active link OR any store problem; a resolver
-    failure here must never break the task-detail route (same defensive
-    shape as the actor-identity block above)."""
+def _mirror_entry(entity, conn, active) -> dict:
+    """One badge-worth of data from a resolved (entity, connection, link)
+    triple — shared by the single-task and batched-board lookups below so
+    the two never drift (task 6fbbec35)."""
+    provider = conn.provider if conn is not None else ""
+    return {
+        "provider": provider,
+        "issue": entity.display_key or entity.remote_id,
+        "url": entity.url,
+        "last_synced_at": entity.last_seen_at,
+        "state": active.state,
+    }
+
+
+def _mirrors_for_task(task_id: str, principal: Principal) -> list[dict]:
+    """ALL of the task's real counterparts (task 6fbbec35, epic 02672417
+    shared contract; supersedes the singular _mirror_for_task, whose
+    `next(...)` kept only the FIRST active work_item_external_links row so
+    a task linked to both github and jira lost one badge). `[]` on no
+    active link OR any store problem; a resolver failure here must never
+    break the task-detail route (same defensive shape as the
+    actor-identity block above)."""
     try:
         scope = personal_scope(coerce_principal(principal))
         store = get_integration_store()
         links = store.list_links(scope, task_id=task_id)
-        active = next((link for link in links if link.state == "active"), None)
-        if active is None:
-            return None
-        entity = store.get_entity(scope, active.entity_id)
-        if entity is None:
-            return None
-        conn = store.get_connection(scope, entity.connection_id)
-        provider = conn.provider if conn is not None else ""
-        return {
-            "provider": provider,
-            "issue": entity.display_key or entity.remote_id,
-            "url": entity.url,
-            "last_synced_at": entity.last_seen_at,
-            "state": active.state,
-        }
+        out = []
+        for active in links:
+            if active.state != "active":
+                continue
+            entity = store.get_entity(scope, active.entity_id)
+            if entity is None:
+                continue
+            conn = store.get_connection(scope, entity.connection_id)
+            out.append(_mirror_entry(entity, conn, active))
+        return out
     except Exception:
-        return None
+        return []
+
+
+def _all_mirrors_index(principal: Principal) -> dict[str, list[dict]]:
+    """Board-wide mirrors, batched to ONE query each against links/
+    entities/connections regardless of row count (task 6fbbec35 AC-8 — the
+    ticket's own named misfire was a per-row store hit). Grouped
+    task_id -> [entry, ...] in the same shape _mirrors_for_task returns
+    per-task. Best-effort, like every helper in this file — a store
+    problem must never break the board."""
+    try:
+        scope = personal_scope(coerce_principal(principal))
+        store = get_integration_store()
+        links = [l for l in store.list_links(scope) if l.state == "active"]
+        if not links:
+            return {}
+        entities = {e.id: e for e in store.list_entities(scope)}
+        conns = {c.id: c for c in store.list_connections(scope)}
+        out: dict[str, list[dict]] = {}
+        for active in links:
+            entity = entities.get(active.entity_id)
+            if entity is None:
+                continue
+            conn = conns.get(entity.connection_id)
+            out.setdefault(active.task_id, []).append(
+                _mirror_entry(entity, conn, active))
+        return out
+    except Exception:
+        return {}
 
 
 @router.get("/{task_id}")
@@ -544,11 +589,16 @@ def get_task(task_id: str, project: str = Query("default"),
     # `sessions` rides the EXISTING task-detail route (no parallel
     # top-level route) — the linked Claude sessions JOINed with their
     # session_outcomes metrics. Empty list when nothing is linked.
+    mirrors = _mirrors_for_task(task_id, principal)
     out = {
         "task": t,
         "history": history,
         "sessions": svc.sessions_for_task(task_id),
-        "mirror": _mirror_for_task(task_id, principal),
+        # `mirrors` (task 6fbbec35): ALL active counterparts, plural. `mirror`
+        # survives as a read-only mirrors[0] alias — existing consumers of
+        # the singular field are unchanged.
+        "mirrors": mirrors,
+        "mirror": mirrors[0] if mirrors else None,
     }
     # Attribute per-turn token spend (output_tokens bucketed into each turn's
     # (prev, this] wall-clock window) onto the history rows. Best-effort.

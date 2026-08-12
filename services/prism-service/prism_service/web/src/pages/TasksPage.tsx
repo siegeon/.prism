@@ -22,8 +22,13 @@ type Task = {
   updated_at?: string;
   tags?: string[];
   gate_state?: string;
-  mirror_url?: string;
+  mirrors?: TaskMirror[];
 };
+
+// One badge-worth of data per active provider link (api/tasks.py `mirrors`,
+// task 6fbbec35 — plural, store-derived; supersedes the singular
+// description-prose `mirror_url`).
+type TaskMirror = { provider: string; issue?: string; url: string; last_synced_at?: string };
 
 // A row on the unified Work surface — a native PRISM task OR an external
 // GitHub/Jira item, normalized to one shape so My Work/Team, the filters, and
@@ -48,7 +53,7 @@ type WorkItem = {
   restricted?: boolean;     // server says: exists, but linked context is hidden
   imported?: boolean;       // has a local intake task that can be started
   tags?: string[];          // provenance, e.g. ['github','external']
-  mirror_url?: string;      // server-derived backlink for a mirrored native task
+  mirrors?: TaskMirror[];   // server-derived, store-backed backlinks (0..n)
 };
 
 // My Work vs Team — the attention model. "mine" scopes to the signed-in
@@ -88,20 +93,21 @@ function providerOf(kind?: string, provider?: string): WorkSource {
 // happens, so labelling every row "PRISM" says nothing (owner 2026-07-28).
 // A badge earns its place only by taking you somewhere: a task mirrored from
 // a provider gets a link to the real thing, and a native task gets nothing.
-// The URL itself is derived SERVER-SIDE (api/tasks.py's `mirror_url` field,
-// task 842248bd) so the board never has to ship the raw description body
-// that used to carry it, just this one small string.
+// The URL(s) are derived SERVER-SIDE from the integration STORE (api/tasks.py
+// `mirrors` field, task 6fbbec35 — supersedes the singular description-prose
+// `mirror_url`, task 842248bd) so a task linked to BOTH github and jira
+// renders both badges, not just the first.
 
-function mirrorOf(item: WorkItem): { label: string; href: string } | null {
+function mirrorsOf(item: WorkItem): { label: string; href: string }[] {
   if (item.url) {
-    return { label: item.source === "jira" ? "JIRA" : "GITHUB", href: item.url };
+    return [{ label: item.source === "jira" ? "JIRA" : "GITHUB", href: item.url }];
   }
-  // An imported issue becomes an ordinary PRISM task, so the link lives in
-  // what the sync recorded on it (task 900a4fb9).
-  const tags = (item.tags ?? []).map((t) => t.toLowerCase());
-  const provider = tags.includes("jira") ? "jira" : tags.includes("github") ? "github" : null;
-  if (!provider || !item.mirror_url) return null;
-  return { label: provider.toUpperCase(), href: item.mirror_url };
+  // A native task's counterparts are whatever the store says is ACTIVE —
+  // never description prose, never capped to one provider.
+  return (item.mirrors ?? []).map((m) => ({
+    label: m.provider === "jira" ? "JIRA" : m.provider.toUpperCase(),
+    href: m.url,
+  }));
 }
 
 function nativeToWork(t: Task): WorkItem {
@@ -117,7 +123,7 @@ function nativeToWork(t: Task): WorkItem {
     priority: t.priority,
     updated_at: t.updated_at,
     tags: t.tags,
-    mirror_url: t.mirror_url,
+    mirrors: t.mirrors,
     parent_id: t.parent_id,
   };
 }
@@ -162,9 +168,9 @@ export default function TasksPage() {
     // LEAN board projection (task 842248bd): the unprojected board shipped
     // 1.84 MB over 356 rows, 86% of it fields this page never renders.
     // `description` is deliberately NOT in this set — the server derives
-    // `mirror_url` instead so the link-out badge survives without the raw
-    // body riding the board (see mirrorOf below).
-    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirror_url`)
+    // `mirrors` instead so the link-out badge(s) survive without the raw
+    // body riding the board (see mirrorsOf below).
+    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors`)
       .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
     // The viewer identity powers My Work; failure just leaves it empty (Team
@@ -344,7 +350,6 @@ function WorkRow({ item, focused, started, onStart }: {
   const gate = item.gate_state ?? "none";
   const gTone = gateTone(gate);
   const external = item.source !== "native";
-  const mirror = mirrorOf(item);
   return (
     <tr
       className="h-10 transition-colors border-b border-[color:var(--border-subtle)]"
@@ -353,8 +358,9 @@ function WorkRow({ item, focused, started, onStart }: {
     >
       <td className="px-3 py-1.5">
         <div className="flex items-center gap-2 min-w-0">
-          {mirror && (
+          {mirrorsOf(item).map((mirror) => (
             <a
+              key={mirror.label + mirror.href}
               href={mirror.href}
               target="_blank"
               rel="noreferrer"
@@ -365,7 +371,7 @@ function WorkRow({ item, focused, started, onStart }: {
             >
               {mirror.label}
             </a>
-          )}
+          ))}
           <span className="shrink-0 font-mono text-2xs tabular-nums" style={{ color: "var(--text-muted)" }}>
             {item.displayKey ?? shortId(item.id)}
           </span>

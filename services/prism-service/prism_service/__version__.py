@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.31"
+PRISM_VERSION = "7.10.32"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.32: mirror badges read the integration STORE, not description "
+    "prose [task 6fbbec35]. GET /api/tasks?fields=...,mirrors and GET "
+    "/api/tasks/{id} now serve a store-derived, PLURAL mirrors list (one "
+    "entry per ACTIVE work_item_external_links row) batched to one query "
+    "each against links/entities/connections per request; the board "
+    "(mirrorsOf) and task detail page render one badge per mirror, so a "
+    "task linked to both github and jira shows both. `mirror` (singular) "
+    "survives as a read-only mirrors[0] alias.\n"
     "v7.10.31: the existing-backlog preview/confirm push now works for "
     "Jira too [task 56074410]. BacklogPush renders on the Jira card "
     "(SettingsPage.tsx), the confirm/success labels read the connector's "
