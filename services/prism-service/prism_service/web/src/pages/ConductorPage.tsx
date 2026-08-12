@@ -1,52 +1,13 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, lozengeTone, type PillTone } from "@/components/ui";
 import { Lozenge } from "@/components/Lozenge";
 import { domainTone } from "@/lib/domainTone";
 import { motion, useReducedMotion } from "motion/react";
-import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
+import { type PhaseProgress, ACTIVITY_META } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
-
-type ManagedTask = {
-  id: string;
-  title: string;
-  workflow_step?: string;
-  gate_state?: string;
-  gate_reason?: string;
-  status?: string;
-  // v6.0.43: extra fields backing the uniform tile redesign
-  priority?: number;
-  assigned_agent?: string;
-  created_at?: string;
-  updated_at?: string;
-  tags?: string[];
-  phase_progress?: PhaseProgress | null;
-  // Honest work state (server: conductor_service.activity_for). The tile pill
-  // + burn graph read THIS, not the raw status — a task nobody is driving must
-  // NOT read as a teal "in progress".
-  activity?: Activity | null;
-  // Epic slices (server: managed_tasks). Done-first ordered non-cancelled
-  // children; drives the SLICES hero bar. Empty/absent for leaf tasks.
-  subtasks?: { id: string; title: string; status: string }[];
-};
-
-// Honest activity STATE → tile pill label + tone. Only `stalled` appends an idle
-// mm:ss and wears the alarm wording — it is the one state where the owner truly
-// has to step in. `adrift` (linked session live, no step boundary in 120s) is the
-// NORMAL middle of a 5-10min step and reads as work, not as darkness
-// (owner 2026-07-21). Mirrors ACTIVITY_META in conductor/SdlcProgress.
-const ACT_TILE: Record<string, { label: string; tone: PillTone }> = {
-  working: { label: "working", tone: "teal" },
-  paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
-  awaiting_gate: { label: "awaiting review", tone: "amber" },
-  adrift: { label: "driver active", tone: "teal" },
-  stalled: { label: "stalled · needs you", tone: "rose" },
-  done: { label: "done", tone: "emerald" },
-  blocked: { label: "blocked", tone: "rose" },
-  pending: { label: "pending", tone: "amber" },
-};
+import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 
 function fmtIdle(s?: number | null): string {
   if (s == null) return "";
@@ -54,43 +15,25 @@ function fmtIdle(s?: number | null): string {
   return `${m}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 }
 
-type BoardHealth = {
-  consecutive_low_value?: number;
-  reorient?: boolean;
-  reason?: string;
-};
-
-type State = {
-  managed_tasks?: ManagedTask[];
-  step_buckets?: Record<string, number>;
-  board_health?: BoardHealth;
-};
-
 export default function ConductorPage() {
   const [project] = useProject();
   const navigate = useNavigate();
   const reduced = useReducedMotion();
-  const [data, setData] = useState<State | null>(null);
+  // Single resolved source (task 40c29b83): the fetch, the polled/observed
+  // guard, the SSE push refresh, and the staleness sweep all live in the
+  // shared hook now — LiveBar reads the identical state, so the two
+  // surfaces can no longer contradict each other for the same payload.
+  const { data, managed, polled: observed, error, fetchedAt } = useConductorState(project);
   // Liveness: a card that isn't being driven still must VISIBLY tick, or it's
-  // indistinguishable from frozen. fetchedAt marks the last successful poll;
-  // sinceFetchS counts up every second and RESETS each 5s poll — a heartbeat the
-  // eye can see. It also drives the per-second idle clock on paused/adrift tiles.
-  const fetchedAt = useRef(0);
+  // indistinguishable from frozen. sinceFetchS counts up every second and
+  // RESETS each successful poll — a heartbeat the eye can see. It also
+  // drives the per-second idle clock on paused/adrift tiles.
   const [sinceFetchS, setSinceFetchS] = useState(0);
-
-  const load = useCallback(() => {
-    api.get<State>(`/api/conductor/state?project=${project}`)
-      .then((d) => { setData(d); fetchedAt.current = performance.now(); setSinceFetchS(0); })
-      .catch(() => setData(null));
-  }, [project]);
-
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
   useEffect(() => {
     const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [fetchedAt]);
 
-  const managed = data?.managed_tasks ?? [];
   const boardHealth = data?.board_health;
   const reorient = boardHealth?.reorient === true;
   const lowValueN = boardHealth?.consecutive_low_value ?? 0;
@@ -117,8 +60,22 @@ export default function ConductorPage() {
           labeled phase timeline (the task's current phase shown top-right) that advance automatically as the
           conductor drives it. Tasks worked without conductor (status flips only) don't appear here. Click a tile to open it.
         </p>
-        {managed.length === 0 ? (
-          <Empty>No tasks under conductor management. Call conductor_work() to pull the next task and start the loop.</Empty>
+        {/* Four honest branches off the ONE hook (task 40c29b83), never the
+            old `managed.length === 0` catch-all that collapsed "not fetched
+            yet", "fetch failed" and "genuinely empty" into one sentence.
+            !observed is checked FIRST so it is the ternary's outermost
+            condition: pre-first-fetch renders neutral copy, never a claim
+            about the queue. */}
+        {!observed || (managed.length === 0 && !error) ? (
+          <Empty>
+            {!observed
+              ? "Checking conductor state…"
+              : "No tasks under conductor management right now. This can mean the queue is genuinely empty, or work is happening outside conductor tracking (status flips only, not workflow-claimed by the SDLC). Call conductor_work() to pull the next task and start the loop."}
+          </Empty>
+        ) : error ? (
+          <div className="text-2xs" style={{ color: "var(--accent-rose-fg)" }}>
+            Couldn't reach the conductor state endpoint. The board may be stale until this recovers; retrying automatically.
+          </div>
         ) : (
           // WIDE, not portrait (owner 2026-07-22). The old rule packed up to 4
           // tiles per row — minmax(max(280px, (100%-3rem)/4), 1fr) — so every
@@ -153,7 +110,11 @@ export default function ConductorPage() {
 function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; reduced: boolean | null; sinceFetchS: number; onClick: () => void }) {
   const status = (task.status ?? "").toLowerCase();
   const actState = (task.activity?.state ?? status).toLowerCase();
-  const actTone: PillTone = ACT_TILE[actState]?.tone ?? domainTone("taskStatus", status) ?? "slate";
+  // Shared vocabulary (task 40c29b83 FR-7): ACTIVITY_META is the ONE map
+  // every activity surface renders through (LiveBar included) — supersedes
+  // this file's former own private activity map, which had no `driving`
+  // entry and drifted from what the bar showed for the identical payload.
+  const actTone: PillTone = (ACTIVITY_META[actState]?.tone as PillTone | undefined) ?? domainTone("taskStatus", status) ?? "slate";
   // "being worked" covers `adrift` too: a driver holding a 5-10min step crosses
   // no boundary for most of it, and excluding it made a BUILDING task render as
   // "last worked by" with a dead grey tick (owner 2026-07-21). Only `stalled`
@@ -171,7 +132,12 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
     actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
     : actState === "stalled" ? `stalled · needs you${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
-    : (ACT_TILE[actState]?.label ?? (status || "—"));
+    // "awaiting_gate" reads through the shared map like any other honest
+    // state, named explicitly here (not just via the fallback below) so a
+    // human/machine reviewer owed a decision is never silently swallowed
+    // into a generic default.
+    : actState === "awaiting_gate" ? (ACTIVITY_META[actState]?.label ?? "awaiting review")
+    : (ACTIVITY_META[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
   const stepId = task.workflow_step ?? "";

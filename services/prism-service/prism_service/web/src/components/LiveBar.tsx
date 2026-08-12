@@ -13,30 +13,17 @@
  * This is the conductor pulse; it is DISTINCT from <LiveStatusStrip>, which
  * is the analyzer scan-queue strip.
  */
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { stepLabel } from "@/lib/workflowChips";
 import { ACTIVITY_META } from "@/components/conductor/SdlcProgress";
 import { useScanActivity } from "@/lib/scan-activity";
-import { type Activity } from "@/components/conductor/SdlcProgress";
+import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import { Lozenge } from "@/components/Lozenge";
 import { EntityChip } from "@/components/EntityChip";
 import { GateEvidenceBlock } from "@/components/conductor/TaskActivityGantt";
-
-// Conductor live-state (server: /api/conductor/state → managed_tasks). The bar
-// reads activity.state, never the raw task status, so a parked task can't fake
-// liveness.
-type ManagedTask = {
-  id: string;
-  title?: string;
-  workflow_step?: string;
-  gate_state?: string;
-  assigned_agent?: string;
-  updated_at?: string;
-  activity?: Activity | null;
-};
 
 const shortId = (id?: string) => (id ?? "").slice(0, 8) || "—";
 
@@ -56,10 +43,6 @@ function waitFor(ts?: string): string {
 // else (Explore/Understand/Sessions/Learning/Settings) renders no bar.
 const ACTIVITY_ROUTES = ["/", "/tasks", "/conductor"];
 
-// Fallback-sweep staleness threshold (task 4d399e0a) — the sweep only
-// refetches once a fetch is genuinely this old, never on a bare interval.
-const STALE_AFTER_MS = 15_000;
-
 function inActivityContext(pathname: string): boolean {
   return ACTIVITY_ROUTES.some(
     (r) => pathname === r || (r !== "/" && pathname.startsWith(r + "/")),
@@ -69,12 +52,11 @@ function inActivityContext(pathname: string): boolean {
 export default function LiveBar() {
   const [project] = useProject();
   const { pathname } = useLocation();
-  const [managed, setManaged] = useState<ManagedTask[]>([]);
-  // `managed` inits [] which computes state="idle" — so the bar flashed
-  // "Idle · no task being driven — queue is quiet" before its FIRST poll had
-  // even returned, on every load (task 89e90d1a likely_misfire). Hold a
-  // neutral "connecting" state until this flips.
-  const [polled, setPolled] = useState(false);
+  // Single resolved source (task 40c29b83): the fetch, the polled/observed
+  // guard, the heartbeat clock, the SSE push refresh, and the staleness
+  // sweep all live in the shared hook now — ConductorPage reads the
+  // identical state.
+  const { managed, polled, sinceFetchS, heartbeat: baseHeartbeat, refresh } = useConductorState(project);
   const [version, setVersion] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
   // Task 25a25d84: the "awaiting gate" chip expands (click) into the gate's
@@ -82,26 +64,19 @@ export default function LiveBar() {
   const [expandedGate, setExpandedGate] = useState<string | null>(null);
   const scan = useScanActivity();
 
-  // Heartbeat: the bar must VISIBLY tick or it's indistinguishable from frozen.
-  // sinceFetchS counts up every second and RESETS on each 5s poll — the same
-  // honest-liveness trick the conductor tiles use.
-  const fetchedAt = useRef(0);
-  const [sinceFetchS, setSinceFetchS] = useState(0);
   // child task id -> parent task id, for rolling driven slices up to the epic.
   const [parentOf, setParentOf] = useState<Record<string, string>>({});
 
-  const load = useCallback(() => {
-    api.get<{ managed_tasks?: ManagedTask[] }>(`/api/conductor/state?project=${project}`)
-      .then((d) => { setManaged(d.managed_tasks ?? []); fetchedAt.current = performance.now(); setSinceFetchS(0); })
-      .catch(() => setManaged([]))
-      .finally(() => setPolled(true));
-    // PARENTAGE, fetched separately because managed_tasks does not carry it
-    // (ConductorService.managed_tasks selects on workflow_step alone and emits
-    // no parent_id, so a driven CHILD is indistinguishable from a root epic
-    // here). Without this the bar renders a driver's own decomposition as
-    // peers of the epic the owner is watching — owner 2026-08-06: "those are
-    // sub tasks ... they are your details, you do not have me conduct them
-    // for you". Lean projection, same shape TasksPage.tsx already requests.
+  // PARENTAGE, fetched separately because managed_tasks does not carry it
+  // (ConductorService.managed_tasks selects on workflow_step alone and emits
+  // no parent_id, so a driven CHILD is indistinguishable from a root epic
+  // here). Without this the bar renders a driver's own decomposition as
+  // peers of the epic the owner is watching — owner 2026-08-06: "those are
+  // sub tasks ... they are your details, you do not have me conduct them
+  // for you". Lean projection, same shape TasksPage.tsx already requests;
+  // re-runs whenever the managed set changes so a newly-driven task's
+  // parentage resolves without a bare interval of its own.
+  useEffect(() => {
     api.get<{ tasks?: { id: string; parent_id?: string }[] }>(
       `/api/tasks?project=${project}&fields=id,parent_id`)
       .then((d) => {
@@ -110,41 +85,20 @@ export default function LiveBar() {
         setParentOf(map);
       })
       .catch(() => { /* leave parentage as-is; never blank a known map */ });
-  }, [project]);
+  }, [project, managed]);
 
-  // Push refresh (task 4d399e0a): subscribe to the project's real event bus
-  // (same route SessionsPage.tsx already uses) rather than /sse/live, which
-  // only ever emits one connect payload plus ": keepalive" comment lines and
-  // can never fire onmessage. TaskService.update publishes task.changed on
-  // every conductor step/gate write, so this reaches load() on real motion
-  // -- not merely on "the socket is open" like the retired sseHealthy did.
+  useEffect(() => { api.get<{ version: string }>(`/api/version`).then((d) => setVersion(d.version)).catch(() => {}); }, []);
+
+  // D-6 (task 2d480b08): a supplementary push trigger local to the bar
+  // itself, on top of the hook's own subscription — nudges the SAME shared
+  // refresh() rather than re-fetching or re-parsing anything independently,
+  // so this can never drift from what the hook (and ConductorPage) already
+  // resolved for the identical payload.
   useEffect(() => {
     const es = new EventSource(`/sse/sessions?project=${project}`);
-    es.onmessage = () => { load(); };
+    es.onmessage = () => { refresh(); };
     return () => es.close();
-  }, [project, load]);
-
-  // Fallback sweep only (task 4d399e0a): the SSE subscribe above is the
-  // primary refresh path now, so this never gates on connection health --
-  // gating a "is push alive" flag was the exact bug (onopen fires once,
-  // stays true forever, load() never runs again). It gates on tab
-  // visibility + genuine STALENESS instead, a safety net for the case push
-  // itself observes nothing to say (ConductorService.activity_for decays
-  // working -> adrift -> stalled purely on elapsed time, no bus event).
-  useEffect(() => {
-    const sweep = () => {
-      if (!document.hidden && performance.now() - fetchedAt.current >= STALE_AFTER_MS) load();
-    };
-    load();
-    const t = setInterval(sweep, 2000);
-    document.addEventListener("visibilitychange", sweep);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", sweep); };
-  }, [load]);
-  useEffect(() => {
-    const t = setInterval(() => setSinceFetchS(Math.max(0, (performance.now() - fetchedAt.current) / 1000)), 1000);
-    return () => clearInterval(t);
-  }, []);
-  useEffect(() => { api.get<{ version: string }>(`/api/version`).then((d) => setVersion(d.version)).catch(() => {}); }, []);
+  }, [project, refresh]);
 
   // ROOTS ONLY on this bar. A driven CHILD is the driver's own decomposition;
   // it rolls up into its epic's row as a slice count instead of claiming a row
@@ -190,7 +144,7 @@ export default function LiveBar() {
   const stateLabel = state === "loading" ? "Connecting…"
     : state === "live" ? "Live" : state === "gated" ? "Awaiting review"
       : state === "inflow" ? "In flow" : "Idle";
-  const heartbeat = `updated ${Math.floor(sinceFetchS)}s ago · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
+  const heartbeat = `${baseHeartbeat} · queue ${scan.pending}${version ? ` · daemon v${version}` : ""}`;
 
   // Legible chip: the task TITLE (truncated), never a bare uuid — the full
   // id rides in the tooltip (owner: "it's hard to see what 401811b8 is").
