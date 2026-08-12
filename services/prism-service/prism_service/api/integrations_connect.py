@@ -661,7 +661,7 @@ class PushBacklogBody(BaseModel):
 
 def _empty_skip_buckets() -> dict:
     return {"done": [], "cancelled": [], "already_linked": [],
-            "other_status": []}
+            "other_status": [], "imported": []}
 
 
 @router.post("/{provider}/push-backlog")
@@ -703,9 +703,18 @@ def push_backlog(provider: str, body: PushBacklogBody,
     task_svc = project_context.get_project(project).task_svc
     tasks = task_svc.list()
 
+    from prism_service.services.task_mirror import IMPORTED_TAGS
+
     by_id = {t.id: t for t in tasks}
-    rows = []
+    rows, skipped_imported = [], []
     for t in tasks:
+        # An IMPORTED task never exports to ANY provider (the observer path
+        # refuses IMPORTED_TAGS; this route must agree). The first live jira
+        # preview offered 48 github-imported tasks because this exclusion
+        # was missing (task 56074410, 2026-08-11).
+        if set(t.tags or []) & IMPORTED_TAGS:
+            skipped_imported.append(t.id)
+            continue
         # PROVIDER-SCOPED, matching push_task_creation's own eligibility
         # check (FR-9, task 88a7da0b) -- a task linked only to another
         # provider must still preview as create-eligible for THIS one,
@@ -719,6 +728,7 @@ def push_backlog(provider: str, body: PushBacklogBody,
         "cancelled": report.skipped_cancelled,
         "already_linked": report.skipped_already_linked,
         "other_status": report.skipped_other_status,
+        "imported": skipped_imported,
     }
 
     if body.dry_run:
