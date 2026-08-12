@@ -147,26 +147,36 @@ def test_get_task_mirror_is_none_without_a_counterpart(rig):
 
 # ── UI: the actual affordance a person clicks ──────────────────────────────
 
-def test_taskdetail_renders_a_working_link_from_task_mirror():
-    """Must find a REAL rendered `href` reading `task.mirror`, not merely
-    the substring somewhere in the file (a stray comment has satisfied
-    look-alike assertions before — CLAUDE.md lessons)."""
+# SUPERSEDED by task 6fbbec35: task.mirror (singular) can only ever show ONE
+# counterpart, so a task linked to both github AND jira lost one badge. The
+# detail page now maps over the store-derived, array-valued task.mirrors;
+# task.mirror survives only as a read-only mirrors[0] alias on the wire (AC-7,
+# still pinned above). Rewritten, not deleted — the "real clickable href,
+# not just a field reference" discipline still applies to the new map.
+def test_taskdetail_renders_a_working_link_from_task_mirrors():
+    """Must find a REAL rendered `href` reading inside a task.mirrors map,
+    not merely the substring somewhere in the file (a stray comment has
+    satisfied look-alike assertions before — CLAUDE.md lessons)."""
     assert _DETAIL.exists(), f"expected source missing: {_DETAIL}"
     src = _DETAIL.read_text(encoding="utf-8")
 
-    assert "task.mirror" in src, (
-        "TaskDetailPage must read task.mirror; it is the only field that "
-        "exists for BOTH an imported and an outbound-created task")
+    assert re.search(r"task\.mirrors\s*\?\?\s*\[\]\s*\)?\s*\.\s*map\(|"
+                      r"task\.mirrors\s*\.\s*map\(", src), (
+        "TaskDetailPage must render one row per entry via "
+        "(task.mirrors ?? []).map(...) — it is the only field that shows "
+        "BOTH an imported and an outbound-created task's counterparts, and "
+        "the only shape that can render more than one")
 
-    href = re.search(r'href=\{[^}]*task\.mirror[^}]*\}', src)
+    href = re.search(r"href=\{[^}]*\.url[^}]*\}", src)
     assert href, (
-        "no <a href=...> actually reads task.mirror — a person needs a "
-        "real clickable link, not just a field reference somewhere")
+        "no <a href=...> inside the mirrors map actually reads a mirror's "
+        "url — a person needs a real clickable link, not just a field "
+        "reference somewhere")
 
-    window = src[max(0, href.start() - 300):href.end() + 400]
+    window = src[max(0, href.start() - 400):href.end() + 400]
     assert "last_synced" in window, (
-        "the counterpart link must show a last-synced time next to it "
-        "(AC-6); found the link but no last_synced nearby")
+        "each counterpart link must show a last-synced time next to it "
+        "(AC-6); found a link but no last_synced nearby")
 
 
 def test_taskdetail_no_longer_gates_the_counterpart_on_the_external_tag():

@@ -44,6 +44,10 @@ type Task = {
   // external_url (removed, task a7c989c6): had zero backend producers —
   // superseded by `mirror` below, built from the real active-link lookup.
   mirror?: TaskMirror | null;
+  // mirrors (task 6fbbec35): ALL active counterparts, plural — `mirror`
+  // survives as a read-only mirrors[0] alias so a task linked to both
+  // github and jira shows both, not just the first.
+  mirrors?: TaskMirror[];
   assigned_agent?: string;
   description?: string;
   story_file?: string;
@@ -973,15 +977,15 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number>; mirror?: TaskMirror | null }>(
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number>; mirror?: TaskMirror | null; mirrors?: TaskMirror[] }>(
         `/api/tasks/${id}?project=${project}`,
       );
       // phase_progress + activity + has_prototype + spend + step_tokens +
-      // mirror ride at the TOP LEVEL of the response (not nested in task) —
+      // mirror(s) ride at the TOP LEVEL of the response (not nested in task) —
       // merge onto the task so the SDLC bar, the honest work-state pill, the
       // prototype iframe, the Spend panel, the StepRail's per-step tokens,
       // and the linked-issue block all read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {}, mirror: d.mirror ?? d.task.mirror ?? null } : d.task);
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {}, mirror: d.mirror ?? d.task.mirror ?? null, mirrors: d.mirrors ?? d.task.mirrors ?? [] } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
       setTimeline(d.timeline ?? null);
@@ -1497,21 +1501,27 @@ export default function TaskDetailPage() {
               <Lozenge key={tag} tone="neutral">#{tag}</Lozenge>
             ))}
           </div>
-          {task.mirror && (
-            <div data-external-context className="mt-1.5 text-2xs flex items-center gap-1.5">
+          {(task.mirrors ?? []).length > 0 && (
+            // Every ACTIVE counterpart, not just the first — a task linked
+            // to both github and jira shows both (task 6fbbec35, supersedes
+            // the singular task.mirror; that field survives as a read-only
+            // mirrors[0] alias on the wire).
+            <div data-external-context className="mt-1.5 text-2xs flex items-center gap-3 flex-wrap">
               {task.restricted ? (
                 <span data-restricted className="italic" style={{ color: "var(--text-disabled)" }}>
                   Restricted — you don't have access to this item's linked provider context.
                 </span>
               ) : (
-                <>
-                  <a href={task.mirror.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
-                    {task.mirror.issue || "linked issue"} ↗
-                  </a>
-                  <span style={{ color: "var(--text-muted)" }}>
-                    synced {relativeTime(task.mirror.last_synced_at)} ago
+                (task.mirrors ?? []).map((mirror) => (
+                  <span key={mirror.provider + mirror.url} className="flex items-center gap-1.5">
+                    <a href={mirror.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent-teal-fg)" }}>
+                      {mirror.issue || "linked issue"} ↗
+                    </a>
+                    <span style={{ color: "var(--text-muted)" }}>
+                      synced {relativeTime(mirror.last_synced_at)} ago
+                    </span>
                   </span>
-                </>
+                ))
               )}
             </div>
           )}

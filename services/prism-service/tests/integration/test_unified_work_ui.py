@@ -72,7 +72,10 @@ def test_external_rows_show_provider_badge_backlink_and_remote_status():
     # ProviderBadge is retired (task feeec35e): it labelled EVERY row, so it
     # said nothing. The backlink claim survives and is what mattered, now as a
     # provider-named button rather than an unlinked lozenge.
-    assert "mirrorOf" in src, "a mirrored row must resolve its provider link"
+    # SUPERSEDED by task 6fbbec35: mirrorOf (singular, at most one badge) was
+    # replaced by the array-returning mirrorsOf, so a task linked to both
+    # github and jira renders both badges instead of just the first.
+    assert "mirrorsOf" in src, "a mirrored row must resolve its provider link(s)"
     assert "href={" in src and "target=\"_blank\"" in src
     # remote status is rendered with a label DISTINCT from the local gate/step
     assert "Remote" in src, "external remote status must be labelled Remote"

@@ -207,16 +207,24 @@ def test_board_fetch_requests_a_lean_field_projection():
             f"board fetch must NOT request heavy field {must_not_have!r}; got {url!r}")
 
 
-def test_mirror_of_reads_mirror_url_not_raw_description():
+# SUPERSEDED by task 6fbbec35: item.mirror_url was itself a description-prose
+# derivative (single-valued, and null when a mirror had no "Mirrored to..."
+# line). The badge now reads the store-derived, array-valued item.mirrors via
+# mirrorsOf() — see test_mirror_badges_read_the_store.py for the full RED
+# coverage of that contract. This test is rewritten (not deleted) to keep
+# pinning the invariant that never changed: no raw description regex.
+def test_mirrors_of_reads_item_mirrors_not_raw_description():
     src = _read("pages/TasksPage.tsx")
-    i = src.index("function mirrorOf(")
+    i = src.index("function mirrorsOf(")
     end = src.index("\n}\n", i)
     body = src[i:end]
-    assert "item.mirror_url" in body, (
-        "mirrorOf must read the server-derived item.mirror_url instead of "
-        "regexing raw description")
-    assert "MIRROR_URL_RE.exec(item.description" not in body, (
-        "mirrorOf must no longer regex item.description directly")
+    assert "item.mirrors" in body, (
+        "mirrorsOf must read the server-derived, store-backed item.mirrors "
+        "array instead of the old singular item.mirror_url prose field")
+    assert "item.mirror_url" not in body, (
+        "mirrorsOf must not read the retired singular item.mirror_url field")
+    assert "item.description" not in body, (
+        "mirrorsOf must never regex item.description")
 
 
 def test_detail_children_fetch_is_scoped_not_the_whole_board():

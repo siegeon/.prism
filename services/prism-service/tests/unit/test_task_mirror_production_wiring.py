@@ -269,24 +269,35 @@ def wired(tmp_path, monkeypatch):
     return svc
 
 
+# SUPERSEDED IN PART by task 6fbbec35: the board badge no longer depends on
+# a provider tag + description-derived mirror_url (a task pushed without the
+# "Mirrored to..." line, or whose description was edited afterwards, used to
+# lose its badge). The real postcondition is the ACTIVE store link mirror_task
+# leaves behind — that link is what api/tasks.py's `mirrors` field (and the
+# board's mirrorsOf badge) actually reads. Rewritten, not deleted.
 def test_ac7_a_mirrored_task_renders_the_board_link_out_badge(wired):
-    """The oracle says the task "shows a link to one". The ONLY link a person
-    can click is TasksPage.tsx's mirrorOf badge, and that badge needs BOTH a
-    provider tag and a server-derived mirror_url. Assert the affordance, not
-    the internals: a link recorded anywhere else is a link nobody sees.
+    """The oracle says the task "shows a link to one". The badge is driven by
+    the store's active work_item_external_links row, resolved through the
+    SAME lookup api/tasks.py's mirrors field uses. Assert the affordance
+    (an active, resolvable store link), not the retired description prose.
     """
-    from prism_service.api.tasks import _mirror_url
     from prism_service.services import task_mirror
+    from prism_service.services.integration_store import get_integration_store
 
     task = wired.create(title="mirror me")
     outcome = task_mirror.mirror_task("prism", task.id)
     assert outcome.created is True, outcome.reason
 
-    after = wired.get(task.id)
-    assert "github" in [t.lower() for t in after.tags], (
-        "no provider tag: TasksPage.mirrorOf returns null and the badge "
-        "never renders")
-    assert _mirror_url(after.description) == f"https://github.com/{REPO}/issues/4242"
+    store = get_integration_store()
+    from prism_service.services.task_mirror import personal_scope
+    scope = personal_scope()
+    links = store.list_links(scope, task_id=task.id)
+    active = [l for l in links if l.state == "active"]
+    assert active, (
+        "no active work_item_external_links row for the mirrored task: "
+        "the board's mirrors field has nothing to render")
+    entity = store.get_entity(scope, active[0].entity_id)
+    assert entity is not None and entity.url == f"https://github.com/{REPO}/issues/4242"
 
 
 def test_ac7b_mirroring_the_same_task_twice_creates_one_issue(wired):
