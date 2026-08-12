@@ -324,3 +324,35 @@ def test_ac7_jira_origin_imported_task_never_reexports_its_own_issue(app):
     body = resp.json()
     assert ids["jira_linked"] not in body["would_create"]
     assert ids["jira_linked"] in body["skipped"]["already_linked"]
+
+
+# ── Regression (live preview 2026-08-11): a GITHUB-IMPORTED task must
+# never preview as jira-eligible. On the owner's real board the first live
+# jira preview offered would_create=48, ALL of them external-tagged tasks
+# imported FROM GitHub - the observer path refuses IMPORTED_TAGS, but the
+# backlog route consulted only status + this-provider links. Imported
+# tasks belong in their own skip bucket, and a confirm naming one
+# explicitly must still create nothing.
+def test_imported_tasks_never_preview_or_push_cross_provider(app):
+    ids = _seed_board(app)
+    svc = app.task_svc
+    imported = svc.create(title="Imported from GitHub, do not re-export",
+                          tags=["external", "github"])
+
+    resp = app.post("/api/integrations/connect/jira/push-backlog",
+                    params={"project": PROJECT}, json={"dry_run": True})
+    body = resp.json()
+    assert imported.id not in body["would_create"], (
+        "an external-tagged task previewed as jira-eligible - the exact "
+        "48-task offer the live preview made on 2026-08-11")
+    assert imported.id in body["skipped"].get("imported", []), (
+        "imported tasks need their OWN skip bucket so the preview says "
+        "what happened to them")
+
+    resp = app.post(
+        "/api/integrations/connect/jira/push-backlog",
+        params={"project": PROJECT},
+        json={"dry_run": False, "task_ids": [imported.id]})
+    body = resp.json()
+    assert body["created"] == [], (
+        "a confirm explicitly naming an imported task must refuse it")
