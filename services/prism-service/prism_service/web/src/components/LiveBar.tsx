@@ -63,7 +63,7 @@ export default function LiveBar() {
   // guard, the heartbeat clock, the SSE push refresh, and the staleness
   // sweep all live in the shared hook now — ConductorPage reads the
   // identical state.
-  const { managed, polled, sinceFetchS, heartbeat: baseHeartbeat, refresh } = useConductorState(project);
+  const { managed, polled, heartbeat: baseHeartbeat, refresh } = useConductorState(project);
   const [version, setVersion] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
   // Task 25a25d84: the "awaiting gate" chip expands (click) into the gate's
