@@ -3552,14 +3552,14 @@ function BacklogPush({ connector, project }: { connector: Connector; project: st
             <button type="button" onClick={confirm} disabled={busy !== ""}
               className="text-xs font-semibold px-3 py-1.5 rounded-md border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
               style={{ color: "var(--accent-teal-fg)" }}>
-              {busy === "confirm" ? "Pushing…" : `Confirm: push ${report.would_create.length} to GitHub`}
+              {busy === "confirm" ? "Pushing…" : `Confirm: push ${report.would_create.length} to ${connector.name}`}
             </button>
           ) : <p>Nothing to push.</p>}
         </div>
       )}
       {done && (
         <p className="mt-2 text-xs" style={{ color: "var(--accent-sage-fg)" }}>
-          Created {done.created.length} issue{done.created.length === 1 ? "" : "s"} on GitHub.
+          {`Created ${done.created.length} issue${done.created.length === 1 ? "" : "s"} on ${connector.name}.`}
         </p>
       )}
       {err && <p className="mt-2 text-xs" style={{ color: "var(--accent-amber-fg)" }}>{err}</p>}
@@ -3783,7 +3783,8 @@ function ConnectorsSection({ project }: { project: string }) {
               {c.state === "connected" ? (
                 <>
                   <RepoSync connector={c} project={project} onChanged={reload} />
-                  {c.provider === "github" && (c.tracking?.length ?? 0) > 0 && (
+                  {(c.provider === "github" || c.provider === "jira") &&
+                    (c.tracking?.length ?? 0) > 0 && (
                     <BacklogPush connector={c} project={project} />
                   )}
                 </>
