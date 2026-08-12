@@ -697,7 +697,7 @@ def push_backlog(provider: str, body: PushBacklogBody,
     from prism_service.api.integrations import _adapters
     from prism_service.services.integration_outbox import get_outbox
     from prism_service.services.work_item_sync import (
-        push_task_creation, scan_active_tasks)
+        _provider_active_links, push_task_creation, scan_active_tasks)
 
     store = get_integration_store()
     task_svc = project_context.get_project(project).task_svc
@@ -706,9 +706,11 @@ def push_backlog(provider: str, body: PushBacklogBody,
     by_id = {t.id: t for t in tasks}
     rows = []
     for t in tasks:
-        has_link = any(
-            l.state == "active"
-            for l in store.list_links(scope, task_id=t.id))
+        # PROVIDER-SCOPED, matching push_task_creation's own eligibility
+        # check (FR-9, task 88a7da0b) -- a task linked only to another
+        # provider must still preview as create-eligible for THIS one,
+        # never undercounted as already_linked.
+        has_link = bool(_provider_active_links(store, scope, t.id, provider))
         rows.append((t.id, t.status, has_link))
 
     report = scan_active_tasks(rows)
@@ -725,7 +727,10 @@ def push_backlog(provider: str, body: PushBacklogBody,
                 "created": [], "skipped": skipped, "reason": ""}
 
     account = body.assignee
-    if not account:
+    if not account and provider == "github":
+        # GitHub-CLI-specific identity source; meaningless for other
+        # providers (jira has no equivalent here) so it must never be
+        # consulted outside the github push (task 56074410).
         from prism_service.services.github_cli_auth import get_cli_credentials
 
         account = get_cli_credentials().status().get("account", "")

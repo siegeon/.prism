@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.30"
+PRISM_VERSION = "7.10.31"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.31: the existing-backlog preview/confirm push now works for "
+    "Jira too [task 56074410]. BacklogPush renders on the Jira card "
+    "(SettingsPage.tsx), the confirm/success labels read the connector's "
+    "own name instead of hardcoding GitHub, the preview scan's link check "
+    "is provider-scoped (a GitHub-only link no longer undercounts as "
+    "already_linked for a Jira preview), and the GitHub-CLI assignee "
+    "default only runs for provider=github.\n"
     "v7.10.28: the Jira/GitHub connector card shows what the sync did "
     "[task 1c9899d6]. GET /api/integrations/connect/status now surfaces "
     "each tracked container's LATEST sync_runs row (IntegrationStore."
