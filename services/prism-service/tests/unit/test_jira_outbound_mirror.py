@@ -163,10 +163,15 @@ def test_ac1_creating_a_task_posts_the_real_issue_create_call(wired):
 
 
 def test_ac2_the_mirrored_task_renders_the_board_link_out_badge(wired):
-    from prism_service.api.tasks import _mirror_url
+    # SUPERSEDED IN PART by task 675dd11a: _record_backlink no longer
+    # appends 'Mirrored to ...' prose to task.description (task 6fbbec35
+    # already made the board badge STORE-derived, not description-derived
+    # -- this slice just stops the now-redundant write). Assert the active
+    # store link the badge actually reads, not _mirror_url(after.
+    # description), which would now find nothing to regex.
     from prism_service.services import task_mirror
 
-    svc, *_ = wired
+    svc, store, *_ = wired
     task = svc.create(title="visible on the board")
     outcome = task_mirror.mirror_task("prism", task.id, provider="jira")
     assert outcome.created is True, outcome.reason
@@ -174,7 +179,11 @@ def test_ac2_the_mirrored_task_renders_the_board_link_out_badge(wired):
     after = svc.get(task.id)
     assert "jira" in [t.lower() for t in after.tags], (
         "no provider tag: TasksPage.mirrorOf returns null and the badge never renders")
-    assert _mirror_url(after.description) == f"{SITE}/browse/PRIS-1"
+    links = store.list_links(SCOPE, task_id=task.id)
+    active = [l for l in links if l.state == "active"]
+    assert active, "no active store link: the board's mirrors field has nothing to render"
+    entity = store.get_entity(SCOPE, active[0].entity_id)
+    assert entity is not None and entity.url == f"{SITE}/browse/PRIS-1"
 
 
 # ── AC-3: create-leg idempotence is PROVIDER-SCOPED (FR-9) ────────────────

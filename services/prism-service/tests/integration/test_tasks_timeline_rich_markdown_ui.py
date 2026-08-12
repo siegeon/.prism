@@ -121,7 +121,13 @@ def test_detail_description_uses_markdown_not_pre():
     # code that is right, while the actual contract (L1886 renders
     # <Markdown text={task.description} />) was satisfied the whole time.
     # Pin the contract itself: no <pre> may wrap the description.
-    assert "<Markdown text={task.description}" in src, \
+    # SUPERSEDED IN PART by task 675dd11a: the Description card now passes
+    # task.description through stripMirrorProvenance() before <Markdown>
+    # (so legacy 'Mirrored to/from ...' provenance lines never render), so
+    # the literal `<Markdown text={task.description}` string is gone by
+    # design. Re-anchor on the render-through-Markdown part of the
+    # contract (never a raw <pre>), not the exact identifier.
+    assert "<Markdown text={" in src, \
         "AC-4: the description must render through <Markdown>, not a raw <pre>"
     for block in re.findall(r"<pre\b.*?</pre>", src, flags=re.S):
         assert "task.description" not in block, \
