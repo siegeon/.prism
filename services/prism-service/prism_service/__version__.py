@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.9"
+PRISM_VERSION = "7.11.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.10: CONDUCTOR PAGE STOPS CONTRADICTING ITS OWN LIVE BAR "
+    "[task 40c29b83]. New web/src/lib/useConductorState.ts owns the ONE "
+    "fetch of /api/conductor/state, the polled/observed guard, the "
+    "/sse/sessions push refresh and the staleness sweep, lifted from "
+    "LiveBar.tsx's already-hardened machinery. LiveBar and ConductorPage "
+    "both consume it now; ConductorPage's own load()/setInterval(load,5000) "
+    "and data===null-swallows-errors are gone. The 'Under conductor' panel "
+    "branches on observed/error/empty instead of `managed.length === 0` "
+    "alone: pre-first-fetch renders neutral copy, a fetch failure renders "
+    "its own reachability branch, and the genuine-empty state names the "
+    "second symptom (work happening outside conductor tracking, not just "
+    "'no tasks'). ConductorPage's stale ACT_TILE activity map (no `driving` "
+    "entry) is deleted in favor of the shared ACTIVITY_META every other "
+    "activity surface already renders through. "
     "7.11.6: fixed the /live mission clock's server anchor "
     "(_drive_started_at, api/work.py) so it survives a null first "
     "telemetry row -- SQLite sorts NULL first in ASC order and every "
