@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.34"
+PRISM_VERSION = "7.10.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.35: task-detail page opens instantly and fills in "
+    "progressively [task d8f73a68]. GET /api/tasks/{id} no longer walks "
+    ".jsonl transcripts on the request path (spend/step_tokens/timeline/"
+    "turn_tokens removed); those now serve from a new deferred GET "
+    "/{task_id}/detail-extras route. TaskDetailPage's header/status/SDLC "
+    "bar render off the lean fetch alone; SpendPanel, the Activity "
+    "timeline and per-step/per-turn token pills fill in from the second "
+    "request behind an extrasLoading skeleton, with a visible extrasError "
+    "on rejection.\n"
     "v7.10.34: team mode redacts host filesystem paths from "
     "/api/claude-auth/status, /api/github-auth/status and "
     "/api/service-info [task 74a38571]. security.redact_host_paths "

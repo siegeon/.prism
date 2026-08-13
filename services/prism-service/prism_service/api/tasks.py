@@ -600,24 +600,10 @@ def get_task(task_id: str, project: str = Query("default"),
         "mirrors": mirrors,
         "mirror": mirrors[0] if mirrors else None,
     }
-    # Attribute per-turn token spend (output_tokens bucketed into each turn's
-    # (prev, this] wall-clock window) onto the history rows. Best-effort.
-    _attach_turn_tokens(out["history"], out["sessions"], project)
-    # Per-step token totals for the StepRail's closed-step rows, windowed to
-    # each step's own [entry, exit) span (never the row-summing shortcut
-    # above, which misattributes a step-entry row's preceding idle gap).
-    try:
-        out["step_tokens"] = _step_token_totals(out["history"], out["sessions"], project)
-    except Exception:
-        out["step_tokens"] = {}
-    # Honest per-field, per-turn-model dollar spend, split main-vs-background
-    # (SpendPanel on the task-detail page). Best-effort.
-    try:
-        _attach_spend(out, out["sessions"], project)
-    except Exception:
-        pass
-    # Way 1 — typed activity Gantt (real session lanes + gate markers).
-    out["timeline"] = _build_timeline(out["history"], out["sessions"])
+    # Transcript-derived attachments (turn_tokens, step_tokens, spend,
+    # timeline) moved OFF this route to GET /{task_id}/detail-extras (task
+    # d8f73a68): they walk .jsonl transcripts on disk and must never block
+    # the header/status/SDLC-bar first paint. See get_task_detail_extras.
     # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
     # reads the blended current-step fill. Best-effort — never break the
     # detail route if conductor is unavailable.
@@ -680,6 +666,48 @@ def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     return build_task_trace(
         _scores_db(project), task_id, source_path=src, override_dir=override
     )
+
+
+@router.get("/{task_id}/detail-extras")
+def get_task_detail_extras(task_id: str, project: str = Query("default")) -> dict:
+    """Deferred transcript-derived detail-page data — spend, step_tokens,
+    timeline and per-turn turn_tokens (keyed by TaskHistory.id, never list
+    index). Split off the lean GET /{task_id} route (task d8f73a68): these
+    four attachments walk .jsonl transcripts on disk, so the header/status/
+    SDLC-bar first paint must never wait on them. 404s on an unknown task id
+    like get_task_trace above."""
+    svc = _svc(project)
+    t = svc.get(task_id)
+    if not t:
+        raise HTTPException(404, "task not found")
+    history = [
+        dataclasses.asdict(h) if dataclasses.is_dataclass(h) else dict(h)
+        for h in svc.history(task_id)
+    ]
+    sessions = svc.sessions_for_task(task_id)
+    _attach_turn_tokens(history, sessions, project)
+    turn_tokens = {
+        str(h["id"]): h["turn_tokens"]
+        for h in history
+        if isinstance(h, dict) and h.get("id") is not None
+        and h.get("turn_tokens") is not None
+    }
+    try:
+        step_tokens = _step_token_totals(history, sessions, project)
+    except Exception:
+        step_tokens = {}
+    spend_out: dict = {}
+    try:
+        _attach_spend(spend_out, sessions, project)
+    except Exception:
+        pass
+    timeline = _build_timeline(history, sessions)
+    return {
+        "spend": spend_out.get("spend"),
+        "step_tokens": step_tokens,
+        "timeline": timeline,
+        "turn_tokens": turn_tokens,
+    }
 
 
 def _attach_spend(out: dict, sessions: list, project: str) -> None:
