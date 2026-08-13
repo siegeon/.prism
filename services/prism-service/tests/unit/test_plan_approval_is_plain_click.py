@@ -105,6 +105,13 @@ def _eval_disabled(expr: str, *, busy: bool, gate_verdict: str, gate_override: b
                 "True" if is_awaiting_design_approval else "False", e)
     e = re.sub(r"\bgateOverride\b", "True" if gate_override else "False", e)
     e = re.sub(r"\bbusy\b", "True" if busy else "False", e)
+    # readinessStale (task a9f37cd1): none of THIS suite's scenarios exercise
+    # staleness - they are all about the design-approval/override clauses -
+    # so every scenario here implicitly assumes fresh (non-stale) readiness,
+    # matching a freshly-mounted page (both timestamps init to 0, per
+    # plan_doc D-2/R-1). Substituted to False rather than left unhandled so
+    # a genuinely new, orthogonal atom does not NameError this eval.
+    e = re.sub(r"\breadinessStale\b", "False", e)
     e = re.sub(r"!\s*(True|False)", r"not \1", e)
     e = e.replace("&&", " and ").replace("||", " or ")
     return bool(eval(e, {"__builtins__": {}}, {}))

@@ -312,6 +312,16 @@ function fmtGap(ms: number): string {
 // pills (everything else is a content edit summarized as "edited <field>").
 const FLOW_FIELDS = ["workflow_step", "status", "gate_state", "priority", "assigned_agent"];
 
+// Fields whose arrival over /sse/tasks means the gate card's cached
+// readiness may now be wrong (task a9f37cd1 — owner hit this 2026-08-12: the
+// top banner converged live via /sse/tasks, the gate card stayed on a
+// mount-only fetch and never noticed).
+const GATE_RELEVANT_SSE_FIELDS = ["workflow_step", "status", "gate_state", "gate_reason", "plan_doc", "plan_diagram"];
+// How long a readiness read is trusted before the card must call itself
+// stale (matches LiveBar.tsx:61's STALE_AFTER_MS convention) — this is a
+// grace window on a PUSH-fed value, never a poll interval (NFR-1).
+const READINESS_STALE_AFTER_MS = 15_000;
+
 type Transition = { field?: string; from?: string; to?: string };
 
 // Pull a short state transition out of the free-text `details` blob, if any.
@@ -852,6 +862,13 @@ export default function TaskDetailPage() {
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
+  // WHEN gateReadiness was last actually read from the server, and WHEN a
+  // live push last told us the server's gate-relevant state moved — the
+  // fetched-at/changed-at pair readinessStale is derived from below (task
+  // a9f37cd1). A ref, not state: stamping it must never itself force a
+  // render — refreshReadiness's own setGateReadiness call already does that.
+  const readinessFetchedAt = useRef(0);
+  const [readinessChangedAt, setReadinessChangedAt] = useState(0);
   // Last ↻ re-run outcome, rendered INLINE in the evidence table (owner
   // 2026-07-16: a silent corner toast reads as "the button does not work" —
   // the result must appear where the click happened).
@@ -873,6 +890,33 @@ export default function TaskDetailPage() {
   // In-panel decision feedback: 'checking' while the machine check runs
   // (minutes), then the persistent result — never just a transient toast.
   const [gateResult, setGateResult] = useState<{ kind: "checking" | "ok" | "refused"; text: string } | null>(null);
+  // SINGLE readiness-fetch choke point (task a9f37cd1): mount, the /sse/tasks
+  // push handler, the visibility sweep and mintEvidence ALL go through this
+  // one function so readinessFetchedAt is stamped on every successful read —
+  // a second inline fetch anywhere else is exactly how the card drifted out
+  // of sync with the live top banner on task b43b33b8.
+  const refreshReadiness = useCallback(async () => {
+    if (!id) return null;
+    try {
+      const gr = await api.get<GateReadiness>(
+        `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
+      setGateReadiness(gr);
+      readinessFetchedAt.current = Date.now();
+      return gr;
+    } catch {
+      // keep the last known readiness; a failed fetch must never manufacture
+      // freshness by stamping fetchedAt anyway.
+      return null;
+    }
+  }, [id, project]);
+  // Named staleness boolean (FR-3): stale if we have never read readiness,
+  // if a live push told us the server moved AFTER our last read, or if the
+  // last read is simply old — the grace window a push-fed value earns
+  // before a person must be told "this may not be current".
+  const readinessStale =
+    readinessFetchedAt.current === 0 ||
+    readinessChangedAt > readinessFetchedAt.current ||
+    Date.now() - readinessFetchedAt.current >= READINESS_STALE_AFTER_MS;
   // ONE authoritative verdict (owner design: the layout must be unable to
   // contradict itself). verifierRefusal = the shell verifier's last recorded
   // refusal, parsed for humans; verdict is READY only when the evidence
@@ -924,8 +968,11 @@ export default function TaskDetailPage() {
     !!(task?.plan_doc || task?.plan_diagram);
   // Calm-but-not-a-pass tone (owner: awaiting-review is a normal, correct
   // state — it must never read as alarming/failed, and must never be
-  // visually indistinguishable from a real pass).
+  // visually indistinguishable from a real pass). Stale data is its OWN
+  // tone, checked FIRST: unread data is not a verdict, so it must never
+  // paint rose (task a9f37cd1).
   const bannerTone: "sage" | "amber" | "rose" =
+    readinessStale ? "amber" :
     isAwaitingDesignApproval ? "amber" :
     gateVerdict !== "ready" ? "rose" : isAwaitingReview ? "amber" : "sage";
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
@@ -1025,10 +1072,19 @@ export default function TaskDetailPage() {
         if (payload.task_id !== id || !payload.fields) return;
         const fields = payload.fields;
         setTask((prev) => (prev ? { ...prev, ...fields } : prev));
+        // GATE CONVERGENCE (FR-1, task a9f37cd1): the field patch above keeps
+        // the top banner honest, but gateReadiness is a SEPARATE fetch — a
+        // gate-relevant field arriving means our cached readiness may now be
+        // wrong. Mark it stale immediately (synchronously, before the refetch
+        // resolves) and kick off the real refetch.
+        if (GATE_RELEVANT_SSE_FIELDS.some((k) => k in fields)) {
+          setReadinessChangedAt(Date.now());
+          refreshReadiness();
+        }
       } catch { /* ignore malformed payloads */ }
     };
     return () => es.close();
-  }, [id, project]);
+  }, [id, project, refreshReadiness]);
 
   // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
   // (run=false — AST scan only), readiness, delivery. The old shape awaited
@@ -1044,13 +1100,10 @@ export default function TaskDetailPage() {
         if (!cancelled) { setPinTests(tr.tests ?? []); setTestReceipt(tr.receipt ?? null); }
       } catch { if (!cancelled) setPinTests([]); }
     })();
-    (async () => {
-      try {
-        const gr = await api.get<GateReadiness>(
-          `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
-        if (!cancelled) setGateReadiness(gr);
-      } catch { if (!cancelled) setGateReadiness(null); }
-    })();
+    // Through the SAME choke point every other caller uses (AC-3) so
+    // readinessFetchedAt is stamped here too — the mount read is not a
+    // special case.
+    refreshReadiness();
     (async () => {
       try {
         const dv = await api.get<Delivery>(
@@ -1059,7 +1112,24 @@ export default function TaskDetailPage() {
       } catch { if (!cancelled) setDelivery(null); }
     })();
     return () => { cancelled = true; };
-  }, [id, project]);
+  }, [id, project, refreshReadiness]);
+
+  // VISIBILITY FALLBACK (FR-2, task a9f37cd1): the SSE push above is the
+  // primary convergence path, but a BACKGROUNDED tab can miss a push
+  // (browsers throttle/suspend hidden-tab delivery). This is a safety net,
+  // never a poll — it fires only on the browser's own visibilitychange
+  // event, and only refetches when the last read is genuinely stale, the
+  // same push+visibility shape LiveBar.tsx:134-141 already ships (no new
+  // setInterval, NFR-1).
+  useEffect(() => {
+    const sweep = () => {
+      if (!document.hidden && Date.now() - readinessFetchedAt.current >= READINESS_STALE_AFTER_MS) {
+        refreshReadiness();
+      }
+    };
+    document.addEventListener("visibilitychange", sweep);
+    return () => document.removeEventListener("visibilitychange", sweep);
+  }, [refreshReadiness]);
 
   // HEAVY, deferred: actually EXECUTE the pinned tests (one pytest run,
   // one-shot per task) only when the task is parked AT a gate — that is
@@ -1270,19 +1340,18 @@ export default function TaskDetailPage() {
       setMintResult(msg);
     }
     // The readiness fetch is one-shot per task (heavy git-walk, kept out of
-    // the 5s poll) — so a mint MUST re-pull it or the result chip stays
-    // "missing" forever and the button reads as broken.
-    try {
-      const gr = await api.get<GateReadiness>(
-        `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
-      setGateReadiness(gr);
+    // the 5s poll) — so a mint MUST re-pull it (via the shared choke point,
+    // AC-3) or the result chip stays "missing" forever and the button reads
+    // as broken.
+    const gr = await refreshReadiness();
+    if (gr) {
       // Readiness is the authority on whether Approve will actually pass.
       msg = gr.receipt_ok
         ? "fresh evidence receipt minted — Approve will pass the evidence check"
         : `re-run did NOT satisfy this gate: ${gr.receipt_refusal || "evidence still missing"}`;
       setNotice(msg);
       setMintResult(msg);
-    } catch { /* keep the last known readiness */ }
+    }
     load();
   };
 
@@ -1600,7 +1669,19 @@ export default function TaskDetailPage() {
             title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
           >
             <span className="font-semibold">
-              ● {isAwaitingDesignApproval
+              ● {readinessStale
+                  ? <>
+                      STALE · gate data may not be current ·{" "}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); refreshReadiness(); }}
+                        className="underline decoration-dotted cursor-pointer"
+                      >
+                        ↻ refresh
+                      </span>
+                    </>
+                  : isAwaitingDesignApproval
                   ? `AWAITING YOUR APPROVAL · packet ready (${packetParts})`
                   : gateVerdict === "ready"
                   ? (isAwaitingReview
@@ -1609,7 +1690,9 @@ export default function TaskDetailPage() {
                   : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
-              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence below"}
+              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready"
+                ? (readinessStale ? "refresh to check the current state" : "approve with a reason")
+                : "inspect the evidence below"}
               <span className="ml-2">{gatePanelOpen ? "▾" : "▸"}</span>
             </span>
           </button>
@@ -1883,7 +1966,7 @@ export default function TaskDetailPage() {
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
                     type="button"
-                    disabled={busy || (gateVerdict !== "ready" && !isAwaitingDesignApproval && !gateOverride) || (gateOverride && !gateReason.trim())}
+                    disabled={busy || (gateVerdict !== "ready" && !isAwaitingDesignApproval && !gateOverride) || (gateOverride && !gateReason.trim()) || readinessStale}
                     onClick={() => gateDecide("approve")}
                     className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
                     style={gateVerdict === "ready" || gateOverride
@@ -1904,9 +1987,11 @@ export default function TaskDetailPage() {
                     </button>
                   )}
                   <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
-                    {gateVerdict === "ready"
-                      ? "Ready: Approve records your decision; the machine check runs first."
-                      : isAwaitingDesignApproval
+                    {readinessStale
+                      ? "Stale: this card has not confirmed the latest gate state. Click refresh above before deciding."
+                      : gateVerdict === "ready"
+                        ? "Ready: Approve records your decision; the machine check runs first."
+                        : isAwaitingDesignApproval
                         ? "Awaiting your approval: Approve records the design-packet sign-off and releases the gate."
                         : gateOverride
                           ? "Override armed: Approve releases on your judgment (audited)."
@@ -1982,6 +2067,7 @@ export default function TaskDetailPage() {
             runningTests={runningTests}
             onRunTests={runTests}
             gateReadiness={gateReadiness}
+            readinessStale={readinessStale}
             onMintEvidence={mintEvidence}
             tabRequest={tabRequest}
             taskId={id}

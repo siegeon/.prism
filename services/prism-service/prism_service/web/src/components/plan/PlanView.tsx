@@ -208,6 +208,7 @@ export default function PlanView({
   onRunTests,
   runningTests,
   gateReadiness,
+  readinessStale,
   onMintEvidence,
   tabRequest,
   taskId,
@@ -245,6 +246,10 @@ export default function PlanView({
     manual_review?: boolean;
     receipt?: { adapter?: string; passed?: boolean; status?: string; ended_at?: string; reason?: string };
   } | null;
+  // Whether the gateReadiness object above is known STALE (task a9f37cd1) —
+  // the parent's own fetched-at/changed-at derivation; this panel must stop
+  // claiming a live verdict while it is true.
+  readinessStale?: boolean;
   // Gate-card action: re-run the oracle inside the daemon and mint a fresh
   // EvidenceReceipt (POST /api/conductor/gate/mint), then refresh readiness.
   onMintEvidence?: () => void;
@@ -600,7 +605,9 @@ export default function PlanView({
                       roll-up sets manual_review too but over REAL child
                       evidence (adapter="epic-rollup"), so it keeps the
                       affirmative branch below. */}
-                  <span className="uppercase tracking-wider text-2xs mr-2">evidence check · live</span>
+                  <span className="uppercase tracking-wider text-2xs mr-2">
+                    {readinessStale ? "evidence check · may be stale" : "evidence check · live"}
+                  </span>
                   {gateReadiness.receipt_ok && gateReadiness.manual_review && gateReadiness.receipt?.adapter === "human" ? (
                     <>
                       Awaiting your review — no machine evidence at this tree

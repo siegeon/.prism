@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.34"
+PRISM_VERSION = "7.10.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.35: task detail gate card can no longer strand an Approve on "
+    "stale data [task a9f37cd1]. TaskDetailPage.tsx's /sse/tasks push now "
+    "refreshes gate readiness (not only the task field patch), a "
+    "visibility-gated sweep converges a backgrounded tab, and a new "
+    "readinessStale boolean leads the headline/Approve/caption/PlanView's "
+    "'evidence check' panel with a neutral refresh notice instead of a red "
+    "BLOCKED verdict on data the page knows is old. No new poll interval.\n"
     "v7.10.34: team mode redacts host filesystem paths from "
     "/api/claude-auth/status, /api/github-auth/status and "
     "/api/service-info [task 74a38571]. security.redact_host_paths "
