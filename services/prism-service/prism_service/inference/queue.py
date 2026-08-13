@@ -29,7 +29,7 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
@@ -86,6 +86,12 @@ class JobQueue:
         self._project = project
         self._lock = threading.RLock()
         self._jobs: dict[str, AnalysisJob] = {}
+        # Incremental tail-read bookkeeping for refresh(). Sentinels
+        # (-1) never match a real stat() so the first refresh() always
+        # runs its full-file read.
+        self._offset = 0
+        self._log_size = -1
+        self._log_mtime = -1.0
         self._load()
         self._reap_stale()
 
@@ -99,11 +105,51 @@ class JobQueue:
             fh.write(line)
 
     def _load(self) -> None:
-        """Replay the JSONL log into the in-memory job table."""
-        if not self._log_path.exists():
-            return
-        try:
-            for line in self._log_path.read_text(encoding="utf-8").splitlines():
+        """Thin wrapper kept for existing callers — folds the log via
+        refresh(). A newly constructed instance starts at offset 0, so
+        this is a full replay exactly as before."""
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Incrementally fold newly appended log lines into the
+        in-memory job table. Safe to call on every read:
+          * unchanged file (same size+mtime) -> one stat(), no read.
+          * strictly grown -> seek to the last-known offset, read only
+            the new bytes.
+          * shrunk/rewritten (compaction) -> full re-read from 0.
+        A torn trailing line (no terminating newline yet) is left
+        unconsumed and re-read once the writer completes it — same
+        recovery semantics as the old full replay's per-line
+        JSONDecodeError skip, applied only to the tail.
+        """
+        with self._lock:
+            try:
+                st = self._log_path.stat()
+            except OSError:
+                return
+            if st.st_size == self._log_size and st.st_mtime == self._log_mtime:
+                return
+            if st.st_size < self._offset:
+                # Compaction / rewrite: prior offset no longer valid.
+                self._offset = 0
+                self._jobs = {}
+            try:
+                with open(self._log_path, "rb") as fh:
+                    fh.seek(self._offset)
+                    chunk = fh.read()
+            except OSError:
+                return
+            last_nl = chunk.rfind(b"\n")
+            if last_nl == -1:
+                # No complete new line since our offset yet; remember
+                # the observed size/mtime so we don't re-stat for
+                # nothing until the file actually changes again.
+                self._log_size = st.st_size
+                self._log_mtime = st.st_mtime
+                return
+            usable = chunk[: last_nl + 1]
+            self._offset += len(usable)
+            for line in usable.decode("utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line:
                     continue
@@ -113,8 +159,16 @@ class JobQueue:
                     # Torn write on the last line — skip and move on.
                     continue
                 self._apply(evt)
-        except OSError:
-            return
+            self._log_size = st.st_size
+            self._log_mtime = st.st_mtime
+
+    def snapshot(self) -> list[AnalysisJob]:
+        """Lock-guarded, freshness-checked copy of the job rows. This
+        is the read API callers (e.g. api/jobs.py) must use instead of
+        iterating `._jobs` directly."""
+        with self._lock:
+            self.refresh()
+            return [replace(j) for j in self._jobs.values()]
 
     def _apply(self, evt: dict) -> None:
         op = evt.get("op")

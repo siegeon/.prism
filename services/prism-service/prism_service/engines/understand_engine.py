@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -56,6 +57,25 @@ ANALYZER_BUDGETS = {
     "onboarding_writer": 6_000,
 }
 ALL_ANALYZERS = list(ANALYZER_BUDGETS.keys())
+
+# Process-wide JobQueue registry, keyed by the RESOLVED project data
+# dir (not the bare project name — two different tmp_path-scoped
+# tests can reuse the same project name and must not share a queue).
+# `UnderstandEngine.queue` resolves through this so every construction
+# site (api/jobs.py, api/understand.py, mcp/understand_tools.py,
+# services/understand_drainer.py, services/source_service.py) shares
+# one JobQueue per project instead of paying a full log replay on
+# every request. See engines/brain_engine.py's _TS_PARSER_CACHE for
+# the same pattern.
+_QUEUES: dict[str, job_queue.JobQueue] = {}
+_QUEUES_LOCK = threading.Lock()
+
+
+def reset_queue_registry() -> None:
+    """Test hook: clear the process-wide queue registry so each test
+    gets an isolated JobQueue even when it reuses a project name."""
+    with _QUEUES_LOCK:
+        _QUEUES.clear()
 
 
 @dataclass
@@ -107,8 +127,14 @@ def _scope_hash(files: list[str]) -> str:
 
 
 class UnderstandEngine:
-    """Project-scoped orchestrator. Stateless across calls — every
-    method reads fresh state from disk + Brain.
+    """Project-scoped orchestrator. Reads fresh state from disk + Brain
+    on every call EXCEPT the job queue: `.queue` is resolved through
+    the process-wide `_QUEUES` registry (keyed by resolved project
+    data dir) so repeated `UnderstandEngine(pid)` construction — e.g.
+    one per /api/jobs request — reuses the SAME JobQueue instead of
+    replaying its whole log every time. The queue's own `refresh()`
+    keeps it current (task e8fc073b superseded the old "stateless"
+    per-instance JobQueue).
     """
 
     def __init__(self, project: str) -> None:
@@ -118,9 +144,15 @@ class UnderstandEngine:
     @property
     def queue(self) -> job_queue.JobQueue:
         if self._queue is None:
-            self._queue = job_queue.JobQueue(
-                project_data_dir(self.project), project=self.project,
-            )
+            key = str(project_data_dir(self.project))
+            with _QUEUES_LOCK:
+                q = _QUEUES.get(key)
+                if q is None:
+                    q = job_queue.JobQueue(
+                        project_data_dir(self.project), project=self.project,
+                    )
+                    _QUEUES[key] = q
+                self._queue = q
         return self._queue
 
     def plan(
@@ -283,7 +315,10 @@ class UnderstandEngine:
         # scope_hash). Old failed attempts that were later succeeded by
         # a retry shouldn't pollute the FAILED count.
         latest: dict = {}
-        for j in self.queue._jobs.values():
+        # snapshot(), not ._jobs directly (task e8fc073b) — the queue is
+        # now shared across requests via the registry, so an unguarded
+        # iteration here could race a concurrent writer.
+        for j in self.queue.snapshot():
             key = (j.analyzer, j.target_sha, j.scope_hash)
             prev = latest.get(key)
             if prev is None or j.enqueued_at > prev.enqueued_at:
