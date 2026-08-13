@@ -208,13 +208,17 @@ def _client(monkeypatch):
 
 
 def test_route_returns_timeline_field_with_filtered_lanes(monkeypatch):
-    """The new `timeline` field is on the REAL route response (not just the
-    helper), and its lanes exclude the synthetic actors end-to-end."""
+    """SUPERSEDES the pre-d8f73a68 assertion that `timeline` rode the lean
+    GET /api/tasks/{id} response. Task d8f73a68 moved ALL transcript-derived
+    fields (timeline included) off that route onto the deferred
+    GET /{task_id}/detail-extras route, so the field + its filtered-lanes
+    contract now live there instead — its lanes still exclude the synthetic
+    actors end-to-end."""
     client = _client(monkeypatch)
-    r = client.get("/api/tasks/ade01b38?project=proj")
+    r = client.get("/api/tasks/ade01b38/detail-extras?project=proj")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "timeline" in body, "GET /api/tasks/{id} must carry `timeline`"
+    assert "timeline" in body, "GET /{task_id}/detail-extras must carry `timeline`"
     tl = body["timeline"]
     lane_ids = [l["session_id"] for l in tl["lanes"]]
     assert lane_ids == [_REAL_SID], lane_ids
