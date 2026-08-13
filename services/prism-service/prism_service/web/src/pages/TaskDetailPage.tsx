@@ -180,6 +180,16 @@ type HistoryRow = {
   turn_tokens?: number;
 };
 
+// GET /api/tasks/{id}/detail-extras (task d8f73a68) — the transcript-derived
+// fields split off the lean GET /{id} route: spend, step_tokens, timeline
+// and per-turn turn_tokens keyed by TaskHistory.id.
+type DetailExtras = {
+  spend?: SpendData | null;
+  step_tokens?: Record<string, number>;
+  timeline?: Timeline | null;
+  turn_tokens?: Record<string, number>;
+};
+
 type SessionRow = {
   session_id: string;
   started_at?: string | null;
@@ -757,7 +767,7 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
 
 // The Trace tab body: 4 KPI tiles + a per-session tree (session header row →
 // indented step rows). Honest empty state when the task has no agent_runs.
-function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null }) {
+function TraceView({ trace, loading, spend, extrasLoading, extrasError }: { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null; extrasLoading?: boolean; extrasError?: string | null }) {
   if (loading && !trace) return <Card><Empty>Loading trace…</Empty></Card>;
   if (!trace || trace.sessions.length === 0) {
     return <Card><Empty>No trace yet — this task has no recorded agent runs.</Empty></Card>;
@@ -766,7 +776,14 @@ function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading
   const perStep = t.steps > 0 ? Math.round(t.tokens / t.steps) : 0;
   return (
     <div className="space-y-4">
-      <SpendPanel spend={spend} />
+      {/* Spend rides the deferred /detail-extras fetch (task d8f73a68) — a
+          skeleton while it's in flight, a VISIBLE failure on rejection,
+          never an indefinite spinner (FR-5). */}
+      {extrasLoading
+        ? <Card><Empty>Loading spend…</Empty></Card>
+        : extrasError
+          ? <Card><Empty>Spend data failed to load: {extrasError}</Empty></Card>
+          : <SpendPanel spend={spend} />}
       <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
         <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
         <TraceKpi label="Steps" value={String(t.steps)} />
@@ -832,6 +849,14 @@ export default function TaskDetailPage() {
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
+  // Deferred detail-extras (task d8f73a68): spend/step_tokens/timeline/
+  // turn_tokens moved off the lean fetch above onto GET /detail-extras —
+  // mirrors the traceLoading pattern (loading flag + honest failure state,
+  // never an indefinite skeleton).
+  const [extrasLoading, setExtrasLoading] = useState(false);
+  const [extrasError, setExtrasError] = useState<string | null>(null);
+  const [spend, setSpend] = useState<SpendData | null>(null);
+  const [turnTokensMap, setTurnTokensMap] = useState<Record<string, number>>({});
   const [children, setChildren] = useState<ChildTask[]>([]);
   // OKF concepts this task recalled (recall_log attribution) — the rail's
   // "Knowledge · Understand" group. Empty when the task recalled nothing.
@@ -977,18 +1002,20 @@ export default function TaskDetailPage() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number>; mirror?: TaskMirror | null; mirrors?: TaskMirror[] }>(
+      // spend/step_tokens/timeline/turn_tokens do NOT ride this fetch any
+      // more (task d8f73a68) — they walk .jsonl transcripts on disk, so the
+      // header/status/SDLC-bar first paint must never wait on them. They
+      // arrive via the deferred GET /detail-extras effect below.
+      const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; has_prototype?: boolean; mirror?: TaskMirror | null; mirrors?: TaskMirror[] }>(
         `/api/tasks/${id}?project=${project}`,
       );
-      // phase_progress + activity + has_prototype + spend + step_tokens +
-      // mirror(s) ride at the TOP LEVEL of the response (not nested in task) —
-      // merge onto the task so the SDLC bar, the honest work-state pill, the
-      // prototype iframe, the Spend panel, the StepRail's per-step tokens,
-      // and the linked-issue block all read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {}, mirror: d.mirror ?? d.task.mirror ?? null, mirrors: d.mirrors ?? d.task.mirrors ?? [] } : d.task);
+      // phase_progress + activity + has_prototype + mirror(s) ride at the TOP
+      // LEVEL of the response (not nested in task) — merge onto the task so
+      // the SDLC bar, the honest work-state pill, the prototype iframe, and
+      // the linked-issue block all read them off task.*.
+      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, mirror: d.mirror ?? d.task.mirror ?? null, mirrors: d.mirrors ?? d.task.mirrors ?? [] } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
-      setTimeline(d.timeline ?? null);
       setError(null);
       // Children aren't on the detail payload — derive them from the task
       // list, scoped server-side to THIS epic's direct children and
@@ -1142,6 +1169,49 @@ export default function TaskDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [docTab, trace, id, project]);
+
+  // Deferred detail-extras fetch (task d8f73a68): fires once per task load,
+  // unconditional on tab — the SpendPanel, StepRail's per-step/per-turn
+  // token pills and the Activity timeline gate markers all fill in from
+  // this second request without blocking first paint. Mirrors traceLoading:
+  // a rejected fetch sets a VISIBLE extrasError, never an indefinite
+  // skeleton (FR-5). turn_tokens is applied to `history` by a separate
+  // effect below (keeps this fetch effect tight, mirroring traceLoading).
+  const applyExtras = useCallback((d: DetailExtras) => {
+    setSpend(d.spend ?? null);
+    setTask((p) => p ? { ...p, step_tokens: d.step_tokens ?? {} } : p);
+    setTimeline(d.timeline ?? null);
+    setTurnTokensMap(d.turn_tokens ?? {});
+  }, []);
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    setExtrasLoading(true);
+    setExtrasError(null);
+    (async () => {
+      try {
+        const d = await api.get<DetailExtras>(
+          `/api/tasks/${id}/detail-extras?project=${project}`,
+        );
+        if (!cancelled) applyExtras(d);
+      } catch (e) {
+        if (!cancelled) setExtrasError((e as Error).message || "failed");
+      } finally {
+        if (!cancelled) setExtrasLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id, project, applyExtras]);
+
+  // Stamps turn_tokens (keyed by TaskHistory.id) from detail-extras onto the
+  // history rows fetched by the lean route, once available.
+  useEffect(() => {
+    if (Object.keys(turnTokensMap).length === 0) return;
+    setHistory((prev) => prev.map((h) => {
+      const v = h.id != null ? turnTokensMap[String(h.id)] : undefined;
+      return v != null ? { ...h, turn_tokens: v } : h;
+    }));
+  }, [turnTokensMap]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1573,7 +1643,7 @@ export default function TaskDetailPage() {
         ))}
       </div>
 
-      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
+      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={spend} extrasLoading={extrasLoading} extrasError={extrasError} />}
 
       {docTab === "overview" && (<>
 
