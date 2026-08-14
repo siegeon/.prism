@@ -95,6 +95,7 @@ version = { attr = "prism_service.__version__.PRISM_VERSION" }
   "web_dist/**/*",
   "inference/prompts/*.md",
   "services/*.yaml",
+  "assets/*",
   "py.typed",
 ]
 

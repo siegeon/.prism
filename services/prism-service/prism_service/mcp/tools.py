@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
 from mcp.types import Tool, TextContent
+
+logger = logging.getLogger(__name__)
 
 # v5.1 understand-anything tool surface (sidecar) — see T9.
 from prism_service.mcp.understand_tools import (
@@ -2639,11 +2642,11 @@ def _load_asset(filename: str) -> str:
     ``prism_install`` distributes. The plugin hook directory is a no-op;
     do not add sibling hook implementations there."""
     from pathlib import Path as _P
+    resolved = _P(__file__).resolve().parent.parent / "assets" / filename
     try:
-        return (_P(__file__).parent.parent / "assets" / filename).read_text(
-            encoding="utf-8"
-        )
-    except Exception:
+        return resolved.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.error("failed to load asset %s: %r", resolved, exc)
         return ""
 
 
@@ -2791,7 +2794,7 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
         # triggered from the same importer in a follow-up.
     }
     settings_json = {"hooks": hooks_map}
-    return {
+    manifest = {
         "prism_version": PRISM_VERSION,
         "version_notes": PRISM_VERSION_NOTES,
         "project_id": project_id,
@@ -2926,6 +2929,20 @@ def _install_manifest(project_id: str, host_platform: str | None = None) -> dict
             "one pending candidate via the prism-reflect subagent.",
         ],
     }
+    # AC-5: a load failure (see _load_asset's bare except) must never ship
+    # as a blank install_files entry — refuse it and report it additively
+    # so the caller can tell "no such file to write" apart from "here is
+    # an empty file to write".
+    kept_files = []
+    degraded_assets = []
+    for spec in manifest["install_files"]:
+        if not (spec.get("content") or "").strip():
+            degraded_assets.append(spec["path"])
+        else:
+            kept_files.append(spec)
+    manifest["install_files"] = kept_files
+    manifest["degraded_assets"] = degraded_assets
+    return manifest
 
 
 # ---------------------------------------------------------------------------
