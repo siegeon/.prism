@@ -90,23 +90,40 @@ def _header_slice(body: str) -> str:
     return body[start:end]
 
 
+def _extract_function_body(src: str, start_idx: int) -> str:
+    """Brace-balance a function BODY starting at a `function Name(...) {`
+    declaration whose `idx` points at the `function` keyword. Skips past
+    the parameter list (which may itself contain `{...}` destructuring /
+    type-annotation braces) by locating the FIRST `") {"` after `idx` —
+    the point where the params close and the body opens — rather than
+    naively taking the first `{`, which would wrongly match a destructured
+    parameter's brace instead of the function body."""
+    body_open = src.index(") {", start_idx)
+    start = body_open + 2  # index of the body's opening '{'
+    depth = 0
+    for i in range(start, len(src)):
+        ch = src[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:i + 1]
+    raise AssertionError(f"unbalanced braces scanning function body from {start_idx}")
+
+
 def _actor_chip_body(src: str) -> str:
     """Locate whatever function renders the actor identity chip by finding
-    the first function/arrow body whose header slice references
-    `actor_identity` and pulling ITS enclosing function, so this test does
-    not hardcode a component name. Falls back to the TimelineRow body
-    itself if the branch logic is written inline."""
-    # Find every `function <Name>(` declaration and check whether its body
-    # references actor_identity.kind-style branching; return the first hit.
-    for m in re.finditer(r"function\s+(\w+)\s*\(", src):
-        name = m.group(1)
+    the first `function <Name>(...)` whose body branches on `.kind`, so
+    this test does not hardcode a component name. Falls back to the
+    TimelineRow body itself if the branch logic is written inline there."""
+    for m in re.finditer(r"function\s+\w+\s*\(", src):
         try:
-            body = _extract_braced(src, f"function {name}")
+            body = _extract_function_body(src, m.start())
         except (ValueError, AssertionError):
             continue
-        if "actor_identity" in body or ".kind" in body:
-            if re.search(r'kind\s*===\s*["\']machine["\']', body):
-                return body
+        if re.search(r'kind\s*===\s*["\']machine["\']', body):
+            return body
     # Inline in TimelineRow itself.
     return _timeline_row_body(src)
 
