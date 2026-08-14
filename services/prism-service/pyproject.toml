@@ -63,6 +63,10 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "build>=1.0",
+  # test_install_packaging_assets builds the real wheel/sdist via
+  # setuptools.build_meta (this package's own build backend); modern
+  # 3.12 venvs no longer ship setuptools implicitly, so declare it.
+  "setuptools>=68",
 ]
 # OPTIONAL (task 9afd1b72): browser_oracle_runner / evidence_capture use
 # Playwright to earn a real UI-oracle receipt and capture screenshots/video.
