@@ -134,6 +134,16 @@ const API_BASE = (_in.api_base || 'http://127.0.0.1:7778').replace(/\/$/, '')
 //     Do NOT "unblock" one by editing the oracle or flipping proof_type -
 //     that games the single sign-off. Make the click GROUNDED and stop.
 const GATE_STEPS = ['story_gate', 'plan_gate', 'red_gate', 'green_gate']
+// OWNER RULE 2026-08-04 (mx-1eb0a9), enforced HERE rather than in CLAUDE.md
+// prose: the human stops at EXACTLY TWO gates. Everything else belongs to a
+// machine seat, and a machine seat that will not decide is a DEFECT to
+// diagnose - never a click to hand the owner. Owner, verbatim: "i do not want
+// to be stoped on the approve red gate for the tests, that is for the
+// adjuctor or whatever, you stop at approve the plan, and approve the final
+// green state."
+const HUMAN_GATES = ['plan_gate', 'green_gate']
+const MACHINE_GATES = GATE_STEPS.filter((g) => !HUMAN_GATES.includes(g))
+function isHumanGate(step) { return HUMAN_GATES.includes(step) }
 // Safety bound on the pull loop - the server decides when it is done; this
 // only stops a pathological ping-pong (a step that never advances).
 const MAX_JOBS = 24
@@ -188,7 +198,7 @@ const PROCEDURAL_SPINE = [
   '- Hooks are advisory (exit 0) - never block tool execution.',
   '- Destructive ops: validate paths, never -ErrorAction SilentlyContinue, no inline destructive PowerShell.',
   '- If the change is user-visible, patch-bump PRISM_VERSION in the same commit.',
-  '- TASK-BOARD HYGIENE (hard): NEVER call task_create for a ROOT/parent task (parent_id="" or omitted). You are driving ONE task; spawning a sibling on the board is always wrong. The ONLY task_create permitted is a CHILD of the task being driven - it MUST pass parent_id="<the driven task id>" so it stays off the root board and is reached from the parent detail page.',
+  '- TASK-BOARD HYGIENE (hard): NEVER call task_create for a ROOT/parent task (parent_id="" or omitted). You are driving ONE task; spawning a sibling on the board is always wrong. The ONLY task_create permitted is a CHILD of the task being driven - it MUST pass parent_id="<the driven task id>" so it stays off the root board and is reached from the parent detail page. SEARCH BEFORE YOU FILE: run task_list (and brain_search) for the defect first - the board very often already owns it, and a near-duplicate is worse than no ticket because it splits the fix across two oracles. On 2026-08-06 a main-thread session re-diagnosed the readiness-vs-decider divergence from scratch and filed a new ticket, while 5c61e0e6 had owned it since 2026-08-02 with its test path already picked. If an existing ticket covers it, add the new instance to THAT one instead.',
   '- WORK IN THE TASK WORKTREE, never the shared checkout. conductor_work\'s start call returns workspace.path (a real git worktree under data_dir/task_workspaces/<task_id>). Every edit, every test run, and every commit for this task happens with `git -C <workspace.path>` / cwd=<workspace.path>. The gate verifier reads THAT path - work done in E:/.prism is invisible to it. This shared checkout also holds OTHER sessions\' uncommitted work: never `git add -A`, never `git checkout -- <file>`, and never commit from it on this drive.',
   '- Re-read the branch in the SAME command as every commit (`git -C <ws> rev-parse --abbrev-ref HEAD && git -C <ws> commit ...`) - this tree is shared and HEAD moves under you.',
   '- Tag every commit with the task trailer `[task:<task-id-8>]` (the Delivery pipeline reads trailers), and commit the FAILING TESTS as a TESTS-ONLY commit before any implementation commit - the red machine seat anchors to that commit.',
@@ -279,7 +289,7 @@ function heartbeatInstr(job) {
   if (DRY) return ''
   const tid = locate.task_id
   const step = job.step
-  return `\n\nHEARTBEAT (drive liveness, optional but keeps the SDLC tile/LiveBar honest while a long step runs): every couple of minutes during THIS step, POST \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${tid}","step":"${step}","elapsed_s":<seconds since you started this step>,"last_tool":"<the tool you just ran>","work_units":<a counter you increment each beat, e.g. total tool calls so far>}'\`. work_units MUST strictly increase and reflect REAL progress - two beats with an unchanged counter are treated as a wedged/looping process, not a driving one. A missed or failed beat is non-fatal; never let this block the step.`
+  return `\n\nHEARTBEAT (drive liveness - REQUIRED, not optional; while you work, the owner's board computes "stalled" from step boundaries alone, and a beat is the ONLY signal that reaches it mid-step). Post your FIRST beat immediately after your first tool call of this step, then re-beat after roughly every 5-8 tool calls (at least every ~2 minutes of work): \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${tid}","step":"${step}","elapsed_s":<seconds since you started this step>,"last_tool":"<the tool you just ran>","work_units":<a counter you increment each beat, e.g. total tool calls so far>}'\`. work_units MUST strictly increase and reflect REAL progress - two beats with an unchanged counter are treated as a wedged/looping process, not a driving one. A missed or failed beat is non-fatal (never let it block the step), but skipping beats entirely makes the owner's board cry "stalled" over healthy work - that is a report-quality defect on YOUR step.`
 }
 
 // -- Agent-run telemetry emitter (task f4498190) -------------------------
@@ -516,7 +526,14 @@ function gatePrompt(job) {
     `   curl -s -m10 "${API_BASE}/api/conductor/gate/readiness?task_id=${tid}&project=prism"  and  conductor_work(id="${tid}")  (no outcome - a pure PEEK).`,
     `   The moment the peek returns a job whose step is PAST this gate (or done:true), the gate was decided: report ok:true with the new step. In this environment the machine adjudicator seat runs on a ~20s interval, so a genuinely-evidenced gate usually clears inside a minute.`,
     '',
-    '4. IF IT DOES NOT CLEAR: that is a legitimate outcome, not a failure to hide. Set ok:false and put in halt_reason exactly WHICH tooth is unsatisfied and WHAT a human must do. Two cases deserve plain language:',
+    (isHumanGate(step)
+      ? `4. IF IT DOES NOT CLEAR: ${step} IS one of the owner's two gates, so a human decision is legitimate here. Set ok:false and say plainly what the owner reviews and where. Two cases deserve plain language:`
+      : [
+        `4. IF IT DOES NOT CLEAR: STOP. ${step} is a MACHINE gate. The owner stops ONLY at plan_gate and green_gate (owner rule mx-1eb0a9). A machine seat that will not decide is a DEFECT to diagnose, never a click to request - do NOT write "the owner must approve ${step}" in halt_reason. Diagnose in this order and report the CAUSE:`,
+        `   (a) STALE WORKSPACE BASELINE - the known false positive. control_plane.candidate_policy_edits diffs the worktree against workspace.baseline, a SNAPSHOT that goes stale the moment main moves. A POLICY_FILES entry that arrived from an already-merged FOREIGN commit is then attributed to this candidate and the seat abstains silently every sweep, forever. CHECK IT: compare the stored baseline in services/prism-service/data/task_workspaces/index.json against \`git -C <workspace> merge-base HEAD origin/main\`. If they differ, that is the cause: report it, name both shas, and say the judge should diff the merge-base (or exclude commits already ancestors of origin/main). Do NOT tag the task 'policy-change', do NOT set PRISM_POLICY_CHANGE_APPROVED=1, and do NOT rewrite the baseline yourself - a candidate editing the judge's own diff input games the distinct-actor rule.`,
+        `   (b) THE REASON MAY BE A CURED SNAPSHOT. task.gate_reason is written once and not refreshed, so it can describe a gap the drive already fixed. Before repeating it, run the real scorer against the LIVE artifact (arc_governance.score_story_complete / score_plan_coverage over task.plan_doc). If it now passes, say so and name the true blocker instead.`,
+        `   (c) Only once (a) and (b) come back clean, report the unsatisfied tooth verbatim.`,
+      ].join('\n')),
     `   - green_gate on proof_type=demo or review is HUMAN-ONLY by owner rule (adjudicate_green_gate returns None for them deliberately, because a machine seat once false-greened two tasks and ate the single sign-off). Do NOT add a loadable URL to the oracle, do NOT flip proof_type, do NOT reach for override - that games the distinct-actor rule. Instead make the click GROUNDED: a live demo URL, durable screenshots in the PRISM evidence store, and a green machine-checkable verify. Then say: the evidence is ready, the owner approves at ${API_BASE}/tasks/${tid}?project=prism (cite the task as a linked title, never a bare hex id).`,
     `   - a readiness saying receipt_ok:true with "your review is the sign-off" means the Approve is ALREADY clean and enabled. Say that, rather than telling a human they are blocked.`,
     '',
@@ -930,10 +947,10 @@ const settle = DRY ? null : await agent(
     `SETTLE task ${locate.task_id}. Report the SERVER'S state, not the drive's opinion of it. Read, do not mutate: no conductor_work report, no gate call, no task_update.`,
     '',
     `1. task_list(id="${locate.task_id}") -> workflow_step, gate_state, status, proof_type.`,
-    `2. curl -s -m10 "${API_BASE}/api/conductor/gate/readiness?task_id=${locate.task_id}&project=prism" -> receipt_ok and the live reason. This is the truth; task.gate_reason is a stale snapshot that has misled a driver for three turns straight.`,
-    `3. OPEN THE RECEIPT before calling anything green: quote the adapter and the tree sha, and confirm that tree is THIS task's worktree${WS ? ` (\`git -C "${WS}" rev-parse HEAD\`)` : ''}. A green receipt naming another task's tree is not a pass - say so plainly if you find one.`,
+    `2. curl -s -m10 "${API_BASE}/api/conductor/gate/readiness?task_id=${locate.task_id}&project=prism" -> receipt_ok and the live reason. Better than task.gate_reason (a stale snapshot that has misled a driver for three turns straight) but READINESS IS NOT THE DECIDER: it is a SEPARATE implementation from gate_decide and the two DISAGREE. On 7feed0c8 readiness said receipt_ok:true "Approve to release" while gate_decide refused the same gate on a stale receipt; the owner clicked five times and the refusal drove the gate to 'failed'. NEVER report "the Approve is clean" on readiness alone - prove it with step 3.`,
+    `3. OPEN THE RECEIPT before calling anything green: quote the adapter and the tree sha, and confirm that tree is THIS task's worktree${WS ? ` (\`git -C "${WS}" rev-parse HEAD\`)` : ''}. A green receipt naming another task's tree is not a pass - say so plainly if you find one. FRESHNESS IS THE SAME CHECK: a receipt is pinned to the tree it was minted at, so ANY commit after the mint (even a correct fix) invalidates it. If the newest receipt's tree_sha != worktree HEAD, say STALE and give the one-line repair: \`curl -s -m300 -X POST "${API_BASE}/api/conductor/gate/mint" -H 'Content-Type: application/json' --data-binary '{"task_id":"${locate.task_id}"}'\` (seconds, not minutes). Re-mint IN THE SAME BREATH as any commit you add, never leave it for the owner's click to discover.`,
     WS ? `4. \`git -C "${WS}" log --oneline -8\` -> the commits this drive actually produced. A drive that reports done with no [task:<id8>] commit produced nothing.` : '',
-    `5. owner_action: if the gate is decided, "none, the server decided it". If a human must click, give the one sentence they need and the URL ${API_BASE}/tasks/${locate.task_id}?project=prism. If readiness already says the review IS the sign-off and the Approve is clean, say THAT - do not tell a human they are blocked when they are not.`,
+    `5. owner_action: if the gate is decided, "none, the server decided it". If a human must click, give the one sentence they need and the URL ${API_BASE}/tasks/${locate.task_id}?project=prism. If readiness says the review IS the sign-off AND step 3 confirmed the receipt is fresh at this tree, say THAT - do not tell a human they are blocked when they are not. NEVER tell them to tick Override: gate_decide re-runs the oracle even with override=True (it forgives only a literal manual_evidence_required reason backed by a matching manual receipt), so against a stale receipt Override can NEVER succeed and the refused attempt can drive the gate to 'failed'. The correct sentence is always "re-run the oracle, then Approve with Override UNTICKED".`,
     `6. EVIDENCE MUST BE CITED, not merely written. curl -s -m10 "${API_BASE}/api/tasks/${locate.task_id}/evidence?project=prism" and report every file WITH its \`cited\` flag. A file sitting there with cited=false never reaches the gate card, so the owner signs off without ever seeing it - that happened on epic 2d480b08 and was caught only because the owner pushed back. If anything is uncited, that is an owner_action, not a footnote: cite it from completion_proof.`,
     `7. SHIPPING, decided by git and not by the gate: \`git -C "${WS || '.'}" log --oneline -1\`, then check whether those commits are ancestors of origin/main (\`git merge-base --is-ancestor <sha> origin/main\`), and look for an open PR (\`gh pr list --head <branch>\`). Set shipped=true ONLY if origin/main actually contains the work.`,
     '',
@@ -977,6 +994,23 @@ return {
     : null,
   steps_driven: trace.map((t) => ({ step: t.step, ok: t.ok, next_step: t.next_step, gate_state: t.gate_state, source_tier: t.source_tier })),
   halted,
+  // THE RESUME CONTRACT (owner 2026-08-13: a drive halted at plan_gate sat
+  // driverless for an hour after the owner approved - "you did it again").
+  // A halt at one of the owner's two gates is NOT the end of the work, only
+  // of this run. The INVOKER (the main thread that called Workflow) must not
+  // walk away: watch the gate (poll the readiness/gate_state below, or set a
+  // Monitor on it) and the moment it clears, relaunch this workflow FRESH
+  // (never resumeFromRunId - cached pre-flight verdicts replay stale) with
+  // the same task_id/api_base so implementation continues without a human
+  // having to nudge it.
+  resume: (halted && halted.kind === 'gate' && HUMAN_GATES.includes(halted.at))
+    ? {
+      must_resume: true,
+      watch: `${API_BASE}/api/conductor/gate/readiness?task_id=${(locate && locate.task_id) || TASK_ID}&project=prism`,
+      when: `task gate_state for ${halted.at} reads 'passed' (owner approved)`,
+      relaunch: { name: 'implement', args: { task_id: (locate && locate.task_id) || TASK_ID, api_base: API_BASE } },
+    }
+    : null,
   settle,
   trace,
 }

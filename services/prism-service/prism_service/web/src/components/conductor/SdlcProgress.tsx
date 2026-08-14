@@ -54,9 +54,13 @@ export type PhaseProgress = {
 // tile pill + live pulse read THIS, not the raw status — "working" is the ONLY
 // state that means the task is actively being driven right now.
 export type Activity = {
-  state?: string;             // working|adrift|stalled|awaiting_gate|done|blocked|pending
+  state?: string;             // working|driving|adrift|stalled|awaiting_gate|done|blocked|pending
   task_motion_s?: number | null;   // s since the last conductor transition on THIS task
   session_quiet_s?: number | null; // s since the linked session's transcript moved
+  // The driver's own mid-step progress evidence (drive_heartbeat), present only
+  // while fresh. Lets the pill say WHAT a driving step is doing, not just that
+  // it is doing something.
+  heartbeat?: { step?: string; last_tool?: string; elapsed_s?: number | null; age_s?: number | null } | null;
 };
 
 function fmtClock(s: number): string {
@@ -104,7 +108,11 @@ export const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
   adrift: { label: "driver active · between step reports", tone: "teal" },
-  stalled: { label: "stalled · needs you", tone: "rose" },
+  // "needs you" was a lie here: when nothing is driving a mid-flow step the
+  // OWNER has no affordance to click, the fix is a driver relaunch (the
+  // resume watcher's job). The alarm words stay reserved for gates, where an
+  // owner action actually exists (awaiting_gate above).
+  stalled: { label: "no active driver", tone: "rose" },
   in_progress: { label: "in progress", tone: "teal" },  // pre-activity fallback
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
@@ -156,9 +164,12 @@ export default function SdlcProgress({
   // steps run 5-10min, so the clock must not be captioned as idleness. Only a
   // genuinely dead drive (`stalled`) earns the alarm wording.
   const idleClock = activity?.task_motion_s != null ? fmtClock(activity.task_motion_s) : "";
+  const hb = activity?.heartbeat;
   const stateLabel =
     state === "adrift" ? `driver active · last step report ${idleClock || "—"} ago`
-    : state === "stalled" ? `stalled · needs you · idle ${idleClock || "—"}`
+    : state === "driving" && hb?.last_tool
+      ? `driving · ${hb.last_tool}${hb.elapsed_s != null ? ` · ${fmtClock(hb.elapsed_s)} in step` : ""}`
+    : state === "stalled" ? `no active driver · idle ${idleClock || "—"}`
     : state === "paused" ? `paused · ${phase?.children_done ?? 0}/${phase?.children_total ?? 0} done`
     : meta.label;
   // "live" = the task is genuinely being DRIVEN right now — a real recent

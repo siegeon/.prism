@@ -4678,8 +4678,8 @@ class ConductorService:
         # the owner's "stalled must mean the owner has something to do"
         # complaint. heartbeat_age_s is scoped per task_id (never global);
         # a stale/absent heartbeat is None/over-window and changes nothing.
-        heartbeat_age = drive_heartbeat.heartbeat_age_s(
-            self._scores_db, getattr(task, "id", ""))
+        beat = drive_heartbeat.latest(self._scores_db, getattr(task, "id", ""))
+        heartbeat_age = beat["age_s"] if beat is not None else None
         driving = (heartbeat_age is not None
                    and heartbeat_age <= drive_heartbeat.HEARTBEAT_WINDOW_S)
         if status == "done":
@@ -4738,4 +4738,17 @@ class ConductorService:
             "state": state,
             "task_motion_s": round(motion, 3) if motion is not None else None,
             "session_quiet_s": round(quiet, 3) if isinstance(quiet, (int, float)) else None,
+            # The driver's own progress evidence, threaded through ONLY while
+            # fresh (inside HEARTBEAT_WINDOW_S) so the board can say WHAT a
+            # driving step is doing (last tool, elapsed) instead of the bare
+            # state word — a stale beat says nothing about now and is dropped.
+            "heartbeat": (
+                {
+                    "step": beat.get("step"),
+                    "last_tool": beat.get("last_tool"),
+                    "elapsed_s": beat.get("elapsed_s"),
+                    "age_s": round(heartbeat_age, 3),
+                }
+                if driving else None
+            ),
         }
