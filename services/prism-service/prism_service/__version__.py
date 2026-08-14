@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.37"
+PRISM_VERSION = "7.10.38"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.38: clicking a task paints instantly. GET /api/tasks/{id} gains "
+    "scope=core (sqlite+stat only: task/history/sessions/mirrors/prototype) "
+    "and TaskDetailPage loads core first then scope=full behind it. The "
+    "full assembly parses linked-session transcript JSONL in four attaches "
+    "(turn tokens, step tokens, spend, timeline) plus phase_progress, and "
+    "those caches are in-process — measured 32s COLD after a daemon bounce "
+    "(0.8s warm), paid on the first click into every task.\n"
     "v7.10.37: the board stops crying wolf over healthy drives. The stalled "
     "pill no longer says 'needs you' (with no driver attached the owner has "
     "no affordance; alarm words are reserved for gates) — it reads 'no "
