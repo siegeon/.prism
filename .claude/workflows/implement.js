@@ -994,6 +994,23 @@ return {
     : null,
   steps_driven: trace.map((t) => ({ step: t.step, ok: t.ok, next_step: t.next_step, gate_state: t.gate_state, source_tier: t.source_tier })),
   halted,
+  // THE RESUME CONTRACT (owner 2026-08-13: a drive halted at plan_gate sat
+  // driverless for an hour after the owner approved - "you did it again").
+  // A halt at one of the owner's two gates is NOT the end of the work, only
+  // of this run. The INVOKER (the main thread that called Workflow) must not
+  // walk away: watch the gate (poll the readiness/gate_state below, or set a
+  // Monitor on it) and the moment it clears, relaunch this workflow FRESH
+  // (never resumeFromRunId - cached pre-flight verdicts replay stale) with
+  // the same task_id/api_base so implementation continues without a human
+  // having to nudge it.
+  resume: (halted && halted.kind === 'gate' && HUMAN_GATES.includes(halted.at))
+    ? {
+      must_resume: true,
+      watch: `${API_BASE}/api/conductor/gate/readiness?task_id=${(locate && locate.task_id) || TASK_ID}&project=prism`,
+      when: `task gate_state for ${halted.at} reads 'passed' (owner approved)`,
+      relaunch: { name: 'implement', args: { task_id: (locate && locate.task_id) || TASK_ID, api_base: API_BASE } },
+    }
+    : null,
   settle,
   trace,
 }
