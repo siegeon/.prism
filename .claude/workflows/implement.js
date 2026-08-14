@@ -7,6 +7,7 @@ export const meta = {
   // publishes a tier per SDLC role (Steward=frontier, Verifier=balanced,
   // Builder=fast); frontier is spent only where the work is judgment.
   phases: [
+    { title: 'Claim', detail: 'Instant PRISM visibility: in_progress + session link + first heartbeat', model: 'haiku' },
     { title: 'Pre-flight', detail: 'Fail fast: branch, clock, daemon identity, deps', model: 'haiku' },
     { title: 'Locate', detail: 'Task + conductor state; brain-first context; claim the task worktree', model: 'sonnet' },
     { title: 'Graph', detail: 'Call-graph blast radius -> allowed_files + neighbouring suites', model: 'sonnet' },
@@ -375,11 +376,54 @@ const PREFLIGHT_SCHEMA = {
     halt_reason: { type: 'string', description: 'ONE actionable remediation line if ok=false; empty otherwise' },
   },
 }
+// -- Phase: Claim (instant visibility - owner rule 2026-08-14) ------------
+// The moment a drive starts working a task, PRISM must show it. The old
+// shape spent ~6 minutes (pre-flight + Locate's context sweep) with the row
+// still PENDING and the board reading IDLE while real work was happening
+// (task ea3f4a62, observed live on the 01ec3894 drive). VISIBILITY PRECEDES
+// READING: this tiny mechanical agent flips the row, links the driving
+// session and posts the first heartbeat BEFORE pre-flight, before any file
+// is read. Non-fatal by design - a failed claim costs only the visibility
+// it exists to provide; pre-flight still owns fail-fast.
+const CLAIM_SCHEMA = {
+  type: 'object',
+  required: ['claimed'],
+  properties: {
+    claimed: { type: 'boolean', description: 'true only if the task row now reads status=in_progress' },
+    note: { type: 'string', description: 'one line on anything that failed (best-effort steps included)' },
+  },
+}
+phase('Claim')
+if (TASK_ID && !DRY) {
+  const claim = await agent(
+    `You have PRISM MCP tools via ToolSearch. Load them in ONE call: ToolSearch("select:mcp__prism__task_update,mcp__prism__task_link_session"). Project slug is "prism".\n\nCLAIM TASK ${TASK_ID} FOR THIS DRIVE - three quick actions, NOTHING else: no reading, no context, no grep. Speed is the whole point of this step.\n1. task_update(id="${TASK_ID}", status="in_progress"${SID ? `, session_id="${SID}"` : ''}) - the board must leave the pending column THIS SECOND.\n2. task_link_session(task_id="${TASK_ID}"${SID ? `, session_id="${SID}"` : ''}) - tie the driving session to the task.\n3. First heartbeat via Bash curl (127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${TASK_ID}","step":"claim","elapsed_s":0,"last_tool":"claim","work_units":1}'\`\nReturn claimed=true only if action 1 succeeded (2 and 3 are best-effort - note a failure in \`note\`, never retry more than once).`,
+    { label: 'claim', phase: 'Claim', schema: CLAIM_SCHEMA, model: TIER_MODEL.mechanical })
+  if (claim && claim.claimed) {
+    log(`Task ${TASK_ID} claimed - the board shows in_progress before anything is read.`)
+  } else {
+    log(`Claim did not land (${(claim && claim.note) || 'no detail'}) - continuing; pre-flight owns fail-fast and will catch a dead daemon.`)
+  }
+} else {
+  log(TASK_ID ? 'Dry-run: no claim (no mutations).' : 'No task_id supplied - Locate claims the instant task_next names one.')
+}
+
 phase('Pre-flight')
 const preflight = await agent(
   `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD - run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 - a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap - the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. datenow_clean=false on ANY match - PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' ${API_BASE}/api/version\` must be 200 - the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n4. DEPENDENCY PRESENCE: read this task's \`depends_on\` via task_list (the dependencies/depends_on field). For EACH depends_on dep that is DONE, confirm its substrate is present: its [conductor:<dep8>] commit (first 8 chars of the dep id) must be reachable from the chosen base OR carried by some branch - \`git -C E:/.prism log --all --grep "conductor:<dep8>" -n1\` must hit, and that commit must be an ancestor of origin/main OR of a branch returned by \`git -C E:/.prism branch -a --contains <sha>\`. deps_present=false ONLY when a DONE dep's commit is unreachable from the base AND no branch carries it. (No deps, or all dep commits reachable, => deps_present=true.)\n5. MCP-DAEMON IDENTITY MATCH: the reachability check (step 3) proves the CONDUCTOR daemon is up, but NOT that YOUR MCP tools point at that same daemon - a duplicate ~/.claude.json key can bind mcp__prism__* to a DIFFERENT daemon (a fork, or another port) while the conductor HTTP endpoint (${API_BASE}) is the store you think you're driving. Call \`prism_status\` (MCP) and read its \`prism_version\` (mcp_ver); \`curl -s -m5 ${API_BASE}/api/version\` and read that \`version\` (http_ver). identity_ok=false if mcp_ver !== http_ver - your MCP is bound to a different daemon than the conductor and the whole drive would mutate the WRONG store. Also compare \`prism_status.data_dir\` against the expected store when known.${DRY ? ' (DRY-RUN: a dead daemon can not answer either endpoint; treat identity as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean AND deps_present${DRY ? '' : ' AND daemon_ok AND identity_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main - rebase or branch fresh off main", "client clock in <file>:<line> - PRISM server-stamps time, remove it (mx-9945f2)", "conductor daemon down at ${API_BASE} - start it before driving", "MCP daemon <mcp_ver> != conductor daemon <http_ver> - /mcp reconnect prism to the daemon serving ${API_BASE} (or restart the session) before driving", or "dep <id> done but not merged to main and no branch carries it - merge it first".`,
   { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA, model: modelFor('', 'pre-flight', false) })
 if (!preflight.ok) {
+  // HALT VISIBILITY (task ea3f4a62): the Claim phase flipped the row to
+  // in_progress, so a silent throw here would leave a driverless in_progress
+  // task - the exact dishonest state this workflow exists to prevent. Un-claim
+  // and stamp the halt reason onto the drive heartbeat so the task Trace says
+  // WHY the drive died instead of showing nothing. Best-effort: if the daemon
+  // is the thing that is down, these calls fail quietly and the throw still
+  // carries the reason to the invoker.
+  if (TASK_ID && !DRY) {
+    await agent(
+      `You have PRISM MCP tools via ToolSearch. Load ToolSearch("select:mcp__prism__task_update"). Project slug "prism". The implement drive for task ${TASK_ID} HALTED at pre-flight: ${preflight.halt_reason || 'a pre-flight check failed'}. Two quick actions, nothing else:\n1. task_update(id="${TASK_ID}", status="pending") - the drive is dead, the row must not sit in_progress with no driver.\n2. Bash curl: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' --data-binary '{"task_id":"${TASK_ID}","step":"pre-flight","elapsed_s":60,"last_tool":"pre-flight-halt: ${String(preflight.halt_reason || 'check failed').replace(/["\\]/g, '')}","work_units":2}'\`\nReturn claimed=false with a note. Best-effort - a failure here is non-fatal.`,
+      { label: 'halt-visible', phase: 'Pre-flight', schema: CLAIM_SCHEMA, model: TIER_MODEL.mechanical })
+  }
   throw new Error(`PRE-FLIGHT HALT - ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok} deps_present=${preflight.deps_present} identity_ok=${preflight.identity_ok}]`)
 }
 log(`Pre-flight OK - branch sane, workflow scripts clock-clean (PRISM owns time)${DRY ? '' : ', daemon reachable'}.`)
@@ -390,8 +434,21 @@ const pick = TASK_ID
   ? `Read the driven task via task_list(id="${TASK_ID}") - a LEAN by-id read that returns JUST this one task (a 1-element list), NOT the whole board (a full board is ~100x the tokens).`
   : 'No task id was supplied. Call task_next to choose the highest-priority unblocked task; it returns that single task (do NOT pull the whole board).'
 
+// VISIBILITY PRECEDES READING (owner rule 2026-08-14, task ea3f4a62): the
+// claim + first heartbeat are Locate's FIRST tool calls, before any brain or
+// grep work - the context sweep runs minutes, and an unclaimed sweep renders
+// as "nothing is being done" on the owner's board. Idempotent on the
+// task_id path (the Claim phase already flipped the row); load-bearing on the
+// server-pull path where the task id is only known after task_next.
+const sidArg = SID ? `, session_id="${SID}"` : ''
+const claimFirstInstr = DRY ? '' : [
+  `- CLAIM VISIBILITY FIRST - your first tool calls after reading the task row, BEFORE any brain/grep/context work: task_update(id="<the task id>", status="in_progress"${sidArg}) then task_link_session(task_id="<the task id>"${sidArg}). If the Claim phase already flipped the row these are idempotent no-ops - run them anyway; on the task_next path they are the ONLY claim.`,
+  `- FIRST HEARTBEAT immediately after the claim, then re-beat every 5-8 tool calls THROUGHOUT the context sweep below: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"<the task id>","step":"locate","elapsed_s":<seconds since you started>,"last_tool":"<the tool you just ran>","work_units":<counter that strictly increases>}'\` - without beats the owner's board reads a healthy sweep as nothing happening.`,
+  '',
+].join('\n')
+
 const locate = await agent(
-  `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list - each item independently testable.\n- PUSH-INJECT CONVENTIONS (task 0c811636): call \`context_bundle(persona="dev")\` ONCE and return its \`conventions\` array verbatim as the \`conventions\` field - this is PRISM's importance-ranked, top-N-capped living feedback doctrine (the domain="feedback" conventions - render policy, gate enforcement, board hygiene, etc.) that the drive injects into EVERY subsequent step agent's preamble. If the bundle has no \`conventions\` key or it is empty, return \`[]\` (the drive falls back to the static procedural spine + memory_recall self-heal).\n- CLAIM THE TASK WORKTREE (this REPLACES cutting a feature branch in the shared checkout). ${DRY ? 'Report the workspace path you WOULD claim (data_dir/task_workspaces/<task_id>) without calling conductor_work.' : 'Call `conductor_work(id="<the task id>")` with NO outcome - that is the idempotent START/PEEK: it enters the flow, runs task_workspace.ensure_workspace(), and returns `workspace` {path, branch, baseline, repo_root} together with the first self-describing `job`. Report workspace.path as `workspace`, workspace.branch as `branch`, the job\'s `step` as current_step, and its gate_state.'} EVERY later edit, test run and commit for this task happens with \`git -C <workspace.path>\` or cwd=<workspace.path> - the gate verifier reads exactly that path, and work left in the shared E:/.prism checkout is invisible to it. A conductor_work ok:false carrying a workspace error is a HARD stop (it fails closed on purpose so two tasks can never share a branch): put it in halt_reason and do not proceed.\n- BRANCH: BASE SAFETY. The server cuts the worktree for you, but \`ensure_workspace\` defaults its base_ref to the repo's CURRENT HEAD - NOT origin/main - so a stale shared checkout silently yields a stale worktree, and the slice would be built on code that is behind. Verify it rather than assume: \`git -C "<workspace.path>" fetch -q origin main && git -C "<workspace.path>" rev-list --count HEAD..origin/main\` MUST return 0. If the worktree base is BEHIND origin/main, STOP and say so in halt_reason (name the count) - do not drive a slice onto a stale base.${DRY ? ' In DRY-RUN, report the base you WOULD verify and the depends_on you WOULD check, without claiming a workspace.' : ''}\n- DEPENDENCY CHECK (do NOT pick a base - the server already cut the worktree): read this task's \`depends_on\`. For each dep that is DONE, confirm its \`[task:<dep8>]\` / \`[conductor:<dep8>]\` commit is reachable from the worktree baseline (\`git -C <workspace.path> log --grep "<dep8>" -n1\`, falling back to \`git -C E:/.prism log --all --grep "<dep8>" -n1\`). A dep that is NOT done means this task is BLOCKED: report that in halt_reason and do not drive.\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") - do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id - never the request_id default).` : ''}\n\nReturn the structured locate result.`,
+  `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen, IN THIS ORDER - visibility precedes reading:\n${claimFirstInstr}- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list - each item independently testable.\n- PUSH-INJECT CONVENTIONS (task 0c811636): call \`context_bundle(persona="dev")\` ONCE and return its \`conventions\` array verbatim as the \`conventions\` field - this is PRISM's importance-ranked, top-N-capped living feedback doctrine (the domain="feedback" conventions - render policy, gate enforcement, board hygiene, etc.) that the drive injects into EVERY subsequent step agent's preamble. If the bundle has no \`conventions\` key or it is empty, return \`[]\` (the drive falls back to the static procedural spine + memory_recall self-heal).\n- CLAIM THE TASK WORKTREE (this REPLACES cutting a feature branch in the shared checkout). ${DRY ? 'Report the workspace path you WOULD claim (data_dir/task_workspaces/<task_id>) without calling conductor_work.' : 'Call `conductor_work(id="<the task id>")` with NO outcome - that is the idempotent START/PEEK: it enters the flow, runs task_workspace.ensure_workspace(), and returns `workspace` {path, branch, baseline, repo_root} together with the first self-describing `job`. Report workspace.path as `workspace`, workspace.branch as `branch`, the job\'s `step` as current_step, and its gate_state.'} EVERY later edit, test run and commit for this task happens with \`git -C <workspace.path>\` or cwd=<workspace.path> - the gate verifier reads exactly that path, and work left in the shared E:/.prism checkout is invisible to it. A conductor_work ok:false carrying a workspace error is a HARD stop (it fails closed on purpose so two tasks can never share a branch): put it in halt_reason and do not proceed.\n- BRANCH: BASE SAFETY. The server cuts the worktree for you, but \`ensure_workspace\` defaults its base_ref to the repo's CURRENT HEAD - NOT origin/main - so a stale shared checkout silently yields a stale worktree, and the slice would be built on code that is behind. Verify it rather than assume: \`git -C "<workspace.path>" fetch -q origin main && git -C "<workspace.path>" rev-list --count HEAD..origin/main\` MUST return 0. If the worktree base is BEHIND origin/main, STOP and say so in halt_reason (name the count) - do not drive a slice onto a stale base.${DRY ? ' In DRY-RUN, report the base you WOULD verify and the depends_on you WOULD check, without claiming a workspace.' : ''}\n- DEPENDENCY CHECK (do NOT pick a base - the server already cut the worktree): read this task's \`depends_on\`. For each dep that is DONE, confirm its \`[task:<dep8>]\` / \`[conductor:<dep8>]\` commit is reachable from the worktree baseline (\`git -C <workspace.path> log --grep "<dep8>" -n1\`, falling back to \`git -C E:/.prism log --all --grep "<dep8>" -n1\`). A dep that is NOT done means this task is BLOCKED: report that in halt_reason and do not drive.\n\nReturn the structured locate result.`,
   { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA, model: TIER_MODEL.balanced })
 
 if (locate.halt_reason && String(locate.halt_reason).trim()) {
@@ -659,7 +716,8 @@ const graph = await agent(
     '6. Set `slice_count`: 1 when this is one coherent slice with one oracle. >1 ONLY when the blast radius spans genuinely disjoint surfaces that each need their own oracle and their own allowlist (e.g. a store, an adapter, and a UI surface). Be conservative - splitting has its own cost.',
     '',
     'Read before you cite: every file you name must be one you actually opened.',
-  ].join('\n'),
+    (DRY ? '' : `\nHEARTBEAT (drive liveness): post a beat immediately after your first tool call, then every 5-8 tool calls: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${locate.task_id}","step":"graph","elapsed_s":<seconds>,"last_tool":"<tool>","work_units":<increasing counter>}'\` - best-effort, never let a failed beat block the step.`),
+  ].filter(Boolean).join('\n'),
   { label: 'graph-blast-radius', phase: 'Graph', schema: GRAPH_SCHEMA, model: TIER_MODEL.balanced })
 
 GRAPH_BRIEF = [
