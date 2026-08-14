@@ -15,6 +15,9 @@ type Packet = {
   commits: { sha: string; subject: string }[];
   receipt: { adapter: string; passed: boolean; status: string; ended_at: string; reason: string } | null;
   screenshots: { name: string; url: string }[];
+  // task 31c345b7: the story/plan text THIS gate is deciding on. Only
+  // non-null at story_gate/plan_gate — post-code gates keep None here.
+  subject: { kind: string; title: string; markdown: string; diagram: string } | null;
 };
 
 // AC-5: card state -> label + tone, mapped onto the existing Hermes accent vars.
@@ -99,6 +102,20 @@ export default function DecisionPacket({ taskId, project, state, step, latestRec
           {tone.label}
         </span>
       </div>
+
+      {/* Subject channel (task 31c345b7): the story/plan text this gate is
+          actually deciding on. Only story_gate/plan_gate carry a subject —
+          post-code gates keep the four rows below untouched (epic stop_if:
+          no panel grows at a gate that already has full evidence). */}
+      {(step === "story_gate" || step === "plan_gate") && (
+        <Row icon="§" title={pkt.subject ? pkt.subject.title : "Story / plan under judgment"}
+             empty={!pkt.subject} summary={pkt.subject ? "1" : ""}>
+          {pkt.subject && (
+            <div className={mono} style={{ whiteSpace: "pre-wrap" }}>{pkt.subject.markdown}</div>
+          )}
+          {pkt.subject?.diagram && <pre className={mono}>{pkt.subject.diagram}</pre>}
+        </Row>
+      )}
 
       <Row icon="◨" title="Diff vs baseline" empty={ds.files === 0}
            summary={`+${ds.insertions} −${ds.deletions} · ${ds.files} files`}>
