@@ -34,7 +34,7 @@ def _collect_jobs(project_filter: Optional[str]) -> list[dict]:
             queue = ue.UnderstandEngine(pid).queue
         except Exception:
             continue
-        for job in queue._jobs.values():
+        for job in queue.snapshot():
             row = asdict(job)
             row["project"] = pid
             out.append(row)

@@ -22,7 +22,7 @@ import {
   type CollaborationSurface,
 } from "@/lib/api";
 import { notifyProjectsChanged, useProject } from "@/lib/project";
-import type { ScanJob } from "@/lib/scan-activity";
+import { useJobs, type ScanJob } from "@/lib/scan-activity";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -1474,64 +1474,31 @@ type SpendSummary = {
 const _fmtUsd = (n?: number) =>
   "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-type Job = {
-  id: string;
-  project: string;
-  analyzer: string;
-  target_sha: string;
-  scope_hash: string;
-  state: "pending" | "in_progress" | "completed" | "failed";
-  enqueued_at: number;
-  started_at: number;
-  completed_at: number;
-  attempts: number;
-  error: string;
-  result_path: string;
-};
+// The shared /api/jobs payload (lib/scan-activity.ts's ScanJob) already
+// carries every field this page needs — one row shape serves both the
+// shared poller's derived ScanActivity summary and this page's raw list.
+type Job = ScanJob;
 
 const JOB_STATES: Array<Job["state"] | "all"> = [
   "all", "pending", "in_progress", "failed", "completed",
 ];
 
 function JobsPanel() {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  // Used to run its own 5s interval timer; now rides the ONE shared
+  // /api/jobs poller (task e8fc073b) that every mounted surface shares.
+  // The status filter moves client-side over the shared unfiltered
+  // newest-200 (was a server-side &status= query param) — an operator
+  // glance panel, not a paginated view, so this is a fine trade.
+  const { jobs: allJobs, loaded, lastLoaded, refresh } = useJobs();
   const [filter, setFilter] = useState<Job["state"] | "all">("all");
-  const [refreshing, setRefreshing] = useState(false);
-  const [lastLoaded, setLastLoaded] = useState<number | null>(null);
   const [now, setNow] = useState<number>(Date.now());
+  const jobs = filter === "all" ? allJobs : allJobs.filter((j) => j.state === filter);
 
-  const load = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const q = filter === "all" ? "" : `&status=${filter}`;
-      const r = await api.get<{ jobs: Job[] }>(`/api/jobs?limit=200${q}`);
-      setJobs(r.jobs);
-      setLastLoaded(Date.now());
-    } catch {
-      setJobs([]);
-    } finally {
-      setLoaded(true);
-      setRefreshing(false);
-    }
-  }, [filter]);
-
-  useEffect(() => { load(); }, [load]);
   // Tick the freshness label every second so it ages live, like Workers.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  // Poll while there's anything in flight or pending so the list
-  // reflects what the drainer is actually doing.
-  useEffect(() => {
-    const anyHot = jobs.some(
-      (j) => j.state === "pending" || j.state === "in_progress",
-    );
-    if (!anyHot) return;
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, [jobs, load]);
 
   const ageLabel = lastLoaded
     ? `Updated ${Math.max(0, Math.round((now - lastLoaded) / 1000))}s ago`
@@ -1552,11 +1519,10 @@ function JobsPanel() {
         </span>
         <span className="text-2xs opacity-40 font-mono ml-auto">{ageLabel}</span>
         <button
-          onClick={load}
-          disabled={refreshing}
+          onClick={refresh}
           className="text-2xs uppercase tracking-wider px-3 py-1 rounded bg-[color:var(--midground-base)]/15 hover:bg-[color:var(--midground-base)]/30 disabled:opacity-40"
         >
-          {refreshing ? "refreshing…" : "Refresh now"}
+          Refresh now
         </button>
       </div>
 
@@ -1711,6 +1677,9 @@ function JobStateDot({ state }: { state: Job["state"] }) {
     in_progress: "bg-sky-400 shadow-[0_0_6px_2px_rgba(56,189,248,0.4)]",
     completed: "bg-[color:var(--accent-emerald-fg)] shadow-[0_0_6px_2px_rgba(52,211,153,0.4)]",
     failed: "bg-[color:var(--accent-rose-fg)] shadow-[0_0_6px_2px_rgba(251,113,133,0.4)]",
+    // ScanJob's state is a superset (task e8fc073b widened Job = ScanJob);
+    // cancelled jobs get a neutral dot, same family as a dismissed row.
+    cancelled: "bg-[color:var(--midground-base)]/40",
   };
   return (
     <span
@@ -1723,7 +1692,7 @@ function JobStateDot({ state }: { state: Job["state"] }) {
 function jobTimestamp(j: Job): string {
   // Pick the most recent meaningful timestamp for the row's right gutter.
   const ts =
-    j.state === "completed" || j.state === "failed"
+    j.state === "completed" || j.state === "failed" || j.state === "cancelled"
       ? j.completed_at
       : j.state === "in_progress"
         ? j.started_at
@@ -2756,31 +2725,13 @@ function ProjectCard({
 function ScanProgress({
   project, sinceTs, onDismiss,
 }: { project: string; sinceTs: number; onDismiss: () => void }) {
-  const [jobs, setJobs] = useState<ScanJob[]>([]);
-
-  useEffect(() => {
-    let cancel = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const poll = async () => {
-      try {
-        const r = await api.get<{ jobs: ScanJob[] }>("/api/jobs?limit=200");
-        if (cancel) return;
-        const scoped = r.jobs.filter(
-          (j) => j.project === project && j.enqueued_at >= sinceTs,
-        );
-        setJobs(scoped);
-        const stillActive = scoped.some(
-          (j) => j.state === "pending" || j.state === "in_progress",
-        );
-        timer = setTimeout(poll, stillActive ? 2000 : 10000);
-      } catch {
-        if (cancel) return;
-        timer = setTimeout(poll, 10000);
-      }
-    };
-    poll();
-    return () => { cancel = true; if (timer !== null) clearTimeout(timer); };
-  }, [project, sinceTs]);
+  // Used to run its own 2s/10s timeout loop with no hidden-tab skip; now
+  // rides the ONE shared /api/jobs poller (task e8fc073b), which DOES
+  // skip while the tab is hidden. The scoping filter is unchanged.
+  const { jobs: allJobs } = useJobs();
+  const jobs = allJobs.filter(
+    (j) => j.project === project && j.enqueued_at >= sinceTs,
+  );
 
   const counts = jobs.reduce(
     (acc, j) => { acc[j.state as keyof typeof acc] = (acc[j.state as keyof typeof acc] ?? 0) + 1; acc.total++; return acc; },

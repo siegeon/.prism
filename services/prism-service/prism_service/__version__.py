@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.34"
+PRISM_VERSION = "7.10.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4321,6 +4321,20 @@ PRISM_VERSION_NOTES += (
     "also toggles the card; RepoSync's expanded tracked list reads the "
     "same {key,url} shape. MirrorStatus.tracking (a different endpoint) "
     "stays string[]."
+    " v7.10.35: TASK PAGES LOAD FAST EVEN WHEN JOBS ARE BUSY [task "
+    "e8fc073b]. UnderstandEngine.queue now resolves through a "
+    "process-wide registry keyed by resolved project_data_dir, so "
+    "repeated /api/jobs requests reuse ONE JobQueue instead of replaying "
+    "understand_queue.jsonl from scratch every time; JobQueue.refresh() "
+    "does an incremental byte-offset tail read instead, and the new "
+    "snapshot() method is the only lock-guarded read path (api/jobs.py "
+    "and UnderstandEngine.status() both moved off the private "
+    "queue._jobs access). Client side, scan-activity.ts's useScanActivity "
+    "is now backed by ONE module-level poller with a subscriber set and "
+    "an in-flight guard, shared by LiveBar, LiveStatusStrip, Sidebar and "
+    "a new useJobs() hook that Settings' JobsPanel and ScanProgress "
+    "consume in place of their own private timers — five independent "
+    "/api/jobs polls collapse to one."
 )
 
 
