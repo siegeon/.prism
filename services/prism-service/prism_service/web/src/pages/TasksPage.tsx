@@ -189,7 +189,15 @@ export default function TasksPage() {
       .catch(() => setExternal([]));
   }, [project]);
 
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  // Only poll a tab someone is looking at (Sidebar useStaleness precedent);
+  // refetch on focus so the board is current the moment it is seen.
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) load(); };
+    load();
+    const t = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [load]);
 
   // The unified, filtered, viewer-scoped work list.
   const items = useMemo(() => {

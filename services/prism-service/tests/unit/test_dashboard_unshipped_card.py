@@ -90,7 +90,10 @@ def _wire(monkeypatch, repo: Path, tasks: list, ws_map: dict | None = None):
     done-task list."""
     ws_map = ws_map or {}
     from prism_service.services import task_workspace
-    monkeypatch.setattr(task_workspace, "workspace_for",
+    # The scan reads workspace_record (the sync-free accessor added in the
+    # 2026-08-13 loading-perf round) — workspace_for syncs the worktree per
+    # call, which is exactly what the scan must NOT do per done task.
+    monkeypatch.setattr(task_workspace, "workspace_record",
                         lambda tid: ws_map.get(tid))
     import prism_service.api.tasks as tasks_mod
     from prism_service.services import claude_transcripts as ct

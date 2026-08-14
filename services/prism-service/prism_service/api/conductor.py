@@ -1,5 +1,9 @@
 """Conductor API — prompt variants, scores, session outcomes, and SDLC state."""
 
+import threading
+import time
+import weakref
+
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
@@ -16,25 +20,77 @@ def _svc(project: str):
         raise HTTPException(404, f"unknown project: {project}: {exc}")
 
 
+# /state recompute is GIL-bound Python over the whole task store (per managed
+# task: history scans, per-step medians, live transcript token reads) — ~0.5s
+# idle and it SERIALIZES under load: 6 concurrent pollers each measured 7.5s
+# (2026-08-13) while LiveBar (every page) + ConductorPage + SSE-triggered
+# refetches all hit it. A short TTL cache with single-flight collapses any
+# number of pollers into one recompute per TTL. Keyed on the SERVICE INSTANCE
+# via WeakKeyDictionary so each test's fresh service gets a fresh cache and
+# nothing leaks across tests; 2.5s stays under every poller's own cadence.
+_STATE_TTL_S = 2.5
+_state_cache: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_state_lock = threading.Lock()
+
+
+def _state_cache_get(s):
+    """None when uncached — or when the service isn't weakref-able (test
+    stubs), which simply disables caching for it."""
+    try:
+        return _state_cache.get(s)
+    except TypeError:
+        return None
+
+
+def _state_cache_put(s, val) -> None:
+    try:
+        _state_cache[s] = val
+    except TypeError:
+        pass
+
+
+def _state_payload(s) -> dict:
+    hit = _state_cache_get(s)
+    if hit and time.monotonic() - hit[0] < _STATE_TTL_S:
+        return hit[1]
+    if not _state_lock.acquire(blocking=False):
+        # Another request is already recomputing — serve the stale copy
+        # instantly rather than queueing a second identical recompute.
+        if hit:
+            return hit[1]
+        _state_lock.acquire()
+    try:
+        hit = _state_cache_get(s)
+        if hit and time.monotonic() - hit[0] < _STATE_TTL_S:
+            return hit[1]
+        payload = {
+            "exploration_rate": s.exploration_rate(),
+            "variants": s.get_variants(),
+            "scores": s.get_scores(),
+            "retired": s.get_retired(),
+            # Conductor v2 (#79 follow-up): SPA /conductor page reads these to
+            # render the SDLC dashboard — which tasks conductor is driving and
+            # where they are in the workflow.
+            "managed_tasks": s.managed_tasks(),
+            "step_buckets": s.step_buckets(),
+            # GoalBuddy GAP-5: cross-task "reorient" signal composed from the
+            # per-task '⚠' advisory notes — fires when >= 2 low-value done-root
+            # completions lead the newest-first run. Additive; SPA renders a badge.
+            "board_health": board_health(_board_tasks(s)),
+        }
+        _state_cache_put(s, (time.monotonic(), payload))
+        return payload
+    finally:
+        _state_lock.release()
+
+
 @router.get("/state")
 def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1, le=1000),
           include_outcomes: bool = Query(False)) -> dict:
     s = _svc(project)
-    out = {
-        "exploration_rate": s.exploration_rate(),
-        "variants": s.get_variants(),
-        "scores": s.get_scores(),
-        "retired": s.get_retired(),
-        # Conductor v2 (#79 follow-up): SPA /conductor page reads these to
-        # render the SDLC dashboard — which tasks conductor is driving and
-        # where they are in the workflow.
-        "managed_tasks": s.managed_tasks(),
-        "step_buckets": s.step_buckets(),
-        # GoalBuddy GAP-5: cross-task "reorient" signal composed from the
-        # per-task '⚠' advisory notes — fires when >= 2 low-value done-root
-        # completions lead the newest-first run. Additive; SPA renders a badge.
-        "board_health": board_health(_board_tasks(s)),
-    }
+    # Shallow copy so the include_outcomes branch below never mutates the
+    # cached payload shared with concurrent requests.
+    out = dict(_state_payload(s))
     # Task d5465a25 (heavy-poll scoping): session_outcomes is 93% of this
     # payload (55.9 KB of a measured 60 KB) and this route is polled every
     # 5s from LiveBar.tsx + ConductorPage.tsx — neither reads it (both type

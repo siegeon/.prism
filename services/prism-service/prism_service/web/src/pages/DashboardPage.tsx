@@ -182,13 +182,35 @@ export default function DashboardPage() {
     api.get<Activity>(`/api/dashboard/activity?project=${project}&days=14`)
       .then(setAct).catch(() => setAct(null))
       .finally(() => setActLoaded(true));
-    // Unshipped-done scan (task b22576bb): "done" that never merged to main.
+  }, [project]);
+
+  // Unshipped-done scan (task b22576bb): "done" that never merged to main.
+  // Loaded PROGRESSIVELY on its own slow cadence, never in the 5s loop: the
+  // server-side scan walks git history for every done task (measured 35s at
+  // 301 done tasks, 2026-08-13) and re-firing it each poll stacked requests
+  // faster than they finished, starving every other page's fetches.
+  // Stranded-ness only moves on merges — 5 minutes is current.
+  const loadStranded = useCallback(() => {
     api.get<{ stranded: StrandedRow[] }>(`/api/tasks/stranded?project=${project}`)
       .then((r) => setStranded(r.stranded ?? [])).catch(() => setStranded([]))
       .finally(() => setStrandedLoaded(true));
   }, [project]);
 
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  // Only poll a tab someone is looking at (the Sidebar useStaleness
+  // precedent, task c38ef597); refetch on focus so it's current when seen.
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) load(); };
+    load();
+    const t = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [load]);
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) loadStranded(); };
+    loadStranded();
+    const t = setInterval(tick, 300_000);
+    return () => clearInterval(t);
+  }, [loadStranded]);
 
   // Hero: overlaid multi-series timeline on a symlog axis so the giant
   // reindex spikes and single-digit search counts are both legible.

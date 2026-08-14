@@ -59,6 +59,11 @@ const ACTIVITY_ROUTES = ["/", "/tasks", "/conductor"];
 // Fallback-sweep staleness threshold (task 4d399e0a) — the sweep only
 // refetches once a fetch is genuinely this old, never on a bare interval.
 const STALE_AFTER_MS = 15_000;
+// Minimum spacing between conductor/state fetch starts — absorbs the
+// task.changed event bursts a busy drive emits (several per second).
+const MIN_REFRESH_MS = 3_000;
+// Parentage projection cadence — moves on task creation, not on step writes.
+const PARENTAGE_REFRESH_MS = 60_000;
 
 function inActivityContext(pathname: string): boolean {
   return ACTIVITY_ROUTES.some(
@@ -90,7 +95,17 @@ export default function LiveBar() {
   // child task id -> parent task id, for rolling driven slices up to the epic.
   const [parentOf, setParentOf] = useState<Record<string, string>>({});
 
-  const load = useCallback(() => {
+  // Burst coalescing (loading-perf round 2026-08-13): task.changed fires on
+  // EVERY conductor write and a busy drive emits several per second; each one
+  // used to refire the conductor/state fetch from EVERY open page, and the
+  // server-side recompute serializes under that storm. One fetch per
+  // MIN_REFRESH_MS window absorbs the burst; a single trailing call keeps the
+  // final event's state, so nothing observable is ever dropped.
+  const lastStartRef = useRef(-Infinity);
+  const trailingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const parentageAt = useRef(-Infinity);
+
+  const doLoad = useCallback(() => {
     api.get<{ managed_tasks?: ManagedTask[] }>(`/api/conductor/state?project=${project}`)
       .then((d) => { setManaged(d.managed_tasks ?? []); fetchedAt.current = performance.now(); setSinceFetchS(0); })
       .catch(() => setManaged([]))
@@ -102,15 +117,39 @@ export default function LiveBar() {
     // peers of the epic the owner is watching — owner 2026-08-06: "those are
     // sub tasks ... they are your details, you do not have me conduct them
     // for you". Lean projection, same shape TasksPage.tsx already requests.
-    api.get<{ tasks?: { id: string; parent_id?: string }[] }>(
-      `/api/tasks?project=${project}&fields=id,parent_id`)
-      .then((d) => {
-        const map: Record<string, string> = {};
-        for (const t of d.tasks ?? []) if (t.parent_id) map[t.id] = t.parent_id;
-        setParentOf(map);
-      })
-      .catch(() => { /* leave parentage as-is; never blank a known map */ });
+    // Parentage moves on task creation/re-parenting, not on step writes —
+    // once a minute is current enough and keeps the burst path to ONE fetch.
+    if (performance.now() - parentageAt.current >= PARENTAGE_REFRESH_MS) {
+      parentageAt.current = performance.now();
+      api.get<{ tasks?: { id: string; parent_id?: string }[] }>(
+        `/api/tasks?project=${project}&fields=id,parent_id`)
+        .then((d) => {
+          const map: Record<string, string> = {};
+          for (const t of d.tasks ?? []) if (t.parent_id) map[t.id] = t.parent_id;
+          setParentOf(map);
+        })
+        .catch(() => { /* leave parentage as-is; never blank a known map */ });
+    }
   }, [project]);
+
+  const load = useCallback(() => {
+    const since = performance.now() - lastStartRef.current;
+    if (since < MIN_REFRESH_MS) {
+      if (trailingRef.current == null) {
+        trailingRef.current = setTimeout(() => {
+          trailingRef.current = null;
+          lastStartRef.current = performance.now();
+          doLoad();
+        }, MIN_REFRESH_MS - since);
+      }
+      return;
+    }
+    lastStartRef.current = performance.now();
+    doLoad();
+  }, [doLoad]);
+  useEffect(() => () => {
+    if (trailingRef.current != null) clearTimeout(trailingRef.current);
+  }, []);
 
   // Push refresh (task 4d399e0a): subscribe to the project's real event bus
   // (same route SessionsPage.tsx already uses) rather than /sse/live, which

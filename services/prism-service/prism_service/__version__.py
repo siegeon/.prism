@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.35"
+PRISM_VERSION = "7.10.36"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.36: loading-performance round — every view loads minimally and "
+    "progressively. GET /api/tasks/stranded drops from ~35s to one batched "
+    "git pass behind a 5-min single-flight cache (was ~900 git subprocesses "
+    "per call, refired every 5s by the Dashboard); GET /api/conductor/state "
+    "gains a 2.5s single-flight TTL cache so N pollers cost one recompute "
+    "(6 concurrent calls measured 7.5s EACH before); the Dashboard fetches "
+    "stranded on its own 5-min cadence; Dashboard/Conductor/Tasks/Retrievals "
+    "polls pause while the tab is hidden; LiveBar coalesces task.changed "
+    "SSE bursts to one conductor/state fetch per 3s and refreshes parentage "
+    "at most once a minute.\n"
     "v7.10.34: team mode redacts host filesystem paths from "
     "/api/claude-auth/status, /api/github-auth/status and "
     "/api/service-info [task 74a38571]. security.redact_host_paths "
