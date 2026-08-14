@@ -178,8 +178,20 @@ def test_precondition_miss_self_heals_without_override_ac2_ac3_ac5(
         "readback after the recovery approve must match the call's own "
         "response — AC-5's pinned post-recovery assertion"
     )
-    assert snap2.workflow_step != "green_gate", (
-        "a passed green_gate must auto-advance the task past the gate"
+    # green_gate is the LAST WORKFLOW_STEPS entry (task ae63e375,
+    # conductor_service.py:3769-3778): "auto-advance past the gate" for the
+    # TERMINAL gate means the task becomes done in place — advance_task has
+    # no next step to move to and workflow_step correctly stays "green_gate"
+    # (mirrors conductor_work's own `done` predicate: final step + gate_state
+    # == passed). status flipping to "done" IS the advance signal here.
+    assert snap2.status == "done", (
+        "a passed TERMINAL green_gate must flip the task to done in place "
+        f"(workflow_step legitimately stays 'green_gate'); got status="
+        f"{snap2.status!r}, workflow_step={snap2.workflow_step!r}"
+    )
+    assert snap2.workflow_step == "green_gate", (
+        "the terminal step has no successor to advance to; workflow_step "
+        f"must remain 'green_gate', got {snap2.workflow_step!r}"
     )
 
 
