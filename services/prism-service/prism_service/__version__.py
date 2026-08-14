@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.34"
+PRISM_VERSION = "7.10.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.37: a failed (or pending) gate can no longer be closed around "
+    "[task b43b33b8]. TaskService.update refuses status=done while "
+    "gate_state is pending/failed unless an explicit gate_bypass_reason "
+    "rides the call; the bypass writes a gate_decide-shaped gate_bypass "
+    "history row (actor + reason) on the task Trace. Both surfaces "
+    "inherit the guard (REST PATCH 422s, mcp task_update returns a "
+    "structured refusal), and the task page's done button collects the "
+    "reason inline and surfaces the server's refusal instead of "
+    "announcing a silent success. The conductor's terminal close "
+    "(gate_state=passed before status=done) and ungated one-click closes "
+    "are unchanged.\n"
     "v7.10.34: team mode redacts host filesystem paths from "
     "/api/claude-auth/status, /api/github-auth/status and "
     "/api/service-info [task 74a38571]. security.redact_host_paths "

@@ -1521,6 +1521,10 @@ class TaskUpdate(BaseModel):
     stop_if: Optional[list[str]] = None
     plan_doc: Optional[str] = None
     plan_diagram: Optional[str] = None
+    # Audited gated-done bypass (task b43b33b8): without this field the
+    # route cannot forward the reason at all — kwargs is built from this
+    # explicit model, dropping unknown keys.
+    gate_bypass_reason: Optional[str] = None
 
 
 @router.patch("/{task_id}")
@@ -1546,7 +1550,14 @@ def update_task(
             raise HTTPException(404, "task not found")
         if current.status != "in_progress" and not svc.sessions_for_task(task_id):
             raise HTTPException(422, SESSION_GATE_FIX)
-    t = svc.update(task_id, **kwargs)
+    # Gated-done guard (task b43b33b8): the chokepoint refuses a done
+    # transition around a pending/failed gate; surface it as the same 422
+    # shape as the session-gate refusal above so the SPA renders one way.
+    from prism_service.services.task_service import GatedDoneRefused
+    try:
+        t = svc.update(task_id, **kwargs)
+    except GatedDoneRefused as e:
+        raise HTTPException(422, str(e))
     if not t:
         raise HTTPException(404, "task not found")
     return {"task": t, "history": svc.history(task_id)}

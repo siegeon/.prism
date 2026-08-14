@@ -32,6 +32,26 @@ SESSION_GATE_FIX = (
 )
 
 
+# Gated-done guard (task b43b33b8): the ONE message every public surface
+# (REST PATCH + MCP task_update) quotes when a done transition would close
+# around an unresolved gate. Shared exactly like SESSION_GATE_FIX so the
+# two edges can never drift apart in wording.
+GATED_DONE_FIX = (
+    "the task cannot be closed 'done' around its unresolved gate — "
+    "resolve the gate on the task page (Approve / Approve-with-override / "
+    "Reject), or pass gate_bypass_reason=<why> to close around it "
+    "(the bypass is audited: actor + reason land in the task history)"
+)
+
+
+class GatedDoneRefused(ValueError):
+    """A done transition was refused because the task's gate_state is
+    pending or failed and no bypass reason was supplied. ValueError is the
+    established service-layer refusal shape (design_packet.py raises it
+    when an audited approval lacks an approver); the subclass keeps
+    `except` narrow at the API/MCP edges."""
+
+
 # The task page's GET /api/tasks/{id} embeds every TaskHistory row verbatim
 # (no pagination — see history() below), so a full-fidelity repr() of a
 # changed plan_doc/plan_diagram/description dumps BOTH the entire old and
@@ -659,6 +679,30 @@ class TaskService:
         # status to tell a real transition from a no-op re-write.
         old_status = task.status
 
+        # Gated-done guard (task b43b33b8). Popped BEFORE the mutation loop:
+        # these are not columns, and popping keeps them out of the `changes`
+        # audit string. Evaluated on the TRANSITION only (a task already
+        # done, or a non-status update, passes through untouched), so the
+        # conductor's terminal close — which writes gate_state="passed"
+        # BEFORE it writes status="done" — never sees a blocking state.
+        bypass_reason = str(kwargs.pop("gate_bypass_reason", "") or "")
+        bypass_actor = str(kwargs.pop("gate_bypass_actor", "") or "")
+        prior_gate_state = (task.gate_state or "none")
+        prior_step = task.workflow_step or ""
+        gated_close = (
+            kwargs.get("status") == "done"
+            and old_status != "done"
+            and prior_gate_state in ("pending", "failed")
+        )
+        if gated_close and not bypass_reason.strip():
+            # Refuse BEFORE any write: status stays, completed_at stays
+            # unstamped, and no history row lands (the rewind_task contract:
+            # a blank reason never reaches the audit trail).
+            raise GatedDoneRefused(
+                f"gate {prior_step or 'unknown step'} is {prior_gate_state}: "
+                + GATED_DONE_FIX
+            )
+
         now = datetime.now(timezone.utc).isoformat()
         changes: list[str] = []
         # D-1: only SCALAR changed fields ride the push event — never the
@@ -736,6 +780,21 @@ class TaskService:
         )
         self._db.commit()
         self._record_history(task.id, "updated", "; ".join(changes))
+        # Audited gate bypass (task b43b33b8): update-then-record is
+        # rewind_task's order, and "owner" is its default actor for a human
+        # lever — the SPA has no identity to send. The row is
+        # gate_decide-shaped so the Trace tab renders it beside real gate
+        # decisions, never as a bare status change line.
+        if gated_close and bypass_reason.strip():
+            self._record_history(
+                task.id,
+                "gate_bypass",
+                details=(
+                    f"gate={prior_step}; gate_state={prior_gate_state}; "
+                    f"action=close_around_gate; reason={bypass_reason.strip()}"
+                ),
+                actor=(bypass_actor.strip() or "owner"),
+            )
         # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
         # it — the write already committed above, so a publish failure
         # (bus down, serialization) must never surface as a write failure.

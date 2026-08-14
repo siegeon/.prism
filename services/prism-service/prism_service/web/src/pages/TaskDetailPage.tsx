@@ -939,6 +939,12 @@ export default function TaskDetailPage() {
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
   const [gateOverride, setGateOverride] = useState(false);
+  // Gated-done bypass (task b43b33b8): a done click while the gate is
+  // pending/failed opens an inline reason row (the gate card's own
+  // controlled-textarea + disabled-confirm pattern — this SPA uses no
+  // window.prompt/confirm) instead of PATCHing straight through.
+  const [bypassPrompt, setBypassPrompt] = useState(false);
+  const [bypassReason, setBypassReason] = useState("");
   // Pre-fill a truthful suggested reason INSIDE the expanded panel body
   // (task c7ce0fc3) — a render-time effect of the panel being open, never a
   // side effect of the banner's own expand-click. Approve stays one click
@@ -1203,15 +1209,34 @@ export default function TaskDetailPage() {
     return () => { cancelled = true; };
   }, [id, project]);
 
-  const setStatus = async (status: string) => {
+  // Gated-done bypass (task b43b33b8): an optional reason rides the PATCH as
+  // gate_bypass_reason, and the response is CHECKED — fetch() does not
+  // reject on 4xx, so without the ok check the server's 422 refusal would
+  // be announced as "Moved to done.".
+  const setStatus = async (status: string, bypassReason?: string) => {
     setBusy(true);
     try {
-      await fetch(`/api/tasks/${id}?project=${project}`, {
+      const payload: Record<string, string> = { status };
+      if (bypassReason && bypassReason.trim()) {
+        payload.gate_bypass_reason = bypassReason.trim();
+      }
+      const res = await fetch(`/api/tasks/${id}?project=${project}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(payload),
       });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          detail = String(body?.detail ?? detail);
+        } catch { /* keep the status-code detail */ }
+        setNotice(`Refused: ${detail}`);
+        return;
+      }
       setNotice(`Moved to ${status}.`);
+      setBypassPrompt(false);
+      setBypassReason("");
       load();
     } catch (e) {
       setNotice(`Update failed: ${(e as Error).message ?? e}`);
@@ -1385,6 +1410,10 @@ export default function TaskDetailPage() {
   const conductorOn = (task.workflow_step ?? "") !== "" || (task.gate_state ?? "none") !== "none";
   const shortId = String(task.id ?? id).slice(0, 8);
   const gateActive = (task.gate_state ?? "none") !== "none";
+  // Gated-done bypass (task b43b33b8): a pending/failed gate blocks the
+  // one-click done — the server refuses it (TaskService.update), and the
+  // done button routes through the inline reason row below instead.
+  const gateBlocksDone = ["pending", "failed"].includes(task.gate_state ?? "none");
   const gateStep = /_gate$/.test(task.workflow_step ?? "");
   // ─ Gate-panel receipt reconciliation (task 5a6837a0) ─────────────────────
   // The panel renders TWO independent receipt lookups: the DecisionPacket row
@@ -1531,7 +1560,12 @@ export default function TaskDetailPage() {
             <button
               key={target}
               disabled={busy}
-              onClick={() => setStatus(target)}
+              onClick={() => {
+                // task b43b33b8: a done click on a gated task collects the
+                // audited bypass reason instead of PATCHing straight through.
+                if (target === "done" && gateBlocksDone) { setBypassPrompt(true); return; }
+                setStatus(target);
+              }}
               className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)] disabled:opacity-40"
             >
               → {target}
@@ -1539,6 +1573,40 @@ export default function TaskDetailPage() {
           ))}
         </div>
       </div>
+
+      {bypassPrompt && gateBlocksDone && (
+        <Card>
+          <SectionLabel>Close around the {task.gate_state} gate — audited</SectionLabel>
+          <div className="text-xs text-[color:var(--text-secondary)] mt-1 max-w-[64ch]">
+            This task's gate ({task.workflow_step || "gate"} · {task.gate_state}) has not been
+            resolved. The normal path is the gate card below (Approve / Approve with
+            override / Reject). Closing around it requires a reason, recorded with the
+            actor in the task history.
+          </div>
+          <textarea
+            value={bypassReason}
+            onChange={(e) => setBypassReason(e.target.value)}
+            placeholder="why this task is being closed around its unresolved gate…"
+            className="mt-2 w-full text-xs font-mono rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] p-2 min-h-[52px]"
+          />
+          <div className="flex gap-2 mt-2">
+            <button
+              disabled={busy || !bypassReason.trim()}
+              onClick={() => setStatus("done", bypassReason)}
+              className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--accent-rose-fg)] text-[color:var(--accent-rose-fg)] disabled:opacity-40"
+            >
+              Close done — bypass the gate (audited)
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => { setBypassPrompt(false); setBypassReason(""); }}
+              className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--border-default)] text-[color:var(--text-secondary)]"
+            >
+              Cancel
+            </button>
+          </div>
+        </Card>
+      )}
 
       {task.blocked_reason && (
         <Card>

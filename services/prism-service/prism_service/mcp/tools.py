@@ -1189,6 +1189,7 @@ TOOLS: list[Tool] = [
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
                 "session_id": {"type": "string", "description": "Driving session to auto-link when flipping status to in_progress. The conductor session gate (ef81fc15) refuses a sessionless in_progress transition; when omitted the active request session is resolved and linked automatically."},
+                "gate_bypass_reason": {"type": "string", "description": "Required to close a task 'done' around a pending/failed gate (task b43b33b8). Non-blank reason -> the close proceeds and an audited gate_bypass history row records actor + reason; omitted/blank -> the transition is refused."},
             },
             "required": ["id"],
         },
@@ -4165,7 +4166,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram", "gate_bypass_reason"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             # Authoring-time oracle validation (task b78a193c): only when
@@ -4222,7 +4223,24 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                                     "session_id) or pass session_id on this "
                                     "task_update, then retry"),
                         }))]
-            task = task_svc.update(arguments["id"], **update_kwargs)
+            # Gated-done guard (task b43b33b8): explicit branch, same shape
+            # as the session-gate refusal above, so an agent gets a
+            # structured refusal it can act on rather than an untyped
+            # error string from the catch-all.
+            from prism_service.services.task_service import (
+                GATED_DONE_FIX,
+                GatedDoneRefused,
+            )
+            try:
+                task = task_svc.update(arguments["id"], **update_kwargs)
+            except GatedDoneRefused:
+                return [TextContent(type="text", text=_json({
+                    "error": GATED_DONE_FIX,
+                    "task_id": arguments["id"],
+                    "fix": ("resolve the gate on the task page, or pass "
+                            "gate_bypass_reason=<why> to close around it "
+                            "(audited)"),
+                }))]
             if task is None:
                 return [TextContent(type="text", text=_json({"error": f"Task {arguments['id']} not found"}))]
 
