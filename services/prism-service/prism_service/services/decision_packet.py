@@ -111,6 +111,22 @@ def _screenshots(task_id: str) -> list:
     return shots
 
 
+def _subject(task, workflow_step: str) -> Optional[dict]:
+    """Task 31c345b7 AC-1/2/3: the story/plan text THIS gate is deciding on.
+    story_gate and plan_gate judge task.plan_doc (+ plan_diagram at
+    plan_gate), and unlike the other four channels this one CAN exist before
+    any code is written. None (never a fabricated stub) when both fields are
+    genuinely blank."""
+    plan_doc = getattr(task, "plan_doc", "") or ""
+    plan_diagram = getattr(task, "plan_diagram", "") or ""
+    if not plan_doc.strip() and not plan_diagram.strip():
+        return None
+    kind = "plan" if workflow_step == "plan_gate" else "story"
+    title = "Plan under judgment" if kind == "plan" else "Story under judgment"
+    return {"kind": kind, "title": title, "markdown": plan_doc,
+            "diagram": plan_diagram}
+
+
 def assemble_packet(project: str, task_id: str, task=None) -> dict:
     """AC-1/2/3: the full server-assembled packet. Resilient - a task with no
     worktree / receipts / evidence yields a well-formed empty packet, never
@@ -118,8 +134,9 @@ def assemble_packet(project: str, task_id: str, task=None) -> dict:
     ws = task_workspace.workspace_for(task_id)
     path = (ws or {}).get("path", "")
     baseline = (ws or {}).get("baseline", "")
+    workflow_step = getattr(task, "workflow_step", "")
     return {
-        "state": packet_state(getattr(task, "workflow_step", ""),
+        "state": packet_state(workflow_step,
                               getattr(task, "gate_state", ""),
                               getattr(task, "status", ""),
                               getattr(task, "gate_reason", "")),
@@ -127,4 +144,7 @@ def assemble_packet(project: str, task_id: str, task=None) -> dict:
         "commits": _commits(path, baseline),
         "receipt": _receipt(project, task_id),
         "screenshots": _screenshots(task_id),
+        # task 31c345b7: additive channel, the artifact under judgment at
+        # story_gate/plan_gate. Never renamed/removed the 5 keys above.
+        "subject": _subject(task, workflow_step),
     }

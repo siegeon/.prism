@@ -13,10 +13,13 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.41"
+PRISM_VERSION = "7.10.42"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.42: decision packet gains a subject channel at story_gate/"
+    "plan_gate - the story/plan text a gate is deciding on, when no "
+    "code-artifact channel can exist yet (task 31c345b7). "
     "v7.10.40: the design under approval IS the gate's evidence (task "
     "b7b71225). At a plan_gate awaiting design approval the gate panel's "
     "EVIDENCE section now renders the DesignPacket itself (prototype, "
