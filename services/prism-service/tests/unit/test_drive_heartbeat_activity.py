@@ -91,6 +91,54 @@ def test_fresh_heartbeat_reads_driving_past_both_stale_windows(tmp_path):
     assert act["state"] == "driving", act
 
 
+def test_fresh_heartbeat_detail_rides_the_activity_dict(tmp_path):
+    """A running step shows WHAT it is doing (task 9b6800a6): while the beat
+    is fresh, activity_for threads the driver's own progress evidence
+    (step/last_tool/elapsed_s/age_s) through as activity["heartbeat"], so the
+    board can render "driving · pytest" instead of a bare state word."""
+    from prism_service.services import drive_heartbeat
+
+    cond, task_svc, scores_db = _cond(tmp_path)
+    t = _driving_task(cond, task_svc)
+
+    beat = drive_heartbeat.record_heartbeat(scores_db, {
+        "task_id": t.id, "step": "write_failing_tests",
+        "elapsed_s": 241, "last_tool": "pytest", "work_units": 3,
+    })
+    assert beat.get("ok") is True, beat
+
+    act = cond.activity_for(task_svc.get(t.id), {"session_quiet_s": 300})
+    hb = act.get("heartbeat")
+    assert hb is not None, act
+    assert hb["last_tool"] == "pytest", hb
+    assert hb["step"] == "write_failing_tests", hb
+    assert hb["elapsed_s"] == 241, hb
+    assert isinstance(hb["age_s"], float), hb
+
+
+def test_stale_heartbeat_detail_is_dropped_from_activity(tmp_path):
+    """The passthrough is fresh-only: a beat past HEARTBEAT_WINDOW_S says
+    nothing about NOW, so activity["heartbeat"] must be None (and the state
+    must not read 'driving') -- a dead drive must not keep showing its last
+    tool as if it were current."""
+    from prism_service.services import drive_heartbeat
+
+    cond, task_svc, scores_db = _cond(tmp_path)
+    t = _driving_task(cond, task_svc)
+
+    beat = drive_heartbeat.record_heartbeat(scores_db, {
+        "task_id": t.id, "step": "write_failing_tests",
+        "elapsed_s": 241, "last_tool": "pytest", "work_units": 3,
+    })
+    assert beat.get("ok") is True, beat
+    _age_heartbeat(scores_db, t.id,
+                   seconds_ago=drive_heartbeat.HEARTBEAT_WINDOW_S + 60)
+
+    act = cond.activity_for(task_svc.get(t.id), {"session_quiet_s": 300})
+    assert act["state"] != "driving", act
+    assert act.get("heartbeat") is None, act
+
+
 def test_bare_liveness_ping_refused_by_name(tmp_path):
     """AC-5 (refusal half): a ping missing elapsed_s/last_tool/work_units is
     refused BY NAME, not silently dropped -- and never rescues activity_for."""

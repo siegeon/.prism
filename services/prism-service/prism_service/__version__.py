@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.36"
+PRISM_VERSION = "7.10.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.37: the board stops crying wolf over healthy drives. The stalled "
+    "pill no longer says 'needs you' (with no driver attached the owner has "
+    "no affordance; alarm words are reserved for gates) — it reads 'no "
+    "active driver'. activity_for threads the drive heartbeat's own "
+    "progress evidence (step/last_tool/elapsed_s/age_s) through as "
+    "activity.heartbeat while fresh, and the SDLC pill + conductor tile "
+    "render 'driving · <last_tool>' so a long step shows WHAT it is doing "
+    "[tasks 8ddbba7f, 9b6800a6]. implement.js heartbeatInstr is now "
+    "REQUIRED-first-beat + every ~5-8 tool calls (was 'optional', and no "
+    "drive ever beat once — the drive_heartbeats table had never been "
+    "created).\n"
     "v7.10.36: loading-performance round — every view loads minimally and "
     "progressively. GET /api/tasks/stranded drops from ~35s to one batched "
     "git pass behind a 5-min single-flight cache (was ~900 git subprocesses "

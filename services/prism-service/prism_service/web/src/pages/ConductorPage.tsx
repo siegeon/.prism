@@ -39,10 +39,13 @@ type ManagedTask = {
 // (owner 2026-07-21). Mirrors ACTIVITY_META in conductor/SdlcProgress.
 const ACT_TILE: Record<string, { label: string; tone: PillTone }> = {
   working: { label: "working", tone: "teal" },
+  driving: { label: "driving", tone: "teal" },  // heartbeat-attributed mid-step liveness
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
   adrift: { label: "driver active", tone: "teal" },
-  stalled: { label: "stalled · needs you", tone: "rose" },
+  // Never "needs you": with no driver attached the owner has nothing to
+  // click, the fix is relaunching the drive. Owner asks live at gates only.
+  stalled: { label: "no active driver", tone: "rose" },
   done: { label: "done", tone: "emerald" },
   blocked: { label: "blocked", tone: "rose" },
   pending: { label: "pending", tone: "amber" },
@@ -166,7 +169,7 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   // no boundary for most of it, and excluding it made a BUILDING task render as
   // "last worked by" with a dead grey tick (owner 2026-07-21). Only `stalled`
   // (nothing driving it) loses the live treatment.
-  const actWorking = actState === "working" || actState === "adrift";
+  const actWorking = actState === "working" || actState === "adrift" || actState === "driving";
   const liveMotionS = task.activity?.task_motion_s != null ? task.activity.task_motion_s + sinceFetchS : null;
   const idle = fmtIdle(liveMotionS);
   const kids = `${task.phase_progress?.children_done ?? 0}/${task.phase_progress?.children_total ?? 0}`;
@@ -175,9 +178,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const qTotal = task.phase_progress?.children_total ?? 0;
   const qDone = task.phase_progress?.children_done ?? 0;
   const qPending = Math.max(0, qTotal - qDone);
+  const hb = task.activity?.heartbeat;
   const actLabel =
     actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
-    : actState === "stalled" ? `stalled · needs you${idle ? ` · idle ${idle}` : ""}`
+    : actState === "driving" && hb?.last_tool ? `driving · ${hb.last_tool}`
+    : actState === "stalled" ? `no active driver${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
   const gate = task.gate_state ?? "none";

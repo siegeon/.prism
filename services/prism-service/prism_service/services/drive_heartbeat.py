@@ -108,6 +108,37 @@ def record_heartbeat(scores_db: str, row: dict) -> dict:
     return {"ok": True, "task_id": task_id, "last_progress_at": progress_at}
 
 
+def latest(scores_db: str, task_id: str):
+    """The full recorded heartbeat row for THIS task_id as a plain dict
+    (step/elapsed_s/last_tool/work_units/last_progress_at/recorded_at) plus
+    a computed ``age_s`` since last_progress_at, or None when no accepted
+    heartbeat exists. Strictly task-scoped like heartbeat_age_s -- the
+    consumer half of "a running step shows what it is doing": activity_for
+    threads this through so the board can render the driver's own progress
+    evidence, not just the bare 'driving' state.
+    """
+    if not task_id:
+        return None
+    conn = _connect(scores_db)
+    try:
+        r = conn.execute(
+            "SELECT step, elapsed_s, last_tool, work_units, "
+            "last_progress_at, recorded_at "
+            "FROM drive_heartbeats WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if r is None or not r["last_progress_at"]:
+        return None
+    ts = datetime.fromisoformat(r["last_progress_at"])
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    row = {k: r[k] for k in r.keys()}
+    row["age_s"] = (datetime.now(timezone.utc) - ts).total_seconds()
+    return row
+
+
 def heartbeat_age_s(scores_db: str, task_id: str):
     """Seconds since the recorded heartbeat's last_progress_at for THIS
     task_id, or None when no (accepted) heartbeat has been recorded for it
