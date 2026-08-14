@@ -974,21 +974,29 @@ export default function TaskDetailPage() {
     prevStatus.current = taskStatusValue;
   }, [taskStatusValue]);
 
-  const load = useCallback(async () => {
+  // Two-phase load (owner 2026-08-13: "clicking on a task still does not
+  // instant load"): scope=core is sqlite+stat only and paints the page in
+  // well under a second; scope=full carries the transcript-parsed panels
+  // (spend, timeline, per-turn/step tokens, phase_progress/activity) whose
+  // in-process caches are cold after every daemon bounce (~30s first hit).
+  const load = useCallback(async (scope: "core" | "full" = "full") => {
     if (!id) return;
     try {
       const d = await api.get<{ task: Task; history: HistoryRow[]; sessions?: SessionRow[]; phase_progress?: PhaseProgress | null; activity?: Activity | null; timeline?: Timeline | null; has_prototype?: boolean; spend?: SpendData | null; step_tokens?: Record<string, number>; mirror?: TaskMirror | null; mirrors?: TaskMirror[] }>(
-        `/api/tasks/${id}?project=${project}`,
+        `/api/tasks/${id}?project=${project}${scope === "core" ? "&scope=core" : ""}`,
       );
       // phase_progress + activity + has_prototype + spend + step_tokens +
       // mirror(s) ride at the TOP LEVEL of the response (not nested in task) —
       // merge onto the task so the SDLC bar, the honest work-state pill, the
       // prototype iframe, the Spend panel, the StepRail's per-step tokens,
       // and the linked-issue block all read them off task.*.
-      setTask(d.task ? { ...d.task, phase_progress: d.phase_progress ?? d.task.phase_progress ?? null, activity: d.activity ?? d.task.activity ?? null, has_prototype: d.has_prototype ?? false, spend: d.spend ?? d.task.spend ?? null, step_tokens: d.step_tokens ?? d.task.step_tokens ?? {}, mirror: d.mirror ?? d.task.mirror ?? null, mirrors: d.mirrors ?? d.task.mirrors ?? [] } : d.task);
+      // Prev-fallback on the heavy fields: a scope=core response omits them,
+      // and clobbering already-loaded panels back to null would flash the
+      // page empty on every core refresh.
+      setTask((prev) => d.task ? { ...d.task, phase_progress: d.phase_progress ?? prev?.phase_progress ?? null, activity: d.activity ?? prev?.activity ?? null, has_prototype: d.has_prototype ?? prev?.has_prototype ?? false, spend: d.spend ?? prev?.spend ?? null, step_tokens: d.step_tokens ?? prev?.step_tokens ?? {}, mirror: d.mirror ?? d.task.mirror ?? null, mirrors: d.mirrors ?? d.task.mirrors ?? [] } : d.task);
       setHistory(d.history ?? []);
       setSessions(d.sessions ?? []);
-      setTimeline(d.timeline ?? null);
+      setTimeline((prev) => d.timeline ?? prev ?? null);
       setError(null);
       // Children aren't on the detail payload — derive them from the task
       // list, scoped server-side to THIS epic's direct children and
@@ -1008,7 +1016,9 @@ export default function TaskDetailPage() {
     }
   }, [id, project]);
 
-  useEffect(() => { load(); }, [load]);
+  // Paint from core immediately, then let the transcript-heavy full payload
+  // land behind it — never make the first paint wait on a cold spend parse.
+  useEffect(() => { (async () => { await load("core"); await load("full"); })(); }, [load]);
 
   // Real-time push (task 2d480b08): subscribe to THIS task's /sse/tasks
   // stream and PATCH local state from the pushed event's `fields` (D-4) so

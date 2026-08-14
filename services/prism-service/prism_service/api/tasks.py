@@ -686,7 +686,16 @@ def _all_mirrors_index(principal: Principal) -> dict[str, list[dict]]:
 
 @router.get("/{task_id}")
 def get_task(task_id: str, project: str = Query("default"),
+             scope: str = Query("full"),
              principal: Principal = Depends(current_principal)) -> dict:
+    """Task-detail wrapper. ``scope=core`` returns only the cheap fields
+    (sqlite + file-stat reads: task/history/sessions/mirrors/phase_progress/
+    activity/prototype) and SKIPS every transcript-parsing attach (turn
+    tokens, step tokens, spend, timeline). The transcript caches are
+    in-process and empty after every daemon bounce, so the first full
+    assembly for a task with big linked sessions costs ~30s cold — the SPA
+    paints from core instantly and fetches scope=full right behind it
+    (owner 2026-08-13: "clicking on a task still does not instant load")."""
     svc = _svc(project)
     t = svc.get(task_id)
     if not t:
@@ -727,38 +736,48 @@ def get_task(task_id: str, project: str = Query("default"),
         "mirrors": mirrors,
         "mirror": mirrors[0] if mirrors else None,
     }
-    # Attribute per-turn token spend (output_tokens bucketed into each turn's
-    # (prev, this] wall-clock window) onto the history rows. Best-effort.
-    _attach_turn_tokens(out["history"], out["sessions"], project)
-    # Per-step token totals for the StepRail's closed-step rows, windowed to
-    # each step's own [entry, exit) span (never the row-summing shortcut
-    # above, which misattributes a step-entry row's preceding idle gap).
-    try:
-        out["step_tokens"] = _step_token_totals(out["history"], out["sessions"], project)
-    except Exception:
-        out["step_tokens"] = {}
-    # Honest per-field, per-turn-model dollar spend, split main-vs-background
-    # (SpendPanel on the task-detail page). Best-effort.
-    try:
-        _attach_spend(out, out["sessions"], project)
-    except Exception:
-        pass
-    # Way 1 — typed activity Gantt (real session lanes + gate markers).
-    out["timeline"] = _build_timeline(out["history"], out["sessions"])
+    if scope != "core":
+        # Attribute per-turn token spend (output_tokens bucketed into each
+        # turn's (prev, this] wall-clock window) onto the history rows.
+        # Best-effort. Everything in this block parses linked-session
+        # transcript JSONL and is what makes the cold assembly ~30s.
+        _attach_turn_tokens(out["history"], out["sessions"], project)
+        # Per-step token totals for the StepRail's closed-step rows, windowed
+        # to each step's own [entry, exit) span (never the row-summing
+        # shortcut above, which misattributes a step-entry row's preceding
+        # idle gap).
+        try:
+            out["step_tokens"] = _step_token_totals(out["history"], out["sessions"], project)
+        except Exception:
+            out["step_tokens"] = {}
+        # Honest per-field, per-turn-model dollar spend, split
+        # main-vs-background (SpendPanel on the task-detail page).
+        # Best-effort.
+        try:
+            _attach_spend(out, out["sessions"], project)
+        except Exception:
+            pass
+        # Way 1 — typed activity Gantt (real session lanes + gate markers).
+        out["timeline"] = _build_timeline(out["history"], out["sessions"])
     # phase_progress (a5e0d9f5): the animated SDLC bar in the detail header
     # reads the blended current-step fill. Best-effort — never break the
-    # detail route if conductor is unavailable.
-    try:
-        cond = get_project(project).conductor_svc
-        if cond is not None and hasattr(cond, "phase_progress"):
-            pp = cond.phase_progress(task_id)
-            out["phase_progress"] = pp
-            # Honest work state (working/adrift/stalled/…) rides the detail
-            # route alongside phase_progress so the header pill can't lie.
-            if hasattr(cond, "activity_for"):
-                out["activity"] = cond.activity_for(t, pp)
-    except Exception:
-        pass
+    # detail route if conductor is unavailable. NOT in scope=core: it reads
+    # live transcript tokens (live_tokens_for_session/tokens_in_window), the
+    # same cold-parse the other heavy attaches pay; the pill falls back to
+    # the raw status for the moment until scope=full lands.
+    if scope != "core":
+        try:
+            cond = get_project(project).conductor_svc
+            if cond is not None and hasattr(cond, "phase_progress"):
+                pp = cond.phase_progress(task_id)
+                out["phase_progress"] = pp
+                # Honest work state (working/adrift/stalled/…) rides the
+                # detail route alongside phase_progress so the header pill
+                # can't lie.
+                if hasattr(cond, "activity_for"):
+                    out["activity"] = cond.activity_for(t, pp)
+        except Exception:
+            pass
     # has_prototype: a clickable MOCK prototype HTML the /prototype workflow
     # generated for this task, served in-app (see get_task_prototype). Top-level
     # boolean (like phase_progress) so the detail page can show/hide the iframe
