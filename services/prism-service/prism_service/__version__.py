@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.41"
+PRISM_VERSION = "7.10.42"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.42: task timeline actor chips distinguish machine gate decisions "
+    "(conductor-adjudicator etc, resolved via actor_identity.kind) from "
+    "human approvals at glance level, plus the gate_decide rubric/receipt "
+    "gist surfaces in the header row instead of only behind expand (task "
+    "934af569). "
     "v7.10.40: the design under approval IS the gate's evidence (task "
     "b7b71225). At a plan_gate awaiting design approval the gate panel's "
     "EVIDENCE section now renders the DesignPacket itself (prototype, "
