@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.40"
+PRISM_VERSION = "7.10.41"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4381,9 +4381,16 @@ PRISM_VERSION_NOTES += (
     "consume in place of their own private timers — five independent "
     "/api/jobs polls collapse to one."
 )
-
-
-
-
-
-
+PRISM_VERSION_NOTES += (
+    " v7.10.41: AUTOMATION-PROFILE CLEAN JSON [task 01ec3894]. handle_tool "
+    "(mcp/tools.py) now accepts tool_profile (default interactive) and "
+    "skips _maybe_augment_with_nudge entirely for tool_profile=automation "
+    "(and its hooks_api alias) via the new _is_automation_profile helper, "
+    "checked BEFORE any consolidation_candidates read/write so an "
+    "automation call never consumes the human nudge window. server.py's "
+    "call_tool threads ctx.tool_profile into handle_tool at the real "
+    "production call site. interactive/all callers are unaffected; fixes "
+    "the shipped .claude/hooks/prism-sync.py SessionStart hook crashing "
+    "with AttributeError when the PRISM_REFLECTION_PENDING banner broke "
+    "its json.loads()."
+)

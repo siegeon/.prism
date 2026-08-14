@@ -227,7 +227,10 @@ async def call_tool(name: str, arguments: dict):
             "message": f"Project '{pid}' created. Connect with ?project={pid}",
         }))])
 
-    result = await handle_tool(name, arguments, project_id=ctx.project_id)
+    result = await handle_tool(
+        name, arguments, project_id=ctx.project_id,
+        tool_profile=ctx.tool_profile,
+    )
     # Normalize the success path to a CallToolResult so a DIRECT call_tool()
     # caller always gets a consistent shape (the SDK transport already wraps a
     # bare content list; existing consumers are shape-agnostic).

@@ -3016,10 +3016,26 @@ _NO_AUGMENT_TOOLS: frozenset[str] = frozenset({
 })
 
 
-async def handle_tool(name: str, arguments: dict, *, project_id: str = "default") -> list[TextContent]:
+def _is_automation_profile(tool_profile: str | None) -> bool:
+    """True when the caller connected with tool_profile=automation (or its
+    hooks_api alias, see TOOL_PROFILE_ALIASES). Automation callers (e.g. the
+    shipped .claude/hooks/prism-sync.py SessionStart hook) need
+    json.loads()-able output and must never see the PRISM_REFLECTION_PENDING
+    prose banner."""
+    key = (tool_profile or "interactive").strip().lower()
+    return TOOL_PROFILE_ALIASES.get(key, "interactive") == "automation"
+
+
+async def handle_tool(
+    name: str, arguments: dict, *, project_id: str = "default",
+    tool_profile: str = "interactive",
+) -> list[TextContent]:
     """Outer MCP entry point. Dispatches to :func:`_dispatch_tool`, then
     lets :func:`_maybe_augment_with_nudge` prepend a pending-reflection
-    header when appropriate (LL-09).
+    header when appropriate (LL-09) — skipped entirely for
+    tool_profile=automation (checked BEFORE any consolidation_candidates
+    read/write, so an automation call never consumes the human nudge
+    window).
 
     All real work runs in the default thread pool — every dispatch arm
     does sync sqlite I/O, so executing them on uvicorn's event loop
@@ -3030,7 +3046,7 @@ async def handle_tool(name: str, arguments: dict, *, project_id: str = "default"
     result = await _aio.to_thread(
         _dispatch_tool, name, arguments, project_id=project_id,
     )
-    if name in _NO_AUGMENT_TOOLS:
+    if name in _NO_AUGMENT_TOOLS or _is_automation_profile(tool_profile):
         return result
     try:
         return await _aio.to_thread(
