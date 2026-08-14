@@ -14,10 +14,16 @@ type Packet = {
   };
   commits: { sha: string; subject: string }[];
   receipt: { adapter: string; passed: boolean; status: string; ended_at: string; reason: string } | null;
-  screenshots: { name: string; url: string }[];
+  // task 72551ef0: each shot carries its capture phase, classified
+  // server-side, so the panel can lead with the artifact THIS gate is
+  // deciding on without re-deriving phase from the filename client-side.
+  screenshots: { name: string; url: string; phase: "before" | "after" | "other" }[];
   // task 31c345b7: the story/plan text THIS gate is deciding on. Only
   // non-null at story_gate/plan_gate — post-code gates keep None here.
   subject: { kind: string; title: string; markdown: string; diagram: string } | null;
+  // task 72551ef0: echo of task.proof_type ("" when unset) — scopes the
+  // demo-red explainer line without a new prop.
+  proof_type: string;
 };
 
 // AC-5: card state -> label + tone, mapped onto the existing Hermes accent vars.
@@ -28,6 +34,21 @@ const TONE: Record<Packet["state"], { label: string; bg: string; fg: string; rin
   waived:    { label: "Waived",    bg: "--accent-amber-bg", fg: "--text-muted",      ring: "--midground-base" },
   done:      { label: "Done",      bg: "--accent-sage-bg",  fg: "--accent-sage-fg",  ring: "--accent-sage-ring" },
 };
+
+// task 72551ef0: which screenshot LEADS the Visual evidence Row, and which
+// collapse under History, keyed on the existing `step` prop — red_gate
+// leads with the recorded BEFORE artifact, green_gate leads with AFTER;
+// any other step (story_gate/plan_gate/no step) returns no lead, so the
+// Row falls back to today's flat, unscoped render (epic stop_if: no
+// change to non-red/green gates).
+type LeadRest = { lead: Packet["screenshots"][number] | null; rest: Packet["screenshots"] };
+
+function leadAndRest(shots: Packet["screenshots"], step?: string): LeadRest {
+  const leadPhase = step === "red_gate" ? "before" : step === "green_gate" ? "after" : null;
+  if (!leadPhase) return { lead: null, rest: shots };
+  const lead = shots.find((s) => s.phase === leadPhase) ?? null;
+  return { lead, rest: lead ? shots.filter((s) => s !== lead) : shots };
+}
 
 function Row({ icon, title, note, summary, empty, children }: {
   icon: string; title: string; note?: string; summary: string; empty: boolean; children?: React.ReactNode;
@@ -85,6 +106,11 @@ export default function DecisionPacket({ taskId, project, state, step, latestRec
   // The tree the latest receipt was measured at: preferred from the panel's
   // receipt context, else the packet's own head commit.
   const receiptSha = latestReceipt?.tree_sha || pkt.commits[0]?.sha || "";
+  // task 72551ef0: the Visual evidence Row's lead artifact + History
+  // remainder for THIS gate step, and the demo-red explainer's guard —
+  // BOTH red_gate AND a demo ticket AND a present lead (before) artifact.
+  const { lead, rest } = leadAndRest(pkt.screenshots, step);
+  const showDemoRedLine = step === "red_gate" && pkt.proof_type === "demo" && !!lead;
 
   return (
     <div
@@ -169,12 +195,43 @@ export default function DecisionPacket({ taskId, project, state, step, latestRec
         {/* Open evidence IN-APP (owner: a screenshot must open in the viewer,
             not navigate the browser to the raw .png). Reuse the shared
             EvidenceGallery lightbox. */}
-        <EvidenceGallery
-          thumb="sm"
-          items={pkt.screenshots.map((s) => ({
-            url: s.url, name: s.name, kind: "image" as const,
-          }))}
-        />
+        {lead ? (
+          <>
+            {/* task 72551ef0, absorbs sibling 6fe2fec3: a demo ticket's red
+                state IS this before artifact, not a failing test suite —
+                said in plain language, only when both are true. */}
+            {showDemoRedLine && (
+              <div className={mono + " mb-2"}>
+                This is the recorded BEFORE artifact — for a demo ticket the
+                red state below IS this screenshot, not a failing test suite.
+              </div>
+            )}
+            <EvidenceGallery
+              thumb="sm"
+              items={[{ url: lead.url, name: lead.name, kind: "image" as const }]}
+            />
+            {rest.length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[11px] text-[color:var(--text-muted)]">
+                  History ({rest.length})
+                </summary>
+                <div className="mt-2">
+                  <EvidenceGallery
+                    thumb="sm"
+                    items={rest.map((s) => ({ url: s.url, name: s.name, kind: "image" as const }))}
+                  />
+                </div>
+              </details>
+            )}
+          </>
+        ) : (
+          <EvidenceGallery
+            thumb="sm"
+            items={pkt.screenshots.map((s) => ({
+              url: s.url, name: s.name, kind: "image" as const,
+            }))}
+          />
+        )}
       </Row>
     </div>
   );

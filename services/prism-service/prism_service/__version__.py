@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.42"
+PRISM_VERSION = "7.10.43"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.43: each gate shows its own evidence (task 72551ef0). The "
+    "Decision packet's Visual evidence Row is re-scoped by the existing "
+    "step prop instead of dumping the same flat pile at every gate: "
+    "red_gate leads with the recorded BEFORE screenshot expanded, "
+    "green_gate leads with AFTER, and everything else collapses under a "
+    "labeled History disclosure - still one click away, never removed. "
+    "story_gate/plan_gate/other steps are unchanged. _screenshots() now "
+    "tags each file with a server-classified phase (before/after/other, "
+    "never dropped); assemble_packet echoes task.proof_type additively. "
+    "Absorbs sibling 6fe2fec3: at red_gate, a demo ticket with a present "
+    "before artifact gets one plain-language line saying the red state IS "
+    "that screenshot, not a failing test suite. No new Row added. "
     "v7.10.42: decision packet gains a subject channel at story_gate/"
     "plan_gate - the story/plan text a gate is deciding on, when no "
     "code-artifact channel can exist yet (task 31c345b7). "

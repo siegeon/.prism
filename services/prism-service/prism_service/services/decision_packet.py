@@ -12,6 +12,7 @@ build it without editing its own judge.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Optional
 
@@ -98,14 +99,36 @@ def _receipt(project: str, task_id: str) -> Optional[dict]:
             "reason": str(getattr(r, "reason", ""))[:300]}
 
 
+def _classify_phase(name: str) -> str:
+    """Task 72551ef0: which capture phase a filename names, from its own
+    tokens. A filename-level heuristic - imprecise by nature, since a name
+    can describe a FIX or an APPROVE rather than a capture phase (e.g.
+    'remote_landed_on_default_before_fix.png') - so 'other' is the safe
+    default for anything that does not clearly say before/after, and a
+    misclassified file is still fully reachable (nothing is ever dropped;
+    phase only decides whether a file LEADS the panel or defers to
+    History)."""
+    stem = name.rsplit(".", 1)[0].lower()
+    tokens = re.split(r"[_\-.\s]+", stem)
+    if "before" in tokens:
+        return "before"
+    if "after" in tokens:
+        return "after"
+    return "other"
+
+
 def _screenshots(task_id: str) -> list:
-    """Evidence images for the task, as servable /evidence urls."""
+    """Evidence images for the task, as servable /evidence urls, each
+    tagged with its capture 'phase' (task 72551ef0: before/after/other) so
+    the gate panel can lead with the artifact this gate is deciding on
+    without dropping any file or re-deriving phase client-side."""
     shots = []
     try:
         for p in sorted(evidence_dir(task_id).glob("*")):
             if p.is_file() and p.suffix.lower() in _IMG:
                 shots.append({"name": p.name,
-                              "url": f"/api/tasks/{task_id}/evidence/{p.name}"})
+                              "url": f"/api/tasks/{task_id}/evidence/{p.name}",
+                              "phase": _classify_phase(p.name)})
     except Exception:
         pass
     return shots
@@ -147,4 +170,7 @@ def assemble_packet(project: str, task_id: str, task=None) -> dict:
         # task 31c345b7: additive channel, the artifact under judgment at
         # story_gate/plan_gate. Never renamed/removed the 5 keys above.
         "subject": _subject(task, workflow_step),
+        # task 72551ef0: additive echo so the client can scope the demo-red
+        # explainer WITHOUT a new prop - "" (never fabricated) when unset.
+        "proof_type": str(getattr(task, "proof_type", "") or ""),
     }
