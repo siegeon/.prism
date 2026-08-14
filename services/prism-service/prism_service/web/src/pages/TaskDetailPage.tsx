@@ -179,6 +179,16 @@ type HistoryRow = {
   details?: string;
   timestamp?: string;
   turn_tokens?: number;
+  // Server-resolved identity behind `actor` (api/tasks.py:712-724,
+  // actor_service.py) — additive alongside the raw string. kind is
+  // "machine" | "human" | "agent" | "unknown" (models/actor.py:15-22).
+  actor_identity?: {
+    id?: string;
+    kind?: string;
+    display_name?: string;
+    user_id?: string;
+    external_ref?: string;
+  };
 };
 
 type SessionRow = {
@@ -373,6 +383,49 @@ function TonePill({ tone, children }: { tone: PillTone; children: React.ReactNod
   );
 }
 
+// Actor identity chip: a machine seat (conductor-adjudicator etc, resolved
+// server-side against actor_service.MACHINE_SEATS) renders visibly
+// differently from a human approval at GLANCE level — a gate_decide row
+// used to print the raw actor string as opaque mono text with no cue who
+// (or what) decided it (task 934af569). Branches on actor_identity.kind,
+// never on the raw actor string, so a newly added machine seat is picked
+// up for free without a client-side edit.
+function ActorIdentityChip({ actor, identity }: { actor?: string; identity?: HistoryRow["actor_identity"] }) {
+  if (!actor) return null;
+  const kind = identity?.kind;
+  const label = identity?.display_name || actor;
+  if (kind === "machine") {
+    return (
+      <span
+        className="text-2xs font-mono px-1.5 py-0.5 rounded uppercase tracking-wider"
+        style={{
+          background: "var(--accent-violet-bg)",
+          color: "var(--accent-violet-fg)",
+          boxShadow: "inset 0 0 0 1px var(--accent-violet-ring)",
+        }}
+        title="machine seat"
+      >
+        machine · {label}
+      </span>
+    );
+  }
+  if (kind === "human") {
+    return <span className="text-2xs opacity-60 font-mono">{label}</span>;
+  }
+  // agent / unknown / unresolved — deliberately distinct from BOTH the
+  // machine tone and the plain human text, so it never gets mistaken for
+  // either (AC-4: nothing may silently collapse into "looks machine").
+  return (
+    <span
+      className="text-2xs font-mono px-1.5 py-0.5 rounded opacity-70"
+      style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+      title="unresolved actor identity"
+    >
+      {label}
+    </span>
+  );
+}
+
 function StateChip({ children, tone }: { children: React.ReactNode; tone?: PillTone }) {
   return (
     <code
@@ -414,7 +467,15 @@ function TimelineRow({ row, prev, isFirst }: { row: HistoryRow; prev?: HistoryRo
           <span className="font-mono text-[12px] opacity-80">{clockOf(row.timestamp)}</span>
           {isFirst && <span className="font-mono text-2xs opacity-40">{dayOf(row.timestamp)}</span>}
           <TonePill tone={tone}>{(row.action ?? "—").replace(/_/g, " ")}</TonePill>
-          {row.actor ? <span className="text-2xs opacity-60 font-mono">{row.actor}</span> : null}
+          <ActorIdentityChip actor={row.actor} identity={row.actor_identity} />
+          {row.action === "gate_decide" && summary && (
+            <span
+              className="text-2xs opacity-70 truncate max-w-[240px]"
+              title={summary}
+            >
+              {oneLine(summary, 64)}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {tokens > 0 && (

@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.42"
+PRISM_VERSION = "7.10.43"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.43: task timeline actor chips distinguish machine gate decisions "
+    "(conductor-adjudicator etc, resolved via actor_identity.kind) from "
+    "human approvals at glance level, plus the gate_decide rubric/receipt "
+    "gist surfaces in the header row instead of only behind expand (task "
+    "934af569). "
     "v7.10.42: decision packet gains a subject channel at story_gate/"
     "plan_gate - the story/plan text a gate is deciding on, when no "
     "code-artifact channel can exist yet (task 31c345b7). "
