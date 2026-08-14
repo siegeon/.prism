@@ -9,6 +9,7 @@ import { EntityChip } from "@/components/EntityChip";
 import { domainTone } from "@/lib/domainTone";
 import PlanView, { parseAc, gateEvidenceLines } from "@/components/plan/PlanView";
 import DecisionPacket from "@/components/plan/DecisionPacket";
+import DesignPacket from "@/components/plan/DesignPacket";
 import { stepLabel } from "@/lib/workflowChips";
 import Markdown from "@/components/Markdown";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
@@ -1686,10 +1687,40 @@ export default function TaskDetailPage() {
                     <ProofShots text={task.completion_proof} className="" />
                   </div>
                 )}
+                {/* THE DESIGN UNDER APPROVAL IS THE EVIDENCE (task b7b71225,
+                    owner 2026-08-14: "fix the UI so that the design is in the
+                    evidence package... its confusing where to do [the
+                    review]"). At a design-approval gate the implementation
+                    DecisionPacket is four rows of "none" - nothing has been
+                    built yet - while the thing actually being approved sat in
+                    PlanView's design tab below the fold. So here the packet
+                    the banner points at IS the design packet; its approval
+                    footer is hidden because this panel's own decision controls
+                    are the single affordance (task 76df7520). */}
+                {isAwaitingDesignApproval && (
+                  <div className="mb-4">
+                    <DesignPacket
+                      taskId={id ?? ""}
+                      project={project}
+                      prototypeSrc={task.has_prototype
+                        ? `/api/tasks/${id}/prototype?project=${encodeURIComponent(project)}`
+                        : undefined}
+                      hideApproval
+                    />
+                    <div className="mt-2 text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                      implementation evidence (diff, commits, oracle receipts, screenshots) does not exist yet
+                      at {stepLabel(task.workflow_step ?? "plan gate")} — it is assembled here at the later gates.
+                    </div>
+                  </div>
+                )}
                 {/* Server-assembled DECISION PACKET (task a1e4120f): diff vs
                     baseline + commits + oracle receipt + screenshots, all read
                     from real worktree artifacts. Leads the machine-receipt
-                    table so the reviewer sees the concrete change first. */}
+                    table so the reviewer sees the concrete change first. At a
+                    design-approval gate it yields to the DesignPacket above -
+                    the all-"none" implementation rows read as "no evidence"
+                    while the real evidence is the design (task b7b71225). */}
+                {!isAwaitingDesignApproval && (
                 <div className="mb-4">
                   <DecisionPacket taskId={id} project={project} state={task.gate_state} step={task.workflow_step}
                                   latestReceipt={testReceipt} />
@@ -1707,6 +1738,7 @@ export default function TaskDetailPage() {
                     </div>
                   )}
                 </div>
+                )}
                 <table className="w-full text-[12.5px]">
                   <thead>
                     <tr className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
