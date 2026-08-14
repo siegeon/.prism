@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.38"
+PRISM_VERSION = "7.10.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.39: prism_install no longer ships blank content for "
+    ".claude/agents/prism-reflect.md / .claude/commands/prism-reflect.md "
+    "(#214). Root cause was packaging, not the handler: a real wheel/sdist "
+    "build carried only the 8 *_hook.py assets, dropping the 2 .md files, "
+    "because neither package-data nor MANIFEST.in named assets/*.md. Fixed "
+    "package-data + MANIFEST.in to include prism_service/assets/**/*; "
+    "_load_asset now logs an ERROR with the resolved path on a read "
+    "failure instead of swallowing it silently, and _install_manifest "
+    "refuses to ship any install_files entry with blank/whitespace "
+    "content, reporting it in an additive degraded_assets list instead.\n"
     "v7.10.38: clicking a task paints instantly. GET /api/tasks/{id} gains "
     "scope=core (sqlite+stat only: task/history/sessions/mirrors/prototype) "
     "and TaskDetailPage loads core first then scope=full behind it. The "

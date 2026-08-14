@@ -10,3 +10,8 @@ recursive-include prism_service/web_dist *
 # Inference prompt templates + typing marker (mirror package-data).
 recursive-include prism_service/inference/prompts *.md
 include prism_service/py.typed
+
+# Hook scripts + prism-reflect agent/command shipped by prism_install
+# (issue #214: the sdist file-finder dropped the two .md assets because
+# no directive named this dir; mirror package-data's "assets/*").
+recursive-include prism_service/assets *
