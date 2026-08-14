@@ -375,6 +375,133 @@ def _is_shipped_on_main(repo: str, task_id: str) -> bool:
     return rc == 0 and bool(out)
 
 
+# The stranded scan is O(done-tasks x git-subprocesses) — measured 35s at 301
+# done tasks (2026-08-13), and the Dashboard used to re-fire it every 5s,
+# permanently saturating the request pool. Two defenses, both here rather than
+# in the (policy-pinned) service layer: a TTL cache keyed on the TaskService
+# INSTANCE (a WeakKeyDictionary, so each test's fresh service gets a fresh
+# cache and the long TTL can never leak state across tests), and a batched
+# recompute that replaces the per-task full-history `git log --grep` with ONE
+# `git log origin/main` pass + ONE `for-each-ref` listing.
+import threading as _threading
+import time as _time
+import weakref as _weakref
+
+_STRANDED_TTL_S = 300.0
+_stranded_cache: "_weakref.WeakKeyDictionary" = _weakref.WeakKeyDictionary()
+_stranded_lock = _threading.Lock()
+
+
+def _stranded_cache_get(svc):
+    """None when uncached — or when the service isn't weakref-able (test
+    stubs use SimpleNamespace), which simply disables caching for it."""
+    try:
+        return _stranded_cache.get(svc)
+    except TypeError:
+        return None
+
+
+def _stranded_cache_put(svc, val) -> None:
+    try:
+        _stranded_cache[svc] = val
+    except TypeError:
+        pass
+
+
+def _git_utf8(repo: str, *args: str) -> tuple[int, str]:
+    """Like _git, but decodes as UTF-8 (errors replaced) with a wider
+    timeout. _git's text=True decodes with the WINDOWS LOCALE codec, and a
+    whole-history `--format=%B` dump contains UTF-8 commit bodies — the
+    cp1252 decode raises, _git swallows it to (1, ""), and an empty
+    shipped-set silently marks EVERY done task stranded."""
+    import subprocess
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=30,
+        )
+        return p.returncode, (p.stdout or "").strip()
+    except Exception:
+        return 1, ""
+
+
+def _compute_stranded(svc, repo: str) -> dict:
+    rows: list[dict] = []
+    # ONE pass over origin/main commit messages for every [task:<id8>] trailer
+    # (squash-safe, same signal _is_shipped_on_main reads one task at a time).
+    _, log_out = _git_utf8(repo, "log", "origin/main", "--format=%B")
+    # Exactly the needle _is_shipped_on_main greps one task at a time —
+    # `[task:<id8>]`, 8 id chars (not necessarily hex) then the bracket, so a
+    # bare unbracketed substring never counts.
+    shipped = {m.group(1).lower()
+               for m in re.finditer(r"\[task:([^\]\s]{8})\]", log_out)}
+    # ONE ref listing (with ahead counts, git >= 2.41) instead of a rev-parse
+    # AND a rev-list subprocess per row — the per-row spawns measured ~70s
+    # cold at 193 stranded rows on Windows.
+    _, refs_out = _git(repo, "for-each-ref",
+                       "--format=%(refname:short) %(ahead-behind:origin/main)",
+                       "refs/heads", "refs/remotes/origin")
+    refs: set[str] = set()
+    ahead_of_main: dict[str, int] = {}
+    for ln in refs_out.splitlines():
+        parts = ln.strip().rsplit(" ", 2)
+        if not parts or not parts[0]:
+            continue
+        refs.add(parts[0])
+        if len(parts) == 3:
+            try:
+                ahead_of_main[parts[0]] = int(parts[1])
+            except ValueError:
+                pass
+    head_ahead: Optional[int] = None  # memoized — every branchless row shares HEAD
+    for t in svc.list(status="done"):
+        tid = str(getattr(t, "id", "") or "")
+        if not tid or tid[:8].lower() in shipped:
+            continue
+        # Same resolution _resolve_delivery_branch performs, minus its
+        # subprocesses: workspace_record (NOT workspace_for — that syncs the
+        # worktree per call) is a local read, and existence checks hit the
+        # prefetched ref set.
+        branch = ""
+        try:
+            from prism_service.services import task_workspace
+            ws = task_workspace.workspace_record(tid)
+            cand = str((ws or {}).get("branch") or "")
+            if cand and (cand in refs or f"origin/{cand}" in refs):
+                branch = cand
+        except Exception:
+            branch = ""
+        if branch:
+            commits_ahead = ahead_of_main.get(
+                branch, ahead_of_main.get(f"origin/{branch}"))
+            if commits_ahead is None:
+                _, count_s = _git(repo, "rev-list", "--count",
+                                  f"origin/main..{branch}")
+                try:
+                    commits_ahead = int(count_s)
+                except ValueError:
+                    commits_ahead = 0
+        else:
+            if head_ahead is None:
+                _, count_s = _git(repo, "rev-list", "--count",
+                                  "origin/main..HEAD")
+                try:
+                    head_ahead = int(count_s)
+                except ValueError:
+                    head_ahead = 0
+            commits_ahead = head_ahead
+        branch_on_origin = bool(branch) and f"origin/{branch}" in refs
+        rows.append({
+            "task_id": tid,
+            "title": str(getattr(t, "title", "") or ""),
+            "commits_ahead": commits_ahead,
+            "branch_on_origin": branch_on_origin,
+            "state": "pushed_unmerged" if branch_on_origin else "local_only",
+        })
+    return {"stranded": rows}
+
+
 @router.get("/stranded")
 def get_stranded_work(project: str = Query("default")) -> dict:
     """DONE means SHIPPED (owner 2026-07-16) -- merged and validated on
@@ -382,34 +509,34 @@ def get_stranded_work(project: str = Query("default")) -> dict:
     the ones whose [task:<id8>] trailer is not (yet) reachable on
     origin/main, so a "done" task stuck on an unmerged branch surfaces on
     the Dashboard instead of silently vanishing."""
-    rows: list[dict] = []
     repo = ""
     try:
         from prism_service.services.claude_transcripts import _project_source_path
         repo = _project_source_path(project) or ""
     except Exception:
         repo = ""
-    if repo and _git(repo, "rev-parse", "--verify", "-q", "origin/main")[0] == 0:
-        for t in _svc(project).list(status="done"):
-            tid = str(getattr(t, "id", "") or "")
-            if not tid or _is_shipped_on_main(repo, tid):
-                continue
-            branch, rev = _resolve_delivery_branch(repo, tid)
-            _, count_s = _git(repo, "rev-list", "--count", f"origin/main..{rev}")
-            try:
-                commits_ahead = int(count_s)
-            except ValueError:
-                commits_ahead = 0
-            branch_on_origin = bool(branch) and _git(
-                repo, "rev-parse", "--verify", "-q", f"origin/{branch}")[0] == 0
-            rows.append({
-                "task_id": tid,
-                "title": str(getattr(t, "title", "") or ""),
-                "commits_ahead": commits_ahead,
-                "branch_on_origin": branch_on_origin,
-                "state": "pushed_unmerged" if branch_on_origin else "local_only",
-            })
-    return {"stranded": rows}
+    svc = _svc(project)
+    if not repo or _git(repo, "rev-parse", "--verify", "-q", "origin/main")[0] != 0:
+        return {"stranded": []}
+    hit = _stranded_cache_get(svc)
+    if hit and _time.monotonic() - hit[0] < _STRANDED_TTL_S:
+        return hit[1]
+    # Single-flight: one thread recomputes; concurrent pollers get the stale
+    # copy instantly (stranded-ness only moves on merges — 5min staleness is
+    # honest for a dashboard warning panel, endless 35s stacking was not).
+    if not _stranded_lock.acquire(blocking=False):
+        if hit:
+            return hit[1]
+        _stranded_lock.acquire()
+    try:
+        hit = _stranded_cache_get(svc)
+        if hit and _time.monotonic() - hit[0] < _STRANDED_TTL_S:
+            return hit[1]
+        data = _compute_stranded(svc, repo)
+        _stranded_cache_put(svc, (_time.monotonic(), data))
+        return data
+    finally:
+        _stranded_lock.release()
 
 
 _UUID_RE = re.compile(

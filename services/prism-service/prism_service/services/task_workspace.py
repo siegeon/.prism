@@ -400,3 +400,16 @@ def workspace_for(task_id: str) -> Optional[dict]:
             pass
         return rec
     return None
+
+
+def workspace_record(task_id: str) -> Optional[dict]:
+    """The stored workspace record WITHOUT the sync side effect.
+
+    workspace_for() fast-forwards the worktree on every call (v7.10.33) —
+    correct for callers about to read the tree, ruinous for read-only sweeps
+    over many tasks (the Dashboard stranded scan calls this once per done
+    task; 193 syncs measured ~60s on Windows, 2026-08-13)."""
+    rec = _load_index().get(task_id)
+    if rec and Path(rec["path"]).exists():
+        return rec
+    return None

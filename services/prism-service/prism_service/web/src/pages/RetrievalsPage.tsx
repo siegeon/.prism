@@ -47,7 +47,15 @@ export default function RetrievalsPage() {
       .catch(() => setRows([]));
   }, [project]);
 
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  // Only poll a tab someone is looking at (Sidebar useStaleness precedent);
+  // refetch on focus so the list is current the moment it is seen.
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) load(); };
+    load();
+    const t = setInterval(tick, 5000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [load]);
 
   const rate = useCallback((search_id: number, doc_id: string, signal: "up" | "down") => {
     const params = new URLSearchParams({
