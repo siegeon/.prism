@@ -32,6 +32,7 @@ export default function DesignPacket({
   project = "default",
   prototypeSrc,
   onApprove,
+  hideApproval = false,
 }: {
   taskId: string;
   project?: string;
@@ -42,6 +43,11 @@ export default function DesignPacket({
   // approve affordance could record the ledger without ever releasing the
   // gate, which is exactly the drift this prop closes off.
   onApprove?: () => void;
+  // The gate decision panel mounts this packet as the EVIDENCE under
+  // approval (task b7b71225): there the panel's own Approve/decision controls
+  // are the single affordance, so the packet's footer must not render a
+  // second one - same forked-approve rule as onApprove above.
+  hideApproval?: boolean;
 }) {
   const [data, setData] = useState<DesignPacketData | null>(null);
 
@@ -118,7 +124,9 @@ export default function DesignPacket({
       )}
 
       {/* FR-6/FR-7: the ONLY approval affordance — an explicit owner write
-          action, never a render/browser receipt. */}
+          action, never a render/browser receipt. Hidden when the gate panel
+          mounts this packet as evidence: its decision controls own the click. */}
+      {!hideApproval && (
       <div className="rounded-md px-3 py-2.5 border border-[color:var(--border-default)] space-y-2">
         {approval.approved ? (
           <div className="text-[12px]" style={{ color: "var(--accent-sage-fg)" }}>
@@ -145,6 +153,7 @@ export default function DesignPacket({
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

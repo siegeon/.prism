@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.39"
+PRISM_VERSION = "7.10.40"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.40: the design under approval IS the gate's evidence (task "
+    "b7b71225). At a plan_gate awaiting design approval the gate panel's "
+    "EVIDENCE section now renders the DesignPacket itself (prototype, "
+    "diagram, proposed change, approval footer hidden - the panel's own "
+    "Approve stays the single affordance), and the implementation "
+    "DecisionPacket - four rows of 'none' at plan time - yields there, with "
+    "one line saying implementation evidence is assembled at later gates. "
     "v7.10.39: prism_install no longer ships blank content for "
     ".claude/agents/prism-reflect.md / .claude/commands/prism-reflect.md "
     "(#214). Root cause was packaging, not the handler: a real wheel/sdist "
