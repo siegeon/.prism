@@ -14,10 +14,15 @@ type Packet = {
   };
   commits: { sha: string; subject: string }[];
   receipt: { adapter: string; passed: boolean; status: string; ended_at: string; reason: string } | null;
-  screenshots: { name: string; url: string }[];
+  // task 72551ef0: server-classified capture phase, so the client keys off
+  // real data instead of re-guessing the filename.
+  screenshots: { name: string; url: string; phase: "before" | "after" | "other" }[];
   // task 31c345b7: the story/plan text THIS gate is deciding on. Only
   // non-null at story_gate/plan_gate — post-code gates keep None here.
   subject: { kind: string; title: string; markdown: string; diagram: string } | null;
+  // task 72551ef0/6fe2fec3: echoed additively so the demo-red explainer can
+  // key off real data, never a guess.
+  proof_type: string;
 };
 
 // AC-5: card state -> label + tone, mapped onto the existing Hermes accent vars.
@@ -55,6 +60,20 @@ function Row({ icon, title, note, summary, empty, children }: {
 
 const mono = "font-mono text-[11.5px] leading-relaxed text-[color:var(--text-secondary)]";
 
+// Task 72551ef0: the ONE artifact this gate leads with — the recorded BEFORE
+// at red_gate, the recorded AFTER at green_gate — with everything else
+// bucketed under History, instead of the same flat pile at every step.
+type LeadRest = { lead: Packet["screenshots"][number] | null; rest: Packet["screenshots"] };
+
+function leadAndRest(shots: Packet["screenshots"], step?: string): LeadRest {
+  const phase: "before" | "after" | null =
+    step === "red_gate" ? "before" : step === "green_gate" ? "after" : null;
+  if (!phase) return { lead: null, rest: shots };
+  const idx = shots.findIndex((s) => s.phase === phase);
+  if (idx === -1) return { lead: null, rest: shots };
+  return { lead: shots[idx], rest: shots.filter((_, i) => i !== idx) };
+}
+
 export default function DecisionPacket({ taskId, project, state, step, latestReceipt }: {
   taskId?: string; project?: string; state?: string; step?: string;
   // The panel's own view of the newest receipt (tree_sha/job_id from
@@ -85,6 +104,11 @@ export default function DecisionPacket({ taskId, project, state, step, latestRec
   // The tree the latest receipt was measured at: preferred from the panel's
   // receipt context, else the packet's own head commit.
   const receiptSha = latestReceipt?.tree_sha || pkt.commits[0]?.sha || "";
+  // task 72551ef0: the lead artifact for THIS gate + everything else.
+  const { lead, rest } = leadAndRest(pkt.screenshots, step);
+  // task 6fe2fec3: demo-red plain-language line — only red_gate, only
+  // proof_type=demo, and only when a BEFORE artifact actually exists.
+  const showDemoRedLine = step === "red_gate" && pkt.proof_type === "demo" && !!lead;
 
   return (
     <div
@@ -168,13 +192,38 @@ export default function DecisionPacket({ taskId, project, state, step, latestRec
            summary={`${pkt.screenshots.length}`}>
         {/* Open evidence IN-APP (owner: a screenshot must open in the viewer,
             not navigate the browser to the raw .png). Reuse the shared
-            EvidenceGallery lightbox. */}
-        <EvidenceGallery
-          thumb="sm"
-          items={pkt.screenshots.map((s) => ({
-            url: s.url, name: s.name, kind: "image" as const,
-          }))}
-        />
+            EvidenceGallery lightbox. task 72551ef0: lead with THIS gate's own
+            artifact (before at red_gate, after at green_gate); everything
+            else collapses under History. story_gate/plan_gate/other steps
+            keep the original flat render. */}
+        {lead ? (
+          <>
+            {showDemoRedLine && (
+              <p className={`${mono} mb-2`}>
+                This IS the recorded BEFORE artifact — a proof_type=demo ticket has
+                no failing test suite, so the red state you're judging is this capture.
+              </p>
+            )}
+            <EvidenceGallery thumb="sm" items={[{ url: lead.url, name: lead.name, kind: "image" as const }]} />
+            {rest.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-[11px] text-[color:var(--text-muted)] cursor-pointer select-none">
+                  History · {rest.length}
+                </summary>
+                <div className="mt-1">
+                  <EvidenceGallery thumb="sm" items={rest.map((s) => ({ url: s.url, name: s.name, kind: "image" as const }))} />
+                </div>
+              </details>
+            )}
+          </>
+        ) : (
+          <EvidenceGallery
+            thumb="sm"
+            items={pkt.screenshots.map((s) => ({
+              url: s.url, name: s.name, kind: "image" as const,
+            }))}
+          />
+        )}
       </Row>
     </div>
   );

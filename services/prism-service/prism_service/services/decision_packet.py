@@ -98,6 +98,21 @@ def _receipt(project: str, task_id: str) -> Optional[dict]:
             "reason": str(getattr(r, "reason", ""))[:300]}
 
 
+def _phase(name: str) -> str:
+    """Task 72551ef0 AC-1: classify a screenshot filename as the recorded
+    BEFORE or AFTER capture, by its trailing `_before`/`_after` token - never
+    a bare substring match, so "before_fix"/"after_approve" style names (the
+    action, not the capture phase) fall through to "other" instead of being
+    mis-scoped. A file that cannot be cleanly classified is still returned
+    (never dropped) with phase "other"."""
+    stem = name.rsplit(".", 1)[0]
+    if stem.endswith("_before"):
+        return "before"
+    if stem.endswith("_after"):
+        return "after"
+    return "other"
+
+
 def _screenshots(task_id: str) -> list:
     """Evidence images for the task, as servable /evidence urls."""
     shots = []
@@ -105,7 +120,8 @@ def _screenshots(task_id: str) -> list:
         for p in sorted(evidence_dir(task_id).glob("*")):
             if p.is_file() and p.suffix.lower() in _IMG:
                 shots.append({"name": p.name,
-                              "url": f"/api/tasks/{task_id}/evidence/{p.name}"})
+                              "url": f"/api/tasks/{task_id}/evidence/{p.name}",
+                              "phase": _phase(p.name)})
     except Exception:
         pass
     return shots
@@ -147,4 +163,7 @@ def assemble_packet(project: str, task_id: str, task=None) -> dict:
         # task 31c345b7: additive channel, the artifact under judgment at
         # story_gate/plan_gate. Never renamed/removed the 5 keys above.
         "subject": _subject(task, workflow_step),
+        # task 72551ef0/6fe2fec3: echoed additively so the client can key
+        # the demo-red explainer line off real data, not a guess.
+        "proof_type": getattr(task, "proof_type", "") or "",
     }
