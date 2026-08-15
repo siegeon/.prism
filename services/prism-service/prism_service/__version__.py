@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.44"
+PRISM_VERSION = "7.10.45"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.45: /conductor tile now gates SDLC-drive chrome (header, 10-step "
+    "timeline, driver pill, handoff) on task.claimed — True only when "
+    "conductor_work actually claimed the task (task_workspace.workspace_record "
+    "exists), so a status-flip-only in_progress task renders an honest "
+    "'not yet claimed' tile instead of fabricated drive chrome (task 2dfa94bd). "
     "v7.10.44: gate_decide persists the REAL deciding actor (caller-supplied "
     "actor, falling back to session_id) on the reject, override, epic "
     "roll-up and verifier-driven approve paths, instead of always stamping "
