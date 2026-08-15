@@ -98,6 +98,57 @@ def test_graph_returns_task_and_subtask_with_parent_of_edge(tmp_path, monkeypatc
     ), f"expected a parent_of edge {root_id}->{child_id}; got {edges!r}"
 
 
+def test_graph_dedupes_a_child_that_is_also_independently_managed(tmp_path, monkeypatch):
+    # A subtask that ALSO carries its own workflow_step/gate_state is
+    # returned by managed_tasks() a SECOND time as its own top-level
+    # entry (real board behavior: "an ENGAGED child... MUST surface").
+    # Caught live via the gamify sim: a child sim advanced through
+    # /api/conductor/advance rendered as two separate circles with the
+    # same id in the /live graph. The node LIST must carry each id once.
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.conductor_service import ConductorService
+
+    scores_db = str(tmp_path / "scores.db")
+    task_svc = TaskService(str(tmp_path / "tasks.db"), scores_db=scores_db)
+    conductor = ConductorService(scores_db, enable_engine=False, task_svc=task_svc)
+
+    root = task_svc.create(title="Root epic")
+    task_svc.update(root.id, status="in_progress", workflow_step="implement_tasks")
+    child = task_svc.create(title="Independently-managed child", parent_id=root.id)
+    # The child is ALSO independently in_progress with its own step —
+    # this is what makes managed_tasks() surface it a second time.
+    task_svc.update(child.id, status="in_progress", workflow_step="write_failing_tests")
+
+    class _Ctx:
+        pass
+
+    ctx = _Ctx()
+    ctx.conductor_svc = conductor
+    ctx.task_svc = task_svc
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from prism_service.api import work as work_api
+
+    monkeypatch.setattr(work_api, "get_project", lambda p: ctx)
+    app = FastAPI()
+    app.include_router(work_api.router, prefix="/api/work")
+    client = TestClient(app)
+
+    resp = client.get("/api/work/graph?project=gamify")
+    assert resp.status_code == 200
+    nodes = resp.json()["nodes"]
+    ids = [n["id"] for n in nodes]
+    assert ids.count(child.id) == 1, (
+        f"child {child.id} must appear exactly once even though it is "
+        f"both a subtask AND independently managed; got node ids {ids!r}")
+    edges = resp.json()["edges"]
+    assert any(
+        e.get("source") == root.id and e.get("target") == child.id
+        and e.get("kind") == "parent_of" for e in edges
+    ), f"parent_of edge must still be recorded; got {edges!r}"
+
+
 def test_graph_omits_unmanaged_projects_task(tmp_path, monkeypatch):
     # A task that never entered the conductor (no workflow_step, status
     # pending) must not appear -- managed_tasks() is the source of truth.

@@ -63,16 +63,29 @@ def work_graph(project: str = Query("default")) -> dict:
 
     nodes: list[dict] = []
     edges: list[dict] = []
+    # A child can ALSO be independently conductor-managed (its own
+    # workflow_step/gate_state set), which makes managed_tasks() return
+    # it a SECOND time as its own top-level entry (mirrors the real
+    # board: "an ENGAGED child... MUST surface", conductor_service.py's
+    # managed_tasks docstring). De-dupe by id here so the graph gets ONE
+    # node per task -- a duplicate id would confuse d3-force's link-by-id
+    # force and double-draw the circle client-side.
+    seen_node_ids: set[str] = set()
 
     roots = conductor.managed_tasks()
     for r in roots:
-        node = _task_node(
-            r["id"], r["title"], r["status"], r.get("workflow_step"),
-            r.get("gate_state"), r.get("activity"),
-        )
-        node["kind"] = "task"
-        nodes.append(node)
+        if r["id"] not in seen_node_ids:
+            node = _task_node(
+                r["id"], r["title"], r["status"], r.get("workflow_step"),
+                r.get("gate_state"), r.get("activity"),
+            )
+            node["kind"] = "task"
+            nodes.append(node)
+            seen_node_ids.add(r["id"])
         for c in r.get("subtasks") or []:
+            edges.append({"source": r["id"], "target": c["id"], "kind": "parent_of"})
+            if c["id"] in seen_node_ids:
+                continue
             child = task_svc.get(c["id"])
             if child is None:
                 continue
@@ -89,7 +102,7 @@ def work_graph(project: str = Query("default")) -> dict:
             )
             cnode["kind"] = "subtask"
             nodes.append(cnode)
-            edges.append({"source": r["id"], "target": child.id, "kind": "parent_of"})
+            seen_node_ids.add(child.id)
 
     # Sessions linked to any task/subtask node, gated to recent token
     # motion (last _SESSION_RECENCY_S) so a stale historical link doesn't
