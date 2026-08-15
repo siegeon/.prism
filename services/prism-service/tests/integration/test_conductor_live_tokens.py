@@ -97,6 +97,15 @@ def test_current_session_id_returns_real_session(tmp_path):
 # ----------------------------------------------------------------------
 
 def test_phase_progress_live_tokens_without_outcomes_row(tmp_path, monkeypatch):
+    """Task 170991cc — pinned RED. Regression commit 569e7d0 (#316, "The
+    conductor tells the truth about what it is doing") scoped the readout to
+    a per-turn windowed timeline (conductor_service.py:4551-4564) that only
+    counts transcript lines carrying a parseable "timestamp"; this fixture's
+    _write_jsonl predates that change and never grew one, so the windowed
+    reader skips every line (claude_transcripts._token_events,
+    "if ep is None: continue") and tokens_since_step silently reads 0 on any
+    in-progress task. See _write_jsonl above — the fix belongs there, not in
+    this assertion, and not in conductor_service.py/claude_transcripts.py."""
     from prism_service.services.task_service import TaskService
     from prism_service.services.conductor_service import ConductorService
     from prism_service.services import claude_transcripts as ct
