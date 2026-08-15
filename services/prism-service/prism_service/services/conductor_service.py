@@ -3155,6 +3155,15 @@ class ConductorService:
 
         gate_step_id = task.workflow_step
 
+        # ACTOR PASSTHROUGH (task 1bc13307): persist the REAL deciding actor
+        # — the caller-supplied `actor`, falling back to `session_id`, and
+        # only a literal as the last resort when neither is given. Every
+        # branch below that used to shadow `actor` with a hardcoded literal
+        # now derives it from this same helper so a machine seat
+        # (ADJUDICATOR_SEAT) or a real human identity is never discarded.
+        def _decided_by(fallback: str) -> str:
+            return actor or session_id or fallback
+
         if action == "reject":
             self._task_svc.update(
                 task_id,
@@ -3165,7 +3174,7 @@ class ConductorService:
                 task_id,
                 action="gate_decide",
                 details=f"gate={gate_step_id}; action=reject; reason={reason}",
-                actor="conductor",
+                actor=_decided_by("conductor"),
             )
             self._record_agent_run(
                 task_id, gate_step_id, session_id, model=model,
@@ -3491,11 +3500,12 @@ class ConductorService:
                         "reason": receipt_reason,
                     }
             # Manual override path — bypass the verifier entirely but
-            # tag the audit row so the override is auditable. Override is a
-            # separately-logged exception; the DISTINCT override actor is
-            # recorded in detail_bits below (the history actor stays
-            # 'manual-override' so the recovery class is greppable).
-            actor = "manual-override"
+            # tag the audit row so the override is auditable. The REAL
+            # deciding actor (caller-supplied actor/session_id) is
+            # persisted verbatim; 'manual-override' is only the fallback
+            # literal when neither is supplied (task 1bc13307 — this used
+            # to mask a real actor unconditionally).
+            actor = _decided_by("manual-override")
             detail_bits = [
                 f"gate={gate_step_id}",
                 "action=approve",
@@ -3508,7 +3518,9 @@ class ConductorService:
             # Epic roll-up satisfies the green_gate WITHOUT override and
             # WITHOUT the epic's own verifier diff — the children's proofs are
             # the proof (issue #171). The artifact tooth is skipped below.
-            actor = "conductor"
+            # The real deciding actor is persisted (task 1bc13307); 'conductor'
+            # is only the fallback when neither actor nor session_id is given.
+            actor = _decided_by("conductor")
             detail_bits = [f"gate={gate_step_id}", "action=approve",
                            "epic-rollup=pass"]
             if reason:
@@ -3589,7 +3601,10 @@ class ConductorService:
                 if verifier_payload is not None:
                     refusal["verifier"] = verifier_payload
                 return refusal
-            actor = "conductor"
+            # The real deciding actor is persisted (task 1bc13307); a machine
+            # seat (ADJUDICATOR_SEAT) or a real human identity must survive
+            # onto the history row, not collapse to the literal 'conductor'.
+            actor = _decided_by("conductor")
             detail_bits = [
                 f"gate={gate_step_id}",
                 "action=approve",
