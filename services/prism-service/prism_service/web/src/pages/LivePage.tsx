@@ -2,31 +2,39 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import { useVersion } from "@/lib/version";
 import { Page, ErrorBanner } from "@/components/ui";
 import { GraphState } from "@/live/graphState";
 import { draw } from "@/live/draw";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
 
-/** /live — "PRISM shows its work": live agent activity flowing onto a
- * node graph. Boots from GET /api/work/graph (one snapshot: managed
- * tasks + subtasks + recently-active sessions), then EventSource(
- * '/sse/work?project=') keeps it live: agent.run adds/updates session
- * nodes, tokens.turn spawns a packet dot travelling session -> task
- * (speed proportional to tok_s), drive.heartbeat pulses the task node,
- * task.changed updates status/step/gate labels. Skeleton visuals only
- * (see live/draw.ts) — a later pass restyles it; the motion is real. */
+/** /live — "PRISM shows its work": every running task is a live card-node
+ * on a deterministic circuit-board canvas (design directive in
+ * E:\gamify-lab\DESIGN_DIRECTIVE.md). Boots from GET /api/work/graph, then
+ * EventSource('/sse/work?project=') keeps it live: agent.run adds/updates
+ * session cards with a wire connect, tokens.turn ghosts the Tokens row and
+ * rides a packet along the wire, drive.heartbeat pulses the task card and
+ * refills its Step capacity bar, task.changed ghosts the Step value and
+ * updates status/gate. All rendering lives in src/live/* (layout, cards,
+ * wires, packets, hud, idle) — this page owns only the DOM canvas, the two
+ * data subscriptions, pan/zoom input, and the rAF loop. */
 export default function LivePage() {
   const [project] = useProject();
   const navigate = useNavigate();
+  const version = useVersion();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GraphState>(new GraphState());
   const [error, setError] = useState<string | null>(null);
-  const [booted, setBooted] = useState(false);
+
+  // Pan/zoom drag bookkeeping (mutable ref — no need to re-render React
+  // on every mousemove, the canvas repaints itself via rAF).
+  const dragRef = useRef<{ dragging: boolean; moved: boolean; lastX: number; lastY: number }>(
+    { dragging: false, moved: false, lastX: 0, lastY: 0 },
+  );
 
   // Boot snapshot.
   useEffect(() => {
     let cancel = false;
-    setBooted(false);
     setError(null);
     api
       .get<GraphSnapshot>(`/api/work/graph?project=${encodeURIComponent(project)}`)
@@ -36,7 +44,6 @@ export default function LivePage() {
         const w = canvas?.clientWidth || 800;
         const h = canvas?.clientHeight || 600;
         stateRef.current.bootstrap(snap, w, h);
-        setBooted(true);
       })
       .catch((e) => { if (!cancel) setError(e instanceof Error ? e.message : String(e)); });
     return () => { cancel = true; };
@@ -56,48 +63,101 @@ export default function LivePage() {
     return () => es.close();
   }, [project]);
 
-  // Canvas sizing.
+  // Canvas sizing — crisp at devicePixelRatio, backing store scaled, CSS
+  // size unscaled, so lines/text stay sharp on hi-DPI displays.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ro = new ResizeObserver(() => {
+      const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth, h = canvas.clientHeight;
-      canvas.width = w; canvas.height = h;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      const ctx = canvas.getContext("2d");
+      ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
       stateRef.current.resize(w, h);
     });
     ro.observe(canvas);
     return () => ro.disconnect();
   }, []);
 
-  // rAF draw loop — independent of the d3-force tick so packet motion
-  // stays smooth even between simulation ticks.
+  // rAF draw loop.
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     let raf = 0;
     let last = performance.now();
+    const versionLabel = version?.version || "";
     const frame = (now: number) => {
       const dt = now - last;
       last = now;
-      stateRef.current.step(dt);
-      draw(ctx, stateRef.current, now);
+      stateRef.current.step(dt, now);
+      draw(ctx, stateRef.current, now, versionLabel);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [booted]);
+  }, [version?.version]);
 
   useEffect(() => () => stateRef.current.destroy(), []);
 
-  const onClick = useCallback((ev: React.MouseEvent<HTMLCanvasElement>) => {
+  // Pan: drag empty space. Click on a card: first click selects, a
+  // second click on an already-selected card navigates to its href.
+  const onPointerDown = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
+    dragRef.current = { dragging: true, moved: false, lastX: ev.clientX, lastY: ev.clientY };
+  }, []);
+
+  const onPointerMove = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const d = dragRef.current;
+    if (!d.dragging) return;
+    const dx = ev.clientX - d.lastX, dy = ev.clientY - d.lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) d.moved = true;
+    if (d.moved) {
+      const state = stateRef.current;
+      state.pan.x -= dx / state.zoom;
+      state.pan.y -= dy / state.zoom;
+      d.lastX = ev.clientX;
+      d.lastY = ev.clientY;
+    }
+  }, []);
+
+  const onPointerUp = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
+    const d = dragRef.current;
+    const wasDrag = d.moved;
+    dragRef.current = { dragging: false, moved: false, lastX: 0, lastY: 0 };
+    if (wasDrag) return;
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
-    const node = stateRef.current.nodeAt(x, y);
-    if (node) navigate(node.href);
+    const state = stateRef.current;
+    const world = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    const node = state.nodeAtWorld(world.x, world.y);
+    if (!node) {
+      state.select(null);
+      return;
+    }
+    if (node.selected) {
+      navigate(node.href);
+    } else {
+      state.select(node.id);
+    }
   }, [navigate]);
+
+  const onWheel = useCallback((ev: React.WheelEvent<HTMLCanvasElement>) => {
+    ev.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const state = stateRef.current;
+    const before = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    const factor = Math.exp(-ev.deltaY * 0.001);
+    state.zoom = Math.max(0.35, Math.min(2.2, state.zoom * factor));
+    const after = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    state.pan.x += before.x - after.x;
+    state.pan.y += before.y - after.y;
+  }, []);
 
   return (
     <Page>
@@ -108,11 +168,14 @@ export default function LivePage() {
         </div>
       </div>
       {error && <ErrorBanner>{error}</ErrorBanner>}
-      <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] h-[calc(100vh-220px)] min-h-[420px]">
+      <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] h-[calc(100vh-220px)] min-h-[420px] overflow-hidden">
         <canvas
           ref={canvasRef}
-          onClick={onClick}
-          className="w-full h-full cursor-pointer"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onWheel={onWheel}
+          className="w-full h-full cursor-pointer touch-none"
         />
       </div>
     </Page>

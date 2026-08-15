@@ -1,138 +1,170 @@
-/** Owns the /live graph's mutable state: the d3-force simulation, the
- * node/edge/packet arrays, and how each WorkEvent mutates them. Kept
- * separate from draw.ts (pure rendering) so the visuals can be iterated
- * on without touching the physics/event-application logic, and vice
- * versa (task instruction: "structure it so visuals are easy to
- * iterate — one module owning draw/state"). */
+/** Owns the /live graph's mutable state: node/edge/packet bookkeeping and
+ * how each WorkEvent mutates it. No physics (see layout.ts) — this module
+ * is the single owner of "what exists and where it's animating to/from",
+ * kept separate from cards.ts/wires.ts/hud.ts/idle.ts (pure rendering) so
+ * the visuals can be iterated without touching state, and vice versa. */
 
-import {
-  forceSimulation, forceManyBody, forceLink, forceCenter, forceCollide,
-  type Simulation, type SimulationNodeDatum,
-} from "d3-force";
 import type { GraphEdge, GraphNode, GraphSnapshot, WorkEvent } from "./types";
+import { LayoutEngine, type Slot } from "./layout";
+import { routeOrthogonal, type Point } from "./wires";
+import { spawnPacket, stepPackets, type Packet } from "./packets";
 
-export type SimNode = GraphNode & SimulationNodeDatum & {
-  /** Timestamp (performance.now()-scale, ms) until which the node's ring
-   * should render pulsing — set on drive.heartbeat, cleared by decay. */
-  pulseUntil: number;
-};
-
-export type SimLink = {
-  source: SimNode;
-  target: SimNode;
-  kind: GraphEdge["kind"];
-};
-
-export type Packet = {
-  link: SimLink;
-  /** 0..1 progress along the edge, source -> target. */
-  t: number;
-  /** Progress per millisecond — derived from tok_s so a hot session's
-   * dots visibly move faster/more often than an idle one. */
-  speedPerMs: number;
-};
-
+const SPAWN_MS = 550;
 const PULSE_MS = 700;
-/** tok_s below this floors to the slowest packet speed so a trickle of
- * tokens still produces a visibly-moving dot instead of a stalled one. */
-const MIN_TOK_S = 5;
-const MAX_TOK_S = 400;
-const MIN_SPEED_PER_MS = 1 / 4000;   // crosses the edge in 4s
-const MAX_SPEED_PER_MS = 1 / 600;    // crosses the edge in 0.6s
+const GHOST_MS = 650;
+/** A step row's capacity bar reads as "fresh" right after a heartbeat and
+ * decays to empty over this window — the directive's "else heartbeat
+ * recency" fallback for when no real in-step progress is wired yet. */
+const HEARTBEAT_DECAY_MS = 20_000;
 
-function speedForTokS(tokS: number): number {
-  const clamped = Math.max(MIN_TOK_S, Math.min(MAX_TOK_S, tokS));
-  const frac = (clamped - MIN_TOK_S) / (MAX_TOK_S - MIN_TOK_S);
-  return MIN_SPEED_PER_MS + frac * (MAX_SPEED_PER_MS - MIN_SPEED_PER_MS);
+export type LiveNode = GraphNode & {
+  parentTaskId: string | null; // subtask -> its root task id
+  driverOfId: string | null; // session -> the task/subtask id it's driven_in to
+  x: number; y: number; // current animated (drawn) position, canvas coords
+  slot: Slot; // resting target position/size from LayoutEngine
+  spawnAt: number; // performance.now() at creation, for slide-in easing
+  spawnFromX: number; spawnFromY: number;
+  pulseUntil: number;
+  tokensGhostUntil: number;
+  stepGhostUntil: number;
+  lastHeartbeatAt: number;
+  selected: boolean;
+};
+
+export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
+
+function easeOutCubic(t: number): number {
+  const c = Math.max(0, Math.min(1, t));
+  return 1 - Math.pow(1 - c, 3);
 }
 
 export class GraphState {
-  nodes: SimNode[] = [];
-  links: SimLink[] = [];
+  nodes: LiveNode[] = [];
+  edges: LiveEdge[] = [];
   packets: Packet[] = [];
-  sim: Simulation<SimNode, SimLink> | null = null;
+  layout = new LayoutEngine();
   width = 800;
   height = 600;
+  /** Pan/zoom camera — screen = (world - pan) * zoom. Owned here so a
+   * click hit-test and the renderer agree on the same transform. */
+  pan = { x: 0, y: 0 };
+  zoom = 1;
+  booted = false;
 
-  private byId = new Map<string, SimNode>();
+  private byId = new Map<string, LiveNode>();
+  /** tok/s samples for the HUD sparkline: {t: performance.now(), v: total tok/s}. */
+  tokSHistory: { t: number; v: number }[] = [];
+
+  private makeNode(
+    n: GraphNode, parentTaskId: string | null, driverOfId: string | null,
+    slot: Slot, now: number, fromX: number, fromY: number,
+  ): LiveNode {
+    return {
+      ...n, parentTaskId, driverOfId,
+      x: fromX, y: fromY, slot,
+      spawnAt: now, spawnFromX: fromX, spawnFromY: fromY,
+      pulseUntil: 0, tokensGhostUntil: 0, stepGhostUntil: 0,
+      lastHeartbeatAt: 0, selected: false,
+    };
+  }
 
   bootstrap(snapshot: GraphSnapshot, width: number, height: number): void {
     this.width = width;
     this.height = height;
-    this.nodes = snapshot.nodes.map((n) => ({
-      ...n,
-      x: width / 2 + (Math.random() - 0.5) * 120,
-      y: height / 2 + (Math.random() - 0.5) * 120,
-      pulseUntil: 0,
-    }));
-    this.byId = new Map(this.nodes.map((n) => [n.id, n]));
-    this.links = snapshot.edges
-      .map((e) => {
-        const source = this.byId.get(e.source);
-        const target = this.byId.get(e.target);
-        if (!source || !target) return null;
-        return { source, target, kind: e.kind } as SimLink;
-      })
-      .filter((l): l is SimLink => l !== null);
+    this.layout.reset();
+    this.byId.clear();
+    this.nodes = [];
+    this.edges = snapshot.edges.map((e) => ({ ...e }));
     this.packets = [];
+    this.pan = { x: 0, y: 0 };
+    this.zoom = 1;
 
-    this.sim?.stop();
-    this.sim = forceSimulation(this.nodes)
-      .force("charge", forceManyBody().strength(-220))
-      .force("link", forceLink<SimNode, SimLink>(this.links).id((d) => d.id).distance(110).strength(0.5))
-      .force("center", forceCenter(width / 2, height / 2))
-      .force("collide", forceCollide<SimNode>().radius(radiusFor).strength(0.9))
-      .alpha(1)
-      .alphaDecay(0.02);
+    const taskCount = snapshot.nodes.filter((n) => n.kind === "task").length;
+    this.layout.setDensity(taskCount);
+
+    const parentOf = new Map<string, string>(); // subtask -> task
+    const driverTarget = new Map<string, string>(); // session -> driven task/subtask
+    for (const e of snapshot.edges) {
+      if (e.kind === "parent_of") parentOf.set(e.target, e.source);
+      if (e.kind === "driven_in") driverTarget.set(e.source, e.target);
+    }
+
+    const now = performance.now();
+    // Place tasks first, then subtasks (need parent slot), then sessions.
+    const byKind = (k: string) => snapshot.nodes.filter((n) => n.kind === k);
+    for (const n of byKind("task")) {
+      const slot = this.layout.placeTask(n.id);
+      const node = this.makeNode(n, null, null, slot, now, slot.x, slot.y);
+      this.nodes.push(node);
+      this.byId.set(n.id, node);
+    }
+    for (const n of byKind("subtask")) {
+      const parentId = parentOf.get(n.id) ?? "";
+      const slot = this.layout.placeSubtask(n.id, parentId);
+      const parentSlot = this.layout.slotFor(parentId);
+      const node = this.makeNode(
+        n, parentId || null, null, slot, now,
+        parentSlot?.x ?? slot.x, parentSlot?.y ?? slot.y);
+      this.nodes.push(node);
+      this.byId.set(n.id, node);
+    }
+    for (const n of byKind("session")) {
+      const driverId = driverTarget.get(n.id) ?? "";
+      const slot = this.layout.placeSession(n.id, driverId);
+      const driverSlot = this.layout.slotFor(driverId);
+      const node = this.makeNode(
+        n, null, driverId || null, slot, now,
+        driverSlot?.x ?? slot.x, driverSlot?.y ?? slot.y);
+      this.nodes.push(node);
+      this.byId.set(n.id, node);
+    }
+    this.booted = true;
   }
 
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
-    this.sim?.force("center", forceCenter(width / 2, height / 2));
-    this.sim?.alpha(0.3).restart();
   }
 
-  private upsertSessionNode(id: string, label: string): SimNode {
+  private wireEndpointsFor(edge: LiveEdge): Point[] | null {
+    const a = this.byId.get(edge.source);
+    const b = this.byId.get(edge.target);
+    if (!a || !b) return null;
+    // routeOrthogonal wants (from, to) as SLOTS in the direction the wire
+    // visually flows: structure edges parent(task)->child(subtask) flow
+    // left->right; token edges session->task flow session(below) up into
+    // the task, which routeOrthogonal's fallback branch already handles.
+    return routeOrthogonal(
+      { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h },
+      { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h },
+    );
+  }
+
+  private upsertSessionNode(id: string, driverId: string, now: number): LiveNode {
     const existing = this.byId.get(id);
     if (existing) return existing;
-    const anchor = this.nodes[0];
-    const node: SimNode = {
-      id, kind: "session", label, status: "", workflow_step: "",
-      gate_state: "", activity_state: "active", heartbeat_age_s: null,
-      tok_s: null, tokens_total: null, href: `/sessions/${id}`,
-      x: (anchor?.x ?? this.width / 2) + (Math.random() - 0.5) * 40,
-      y: (anchor?.y ?? this.height / 2) + (Math.random() - 0.5) * 40,
-      pulseUntil: 0,
-    };
+    const slot = this.layout.placeSession(id, driverId);
+    const driverSlot = this.layout.slotFor(driverId);
+    const node = this.makeNode(
+      {
+        id, kind: "session", label: id.slice(0, 8), status: "",
+        workflow_step: "", gate_state: "", activity_state: "active",
+        heartbeat_age_s: null, tok_s: null, tokens_total: null,
+        href: `/sessions/${id}`,
+      },
+      null, driverId, slot, now, driverSlot?.x ?? slot.x, driverSlot?.y ?? slot.y,
+    );
     this.nodes.push(node);
     this.byId.set(id, node);
     return node;
   }
 
-  private ensureLink(sourceId: string, targetId: string, kind: GraphEdge["kind"]): SimLink | null {
-    const source = this.byId.get(sourceId);
-    const target = this.byId.get(targetId);
-    if (!source || !target) return null;
-    const existing = this.links.find(
-      (l) => l.source.id === sourceId && l.target.id === targetId && l.kind === kind);
-    if (existing) return existing;
-    const link: SimLink = { source, target, kind };
-    this.links.push(link);
-    return link;
+  private ensureEdge(source: string, target: string, kind: GraphEdge["kind"]): void {
+    const exists = this.edges.some(
+      (e) => e.source === source && e.target === target && e.kind === kind);
+    if (!exists) this.edges.push({ source, target, kind });
   }
 
-  private restartSim(alpha = 0.4): void {
-    if (!this.sim) return;
-    this.sim.nodes(this.nodes);
-    this.sim.force("link", forceLink<SimNode, SimLink>(this.links).id((d) => d.id).distance(110).strength(0.5));
-    this.sim.alpha(alpha).restart();
-  }
-
-  /** Mutate state from one pushed WorkEvent. Returns true when the node
-   * set changed (so the caller knows the simulation needs a restart —
-   * already handled internally, but useful for callers that also want
-   * to know). */
   applyEvent(event: WorkEvent): void {
     const now = performance.now();
     if (event.type === "task.changed") {
@@ -140,7 +172,10 @@ export class GraphState {
       if (!node) return;
       const fields = event.fields ?? {};
       if (typeof fields.status === "string") node.status = fields.status;
-      if (typeof fields.workflow_step === "string") node.workflow_step = fields.workflow_step;
+      if (typeof fields.workflow_step === "string" && fields.workflow_step !== node.workflow_step) {
+        node.workflow_step = fields.workflow_step;
+        node.stepGhostUntil = now + GHOST_MS;
+      }
       if (typeof fields.gate_state === "string") node.gate_state = fields.gate_state;
       return;
     }
@@ -148,63 +183,91 @@ export class GraphState {
       const node = this.byId.get(event.task_id);
       if (!node) return;
       node.pulseUntil = now + PULSE_MS;
-      if (event.step) node.workflow_step = event.step;
+      node.lastHeartbeatAt = now;
+      if (event.step && event.step !== node.workflow_step) {
+        node.workflow_step = event.step;
+        node.stepGhostUntil = now + GHOST_MS;
+      }
       return;
     }
     if (event.type === "agent.run") {
-      const taskNode = this.byId.get(event.task_id);
-      if (!taskNode) return;
+      if (!this.byId.get(event.task_id)) return;
       if (event.session_id) {
-        const sessionNode = this.upsertSessionNode(event.session_id, event.session_id.slice(0, 8));
-        this.ensureLink(event.session_id, event.task_id, "driven_in");
+        const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
+        this.ensureEdge(event.session_id, event.task_id, "driven_in");
         sessionNode.pulseUntil = now + PULSE_MS;
-        this.restartSim(0.35);
       }
       return;
     }
     if (event.type === "tokens.turn") {
       const taskNode = this.byId.get(event.task_id);
-      const sessionNode = this.byId.get(event.session_id) ?? this.upsertSessionNode(
-        event.session_id, event.session_id.slice(0, 8));
       if (!taskNode) return;
+      const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
       sessionNode.tok_s = event.tok_s;
       sessionNode.tokens_total = event.tokens_total;
-      const link = this.ensureLink(event.session_id, event.task_id, "driven_in") ?? this.links.find(
-        (l) => l.source.id === event.session_id && l.target.id === event.task_id);
-      if (!link) return;
-      this.restartSim(0.15);
-      this.packets.push({ link, t: 0, speedPerMs: speedForTokS(event.tok_s || MIN_TOK_S) });
+      sessionNode.tokensGhostUntil = now + GHOST_MS;
+      taskNode.tokensGhostUntil = now + GHOST_MS;
+      this.ensureEdge(event.session_id, event.task_id, "driven_in");
+      const edge = this.edges.find(
+        (e) => e.source === event.session_id && e.target === event.task_id && e.kind === "driven_in");
+      if (edge) {
+        const pts = this.wireEndpointsFor(edge);
+        if (pts) this.packets.push(spawnPacket(`${edge.source}->${edge.target}`, pts, event.tok_s));
+      }
+      this.recordTokSample(now);
       return;
     }
   }
 
-  /** Advance packet travel + drop finished ones. Called once per rAF
-   * frame from LivePage.tsx with the elapsed ms since the previous frame. */
-  step(dtMs: number): void {
-    if (this.packets.length) {
-      for (const p of this.packets) p.t += p.speedPerMs * dtMs;
-      this.packets = this.packets.filter((p) => p.t < 1);
-    }
+  /** Sum of live tok_s across all session nodes, sampled for the HUD's
+   * sparkline (last ~5 minutes kept). */
+  private recordTokSample(now: number): void {
+    const total = this.nodes
+      .filter((n) => n.kind === "session")
+      .reduce((sum, n) => sum + (n.tok_s || 0), 0);
+    this.tokSHistory.push({ t: now, v: total });
+    const cutoff = now - 5 * 60_000;
+    while (this.tokSHistory.length && this.tokSHistory[0].t < cutoff) this.tokSHistory.shift();
   }
 
-  nodeAt(x: number, y: number): SimNode | null {
+  /** Advance spawn-in easing + packet travel. Called once per rAF frame. */
+  step(dtMs: number, now: number): void {
+    for (const n of this.nodes) {
+      const elapsed = now - n.spawnAt;
+      if (elapsed >= SPAWN_MS) {
+        n.x = n.slot.x;
+        n.y = n.slot.y;
+        continue;
+      }
+      const e = easeOutCubic(elapsed / SPAWN_MS);
+      n.x = n.spawnFromX + (n.slot.x - n.spawnFromX) * e;
+      n.y = n.spawnFromY + (n.slot.y - n.spawnFromY) * e;
+    }
+    this.packets = stepPackets(this.packets, dtMs);
+  }
+
+  /** Screen -> world, inverting the pan/zoom camera. */
+  toWorld(screenX: number, screenY: number): { x: number; y: number } {
+    return { x: screenX / this.zoom + this.pan.x, y: screenY / this.zoom + this.pan.y };
+  }
+
+  nodeAtWorld(x: number, y: number): LiveNode | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i];
-      const dx = (n.x ?? 0) - x;
-      const dy = (n.y ?? 0) - y;
-      if (dx * dx + dy * dy <= radiusFor(n) * radiusFor(n) * 2.25) return n;
+      if (x >= n.x && x <= n.x + n.slot.w && y >= n.y && y <= n.y + n.slot.h) return n;
     }
     return null;
   }
 
+  select(id: string | null): void {
+    for (const n of this.nodes) n.selected = n.id === id;
+  }
+
   destroy(): void {
-    this.sim?.stop();
-    this.sim = null;
+    this.nodes = [];
+    this.edges = [];
+    this.packets = [];
   }
 }
 
-export function radiusFor(n: Pick<SimNode, "kind">): number {
-  if (n.kind === "task") return 18;
-  if (n.kind === "subtask") return 12;
-  return 7; // session
-}
+export { HEARTBEAT_DECAY_MS };
