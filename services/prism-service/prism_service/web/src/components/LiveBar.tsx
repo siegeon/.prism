@@ -36,6 +36,10 @@ type ManagedTask = {
   assigned_agent?: string;
   updated_at?: string;
   activity?: Activity | null;
+  // Has conductor_work ever touched this task (api/conductor.py:104-117
+  // _with_claimed) -- True forever once a workspace exists, never a
+  // recency check. Gates drive chrome, distinct from workflow_step/gate_state.
+  claimed?: boolean;
 };
 
 const shortId = (id?: string) => (id ?? "").slice(0, 8) || "—";
@@ -198,7 +202,7 @@ export default function LiveBar() {
   // both the transition and session-quiet windows is genuinely being driven
   // too — never a call to action, so it rolls up into the same live row.
   const working = roots.filter((m) =>
-    m.activity?.state === "working" || m.activity?.state === "driving");
+    m.claimed && (m.activity?.state === "working" || m.activity?.state === "driving"));
   const gated = roots.filter((m) => (m.gate_state === "pending" || m.gate_state === "failed") || m.activity?.state === "awaiting_gate");
   // Managed, mid-flow, but neither moving nor at a gate (between reports,
   // adrift, stalled). The bar used to DROP these and claim "queue is quiet"

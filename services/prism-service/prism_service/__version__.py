@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.53"
+PRISM_VERSION = "7.10.54"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4509,4 +4509,19 @@ PRISM_VERSION_NOTES += (
     "SdlcProgress.tsx's minimap and StepRail.tsx's current-step row all "
     "read the we-can't-see-it wording from, so a future classification "
     "tweak can't re-diverge across three copies (mx-d412e0 precedent)."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.54: LIVE STRIP HONORS THE CLAIM SIGNAL [task 30255bfa] - "
+    "round-2 follow-up on 2dfa94bd (PR #1305), which made the /conductor "
+    "TaskTile honest via `claimed` but flagged LiveBar.tsx as a second "
+    "consumer never wired up. An in_progress, session-linked task with "
+    "claimed:false landed in LiveBar's `working` bucket purely off "
+    "activity.state, rendering full DRIVING chrome (step Lozenge, "
+    "working/driving Lozenge, assigned_agent actor line) at the same "
+    "instant the tile below it read NOT CLAIMED. ManagedTask now carries "
+    "`claimed?: boolean`, and the `working` filter gates on `m.claimed` "
+    "additively (never on workflow_step/the synthesized 'intake' literal) "
+    "- an unclaimed task falls through to the existing honest `inflow` "
+    "row instead of vanishing (mx-ccba40 precedent: never hide, stop "
+    "claiming a driver)."
 )
