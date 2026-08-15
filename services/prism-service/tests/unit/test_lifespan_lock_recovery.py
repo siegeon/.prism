@@ -22,6 +22,13 @@ import pytest
 def isolated_lock(tmp_path, monkeypatch):
     import prism_service.main as main_mod
     monkeypatch.setattr(main_mod, "_LOCK_FILE", tmp_path / ".mcp_started")
+    # The drive-activity observer (task dd1e8871) keeps a module-level
+    # singleton so a live process never double-starts its thread. Mocked
+    # Threads read as alive forever, so without a reset the SECOND lifespan
+    # run in this process would no-op the start and undercount by one.
+    # A real stale-lock recovery is a fresh process where _thread is None.
+    import prism_service.services.drive_activity_observer as dao_mod
+    monkeypatch.setattr(dao_mod, "_thread", None)
     return tmp_path / ".mcp_started"
 
 
@@ -69,7 +76,10 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # Still 10 as of v7.0.32: the green-gate machine adjudicator sweep
     # (task 1d3322a6, services/gate_adjudicator.py) ships OFF by default —
     # its thread only starts when PRISM_GATE_ADJUDICATOR_INTERVAL opts in.
-    assert len(started) == 10
+    # 11 as of v7.10.49: the drive-activity observer (task dd1e8871,
+    # services/drive_activity_observer.py) starts a thread that derives
+    # heartbeats from observed activity so long steps stay visibly alive.
+    assert len(started) == 11
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -82,8 +92,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    # Same 10 threads — see test_lifespan_starts_threads_when_no_lock.
-    assert len(started) == 10  # threads started despite the stale lock
+    # Same 11 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 11  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err

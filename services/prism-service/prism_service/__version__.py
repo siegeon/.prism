@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.48"
+PRISM_VERSION = "7.10.49"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.49: a long step's liveness no longer depends only on a step "
+    "agent remembering to self-issue a heartbeat curl - "
+    "drive_activity_observer.py is a SECOND, server-side producer onto the "
+    "same drive_heartbeats store, sweeping every project's in_progress, "
+    "non-gate-parked tasks and beating one ONLY when its live transcript "
+    "token count GREW since the previous tick (never on elapsed wall-clock "
+    "alone, so a genuinely hung/looping agent still goes quiet and the "
+    "dead-worker signal survives). Default-on background thread wired in "
+    "main.py; conductor_service.py and drive_heartbeat.py stay untouched "
+    "and read-only (task dd1e8871). "
     "v7.10.48: gate banner quotes the LIVE gate reason instead of falling "
     "through to the wrong shape - GET /api/conductor/gate/readiness now has "
     "a story_gate branch (adapter=story-rubric, consulting "
