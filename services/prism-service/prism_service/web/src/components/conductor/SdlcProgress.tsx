@@ -158,7 +158,14 @@ export default function SdlcProgress({
 
   // The honest state: prefer activity.state, fall back to raw status.
   const state = (activity?.state ?? status ?? "").toLowerCase();
-  const meta = ACTIVITY_META[state] ?? { label: state || "", tone: "slate" };
+  // Defensive cross-check (task 122ff356): "awaiting review" may only reach
+  // the screen while the CURRENT step's own resolved type is genuinely a
+  // gate — never let a stale/relayed activity.state render that claim on a
+  // mid-execution non-gate step. Keys off the step's `type` field, never a
+  // step id, so a new workflow step can't reintroduce the same phantom claim.
+  const curStepType = curIdx >= 0 ? steps[curIdx].type : undefined;
+  const effectiveState = state === "awaiting_gate" && curStepType !== "gate" ? "working" : state;
+  const meta = ACTIVITY_META[effectiveState] ?? { label: effectiveState || "", tone: "slate" };
   // How long since the last conductor STEP BOUNDARY (task_motion_s). On `adrift`
   // that is a "last report" age, NOT an idle time — the driver is mid-step and
   // steps run 5-10min, so the clock must not be captioned as idleness. Only a

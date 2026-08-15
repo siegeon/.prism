@@ -316,7 +316,9 @@ export default function StepRail({
                           {stepLabel(s.id)}
                         </span>
                         <div className="ml-auto flex items-center gap-2 min-w-0">
-                          {cur && !isGate && verifierPersona && <VerifiedBy persona={verifierPersona} />}
+                          {cur && !isGate && verifierPersona && (
+                            <VerifiedBy persona={verifierPersona} decided={!!gateFor(nextGate?.id ?? "")} />
+                          )}
                           {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
                             <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
                               title="ephemeral sub-agents dispatched vs returned for this step">
@@ -422,19 +424,22 @@ function Persona({ persona, isGate }: { persona: string; isGate: boolean }) {
   );
 }
 
-// "verified by {Role}" — the persona that reviews the UPCOMING gate, shown on
-// the current step so the reviewer is legible before the gate is reached. Same
-// domainTone("role") palette + ◇ marker as the gate Persona tag (subtle: the
-// tag is outlined, not filled, so it reads as a forward-looking hint).
-function VerifiedBy({ persona }: { persona: string }) {
+// The persona who reviews the UPCOMING gate, shown on the current step so the
+// reviewer is legible before the gate is reached. `decided` is a REAL
+// gate_decide record (gateFor(...) against the resolved `gates` array), never
+// step position — until it exists this reads as a prediction ("{Role} reviews
+// next"), not a completed-action claim (task 122ff356). Same domainTone
+// ("role") palette + ◇ marker as the gate Persona tag.
+function VerifiedBy({ persona, decided }: { persona: string; decided: boolean }) {
   const tone = domainTone("role", persona) ?? "slate";
+  const label = personaLabel(persona);
   return (
     <span
-      title={`${personaLabel(persona)} verifies the next gate`}
+      title={decided ? `${label} verified this step` : `${label} reviews next`}
       className="text-2xs font-mono uppercase tracking-wide px-1.5 py-0.5 rounded flex-none inline-flex items-center gap-1"
       style={{ color: `var(--accent-${tone}-fg)`, boxShadow: `inset 0 0 0 1px var(--accent-${tone}-ring)` }}>
       <span aria-hidden>◇</span>
-      verified by {personaLabel(persona)}
+      {decided ? <>verified by {label}</> : <>{label} reviews next</>}
     </span>
   );
 }
