@@ -19,6 +19,7 @@ import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 import { fmtTokens } from "@/lib/format";
 import { relativeTime } from "@/lib/relativeTime";
 import SpendPanel, { type SpendData } from "@/components/SpendPanel";
+import { gateSeverity } from "../lib/gateSeverity";
 
 // The task's real counterpart issue (task a7c989c6) — built server-side from
 // the active WorkItemExternalLink, never a client-derived field.
@@ -873,6 +874,26 @@ function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading
   );
 }
 
+// Gate-arrival re-fetch (task 8e5aa63b): the SAME runKey/re-observe pattern
+// already proven at ranPinTestsFor (below) — a page opened BEFORE a gate
+// mints must not freeze on a stale readiness payload for the rest of the
+// session. readinessRunKey names the transition; shouldRefetchReadiness is
+// a strict change check (never a timer). Kept as PLAIN JS (no inline type
+// annotations) so this exact block is directly executable by node in tests
+// (D-4) — types for the call sites live outside the markers.
+// --- READINESS-REFRESH-BLOCK-START ---
+// @ts-expect-error -- untyped on purpose: this block is executed verbatim
+// under a bare `node` in tests/unit/test_gate_banner_refreshes_on_gate_arrival.py,
+// so it must contain no TypeScript-only syntax. Callers below pass real types.
+function readinessRunKey(id, task) {
+  return `${id || ""}:${(task && task.workflow_step) || ""}:${(task && task.gate_state) || ""}:${(task && task.status) || ""}`;
+}
+// @ts-expect-error -- see readinessRunKey above; same reason.
+function shouldRefetchReadiness(prevKey, key) {
+  return prevKey !== key;
+}
+// --- READINESS-REFRESH-BLOCK-END ---
+
 export default function TaskDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -918,6 +939,22 @@ export default function TaskDetailPage() {
   // LIVE gate-card truth: the evidence tooth checked at render time (never a
   // stale stored decision string) — GET /api/conductor/gate/readiness.
   const [gateReadiness, setGateReadiness] = useState<GateReadiness | null>(null);
+  // SINGLE choke point for GET /api/conductor/gate/readiness (task
+  // 8e5aa63b, AC-4): both the transition-keyed effect below and the manual
+  // "re-run oracle" button call this ONE function, so the readiness URL
+  // literal exists exactly once in this file.
+  const refreshReadiness = useCallback(async (): Promise<GateReadiness | null> => {
+    if (!id) return null;
+    try {
+      const gr = await api.get<GateReadiness>(
+        `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
+      setGateReadiness(gr);
+      return gr;
+    } catch {
+      setGateReadiness(null);
+      return null;
+    }
+  }, [id, project]);
   // Last ↻ re-run outcome, rendered INLINE in the evidence table (owner
   // 2026-07-16: a silent corner toast reads as "the button does not work" —
   // the result must appear where the click happened).
@@ -1131,13 +1168,6 @@ export default function TaskDetailPage() {
     })();
     (async () => {
       try {
-        const gr = await api.get<GateReadiness>(
-          `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
-        if (!cancelled) setGateReadiness(gr);
-      } catch { if (!cancelled) setGateReadiness(null); }
-    })();
-    (async () => {
-      try {
         const dv = await api.get<Delivery>(
           `/api/tasks/${id}/delivery?project=${project}`);
         if (!cancelled) setDelivery(dv);
@@ -1145,6 +1175,22 @@ export default function TaskDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [id, project]);
+
+  // Re-fetch readiness on a gate_state/workflow_step/status TRANSITION —
+  // never a fixed-interval timer (stop_if). Same runKey/re-observe shape as
+  // ranPinTestsFor just below: covers BOTH the initial mount (task lands
+  // undefined -> loaded is itself a transition) AND a gate arriving/
+  // resolving mid-session via the SSE push above, so a page opened before a
+  // gate mints does not freeze on a stale/legacy readiness payload for the
+  // rest of the session (task 8e5aa63b).
+  const readinessRunFor = useRef<string>("");
+  useEffect(() => {
+    if (!id) return;
+    const key = readinessRunKey(id, task);
+    if (!shouldRefetchReadiness(readinessRunFor.current || null, key)) return;
+    readinessRunFor.current = key;
+    refreshReadiness();
+  }, [id, task?.workflow_step, task?.gate_state, task?.status, refreshReadiness]);
 
   // HEAVY, deferred: actually EXECUTE the pinned tests (one pytest run,
   // one-shot per task) only when the task is parked AT a gate — that is
@@ -1357,17 +1403,15 @@ export default function TaskDetailPage() {
     // The readiness fetch is one-shot per task (heavy git-walk, kept out of
     // the 5s poll) — so a mint MUST re-pull it or the result chip stays
     // "missing" forever and the button reads as broken.
-    try {
-      const gr = await api.get<GateReadiness>(
-        `/api/conductor/gate/readiness?task_id=${id}&project=${project}`);
-      setGateReadiness(gr);
+    const gr = await refreshReadiness();
+    if (gr) {
       // Readiness is the authority on whether Approve will actually pass.
       msg = gr.receipt_ok
         ? "fresh evidence receipt minted — Approve will pass the evidence check"
         : `re-run did NOT satisfy this gate: ${gr.receipt_refusal || "evidence still missing"}`;
       setNotice(msg);
       setMintResult(msg);
-    } catch { /* keep the last known readiness */ }
+    } /* else: keep the last known readiness */
     load();
   };
 
@@ -1685,18 +1729,34 @@ export default function TaskDetailPage() {
             title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
           >
             <span className="font-semibold">
-              ● {isAwaitingDesignApproval
-                  ? `AWAITING YOUR APPROVAL · packet ready (${packetParts})`
-                  // story-rubric (task a646cbd1, mx-a31a3d): quote the live reason.
-                  : isStoryRubricPending
-                  ? `PENDING · story rubric: ${gateReadiness?.receipt?.reason || "acceptance criteria not yet complete"}`
-                  : gateVerdict === "ready"
-                  ? (isAwaitingReview
-                      ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
-                      : "READY · evidence passing")
-                  : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
-                  ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
-                  : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
+              ● {(() => {
+                  // ONE shared severity vocabulary (task 8e5aa63b, lib/gateSeverity)
+                  // so this banner, StepRail's gate row and the board tile cannot
+                  // legitimately disagree for the same gate at the same moment.
+                  const sev = gateSeverity({
+                    gate_state: task.gate_state,
+                    readiness: gateReadiness,
+                    verifier_refused: !!verifierRefusal,
+                    manual_review: !!gateReadiness?.manual_review,
+                  });
+                  return isAwaitingDesignApproval
+                    ? `AWAITING YOUR APPROVAL · packet ready (${packetParts})`
+                    // story-rubric (task a646cbd1, mx-a31a3d): quote the live reason.
+                    : isStoryRubricPending
+                    ? `PENDING · story rubric: ${gateReadiness?.receipt?.reason || "acceptance criteria not yet complete"}`
+                    : gateVerdict === "ready"
+                    ? (isAwaitingReview
+                        ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
+                        : "READY · evidence passing")
+                    : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
+                    ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
+                    : verifierRefusal ? "BLOCKED · verifier rejected current evidence"
+                    // The legacy generic literal (mx-a31a3d precedent) survives,
+                    // reachable ONLY behind the shared function's blocked verdict —
+                    // never a private re-derived ternary.
+                    : sev.key === "blocked" ? "BLOCKED · evidence not on file"
+                    : sev.label;
+                })()}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
               {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence below"}

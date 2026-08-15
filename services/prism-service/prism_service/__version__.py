@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.52"
+PRISM_VERSION = "7.10.53"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.53: the gate banner's readiness fetch was mount-only (deps "
+    "[id, project]) so it never re-fired when task.gate_state/workflow_step "
+    "transitioned via the live SSE push - a page opened before a gate "
+    "minted froze on the stale/legacy fallback string. TaskDetailPage now "
+    "re-observes readiness on a runKey transition (same pattern as "
+    "ranPinTestsFor), through ONE refreshReadiness choke point. A new "
+    "lib/gateSeverity.ts gives the banner, StepRail's gate row and the "
+    "ConductorPage tile handoff ONE shared READY/PENDING/AWAITING YOU/"
+    "BLOCKED vocabulary so the three surfaces cannot disagree for the same "
+    "gate at the same moment (task 8e5aa63b). "
     "v7.10.49: a long step's liveness no longer depends only on a step "
     "agent remembering to self-issue a heartbeat curl - "
     "drive_activity_observer.py is a SECOND, server-side producer onto the "
