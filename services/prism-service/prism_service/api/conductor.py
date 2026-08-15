@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from prism_service.project_context import get_project
 from prism_service.services.conductor_service import board_health
+from prism_service.services import task_workspace
 
 router = APIRouter()
 
@@ -49,6 +50,22 @@ def _state_cache_put(s, val) -> None:
         pass
 
 
+def _with_claimed(managed_tasks: list) -> list:
+    """Task 2dfa94bd: a task only ever renders SDLC-drive chrome on the real
+    /conductor tab if conductor_work actually claimed it (ensure_workspace
+    ran at its first PEEK). task_workspace.workspace_record is a real,
+    side-effect-free "has conductor_work ever touched this task" bit, None
+    until a genuine claim and a real dict thereafter (no recency check, so a
+    released-but-idle worker still reads claimed:True). Additive field —
+    module-attribute lookup so tests can monkeypatch task_workspace.workspace_record."""
+    out = []
+    for row in managed_tasks:
+        row = dict(row)
+        row["claimed"] = task_workspace.workspace_record(row.get("id", "")) is not None
+        out.append(row)
+    return out
+
+
 def _state_payload(s) -> dict:
     hit = _state_cache_get(s)
     if hit and time.monotonic() - hit[0] < _STATE_TTL_S:
@@ -71,7 +88,7 @@ def _state_payload(s) -> dict:
             # Conductor v2 (#79 follow-up): SPA /conductor page reads these to
             # render the SDLC dashboard — which tasks conductor is driving and
             # where they are in the workflow.
-            "managed_tasks": s.managed_tasks(),
+            "managed_tasks": _with_claimed(s.managed_tasks()),
             "step_buckets": s.step_buckets(),
             # GoalBuddy GAP-5: cross-task "reorient" signal composed from the
             # per-task '⚠' advisory notes — fires when >= 2 low-value done-root
