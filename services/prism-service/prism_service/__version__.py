@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.47"
+PRISM_VERSION = "7.10.48"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.48: gate banner quotes the LIVE gate reason instead of falling "
+    "through to the wrong shape - GET /api/conductor/gate/readiness now has "
+    "a story_gate branch (adapter=story-rubric, consulting "
+    "ConductorService._verify_rubric_gate read-only) and the epic-rollup "
+    "branch names blocking_children by id/title; TaskDetailPage's banner "
+    "quotes the live story-rubric reason with an amber (not rose) tone, "
+    "links the blocking child via EntityChip, and the collapsed audit-detail "
+    "block suppresses a stale inviting task.gate_reason when live readiness "
+    "is actively refusing (task a646cbd1). "
     "v7.10.46: /conductor tile distinguishes a long-silent adrift drive "
     "(task-scoped drive_heartbeat gone dark past a new SIGNAL_LOST_AFTER_S "
     "threshold, server-computed via api/conductor.py::_with_report_signal) "
