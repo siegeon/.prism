@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.45"
+PRISM_VERSION = "7.10.46"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.46: /conductor tile distinguishes a long-silent adrift drive "
+    "(task-scoped drive_heartbeat gone dark past a new SIGNAL_LOST_AFTER_S "
+    "threshold, server-computed via api/conductor.py::_with_report_signal) "
+    "from a freshly-adrift one — a neutral 'we can't see it' pill instead of "
+    "the same 'driver active' wording, and the HANDOFF strip no longer says "
+    "'on deck' for a step the timeline already shows running (task e9625a4d). "
     "v7.10.45: /conductor tile now gates SDLC-drive chrome (header, 10-step "
     "timeline, driver pill, handoff) on task.claimed — True only when "
     "conductor_work actually claimed the task (task_workspace.workspace_record "
