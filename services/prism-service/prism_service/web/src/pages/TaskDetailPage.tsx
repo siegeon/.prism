@@ -140,6 +140,10 @@ type GateReadiness = {
     passed: boolean | null; status: string;
     ended_at: string; receipt_job_id: string;
   }[];
+  // Epic-rollup adapter (task a646cbd1): the specific unfinished child(ren)
+  // blocking a green_gate roll-up, named by id/title so the banner can link
+  // them instead of only quoting "N child task(s) not done" prose.
+  blocking_children?: { id: string; title: string }[];
 };
 
 // GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
@@ -984,11 +988,20 @@ export default function TaskDetailPage() {
     gateReadiness?.receipt?.adapter === "design-packet" &&
     gateReadiness?.receipt?.passed === false &&
     !!(task?.plan_doc || task?.plan_diagram);
+  // HONEST STORY_GATE HEADLINE (task a646cbd1, mx-a31a3d convention): a
+  // story_gate rubric refusal is a MACHINE-OWNED, healthily re-swept state
+  // (the rubric re-sweep clears it, not an owner click) — not the same as a
+  // genuinely stuck gate. Keyed on receipt.adapter (never workflow_step
+  // string equality) so this generalizes to any future rubric-shaped gate.
+  const isStoryRubricPending =
+    gateReadiness?.receipt?.adapter === "story-rubric" &&
+    gateVerdict !== "ready";
   // Calm-but-not-a-pass tone (owner: awaiting-review is a normal, correct
   // state — it must never read as alarming/failed, and must never be
   // visually indistinguishable from a real pass).
   const bannerTone: "sage" | "amber" | "rose" =
     isAwaitingDesignApproval ? "amber" :
+    isStoryRubricPending ? "amber" :
     gateVerdict !== "ready" ? "rose" : isAwaitingReview ? "amber" : "sage";
   // Clicking the oracle's compact "N RED" summary drives PlanView to its Tests
   // tab (bump the nonce so a repeat click re-fires) and scrolls it into view.
@@ -1674,10 +1687,15 @@ export default function TaskDetailPage() {
             <span className="font-semibold">
               ● {isAwaitingDesignApproval
                   ? `AWAITING YOUR APPROVAL · packet ready (${packetParts})`
+                  // story-rubric (task a646cbd1, mx-a31a3d): quote the live reason.
+                  : isStoryRubricPending
+                  ? `PENDING · story rubric: ${gateReadiness?.receipt?.reason || "acceptance criteria not yet complete"}`
                   : gateVerdict === "ready"
                   ? (isAwaitingReview
                       ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
                       : "READY · evidence passing")
+                  : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
+                  ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
                   : verifierRefusal ? "BLOCKED · verifier rejected current evidence" : "BLOCKED · evidence not on file"}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
@@ -1688,6 +1706,20 @@ export default function TaskDetailPage() {
 
           {gatePanelOpen && (
             <div className="bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)] border-t" style={{ borderColor: "var(--border-subtle)" }}>
+              {/* BLOCKED-ON CHILDREN (task a646cbd1): name + link the
+                  specific unfinished child(ren), not just roll-up prose —
+                  same EntityChip -> /tasks/${id} pattern as the Children
+                  rail group below. */}
+              {(gateReadiness?.blocking_children?.length ?? 0) > 0 && (
+                <div className="p-4 space-y-1.5">
+                  <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>blocked on</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {gateReadiness!.blocking_children!.map((c) => (
+                      <EntityChip key={c.id} kind="task" label={oneLine(c.title || c.id.slice(0, 8), 26)} title={c.title} to={`/tasks/${c.id}`} />
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* 1 · WHAT YOU'RE APPROVING — the contract, human-first:
                   bold title, then the oracle's LEAD clause (URL linkified),
                   the rest collapsed under 'Acceptance criteria'. */}
@@ -1940,11 +1972,19 @@ export default function TaskDetailPage() {
                     Not decided yet — the machine check runs when you click Approve (takes up to a few minutes).
                   </div>
                 )}
+                {/* task a646cbd1: task.gate_reason is a STORED snapshot that
+                    can read as inviting ("evidence is ready; Approve") even
+                    while the live gate/readiness evaluation below is
+                    actively refusing — the collapsed block must consult it
+                    too, not just render the stale string unconditionally. */}
                 {(task.gate_reason || gateEvidenceLines(history).length > 0) && (
                   <details className="text-[12px]">
                     <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>audit detail (machine text)</summary>
                     <div className="mt-1.5 space-y-1">
-                      {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                      {task.gate_reason && gateReadiness?.receipt_ok !== false && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                      {gateReadiness?.receipt_ok === false && gateReadiness?.receipt_refusal && (
+                        <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>live: {gateReadiness.receipt_refusal}</div>
+                      )}
                       {gateEvidenceLines(history).slice(0, 4).map((l, i) => (
                         <div key={i} className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>• {l}</div>
                       ))}

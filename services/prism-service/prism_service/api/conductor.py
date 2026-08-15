@@ -366,6 +366,22 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                     "demonstrate the pinned tests failing at red-step "
                     f"commit {red_sha[:12]} on its next sweep and decide "
                     "this gate; no owner action needed")}
+    # STORY-GATE READINESS (task a646cbd1): a story_gate task with a rubric
+    # refusal fell through to the green-gate-shaped EvidenceReceipt oracle
+    # tooth below — wrong evaluation entirely for a rubric gate. Judge with
+    # the SAME rubric evaluator the gate's own approve path uses
+    # (ConductorService._verify_rubric_gate -> arc_governance), read-only —
+    # mirrors the plan_gate/red_gate branches above so the reason a driver
+    # or human sees here is the LIVE story_complete verdict, not a stale or
+    # mismatched-gate string.
+    if getattr(task, "workflow_step", "") == "story_gate":
+        live = s._verify_rubric_gate(task, "story_complete")
+        _reason = str(live.get("reason", "") or "")
+        _ok = bool(live.get("verified"))
+        return {"receipt_ok": _ok, "receipt_refusal": "" if _ok else _reason,
+                "receipt": {"adapter": "story-rubric", "passed": _ok,
+                            "status": "story_complete" if _ok else "pending",
+                            "ended_at": "", "reason": _reason}}
     # EPIC ROLL-UP (issue #171, owner 2026-07-19): a parent whose children all
     # rolled up cleanly is signable — the children's proofs ARE the epic's proof,
     # and gate_decide's rollup path accepts a plain distinct-actor approve (no
@@ -373,12 +389,23 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # is ENABLED; else surface the actionable roll-up reason (which child blocks).
     try:
         from prism_service.services.conductor_service import (
-            epic_rollup_verdict, ui_artifact_gate_reason, has_captured_evidence)
+            epic_rollup_verdict, ui_artifact_gate_reason, has_captured_evidence,
+            _task_attr)
         # parent_id-scoped (idx_tasks_parent) rather than a full-table read
         # filtered in Python — same rows, one indexed query.
         kids = list(s._task_svc.list(parent_id=task_id))
         if kids:
             ok_roll, why_roll = epic_rollup_verdict(kids)
+            # AC-3 (task a646cbd1): epic_rollup_verdict's own reason string
+            # is prose ("N child task(s) not done") with no ids — name the
+            # specific unfinished child(ren) here from the SAME `kids` list
+            # it was computed from, so the UI can link, not just read prose.
+            blocking_children = [
+                {"id": str(_task_attr(c, "id", "")),
+                 "title": str(_task_attr(c, "title", ""))}
+                for c in kids
+                if str(_task_attr(c, "status", "")) not in ("done", "cancelled")
+            ]
             # A clean roll-up still has to satisfy the ui-artifact tooth (owner:
             # default to visual evidence) — reflect BOTH so READY is never a lie
             # that then fails the approve.
@@ -391,6 +418,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             reason = why_roll if not ok_roll else (ui or why_roll)
             return {"receipt_ok": ready, "manual_review": True,
                     "receipt_refusal": "" if ready else reason,
+                    "blocking_children": blocking_children,
                     "receipt": {"adapter": "epic-rollup", "passed": ready,
                                 "status": "rollup" if ready else "rollup_blocked",
                                 "ended_at": "", "reason": reason}}
