@@ -184,7 +184,9 @@ def test_phase_progress_has_tokens_source_field(tmp_path, monkeypatch):
 
     pp = cond.phase_progress(t.id)
     assert "tokens_source" in pp, "phase_progress must return a tokens_source field"
-    assert pp["tokens_source"] in ("linked", "wallclock"), pp["tokens_source"]
+    # 'unattributed' added by task a91f1d11: a contested session (linked to
+    # 2+ tasks) with no agent_runs drive evidence for THIS task.
+    assert pp["tokens_source"] in ("linked", "wallclock", "unattributed"), pp["tokens_source"]
 
 
 def test_pending_task_no_authoritative_turns_stays_linked_and_empty(tmp_path, monkeypatch):

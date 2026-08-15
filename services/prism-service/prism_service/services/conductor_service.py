@@ -4505,16 +4505,33 @@ class ConductorService:
                 # linked to both a child and its parent would otherwise be
                 # counted twice.
                 _seen_sids: set = set()
-                _rows = [row
-                         for _tid in ([task_id] + self._child_task_ids(task_id))
+                # CONTESTED-SESSION OWNERSHIP (task a91f1d11): a session
+                # linked to 2+ tasks must not paint its FULL lifetime burn on
+                # every one of them (session daffe20c on both 170991cc and
+                # 2419bff2, mx-56d049). Pairs (owning _tid, row) are kept so
+                # attributability is checked against the tid that actually
+                # OWNS the link, not the root task_id being rendered.
+                from prism_service.services import task_burn_attribution as _tba
+                _owned_ids = [task_id] + self._child_task_ids(task_id)
+                _rows = [(_tid, row)
+                         for _tid in _owned_ids
                          for row in self._task_svc.sessions_for_task(_tid)]
-                for s in _rows:
+                _own_contributed = False
+                _own_unattributed = False
+                for _tid, s in _rows:
                     _sid = (s.get("session_id") if isinstance(s, dict)
                             else getattr(s, "session_id", "")) or ""
                     if _sid and _sid in _seen_sids:
                         continue
                     if _sid:
                         _seen_sids.add(_sid)
+                    if _sid and not _tba.session_is_attributable(
+                            self._task_svc, self._scores_db, _tid, _sid):
+                        if _tid == task_id:
+                            _own_unattributed = True
+                        continue
+                    if _tid == task_id and _sid:
+                        _own_contributed = True
                     sid = s.get("session_id") if isinstance(s, dict) else getattr(s, "session_id", "")
                     used = s.get("tokens_used") if isinstance(s, dict) else getattr(s, "tokens_used", 0)
                     outcome_tok = int(used or 0)
@@ -4530,6 +4547,12 @@ class ConductorService:
                             live_events.extend(events_fn(sid, source_path, override_dir=override_dir) or [])
                         except Exception:
                             pass
+                # A task whose ONLY claim to a session is a contested, drive-
+                # less link must not silently read as an ordinary empty
+                # 'linked' state (which is indistinguishable from "hasn't
+                # started yet") — label it so the tile can say so (AC-2).
+                if _own_unattributed and not _own_contributed:
+                    tokens_source = "unattributed"
                 live_events.sort(key=lambda e: e[0])
                 if live_events:
                     session_quiet_s = max(0.0, self._now_epoch() - live_events[-1][0])

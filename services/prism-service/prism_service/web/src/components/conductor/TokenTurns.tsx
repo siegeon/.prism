@@ -38,9 +38,11 @@ export default function TokenTurns({
   live?: boolean;
   reduced?: boolean | null;
   // 'linked' = authoritative per-task series; 'wallclock' = project-wide
-  // approximate fallback — render dimmed + labelled so the number is never
-  // presented as authoritative per-task truth.
-  tokens_source?: "linked" | "wallclock";
+  // approximate fallback; 'unattributed' = a CONTESTED session (linked to
+  // 2+ tasks) with no agent_runs drive evidence for THIS task (task
+  // a91f1d11) — render dimmed + labelled so the number is never presented
+  // as authoritative per-task truth.
+  tokens_source?: "linked" | "wallclock" | "unattributed";
   // Honest work state (conductor_service.activity_for). When NOT "working" the
   // burn is real spend but NOT this task's progress — dim it + relabel so it
   // can't masquerade as work getting done here.
@@ -57,6 +59,9 @@ export default function TokenTurns({
     : -1;
   const latest = series.length ? series[series.length - 1] : null;
   const approximate = tokens_source === "wallclock";
+  // Contested session, no drive evidence for THIS task — never render as an
+  // ordinary empty 'linked' state (indistinguishable from "hasn't started").
+  const unattributed = tokens_source === "unattributed";
   // The burn belongs to THIS task only while working. EVERY other state
   // (paused/adrift/stalled/awaiting_gate) is real spend but NOT this task's
   // progress ⇒ dim + shrink it and say so honestly, so a borrowed orchestrator
@@ -72,10 +77,11 @@ export default function TokenTurns({
     : st === "adrift" ? "driver active · linked session burn"
     : st === "stalled" ? `no active driver${quietClock ? ` · quiet ${quietClock}` : ""}`
     : st === "awaiting_gate" ? "awaiting review · paused here"
+    : unattributed ? "shared session · not this task's drive"
     : approximate ? "project activity (approximate)"
     : "burn · tok/s by turn";
   // Only a task actively being WORKED gets the full-strength graph.
-  const dimmed = approximate || (st !== "" && !working);
+  const dimmed = approximate || unattributed || (st !== "" && !working);
 
   return (
     <div

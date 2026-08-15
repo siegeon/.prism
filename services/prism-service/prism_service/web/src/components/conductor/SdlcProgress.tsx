@@ -40,8 +40,10 @@ export type PhaseProgress = {
   token_turns?: TokenTurn[];
   turns?: number;
   // 'linked' = authoritative per-task series; 'wallclock' = project-wide
-  // approximate fallback (TokenTurns renders it dimmed + labelled).
-  tokens_source?: "linked" | "wallclock";
+  // approximate fallback; 'unattributed' = contested session, no drive
+  // evidence for this task (task a91f1d11) — TokenTurns renders all
+  // non-'linked' values dimmed + labelled.
+  tokens_source?: "linked" | "wallclock" | "unattributed";
   // Forward-projected seconds to the terminal gate (learned per-step medians;
   // sharpens over time). eta_sample_n = current step's sample count.
   eta_s?: number | null;

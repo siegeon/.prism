@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.44"
+PRISM_VERSION = "7.10.45"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4407,4 +4407,17 @@ PRISM_VERSION_NOTES += (
     "the shipped .claude/hooks/prism-sync.py SessionStart hook crashing "
     "with AttributeError when the PRISM_REFLECTION_PENDING banner broke "
     "its json.loads()."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.45: CONTESTED-SESSION TILE SCOPING [task a91f1d11]. "
+    "phase_progress (conductor_service.py) no longer charges a session's "
+    "FULL lifetime burn to every task it is linked to: a session linked to "
+    "2+ tasks (new task_burn_attribution.session_is_attributable) counts "
+    "toward a task only when agent_runs evidences that task actually drove "
+    "it; a bare drive-less link reads tokens_task_total=0 with "
+    "tokens_source='unattributed' (TokenTurns/SdlcProgress render it dimmed "
+    "+ labelled 'shared session · not this task's drive'), never the other "
+    "task's number. Uncontested (single-linked) sessions and epic/child "
+    "aggregation are unchanged. Fixes session daffe20c painting identical "
+    "tok_total on both 170991cc and 2419bff2."
 )
