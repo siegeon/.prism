@@ -22,6 +22,13 @@ import pytest
 def isolated_lock(tmp_path, monkeypatch):
     import prism_service.main as main_mod
     monkeypatch.setattr(main_mod, "_LOCK_FILE", tmp_path / ".mcp_started")
+    # The drive-activity observer (task dd1e8871) keeps a module-level
+    # singleton so a live process never double-starts its thread. Mocked
+    # Threads read as alive forever, so without a reset the SECOND lifespan
+    # run in this process would no-op the start and undercount by one.
+    # A real stale-lock recovery is a fresh process where _thread is None.
+    import prism_service.services.drive_activity_observer as dao_mod
+    monkeypatch.setattr(dao_mod, "_thread", None)
     return tmp_path / ".mcp_started"
 
 
