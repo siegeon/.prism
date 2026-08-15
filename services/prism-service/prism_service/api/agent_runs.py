@@ -54,6 +54,30 @@ def ingest(
                 "reason": refusal, "run_id": row.get("run_id"),
                 "agent_id": row.get("agent_id"), "step": row.get("step")}
     upsert_agent_run(_scores_db(project), row)
+    # gamify walking skeleton: publish onto the bus so /sse/work and the
+    # /live graph can add/update this session's node live. Best-effort,
+    # never lets a publish failure surface as a write failure (the row is
+    # already committed above).
+    try:
+        import time
+
+        from prism_service.events import bus
+
+        bus.publish({
+            "project": project,
+            "type": "agent.run",
+            "task_id": row.get("task_id"),
+            "session_id": row.get("session_id"),
+            "agent_id": row.get("agent_id"),
+            "parent_agent_id": row.get("parent_agent_id"),
+            "step": row.get("step"),
+            "role": row.get("role"),
+            "model": row.get("model"),
+            "ok": row.get("ok"),
+            "ts": time.time(),
+        })
+    except Exception:
+        pass
     return {"ok": True, "run_id": row.get("run_id"),
             "agent_id": row.get("agent_id"), "step": row.get("step")}
 

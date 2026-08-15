@@ -12,6 +12,8 @@ BY NAME (drive_heartbeat.BEAT_REFUSAL) so a refused caller can self-diagnose
 instead of guessing why its beat didn't register (AC-5).
 """
 
+import time
+
 from fastapi import APIRouter, Body, Query
 
 from prism_service.project_context import get_project
@@ -32,5 +34,28 @@ def beat(
     """Persist one liveness ping. Returns the store's own ok:true/false
     shape unchanged -- a refusal already names itself (BEAT_REFUSAL) and
     lists the missing field(s), so this door adds no translation layer.
+
+    On acceptance, also publishes a `drive.heartbeat` event onto the bus
+    (gamify walking skeleton) so /sse/work and the /live graph can pulse
+    the task node live -- best-effort, never lets a publish failure
+    surface as a write failure (mirrors task_service.py's task.changed
+    publish).
     """
-    return record_heartbeat(_scores_db(project), row)
+    result = record_heartbeat(_scores_db(project), row)
+    if result.get("ok"):
+        try:
+            from prism_service.events import bus
+
+            bus.publish({
+                "project": project,
+                "type": "drive.heartbeat",
+                "task_id": row.get("task_id"),
+                "step": row.get("step"),
+                "last_tool": row.get("last_tool"),
+                "work_units": row.get("work_units"),
+                "elapsed_s": row.get("elapsed_s"),
+                "ts": time.time(),
+            })
+        except Exception:
+            pass
+    return result

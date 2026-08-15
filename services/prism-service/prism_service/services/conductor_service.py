@@ -1718,6 +1718,24 @@ class ConductorService:
                 "evidence_ref": None,
             }
             upsert_agent_run(self._scores_db, row)
+            # gamify walking skeleton: publish onto the bus so /sse/work and
+            # the /live graph can add/update this session's node live.
+            # Same try/except umbrella as the write above -- a telemetry
+            # publish must never break a conductor transition.
+            from prism_service.events import bus
+            bus.publish({
+                "project": self._project_name or "default",
+                "type": "agent.run",
+                "task_id": task_id,
+                "session_id": session_id,
+                "agent_id": row["agent_id"],
+                "parent_agent_id": row.get("parent_agent_id"),
+                "step": step,
+                "role": role,
+                "model": model,
+                "ok": ok,
+                "ts": now,
+            })
         except Exception:
             pass
 
