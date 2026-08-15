@@ -1,33 +1,40 @@
 """A currently-EXECUTING step row must never claim review it has not had.
 
-Task 122ff356. The PRISM SPA has no JS test runner, so these ACs are pinned
-by asserting the ACTUAL web source (same pattern as
-test_conductor_card_tells_the_truth.py / test_conductor_page_animated_cleanup_ui.py).
+Task 122ff356 (plan_doc has the full FR/AC list; this suite pins AC-1..AC-5).
+The PRISM SPA has no JS test runner, so these ACs are pinned by asserting the
+ACTUAL rendered web source (same pattern as
+tests/unit/test_conductor_page_animated_cleanup_ui.py:4-6 and
+tests/unit/test_cancelled_task_gate_card_inert.py:52-77, whose
+`_strip_comments`/balanced-brace-extraction helpers are reused verbatim below
+— a comment or an inserted line must never be able to satisfy an assertion
+the real guard is supposed to own).
 
-Bug: StepRail.tsx's CURRENT non-gate step row renders `verified by {Role}`
-(the VerifiedBy pill, StepRail.tsx ~319/425-440) purely off step POSITION —
-`verifierPersona` is "the persona of the next gate step ahead", found by
-`steps.slice(curIdx+1).find(s=>s.type==="gate")?.persona` — with NO check
-against the resolved `gates: GanttGate[]` array (the real gate_decide
-receipts, looked up via `gateFor(id)` at StepRail.tsx:217). So a step that is
-still mid-execution, with its own gate genuinely pending/future, renders text
-that reads as if a reviewer already signed off.
+Bug: StepRail.tsx:319 renders a "verified by {Role}" pill on the CURRENT
+non-gate step row purely off step POSITION — `verifierPersona`
+(StepRail.tsx:250-251) is a lookahead into the static WORKFLOW_STEPS_ORDERED
+table, never a query against the `gates: GanttGate[]` array of REAL
+gate_decide receipts that `gateFor`/`gateInfo` (StepRail.tsx:217-224) already
+resolve for GateRow. Observed live: task 2419bff2 mid implement_tasks showed
+"VERIFIED BY STEWARD" beside the live blue implement row while the builder
+was still working. Same pattern in SdlcProgress.tsx's "awaiting review"
+header caption, which currently flows `activity?.state` straight into
+ACTIVITY_META with no cross-check against the current step's own resolved
+`type` — even though SdlcProgress already has `steps`/`curIdx` in hand.
 
-Fix must key off actual record existence (gateFor/the gates array), never off
-a step id/name, so a newly-added workflow step doesn't reintroduce the same
-phantom claim; and it must leave the GateRow real passed/override receipt
-path (StepRail.tsx:302-303) completely unchanged.
+AC-4 pins the flip side: GateRow's real passed/override receipt path
+(StepRail.tsx:302-303) must render completely unchanged.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _HERE = Path(__file__).resolve()
-_SRC = _HERE.parent.parent.parent / "prism_service" / "web" / "src"
+_SERVICE_ROOT = _HERE.parent.parent.parent
+_SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
 _RAIL = _SRC / "components" / "conductor" / "StepRail.tsx"
 _PROGRESS = _SRC / "components" / "conductor" / "SdlcProgress.tsx"
-_CONDUCTOR_PAGE = _SRC / "pages" / "ConductorPage.tsx"
 
 
 def _read(p: Path) -> str:
@@ -35,99 +42,234 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-def _verified_by_render_line(src: str) -> str:
-    """The exact JSX line that renders the VerifiedBy pill on the CURRENT
-    non-gate step row. Matched on the rendered tag `<VerifiedBy`, never a
-    bare name or a comment — a comment above the element has satisfied this
-    kind of assertion before."""
-    for line in src.splitlines():
-        if "<VerifiedBy persona=" in line:
-            return line
+def _strip_comments(src: str) -> str:
+    """Drop /* */, {/* */} and // comments so a comment can never satisfy a
+    source assertion. Reused verbatim from
+    tests/unit/test_cancelled_task_gate_card_inert.py:52-64."""
+    src = re.sub(r"\{\s*/\*.*?\*/\s*\}", "", src, flags=re.S)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    src = re.sub(r"(?m)(?<!:)(?<!\\)//.*$", "", src)
+    return src
+
+
+def _balanced(src: str, open_idx: int, open_ch: str, close_ch: str) -> int:
+    """Index of the close char matching the open char at open_idx."""
+    depth = 0
+    for k in range(open_idx, len(src)):
+        if src[k] == open_ch:
+            depth += 1
+        elif src[k] == close_ch:
+            depth -= 1
+            if depth == 0:
+                return k
+    raise AssertionError(f"unbalanced {open_ch}{close_ch} scanning from {open_idx}")
+
+
+def _reviewer_tag(src: str) -> str:
+    """The rendered tag for the forward-looking reviewer pill component —
+    `<VerifiedBy` today, `<ReviewRole` once the fix lands (plan_doc renames
+    it so a bare completed-action claim is structurally unreachable without
+    a `decided` prop). Matched on the RENDERED TAG, never a bare name or a
+    comment naming the old one."""
+    for tag in ("ReviewRole", "VerifiedBy"):
+        if f"<{tag}" in src:
+            return tag
     raise AssertionError(
-        "StepRail.tsx no longer renders a <VerifiedBy ...> element at all — "
-        "if the pill was removed outright this test's premise changed, "
-        "update it deliberately rather than letting it silently pass"
+        "no reviewer-pill component render tag (<ReviewRole ...> or "
+        "<VerifiedBy ...>) found in StepRail.tsx"
+    )
+
+
+def _enclosing_jsx_expr(src: str, tag: str) -> str:
+    """The balanced `{...}` JSX expression that renders `<tag`, found by
+    scanning OUTWARD from the tag's first use to its innermost enclosing
+    brace pair — never a fixed line/character window (a line-wrap or
+    reformat must not desync this)."""
+    idx = src.index(f"<{tag}")
+    depth = 0
+    open_idx = None
+    i = idx
+    while i >= 0:
+        c = src[i]
+        if c == "}":
+            depth += 1
+        elif c == "{":
+            if depth == 0:
+                open_idx = i
+                break
+            depth -= 1
+        i -= 1
+    assert open_idx is not None, f"no enclosing brace found for <{tag}"
+    close_idx = _balanced(src, open_idx, "{", "}")
+    return src[open_idx : close_idx + 1]
+
+
+def _component_function_body(src: str, name: str) -> str:
+    """The `function <name>(...) { ... }` body, found by paren/brace
+    balancing from the `function <name>(` marker — never a fixed window."""
+    marker = f"function {name}("
+    start = src.index(marker)
+    paren_open = src.index("(", start)
+    paren_close = _balanced(src, paren_open, "(", ")")
+    brace_open = src.index("{", paren_close)
+    brace_close = _balanced(src, brace_open, "{", "}")
+    return src[brace_open : brace_close + 1]
+
+
+def _const_stmt(src: str, name: str, start: int = 0) -> str:
+    """A `const <name> = ...;` statement, found by scanning to the
+    terminating `;` at paren/brace/bracket depth 0 — never a fixed
+    character window. Pattern reused from
+    tests/unit/test_gate_actor_chip_ui.py."""
+    marker = f"const {name} ="
+    begin = src.index(marker, start)
+    depth = 0
+    i = begin
+    while i < len(src):
+        c = src[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ";" and depth == 0:
+            return src[begin : i + 1]
+        i += 1
+    raise AssertionError(f"unterminated const {name} statement")
+
+
+def _caption_state_region(src: str) -> str:
+    """The exact computation deciding which ACTIVITY_META entry (and thus
+    which caption string, e.g. 'awaiting review') reaches the screen: from
+    `const state = (activity?.state ...)` through the `const stateLabel =`
+    statement. Bounded so an UNRELATED `.type === "gate"` check used for
+    segment styling elsewhere in the same file (the steps.map loop further
+    down, computing bar opacity) can't satisfy this assertion."""
+    start = src.index("const state = (activity?.state")
+    stmt = _const_stmt(src, "stateLabel", start)
+    end = src.index(stmt, start) + len(stmt)
+    return src[start:end]
+
+
+# ---------------------------------------------------------------------------
+# Self-check: the comment-stripper actually strips a planted trap comment
+# that names every string this suite otherwise searches for.
+# ---------------------------------------------------------------------------
+
+def test_strip_comments_removes_a_trap_comment():
+    trap = (
+        "const x = 1; // verified by Steward gateFor implement_tasks\n"
+        "/* reviews next decided */\n"
+        "{/* verified by reviews next */}\n"
+        "const y = 2;"
+    )
+    stripped = _strip_comments(trap)
+    assert "verified by" not in stripped
+    assert "reviews next" not in stripped
+    assert "const x = 1" in stripped and "const y = 2" in stripped
+
+
+# ---------------------------------------------------------------------------
+# AC-1 — the current non-gate row's reviewer pill must be guarded by a real
+# gate record, not by step position (verifierPersona) alone.
+# ---------------------------------------------------------------------------
+
+def test_ac1_current_step_reviewer_pill_requires_a_real_gate_record():
+    src = _strip_comments(_read(_RAIL))
+    tag = _reviewer_tag(src)
+    expr = _enclosing_jsx_expr(src, tag)
+    assert "cur" in expr and "!isGate" in expr, (
+        f"expected the reviewer-pill expression to stay scoped to the "
+        f"current non-gate row: {expr!r}"
+    )
+    assert re.search(r"gateFor\(|\bdecided\b", expr), (
+        "the reviewer-pill render condition carries nothing beyond step "
+        "POSITION (cur / !isGate / verifierPersona) — it must additionally "
+        "consult a REAL gate record (gateFor(...) against the resolved "
+        f"`gates` array, or a `decided` flag derived from one): {expr!r}"
     )
 
 
 # ---------------------------------------------------------------------------
-# The core defect: the pill must require a REAL gate_decide/verification
-# record for the upcoming gate, not merely "a gate exists later in the list".
+# AC-2 — the retained forward-looking hint reads as a PREDICTION until a
+# real record exists; the completed-action string is not unconditional.
 # ---------------------------------------------------------------------------
 
-def test_verified_by_pill_requires_a_real_gate_record():
-    src = _read(_RAIL)
-    line = _verified_by_render_line(src)
-    # `verifierPersona` alone only proves a later gate STEP exists in
-    # WORKFLOW_STEPS_ORDERED — it says nothing about whether that gate has
-    # actually been decided. The guard must additionally consult the
-    # resolved `gates` array (a real GanttGate receipt), via the same
-    # `gateFor` lookup GateRow itself uses for genuine passed/override pills.
-    assert "gateFor(" in line, (
-        "the CURRENT non-gate step's 'verified by' pill renders off step "
-        "POSITION only (verifierPersona) with no check that a real "
-        "gate_decide/verification record exists for the upcoming gate — "
-        f"this claims review before it happened. Offending line: {line!r}"
+def test_ac2_reviewer_pill_is_future_tense_until_a_record_exists():
+    src = _strip_comments(_read(_RAIL))
+    assert "reviews next" in src, (
+        "the forward-looking reviewer hint on an executing step must read "
+        "as a prediction ('{Role} reviews next'), never a completed-action "
+        "claim, until a real gate record exists"
     )
-    # Still scoped to the currently-executing, non-gate row — the fix must
-    # not widen it to fire on rows it was never meant to touch.
-    assert "cur" in line and "!isGate" in line, (
-        f"the guard must stay scoped to the current non-gate row: {line!r}"
-    )
-
-
-def test_verified_by_guard_keys_off_record_existence_not_a_step_name():
-    src = _read(_RAIL)
-    line = _verified_by_render_line(src)
-    # stop_if: never special-case a literal step id (e.g. "implement_tasks")
-    # — the guard must generalize to any newly-added workflow step.
-    assert '"implement_tasks"' not in src and "'implement_tasks'" not in src, (
-        "the fix must not hardcode the specific step name that surfaced the "
-        "bug; it must key off actual gate-record existence so a NEW step "
-        "can't reintroduce the same phantom claim"
-    )
-    assert "implement_tasks" not in line, (
-        f"the VerifiedBy guard line itself must not name a specific step: {line!r}"
+    tag = _reviewer_tag(src)
+    body = _component_function_body(src, tag)
+    assert "verified by" in body, f"{tag} must still render 'verified by' once a record exists: {body!r}"
+    assert "reviews next" in body, f"{tag} must render 'reviews next' before a record exists: {body!r}"
+    # The two strings must be mutually exclusive branches of one decision —
+    # a conditional keyword must separate them, not just two sibling spans
+    # that both always render.
+    lo, hi = sorted((body.index("verified by"), body.index("reviews next")))
+    between = body[lo:hi]
+    assert re.search(r"\?|:\s*<|&&|if\s*\(", between), (
+        f"'verified by' and 'reviews next' must be mutually exclusive "
+        f"branches of the same guard, not two always-rendered spans: {body!r}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Non-regression: a genuinely completed/verified earlier step (a real
-# gate_decide receipt) must keep rendering its real pill unchanged.
+# AC-3 — SdlcProgress's "awaiting review" header caption must cross-check
+# the CURRENT step's own resolved type before it reaches the screen.
 # ---------------------------------------------------------------------------
 
-def test_gate_row_real_receipts_still_render_unchanged():
+def test_ac3_awaiting_review_caption_requires_the_current_step_to_be_a_gate():
+    src = _strip_comments(_read(_PROGRESS))
+    region = _caption_state_region(src)
+    assert re.search(r'\.type\s*===\s*["\']gate["\']', region) or "curStepType" in region, (
+        "SdlcProgress must cross-check the CURRENT step's own resolved "
+        "type (steps[curIdx].type === 'gate') as part of computing `state` "
+        "/ `stateLabel` — today that computation flows `activity?.state` "
+        "straight into ACTIVITY_META with no such check, so nothing stops "
+        "the 'awaiting review' claim from reaching the screen on a "
+        "non-gate step. (An unrelated `.type === \"gate\"` check used "
+        f"elsewhere in the file, e.g. for segment styling, does not count "
+        f"— it must be part of THIS computation): {region!r}"
+    )
+    assert 'awaiting_gate: { label: "awaiting review"' in src, (
+        "the awaiting_gate key/label must still exist in ACTIVITY_META — "
+        "this is a defensive cross-check on WHEN the label reaches the "
+        "screen, never a removal of the honest state itself (a "
+        "neighbouring suite pins the key's presence)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC-4 — non-regression: a genuinely completed gate's real receipt pill
+# (GateRow) must render exactly as before.
+# ---------------------------------------------------------------------------
+
+def test_ac4_gate_row_real_receipts_are_unchanged():
     src = _read(_RAIL)
     assert 'isGate && gi && gi.state !== "future"' in src, (
-        "GateRow's real passed/override receipt path (the legitimate "
-        "'verified'/'passed' pill for a genuinely completed gate, "
-        "StepRail.tsx:302-303) must be left rendering exactly as before — "
-        "the fix must only touch the CURRENT non-gate row's forward-looking "
-        "pill, never suppress real evidence on completed gates"
+        "GateRow's real passed/override receipt branch (StepRail.tsx:302-"
+        "303) must be left rendering exactly as before"
+    )
+    assert 'g.override ? "override" : "passed"' in src, (
+        "gateInfo's resolution of a real gate_decide record into "
+        "passed/override (StepRail.tsx:217-224) must be unchanged"
     )
 
 
 # ---------------------------------------------------------------------------
-# The header/caption "awaiting review" wording: already keyed strictly off
-# the server's honest `activity.state` (conductor_service.activity_for only
-# ever sets state=awaiting_gate on a real pending/failed gate step). Pinned
-# here so this invariant can't silently drift while fixing the pill above.
+# AC-5 — no guard special-cases a step id; a new workflow step can't
+# reintroduce the same phantom claim.
 # ---------------------------------------------------------------------------
 
-def test_awaiting_review_wording_is_keyed_only_off_server_activity_state():
-    for path in (_PROGRESS, _CONDUCTOR_PAGE):
-        src = _read(path)
-        assert 'awaiting_gate: { label: "awaiting review"' in src, (
-            f"{path.name}: expected the honest ACTIVITY_META/ACT_TILE map to "
-            "carry the 'awaiting review' label under the awaiting_gate key "
-            "(server-driven), not as a free-standing string"
-        )
-        # Exactly one occurrence of the literal label per file: no second,
-        # locally-computed "awaiting review" string driven by workflow_step
-        # or any other client-side signal.
-        assert src.count('"awaiting review"') == 1, (
-            f"{path.name}: 'awaiting review' must appear exactly once, as "
-            "the awaiting_gate entry in the honest activity-state map — a "
-            "second occurrence would mean some OTHER, non-gate-backed path "
-            "can print the same claim"
+def test_ac5_no_guard_hardcodes_a_step_name():
+    for path in (_RAIL, _PROGRESS):
+        src = _strip_comments(_read(path))
+        assert "implement_tasks" not in src, (
+            f"{path.name}: a guard must not special-case the literal step "
+            "id that surfaced the bug — it must key off gate-record "
+            "existence or the step's own `type` field so a NEW workflow "
+            "step can't reintroduce the same phantom claim"
         )
