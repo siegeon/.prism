@@ -5,8 +5,9 @@ The dual-theme tokens must be SERVED by the dev daemon at 127.0.0.1:8888
 a stale web_dist/an unbounced daemon shipped false-greens before. Pins the
 user-facing integration: npm build shipped + daemon bounced onto it.
 
-NOT run in PR CI (pr-checks.yml runs tests/unit only); enforced locally where
-the dev daemon is mandated always-on (feedback-dev-must-stay-current).
+NOT run in PR CI (pr-checks.yml's "Pytest (integration)" step explicitly
+--ignores this file - task 170991cc); enforced locally where the dev daemon
+is mandated always-on (feedback-dev-must-stay-current).
 """
 from __future__ import annotations
 
