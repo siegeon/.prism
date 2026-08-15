@@ -12,6 +12,7 @@ import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/
 import { useSpring } from "motion/react";
 import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
 import { fmtTokens } from "@/lib/format";
+import { activityLabel } from "@/lib/activityLabel";
 
 // Per-segment tooltip: step name + the role that owns it ("story gate ·
 // Steward"), so hovering the minimap says WHO drives each phase.
@@ -61,6 +62,10 @@ export type Activity = {
   // while fresh. Lets the pill say WHAT a driving step is doing, not just that
   // it is doing something.
   heartbeat?: { step?: string; last_tool?: string; elapsed_s?: number | null; age_s?: number | null } | null;
+  // Task e9625a4d + 0f090a6c additive fields (api/conductor.py
+  // _with_report_signal), read only via lib/activityLabel.ts's activityLabel().
+  report_signal_lost?: boolean;
+  report_signal_age_s?: number | null;
 };
 
 function fmtClock(s: number): string {
@@ -172,8 +177,17 @@ export default function SdlcProgress({
   // genuinely dead drive (`stalled`) earns the alarm wording.
   const idleClock = activity?.task_motion_s != null ? fmtClock(activity.task_motion_s) : "";
   const hb = activity?.heartbeat;
-  const stateLabel =
-    state === "adrift" ? `driver active · last step report ${idleClock || "—"} ago`
+  // Task 0f090a6c: the SAME claimed-but-unobservable "we can't see it" cue
+  // as ConductorPage's tile pill, from the ONE shared decision — 'adrift'
+  // and 'stalled' are the two classifications it can fire for; checked
+  // BEFORE either's own normal-state wording below.
+  const signal = activityLabel(activity);
+  // The pulse dot + stateLabel color below read effTone rather than
+  // meta.tone directly while unobservable — never mutate `meta` itself,
+  // it's the shared ACTIVITY_META map object.
+  const effTone = signal.lost ? signal.tone : meta.tone;
+  const stateLabel = signal.lost ? signal.label
+    : state === "adrift" ? `driver active · last step report ${idleClock || "—"} ago`
     : state === "driving" && hb?.last_tool
       ? `driving · ${hb.last_tool}${hb.elapsed_s != null ? ` · ${fmtClock(hb.elapsed_s)} in step` : ""}`
     : state === "stalled" ? `no active driver · idle ${idleClock || "—"}`
@@ -323,7 +337,7 @@ export default function SdlcProgress({
             <span className="flex items-center gap-1.5 shrink-0 tabular-nums">
               <motion.span
                 className="inline-block h-1.5 w-1.5 rounded-full"
-                style={{ background: `var(--accent-${meta.tone}-fg)` }}
+                style={{ background: `var(--accent-${effTone}-fg)` }}
                 animate={!reduced && live ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
                 transition={!reduced && live ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.2 }}
               />
@@ -351,7 +365,7 @@ export default function SdlcProgress({
                 </span>
               )}
               {!hideTokens && <span className="opacity-70">· {fmtTokens(tokens)} tok</span>}
-              {stateLabel && <span style={{ color: `var(--accent-${meta.tone}-fg)` }}>· {stateLabel}</span>}
+              {stateLabel && <span style={{ color: `var(--accent-${effTone}-fg)` }}>· {stateLabel}</span>}
             </span>
           </div>
           {!hideTokens && tokens > 0 && (

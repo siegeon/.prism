@@ -66,23 +66,36 @@ def _scores_db_of(s) -> str:
 SIGNAL_LOST_AFTER_S = drive_heartbeat.HEARTBEAT_WINDOW_S * 3
 
 
+_REPORT_SIGNAL_STATES = frozenset({"adrift", "stalled"})
+
+
 def _with_report_signal(managed_tasks: list, scores_db: str) -> list:
-    """Task e9625a4d: distinguish a freshly-adrift row from one whose
-    task-scoped report signal (drive_heartbeat) has gone dark for a long
-    while -- additive enrichment mirroring _with_claimed (:53-66) below.
-    NEVER edits conductor_service.activity_for (a control_plane.POLICY_FILES
-    entry) and never widens the settled 120s/90s/180s thresholds (mx-b26121);
-    this only READS drive_heartbeat.heartbeat_age_s, the same non-policy
-    primitive activity_for already consults. Scoped to 'adrift' rows only --
-    working/driving/stalled/paused already carry their own honest wording."""
+    """Task e9625a4d, extended by task 0f090a6c: distinguish a freshly
+    adrift/stalled row from one whose task-scoped report signal
+    (drive_heartbeat) has gone dark for a long while -- additive enrichment
+    mirroring _with_claimed (:53-66) below. NEVER edits
+    conductor_service.activity_for (a control_plane.POLICY_FILES entry) and
+    never widens the settled 120s/90s/180s thresholds (mx-b26121); this only
+    READS drive_heartbeat.heartbeat_age_s, the same non-policy primitive
+    activity_for already consults.
+
+    Task 0f090a6c SUPERSESSION: originally scoped to 'adrift' rows only
+    ("working/driving/stalled/paused already carry their own honest
+    wording") -- that was wrong for 'stalled', which is exactly the OTHER
+    claimed-but-unobservable classification and needs the identical
+    treatment (see test_invisible_worker_states_read_cannot_see.py). Also
+    attaches report_signal_age_s, the REAL heartbeat age, so the client
+    never has to fall back to task_motion_s (step-transition recency, a
+    different clock) for the elapsed-since-observation number."""
     out = []
     for row in managed_tasks:
         row = dict(row)
         activity = row.get("activity") or {}
-        if activity.get("state") == "adrift":
+        if activity.get("state") in _REPORT_SIGNAL_STATES:
             activity = dict(activity)
             age = drive_heartbeat.heartbeat_age_s(scores_db, row.get("id", ""))
             activity["report_signal_lost"] = age is None or age > SIGNAL_LOST_AFTER_S
+            activity["report_signal_age_s"] = age
             row["activity"] = activity
         out.append(row)
     return out
