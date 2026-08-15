@@ -38,6 +38,18 @@ from pathlib import Path
 
 WEB = Path(__file__).resolve().parents[2] / "prism_service" / "web" / "src"
 CONDUCTOR_SRC = (WEB / "pages" / "ConductorPage.tsx").read_text(encoding="utf-8")
+ACTIVITY_LABEL_SRC = (WEB / "lib" / "activityLabel.ts").read_text(encoding="utf-8")
+
+
+def _activity_label_fn_body() -> str:
+    """The body of activityLabel(), the ONE function that renders the
+    we-can't-see-it wording -- scoped narrowly so a blanket module-text
+    search doesn't false-positive on isSignalLost()'s legitimate 'adrift'/
+    'stalled' state-name literals (the exact false-positive concern this
+    suite's own docstring already flags for fmtIdle/the stalled pill)."""
+    start = ACTIVITY_LABEL_SRC.index("export function activityLabel(")
+    end = ACTIVITY_LABEL_SRC.index("\n}", start)
+    return ACTIVITY_LABEL_SRC[start:end]
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +146,21 @@ def test_with_report_signal_flags_adrift_with_no_heartbeat_ever_as_lost(tmp_path
 
 
 def test_with_report_signal_ignores_non_adrift_states(tmp_path):
-    """The enrichment is scoped to 'adrift' rows only -- working/driving/
-    stalled/paused already carry their own honest wording and must not gain
-    this key at all."""
+    """The enrichment is scoped to 'adrift'/'stalled' rows only -- working/
+    driving/paused already carry their own honest wording and must not gain
+    this key at all.
+
+    SUPERSESSION (task 0f090a6c, 2026-08-15): 'stalled' was originally
+    excluded here too ("working/driving/stalled/paused already carry their
+    own honest wording") -- that was the bug: 'stalled' is the OTHER
+    claimed-but-unobservable classification alongside 'adrift' and needed
+    the identical treatment. See
+    tests/unit/test_invisible_worker_states_read_cannot_see.py for the
+    positive coverage of 'stalled' now gaining report_signal_lost."""
     from prism_service.api import conductor as conductor_api
 
     scores_db = str(tmp_path / "scores.db")
-    for state in ("working", "driving", "stalled", "paused", "awaiting_gate"):
+    for state in ("working", "driving", "paused", "awaiting_gate"):
         managed = [{"id": f"task-{state}", "title": "t", "activity": {"state": state}}]
         out = conductor_api._with_report_signal(managed, scores_db)
         assert "report_signal_lost" not in (out[0].get("activity") or {}), (state, out)
@@ -158,35 +178,57 @@ def _extract_between(src: str, start: str, end: str) -> str:
 
 def test_pill_reads_the_server_computed_report_signal_lost_field():
     """The client reads the server field by name -- never invents its own
-    staleness cutoff from a raw timestamp (stop_if)."""
-    assert "task.activity?.report_signal_lost" in CONDUCTOR_SRC, (
-        "actLabel must branch on the server-computed activity.report_signal_lost "
-        "field, not a client-side heuristic")
+    staleness cutoff from a raw timestamp (stop_if).
+
+    SUPERSESSION (task 0f090a6c, 2026-08-15): the read used to be an inline
+    `task.activity?.report_signal_lost` ternary in ConductorPage.tsx itself;
+    it now lives in the ONE shared decision, lib/activityLabel.ts's
+    isSignalLost(), which ConductorPage.tsx calls via activityLabel()
+    rather than re-deriving the branch locally (mx-d412e0 precedent) --
+    see test_invisible_worker_states_read_cannot_see.py's
+    test_conductor_page_consumes_the_shared_activity_label_module."""
+    assert "report_signal_lost" in ACTIVITY_LABEL_SRC, (
+        "the shared activityLabel module must branch on the server-computed "
+        "activity.report_signal_lost field, not a client-side heuristic")
+    assert "activityLabel" in CONDUCTOR_SRC and "lib/activityLabel" in CONDUCTOR_SRC, (
+        "ConductorPage.tsx must consume the shared module rather than "
+        "re-deriving the report_signal_lost branch inline")
 
 
 def test_signal_lost_pill_wording_differs_from_driver_active():
-    """The signal-lost branch renders different leading text than
+    """The signal-lost wording renders different leading text than
     'driver active' -- the ticket's own captured symptom is that both read
-    identically reassuring as staleness grows."""
-    branch = _extract_between(
-        CONDUCTOR_SRC, "task.activity?.report_signal_lost", 'actState === "adrift" ?')
+    identically reassuring as staleness grows.
+
+    SUPERSESSION (task 0f090a6c, 2026-08-15): the wording now lives in
+    lib/activityLabel.ts's activityLabel() (the shared decision), not
+    inline in ConductorPage.tsx -- scoped to that function's own body so
+    the check isn't defeated by 'driver active' legitimately appearing
+    elsewhere in ConductorPage.tsx's OTHER (non-signal-lost) branches."""
+    branch = _activity_label_fn_body()
     assert "driver active" not in branch, (
-        "the signal-lost branch must not reuse the 'driver active' wording "
-        f"verbatim: {branch!r}")
-    assert branch.strip() != "", "the report_signal_lost branch must render something"
+        "activityLabel()'s we-can't-see-it branch must not reuse the "
+        f"'driver active' wording verbatim: {branch!r}")
+    assert branch.strip() != "", "activityLabel() must render something"
 
 
 def test_signal_lost_wording_carries_no_alarm_vocabulary():
     """mx-dfd56a: idle/stalled/needs-you/attention are INTERVENTION words --
     reserved for states where the owner truly has something to click. Scoped
-    to the NEW branch only (fmtIdle / the stalled pill legitimately use
-    'idle' elsewhere and must not false-positive this check)."""
-    branch = _extract_between(
-        CONDUCTOR_SRC, "task.activity?.report_signal_lost", 'actState === "adrift" ?')
+    to activityLabel()'s own function body (fmtIdle / the stalled pill
+    legitimately use 'idle' elsewhere, and isSignalLost()'s SIGNAL_LOST_STATES
+    set legitimately contains the literal state name 'stalled' -- both must
+    not false-positive this check).
+
+    SUPERSESSION (task 0f090a6c, 2026-08-15): re-scoped from a CONDUCTOR_SRC
+    character-window extraction (assumed the OLD inline adjacency) to the
+    shared activityLabel() function body in lib/activityLabel.ts."""
+    branch = _activity_label_fn_body()
     lowered = branch.lower()
     for bad in ("idle", "stalled", "needs you", "attention"):
         assert bad not in lowered, (
-            f"signal-loss branch must not say {bad!r} (mx-dfd56a): {branch!r}")
+            f"activityLabel()'s we-can't-see-it wording must not say "
+            f"{bad!r} (mx-dfd56a): {branch!r}")
 
 
 def test_handoff_never_says_on_deck_for_a_step_already_running():
