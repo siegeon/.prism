@@ -43,7 +43,7 @@ function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics
     return {
       tokS: node.tok_s, tokensTotal: node.tokens_total, tokensLive: live,
       step: "", stepBarFrac: 0, stepLive: false,
-      gatePending: false, gateLabel: "", queueDepth: 0,
+      gatePending: false, gateLabel: "", queueDepth: 0, bufferFrac: 0,
     };
   }
 
@@ -69,7 +69,7 @@ function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics
     step: node.workflow_step, stepBarFrac: stepLive ? Math.max(heartbeatFrac, 0.08) : 0, stepLive,
     gatePending: node.gate_state === "pending",
     gateLabel: node.gate_state === "pending" ? "awaiting review" : "",
-    queueDepth,
+    queueDepth, bufferFrac: node.bufferFrac,
   };
 }
 
@@ -99,7 +99,11 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     const b = state.nodes.find((n) => n.id === e.target);
     if (!a || !b) continue;
     const kind = edgeKind(e.kind);
-    const live = kind === "token" ? !!a.tok_s && a.tok_s > 0 : true;
+    // Token wires read "flowing" off the session's own live tok_s;
+    // structural wires read the ~4s propagated-flow window graphState
+    // tracks per edge (piece 2: a structural edge tints teal only while
+    // real motion has actually propagated up it, never permanently).
+    const live = kind === "token" ? !!a.tok_s && a.tok_s > 0 : state.isEdgeFlowing(e.source, e.target, now);
     const pts = routeOrthogonal(
       { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h },
       { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h },
@@ -118,6 +122,8 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
   // HUD — fixed, screen space, independent of pan/zoom.
   drawHud(ctx, state, now);
   if (isGraphQuiet(state, now)) {
-    drawQuietLine(ctx, 22, 148);
+    // Round 2's taller/wider HUD panel (piece 3) pushed its bottom edge
+    // down; the quiet line sits just below it, never overlapping a row.
+    drawQuietLine(ctx, 22, 232);
   }
 }

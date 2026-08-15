@@ -29,7 +29,12 @@ function fmtNum(n: number | null | undefined): string {
  * a soft second copy offset + faded, to read as a double-exposed tween
  * even though we don't have a real intermediate value to animate through
  * (grammar §1/§7: "the number briefly renders in two overlapping states"). */
-function drawGhostable(
+/** Exported so hud.ts (round 2, piece 3) reuses the exact same
+ * double-exposed-tween technique for its own big numbers, per the build
+ * directive: "Numbers ghost/tween when they change (reuse cards.ts's
+ * ghosting approach)" — one visual language for "this value just
+ * moved", not two. */
+export function drawGhostable(
   ctx: CanvasRenderingContext2D, text: string, x: number, y: number,
   color: string, font: string, ghostActive: boolean, ghostFrac: number,
 ): void {
@@ -60,9 +65,9 @@ function drawConnectorDot(ctx: CanvasRenderingContext2D, x: number, y: number, c
 }
 
 function drawCapacityBar(
-  ctx: CanvasRenderingContext2D, x: number, y: number, w: number, frac: number, color: string, live: boolean,
+  ctx: CanvasRenderingContext2D, x: number, y: number, w: number, frac: number,
+  color: string, live: boolean, h = 4,
 ): void {
-  const h = 4;
   ctx.fillStyle = "rgba(255,255,255,0.08)";
   ctx.fillRect(x, y, w, h);
   if (live) {
@@ -81,6 +86,9 @@ export type CardMetrics = {
   gatePending: boolean;
   gateLabel: string;
   queueDepth: number;
+  /** Recent-throughput buffer bar fraction (0..1) — task/subtask cards
+   * only (round 2, piece 5: "load as LENGTH"). */
+  bufferFrac: number;
 };
 
 const STATUS_ICON: Record<string, string> = {
@@ -174,6 +182,20 @@ export function drawCard(
     const tw = ctx.measureText(valueText).width;
     drawGhostable(ctx, valueText, valueRight - tw, rowY, m.tokensLive ? PALETTE.teal : PALETTE.textDim, "11px ui-monospace, SFMono-Regular, monospace", ghostActive, ghostFrac);
     rowY += ROW_H;
+  }
+
+  // Recent-throughput BUFFER bar (round 2, piece 5) — task/subtask cards
+  // only, ~70% of card width, teal fill on a dark track. Fills a real
+  // amount on every tokens.turn that targets this node and drains
+  // continuously in GraphState.step(), so its LENGTH alone answers "how
+  // loaded is this right now" (round1 critic: "no node ever shows load
+  // as a filling bar... every load judgment forces reading and
+  // comparing five-digit numbers instead of glancing at a bar").
+  if (n.kind !== "session") {
+    const barW = Math.min(w * 0.7, valueRight - labelX);
+    rowY += 8;
+    drawCapacityBar(ctx, labelX, rowY, barW, m.bufferFrac, PALETTE.teal, m.bufferFrac > 0.015, 6);
+    rowY += ROW_H - 8;
   }
 
   // Step row (orange) + capacity bar — task/subtask cards only. A session

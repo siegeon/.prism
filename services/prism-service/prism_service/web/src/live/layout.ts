@@ -10,17 +10,19 @@
 export type Slot = { x: number; y: number; w: number; h: number };
 
 export const BASE_CARD_W = 236;
-export const BASE_TASK_H = 116;
-export const BASE_SUB_H = 96;
+// +12 each (round 2, piece 5) to fit the new Tokens-row buffer bar
+// without cramping the rows already below it (Step bar, Spend, gate).
+export const BASE_TASK_H = 128;
+export const BASE_SUB_H = 108;
 export const BASE_SESSION_H = 60;
 const COL_GAP = 96;
 const ROW_GAP = 22;
 const ORIGIN_X = 48;
-/** Clears the fixed HUD panel (top-left, ~166px tall — see hud.ts) so the
- * first task card is never born underneath it; the HUD sits in screen
- * space and never pans, so this is the one layout constant that has to
- * know about it. */
-const ORIGIN_Y = 190;
+/** Clears the fixed HUD panel (top-left, ~206px tall after round 2's
+ * taller instrumentation rebuild — see hud.ts) so the first task card is
+ * never born underneath it; the HUD sits in screen space and never
+ * pans, so this is the one layout constant that has to know about it. */
+const ORIGIN_Y = 228;
 
 /** Above this many top-level task cards, shrink everything so 1-15 tasks
  * still fit without cards overlapping (directive: "overflow -> smaller

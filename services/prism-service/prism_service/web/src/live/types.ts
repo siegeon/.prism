@@ -15,6 +15,9 @@ export type GraphNode = {
   heartbeat_age_s: number | null;
   tok_s: number | null;
   tokens_total: number | null;
+  /** Live USD spend, task/subtask nodes only (api/work.py's _task_node
+   * data-enrichment slice) — absent on session nodes. */
+  spend_usd?: number | null;
   href: string;
 };
 

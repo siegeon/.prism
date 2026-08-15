@@ -69,8 +69,17 @@ export function pointAtFraction(pts: Point[], t: number): Point {
 
 export type WireKind = "token" | "structure";
 
-export function wireColor(kind: WireKind): string {
-  return kind === "token" ? PALETTE.teal : "rgba(255,255,255,0.16)";
+/** `flowing` means "this specific wire has carried real token motion
+ * recently" -- for a token (session->task) wire that's live tok_s>0; for
+ * a structure (parent_of) wire it's graphState's ~4s recency window on
+ * propagated flow (round1 critic: "the structural edges... never show
+ * color, a marker, or motion" -- a structure wire now tints faintly teal
+ * while flow is propagating up it, dim neutral otherwise, so color still
+ * never means two things in the same view: full-saturation teal stays
+ * reserved for the token wire itself). */
+export function wireColor(kind: WireKind, flowing: boolean): string {
+  if (kind === "token") return PALETTE.teal;
+  return flowing ? "rgba(45,212,191,0.4)" : "rgba(255,255,255,0.16)";
 }
 
 export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: WireKind, live: boolean): void {
@@ -78,9 +87,9 @@ export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: Wire
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.strokeStyle = wireColor(kind);
+  ctx.strokeStyle = wireColor(kind, live);
   ctx.lineWidth = kind === "token" ? 2.5 : 2;
-  ctx.globalAlpha = kind === "token" ? (live ? 0.9 : 0.35) : 0.5;
+  ctx.globalAlpha = kind === "token" ? (live ? 0.9 : 0.35) : (live ? 0.75 : 0.5);
   ctx.stroke();
   ctx.globalAlpha = 1;
 }

@@ -189,6 +189,99 @@ def test_draw_composes_every_sub_renderer():
         assert fn in src, f"draw.ts must call {fn} — it is the render loop owner"
 
 
+# ---------------------------------------------------------------------------
+# Round 2 (gauntlet pieces 2 + 5): structural edges carry motion too, task/
+# subtask cards get a real throughput buffer bar, and the HUD reads as
+# instrumentation even at a squint. Pinned against the blind critics'
+# verdicts in E:\gamify-lab\verdicts\round1\piece2_edge_motion.md and
+# piece5_readouts.md.
+# ---------------------------------------------------------------------------
+
+def test_packets_travel_at_a_constant_speed_not_scaled_by_tok_s():
+    src = _read(_LIVE / "packets.ts")
+    assert "export function spawnPacket(edgeKey: string, pts: Point[]): Packet" in src, (
+        "spawnPacket must no longer take tokS -- speed is constant per the "
+        "build directive, only spawn FREQUENCY scales with throughput")
+    assert "polylineLength" in src, (
+        "packet fractional speed must be derived from the wire's real pixel "
+        "length so travel is a CONSTANT real-world px/s, not a fixed fraction")
+    assert "speedForTokS" not in src, "the old tok_s-scaled speed model must be gone"
+
+
+def test_structural_wire_carries_propagated_flow_upward():
+    src = _read(_LIVE / "graphState.ts")
+    assert "parentTaskId" in src and "parent_of" in src, (
+        "a subtask's tokens.turn must locate its parent_of structural edge")
+    assert "reverse()" in src, (
+        "the propagated marker must travel child->parent, the reverse of "
+        "the parent_of edge's own source->target direction")
+    assert "isEdgeFlowing(" in src, (
+        "GraphState must expose whether a specific edge has flowed recently, "
+        "for the structural wire's teal tint")
+
+
+def test_wires_tint_structural_edges_on_recent_flow_not_always_grey():
+    src = _read(_LIVE / "wires.ts")
+    assert "wireColor(kind: WireKind, flowing: boolean)" in src, (
+        "wireColor must take a flowing signal so a structural wire can tint "
+        "teal while flow has propagated up it (round1 gap: structural edges "
+        "never showed color, a marker, or motion)")
+
+
+def test_packet_spawns_are_cooldown_gated_per_edge_sparse():
+    src = _read(_LIVE / "graphState.ts")
+    assert "SPAWN_COOLDOWN_MS" in src, (
+        "a wire must carry at most one marker per cooldown window -- "
+        "grammar's SPARSE density, not a packet train")
+    assert "maybeSpawnPacket" in src or "edgeLastSpawnAt" in src
+
+
+def test_task_card_gets_a_throughput_buffer_bar_that_drains():
+    cards_src = _read(_LIVE / "cards.ts")
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "bufferFrac" in cards_src and "bufferFrac" in state_src, (
+        "a task/subtask card's buffer bar must be a real per-node field, "
+        "not a static icon (round1 gap: 'no node ever shows load as a "
+        "filling bar')")
+    assert "BUFFER_DRAIN_PER_MS" in state_src, (
+        "the buffer bar must drain continuously, not just ratchet up and "
+        "sit at its high-water mark")
+    assert "bufferFillFor(" in state_src, (
+        "the buffer bar must fill by an amount driven by the REAL tok_s on "
+        "the tokens.turn event, never a fixed timer tick")
+
+
+def test_hud_rebuilt_with_meter_bars_and_bigger_hero_number():
+    src = _read(_LIVE / "hud.ts")
+    assert "drawGhostable" in src, (
+        "HUD numbers must ghost/tween on change, reusing cards.ts's own "
+        "technique per the build directive")
+    assert "drawMeter(" in src and "drawSegments(" in src, (
+        "every HUD stat row must carry its own meter bar or segmented-block "
+        "gauge, not just a bare number (round1 gap: squinted to 25% the "
+        "dashboard read as 'mostly empty dark canvas')")
+    assert "PANEL_W = 320" in src or "PANEL_W" in src
+
+
+def test_hud_no_longer_carries_dead_unused_rows():
+    src = _read(_LIVE / "hud.ts")
+    # round1's own critique of clip A: "two of its four rows never change
+    # at all in 78 seconds, so half the HUD is dead weight" -- the rebuilt
+    # HUD drops the static "root tasks" counter rather than keep dead rows.
+    assert "root tasks" not in src
+
+
+def test_graph_state_self_heals_nodes_created_after_boot():
+    src = _read(_LIVE / "graphState.ts")
+    assert "ensureTaskNode" in src, (
+        "a task/subtask referenced by an event that arrives after the page's "
+        "boot snapshot must get a placeholder card, not be silently dropped "
+        "forever (piece-4 cross-check: HUD ticked while cards read 0)")
+    # every one of the four WorkEvent handlers must route through the
+    # self-healing lookup rather than a bare byId.get(...) early return.
+    assert src.count("ensureTaskNode(event.task_id, now)") >= 4
+
+
 def test_version_bumped_for_this_change():
     # Pinned as a FLOOR, never equality on the live gamify.N marker: an
     # exact-literal pin rots on the very next patch bump and hands its red

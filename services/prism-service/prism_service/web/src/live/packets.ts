@@ -2,38 +2,39 @@
  * source to target, spawned on real tokens.turn events only (design
  * directive: "every piece of motion driven by REAL events"; grammar §1:
  * SPARSE density, "one visible marker per 300-600px", legibility over
- * spectacle). Kept as a tiny, dependency-free module so it's easy for a
- * later lane to retune density/speed without touching layout or draw. */
+ * spectacle). Round 2 (piece 2 critic fix): SPEED is now CONSTANT
+ * real-world px/s regardless of tok_s ("constant modest speed... a
+ * marker is visibly mid-wire in any 2s window") -- it's SPAWN FREQUENCY
+ * (gated in graphState.ts by a per-wire cooldown) that scales with
+ * tok_s, never the travel speed. Kept as a tiny, dependency-free module
+ * so it's easy for a later lane to retune density/speed without
+ * touching layout or draw. */
 
 import type { Point } from "./wires";
-import { pointAtFraction } from "./wires";
+import { pointAtFraction, polylineLength } from "./wires";
 import { PALETTE } from "./palette";
 
 export type Packet = {
   edgeKey: string;
   pts: Point[];
   t: number;
-  speedPerMs: number;
+  fracPerMs: number;
 };
 
-const MIN_TOK_S = 5;
-const MAX_TOK_S = 400;
-const MIN_SPEED_PER_MS = 1 / 4500; // crosses a wire in ~4.5s (sparse, legible)
-const MAX_SPEED_PER_MS = 1 / 900; // ~0.9s for a very hot session
+/** ~140px/s -- fast enough to read as motion, slow enough that a marker
+ * sits visibly mid-span for a full second or more on a typical wire
+ * (round1 critic: markers must be seen "sitting partway along at least
+ * one edge, not only at the nodes themselves"). */
+const PX_PER_MS = 140 / 1000;
 
-export function speedForTokS(tokS: number): number {
-  const clamped = Math.max(MIN_TOK_S, Math.min(MAX_TOK_S, tokS || MIN_TOK_S));
-  const frac = (clamped - MIN_TOK_S) / (MAX_TOK_S - MIN_TOK_S);
-  return MIN_SPEED_PER_MS + frac * (MAX_SPEED_PER_MS - MIN_SPEED_PER_MS);
-}
-
-export function spawnPacket(edgeKey: string, pts: Point[], tokS: number): Packet {
-  return { edgeKey, pts, t: 0, speedPerMs: speedForTokS(tokS) };
+export function spawnPacket(edgeKey: string, pts: Point[]): Packet {
+  const len = Math.max(1, polylineLength(pts));
+  return { edgeKey, pts, t: 0, fracPerMs: PX_PER_MS / len };
 }
 
 export function stepPackets(packets: Packet[], dtMs: number): Packet[] {
   if (!packets.length) return packets;
-  for (const p of packets) p.t += p.speedPerMs * dtMs;
+  for (const p of packets) p.t += p.fracPerMs * dtMs;
   return packets.filter((p) => p.t < 1);
 }
 
