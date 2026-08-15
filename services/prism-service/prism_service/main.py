@@ -522,6 +522,19 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.task_runner import start_task_runner
         start_task_runner()
 
+        # Task dd1e8871 — the server-side, observed-activity heartbeat
+        # producer: a SECOND, harness-guaranteed source onto the SAME
+        # drive_heartbeats store the implement.js prompt text already
+        # writes to (additive, never a replacement). Beats a task ONLY on
+        # observed transcript-token growth tick over tick, never on
+        # elapsed wall-clock alone, so a genuinely hung/looping agent still
+        # goes quiet. Default ON; PRISM_DRIVE_ACTIVITY_OBSERVER_INTERVAL=0
+        # opts an environment out.
+        from prism_service.services.drive_activity_observer import (
+            start_drive_activity_observer,
+        )
+        start_drive_activity_observer()
+
         # Ultimate Graph narrative layer (#50) — names the code hierarchy
         # (domain/service/module) with inference, escaping scopes whose
         # files haven't changed. Defaults ON; PRISM_GRAPH_ENRICH_WORKER=off.
