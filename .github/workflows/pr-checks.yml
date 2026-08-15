@@ -68,3 +68,38 @@ jobs:
         # arguments" — verified on this runner).
         # 120s is ~50x the slowest test here; the whole suite is ~145s.
         run: python -m pytest tests/unit -q -o faulthandler_timeout=120
+
+      - name: Pytest (integration)
+        working-directory: services/prism-service
+        # tests/integration went uncovered by PR CI (task 170991cc): a red
+        # integration tree could land on main invisibly, which is exactly
+        # what happened when task 5ecbbfb8 broke
+        # test_conductor_live_tokens.py and no PR check ever noticed.
+        timeout-minutes: 12
+        # test_radix_tokens_live_8888.py is a deliberate --ignore: it makes a
+        # REAL network call to the always-on LOCAL dev daemon at
+        # 127.0.0.1:8888 (feedback-dev-must-stay-current) and its own
+        # docstring says it is not meant for CI - there is no such daemon on
+        # this runner, so ignoring it here is a scoping decision, not a
+        # silenced regression.
+        #
+        # The 4 --deselects below are PRE-EXISTING failures on main, found
+        # while adding this step (unrelated to task 170991cc's blast radius:
+        # conductor phase_progress/token windowing) and named in full,
+        # rather than silently swallowed, at child task
+        # 1ab8fd0f-f90e-4ea2-afba-6627d761a000 - remove each flag as its
+        # test is fixed there. Landing this step while a red integration
+        # test is NOT named this way is exactly what this task's stop_if
+        # forbids.
+        # Node ids below are rootdir-relative (rootdir resolves to the repo
+        # root, where pyproject.toml's [tool.pytest.ini_options] lives, NOT
+        # to this step's working-directory) - verified against this exact
+        # invocation locally before landing (689 passed, 4 deselected, 0
+        # failed).
+        run: >
+          python -m pytest tests/integration -q -o faulthandler_timeout=120
+          --ignore=tests/integration/test_radix_tokens_live_8888.py
+          --deselect "services/prism-service/tests/integration/test_team_boundary_hardening.py::test_local_mcp_keeps_host_path_tools_available[verifier_run-arguments0]"
+          --deselect "services/prism-service/tests/integration/test_team_boundary_hardening.py::test_local_mcp_keeps_host_path_tools_available[register_claude_source-arguments1]"
+          --deselect services/prism-service/tests/integration/test_work_rows_link_out.py::test_a_task_with_no_counterpart_gets_no_button
+          --deselect services/prism-service/tests/integration/test_work_rows_link_out.py::test_the_provider_pill_is_the_first_thing_on_the_summary_line
