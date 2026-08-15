@@ -9,6 +9,10 @@ import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
 import { activityLabel } from "@/lib/activityLabel";
+// ONE shared severity vocabulary (task 8e5aa63b) — the tile's at-gate
+// handoff copy must read the same label the TaskDetailPage banner and
+// StepRail's gate row derive, so the three cannot disagree.
+import { gateSeverity } from "@/lib/gateSeverity";
 
 type ManagedTask = {
   id: string;
@@ -229,7 +233,13 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const handoff = !claimed
     ? "not yet claimed by conductor — conductor_work has never run on this task"
     : showGate
-    ? "paused at gate — awaiting a distinct reviewer"
+    // No readiness payload is fetched for the board tile (a lightweight
+    // poll) — pass null so gateSeverity() honestly reads PENDING rather
+    // than claiming a verdict this tile has no evidence for. Kept as a
+    // concatenation (not a template literal) so the pinned literal string
+    // below stays a source-scannable double-quoted constant.
+    ? gateSeverity({ gate_state: gate, readiness: null }).label + " · " +
+      "paused at gate — awaiting a distinct reviewer"
     // Task e9625a4d: a step the timeline already shows actively running
     // (working/driving/adrift) must never read as merely queued — that was
     // the byte-identical "on deck" wording for a fresh task AND one 24

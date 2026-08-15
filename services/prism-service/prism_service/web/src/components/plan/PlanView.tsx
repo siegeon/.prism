@@ -535,6 +535,11 @@ export default function PlanView({
           <StepRail
             step={c.step}
             gateState={c.status === "done" ? "none" : c.gateState}
+            // The SAME gateReadiness this card already receives as a prop
+            // (task 8e5aa63b) — so the rail's gate row and this card's own
+            // banner-style summary below derive from identical input and
+            // cannot disagree.
+            gateReadiness={gateReadiness}
             phase={c.phase}
             status={c.status}
             activity={c.status === "done" ? null : c.activity}
