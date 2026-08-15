@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.43"
+PRISM_VERSION = "7.10.44"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "v7.10.44: gate_decide persists the REAL deciding actor (caller-supplied "
+    "actor, falling back to session_id) on the reject, override, epic "
+    "roll-up and verifier-driven approve paths, instead of always stamping "
+    "a hardcoded literal ('conductor'/'manual-override') - so the actor "
+    "chips added in v7.10.43 now render the true machine seat or human "
+    "identity that decided each gate (task 1bc13307). "
     "v7.10.43: task timeline actor chips distinguish machine gate decisions "
     "(conductor-adjudicator etc, resolved via actor_identity.kind) from "
     "human approvals at glance level, plus the gate_decide rubric/receipt "
