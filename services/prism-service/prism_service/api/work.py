@@ -8,6 +8,15 @@ boots from this, then opens EventSource('/sse/work?project=...') for
 incremental updates (task.changed, drive.heartbeat, agent.run,
 tokens.turn) so it never has to re-poll this endpoint.
 
+Data-enrichment slice (gamify): task/subtask nodes also carry spend_usd
+(live dollar spend across the task's linked sessions, cached per task
+~_SPEND_CACHE_TTL_S so this endpoint stays cheap under polling),
+gate_waiting_s (seconds since the CURRENT gate went pending, None when
+not pending), and queue_depth (count of not-yet-started children).
+Session nodes carry model/role/step off their latest agent_runs row, and
+their label becomes "role · model" once known -- the session id itself
+stays on `id`, never overwritten.
+
 POST /sim-tokens is a DEV-ONLY door that publishes a tokens.turn event
 directly onto the bus, with no real transcript behind it, so
 E:\\gamify-lab\\sim\\drive_sim.py can drive reproducible packet motion on
@@ -20,6 +29,7 @@ services/work_stream.py's transcript ticker.
 from __future__ import annotations
 
 import os
+import threading
 import time
 
 from fastapi import APIRouter, Body, HTTPException, Query
@@ -33,9 +43,21 @@ router = APIRouter()
 # ticker (and vice versa).
 _SESSION_RECENCY_S = 30 * 60
 
+# Per-task live-spend cache: (project, task_id) -> (fetched_at, usd). Spend
+# requires walking every linked session's transcript(s) via
+# live_spend_for_session, which is its own directory walk + incremental
+# file reads -- cheap once warm, but not cheap enough to redo for every
+# task on every /live poll. A short TTL keeps the number honest (spend
+# only ever grows) while bounding cost.
+_SPEND_CACHE_TTL_S = 5.0
+_TASK_SPEND_CACHE: dict[str, tuple[float, float]] = {}
+_TASK_SPEND_LOCK = threading.Lock()
+
 
 def _task_node(task_id: str, title: str, status: str, workflow_step: str,
-               gate_state: str, activity: dict) -> dict:
+               gate_state: str, activity: dict, spend_usd: float = 0.0,
+               gate_waiting_s: float | None = None,
+               queue_depth: int = 0) -> dict:
     heartbeat = (activity or {}).get("heartbeat") or {}
     kind = "task"
     return {
@@ -49,8 +71,59 @@ def _task_node(task_id: str, title: str, status: str, workflow_step: str,
         "heartbeat_age_s": heartbeat.get("age_s"),
         "tok_s": None,
         "tokens_total": None,
+        "spend_usd": round(spend_usd or 0.0, 4),
+        "gate_waiting_s": gate_waiting_s,
+        "queue_depth": queue_depth,
         "href": f"/tasks/{task_id}",
     }
+
+
+def _queue_depth(task_svc, task_id: str) -> int:
+    """Count of `task_id`'s children that are pending AND have never
+    entered the conductor (no workflow_step) -- the work queued up behind
+    this node, as distinct from work already in flight."""
+    try:
+        kids = task_svc.list(parent_id=task_id)
+    except Exception:
+        return 0
+    return sum(
+        1 for c in kids
+        if (getattr(c, "status", "") or "") == "pending"
+        and not (getattr(c, "workflow_step", "") or "")
+    )
+
+
+def _task_spend_usd(project: str, task_id: str, task_svc,
+                     source_path: str, override_dir: str) -> float:
+    """Live USD spend summed over `task_id`'s linked sessions, cached per
+    (project, task_id) for _SPEND_CACHE_TTL_S. See module docstring."""
+    key = f"{project}\x00{task_id}"
+    now = time.time()
+    with _TASK_SPEND_LOCK:
+        hit = _TASK_SPEND_CACHE.get(key)
+        if hit is not None and (now - hit[0]) < _SPEND_CACHE_TTL_S:
+            return hit[1]
+
+    from prism_service.services.claude_transcripts import live_spend_for_session
+
+    try:
+        sessions = task_svc.sessions_for_task(task_id)
+    except Exception:
+        sessions = []
+    total = 0.0
+    for sess in sessions:
+        sid = sess.get("session_id")
+        if not sid:
+            continue
+        try:
+            spend = live_spend_for_session(
+                sid, source_path, override_dir=override_dir or None)
+            total += spend["total"]["usd"]
+        except Exception:
+            continue
+    with _TASK_SPEND_LOCK:
+        _TASK_SPEND_CACHE[key] = (now, total)
+    return total
 
 
 @router.get("/graph")
@@ -72,12 +145,27 @@ def work_graph(project: str = Query("default")) -> dict:
     # force and double-draw the circle client-side.
     seen_node_ids: set[str] = set()
 
+    # Resolved ONCE up front -- both the spend lookup (task/subtask nodes)
+    # and the session-recency walk below need it.
+    try:
+        source_path = conductor._project_source_path()
+        override_dir = conductor._project_override_dir()
+    except Exception:
+        source_path, override_dir = "", ""
+
     roots = conductor.managed_tasks()
     for r in roots:
         if r["id"] not in seen_node_ids:
+            task_obj = task_svc.get(r["id"])
             node = _task_node(
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
+                spend_usd=_task_spend_usd(
+                    project, r["id"], task_svc, source_path, override_dir),
+                gate_waiting_s=(
+                    conductor.gate_waiting_s(task_obj)
+                    if task_obj is not None else None),
+                queue_depth=_queue_depth(task_svc, r["id"]),
             )
             node["kind"] = "task"
             nodes.append(node)
@@ -99,6 +187,10 @@ def work_graph(project: str = Query("default")) -> dict:
                 getattr(child, "workflow_step", ""),
                 getattr(child, "gate_state", "none"),
                 c_activity,
+                spend_usd=_task_spend_usd(
+                    project, child.id, task_svc, source_path, override_dir),
+                gate_waiting_s=conductor.gate_waiting_s(child),
+                queue_depth=_queue_depth(task_svc, child.id),
             )
             cnode["kind"] = "subtask"
             nodes.append(cnode)
@@ -107,17 +199,16 @@ def work_graph(project: str = Query("default")) -> dict:
     # Sessions linked to any task/subtask node, gated to recent token
     # motion (last _SESSION_RECENCY_S) so a stale historical link doesn't
     # clutter the graph with a dead node.
-    try:
-        source_path = conductor._project_source_path()
-        override_dir = conductor._project_override_dir()
-    except Exception:
-        source_path, override_dir = "", ""
-
+    from prism_service.services.agent_runs_data import get_agent_runs
     from prism_service.services.claude_transcripts import (
         live_token_events_for_session,
         token_turns_from_events,
     )
 
+    try:
+        scores_db = str(ctx._data_dir / "scores.db")
+    except Exception:
+        scores_db = ""
     now = time.time()
     seen_sessions: set[str] = set()
     for n in list(nodes):
@@ -141,10 +232,28 @@ def work_graph(project: str = Query("default")) -> dict:
             tokens_total = sum(int(tok or 0) for _, tok in events)
             turns = token_turns_from_events(events[-5:])
             tok_s = turns[-1]["tok_s"] if turns else None
+
+            # Latest agent_runs row for this session -- role/model/step
+            # (item 1 of the gamify data-enrichment slice). Best-effort:
+            # a session with no agent_runs telemetry yet (e.g. a plain
+            # /implement drive that hasn't ingested a row) just carries
+            # None on all three rather than failing the whole graph.
+            role = model = step = None
+            if scores_db:
+                try:
+                    run_rows = get_agent_runs(scores_db, limit=1, session_id=sid)
+                    if run_rows:
+                        role = run_rows[0].get("role")
+                        model = run_rows[0].get("model")
+                        step = run_rows[0].get("step")
+                except Exception:
+                    pass
+            label = f"{role} · {model}" if role and model else sid[:8]
+
             nodes.append({
                 "id": sid,
                 "kind": "session",
-                "label": sid[:8],
+                "label": label,
                 "status": "",
                 "workflow_step": "",
                 "gate_state": "",
@@ -152,6 +261,9 @@ def work_graph(project: str = Query("default")) -> dict:
                 "heartbeat_age_s": None,
                 "tok_s": tok_s,
                 "tokens_total": tokens_total,
+                "model": model,
+                "role": role,
+                "step": step,
                 "href": f"/sessions/{sid}",
             })
             edges.append({"source": sid, "target": task_id, "kind": "driven_in"})
@@ -165,7 +277,13 @@ def sim_tokens(project: str = Query("default"), row: dict = Body(...)) -> dict:
     transcript required. Gated behind PRISM_DEV_SIM=1 -- 404s (not a 403,
     so it reads as "this route does not exist" rather than "exists but
     refused") on every instance that doesn't opt in, which is every real
-    one. See E:\\gamify-lab\\sim\\drive_sim.py, the ONLY intended caller."""
+    one. See E:\\gamify-lab\\sim\\drive_sim.py, the ONLY intended caller.
+
+    `usd_total` is OPTIONAL passthrough (gamify data-enrichment slice item
+    5): the sim scenario doesn't send it yet, but the real ticker's
+    tokens.turn payload may in future (see services/work_stream.py's
+    comment on why it doesn't today), so this door accepts it now rather
+    than needing a second change when the sim catches up."""
     if os.environ.get("PRISM_DEV_SIM") != "1":
         raise HTTPException(status_code=404)
 
@@ -182,5 +300,7 @@ def sim_tokens(project: str = Query("default"), row: dict = Body(...)) -> dict:
         "tokens_total": row.get("tokens_total", 0),
         "ts": row.get("ts") or time.time(),
     }
+    if row.get("usd_total") is not None:
+        event["usd_total"] = row.get("usd_total")
     bus.publish(event)
     return {"ok": True}

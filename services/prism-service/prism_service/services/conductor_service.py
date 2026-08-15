@@ -4682,6 +4682,42 @@ class ConductorService:
             return None
         return max(0.0, self._now_epoch() - latest)
 
+    def gate_waiting_s(self, task) -> Optional[float]:
+        """Seconds since `task`'s CURRENT gate went pending (the /live
+        graph's gate_waiting_s field, gamify data-enrichment slice). None
+        when gate_state != 'pending' -- there is nothing to be waiting on.
+
+        Reads the latest 'advance_task' history row whose details carry
+        both 'gate=pending' and 'to=<current workflow_step>' -- the exact
+        row advance_task itself writes the moment it parks the task on a
+        gate (see advance_task's own record_history call above). Falls
+        back to task.updated_at when no such row is found (e.g. seeded or
+        imported data with no transition history) so the field still reads
+        SOMETHING honest rather than None on a genuinely-pending gate."""
+        if getattr(task, "gate_state", "") != "pending":
+            return None
+        tid = getattr(task, "id", "") or ""
+        step = getattr(task, "workflow_step", "") or ""
+        latest: Optional[float] = None
+        if self._task_svc is not None and tid:
+            try:
+                for r in self._task_svc.history(tid):
+                    if getattr(r, "action", "") != "advance_task":
+                        continue
+                    details = getattr(r, "details", "") or ""
+                    if "gate=pending" not in details or f"to={step}" not in details:
+                        continue
+                    ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+                    if ts is not None and (latest is None or ts > latest):
+                        latest = ts
+            except Exception:
+                latest = None
+        if latest is None:
+            latest = self._parse_iso(getattr(task, "updated_at", "") or "")
+        if latest is None:
+            return None
+        return max(0.0, self._now_epoch() - latest)
+
     def _children(self, task) -> list:
         """Non-cancelled child tasks of this task (parent_id == task.id)."""
         tid = getattr(task, "id", "") or ""

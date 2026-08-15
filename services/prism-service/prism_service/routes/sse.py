@@ -28,6 +28,20 @@ _WORK_EVENT_TYPES = frozenset({
     "task.changed", "drive.heartbeat", "agent.run", "tokens.turn",
 })
 
+# gamify data-enrichment slice item 3: NO separate "work.status" event.
+# task.changed's `fields` dict (services/task_service.py TaskService.update
+# -- `changed_fields`) already carries every SCALAR field that changed on
+# the write, which includes `status` and `gate_state` whenever either one
+# actually moved (workflow_step too, when it moved). So a task completing
+# (status -> done/cancelled) or a gate arriving/clearing (gate_state
+# changing) is ALREADY an unambiguous task.changed event on this stream --
+# the /live frontend's completion/gate animations should key off
+# `event.fields.status` and `event.fields.gate_state` on task.changed
+# (present in `fields` only when that field is one of the ones that just
+# changed; absent otherwise, never a false trigger). Publishing a second,
+# differently-named event with the same payload would be a duplicate
+# source of truth for the same write.
+
 
 @router.get("/sessions")
 async def sse_sessions(request: Request, project: str = "default"):

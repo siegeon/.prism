@@ -128,6 +128,24 @@ def _tick_project(project: str) -> None:
                 state["last_tick"] = now
             tok_s = round(out_tokens / dt_s, 1)
             tokens_total = sum(int(tok or 0) for _, tok in events)
+            # gamify data-enrichment slice item 4: usd_total was considered
+            # here (running spend for the session, priced via
+            # claude_transcripts.live_spend_for_session / usage_components).
+            # Deliberately SKIPPED: this tick's `events` come from
+            # live_token_events_for_session, which reads the transcript's
+            # new tail bytes through its OWN incremental cache
+            # (_TOKEN_EVENTS_CACHE, keyed on path+offset). Honest per-field
+            # USD needs the full usage dict + per-turn model
+            # (claude_transcripts._spend_for_path / _SPEND_CACHE), which is
+            # a SEPARATE incremental reader keyed on the same path -- so
+            # calling it here would open/seek/read the SAME new lines a
+            # second time, every tick, for every active session. That is
+            # exactly the "double transcript reads" case this task's
+            # instructions call out to skip. api/work.py's spend_usd (task/
+            # subtask nodes, cached ~5s) is the honest live-spend surface;
+            # a session-level usd_total on this per-tick event would need a
+            # THIRD cache that shares _SPEND_CACHE's offsets rather than
+            # re-deriving them, which is a real refactor, not a cheap add.
             try:
                 bus.publish({
                     "project": project,

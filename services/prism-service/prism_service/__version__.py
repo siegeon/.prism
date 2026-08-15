@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.2"
+PRISM_VERSION = "7.10.54+gamify.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4524,4 +4524,22 @@ PRISM_VERSION_NOTES += (
     "- an unclaimed task falls through to the existing honest `inflow` "
     "row instead of vanishing (mx-ccba40 precedent: never hide, stop "
     "claiming a driver)."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.54+gamify.3: /LIVE DATA-ENRICHMENT SLICE - session nodes on "
+    "GET /api/work/graph now carry model/role/step off their latest "
+    "agent_runs row (label becomes 'role · model' once known, session id "
+    "stays on `id`); task/subtask nodes carry spend_usd (live dollar "
+    "spend across linked sessions, cached ~5s per task), gate_waiting_s "
+    "(seconds since the CURRENT gate went pending, from the advance_task "
+    "history row that parked it there), and queue_depth (pending "
+    "children that never entered the conductor). ConductorService gains "
+    "gate_waiting_s(task). tokens.turn intentionally does NOT gain a "
+    "per-tick usd_total: it would read the same new transcript bytes a "
+    "second time through a second incremental cache (see the comment in "
+    "services/work_stream.py); POST /api/work/sim-tokens accepts it as "
+    "optional passthrough regardless, for when a cheap source exists. No "
+    "new work.status SSE event: task.changed's existing `fields` dict "
+    "already carries status/gate_state on the write that moved them (see "
+    "routes/sse.py's comment) - a second event would just duplicate it."
 )
