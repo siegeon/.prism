@@ -91,19 +91,20 @@ jobs:
         # test is fixed there. Landing this step while a red integration
         # test is NOT named this way is exactly what this task's stop_if
         # forbids.
-        # The 8 --deselects after those are LINUX-RUNNER-ONLY failures found on
-        # this step's first CI run (green on Windows, 689 passed locally):
-        # 5 host-path redaction assertions in test_team_boundary_hardening
-        # (possibly a REAL posix redaction bug - investigate, do not weaken),
-        # 2 worker-contract path normalization cases, 1 premise-notes fixture
-        # stall. Named in full at task
-        # 93cd2cf9-a275-4ed3-95ab-4dea7fd9772c - remove each flag as its
-        # test is fixed there.
+        # The 8 LINUX-RUNNER-ONLY deselects found on this step's first CI run
+        # (5 host-path redaction assertions in test_team_boundary_hardening,
+        # 2 worker-contract path-normalization cases, 1 premise-notes fixture
+        # stall) were fixed and removed at task
+        # 93cd2cf9-a275-4ed3-95ab-4dea7fd9772c: the POSIX host-path shape was
+        # added to security._HOST_PATH_PATTERNS, and the worker-contract
+        # check now excludes PRISM's own injected node_modules symlink
+        # (task_workspace.is_injected_node_modules_link) rather than
+        # blaming the worker for it.
         # Node ids below are rootdir-relative (rootdir resolves to the repo
         # root, where pyproject.toml's [tool.pytest.ini_options] lives, NOT
         # to this step's working-directory) - verified against this exact
-        # invocation locally before landing (689 passed, 4 deselected, 0
-        # failed).
+        # invocation locally before landing (696 passed, 4 deselected, 0
+        # failed, web_dist built first).
         run: >
           python -m pytest tests/integration -q -o faulthandler_timeout=120
           --ignore=tests/integration/test_radix_tokens_live_8888.py
@@ -111,11 +112,3 @@ jobs:
           --deselect "services/prism-service/tests/integration/test_team_boundary_hardening.py::test_local_mcp_keeps_host_path_tools_available[register_claude_source-arguments1]"
           --deselect services/prism-service/tests/integration/test_work_rows_link_out.py::test_a_task_with_no_counterpart_gets_no_button
           --deselect services/prism-service/tests/integration/test_work_rows_link_out.py::test_the_provider_pill_is_the_first_thing_on_the_summary_line
-          --deselect services/prism-service/tests/integration/test_team_boundary_hardening.py::test_team_claude_auth_status_serves_no_host_path
-          --deselect services/prism-service/tests/integration/test_team_boundary_hardening.py::test_team_github_auth_status_serves_no_host_path
-          --deselect services/prism-service/tests/integration/test_team_boundary_hardening.py::test_team_service_info_serves_no_host_path
-          --deselect services/prism-service/tests/integration/test_team_boundary_hardening.py::test_no_auth_only_get_surface_serves_a_host_path
-          --deselect services/prism-service/tests/integration/test_team_boundary_hardening.py::test_redaction_is_structural_not_a_machine_literal
-          --deselect services/prism-service/tests/integration/test_worker_contract_enforced.py::test_out_of_contract_report_refused_then_acknowledged
-          --deselect services/prism-service/tests/integration/test_worker_contract_enforced.py::test_allowlisted_directory_prefix_is_not_an_offender
-          --deselect services/prism-service/tests/integration/test_premise_notes_seeded_across_fixtures.py::test_no_fixture_stalls_at_review_previous_notes_for_premise_reasons

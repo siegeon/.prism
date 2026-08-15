@@ -377,7 +377,11 @@ def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
                           "task's workspace root server-side — refusing "
                           "rather than falling back to the daemon cwd",
                 "next_job": _job(task)}
-    offenders = _contract_violations(_contract_changed_paths(root), allowed)
+    changed = [
+        p for p in _contract_changed_paths(root)
+        if not task_workspace.is_injected_node_modules_link(p)
+    ]
+    offenders = _contract_violations(changed, allowed)
     if not offenders:
         return None
     acked = {_contract_norm(p)

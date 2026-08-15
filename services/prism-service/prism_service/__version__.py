@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.49"
+PRISM_VERSION = "7.10.50"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4450,4 +4450,20 @@ PRISM_VERSION_NOTES += (
     "stale/relayed activity.state can't render it on a mid-execution "
     "step. Both guards key off record existence / step type, never a "
     "step id, so a new workflow step can't reintroduce the phantom claim."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.50: LINUX CI HOST-PATH LEAK + WORKER-CONTRACT NODE_MODULES "
+    "FALSE-OFFENDER FIXED [task 93cd2cf9]. security._HOST_PATH_PATTERNS "
+    "gains a shape-based POSIX-absolute pattern (excludes this app's own "
+    "/api, /sse, /graph, /graphify-visual route namespaces) so team-mode "
+    "/api/claude-auth/status, /api/github-auth/status, /api/service-info "
+    "never leak a Linux runner's host path the way they already refused "
+    "to leak a Windows drive-letter path. Separately, "
+    "task_workspace.is_injected_node_modules_link lets "
+    "conductor_flow._contract_refusal exclude PRISM's own injected "
+    "node_modules symlink from worker-contract offending_files - git's "
+    "trailing-slash gitignore pattern never matches a symlink, so on "
+    "Linux `git status --porcelain` reported that link as untracked and "
+    "blamed it on the worker; .gitignore/web/.gitignore also drop the "
+    "trailing slash so the pattern matches the link too."
 )

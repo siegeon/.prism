@@ -25,13 +25,19 @@ def team_mode_active() -> bool:
     return os.getenv("PRISM_AUTH_MODE", "local").strip().lower() == "team"
 
 
-# Structural host-path shapes - drive-letter (C:\ or C:/) and UNC (\\host\share).
-# Deliberately SHAPE-based, never a machine-specific literal (this developer's
-# home directory, a specific data_dir), so a fabricated path is caught exactly
-# like a real one and the check survives a change of host or account name.
+# Structural host-path shapes - drive-letter (C:\ or C:/), UNC (\\host\share),
+# and POSIX-absolute (/home/x/y - a Linux CI runner's host paths never match
+# either Windows shape). Deliberately SHAPE-based, never a machine-specific
+# literal (this developer's home directory, a specific data_dir, a /home/
+# prefix), so a fabricated path is caught exactly like a real one and the
+# check survives a change of host or account name. The POSIX pattern excludes
+# this app's own route namespaces (_protected_path's prefixes below) so an
+# API route string like "/api/claude-auth/status" is never mistaken for a
+# filesystem path - that exclusion is the app's route shape, not a host literal.
 _HOST_PATH_PATTERNS = (
     re.compile(r"[A-Za-z]:[\\/]"),
     re.compile(r"\\\\[^\\/]"),
+    re.compile(r"^/(?!api/|sse/|graph/|graphify-visual/)[^/\s]+(?:/[^/\s]+)+/?$"),
 )
 
 
