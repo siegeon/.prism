@@ -17,6 +17,7 @@ import { type EvidenceItem } from "@/components/EvidenceGallery";
 import { useProject } from "@/lib/project";
 import type { PhaseProgress, Activity } from "./SdlcProgress";
 import { type GanttGate, useGateEvidence, GateEvidenceBlock } from "./TaskActivityGantt";
+import { activityLabel } from "@/lib/activityLabel";
 
 function clockHM(ts: number): string {
   try {
@@ -205,6 +206,11 @@ export default function StepRail({
   // Pulse ONLY when genuinely being driven now (a real recent conductor
   // transition on THIS task), never merely because status is in_progress.
   const live = (activity?.state ?? status ?? "").toLowerCase() === "working";
+  // Task 0f090a6c: the SAME claimed-but-unobservable "we can't see it" cue
+  // ConductorPage's tile pill and SdlcProgress's minimap render, from the
+  // ONE shared decision — previously this rail carried no signal-loss cue
+  // at all (only the boolean `live` pulse above).
+  const signal = activityLabel(activity);
   // Auto-expand the completion gate on a DONE task so its evidence is visible
   // immediately — otherwise the gate reads as empty until you happen to click
   // the exact row, and the evidence looks like it isn't there at all.
@@ -331,7 +337,11 @@ export default function StepRail({
                               </span>
                             </span>
                           )}
-                          {cur && !isGate && (
+                          {cur && !isGate && signal.lost ? (
+                            <span className="text-2xs font-mono flex items-center gap-1.5 flex-none" style={{ color: "var(--text-muted)" }}>
+                              {signal.label}
+                            </span>
+                          ) : cur && !isGate && (
                             <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
                               <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
                                 animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}

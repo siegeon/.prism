@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.51"
+PRISM_VERSION = "7.10.52"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4480,4 +4480,23 @@ PRISM_VERSION_NOTES += (
     "/etc/hostname, else socket.gethostname(), never a hard-coded value) - "
     "closes the docker-exec 'container' field on /api/claude-auth/status "
     "and /api/service-info in team mode."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.52: INVISIBLE-WORKER STATES READ 'WE CAN'T SEE IT' [task "
+    "0f090a6c] - round-2 follow-up on e9625a4d, which scoped its honest "
+    "signal-loss enrichment to 'adrift' rows only; 'stalled' is the OTHER "
+    "claimed-but-unobservable classification and never got the same "
+    "treatment. api/conductor.py::_with_report_signal now enriches BOTH "
+    "'adrift' and 'stalled' rows with report_signal_lost, plus a new "
+    "report_signal_age_s carrying the REAL drive_heartbeat age (never "
+    "task_motion_s, a different step-transition clock that could read "
+    "fresh while the real heartbeat was ancient - the label's own "
+    "internal-inconsistency bug). api/tasks.py's task-detail route now "
+    "applies the same enrichment so the Implementation tab sees it too "
+    "(previously it attached activity_for raw and carried no signal-loss "
+    "cue at all). ONE new shared decision, web/src/lib/activityLabel.ts, "
+    "is now the single place ConductorPage.tsx's tile pill, "
+    "SdlcProgress.tsx's minimap and StepRail.tsx's current-step row all "
+    "read the we-can't-see-it wording from, so a future classification "
+    "tweak can't re-diverge across three copies (mx-d412e0 precedent)."
 )

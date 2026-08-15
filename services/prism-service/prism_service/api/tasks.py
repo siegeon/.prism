@@ -775,7 +775,16 @@ def get_task(task_id: str, project: str = Query("default"),
                 # detail route alongside phase_progress so the header pill
                 # can't lie.
                 if hasattr(cond, "activity_for"):
-                    out["activity"] = cond.activity_for(t, pp)
+                    activity = cond.activity_for(t, pp)
+                    # Task 0f090a6c: the detail route's Implementation tab
+                    # (StepRail.tsx) needs the SAME report-signal enrichment
+                    # the board applies (api/conductor.py::_with_report_signal)
+                    # -- previously this attached activity_for's raw output,
+                    # so report_signal_lost never reached this page at all.
+                    from prism_service.api.conductor import _with_report_signal
+                    enriched = _with_report_signal(
+                        [{"id": task_id, "activity": activity}], _scores_db(project))
+                    out["activity"] = enriched[0]["activity"]
         except Exception:
             pass
     # has_prototype: a clickable MOCK prototype HTML the /prototype workflow
