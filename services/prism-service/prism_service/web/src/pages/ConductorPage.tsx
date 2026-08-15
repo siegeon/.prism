@@ -23,6 +23,11 @@ type ManagedTask = {
   updated_at?: string;
   tags?: string[];
   phase_progress?: PhaseProgress | null;
+  // Task 2dfa94bd: True iff conductor_work has genuinely claimed this task
+  // (task_workspace.workspace_record exists — ensure_workspace ran at its
+  // first PEEK). A task someone flipped in_progress by hand, without ever
+  // driving it through conductor_work, must NOT wear SDLC-drive chrome.
+  claimed?: boolean;
   // Honest work state (server: conductor_service.activity_for). The tile pill
   // + burn graph read THIS, not the raw status — a task nobody is driving must
   // NOT read as a teal "in progress".
@@ -162,6 +167,9 @@ export default function ConductorPage() {
 // gated on real motion so a paused tile never shows a frozen "N left" lie.
 // ---------------------------------------------------------------------------
 function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; reduced: boolean | null; sinceFetchS: number; onClick: () => void }) {
+  // task.claimed: honest "did conductor_work ever start this task" bit —
+  // gates ALL SDLC-drive chrome below (header, timeline, pill, handoff).
+  const claimed = task.claimed === true;
   const status = (task.status ?? "").toLowerCase();
   const actState = (task.activity?.state ?? status).toLowerCase();
   const actTone: PillTone = ACT_TILE[actState]?.tone ?? domainTone("taskStatus", status) ?? "slate";
@@ -179,12 +187,16 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const qDone = task.phase_progress?.children_done ?? 0;
   const qPending = Math.max(0, qTotal - qDone);
   const hb = task.activity?.heartbeat;
-  const actLabel =
+  // Unclaimed tasks never earn the drive-derived pills (driver active / no
+  // active driver / driving / paused) — those describe a real conductor
+  // drive that never started here (stop_if: never fabricate a driver).
+  const actLabel = !claimed ? "not claimed" :
     actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
     : actState === "driving" && hb?.last_tool ? `driving · ${hb.last_tool}`
     : actState === "stalled" ? `no active driver${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
+  const actToneFinal: PillTone = claimed ? actTone : "slate";
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
   const stepId = task.workflow_step ?? "";
@@ -194,7 +206,12 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const curIdx = phaseIndexOf(stepId);
   const curStep = curIdx >= 0 ? SDLC_STEPS[curIdx] : null;
   const worker = task.assigned_agent || "claude-code";
-  const handoff = showGate
+  // !claimed short-circuits BEFORE any of the drive-derived strings below —
+  // none of them describe a real drive for a task conductor_work never
+  // touched (stop_if: never fabricate a handoff for a phantom drive).
+  const handoff = !claimed
+    ? "not yet claimed by conductor — conductor_work has never run on this task"
+    : showGate
     ? "paused at gate — awaiting a distinct reviewer"
     : curStep ? `ready → ${worker} on deck for ${curStep.label}`
     : status === "done" ? "all steps complete" : "queued — awaiting first turn";
@@ -207,18 +224,26 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
       title={title}
       className="text-left w-full rounded-lg border border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:border-[color:var(--border-strong)] p-5 flex flex-col gap-3 transition-colors cursor-pointer"
     >
-      {/* Header — title + "conductor task · SDLC drive" + honest status pill. */}
+      {/* Header — claimed: "conductor task · SDLC drive"; unclaimed: honest label
+          (task 2dfa94bd — never wear drive chrome for a status-flip-only task). */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[17px] font-semibold leading-snug text-[color:var(--text-primary)] line-clamp-1">{task.title}</div>
-          <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-0.5">conductor task · SDLC drive</div>
+          <div className="text-2xs font-mono text-[color:var(--text-muted)] mt-0.5">{claimed ? "conductor task · SDLC drive" : "not yet claimed by conductor"}</div>
         </div>
-        <Lozenge tone={lozengeTone(actTone)} className="shrink-0">{actLabel}</Lozenge>
+        <Lozenge tone={lozengeTone(actToneFinal)} className="shrink-0">{actLabel}</Lozenge>
       </div>
       {/* ring + "N/10 steps complete · the conductor drives this task…" */}
       <TileHero task={task} />
-      {/* the 10-step SDLC timeline with gate diamonds + roles */}
-      <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
+      {/* claimed: the 10-step SDLC timeline with gate diamonds + roles.
+          !claimed: honest alternate — no fabricated 10-step drive. */}
+      {claimed ? (
+        <LabeledTimeline step={stepId} phase={task.phase_progress} reduced={reduced} live={actWorking} />
+      ) : (
+        <div className="rounded-md border border-dashed border-[color:var(--border-default)] px-4 py-3 text-2xs font-mono text-[color:var(--text-muted)]">
+          no conductor drive — status was flipped without conductor_work ever claiming this task
+        </div>
+      )}
       {/* BURN — tok/s per turn off the live transcript. The component and the
           server data (phase_progress.token_turns, tokens_source, turns) both
           existed; nothing ever rendered it, so a tile mid-drive looked static
