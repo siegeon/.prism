@@ -184,6 +184,50 @@ def test_allowlisted_directory_prefix_is_not_an_offender(make_task):
 
 
 # ---------------------------------------------------------------------------
+# task 93cd2cf9 — the check must never blame the worker for PRISM's OWN
+# node_modules link (Linux CI evidence, PR #1282 run 31865514286)
+# ---------------------------------------------------------------------------
+
+def test_worker_contract_excludes_the_prism_injected_node_modules_link(
+    make_task, monkeypatch,
+):
+    """_link_web_node_modules (task_workspace.py) makes a POSIX symlink for
+    JS deps on non-Windows. git's gitignore semantics never match a symlink
+    against a trailing-slash directory-only pattern ('node_modules/' in
+    .gitignore), so on the Linux runner `git status --porcelain` reports the
+    link path itself as untracked and the real CI run failed with:
+      assert ['b/rogue.py', 'services/prism-service/prism_service/web/
+      node_modules'] == ['b/rogue.py']
+    Simulated here by monkeypatching the git call (never real files or a
+    real symlink), so this is pinned identically on every platform, not
+    only reproducible on Linux."""
+    from prism_service.api import conductor_flow as cf
+
+    node_modules_link = (
+        "services/prism-service/prism_service/web/node_modules")
+
+    ctx, task, project = make_task(allowed_files=["a/allowed.py"])
+    _drive_to_step(cf, ctx.task_svc, task.id, project, "implement_tasks")
+    monkeypatch.setattr(
+        cf, "_contract_changed_paths", lambda root: [node_modules_link])
+    only_link = cf.flow_report(cf.Ident(
+        task_id=task.id, session_id="builder", expected_step="implement_tasks",
+        outcome="pass"), project=project)
+    assert only_link.get("ok") is not False, only_link
+
+    ctx2, task2, project2 = make_task(allowed_files=["a/allowed.py"])
+    _drive_to_step(cf, ctx2.task_svc, task2.id, project2, "implement_tasks")
+    monkeypatch.setattr(
+        cf, "_contract_changed_paths",
+        lambda root: ["b/rogue.py", node_modules_link])
+    refused = cf.flow_report(cf.Ident(
+        task_id=task2.id, session_id="builder", expected_step="implement_tasks",
+        outcome="pass"), project=project2)
+    assert refused["ok"] is False, refused
+    assert refused["offending_files"] == ["b/rogue.py"], refused
+
+
+# ---------------------------------------------------------------------------
 # AC-4 — empty allowed_files stays unconstrained
 # ---------------------------------------------------------------------------
 

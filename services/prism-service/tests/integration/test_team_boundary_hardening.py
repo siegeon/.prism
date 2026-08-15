@@ -926,3 +926,75 @@ def test_redaction_is_structural_not_a_machine_literal(real_team, monkeypatch, t
         assert not re.search(r"[A-Za-z]:[\\\\]", source), (
             f"{module.__name__} hard-codes a drive-letter literal"
         )
+
+
+# --- task 93cd2cf9: the redactor also needs POSIX host paths (Linux CI) ---
+
+
+def test_redact_host_paths_strips_posix_absolute_paths():
+    """CI evidence (PR #1282, run 31865514286, ubuntu runner):
+    _HOST_PATH_PATTERNS only matches Windows drive-letter (C:\\) and UNC
+    (\\\\host\\share) shapes, so a POSIX absolute host path never matches
+    either and redact_host_paths lets it straight through. The actual
+    failure captured from that run:
+      AssertionError: host token '/home/runner' leaked: {"authenticated":
+      false, "config_dir": "/home/runner/.claude", "credentials_path":
+      "/home/runner/.claude/.credentials.json", ...}
+    Pinned here with fabricated POSIX paths (never a machine literal, per
+    test_redaction_is_structural_not_a_machine_literal's own contract) so
+    this reproduces on ANY platform, not only a Linux runner."""
+    from prism_service.api.security import redact_host_paths
+
+    payload = {
+        "config_dir": "/home/runner/.claude",
+        "credentials_path": "/home/runner/.claude/.credentials.json",
+        "authenticated": True,
+        "login_command": "claude /login",
+    }
+    redacted = redact_host_paths(payload)
+    assert "config_dir" not in redacted, redacted
+    assert "credentials_path" not in redacted, redacted
+    assert redacted["authenticated"] is True
+    assert redacted["login_command"] == "claude /login"
+
+
+def test_redact_host_paths_does_not_flag_api_routes_as_posix_paths():
+    """Guard against an over-broad POSIX fix: a route string starts with
+    '/' too but is not an absolute filesystem path, and must pass through
+    untouched - this is the false-positive floor the structural fix must
+    respect."""
+    from prism_service.api.security import redact_host_paths
+
+    payload = {
+        "route": "/api/claude-auth/status",
+        "sse_path": "/sse/live",
+        "authenticated": True,
+    }
+    redacted = redact_host_paths(payload)
+    assert redacted == payload, redacted
+
+
+def test_redact_host_paths_strips_the_live_container_identifier(monkeypatch):
+    """CI evidence (PR #1282, run 31865514286, ubuntu runner, re-verified on
+    THIS task's own follow-up run): a GH-hosted runner's ephemeral VM
+    hostname ('runnervmzvulz') is neither a drive-letter, UNC, nor
+    POSIX-absolute path, so none of the three _HOST_PATH_PATTERNS catch it -
+    but it starts with the exact same account-name token Path.home().name
+    resolves to ('runner'), which the independent oracle
+    (_assert_no_host_paths) also refuses to see leak anywhere in the body.
+    Pinned with a monkeypatched host id (never a machine literal) so this
+    reproduces on any platform, not only a Linux runner whose hostname
+    happens to collide with its own $HOME."""
+    from prism_service.api import security as sec
+
+    monkeypatch.setattr(sec, "_raw_host_identifier", lambda: "runnervmzvulz")
+    payload = {
+        "authenticated": False,
+        "container": "runnervmzvulz",
+        "runtime": "native",
+        "login_command": "claude /login",
+    }
+    redacted = sec.redact_host_paths(payload)
+    assert "container" not in redacted, redacted
+    assert redacted["authenticated"] is False
+    assert redacted["login_command"] == "claude /login"

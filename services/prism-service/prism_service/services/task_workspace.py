@@ -138,6 +138,22 @@ def _link_web_node_modules(ws: Path, root: Path) -> None:
     _create_junction(dest, src)
 
 
+_NODE_MODULES_LINK_NORM = str(_NODE_MODULES).replace("\\", "/")
+
+
+def is_injected_node_modules_link(path: str) -> bool:
+    """True when `path` (workspace-root-relative) IS the node_modules link
+    `_link_web_node_modules` injects into every task worktree — never a
+    change the worker made. Used by the worker-contract check (task
+    93cd2cf9) so PRISM's own injected dependency link is never blamed on
+    the worker: a `.gitignore` pattern with a trailing slash matches only
+    directories, never a symlink (git-scm.com/docs/gitignore), so on a
+    Linux runner `git status --porcelain` reports this link itself as
+    untracked even after the trailing-slash fix in .gitignore/web/.gitignore
+    — this is the structural, git-independent backstop for that gap."""
+    return str(path or "").replace("\\", "/").strip("/") == _NODE_MODULES_LINK_NORM
+
+
 def _is_link(path: Path) -> bool:
     """True if `path` is a directory LINK (a Windows junction/symlink
     reparse point, or a POSIX symlink) rather than a real directory.
