@@ -83,18 +83,41 @@ def test_the_link_is_named_for_the_provider():
 
 # ── AC-4: only mirrored tasks get one ─────────────────────────────────
 
+def _mirrors_of_body() -> str:
+    src = _read()
+    i = src.index("function mirrorsOf")
+    j = src.index("\nfunction ", i + 1)
+    return src[i:j]
+
+
 def test_a_task_with_no_counterpart_gets_no_button():
     """Recorded first misfire: a link on every row, so a native task shows a
-    button that goes nowhere."""
+    button that goes nowhere.
+
+    SUPERSEDED assertion retired in place (task 1ab8fd0f): this used to look
+    for a single `{mirror && <a ...>}` boolean guard immediately before the
+    anchor. Task 6fbbec35 (commit c742492) replaced that with
+    `mirrorsOf(item).map(...)` so a task can render one badge PER active
+    mirror instead of at most one — a strictly better behaviour, not a
+    regression (see mirrorsOf, TasksPage.tsx:101-111). "No counterpart gets
+    no button" now holds because mirrorsOf returns an EMPTY array when
+    item.url is unset and item.mirrors is empty/absent, so .map() renders
+    nothing; assert that guard shape instead of the retired `&&` token.
+    """
     src = _row_body()
     m = re.search(r"<a\s", src)
     assert m, "no anchor element to judge; the link does not exist yet"
     i = m.start()
-    opener = src.rindex("&&", 0, i)
-    condition = src[max(0, opener - 160):opener]
-    assert re.search(r"url|href|external|mirror", condition, re.IGNORECASE), (
-        "the link must be guarded by the presence of an external target; the "
-        f"branch that renders it is guarded only by: {condition.strip()[-120:]!r}")
+    opener = src.rindex("mirrorsOf(item).map(", 0, i)
+    assert i - opener < 200, (
+        "the anchor must be rendered directly inside mirrorsOf(item).map(...); "
+        f"got {i - opener} chars between the guard and the anchor")
+
+    mirrors_fn = _mirrors_of_body()
+    assert "if (item.url)" in mirrors_fn and "item.mirrors ?? []" in mirrors_fn, (
+        "mirrorsOf must return an EMPTY array, not a fallback element, when a "
+        "task has neither item.url nor active mirrors, so a task with no "
+        f"counterpart truly renders no button; got: {mirrors_fn.strip()[:200]!r}")
 
 
 # ── AC-5: the source filter is gone, control AND behaviour ────────────
@@ -137,10 +160,17 @@ def test_the_guard_reads_the_row_rendering():
 
 def test_the_provider_pill_is_the_first_thing_on_the_summary_line():
     """Owner 2026-07-28: "i want the pill on the left hand side of the summary
-    line not the right"."""
+    line not the right".
+
+    SUPERSEDED assertion retired in place (task 1ab8fd0f): this used to look
+    for the literal substring "{mirror &&". Task 6fbbec35 (commit c742492)
+    replaced that single boolean-guarded badge with `mirrorsOf(item).map(...)`
+    (TasksPage.tsx:369), so locate the pill via that render call instead; the
+    ordering requirement (pill before id before title) is unchanged.
+    """
     body = _row_body()
     cell = body[body.index('<td className="px-3 py-1.5">'):]
-    pill = cell.index("{mirror &&")
+    pill = cell.index("mirrorsOf(item).map(")
     ident = cell.index("item.displayKey")
     title = cell.index("item.title")
     assert pill < ident < title, (
