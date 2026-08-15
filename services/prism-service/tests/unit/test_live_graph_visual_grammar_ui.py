@@ -190,6 +190,19 @@ def test_draw_composes_every_sub_renderer():
 
 
 def test_version_bumped_for_this_change():
+    # Pinned as a FLOOR, never equality on the live gamify.N marker: an
+    # exact-literal pin rots on the very next patch bump and hands its red
+    # to whichever lane bumps next (same lesson as AC-9 in
+    # test_second_machine_can_reach_prism_ui.py). This slice's own bump
+    # (7.10.54+gamify.2) is the floor "piece 1" established; anything at
+    # or past it satisfies "the gamify version marker was bumped".
+    import re
+
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
-    assert 'PRISM_VERSION = "7.10.54+gamify.2"' in ver_src, (
-        "gauntlet piece 1 must bump the gamify version marker")
+    m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
+        f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
+    assert int(m.group(1)) >= 2, (
+        "gauntlet piece 1 must bump the gamify version marker to at least "
+        f".2; got .{m.group(1)}")
