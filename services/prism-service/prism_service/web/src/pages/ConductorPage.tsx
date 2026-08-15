@@ -31,7 +31,10 @@ type ManagedTask = {
   // Honest work state (server: conductor_service.activity_for). The tile pill
   // + burn graph read THIS, not the raw status — a task nobody is driving must
   // NOT read as a teal "in progress".
-  activity?: Activity | null;
+  // report_signal_lost: task e9625a4d additive field (api/conductor.py
+  // _with_report_signal) — kept as a local intersection rather than editing
+  // the shared Activity type (out of this slice's allowed_files).
+  activity?: (Activity & { report_signal_lost?: boolean }) | null;
   // Epic slices (server: managed_tasks). Done-first ordered non-cancelled
   // children; drives the SLICES hero bar. Empty/absent for leaf tasks.
   subtasks?: { id: string; title: string; status: string }[];
@@ -187,16 +190,26 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   const qDone = task.phase_progress?.children_done ?? 0;
   const qPending = Math.max(0, qTotal - qDone);
   const hb = task.activity?.heartbeat;
+  // Task e9625a4d: server-computed activity.report_signal_lost (never a
+  // client-invented cutoff) distinguishes a freshly-adrift row from one
+  // whose task-scoped report has gone dark a long while — "driver active
+  // 5:34 ago" and "...5:49 ago" read equally reassuring as it climbed
+  // toward silence. Neutral "we can't see it" register, no alarm/
+  // intervention wording (mx-dfd56a).
+  const lastSeen = idle;
   // Unclaimed tasks never earn the drive-derived pills (driver active / no
   // active driver / driving / paused) — those describe a real conductor
   // drive that never started here (stop_if: never fabricate a driver).
   const actLabel = !claimed ? "not claimed" :
-    actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
+    actState === "adrift" && task.activity?.report_signal_lost ? `we can't see it${lastSeen ? ` · last report ${lastSeen} ago` : ""}`
+    : actState === "adrift" ? `driver active${idle ? ` · last report ${idle} ago` : ""}`
     : actState === "driving" && hb?.last_tool ? `driving · ${hb.last_tool}`
     : actState === "stalled" ? `no active driver${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
     : (ACT_TILE[actState]?.label ?? (status || "—"));
-  const actToneFinal: PillTone = claimed ? actTone : "slate";
+  const actToneFinal: PillTone = claimed
+    ? (actState === "adrift" && task.activity?.report_signal_lost ? "slate" : actTone)
+    : "slate";
   const gate = task.gate_state ?? "none";
   const showGate = gate !== "none";
   const stepId = task.workflow_step ?? "";
@@ -213,6 +226,11 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
     ? "not yet claimed by conductor — conductor_work has never run on this task"
     : showGate
     ? "paused at gate — awaiting a distinct reviewer"
+    // Task e9625a4d: a step the timeline already shows actively running
+    // (working/driving/adrift) must never read as merely queued — that was
+    // the byte-identical "on deck" wording for a fresh task AND one 24
+    // minutes into a step.
+    : curStep && actWorking ? `driving → ${worker} running ${curStep.label}`
     : curStep ? `ready → ${worker} on deck for ${curStep.label}`
     : status === "done" ? "all steps complete" : "queued — awaiting first turn";
   return (

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from prism_service.project_context import get_project
 from prism_service.services.conductor_service import board_health
-from prism_service.services import task_workspace
+from prism_service.services import drive_heartbeat, task_workspace
 
 router = APIRouter()
 
@@ -48,6 +48,44 @@ def _state_cache_put(s, val) -> None:
         _state_cache[s] = val
     except TypeError:
         pass
+
+
+def _scores_db_of(s) -> str:
+    """The scores.db path backing THIS conductor service instance —
+    conductor_service.ConductorService already stores it (self._scores_db,
+    conductor_service.py:637), so this reads the live instance rather than
+    re-deriving a path from get_project() (which test doubles need not
+    implement _data_dir for)."""
+    return getattr(s, "_scores_db", "")
+
+
+# Task e9625a4d: a NEW threshold derived FROM the settled 180s
+# HEARTBEAT_WINDOW_S (mx-b26121) -- longer than one ordinary driving window,
+# so a report that merely just fell outside HEARTBEAT_WINDOW_S (the normal
+# middle of a step) never reads as lost; only long-term silence does.
+SIGNAL_LOST_AFTER_S = drive_heartbeat.HEARTBEAT_WINDOW_S * 3
+
+
+def _with_report_signal(managed_tasks: list, scores_db: str) -> list:
+    """Task e9625a4d: distinguish a freshly-adrift row from one whose
+    task-scoped report signal (drive_heartbeat) has gone dark for a long
+    while -- additive enrichment mirroring _with_claimed (:53-66) below.
+    NEVER edits conductor_service.activity_for (a control_plane.POLICY_FILES
+    entry) and never widens the settled 120s/90s/180s thresholds (mx-b26121);
+    this only READS drive_heartbeat.heartbeat_age_s, the same non-policy
+    primitive activity_for already consults. Scoped to 'adrift' rows only --
+    working/driving/stalled/paused already carry their own honest wording."""
+    out = []
+    for row in managed_tasks:
+        row = dict(row)
+        activity = row.get("activity") or {}
+        if activity.get("state") == "adrift":
+            activity = dict(activity)
+            age = drive_heartbeat.heartbeat_age_s(scores_db, row.get("id", ""))
+            activity["report_signal_lost"] = age is None or age > SIGNAL_LOST_AFTER_S
+            row["activity"] = activity
+        out.append(row)
+    return out
 
 
 def _with_claimed(managed_tasks: list) -> list:
@@ -108,6 +146,9 @@ def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1
     # Shallow copy so the include_outcomes branch below never mutates the
     # cached payload shared with concurrent requests.
     out = dict(_state_payload(s))
+    # Task e9625a4d: additive report-signal enrichment (see _with_report_signal
+    # docstring) -- applied outside the TTL cache so staleness stays live.
+    out["managed_tasks"] = _with_report_signal(out["managed_tasks"], _scores_db_of(s))
     # Task d5465a25 (heavy-poll scoping): session_outcomes is 93% of this
     # payload (55.9 KB of a measured 60 KB) and this route is polled every
     # 5s from LiveBar.tsx + ConductorPage.tsx — neither reads it (both type
