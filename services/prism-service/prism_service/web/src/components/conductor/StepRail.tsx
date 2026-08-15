@@ -18,6 +18,10 @@ import { useProject } from "@/lib/project";
 import type { PhaseProgress, Activity } from "./SdlcProgress";
 import { type GanttGate, useGateEvidence, GateEvidenceBlock } from "./TaskActivityGantt";
 import { activityLabel } from "@/lib/activityLabel";
+// ONE shared severity vocabulary (task 8e5aa63b) — this rail's gate row must
+// read the SAME label the TaskDetailPage banner and ConductorPage tile
+// derive, from the SAME gateReadiness input, so the three cannot disagree.
+import { gateSeverity, type GateSeveritySnapshot } from "@/lib/gateSeverity";
 
 function clockHM(ts: number): string {
   try {
@@ -162,10 +166,14 @@ function TurnList({ rows }: { rows: StepTurn[] }) {
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion,
+  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion, gateReadiness,
 }: {
   step?: string;
   gateState?: string;
+  // The SAME live readiness payload TaskDetailPage's banner reads (task
+  // 8e5aa63b) — passed through so the current gate's pill quotes the shared
+  // gateSeverity() label instead of a bare hardcoded "pending".
+  gateReadiness?: GateSeveritySnapshot["readiness"];
   phase?: PhaseProgress | null;
   status?: string;
   // Honest work state — the current-step node/% only pulses when "working".
@@ -306,7 +314,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} proofType={proofType} completion={completion} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} proofType={proofType} completion={completion} gateReadiness={cur ? gateReadiness : undefined} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -496,8 +504,9 @@ function GateCompletionBlock({ c }: { c: GateCompletion }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDur, proofType, completion }: {
+function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDur, proofType, completion, gateReadiness }: {
   s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; tokens: number; maxTokens: number; maxDur: number; proofType?: string; completion?: GateCompletion;
+  gateReadiness?: GateSeveritySnapshot["readiness"];
 }) {
   const [receipt, setReceipt] = useState(false);
   const [project] = useProject();
@@ -532,7 +541,9 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDu
             useful stage metric instead; the receipt lives in the panel below. */}
         {gi.state === "pending" ? (
           <span className="ml-auto flex items-center gap-2 flex-none">
-            <Lozenge tone="warn">pending</Lozenge>
+            <Lozenge tone="warn">
+              {gateSeverity({ gate_state: "pending", readiness: gateReadiness ?? null }).label.toLowerCase()}
+            </Lozenge>
             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
