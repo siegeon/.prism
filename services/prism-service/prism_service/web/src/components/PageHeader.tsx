@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui";
 const TITLES: Record<string, string> = {
   "/": "Dashboard", "/brain": "Explore", "/graph": "Graph",
   "/memory": "Memory", "/tasks": "Tasks", "/conductor": "Conductor",
+  "/live": "Live",
   "/sessions": "Sessions", "/retrievals": "Retrievals",
   "/learning": "Learning", "/consolidation": "Consolidation",
   "/understand": "Understand", "/settings": "Settings",
