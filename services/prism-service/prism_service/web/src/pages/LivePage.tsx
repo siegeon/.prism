@@ -32,12 +32,18 @@ export default function LivePage() {
     { dragging: false, moved: false, lastX: 0, lastY: 0 },
   );
 
-  // Boot snapshot.
+  // Boot snapshot. Also wires GraphState's self-heal fetcher (round 2,
+  // piece 4 build item 4) to this same endpoint -- a debounced refetch
+  // fires whenever GraphState notices its local state may have drifted
+  // (a fresh placeholder, an unrecognized task.changed field), reusing
+  // this one query rather than the page owning a second fetch path.
   useEffect(() => {
     let cancel = false;
     setError(null);
-    api
-      .get<GraphSnapshot>(`/api/work/graph?project=${encodeURIComponent(project)}`)
+    const fetchSnapshot = () =>
+      api.get<GraphSnapshot>(`/api/work/graph?project=${encodeURIComponent(project)}`);
+    stateRef.current.setReconcileFetcher(fetchSnapshot);
+    fetchSnapshot()
       .then((snap) => {
         if (cancel) return;
         const canvas = canvasRef.current;

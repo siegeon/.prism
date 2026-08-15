@@ -296,6 +296,121 @@ def test_version_bumped_for_this_change():
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
-    assert int(m.group(1)) >= 2, (
+    assert int(m.group(1)) >= 5, (
         "gauntlet piece 1 must bump the gamify version marker to at least "
-        f".2; got .{m.group(1)}")
+        f".5; got .{m.group(1)}")
+
+
+# ---------------------------------------------------------------------------
+# Round 2 (gauntlet pieces 3 + 4): a real per-card state system with
+# color/form driving legibility ("node state while working"), and an
+# honest idle state that actually reads quiet-but-healthy rather than
+# hung. Pinned against E:\gamify-lab\verdicts\round1\piece3_node_states.md
+# and piece4_idle_state.md.
+# ---------------------------------------------------------------------------
+
+def test_graph_state_derives_five_named_card_states():
+    src = _read(_LIVE / "graphState.ts")
+    assert "export function deriveCardState(" in src
+    for state in ('"working"', '"waiting_gate"', '"stalled"', '"young"', '"done"'):
+        assert state in src, f"deriveCardState must be able to return {state}"
+
+
+def test_red_ring_color_is_reserved_for_stalled_only_never_hardcoded():
+    palette_src = _read(_LIVE / "palette.ts")
+    cards_src = _read(_LIVE / "cards.ts")
+    # The actual guard, pinned as the real conditional (not a bare
+    # substring match): deadRingColorFor only returns PALETTE.red on the
+    # "stalled" branch. Round1's exact failure was a red dot rendered
+    # UNCONDITIONALLY on every Spend/Step row regardless of state.
+    assert 'if (state === "stalled") return PALETTE.red;' in palette_src
+    # Every connector dot's dead-fallback must route through this one
+    # function -- never a hardcoded PALETTE.red re-introduced on a row.
+    assert "deadRingColorFor(state)" in cards_src
+    assert cards_src.count("drawConnectorDot(ctx, dotX, rowY,") >= 3, (
+        "Tokens/Step/Spend rows must all pass through the same "
+        "state-derived dead-ring color, not their own hardcoded fallback")
+
+
+def test_waiting_gate_state_gets_magenta_stripe_distinct_from_stalled_red():
+    src = _read(_LIVE / "cards.ts")
+    assert 'state === "waiting_gate"' in src and 'state === "stalled"' in src
+    assert "EDGE_STRIPE_W" in src and "PALETTE.magenta" in src, (
+        "a gate-pending card must render a magenta left-edge stripe")
+    assert "rgba(8,9,13,0.4)" in src, (
+        "a stalled card must desaturate its body, distinct from a "
+        "gate-pending card's magenta stripe")
+
+
+def test_done_card_settles_then_compacts_to_a_witnessed_chip():
+    src = _read(_LIVE / "cards.ts")
+    assert "drawDoneChip(" in src
+    assert "COMPACT_AFTER_MS" in src
+    assert "settleUntil" in src, (
+        "a completed card must get a brief settle flash before it "
+        "compacts -- build directive: 'the completion must be witnessed'")
+
+
+def test_toasts_module_exists_and_graphstate_spawns_both_kinds():
+    toasts_src = _read(_LIVE / "toasts.ts")
+    assert "export function spawnToast(" in toasts_src
+    assert "export function drawToasts(" in toasts_src
+    assert "export function pruneToasts(" in toasts_src
+
+    state_src = _read(_LIVE / "graphState.ts")
+    assert 'spawnToast(this.toasts, "done"' in state_src
+    assert 'spawnToast(this.toasts, "gate"' in state_src
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "drawToasts(" in draw_src
+
+
+def test_idle_quiet_line_carries_a_ticking_elapsed_counter():
+    src = _read(_LIVE / "idle.ts")
+    assert "quietForS" in src, (
+        "the quiet line must show elapsed time since last activity -- a "
+        "static 'queue is quiet' string with no motion at all is exactly "
+        "the round1 gap: 'our clip never actually stages a quiet moment'")
+    assert "lastEventAt" in src, (
+        "quiet detection must key off GraphState's single real-event "
+        "clock, not a per-node tok_s/pulseUntil re-derivation")
+
+
+def test_graph_state_decays_stale_tok_s_for_honest_hud_and_wires():
+    src = _read(_LIVE / "graphState.ts")
+    assert "QUIET_DECAY_MS" in src
+    assert "n.tok_s = 0;" in src, (
+        "a node's rate stat must decay to 0 once its OWN last signal goes "
+        "stale, or the HUD sum / wire-live check reads a session as "
+        "permanently live forever after its last nonzero tick")
+
+
+def test_self_heal_reconcile_catches_gate_flips_written_out_of_band():
+    src = _read(_LIVE / "graphState.ts")
+    assert "scheduleSelfHeal(" in src
+    assert "private reconcile(" in src
+    assert "setReconcileFetcher(" in src, (
+        "GraphState must accept an injected fetcher so the page can wire "
+        "the debounced self-heal refetch to /api/work/graph")
+    page_src = _read(_LIVE_PAGE)
+    assert "setReconcileFetcher(" in page_src
+
+
+def test_tokens_turn_usd_total_ticks_the_spend_row():
+    types_src = _read(_LIVE / "types.ts")
+    assert "usd_total" in types_src
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "event.usd_total" in state_src
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "m.spendUsd" in cards_src, (
+        "the Spend row must render a real per-node value, not the round1 "
+        "hardcoded dead '$0'")
+
+
+def test_layout_session_drop_is_floored_at_150px():
+    src = _read(_LIVE / "layout.ts")
+    assert "Math.max(150," in src, (
+        "the driver-card-bottom -> session-card-top gap must be floored "
+        "at 150px so the session->task wire is long enough for an "
+        "in-transit marker to sit visibly mid-span (round1 gap: "
+        "'wire run ~15-50px, markers flash sub-200ms')")

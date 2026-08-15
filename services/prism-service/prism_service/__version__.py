@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.4"
+PRISM_VERSION = "7.10.54+gamify.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4542,4 +4542,32 @@ PRISM_VERSION_NOTES += (
     "new work.status SSE event: task.changed's existing `fields` dict "
     "already carries status/gate_state on the write that moved them (see "
     "routes/sse.py's comment) - a second event would just duplicate it."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.54+gamify.5: ROUND 2 GAUNTLET, PIECES 3+4 (node state while "
+    "working + honest idle) - graphState.deriveCardState() gives every "
+    "/live card one of five real states (working/waiting_gate/stalled/"
+    "young/done) instead of small grey step text; cards.ts now tints the "
+    "title bar, adds a magenta left-edge stripe for a gate wait and a red "
+    "top border + desaturation for stalled, and routes every connector "
+    "dot's dead-fallback through palette.ts's deadRingColorFor(state) so "
+    "red is reserved for stalled/failed ONLY (round1: 'a red dot sits "
+    "next to Step/Spend on every card whether it's active or not'). Spend "
+    "rows are real now (m.spendUsd, ticking off an optional tokens.turn "
+    "usd_total) instead of a hardcoded dead '$0'. Done cards settle "
+    "(scale + green title flash) then compact to a slim chip after 4s - "
+    "witnessed, never an instant vanish - and a docked bottom-right toast "
+    "(toasts.ts) fires on both a done settle and a gate going pending. "
+    "graphState.step() now decays a node's stale tok_s to 0, which "
+    "cascades honestly into the HUD total, the wire live-tint, and a "
+    "card's own dot liveliness from ONE fix; idle.ts's quiet line now "
+    "reads off GraphState.lastEventAt (a single real-event clock) and "
+    "carries a ticking 'last activity Xs ago' counter instead of a static "
+    "string, closing piece4's 'never actually stages a quiet moment' gap. "
+    "GraphState.reconcile()/scheduleSelfHeal() debounce a 2s /api/work/"
+    "graph refetch on any task.changed or new placeholder, so a gate flip "
+    "written out-of-band (Act 3's direct sqlite write, no SSE) still "
+    "reaches the screen. layout.ts floors the session-card drop at 150px "
+    "(was ~12px) so the session->task wire is long enough to see a "
+    "marker mid-span."
 )

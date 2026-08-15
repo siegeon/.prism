@@ -55,6 +55,18 @@ export class LayoutEngine {
     return { w: BASE_CARD_W * this.scale, h: h * this.scale };
   }
 
+  /** Vertical gap between a driver card's bottom edge and its session
+   * card's top edge. Round 2 builder-B residual (piece 4 critic gap:
+   * "session cards sit nearly flush under their driver so the
+   * session->task wire is ~15-50px and markers flash sub-200ms") — floor
+   * this at 150px, scale-independent, so the wire is always long enough
+   * for a sparse in-transit marker (packets.ts's ~140px/s constant
+   * speed) to sit visibly mid-span for a beat rather than blink past in
+   * under two rAF frames. */
+  private sessionDropY(): number {
+    return Math.max(150, 170 * this.scale);
+  }
+
   /** Extra vertical room a row must reserve below a task/subtask card so
    * a session card that arrives later (placeSession attaches below-right
    * of whatever it drives) never overlaps the NEXT card in the same
@@ -63,7 +75,7 @@ export class LayoutEngine {
    * to assume worst case up front rather than react after the fact. */
   private sessionReserve(): number {
     const { h } = this.cardSize("session");
-    return h + ROW_GAP * this.scale * 0.7;
+    return this.sessionDropY() + h + ROW_GAP * this.scale * 0.3;
   }
 
   placeTask(id: string): Slot {
@@ -105,7 +117,7 @@ export class LayoutEngine {
     this.sessOrder.set(driverId, list);
     const { w, h } = this.cardSize("session");
     const x = driverSlot.x + 18 * this.scale + idx * (w + 14 * this.scale);
-    const y = driverSlot.y + driverSlot.h + ROW_GAP * 0.55 * this.scale;
+    const y = driverSlot.y + driverSlot.h + this.sessionDropY();
     const slot: Slot = { x, y, w, h };
     this.sessSlot.set(id, slot);
     return slot;

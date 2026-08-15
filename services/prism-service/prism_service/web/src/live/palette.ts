@@ -38,3 +38,29 @@ export function glyphFor(kind: "task" | "subtask" | "session"): string {
   if (kind === "subtask") return "◇"; // ◇ subtask
   return "●"; // ● session/agent
 }
+
+/** Round 2, piece 3 (node state while working): the five states a card
+ * can be in, and the ONE place their chrome maps to color. Red stays
+ * reserved for "stalled" here and here only — the round1 critic's exact
+ * complaint was "a red dot sits next to Step/Spend on every card whether
+ * it's active or not, so red is never reserved for 'dead', it's just
+ * noise". A connector dot with no live signal falls back to THIS
+ * function's color, never a hardcoded PALETTE.red, so a young/pending
+ * card (never signaled yet) or a healthy card with a not-yet-ticked
+ * stat (e.g. Spend at $0 on a fresh task) reads neutral-dim instead of
+ * alarm-red. */
+export type CardState = "working" | "waiting_gate" | "stalled" | "young" | "done";
+
+export function deadRingColorFor(state: CardState): string {
+  if (state === "stalled") return PALETTE.red;
+  if (state === "waiting_gate") return PALETTE.magenta;
+  return PALETTE.textDim; // young / working / done — never red
+}
+
+export function titleTintFor(state: CardState): string {
+  if (state === "waiting_gate") return "#3a2f45"; // magenta-tinted slate
+  if (state === "stalled") return "#2e2a2a"; // desaturated, faintly cool-red
+  if (state === "done") return PALETTE.cardTitleDone;
+  if (state === "working") return "#2c3550"; // teal-tinted slate
+  return PALETTE.cardTitle; // young — the plain neutral default
+}

@@ -6,12 +6,13 @@
  * WorkEvent-sourced, so a still wire really means no flow). */
 
 import type { GraphState, LiveNode } from "./graphState";
-import { HEARTBEAT_DECAY_MS } from "./graphState";
+import { HEARTBEAT_DECAY_MS, deriveCardState } from "./graphState";
 import { drawCard, type CardMetrics } from "./cards";
 import { drawWire, routeOrthogonal, type WireKind } from "./wires";
 import { drawPackets } from "./packets";
 import { drawHud } from "./hud";
 import { drawLoading, drawQuietLine, isGraphQuiet } from "./idle";
+import { drawToasts } from "./toasts";
 import { PALETTE } from "./palette";
 
 function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, pan: { x: number; y: number }, zoom: number): void {
@@ -44,6 +45,7 @@ function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics
       tokS: node.tok_s, tokensTotal: node.tokens_total, tokensLive: live,
       step: "", stepBarFrac: 0, stepLive: false,
       gatePending: false, gateLabel: "", queueDepth: 0, bufferFrac: 0,
+      spendUsd: 0,
     };
   }
 
@@ -62,15 +64,39 @@ function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics
     : 0;
   const stepLive = node.status === "in_progress" && !!node.workflow_step;
 
-  const queueDepth = state.edges.filter((e) => e.kind === "parent_of" && e.source === node.id).length;
+  // Real backed-up-children count from the backend (api/work.py's
+  // queue_depth: pending children that never entered the conductor) when
+  // the boot/reconcile snapshot has populated it; falls back to the raw
+  // parent_of edge count for a placeholder node reconcile hasn't
+  // backfilled yet, same as round 1's approximation.
+  const queueDepth = node.queue_depth
+    || state.edges.filter((e) => e.kind === "parent_of" && e.source === node.id).length;
+
+  // Trust gate_state alone, never gatePendingSince's truthiness: 0 (or
+  // any negative value, now that graphState no longer clamps it to 0)
+  // is a legitimate real timestamp, not an "unset" sentinel.
+  const gateWaitS = node.gate_state === "pending"
+    ? (now - node.gatePendingSince) / 1000
+    : null;
+  const gateLabel = gateWaitS != null
+    ? `${node.workflow_step || "gate"} · waiting ${fmtWaitingMins(gateWaitS)}`
+    : "";
 
   return {
     tokS, tokensTotal, tokensLive: anyLive,
     step: node.workflow_step, stepBarFrac: stepLive ? Math.max(heartbeatFrac, 0.08) : 0, stepLive,
     gatePending: node.gate_state === "pending",
-    gateLabel: node.gate_state === "pending" ? "awaiting review" : "",
+    gateLabel,
     queueDepth, bufferFrac: node.bufferFrac,
+    spendUsd: node.spend_usd || 0,
   };
+}
+
+/** "waiting Xm" per the build directive; sub-minute waits read as "<1m"
+ * rather than "0m", which would misread as "not actually waiting". */
+function fmtWaitingMins(waitS: number): string {
+  const m = Math.floor(waitS / 60);
+  return m < 1 ? "<1m" : `${m}m`;
 }
 
 export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: number, version: string): void {
@@ -112,18 +138,47 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
   }
   drawPackets(ctx, state.packets);
 
+  // Round 2, piece 4 (honest idle): when the WHOLE graph has been quiet
+  // for a while, every card dims ~15% -- never blanked, never removed,
+  // last real numbers stay exactly as they were (build item 3: "cards
+  // keep their last real numbers, dim ~15%, never blanked"). A single
+  // card's own STALLED state (piece 3) is a separate, per-node signal
+  // (red rings) layered on top of this, not replaced by it.
+  const graphQuiet = isGraphQuiet(state, now);
   for (const n of state.nodes) {
     const m = metricsFor(n, state, now);
-    drawCard(ctx, n, m, now);
+    let cardState = deriveCardState(n, now);
+    // A session card carries no `status` of its own (upsertSessionNode
+    // always seeds ""), so deriveCardState can only ever age it into
+    // STALLED, never DONE -- verified live: the session that drove an
+    // already-completed task read alarm-red ~25s after the task itself
+    // had already settled to its green chip, which misreads as "this
+    // agent failed" rather than "this agent finished". If the task it
+    // drove is done, the session inherits that done-ness instead.
+    if (n.kind === "session" && cardState === "stalled" && n.driverOfId) {
+      const driver = state.nodes.find((d) => d.id === n.driverOfId);
+      if (driver && driver.status === "done") cardState = "done";
+    }
+    ctx.save();
+    if (graphQuiet) ctx.globalAlpha = 0.85;
+    drawCard(ctx, n, m, cardState, now);
+    ctx.restore();
   }
 
   ctx.restore();
 
   // HUD — fixed, screen space, independent of pan/zoom.
   drawHud(ctx, state, now);
-  if (isGraphQuiet(state, now)) {
-    // Round 2's taller/wider HUD panel (piece 3) pushed its bottom edge
-    // down; the quiet line sits just below it, never overlapping a row.
-    drawQuietLine(ctx, 22, 232);
+  if (graphQuiet) {
+    // Sits in the ~22px gap between the HUD panel's bottom edge (~206,
+    // see hud.ts's PANEL_W/panelH math) and layout.ts's ORIGIN_Y (228,
+    // where the first task card starts) -- verified against a live
+    // screenshot that y=232 visually collided with the top card's title
+    // bar text; y=217 clears both.
+    drawQuietLine(ctx, 22, 217, (now - state.lastEventAt) / 1000);
   }
+
+  // Docked completion/gate toasts -- screen space, independent of
+  // pan/zoom, drawn last so they sit above everything.
+  drawToasts(ctx, state.toasts, width, height, now);
 }
