@@ -29,33 +29,54 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 
 def _write_jsonl(path: Path, session_id: str, out_tokens: list[int]) -> None:
-    """Emit a minimal transcript: one assistant event per output-token count."""
+    """Emit a minimal transcript: one assistant event per output-token count.
+
+    Carries a real "timestamp" (task 170991cc, regression from 569e7d0 /
+    #316 "SCOPE THE STEP READOUT TO THE STEP"): claude_transcripts._token_events
+    parses evt["timestamp"] via _parse_iso_epoch and `continue`s past any line
+    where that comes back None, so a timestamp-less synthetic line is silently
+    invisible to the per-turn windowed reader (tokens_since_step) even though
+    the older lifetime-sum reader (live_tokens_for_session) still counts it."""
+    from datetime import datetime, timezone
+
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for n in out_tokens:
         lines.append(json.dumps({
             "sessionId": session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "message": {"role": "assistant", "usage": {"output_tokens": n}},
         }))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _fake_tree(tmp_path: Path):
-    """Build claude_home/projects/<slug>/ with a parent transcript + one nested
-    workflow-subagent transcript. Returns (claude_home, source_path, sess)."""
-    from prism_service.services.claude_transcripts import path_to_slug
-
+def _fake_tree(tmp_path: Path, write: bool = True):
+    """Build claude_home/projects/<slug>/ paths for a parent transcript + one
+    nested workflow-subagent transcript. Returns (claude_home, source_path,
+    sess). write=False skips writing the JSONL content immediately - a
+    caller that needs the transcript to land AFTER some other event (e.g. a
+    step-entry timestamp the windowed reader anchors to) calls
+    _write_fake_transcripts() itself once that event has happened."""
     source_path = str(tmp_path / "src" / "proj")
     claude_home = tmp_path / "claude"
-    slug = path_to_slug(source_path)
-    proj = claude_home / "projects" / slug
     sess = "11111111-2222-3333-4444-555555555555"
+    if write:
+        _write_fake_transcripts(claude_home, source_path, sess)
+    return claude_home, source_path, sess
+
+
+def _write_fake_transcripts(claude_home: Path, source_path: str, sess: str) -> None:
+    """Write the parent (300 tok) + nested subagent (125 tok) transcripts for
+    _fake_tree's session. Split out of _fake_tree so a caller can control
+    WHEN they hit disk relative to some other timestamped event."""
+    from prism_service.services.claude_transcripts import path_to_slug
+
+    proj = claude_home / "projects" / path_to_slug(source_path)
     _write_jsonl(proj / f"{sess}.jsonl", sess, [100, 200])  # parent = 300
     # subagent transcript nested under the session dir carries the parent id
     _write_jsonl(
         proj / sess / "subagents" / "wf_x" / "agent-abc.jsonl", sess, [50, 75],
     )  # subagent = 125
-    return claude_home, source_path, sess
 
 
 # ----------------------------------------------------------------------
@@ -97,13 +118,30 @@ def test_current_session_id_returns_real_session(tmp_path):
 # ----------------------------------------------------------------------
 
 def test_phase_progress_live_tokens_without_outcomes_row(tmp_path, monkeypatch):
+    """Task 170991cc. Regression commit 569e7d0 (#316, "The conductor tells
+    the truth about what it is doing") scoped the readout to a per-turn
+    windowed timeline (conductor_service.py:4551-4564) that only counts
+    transcript lines carrying a parseable "timestamp" AND at/after the
+    current step's entry instant (claude_transcripts.tokens_in_window).
+    This fixture's _write_jsonl predated that change and never grew a
+    timestamp, so the windowed reader skipped every line
+    (claude_transcripts._token_events, "if ep is None: continue") and
+    tokens_since_step silently read 0 on any in-progress task. Two fixes,
+    both confined to this fixture (never conductor_service.py/
+    claude_transcripts.py, both product-correct): (1) _write_jsonl now
+    stamps a real timestamp; (2) the transcript is written AFTER
+    advance_task (with a margin past phase_progress's own internal
+    now()-sampling delay), because a step-entry-anchored window can never
+    include a transcript that predates step entry, no matter how it is
+    timestamped - this mirrors reality, where a session's turns happen
+    while the task is in-progress, not before."""
     from prism_service.services.task_service import TaskService
     from prism_service.services.conductor_service import ConductorService
     from prism_service.services import claude_transcripts as ct
 
     import sqlite3
 
-    claude_home, source_path, sess = _fake_tree(tmp_path)
+    claude_home, source_path, sess = _fake_tree(tmp_path, write=False)
     scores_db = str(tmp_path / "scores.db")
     # session_outcomes is normally created by brain_engine; materialize it
     # EMPTY here to mirror an in-progress session the importer hasn't written
@@ -127,6 +165,13 @@ def test_phase_progress_live_tokens_without_outcomes_row(tmp_path, monkeypatch):
 
     t = task_svc.create(title="in-progress, no outcome row")
     cond.advance_task(t.id)
+    # The transcript must land AFTER the step-entry timestamp advance_task
+    # just stamped: tokens_in_window only counts events at/after it, and
+    # phase_progress itself burns real wall-clock between its two internal
+    # now() samples (measured ~30ms on this host), so give a generous margin.
+    import time
+    time.sleep(0.5)
+    _write_fake_transcripts(claude_home, source_path, sess)
     # Link the REAL session — but DO NOT write a session_outcomes row, mirroring
     # an in-progress task the importer hasn't seen yet.
     task_svc.link_session(t.id, sess)
