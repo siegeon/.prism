@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.46"
+PRISM_VERSION = "7.10.47"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4418,4 +4418,17 @@ PRISM_VERSION_NOTES += (
     "the shipped .claude/hooks/prism-sync.py SessionStart hook crashing "
     "with AttributeError when the PRISM_REFLECTION_PENDING banner broke "
     "its json.loads()."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.47: A RUNNING STEP NEVER CLAIMS REVIEW IT HAS NOT HAD [task "
+    "122ff356]. StepRail's VerifiedBy pill on the current non-gate row now "
+    "carries a real `decided` flag (gateFor(nextGate.id) against the "
+    "resolved gate_decide receipts, not step position) and renders "
+    "'{Role} reviews next' until that record exists, 'verified by {Role}' "
+    "only once it does. SdlcProgress's 'awaiting review' caption now "
+    "cross-checks the CURRENT step's own resolved type "
+    "(steps[curIdx].type) before showing the awaiting_gate label, so a "
+    "stale/relayed activity.state can't render it on a mid-execution "
+    "step. Both guards key off record existence / step type, never a "
+    "step id, so a new workflow step can't reintroduce the phantom claim."
 )
