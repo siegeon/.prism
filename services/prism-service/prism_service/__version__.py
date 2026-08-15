@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.50"
+PRISM_VERSION = "7.10.51"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4466,4 +4466,18 @@ PRISM_VERSION_NOTES += (
     "Linux `git status --porcelain` reported that link as untracked and "
     "blamed it on the worker; .gitignore/web/.gitignore also drop the "
     "trailing slash so the pattern matches the link too."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.51: SECOND LINUX-CI-ONLY HOST-PATH LEAK CLOSED [task 93cd2cf9] - "
+    "found by actually running the v7.10.50 fix on a real GH Actions ubuntu "
+    "PR check (run 31887714318): a hosted runner's ephemeral VM hostname "
+    "('runnervmzvulz') matches none of the 3 _HOST_PATH_PATTERNS shapes, but "
+    "starts with the exact account-name token Path.home().name resolves to "
+    "('runner'), which the team-boundary oracle also refuses to see leak. "
+    "security.redact_host_paths now also strips any value that exactly "
+    "equals this process's own LIVE host/container identifier "
+    "(_raw_host_identifier: PRISM_CONTAINER_NAME override, else "
+    "/etc/hostname, else socket.gethostname(), never a hard-coded value) - "
+    "closes the docker-exec 'container' field on /api/claude-auth/status "
+    "and /api/service-info in team mode."
 )

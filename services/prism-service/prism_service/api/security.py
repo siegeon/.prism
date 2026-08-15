@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 from dataclasses import replace
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 
@@ -47,15 +49,54 @@ def _looks_like_host_path(value: object) -> bool:
     return any(pattern.search(value) for pattern in _HOST_PATH_PATTERNS)
 
 
+def _raw_host_identifier() -> str:
+    """The literal host/container identifier claude_auth._container_name and
+    service_info._container_name would otherwise expose unredacted: an
+    operator's explicit PRISM_CONTAINER_NAME, else /etc/hostname (docker),
+    else the OS hostname (native) - resolved LIVE from this process's own
+    environment each call, never a hard-coded value, so it tracks whatever
+    host or container PRISM happens to run in. A hosted Linux CI runner's
+    ephemeral VM hostname can literally start with the same account-name
+    token Path.home().name resolves to (e.g. 'runnervmzvulz' vs. home
+    '/home/runner') - task 93cd2cf9, CI evidence PR #1282 run 31865514286.
+    This mirrors the existing structural approach (a live-computed shape
+    check, not a machine literal) to catch that leak too."""
+    explicit = os.environ.get("PRISM_CONTAINER_NAME", "").strip()
+    if explicit:
+        return explicit
+    try:
+        text = Path("/etc/hostname").read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    except OSError:
+        pass
+    try:
+        return socket.gethostname().strip()
+    except OSError:
+        return ""
+
+
+def _looks_like_host_identifier(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    host = _raw_host_identifier()
+    return bool(host) and value == host
+
+
 def redact_host_paths(payload: dict) -> dict:
     """Drop any top-level value that structurally looks like a host
-    filesystem path. Used by team-mode response handlers so a credentials
-    directory, data dir, or config path never reaches a caller who is not
-    the operator sitting at this machine; connection booleans and identity
-    fields (which never match the path shapes above) pass through untouched.
+    filesystem path, OR that exactly matches this process's own live
+    host/container identifier. Used by team-mode response handlers so a
+    credentials directory, data dir, config path, or the docker-exec
+    container name never reaches a caller who is not the operator sitting
+    at this machine; connection booleans and identity fields (which never
+    match either check) pass through untouched.
     """
 
-    return {k: v for k, v in payload.items() if not _looks_like_host_path(v)}
+    return {
+        k: v for k, v in payload.items()
+        if not _looks_like_host_path(v) and not _looks_like_host_identifier(v)
+    }
 
 
 _PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$", re.ASCII)
