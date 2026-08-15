@@ -85,7 +85,15 @@ def test_the_link_is_named_for_the_provider():
 
 def test_a_task_with_no_counterpart_gets_no_button():
     """Recorded first misfire: a link on every row, so a native task shows a
-    button that goes nowhere."""
+    button that goes nowhere.
+
+    RED marker (task 1ab8fd0f): task 6fbbec35 (commit c742492) replaced the
+    single `{mirror && <a ...>}` boolean guard with mirrorsOf(item).map(...),
+    an array with zero elements for a task with no counterpart. There is no
+    `&&` token near the anchor any more, so this assertion currently raises
+    ValueError: substring not found. Fix (retargeting the locator to the
+    .map() render, in place per repo convention) lands in the next commit.
+    """
     src = _row_body()
     m = re.search(r"<a\s", src)
     assert m, "no anchor element to judge; the link does not exist yet"
@@ -137,7 +145,14 @@ def test_the_guard_reads_the_row_rendering():
 
 def test_the_provider_pill_is_the_first_thing_on_the_summary_line():
     """Owner 2026-07-28: "i want the pill on the left hand side of the summary
-    line not the right"."""
+    line not the right".
+
+    RED marker (task 1ab8fd0f): task 6fbbec35 (commit c742492) replaced the
+    single `{mirror && ...}` badge with mirrorsOf(item).map(...), so the
+    literal substring "{mirror &&" no longer exists in source and this
+    assertion currently raises ValueError: substring not found. Fix
+    (retargeting the locator, in place per repo convention) lands next.
+    """
     body = _row_body()
     cell = body[body.index('<td className="px-3 py-1.5">'):]
     pill = cell.index("{mirror &&")

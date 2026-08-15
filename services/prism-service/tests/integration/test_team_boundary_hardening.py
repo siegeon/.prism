@@ -695,6 +695,12 @@ def test_mcp_host_path_schemas_are_explicitly_classified_for_team_mode():
     } == set(_TEAM_UNSCOPED_HOST_PATH_TOOLS)
 
 
+# RED marker (task 1ab8fd0f): task 01ec3894 (commit 5d6292c) added a
+# tool_profile kwarg to the real server_module.call_tool -> handle_tool call
+# site (prism_service/mcp/server.py:230-233). The local `dispatch` stub below
+# has not been widened to accept it yet, so both parametrizations of this
+# test currently raise TypeError: dispatch() got an unexpected keyword
+# argument 'tool_profile'. Fix lands in the next commit on this task.
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
     [
