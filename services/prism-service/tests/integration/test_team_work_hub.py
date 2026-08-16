@@ -15,16 +15,19 @@ The load-bearing assertion in here is REGISTRATION BY PRODUCTION CODE.
 This epic already shipped seven green children whose feature could not
 run because every test injected its collaborator and nothing ever
 constructed one (task f4dd3687, the reason
-api/integrations.py:63 register_builtin_adapters exists). So the
-collaboration test below reads the registry after a CLEAN import in a
-subprocess, which an injecting test cannot fake.
+api/integrations.py:63 register_builtin_adapters exists).
+
+The collaboration surface itself (services/collaboration.py,
+api/collaboration.py, github_collab.py) was rolled back on owner
+instruction 2026-08-07 ("this buzz work... is not working at all and it
+has caused the system to become more confused and unstable"); its
+production-registration test below is retired accordingly. The
+Actor/identity tests in this file are unaffected and stay.
 """
 
 from __future__ import annotations
 
 import ast
-import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -138,36 +141,18 @@ def test_resolution_is_total_and_never_raises(actors, raw):
 
 
 # ----------------------------------------------------------------------
-# Collaboration: something production CONSTRUCTS reaches off this machine
+# Collaboration: RETIRED 2026-08-07
 # ----------------------------------------------------------------------
-
-_CLEAN_IMPORT = (
-    "import json;"
-    "from prism_service.api import collaboration as c;"
-    "print(json.dumps(sorted(c.collaboration_surfaces())))"
-)
-
-
-def test_a_collaboration_surface_is_registered_by_production_code():
-    """AC-1. THE failure this epic already shipped once: seven green
-    children whose feature could not run because every test injected its
-    collaborator and nothing in production ever constructed one (task
-    f4dd3687, the reason api/integrations.py:63 exists).
-
-    So this reads the registry out of a CLEAN interpreter - no fixtures, no
-    injection, nothing imported but the module itself. A test that registers
-    an adapter for itself cannot satisfy this, which is the point.
-    """
-    proc = subprocess.run([sys.executable, "-c", _CLEAN_IMPORT],
-                          cwd=str(_SERVICE_ROOT), capture_output=True,
-                          text=True, timeout=120)
-    assert proc.returncode == 0, (
-        f"clean import failed:\n{proc.stdout}\n{proc.stderr}")
-    surfaces = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert surfaces, (
-        "no collaboration surface is registered at import time - the "
-        "adapter exists only if a test injects it, which is exactly the "
-        "0784729f failure")
+#
+# test_a_collaboration_surface_is_registered_by_production_code used to read
+# api/collaboration.py's registry from a clean subprocess import to prove
+# production, not a test fixture, constructed the adapter (task f4dd3687).
+# The collaboration surface itself (services/collaboration.py,
+# api/collaboration.py, github_collab.py, the Settings connector card) was
+# rolled back on owner instruction ("this buzz work... is not working at
+# all and it has caused the system to become more confused and unstable"),
+# so there is no registry left to assert against. Superseded by nothing -
+# the surface is gone, not replaced.
 
 
 def test_a_gate_decision_carries_a_resolved_identity(tmp_path, monkeypatch):

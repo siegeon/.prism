@@ -49,8 +49,9 @@ const GATE_WAIT_S = Number.isFinite(Number(_in.gate_wait_s))
 // step whose subprocess wedges keeps the loop on its first iteration and is
 // structurally invisible to it. That is how a drive burned 3.9h, ~2.5 of them
 // inside one wedged step, with nothing telling it to stop.
-// This script has NO clock: Date.now/new Date( are banned in
-// .claude/workflows/*.js (the pre-flight below fails the drive on any match)
+// This script has NO clock: the JS client-clock calls are banned in
+// .claude/workflows/*.js (the pre-flight greps for them and fails the drive
+// on any match - naming them literally here would trip that same grep)
 // and the runtime throws on them because they break resume. So the number is
 // DECLARED here and ENFORCED BY THE STEP AGENT, which has a real clock through
 // bash - exactly the shape GATE_WAIT_S already uses for a gate seat. Seconds.

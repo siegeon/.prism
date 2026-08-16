@@ -241,38 +241,9 @@ def quiet_boot(monkeypatch):
 
     monkeypatch.setattr("prism_service.main._LOCK_FILE", _RefuseLock())
 
-
-@pytest.fixture(autouse=True)
-def _collaboration_registry_isolation():
-    """Same guarantee for the COLLABORATION registry (epic 0784729f).
-
-    services/collaboration.py carries a module-level registry that
-    api/collaboration.py populates once at import time, exactly like the
-    work-item one above. It is given the same snapshot/restore fixture on
-    day one rather than after an incident: the leak that produced the
-    fixture above (task c23e2e7b) was latent for months and only detonated
-    when file ordering changed, and a registry whose emptiness is invisible
-    until some later test expects the production adapter is precisely how
-    this epic shipped a feature that could not run (task f4dd3687)."""
-    from prism_service.services import collaboration
-
-    before = collaboration.adapters_snapshot()
-    try:
-        yield
-    finally:
-        after = collaboration.adapters_snapshot()
-        # The builtin adapters register when api/collaboration is IMPORTED,
-        # which may happen for the first time DURING a test (anything that
-        # imports prism_service.main). Blindly restoring a snapshot taken
-        # before that import wiped github for every later test - the same
-        # leak this fixture family exists to prevent (c23e2e7b), just with
-        # the roles reversed. So only restore when there is something to
-        # restore, or when the test left the registry no better than it
-        # found it; never erase what production populated mid-test.
-        #
-        # Importing the api module here instead was the obvious fix and is
-        # WRONG: it drags the whole API package into every test and starts
-        # its background threads, which broke the lifespan thread-count
-        # assertions (test_lifespan_lock_recovery: assert 30 == 10).
-        if before or not after:
-            collaboration.restore_adapters(before)
+# _collaboration_registry_isolation (epic 0784729f) removed: the
+# collaboration surface it protected (services/collaboration.py,
+# api/collaboration.py) was rolled back on owner instruction 2026-08-07
+# ("this buzz work... is not working at all and it has caused the system
+# to become more confused and unstable"). The work-item adapter fixture
+# above it is unrelated and stays.
