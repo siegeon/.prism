@@ -62,36 +62,39 @@ export function drawQuietLine(
   ctx: CanvasRenderingContext2D, x: number, y: number, quietForS: number,
   needAttentionCount: number, stalledAttentionCount = 0,
 ): void {
+  // Round 8 (owner report + task 04783650): the calm-case "last activity
+  // Ns ago" caption is retired -- hud.ts's hero row sub-label
+  // (heroSubLabel, hud.ts:244-250) already renders the identical
+  // quiet-age info once isGraphQuiet(), so a second copy here was pure
+  // redundancy. This module now only ever draws the "N need attention"
+  // variant; the caller (draw.ts) gates the whole call on
+  // needAttentionCount>0 rather than this function branching on it.
+  // `quietForS` stays in the signature (a still-live API surface some
+  // callers may want) even though this branch no longer prints it.
+  void quietForS;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  const fullText = needAttentionCount > 0
-    ? `queue is quiet · ${needAttentionCount} need attention`
-    : `queue is quiet · last activity ${Math.max(0, Math.floor(quietForS))}s ago`;
+  const fullText = `queue is quiet · ${needAttentionCount} need attention`;
   ctx.font = "11px system-ui, sans-serif";
-  // Opaque backing chip, independent of whatever the HUD sparkline's own
-  // curve happens to be drawing at this y (verified live: the sparkline
-  // is NOT clipped to its panel bounds, so a data spike can visually
-  // overlap this line otherwise) -- matches the docked-panel/chip
-  // treatment used everywhere else on this canvas (gatepanel.ts,
-  // toasts.ts) rather than relying on bare unbacked text.
+  // Opaque backing chip -- matches the docked-panel/chip treatment used
+  // everywhere else on this canvas (gatepanel.ts, toasts.ts) rather than
+  // relying on bare unbacked text.
   const textW = ctx.measureText(fullText).width;
   ctx.fillStyle = "rgba(18,22,32,0.85)";
   ctx.beginPath();
   ctx.roundRect(x - 8, y - 12, textW + 16, 24, 6);
   ctx.fill();
 
-  if (needAttentionCount > 0) {
-    ctx.fillStyle = PALETTE.textDim;
-    ctx.fillText("queue is quiet · ", x, y);
-    const prefixW = ctx.measureText("queue is quiet · ").width;
-    const attentionColor = stalledAttentionCount > 0 ? PALETTE.red : PALETTE.magenta;
-    ctx.fillStyle = attentionColor;
-    ctx.font = "600 11px system-ui, sans-serif";
-    ctx.fillText(`${needAttentionCount} need attention`, x + prefixW, y);
-    return;
-  }
   ctx.fillStyle = PALETTE.textDim;
-  ctx.fillText(fullText, x, y);
+  ctx.fillText("queue is quiet · ", x, y);
+  const prefixW = ctx.measureText("queue is quiet · ").width;
+  // Round 6 item 3's color rule, unchanged: red only for a genuine stall
+  // (stalledAttentionCount>0), magenta otherwise (a waiting gate is a
+  // decision, not a failure).
+  const attentionColor = stalledAttentionCount > 0 ? PALETTE.red : PALETTE.magenta;
+  ctx.fillStyle = attentionColor;
+  ctx.font = "600 11px system-ui, sans-serif";
+  ctx.fillText(`${needAttentionCount} need attention`, x + prefixW, y);
 }
 
 /** `lastEventAt` is GraphState's single clock for "when did anything

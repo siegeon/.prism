@@ -252,13 +252,16 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
 
   // HUD — fixed, screen space, independent of pan/zoom.
   drawHud(ctx, state, now);
-  if (graphQuiet) {
-    // Sits in the ~22px gap between the HUD panel's bottom edge (~206,
-    // see hud.ts's PANEL_W/panelH math) and layout.ts's ORIGIN_Y (228,
-    // where the first task card starts) -- verified against a live
-    // screenshot that y=232 visually collided with the top card's title
-    // bar text; y=217 clears both.
-    drawQuietLine(ctx, 22, 217, (now - state.lastEventAt) / 1000, needAttentionCount, stalledAttentionCount);
+  // Round 8 (owner report + task 04783650): the calm-case caption is
+  // retired -- hud.ts's hero row sub-label already shows the identical
+  // quiet-age info -- so this now only ever docks when there is a real
+  // N-need-attention count to report. y=220 clears the sparkline's own
+  // (now panel-contained) bottom edge, ~203px including the endpoint
+  // dot's radius -- the old y=217 used to sit inside the sparkline's
+  // pre-fix 206..231 overflow zone, which is the collision the owner
+  // reported.
+  if (graphQuiet && needAttentionCount > 0) {
+    drawQuietLine(ctx, 22, 220, (now - state.lastEventAt) / 1000, needAttentionCount, stalledAttentionCount);
   }
 
   // Legend chip -- fixed, screen space, bottom-left (round 3 item 2).
