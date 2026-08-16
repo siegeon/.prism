@@ -11,6 +11,7 @@ never on comments.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -1879,3 +1880,122 @@ def test_version_bumped_for_draggable_cards():
     assert int(m.group(1)) >= 13, (
         "the draggable-cards slice must bump the gamify version marker to "
         f"at least .13; got .{m.group(1)}")
+
+
+# ---------------------------------------------------------------------------
+# Quiet-HUD panel containment (owner report: sparkline spills below the
+# HUD panel, and the calm-case caption overlaps it). Both tests below
+# mirror hud.ts's ACTUAL geometry math (constants + panelH formula + the
+# sparkline's own spY/spH expression) rather than hand-typed pixel
+# guesses, so they fail on the real defect and stay honest if the row
+# layout ever changes again.
+# ---------------------------------------------------------------------------
+
+def _hud_const(hud_src: str, name: str) -> int:
+    m = re.search(rf"const {name} = (\d+)", hud_src)
+    assert m, f"hud.ts must define {name} as a numeric constant"
+    return int(m.group(1))
+
+
+def _sparkline_bottom_extent(hud_src: str) -> tuple[float, float]:
+    """Returns (panel_bottom_px, sparkline_bottom_px) computed from the
+    REAL source: PAD/PANEL_W/HERO_H/STAT_H/SPARK_H, the panelH formula,
+    the row-cursor walk (hero, $ spend, agents, tasks/gates -- the same
+    four draws drawHud actually makes before the sparkline), the
+    sparkline's own spY/spH expression, and the endpoint dot's radius."""
+    pad = _hud_const(hud_src, "PAD")
+    hero_h = _hud_const(hud_src, "HERO_H")
+    stat_h = _hud_const(hud_src, "STAT_H")
+    spark_h = _hud_const(hud_src, "SPARK_H")
+    panel_w = _hud_const(hud_src, "PANEL_W")
+
+    panel_h_m = re.search(r"const panelH = ([^;]+);", hud_src)
+    assert panel_h_m, "hud.ts must define panelH as a single const expression"
+    panel_h = eval(  # noqa: S307 - restricted namespace, source-derived only
+        panel_h_m.group(1), {"__builtins__": {}},
+        {"HERO_H": hero_h, "STAT_H": stat_h, "SPARK_H": spark_h},
+    )
+    panel_bottom = (pad - 10) + panel_h
+
+    # Mirrors drawHud's own rowY walk: top+6, then hero, $ spend, agents,
+    # then the combined tasks/gates row (STAT_H-4) -- the sparkline's
+    # rowY is wherever that walk lands, not a re-typed literal.
+    row_y = pad + 6 + hero_h + stat_h + stat_h + (stat_h - 4)
+
+    spark_m = re.search(
+        r"const spX = x, spY = ([^,]+), spW = ([^,]+), spH = ([^;]+);", hud_src)
+    assert spark_m, (
+        "hud.ts must define spX/spY/spW/spH as one destructured const "
+        "so the sparkline's real geometry is readable from source")
+    ns = {"rowY": row_y, "PANEL_W": panel_w, "SPARK_H": spark_h, "PAD": pad}
+    spy = eval(spark_m.group(1).strip(), {"__builtins__": {}}, ns)  # noqa: S307
+    sph = eval(spark_m.group(3).strip(), {"__builtins__": {}}, ns)  # noqa: S307
+
+    dot_m = re.search(
+        r"ctx\.arc\(last\.x, last\.y, ([\d.]+), 0, Math\.PI \* 2\);", hud_src)
+    dot_r = float(dot_m.group(1)) if dot_m else 3.0
+
+    return panel_bottom, spy + sph + dot_r
+
+
+def test_quiet_sparkline_stays_within_the_panels_own_bottom_edge():
+    # Owner report + task 04783650: no part of the quiet-state sparkline
+    # (curve, fill, or endpoint dot) may render below the HUD panel's
+    # own bottom edge. Fails today: spY+spH+dotRadius (228+3=231px)
+    # overflows the panel's real bottom edge (206px) by 25px.
+    hud_src = _read(_LIVE / "hud.ts")
+    assert "const panelH = HERO_H + STAT_H * 2 + SPARK_H + 22;" in hud_src, (
+        "panelH's formula must stay UNCHANGED -- the fix repositions/"
+        "resizes the sparkline itself (spY/spH) to fit the existing "
+        "budget, never grows panelH to chase the overflow")
+    panel_bottom, sparkline_bottom_px = _sparkline_bottom_extent(hud_src)
+    assert sparkline_bottom_px <= panel_bottom, (
+        f"the sparkline's real rendered bottom edge ({sparkline_bottom_px}px, "
+        f"including the endpoint dot's radius) must sit at/above the "
+        f"panel's own bottom edge ({panel_bottom}px) -- it currently "
+        f"overflows by {sparkline_bottom_px - panel_bottom}px")
+
+
+def test_calm_case_quiet_caption_removed_hero_row_already_shows_it():
+    # DEFECT 2 (removal half): hud.ts's hero-row sub-label (hud.ts:244-250,
+    # heroSubLabel) already renders "quiet Ns ago" once isGraphQuiet(),
+    # so idle.ts's calm-case "queue is quiet - last activity Ns ago"
+    # caption is redundant and must be dropped entirely. The
+    # attention-count variant is NOT redundant (only source of the
+    # queue-level count/color) and must survive untouched.
+    idle_src = _read(_LIVE / "idle.ts")
+    assert (
+        "queue is quiet · last activity ${Math.max(0, Math.floor(quietForS))}s ago"
+        not in idle_src
+    ), (
+        "the redundant calm-case caption must be removed -- hud.ts's "
+        "hero row sub-label already shows the same quiet-age info")
+    assert "queue is quiet · ${needAttentionCount} need attention" in idle_src, (
+        "the 'N need attention' variant must survive -- it is the only "
+        "source of the queue-level attention count/color on this canvas")
+
+
+def test_attention_caption_relocated_outside_sparkline_bounds():
+    # DEFECT 2 (relocation half): the surviving "N need attention"
+    # caption must render below the sparkline's own real bottom edge --
+    # never overlapping the curve/fill/dot. draw.ts's old hardcoded
+    # y=217 sat inside the sparkline's pre-fix overflow zone (206..231),
+    # which is the actual collision the owner reported.
+    hud_src = _read(_LIVE / "hud.ts")
+    _, sparkline_bottom_px = _sparkline_bottom_extent(hud_src)
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "if (graphQuiet && needAttentionCount > 0) {" in draw_src, (
+        "draw.ts must gate the whole drawQuietLine call on "
+        "needAttentionCount>0 -- never draw a docked caption purely to "
+        "restate quiet-age info the HUD hero row already shows")
+    y_m = re.search(r"drawQuietLine\(ctx, 22, (\d+(?:\.\d+)?),", draw_src)
+    assert y_m, "draw.ts must call drawQuietLine with a fixed x=22 and a literal y"
+    caption_y = float(y_m.group(1))
+    assert caption_y != 217, (
+        "the old y=217 sat inside the sparkline's overflow zone -- the "
+        "caption must actually move, not just get relabeled at the same spot")
+    assert caption_y > sparkline_bottom_px, (
+        f"the attention caption (y={caption_y}) must render below the "
+        f"sparkline's real bottom edge ({sparkline_bottom_px}px) -- a "
+        f"caption baseline above that overlaps the curve/fill/dot")
