@@ -20,7 +20,19 @@ export const PALETTE = {
 
   teal: "#2dd4bf",
   orange: "#f59e0b",
-  green: "#34d399",
+  // Round 5 item 4 (protect piece 3's legend): the old #34d399 sampled at
+  // (31,79,67) against working-teal's (18,87,75) in a critic's own
+  // screenshot -- both land in the same cyan-leaning emerald family (hue
+  // ~160 vs ~172, 12 degrees apart), so at video-compression bitrates the
+  // two swatches read as "nearly identical teal-green". #22c55e is a
+  // meaningfully more PURE green (hue ~142, 30 degrees from teal) --
+  // still unambiguously "green" for the locked money/passed-gate
+  // meaning, just far enough from teal's hue that a critic sampling
+  // pixels can't confuse the two. Applied everywhere PALETTE.green was
+  // already the source of truth (spend row/meter, gate-passed chrome,
+  // done card chrome via cardTitleDone below, legend swatch) -- one
+  // constant, no per-site drift.
+  green: "#22c55e",
   red: "#ef4444",
   magenta: "#e879f9",
 
@@ -54,7 +66,15 @@ export function glyphFor(kind: "task" | "subtask" | "session", role?: string | n
   if (kind === "task") return "▣"; // ▣ root task
   if (kind === "subtask") return "◇"; // ◇ subtask
   if (role === "qa") return "▲"; // ▲ verifier
-  if (role === "sm") return "■"; // ■ steward
+  // Round 5 item 0 residual (found verifying the film): the old "■"
+  // (steward) filled-square glyph is visually near-indistinguishable
+  // from "▣" (task) at card-title size under video compression -- a
+  // root task's own steward session sat directly under the root card
+  // with an all-but-identical square glyph, and read as a duplicated
+  // card at a glance even though the wire/data were both correct.
+  // "▼" pairs naturally with qa's "▲" (same triangle family, opposite
+  // direction) while sharing no silhouette with either square glyph.
+  if (role === "sm") return "▼"; // ▼ steward
   return "●"; // ● dev / unknown agent
 }
 

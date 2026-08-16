@@ -151,9 +151,24 @@ const AUTO_FIT_MAX_ZOOM = 1.8;
  * viewport fill" per the brief; a small scene (1-5 cards) still reads
  * LARGE rather than shrinking to a dot in a black field. */
 const AUTO_FIT_FILL_FRAC = 0.82;
-/** Camera eases toward its target with this time constant (ms) -- a
- * smooth swoop, never an instant snap-to-fit. */
-const AUTO_FIT_TIME_CONST_MS = 450;
+/** Round 5 item 1 SUPERSEDES round 3 item 1's continuous-chase model
+ * (`pan/zoom += (target - pan/zoom) * rate` recomputed from every node's
+ * slot EVERY FRAME): critic 1/2's "the whole view auto-scrolling/panning
+ * (~80-100px per 0.2s frame)" traced to two compounding causes -- (1) the
+ * old model has no deadband at all, so ANY per-frame float noise in the
+ * computed bbox re-aims the exponential chase, and an ease that's always
+ * chasing a slightly-moving target never actually reads as "settled"; (2)
+ * item 0's orphaned-session-slot bug fed it a bbox that kept changing
+ * for real, independent of (1). With that bug fixed, bounds now only
+ * change on a genuine topology event (node added/removed/reslotted), but
+ * the chase model itself still needed fixing: a deadband (bounds must
+ * move more than this many px on ANY edge before it counts as a new fit
+ * target) plus a FIXED-DURATION eased move (not an asymptotic chase) that
+ * explicitly reaches its target and then holds dead still, exactly the
+ * brief's "refit only when content bounds change materially... with a
+ * single eased move (<800ms), then hold still" spec. */
+const AUTO_FIT_DEADBAND_PX = 24;
+const AUTO_FIT_MOVE_MS = 750;
 
 export type LiveNode = GraphNode & {
   parentTaskId: string | null; // subtask -> its root task id
@@ -209,6 +224,24 @@ export type LiveNode = GraphNode & {
    * law the HUD hero meter uses, so the bar is monotonic with the
    * printed rate always (round 4 item 2a). */
   bufferLiveTokS: number;
+  /** Round 5 item 0 (regression root cause, part A): true whenever this
+   * node's CURRENT `label` was derived from something OTHER than a real
+   * backend record (placeholderTaskLabel for a task/subtask born from a
+   * live event that beat reconcile; sessionLabelFor's driver-echo
+   * fallback for a session with no `role · model` label from
+   * /api/work/graph yet). While true, step() re-derives a session's
+   * label from its live driver EVERY frame (see the loop below) instead
+   * of freezing it at creation/first-role time -- the old freeze is
+   * exactly what critics 1/2 (round 4) caught as "task starting..."
+   * stuck for the whole film: a session whose ONE agent.run happened to
+   * fire before its driver's own reconcile-heal landed, then went idle
+   * before a later agent.run could ever re-derive the label. Flips false
+   * the moment a REAL label lands (task.changed fields.title, reconcile's
+   * sn.label for a task/subtask, or a backend session node's `role ·
+   * model` label via reconcile) -- from then on this node is never
+   * touched by the live-echo loop again, so a real backend label is
+   * never clobbered by a driver-title guess. */
+  labelIsPlaceholder: boolean;
 };
 
 export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
@@ -225,11 +258,25 @@ function easeOutCubic(t: number): number {
  * witnessed happening before a recording ended ("B's icon-legend + one
  * bare hex-id node"). Falls back to "role · model"-shaped text or the
  * driven task's own title, NEVER the raw id, even in the placeholder
- * window before real telemetry arrives. */
+ * window before real telemetry arrives.
+ *
+ * Round 5 item 0 residual (found reading the actual film, not just
+ * pixel-checking a single frame): round4's `${driverLabel} · ${roleWord}`
+ * shape put role LAST, and cards.ts's title truncation is a flat char
+ * count (titleMaxChars, ~30 chars at this card width) -- every scenario
+ * title in this movie runs 30-47 chars on its own, so the role suffix
+ * NEVER actually rendered; a session sat under its driver showing the
+ * driver's own (truncated) title with nothing to mark it as a distinct
+ * agent card, reading as a duplicated card at a glance even though the
+ * wire and underlying data were both correct. VISUAL_GRAMMAR.md's own
+ * spec for this card is "model+role title", not a copy of the driven
+ * task's title -- so once role is known, lead with it in a SHORT form
+ * that always fits ("dev agent", never truncated). The driver-echo stays
+ * ONLY for the brief pre-role window (still never a bare id). */
 function sessionLabelFor(driverLabel: string | undefined, role?: string | null): string {
   const roleWord = role === "qa" ? "qa" : role === "sm" ? "sm" : role ? "dev" : null;
-  if (driverLabel) return roleWord ? `${driverLabel} · ${roleWord}` : `${driverLabel} · agent`;
-  return roleWord ? `agent · ${roleWord}` : "agent session";
+  if (roleWord) return `${roleWord} agent`;
+  return driverLabel ? `${driverLabel} · agent` : "agent session";
 }
 
 /** Round 4 item 4: a task/subtask placeholder (born from a live event
@@ -258,6 +305,24 @@ export class GraphState {
    * (round 3 item 1) stands down for AUTO_FIT_IDLE_MS after this so a
    * viewer's own framing is never fought. 0 = never touched. */
   lastUserInputAt = 0;
+
+  /** Round 5 item 1: the content bbox the CURRENT (or in-flight) camera
+   * fit was computed against -- compared with a deadband against each
+   * frame's fresh bbox so a materially-unchanged scene never re-aims the
+   * camera. null = no fit committed yet (first frame after boot). */
+  private fitBoundsMinX: number | null = null;
+  private fitBoundsMinY = 0;
+  private fitBoundsMaxX = 0;
+  private fitBoundsMaxY = 0;
+  /** Fixed-duration eased move state: camera goes from `fitFrom*` to
+   * `fitTo*` over AUTO_FIT_MOVE_MS starting at `fitMoveStartAt`, then
+   * HOLDS at `fitTo*` exactly -- never an asymptotic chase that's still
+   * infinitesimally moving 10 seconds later. */
+  private fitMoveStartAt = 0;
+  private fitFromPan = { x: 0, y: 0 };
+  private fitFromZoom = 1;
+  private fitToPan = { x: 0, y: 0 };
+  private fitToZoom = 1;
 
   private byId = new Map<string, LiveNode>();
   /** tok/s samples for the HUD sparkline: {t: performance.now(), v: total tok/s}. */
@@ -319,6 +384,12 @@ export class GraphState {
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
       gatePendingSince, doneAt, settleUntil: 0,
       lastTokenFlowAt: 0, bufferLiveTokS: 0,
+      // Every caller of makeNode EXCEPT the two lazy-create paths
+      // (upsertSessionNode, ensureTaskNode) hands it a real backend
+      // record (bootstrap's snapshot, or reconcile constructing a node
+      // it just discovered) -- those two flip this back to true right
+      // after construction, since their `label` is a same-instant guess.
+      labelIsPlaceholder: false,
     };
   }
 
@@ -332,6 +403,12 @@ export class GraphState {
     this.packets = [];
     this.pan = { x: 0, y: 0 };
     this.zoom = 1;
+    // A fresh boot has no committed fit yet -- forces autoFitCamera's
+    // very first call to treat this as a material change and arm a real
+    // move, rather than comparing against stale bounds from a PRIOR
+    // project/page (GraphState is a page-lifetime singleton ref, reused
+    // across project switches).
+    this.fitBoundsMinX = null;
 
     const taskCount = snapshot.nodes.filter((n) => n.kind === "task").length;
     this.layout.setDensity(taskCount);
@@ -409,6 +486,13 @@ export class GraphState {
       },
       null, driverId, slot, now, driverSlot?.x ?? slot.x, driverSlot?.y ?? slot.y,
     );
+    // Round 5 item 0: this label is a driver-echo GUESS, not the backend's
+    // real "role · model" -- keep it live-refreshed in step() until a
+    // real one arrives (which, for a PRISM_DEV_SIM session, never
+    // happens: /api/work/graph only surfaces a session once it finds
+    // real transcript token events for it, so a sim session's label is
+    // ALWAYS this placeholder path, forever chasing its driver's title).
+    node.labelIsPlaceholder = true;
     this.nodes.push(node);
     this.byId.set(id, node);
     return node;
@@ -446,6 +530,7 @@ export class GraphState {
       },
       parentTaskId, null, slot, now, parentSlot?.x ?? slot.x, parentSlot?.y ?? slot.y,
     );
+    node.labelIsPlaceholder = true;
     this.nodes.push(node);
     this.byId.set(id, node);
     // Round 2, piece 4 self-heal: a placeholder only ever carries what
@@ -556,7 +641,10 @@ export class GraphState {
         node.stepGhostUntil = now + GHOST_MS;
       }
       if (typeof fields.gate_state === "string") node.gate_state = fields.gate_state;
-      if (typeof fields.title === "string" && fields.title) node.label = fields.title;
+      if (typeof fields.title === "string" && fields.title) {
+        node.label = fields.title;
+        node.labelIsPlaceholder = false;
+      }
       node.lastSignalAt = now;
       this.noteStatusGateTransition(node, prevStatus, prevGate, now);
       // Round 2, piece 4 self-heal: ANY task.changed may be the only
@@ -591,14 +679,24 @@ export class GraphState {
         // session's role is known (the boot snapshot only carries it if
         // agent_runs telemetry already existed) -- backfill it so
         // glyphFor's dev/qa/sm icon isn't stuck on the generic dot for a
-        // session that started after page load. Round 4 item 4: refresh
-        // the label too, off the driven task's CURRENT title (which may
-        // itself have backfilled since the session was first upserted),
-        // so a session never keeps reading a stale generic placeholder
-        // once real telemetry is in.
+        // session that started after page load. Round 5 item 0 SUPERSEDES
+        // round 4 item 4's one-shot label refresh here: this used to be
+        // the ONLY place a session's label ever got a second look after
+        // creation, so a session whose ONE agent.run fired before its
+        // driver's own title had healed (well within the ~2s self-heal
+        // debounce window during a staggered fan-out) froze on that stale
+        // guess forever the moment it went idle -- exactly what round4's
+        // critics caught as "task starting..." stuck for the whole film.
+        // The label is now refreshed EVERY FRAME in step() below while
+        // `labelIsPlaceholder` stays true, so this assignment is just the
+        // immediate first draw's value; the guard keeps it from ever
+        // clobbering a REAL backend "role · model" label if one already
+        // landed via reconcile.
         if (event.role) {
           sessionNode.role = event.role;
-          sessionNode.label = sessionLabelFor(taskNode.label, event.role);
+          if (sessionNode.labelIsPlaceholder) {
+            sessionNode.label = sessionLabelFor(taskNode.label, event.role);
+          }
         }
       }
       return;
@@ -721,6 +819,24 @@ export class GraphState {
       if (n.tok_s && n.lastSignalAt && now - n.lastSignalAt > QUIET_DECAY_MS) {
         n.tok_s = 0;
       }
+      // Round 5 item 0 (regression root cause, part A): a session's
+      // placeholder label chases its LIVE driver every frame instead of
+      // being frozen once at creation/first-role-event -- see the
+      // labelIsPlaceholder doc comment on LiveNode. Cheap (a string
+      // compare + occasional reassignment) and correct even if the
+      // driver's own title is STILL a placeholder right now (chases
+      // "task starting..." -> "task starting... - dev" -> the real
+      // title, in step, whichever frame each transition lands on) --
+      // this is what actually closes the race that froze a session's
+      // label the moment it went idle before a correcting agent.run
+      // could fire.
+      if (n.kind === "session" && n.labelIsPlaceholder && n.driverOfId) {
+        const driver = this.byId.get(n.driverOfId);
+        if (driver) {
+          const fresh = sessionLabelFor(driver.label, n.role || null);
+          if (fresh !== n.label) n.label = fresh;
+        }
+      }
     }
     this.packets = stepPackets(this.packets, dtMs);
     this.ensureFlowingWiresCarryAMarker(now);
@@ -735,21 +851,26 @@ export class GraphState {
       this.recordTokSample(now);
     }
 
-    this.autoFitCamera(dtMs, now);
+    this.autoFitCamera(now);
   }
 
-  /** Round 3 item 1: called every frame, no-ops (leaves pan/zoom exactly
-   * as the viewer left them) whenever the viewer has panned/zoomed/
-   * dragged within the last AUTO_FIT_IDLE_MS, or when there's nothing
-   * placed yet to fit. Otherwise eases pan/zoom toward a camera that
-   * frames every current node's SLOT (resting position, not the
-   * mid-spawn-in animated x/y) at ~AUTO_FIT_FILL_FRAC of the viewport,
-   * clamped to the same zoom range the manual wheel-zoom already
-   * respects. This is the fix for item 0's root cause: without it, any
-   * card placed after boot (i.e. nearly every card in a real recording)
-   * renders fully outside the fixed {pan:0,0 / zoom:1} camera bootstrap()
-   * set once and never touched again. */
-  private autoFitCamera(dtMs: number, now: number): void {
+  /** Round 3 item 1 (superseded by round 5 item 1's deadband + fixed-move
+   * model, see the constants' doc comment): called every frame, no-ops
+   * (leaves pan/zoom exactly as the viewer left them) whenever the
+   * viewer has panned/zoomed/dragged within the last AUTO_FIT_IDLE_MS, or
+   * when there's nothing placed yet to fit. Otherwise computes the bbox
+   * of every current node's SLOT (resting position, not the mid-spawn-in
+   * animated x/y); if that bbox has NOT moved more than
+   * AUTO_FIT_DEADBAND_PX on any edge since the last COMMITTED fit, the
+   * camera is left exactly where the in-flight/completed move already
+   * put it (this is the "hold still" half). If it HAS moved materially
+   * (a node was added/removed/reslotted), a fresh fixed-duration eased
+   * move is armed from the camera's CURRENT position (wherever it
+   * happens to be mid-move, so a rapid burst of changes composes cleanly
+   * instead of snapping) to the new target, over AUTO_FIT_MOVE_MS, then
+   * holds there exactly -- never an asymptotic chase still crawling
+   * toward its target 10 seconds later. */
+  private autoFitCamera(now: number): void {
     if (!this.booted || !this.nodes.length) return;
     if (this.lastUserInputAt && now - this.lastUserInputAt < AUTO_FIT_IDLE_MS) return;
 
@@ -763,21 +884,51 @@ export class GraphState {
     if (!isFinite(minX)) return;
     const margin = 40;
     minX -= margin; minY -= margin; maxX += margin; maxY += margin;
-    const contentW = Math.max(100, maxX - minX);
-    const contentH = Math.max(100, maxY - minY);
 
-    const fitZoom = Math.min(this.width / contentW, this.height / contentH) * AUTO_FIT_FILL_FRAC;
-    const targetZoom = Math.max(AUTO_FIT_MIN_ZOOM, Math.min(AUTO_FIT_MAX_ZOOM, fitZoom));
-    // Center the content bbox in the viewport at targetZoom -- inverts
-    // the same screen = (world - pan) * zoom transform draw.ts/toWorld
-    // use, so the fitted camera and every hit-test agree.
-    const targetPanX = minX + contentW / 2 - this.width / 2 / targetZoom;
-    const targetPanY = minY + contentH / 2 - this.height / 2 / targetZoom;
+    const materiallyChanged = this.fitBoundsMinX === null
+      || Math.abs(minX - this.fitBoundsMinX) > AUTO_FIT_DEADBAND_PX
+      || Math.abs(minY - this.fitBoundsMinY) > AUTO_FIT_DEADBAND_PX
+      || Math.abs(maxX - this.fitBoundsMaxX) > AUTO_FIT_DEADBAND_PX
+      || Math.abs(maxY - this.fitBoundsMaxY) > AUTO_FIT_DEADBAND_PX;
 
-    const rate = 1 - Math.exp(-dtMs / AUTO_FIT_TIME_CONST_MS);
-    this.zoom += (targetZoom - this.zoom) * rate;
-    this.pan.x += (targetPanX - this.pan.x) * rate;
-    this.pan.y += (targetPanY - this.pan.y) * rate;
+    if (materiallyChanged) {
+      this.fitBoundsMinX = minX; this.fitBoundsMinY = minY;
+      this.fitBoundsMaxX = maxX; this.fitBoundsMaxY = maxY;
+
+      const contentW = Math.max(100, maxX - minX);
+      const contentH = Math.max(100, maxY - minY);
+      const fitZoom = Math.min(this.width / contentW, this.height / contentH) * AUTO_FIT_FILL_FRAC;
+      const targetZoom = Math.max(AUTO_FIT_MIN_ZOOM, Math.min(AUTO_FIT_MAX_ZOOM, fitZoom));
+      // Center the content bbox in the viewport at targetZoom -- inverts
+      // the same screen = (world - pan) * zoom transform draw.ts/toWorld
+      // use, so the fitted camera and every hit-test agree.
+      const targetPanX = minX + contentW / 2 - this.width / 2 / targetZoom;
+      const targetPanY = minY + contentH / 2 - this.height / 2 / targetZoom;
+
+      // Re-arm from wherever the camera IS right now (its current eased
+      // position, not the previous target) so a fast burst of topology
+      // changes composes into one continuous swoop instead of jumping.
+      this.fitFromPan = { x: this.pan.x, y: this.pan.y };
+      this.fitFromZoom = this.zoom;
+      this.fitToPan = { x: targetPanX, y: targetPanY };
+      this.fitToZoom = targetZoom;
+      this.fitMoveStartAt = now;
+    }
+
+    const elapsed = now - this.fitMoveStartAt;
+    if (elapsed >= AUTO_FIT_MOVE_MS) {
+      // Move is done -- HOLD exactly at the target, no further math, no
+      // per-frame drift. This is what makes "consecutive frames with no
+      // topology change" pixel-stable.
+      this.pan.x = this.fitToPan.x;
+      this.pan.y = this.fitToPan.y;
+      this.zoom = this.fitToZoom;
+      return;
+    }
+    const e = easeOutCubic(elapsed / AUTO_FIT_MOVE_MS);
+    this.pan.x = this.fitFromPan.x + (this.fitToPan.x - this.fitFromPan.x) * e;
+    this.pan.y = this.fitFromPan.y + (this.fitToPan.y - this.fitFromPan.y) * e;
+    this.zoom = this.fitFromZoom + (this.fitToZoom - this.fitFromZoom) * e;
   }
 
   /** LivePage calls this from onPointerMove (drag) and onWheel so
@@ -792,19 +943,25 @@ export class GraphState {
   }
 
   /** Round 2, piece 4 self-heal (build item 4): debounces a burst of
-   * events into ONE /api/work/graph refetch ~2s later, then reconciles.
+   * events into ONE /api/work/graph refetch ~1.2s later, then reconciles.
    * Closes the round1 hole where a gate flip written out-of-band (Act
    * 3's direct sqlite write, which fires no SSE at all) never reached
    * the screen -- and the more general case, a placeholder card that
    * never gets backfilled because no live event happens to carry the
-   * field it's missing. */
+   * field it's missing. Round 5 item 0: trimmed 2000ms -> 1200ms -- the
+   * brief's own bar is "within ~2s of a node's birth", and the OLD
+   * 2000ms debounce alone already ate most of that budget before
+   * reconcile's own fetch/round-trip even started, so a node born right
+   * as a PRIOR debounce window was closing could sit on-screen as a
+   * placeholder for close to 4s (one full debounce + most of a second
+   * one) before ever getting a chance to heal. */
   scheduleSelfHeal(): void {
     if (this.selfHealTimer || !this.reconcileFetcher) return;
     const fetcher = this.reconcileFetcher;
     this.selfHealTimer = setTimeout(() => {
       this.selfHealTimer = null;
       fetcher().then((snap) => this.reconcile(snap)).catch(() => {});
-    }, 2000);
+    }, 1200);
   }
 
   /** Merge a fresh boot-shaped snapshot into live state. Backfills
@@ -823,11 +980,26 @@ export class GraphState {
     for (const sn of snapshot.nodes) {
       const existing = this.byId.get(sn.id);
       if (!existing) {
+        // Round 5 item 0 fix: a task/subtask reconcile is discovering for
+        // the FIRST time (no live event ever touched it) used to create it
+        // via ensureTaskNode and then `continue`, ignoring sn's real
+        // title/kind entirely -- so it kept ensureTaskNode's placeholder
+        // label until ANOTHER task.changed happened to land somewhere on
+        // the graph and re-trigger self-heal, which during a long quiet
+        // stretch (e.g. between Act 2's staggered spawns and Act 3) could
+        // be many seconds away, not the "~2s of a node's birth" the
+        // mechanism is supposed to guarantee. Apply the real fields right
+        // here instead of leaving that gap.
+        let created: LiveNode | null = null;
         if (sn.kind === "task") {
-          this.ensureTaskNode(sn.id, now);
+          created = this.ensureTaskNode(sn.id, now);
         } else if (sn.kind === "subtask") {
           const parentEdge = snapshot.edges.find((e) => e.kind === "parent_of" && e.target === sn.id);
-          this.ensureTaskNode(sn.id, now, "subtask", parentEdge?.source ?? null);
+          created = this.ensureTaskNode(sn.id, now, "subtask", parentEdge?.source ?? null);
+        }
+        if (created && sn.label) {
+          created.label = sn.label;
+          created.labelIsPlaceholder = false;
         }
         continue;
       }
@@ -851,6 +1023,30 @@ export class GraphState {
           existing.spawnFromY = existing.y;
           existing.spawnAt = now;
           existing.slot = newSlot;
+          // Round 5 item 0 fix (part B): any session card already placed
+          // BELOW this task's OLD (wrong, root-column) position -- which
+          // happens whenever tokens.turn/agent.run fired for that session
+          // before this same reconcile discovered the true kind, a near-
+          // certainty during a staggered fan-out since the sim starts
+          // driving a subtask the SAME tick it creates it -- stayed
+          // anchored to a LayoutEngine slot that no longer describes
+          // anything once reslotAsSubtask deletes it. The task card
+          // visibly slides to its new fanned position (above); the
+          // session stayed frozen at the stale coordinates, so its wire
+          // endpoint no longer lines up with its driver -- verified live,
+          // this is exactly the "visually-adjacent card with no
+          // connecting wire drawn at all" critics 1/2 caught. Follow the
+          // move: recompute every session anchored to this driver id and
+          // slide each to its new slot the same way the driver itself
+          // just did.
+          for (const newSessSlot of this.layout.reslotSessionsOf(sn.id)) {
+            const sessNode = this.byId.get(newSessSlot.id);
+            if (!sessNode) continue;
+            sessNode.spawnFromX = sessNode.x;
+            sessNode.spawnFromY = sessNode.y;
+            sessNode.spawnAt = now;
+            sessNode.slot = newSessSlot.slot;
+          }
         }
       }
       const prevStatus = existing.status, prevGate = existing.gate_state;
@@ -860,7 +1056,15 @@ export class GraphState {
         existing.stepGhostUntil = now + GHOST_MS;
       }
       existing.gate_state = sn.gate_state;
-      if (sn.label) existing.label = sn.label;
+      if (sn.label) {
+        existing.label = sn.label;
+        // A backend snapshot's label is always the real thing (task
+        // title, or a session's "role · model") -- this is where a
+        // sim-frozen driver-echo guess, if this node is a session that
+        // somehow DID show up in a snapshot (a non-sim/real drive whose
+        // transcript now has token events), stops being live-refreshed.
+        existing.labelIsPlaceholder = false;
+      }
       if (typeof sn.spend_usd === "number") existing.spend_usd = sn.spend_usd;
       existing.gate_waiting_s = sn.gate_waiting_s ?? null;
       existing.queue_depth = sn.queue_depth ?? 0;

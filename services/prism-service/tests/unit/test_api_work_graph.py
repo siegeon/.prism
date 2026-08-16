@@ -183,6 +183,67 @@ def test_graph_omits_unmanaged_projects_task(tmp_path, monkeypatch):
         f"an idle, never-managed task must not appear on the live graph; got {ids!r}")
 
 
+def test_graph_kinds_a_gated_child_as_subtask_even_when_its_root_is_absent(tmp_path, monkeypatch):
+    # gamify round5 item 0: managed_tasks() returns an INDEPENDENTLY
+    # engaged child (its own workflow_step/gate_state) as its own
+    # top-level entry -- the OLD work_graph() loop hard-coded
+    # `node["kind"] = "task"` for every entry from that top-level loop
+    # regardless of parent_id, so a gated subtask rendered with the
+    # root-task icon and, whenever its actual parent root never appeared
+    # in `roots` at all (reproduced here: root has no workflow_step of
+    # its own, e.g. the brief window before its OWN advance() call has
+    # landed), got NO parent_of edge either -- verified live against a
+    # real scenario run (a story_gate-pending subtask rendered as a
+    # wireless "root" card). The child's kind/edge must be correct from
+    # ITS OWN entry, never dependent on the parent also being present.
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.conductor_service import ConductorService
+
+    scores_db = str(tmp_path / "scores.db")
+    task_svc = TaskService(str(tmp_path / "tasks.db"), scores_db=scores_db)
+    conductor = ConductorService(scores_db, enable_engine=False, task_svc=task_svc)
+
+    root = task_svc.create(title="Root epic, not yet advanced")
+    child = task_svc.create(title="Child sitting at a gate", parent_id=root.id)
+    task_svc.update(
+        child.id, status="in_progress", workflow_step="story_gate",
+        gate_state="pending")
+
+    class _Ctx:
+        pass
+
+    ctx = _Ctx()
+    ctx.conductor_svc = conductor
+    ctx.task_svc = task_svc
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from prism_service.api import work as work_api
+
+    monkeypatch.setattr(work_api, "get_project", lambda p: ctx)
+    app = FastAPI()
+    app.include_router(work_api.router, prefix="/api/work")
+    client = TestClient(app)
+
+    resp = client.get("/api/work/graph?project=gamify")
+    assert resp.status_code == 200
+    body = resp.json()
+    nodes_by_id = {n["id"]: n for n in body["nodes"]}
+    assert root.id not in nodes_by_id, (
+        "this test's whole point is the root NOT appearing on its own -- "
+        f"got {sorted(nodes_by_id)!r}")
+    assert child.id in nodes_by_id, f"got nodes {body['nodes']!r}"
+    assert nodes_by_id[child.id]["kind"] == "subtask", (
+        f"a gated child must render as a subtask, never the root-task "
+        f"kind, even when its parent never appears in `roots`; "
+        f"got {nodes_by_id[child.id]!r}")
+    edges = body["edges"]
+    assert any(
+        e.get("source") == root.id and e.get("target") == child.id
+        and e.get("kind") == "parent_of" for e in edges
+    ), f"the parent_of edge must be synthesized from the child's own entry; got {edges!r}"
+
+
 # ---------------------------------------------------------------------------
 # Data-enrichment slice: model/role/step on session nodes, spend_usd,
 # gate_waiting_s, queue_depth on task/subtask nodes.

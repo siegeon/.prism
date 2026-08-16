@@ -14,6 +14,7 @@ import type { GraphState } from "./graphState";
 import { PALETTE, glyphFor } from "./palette";
 import { drawGhostable } from "./cards";
 import { logMeterFrac, logMeterPipFrac, LOG_METER_PIPS } from "./scale";
+import { isGraphQuiet } from "./idle";
 
 const PAD = 14;
 const PANEL_W = 320;
@@ -234,7 +235,19 @@ export function drawHud(ctx: CanvasRenderingContext2D, state: GraphState, now: n
   ctx.fillStyle = PALETTE.textDim;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText(`tokens total  ·  ${fmtBig(totals.tokS)}/s now`, x + 24, rowY + 20);
+  // Round 5 item 6 (HUD last-activity tick, protecting piece 4's win):
+  // critic 4 asked for a small first-class "last activity Xs ago" line
+  // ON THE HUD CARD ITSELF during quiet -- previously this only existed
+  // on the separate docked quiet-line (idle.ts's drawQuietLine, drawn
+  // near the HUD but not part of it), so the timer reads as the gate
+  // toast's job rather than the HUD's own. Appended to the hero row's
+  // existing rate sub-label (no new row, no panelH change) only once the
+  // graph actually reads quiet -- a busy graph's sub-label stays exactly
+  // as it was, this never competes with the live "N/s now" reading.
+  const heroSubLabel = isGraphQuiet(state, now)
+    ? `tokens total  ·  0/s now  ·  quiet ${Math.max(0, Math.floor((now - state.lastEventAt) / 1000))}s`
+    : `tokens total  ·  ${fmtBig(totals.tokS)}/s now`;
+  ctx.fillText(heroSubLabel, x + 24, rowY + 20);
   drawLogMeter(ctx, x, rowY + 30, meterW, totals.tokS, PALETTE.teal);
   rowY += HERO_H;
 

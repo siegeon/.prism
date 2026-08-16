@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.7"
+PRISM_VERSION = "7.10.54+gamify.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "gamify.8: round5 fixed the round4 regression -- a session card's "
+    "label/position were captured ONCE (creation, or the next agent.run) "
+    "from its driver task, which could still be a placeholder at that "
+    "instant during a staggered fan-out; a session that then went idle "
+    "before a later event re-derived them froze on a literal 'task "
+    "starting...' caption and an orphaned wire for the rest of the film. "
+    "Fixed: step() live-refreshes a placeholder session's label off its "
+    "driver every frame, and reconcile()'s reslot branch now carries any "
+    "already-placed session cards along when their driver reslots. Camera "
+    "auto-fit rewritten from a continuous exponential chase to a "
+    "deadband + fixed-duration eased move that actually settles. Marker "
+    "gets a teal halo; legend done-green moved off teal's hue; quiet-card "
+    "alpha hard-floored at 0.6; HUD hero row carries its own ticking "
+    "last-activity line during quiet. "
     "v7.10.53: the gate banner's readiness fetch was mount-only (deps "
     "[id, project]) so it never re-fired when task.gate_state/workflow_step "
     "transitioned via the live SSE push - a page opened before a gate "

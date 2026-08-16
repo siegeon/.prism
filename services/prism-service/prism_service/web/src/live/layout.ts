@@ -21,6 +21,9 @@ export const BASE_SESSION_H = 82;
 const COL_GAP = 96;
 const ROW_GAP = 22;
 const ORIGIN_X = 48;
+/** Round 5 item 2: how many columns a parent's subtasks fan across
+ * before wrapping to a new row -- see placeSubtask's doc comment. */
+const SUB_COLS = 3;
 /** Clears the fixed HUD panel (top-left, ~206px tall after round 2's
  * taller instrumentation rebuild — see hud.ts) so the first task card is
  * never born underneath it; the HUD sits in screen space and never
@@ -102,11 +105,31 @@ export class LayoutEngine {
    * unused margins on both sides of a 1920x1080 viewport -- verified
    * live: auto-fit was mathematically correct and the screen still read
    * as ~80% empty black, reproducing critic 5's original squint
-   * complaint through a different mechanism. Fanning 2 subtasks per row
-   * (idx%2 picks the column, idx/2 picks the row) roughly SQUARES the
-   * bbox's aspect ratio for the common 2-4-sibling case, which is what
-   * actually lets auto-fit zoom in far enough to read as "fills the
-   * screen" on a landscape viewport. */
+   * complaint through a different mechanism. Fanning subtasks across
+   * SUB_COLS(idx) columns roughly SQUARES the bbox's aspect ratio, which
+   * is what actually lets auto-fit zoom in far enough to read as "fills
+   * the screen" on a landscape viewport.
+   *
+   * Round 5 item 2 residual (found reading the actual FILM, not a single
+   * frame): each ROW's pitch reserves a full session-card's worth of
+   * vertical space (sessionReserve(), ~239px) below EVERY row regardless
+   * of whether a session ever attaches there -- with a fixed 2 columns,
+   * 5 siblings (routine: 2 never-advanced queued children the design
+   * directive's queue-glyph slice deliberately seeds, plus 3 real
+   * subtasks) fan into 3 rows, and 3x that per-row reserve is what
+   * crashed autoFit's zoom from ~0.85 to ~0.46 the instant the 3rd row
+   * appeared -- verified live via GraphState's own zoom/pan fields at
+   * that exact moment. SUB_COLS bumped 2 -> 3 (a FIXED constant, not
+   * computed from the running sibling count) cuts that same 5-sibling
+   * fan to 2 rows instead of 3, removing one whole reserve-inflated
+   * row's worth of height. Deliberately fixed rather than count-
+   * dependent: a column count that changes once MORE siblings arrive
+   * would recompute `col`/`row` differently for indices already placed
+   * under the old count, silently colliding an EARLIER sibling with a
+   * later one at the same slot -- a placed sibling's slot must stay
+   * correct forever once assigned (this module's own doc comment, top of
+   * file), and only a value that never changes across a parent's whole
+   * lifetime can guarantee that. */
   placeSubtask(id: string, parentTaskId: string): Slot {
     const existing = this.subSlot.get(id);
     if (existing) return existing;
@@ -116,14 +139,26 @@ export class LayoutEngine {
     list.push(id);
     this.subOrder.set(parentTaskId, list);
     const { w, h } = this.cardSize("subtask");
-    const col = idx % 2;
-    const row = Math.floor(idx / 2);
+    const col = idx % SUB_COLS;
+    const row = Math.floor(idx / SUB_COLS);
     const x = parentSlot.x + parentSlot.w + COL_GAP * this.scale + col * (w + COL_GAP * this.scale * 0.6);
     const pitch = h + ROW_GAP * this.scale + this.sessionReserve();
     const y = parentSlot.y + row * pitch;
     const slot: Slot = { x, y, w, h };
     this.subSlot.set(id, slot);
     return slot;
+  }
+
+  /** Shared by placeSession (idx = the session's own fresh order slot)
+   * and reslotSessionsOf (idx = an EXISTING session's already-assigned
+   * order, recomputed against a driver slot that just moved) -- the one
+   * place "below-right of the driver" gets computed, so the two callers
+   * can never drift apart on the math. */
+  private sessionSlotAt(driverSlot: Slot, idx: number): Slot {
+    const { w, h } = this.cardSize("session");
+    const x = driverSlot.x + 18 * this.scale + idx * (w + 14 * this.scale);
+    const y = driverSlot.y + driverSlot.h + this.sessionDropY();
+    return { x, y, w, h };
   }
 
   placeSession(id: string, driverId: string): Slot {
@@ -134,12 +169,37 @@ export class LayoutEngine {
     const idx = list.length;
     list.push(id);
     this.sessOrder.set(driverId, list);
-    const { w, h } = this.cardSize("session");
-    const x = driverSlot.x + 18 * this.scale + idx * (w + 14 * this.scale);
-    const y = driverSlot.y + driverSlot.h + this.sessionDropY();
-    const slot: Slot = { x, y, w, h };
+    const slot = this.sessionSlotAt(driverSlot, idx);
     this.sessSlot.set(id, slot);
     return slot;
+  }
+
+  /** Round 5 item 0 fix (part B): follows reslotAsSubtask. A session card
+   * is placed relative to its driver's slot AT THE MOMENT the session is
+   * first seen (placeSession, above) -- if that happens before the
+   * driver's own true kind/parent is known (routine during a staggered
+   * fan-out: the sim starts driving a subtask the SAME tick it creates
+   * it, well inside the ~2s self-heal debounce window), the session gets
+   * anchored to the driver's WRONG root-column slot. reslotAsSubtask then
+   * deletes that slot and re-places the driver, but had no way to know
+   * which session ids were anchored to it -- so a session born early
+   * stayed frozen at coordinates describing nothing, and its wire never
+   * lined up with its (now-moved) driver. Called right after
+   * reslotAsSubtask from GraphState.reconcile(); recomputes every
+   * session already anchored to `driverId` against its NEW slot and
+   * returns the updated {id, slot} pairs so the caller can also start a
+   * fresh spawn-in slide for each LiveNode (this class only owns layout
+   * math, never animation state). */
+  reslotSessionsOf(driverId: string): { id: string; slot: Slot }[] {
+    const ids = this.sessOrder.get(driverId);
+    if (!ids || !ids.length) return [];
+    const driverSlot = this.taskSlot.get(driverId) ?? this.subSlot.get(driverId);
+    if (!driverSlot) return [];
+    return ids.map((id, idx) => {
+      const slot = this.sessionSlotAt(driverSlot, idx);
+      this.sessSlot.set(id, slot);
+      return { id, slot };
+    });
   }
 
   /** Round 3 item-1 residual fix (found while verifying auto-fit against

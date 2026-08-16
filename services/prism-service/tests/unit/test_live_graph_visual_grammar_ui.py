@@ -383,7 +383,11 @@ def test_waiting_gate_state_gets_magenta_stripe_distinct_from_stalled_red():
     assert 'state === "waiting_gate"' in src and 'state === "stalled"' in src
     assert "EDGE_STRIPE_W" in src and "PALETTE.magenta" in src, (
         "a gate-pending card must render a magenta left-edge stripe")
-    assert "rgba(8,9,13,0.4)" in src, (
+    # Round 5 item 5 trimmed the wash 0.4 -> 0.3 (stacks with the whole-
+    # graph quiet dim in the film's final third; brief's floor is "any
+    # card's effective alpha >= 0.6 at all times") -- the wash itself, not
+    # its exact opacity, is what this test pins.
+    assert "rgba(8,9,13,0.3)" in src, (
         "a stalled card must desaturate its body, distinct from a "
         "gate-pending card's magenta stripe")
 
@@ -488,7 +492,19 @@ def test_camera_continuously_auto_fits_content_and_stands_down_for_user_input():
         "auto-fit must stand down for a while after the viewer's own "
         "pan/zoom/drag, never fighting their framing")
     assert "noteUserCameraInput(" in state_src
-    assert "this.autoFitCamera(dtMs, now);" in state_src, (
+    # Round 5 item 1 SUPERSEDES round 3's continuous exponential-chase
+    # call signature (`autoFitCamera(dtMs, now)` recomputing a target
+    # every frame from raw dt): critics 1/2 (round 4) caught "the whole
+    # view auto-scrolling/panning continuously instead of settling" --
+    # the chase model never truly stops (asymptotic) and had no deadband,
+    # so it kept re-aiming at every frame's float noise on top of item 0's
+    # orphaned-session-slot bug feeding it a genuinely-changing bbox.
+    # `autoFitCamera(now)` now only needs a clock, not a frame delta: it
+    # compares each frame's bbox against the last COMMITTED fit with
+    # AUTO_FIT_DEADBAND_PX slack, and any real change arms a FIXED
+    # AUTO_FIT_MOVE_MS eased move that explicitly reaches its target and
+    # holds -- see the deadband/fixed-move test below.
+    assert "this.autoFitCamera(now);" in state_src, (
         "auto-fit must run every step() frame, not just once at boot")
 
     page_src = _read(_LIVE_PAGE)
@@ -635,17 +651,27 @@ def test_quiet_line_distinguishes_needs_attention_from_genuinely_calm():
         "waiting_gate cards) and pass it to drawQuietLine")
 
 
-def test_subtasks_fan_two_columns_so_autofit_can_fill_a_landscape_viewport():
+def test_subtasks_fan_multiple_columns_so_autofit_can_fill_a_landscape_viewport():
     src = _read(_LIVE / "layout.ts")
     # Residual item-1 fix found while verifying auto-fit against a real
     # scenario run: 3+ siblings under one parent all stacked at ONE
     # constant x built a tall narrow content bbox that auto-fit correctly
     # framed but still left huge side margins on a 1920x1080 viewport
     # (min(w/contentW, h/contentH) was dominated by the tall dimension).
-    assert "const col = idx % 2;" in src and "const row = Math.floor(idx / 2);" in src, (
-        "subtasks of one parent must fan across 2 columns, not stack in "
-        "a single column, so the content bbox isn't tall/narrow on a "
-        "landscape viewport")
+    # Round 5 item 2 SUPERSEDES round3's fixed 2-column fan: reading the
+    # actual FILM caught 5 siblings (2 never-advanced queued children +
+    # 3 real subtasks, routine in this scenario) fanning into 3 rows at
+    # 2 columns, and each row's session-height reserve (~239px) tripled
+    # is what crashed autoFit's zoom ~0.85 -> ~0.46 the instant the 3rd
+    # row appeared. SUB_COLS is now 3 -- a FIXED constant (deliberately
+    # not recomputed from the running sibling count, which would
+    # retroactively collide an earlier sibling's slot with a later one,
+    # see placeSubtask's doc comment).
+    assert "const SUB_COLS = 3;" in src
+    assert "const col = idx % SUB_COLS;" in src and "const row = Math.floor(idx / SUB_COLS);" in src, (
+        "subtasks of one parent must fan across SUB_COLS columns, not "
+        "stack in a single column, so the content bbox isn't tall/narrow "
+        "on a landscape viewport")
 
 
 def test_reconcile_reclassifies_a_subtask_misplaced_as_a_root_task():
@@ -695,9 +721,14 @@ def test_quiet_dim_eases_in_instead_of_snapping():
 
     draw_src = _read(_LIVE / "draw.ts")
     assert "quietDimAlpha(state, now)" in draw_src
-    assert "ctx.globalAlpha = dimAlpha;" in draw_src, (
-        "draw.ts must apply the eased alpha, not re-derive its own "
-        "binary 0.85-or-1 snap")
+    # Round 5 item 5 SUPERSEDES the bare assignment with an explicit
+    # Math.max(0.6, dimAlpha) floor -- dimAlpha itself is still exactly
+    # this eased quietDimAlpha() result, just guarded so a future
+    # per-node dim stacked on top can never push a card's effective
+    # alpha below what a title stays legibly readable at.
+    assert "ctx.globalAlpha = Math.max(0.6, dimAlpha);" in draw_src, (
+        "draw.ts must apply the eased alpha (floored at 0.6), not "
+        "re-derive its own binary 0.85-or-1 snap")
 
 
 def test_hud_cumulative_counts_never_zero_only_rates_do():
@@ -841,3 +872,193 @@ def test_session_cards_get_the_same_throughput_bar_as_tasks():
     assert "bufferFrac: node.bufferFrac," in draw_src, (
         "a session card's CardMetrics.bufferFrac must read the node's "
         "real field, not a hardcoded 0")
+
+
+# ---------------------------------------------------------------------------
+# Round 5 (gauntlet: recover piece 2's regression, win piece 1, protect
+# 3/4/5). Pinned against E:\gamify-lab\R5_BRIEF.md's numbered fix list.
+# Item 0's root cause (see the task's final report for the full live
+# evidence chain): a session card's label/position were captured ONCE at
+# creation/first-role-event from its driver task, which could still be a
+# placeholder at that instant during a staggered fan-out -- if the
+# session then went idle before a later event could re-derive them, both
+# stayed frozen (a literal "task starting..." caption, and a wire that no
+# longer lined up with its reslotted driver) for the rest of the film.
+# ---------------------------------------------------------------------------
+
+def test_session_label_lives_off_its_driver_every_frame_not_frozen_once():
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "labelIsPlaceholder: boolean;" in state_src, (
+        "a LiveNode must track whether its CURRENT label is a "
+        "driver-echo guess (placeholder) or a real backend record, so "
+        "step() knows which nodes still need live-refreshing")
+    assert 'if (n.kind === "session" && n.labelIsPlaceholder && n.driverOfId)' in state_src, (
+        "step() must re-derive a placeholder session's label from its "
+        "LIVE driver EVERY frame -- the round4 bug was that this only "
+        "ever happened once (creation, or the next agent.run), so a "
+        "session that went idle before its driver's own title healed "
+        "froze on the stale guess forever")
+    assert "node.labelIsPlaceholder = true;" in state_src, (
+        "both lazy-create paths (upsertSessionNode, ensureTaskNode) must "
+        "mark their guessed label as a placeholder")
+    assert "existing.labelIsPlaceholder = false;" in state_src, (
+        "reconcile() must flip a node's label back to authoritative the "
+        "moment a real backend label lands, so the live-echo loop never "
+        "clobbers a real 'role · model' session label afterward")
+
+
+def test_reconcile_first_discovery_applies_the_real_label_immediately():
+    # Round4's reconcile() `if (!existing) { ensureTaskNode(...); continue; }`
+    # created a task/subtask node on first discovery WITHOUT ever reading
+    # sn.label -- so a node reconcile discovers before any live event ever
+    # touched it kept ensureTaskNode's placeholder text until some OTHER
+    # unrelated task.changed happened to re-trigger self-heal, which could
+    # be many seconds away. Fixed: apply sn.label right at discovery.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "if (created && sn.label) {" in state_src
+    assert "created.labelIsPlaceholder = false;" in state_src
+
+
+def test_reslot_also_carries_along_any_already_placed_session_cards():
+    # Item 0 part B: reslotAsSubtask deletes and re-places the TASK's own
+    # slot but never touched sessSlot for a session already anchored to
+    # the task's OLD (wrong, root-column) position -- verified live, this
+    # produced a session card with no wire lining up to its (moved)
+    # driver at all ("some visually-adjacent cards have no connecting
+    # wire drawn").
+    layout_src = _read(_LIVE / "layout.ts")
+    assert "reslotSessionsOf(driverId: string): { id: string; slot: Slot }[]" in layout_src, (
+        "LayoutEngine needs a way to recompute every session anchored to "
+        "a driver against that driver's NEW slot")
+    assert "private sessionSlotAt(driverSlot: Slot, idx: number): Slot" in layout_src, (
+        "placeSession and reslotSessionsOf must share ONE slot formula "
+        "so they can never drift apart")
+
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "this.layout.reslotSessionsOf(sn.id)" in state_src, (
+        "reconcile()'s reslot branch must call this right after "
+        "reslotAsSubtask, in the same breath the task itself moves")
+    assert "sessNode.slot = newSessSlot.slot;" in state_src, (
+        "the session LiveNode's own slot must actually be updated (and "
+        "a fresh spawn-in armed) so it visually follows its driver")
+
+
+def test_camera_uses_a_deadband_and_a_fixed_duration_move_not_a_chase():
+    # Item 1: critics 1/2 caught "the whole view auto-scrolling/panning
+    # (~80-100px per 0.2s frame)" -- round3's model recomputed a target
+    # from raw node.slot data EVERY FRAME with no deadband and eased
+    # toward it asymptotically (never truly settles). Now a materially-
+    # unchanged bbox (within AUTO_FIT_DEADBAND_PX) is a no-op, and a real
+    # change arms ONE fixed AUTO_FIT_MOVE_MS eased move that reaches its
+    # target and then holds exactly -- pixel-stable between topology
+    # events, per the film protocol's item (c).
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "const AUTO_FIT_DEADBAND_PX = 24;" in state_src
+    assert "const AUTO_FIT_MOVE_MS = 750;" in state_src
+    assert "const materiallyChanged = this.fitBoundsMinX === null" in state_src
+    assert "if (elapsed >= AUTO_FIT_MOVE_MS) {" in state_src, (
+        "the move must have an explicit end -- HOLD exactly at the "
+        "target once reached, not keep asymptotically chasing forever")
+    assert "this.fitBoundsMinX = null;" in state_src, (
+        "bootstrap() must reset the committed fit so a fresh page load "
+        "arms an immediate first move instead of comparing against a "
+        "stale bbox from a prior project/page")
+
+
+def test_marker_gets_a_teal_halo_behind_its_bright_core():
+    # Item 3 (recover piece 2's win): the design directive asks for
+    # "Bright solid core (near-white center, teal halo)" -- the halo was
+    # simply never drawn; critics needed +0.15 brightness/1.6x contrast/
+    # 4-15x upscale to see the marker at native brightness at all.
+    packets_src = _read(_LIVE / "packets.ts")
+    assert "ctx.fillStyle = PALETTE.teal;" in packets_src, (
+        "the marker head must paint a teal halo, not just the near-white "
+        "core + dark outline")
+    # Round 5 item 3 residual: a live browser capture proved the core
+    # paints the exact right pixels -- the gap is record_ours.ps1's
+    # libx264 veryfast encode crushing a small 7x7 feature. Sized up so
+    # the encoder has more contiguous high-contrast area to keep;
+    # verified by re-filming and scanning extracted frames for
+    # near-white pixels (see the task's final report).
+    assert "ctx.arc(at.x, at.y, 10, 0, Math.PI * 2);" in packets_src, (
+        "the halo radius must be sized up from round4's 7px")
+    assert "ctx.globalAlpha = 0.75;" in packets_src
+    assert "ctx.rect(at.x - 4.5, at.y - 4.5, 9, 9);" in packets_src, (
+        "the core must be sized up from round4's 7x7")
+
+
+def test_legend_done_green_is_hue_distinct_from_working_teal():
+    # Item 4 (protect piece 3): critic sampled working vs done swatches
+    # as "nearly identical teal-green (18,87,75 vs 31,79,67)" -- #34d399
+    # (hue ~160) sat only 12 degrees from teal's #2dd4bf (hue ~172).
+    # #22c55e (hue ~142) is a meaningfully more pure green, 30 degrees
+    # from teal, while staying unambiguously "green" for the locked
+    # money/passed-gate meaning.
+    palette_src = _read(_LIVE / "palette.ts")
+    assert 'green: "#22c55e",' in palette_src
+    assert 'teal: "#2dd4bf",' in palette_src, (
+        "teal itself must be untouched -- only done's green moved")
+
+
+def test_quiet_card_alpha_floors_at_point_six():
+    # Item 5: "any card's effective alpha >= 0.6 at all times" -- an
+    # explicit hard clamp at the one call site that sets globalAlpha for
+    # every card's draw, so a future per-node dim added there can never
+    # silently stack the whole-graph quiet dim (idle.ts's 0.85 floor)
+    # below what a title stays legibly readable at.
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "ctx.globalAlpha = Math.max(0.6, dimAlpha);" in draw_src
+
+
+def test_hud_hero_card_carries_its_own_last_activity_line_when_quiet():
+    # Item 6: critic 4 asked for a small first-class "last activity Xs
+    # ago" line ON THE HUD CARD ITSELF during quiet -- previously this
+    # only existed on the separate docked quiet-line (idle.ts), which
+    # reads as the gate toast doing the work, not the HUD.
+    hud_src = _read(_LIVE / "hud.ts")
+    assert "isGraphQuiet(state, now)" in hud_src, (
+        "the HUD hero row must know whether the graph reads quiet")
+    assert "quiet ${Math.max(0, Math.floor((now - state.lastEventAt) / 1000))}s" in hud_src, (
+        "the hero row's own rate sub-label must carry a ticking "
+        "last-activity counter during quiet, not just the docked "
+        "quiet-line")
+
+
+def test_steward_glyph_is_not_confusable_with_the_task_square():
+    # Found reading the actual FILM (not a single-frame check): a root
+    # task's own steward session sat directly under the root card with
+    # an all-but-identical filled-square glyph ("■" steward vs "▣" task)
+    # at card-title size under video compression -- read as a duplicated
+    # card at a glance even though the wire/data were correct.
+    palette_src = _read(_LIVE / "palette.ts")
+    assert 'if (role === "sm") return "▼";' in palette_src, (
+        "the steward glyph must share no silhouette with the task glyph "
+        "'▣' -- a triangle (pairing naturally with qa's '▲') reads "
+        "distinctly at small size where two filled squares do not")
+
+
+def test_session_label_leads_with_role_once_known_not_truncated_title_echo():
+    # Found reading the actual FILM: every scenario title in the movie
+    # runs 30-47 chars, well past cards.ts's ~30-char flat truncation
+    # budget, so round4's `${driverLabel} · ${roleWord}` shape NEVER
+    # actually showed the role suffix -- a session read as a plain
+    # (truncated) copy of its driver's own title. VISUAL_GRAMMAR.md's
+    # spec for this card is "model+role title", not an echo of the
+    # driven task's title.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert 'if (roleWord) return `${roleWord} agent`;' in state_src, (
+        "once role is known, the session label must lead with it in a "
+        "short form that always fits inside the card's title budget")
+
+
+def test_version_bumped_past_round_5():
+    import re
+
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
+        f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
+    assert int(m.group(1)) >= 8, (
+        "round 5 must bump the gamify version marker to at least "
+        f".8; got .{m.group(1)}")

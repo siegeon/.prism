@@ -181,7 +181,16 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     if (cardState === "waiting_gate") needAttentionCount += 1;
     else if (cardState === "stalled" && !graphQuiet) needAttentionCount += 1;
     ctx.save();
-    ctx.globalAlpha = dimAlpha;
+    // Round 5 item 5 (quiet card floor): dimAlpha alone already floors at
+    // 0.85 (idle.ts's QUIET_DIM_FLOOR) -- this Math.max is a hard,
+    // explicit invariant ("any card's effective alpha >= 0.6 at all
+    // times", per the brief) so a future per-node dim added here can
+    // never silently stack this global multiplier below the floor a
+    // title stays legibly readable at. The red/attention behavior is
+    // untouched (cards.ts's deadRingColorFor/titleTintFor still branch on
+    // `graphQuiet` exactly as before; this only bounds the whole-card
+    // alpha the state's chrome gets drawn at).
+    ctx.globalAlpha = Math.max(0.6, dimAlpha);
     drawCard(ctx, n, m, cardState, now, graphQuiet);
     ctx.restore();
   }

@@ -157,6 +157,27 @@ def work_graph(project: str = Query("default")) -> dict:
     for r in roots:
         if r["id"] not in seen_node_ids:
             task_obj = task_svc.get(r["id"])
+            # gamify round5 item 0 fix: managed_tasks() surfaces an
+            # INDEPENDENTLY-ENGAGED child (its own workflow_step/gate_state
+            # set, e.g. a subtask sitting at a gate) as its own top-level
+            # entry -- correctly, per its own docstring ("an ENGAGED child
+            # MUST surface"). This loop used to hard-code kind="task" for
+            # every entry from `roots` regardless of parent_id, so such a
+            # child rendered with the ROOT-task glyph/icon and, if its
+            # actual parent root happened to iterate AFTER it in
+            # task_svc.list()'s order (not guaranteed parent-first), never
+            # got re-classified or wired at all -- verified live against a
+            # real scenario run (a story_gate-pending subtask rendered
+            # kind="task" with no parent_of edge in the snapshot). Now: a
+            # parent_id on the underlying task flips this to "subtask" and
+            # adds its own parent_of edge here, so it's correct even if the
+            # root's own subtasks loop below never gets to add it first (a
+            # duplicate parent_of edge from both paths is harmless --
+            # GraphState.ensureEdge is idempotent on re-adding one it
+            # already has).
+            parent_id = (
+                getattr(task_obj, "parent_id", "") or ""
+                if task_obj is not None else "")
             node = _task_node(
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
@@ -167,9 +188,11 @@ def work_graph(project: str = Query("default")) -> dict:
                     if task_obj is not None else None),
                 queue_depth=_queue_depth(task_svc, r["id"]),
             )
-            node["kind"] = "task"
+            node["kind"] = "subtask" if parent_id else "task"
             nodes.append(node)
             seen_node_ids.add(r["id"])
+            if parent_id:
+                edges.append({"source": parent_id, "target": r["id"], "kind": "parent_of"})
         for c in r.get("subtasks") or []:
             edges.append({"source": r["id"], "target": c["id"], "kind": "parent_of"})
             if c["id"] in seen_node_ids:

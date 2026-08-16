@@ -242,9 +242,16 @@ export function drawCard(
 
   // STALLED desaturates: a translucent dark wash over the whole body,
   // under everything else, so numbers/labels stay legible but read
-  // visibly duller than a healthy card (build item 1).
+  // visibly duller than a healthy card (build item 1). Round 5 item 5:
+  // trimmed 0.4 -> 0.3 -- this wash STACKS with draw.ts's whole-graph
+  // quiet dim (globalAlpha, floors at 0.85) whenever a stalled card sits
+  // in an otherwise-quiet graph (routine in the film's final third), and
+  // the brief's floor is "any card's effective alpha >= 0.6 at all
+  // times" with titles readable through the end. 0.3 keeps the tell
+  // (visibly duller than a healthy card) without pushing a stalled
+  // title's contrast past what's still comfortably readable.
   if (state === "stalled") {
-    ctx.fillStyle = "rgba(8,9,13,0.4)";
+    ctx.fillStyle = "rgba(8,9,13,0.3)";
     ctx.fill();
   }
 
