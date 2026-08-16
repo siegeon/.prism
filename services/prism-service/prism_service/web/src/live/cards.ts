@@ -200,7 +200,10 @@ export function drawActionStrip(ctx: CanvasRenderingContext2D, n: LiveNode): voi
   const { x, y } = n;
   const { w, h } = n.slot;
   const stripX = x + w - STRIP_W;
-  const stripY = y + h + STRIP_GAP;
+  const t = ctx.getTransform(); // FR-2: dock above past canvas bottom.
+  const belowY = y + h + STRIP_GAP;
+  const bottomWorld = (ctx.canvas.height - t.f) / t.d;
+  const stripY = belowY + STRIP_H > bottomWorld ? y - STRIP_GAP - STRIP_H : belowY;
 
   ctx.save();
   ctx.beginPath();
@@ -234,12 +237,23 @@ export type ActionStripHit = "open" | "explore" | null;
  * nodeAtWorld -- callers check this FIRST, since the strip floats outside
  * the card's own slot bounds (nodeAtWorld would otherwise miss it, or a
  * click meant for the strip could fall through onto whatever's behind it). */
-export function actionStripHitTest(n: LiveNode, worldX: number, worldY: number): ActionStripHit {
+export function actionStripHitTest(
+  n: LiveNode, worldX: number, worldY: number, ctx?: CanvasRenderingContext2D,
+): ActionStripHit {
   if (!n.selected) return null;
   const { x, y } = n;
   const { w, h } = n.slot;
   const stripX = x + w - STRIP_W;
-  const stripY = y + h + STRIP_GAP;
+  // FR-3: mirror drawActionStrip's dock decision -- only when a ctx is
+  // passed (LivePage.tsx's existing 3-arg call keeps today's below-only
+  // math); optional so no caller is forced to thread one through.
+  let stripY = y + h + STRIP_GAP;
+  if (ctx) {
+    const t = ctx.getTransform();
+    const belowY = y + h + STRIP_GAP;
+    const canvasBottomWorld = (ctx.canvas.height - t.f) / t.d;
+    if (belowY + STRIP_H > canvasBottomWorld) stripY = y - STRIP_GAP - STRIP_H;
+  }
   if (worldX < stripX || worldX > stripX + STRIP_W || worldY < stripY || worldY > stripY + STRIP_H) {
     return null;
   }
@@ -404,27 +418,47 @@ export function drawCard(
   ctx.textBaseline = "middle";
   ctx.fillText(glyphFor(n.kind, n.role), x + PAD_X, y + TITLE_H / 2);
 
+  // Round 8 (task 191d9f59, FR-1): the right-side corner draws EITHER the
+  // done icon OR the "Ns since signal" chip OR nothing -- decide which
+  // BEFORE sizing the title's truncation width, and MEASURE that content's
+  // actual pixel width (ctx.measureText) rather than assume a flat 44px.
+  // The chip's 10px monospace text is routinely wider than that guess, so
+  // a hardcoded reserve let the truncated title collide with it.
+  const icon = STATUS_ICON[n.status] ?? "";
+  const showAgeChip = !icon && !!n.lastSignalAt && now - n.lastSignalAt > SIGNAL_AGE_CHIP_MS;
+  const ageS = showAgeChip ? Math.floor((now - (n.lastSignalAt as number)) / 1000) : 0;
+  const chipText = `${ageS}s since signal`;
+  const iconFont = "600 12px system-ui, sans-serif";
+  const chipFont = "10px ui-monospace, SFMono-Regular, monospace";
+  let rightReserve = 0;
+  if (icon) {
+    ctx.font = iconFont;
+    rightReserve = ctx.measureText(icon).width;
+  } else if (showAgeChip) {
+    ctx.font = chipFont;
+    rightReserve = ctx.measureText(chipText).width;
+  }
+
   ctx.fillStyle = PALETTE.textPrimary;
   ctx.font = "600 12px system-ui, sans-serif";
-  const titleMaxChars = Math.max(8, Math.floor((w - 44) / 6.4));
+  const titleMaxChars = Math.max(8, Math.floor((w - 26 - rightReserve - (rightReserve ? 6 : 0)) / 6.4));
   ctx.fillText(truncate(n.label, titleMaxChars), x + PAD_X + 16, y + TITLE_H / 2);
 
-  const icon = STATUS_ICON[n.status] ?? "";
   if (icon) {
     ctx.fillStyle = PALETTE.green;
     ctx.textAlign = "right";
+    ctx.font = iconFont;
     ctx.fillText(icon, x + w - PAD_X, y + TITLE_H / 2);
-  } else if (n.lastSignalAt && now - n.lastSignalAt > SIGNAL_AGE_CHIP_MS) {
+  } else if (showAgeChip) {
     // Round 3 item 6: "Ns since signal" once a card's own age crosses
     // 15s -- only where the done checkmark isn't already occupying this
     // corner. Pairs with the connector dots' continuous fade so a
     // viewer gets both a color cue AND a readable number for how stale
     // this card's last real event is.
-    const ageS = Math.floor((now - n.lastSignalAt) / 1000);
     ctx.fillStyle = PALETTE.textDim;
-    ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+    ctx.font = chipFont;
     ctx.textAlign = "right";
-    ctx.fillText(`${ageS}s since signal`, x + w - PAD_X, y + TITLE_H / 2);
+    ctx.fillText(chipText, x + w - PAD_X, y + TITLE_H / 2);
   }
 
   // Rows.
