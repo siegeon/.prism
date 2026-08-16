@@ -19,6 +19,29 @@ router = APIRouter()
 
 _KEEPALIVE_SECONDS = 25.0
 
+# Event types the /live "PRISM shows its work" graph consumes (gamify
+# walking skeleton). task.changed already existed for /sse/tasks;
+# drive.heartbeat, agent.run, tokens.turn are new bus publishers (see
+# api/drive_heartbeat.py, api/agent_runs.py, services/conductor_service.py
+# _record_agent_run, services/work_stream.py).
+_WORK_EVENT_TYPES = frozenset({
+    "task.changed", "drive.heartbeat", "agent.run", "tokens.turn",
+})
+
+# gamify data-enrichment slice item 3: NO separate "work.status" event.
+# task.changed's `fields` dict (services/task_service.py TaskService.update
+# -- `changed_fields`) already carries every SCALAR field that changed on
+# the write, which includes `status` and `gate_state` whenever either one
+# actually moved (workflow_step too, when it moved). So a task completing
+# (status -> done/cancelled) or a gate arriving/clearing (gate_state
+# changing) is ALREADY an unambiguous task.changed event on this stream --
+# the /live frontend's completion/gate animations should key off
+# `event.fields.status` and `event.fields.gate_state` on task.changed
+# (present in `fields` only when that field is one of the ones that just
+# changed; absent otherwise, never a false trigger). Publishing a second,
+# differently-named event with the same payload would be a duplicate
+# source of truth for the same write.
+
 
 @router.get("/sessions")
 async def sse_sessions(request: Request, project: str = "default"):
@@ -77,6 +100,46 @@ async def sse_tasks(request: Request, project: str = "default", task_id: str = "
                 if event.get("project") != project:
                     continue
                 if event.get("type") != "task.changed" or event.get("task_id") != task_id:
+                    continue
+                payload = json.dumps(event, separators=(",", ":"))
+                yield f"data: {payload}\n\n".encode("utf-8")
+        finally:
+            bus.unsubscribe(q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/work")
+async def sse_work(request: Request, project: str = "default"):
+    """Stream the 'PRISM shows its work' event set for one project as SSE
+    -- the /live graph's incremental feed after its /api/work/graph boot
+    snapshot. Same project-scoped, bare `data: {json}` shape as
+    /sse/sessions and /sse/tasks; filters to _WORK_EVENT_TYPES so the
+    graph never has to filter irrelevant bus traffic client-side."""
+
+    async def gen():
+        q = bus.subscribe()
+        try:
+            yield b": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield b": keepalive\n\n"
+                    continue
+                if event.get("project") != project:
+                    continue
+                if event.get("type") not in _WORK_EVENT_TYPES:
                     continue
                 payload = json.dumps(event, separators=(",", ":"))
                 yield f"data: {payload}\n\n".encode("utf-8")

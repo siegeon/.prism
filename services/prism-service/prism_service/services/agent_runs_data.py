@@ -38,6 +38,47 @@ _PASSING_GATE_STATES = frozenset({
 # away can self-diagnose instead of guessing.
 PRODUCER_GATE_VERDICT_REFUSAL = "producer_cannot_record_gate_verdict"
 
+# Canonical agent_runs schema, single-sourced HERE (the module that owns
+# every read/write of the table) so brain_engine.py's full scores.db init
+# imports this constant instead of keeping its own copy -- one definition,
+# never two that can drift apart. See _connect() below for why this module
+# also applies it directly rather than only relying on BrainEngine's init.
+AGENT_RUNS_SCHEMA = """
+    -- Per-agent/subagent run telemetry spine (task f4498190). One row
+    -- per (run_id, agent_id, step); idempotent upsert so a re-POST of
+    -- the same triple UPDATES rather than duplicates. Feeds self-heal
+    -- (flagging error/stall/token-heavy steps) + the /learning agent
+    -- timeline panel + the per-task agent cost/path rollup.
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        run_id TEXT NOT NULL,
+        workflow_name TEXT,
+        task_id TEXT,
+        session_id TEXT,
+        agent_id TEXT NOT NULL,
+        parent_agent_id TEXT,
+        role TEXT,
+        step TEXT NOT NULL,
+        model TEXT,
+        started_at TEXT,
+        ended_at TEXT,
+        duration_ms INTEGER,
+        tokens INTEGER,
+        tool_uses INTEGER,
+        ok INTEGER,
+        gate_state TEXT,
+        verdict_summary TEXT,
+        evidence_ref TEXT,
+        recorded_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (run_id, agent_id, step)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id
+        ON agent_runs(task_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_session_id
+        ON agent_runs(session_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_workflow
+        ON agent_runs(workflow_name);
+"""
+
 
 def is_passing_gate_state(value) -> bool:
     """True when ``value`` reads as a PASSING gate verdict.
@@ -101,8 +142,20 @@ def gate_source_for_row(row) -> str | None:
 
 
 def _connect(scores_db: str) -> sqlite3.Connection:
+    """Open scores_db through the shared hardening funnel AND guarantee
+    agent_runs exists (fresh-install ordering hole: BrainEngine's
+    _init_scores_schema is the table's only creator today, but it only
+    runs lazily on FIRST ACCESS of ProjectContext.brain_svc -- so a fresh
+    data dir whose first-ever touch is POST /api/agent-runs/ingest 500s
+    with "no such table: agent_runs" until something unrelated warms
+    brain_svc). CREATE TABLE/INDEX IF NOT EXISTS is a cheap no-op once
+    BrainEngine has already run its own init, so this never conflicts
+    with it -- it just removes the ordering dependency on the ingest
+    path, without paying BrainEngine's heavy construction cost
+    (embeddings/FTS/vector setup) here."""
     conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.executescript(AGENT_RUNS_SCHEMA)
     return conn
 
 

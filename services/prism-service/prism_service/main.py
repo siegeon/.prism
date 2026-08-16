@@ -447,6 +447,13 @@ async def lifespan(_app: FastAPI):
         # them) and backfills the user's historical sessions.
         from prism_service.services.claude_transcripts import start_transcript_importer
         threading.Thread(target=start_transcript_importer, daemon=True).start()
+        # gamify walking skeleton ("PRISM shows its work") -- polls active
+        # managed tasks' linked-session transcripts every ~1.5s and
+        # publishes tokens.turn onto the bus for /sse/work + the /live
+        # graph. See services/work_stream.py for why this is a poller
+        # (live token burn isn't event-shaped) rather than a publisher.
+        from prism_service.services.work_stream import start_work_ticker
+        threading.Thread(target=start_work_ticker, daemon=True).start()
         # Phase 3 (epic 4fd1e6b4) — TIMERS RETIRED ONTO THE BUS. The
         # Reflection Worker and Memory Summary Worker no longer run on their
         # own polling clocks; session.imported reflects (coalesced, read-

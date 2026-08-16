@@ -79,7 +79,12 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # 11 as of v7.10.49: the drive-activity observer (task dd1e8871,
     # services/drive_activity_observer.py) starts a thread that derives
     # heartbeats from observed activity so long steps stay visibly alive.
-    assert len(started) == 11
+    # 12 as of the gamify walking skeleton ("PRISM shows its work"):
+    # start_work_ticker (services/work_stream.py) polls active managed
+    # tasks' linked-session transcripts every ~1.5s and publishes
+    # tokens.turn onto the bus for /sse/work + the /live graph — live
+    # token burn isn't event-shaped, so nothing else pushes it.
+    assert len(started) == 12
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -92,8 +97,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    # Same 11 threads — see test_lifespan_starts_threads_when_no_lock.
-    assert len(started) == 11  # threads started despite the stale lock
+    # Same 12 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 12  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err

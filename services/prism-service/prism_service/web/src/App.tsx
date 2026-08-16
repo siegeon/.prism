@@ -26,6 +26,7 @@ const CompletedTasksPage = lazy(() => import("@/pages/CompletedTasksPage"));
 const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
 const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
 const ConductorPage = lazy(() => import("@/pages/ConductorPage"));
+const LivePage = lazy(() => import("@/pages/LivePage"));
 const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
 const SessionDetailPage = lazy(() => import("@/pages/SessionDetailPage"));
 const RetrievalsPage = lazy(() => import("@/pages/RetrievalsPage"));
@@ -150,6 +151,7 @@ export default function App() {
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/tasks/:id/:section" element={<TaskTextPage />} />
             <Route path="/conductor" element={<ConductorPage />} />
+            <Route path="/live" element={<LivePage />} />
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/sessions/:id" element={<SessionDetailPage />} />
             <Route path="/retrievals" element={<RetrievalsPage />} />

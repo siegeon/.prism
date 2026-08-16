@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Brain, Eye, FolderTree, Inbox, Info,
   KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
-  ScrollText, Search, Settings, Sparkles, Workflow,
+  Radio, ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -67,6 +67,10 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/inbox", label: "Inbox", icon: Inbox, isNew: true },
       { to: "/tasks", label: "Work", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
+      // The walking-skeleton screen for "PRISM shows its work": live
+      // agent activity flowing onto a node graph (task.changed,
+      // drive.heartbeat, agent.run, tokens.turn over /sse/work).
+      { to: "/live", label: "Live", icon: Radio },
       { to: "/retrievals", label: "Retrievals", icon: Search },
     ],
   },

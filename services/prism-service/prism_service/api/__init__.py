@@ -42,6 +42,7 @@ from prism_service.api.understand import router as understand_router
 from prism_service.api.update import router as update_router
 from prism_service.api.version import router as version_router
 from prism_service.api.watchdog import router as watchdog_router
+from prism_service.api.work import router as work_router
 from prism_service.api.workspaces import router as workspaces_router
 from prism_service.api.xref import router as xref_router
 
@@ -76,6 +77,7 @@ api_router.include_router(understand_router, prefix="/understand", tags=["unders
 api_router.include_router(update_router, prefix="/update", tags=["update"])
 api_router.include_router(version_router, prefix="/version", tags=["version"])
 api_router.include_router(watchdog_router, prefix="/watchdog", tags=["watchdog"])
+api_router.include_router(work_router, prefix="/work", tags=["work"])
 api_router.include_router(workspaces_router, prefix="/workspaces", tags=["workspaces"])
 api_router.include_router(integrations_router, prefix="/workspaces", tags=["integrations"])
 # Connect front door (task e139295d) — user-scoped, works solo, so NOT under
