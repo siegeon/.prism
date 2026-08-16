@@ -573,3 +573,35 @@ def test_quiet_line_distinguishes_needs_attention_from_genuinely_calm():
     assert "needAttentionCount" in draw_src, (
         "draw.ts must actually compute the count (stalled + "
         "waiting_gate cards) and pass it to drawQuietLine")
+
+
+def test_subtasks_fan_two_columns_so_autofit_can_fill_a_landscape_viewport():
+    src = _read(_LIVE / "layout.ts")
+    # Residual item-1 fix found while verifying auto-fit against a real
+    # scenario run: 3+ siblings under one parent all stacked at ONE
+    # constant x built a tall narrow content bbox that auto-fit correctly
+    # framed but still left huge side margins on a 1920x1080 viewport
+    # (min(w/contentW, h/contentH) was dominated by the tall dimension).
+    assert "const col = idx % 2;" in src and "const row = Math.floor(idx / 2);" in src, (
+        "subtasks of one parent must fan across 2 columns, not stack in "
+        "a single column, so the content bbox isn't tall/narrow on a "
+        "landscape viewport")
+
+
+def test_reconcile_reclassifies_a_subtask_misplaced_as_a_root_task():
+    layout_src = _read(_LIVE / "layout.ts")
+    assert "reslotAsSubtask(id: string, parentTaskId: string): Slot" in layout_src, (
+        "item-1 residual fix: every live SSE event handler's "
+        "ensureTaskNode call omits kind/parentTaskId (WorkEvent carries "
+        "only a bare task_id), so a subtask's first-seen live event "
+        "routinely places it as an extra top-level task row instead of "
+        "fanning beside its real parent -- verified live, this is why "
+        "auto-fit still framed a tall narrow column on a 1920x1080 "
+        "viewport even once the camera math itself was correct")
+
+    state_src = _read(_LIVE / "graphState.ts")
+    assert 'existing.kind === "task" && sn.kind === "subtask"' in state_src, (
+        "GraphState.reconcile() must detect and correct this "
+        "misclassification the moment a self-heal snapshot reveals the "
+        "node's true kind/parent")
+    assert "this.layout.reslotAsSubtask(sn.id, parentId)" in state_src

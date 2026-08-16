@@ -90,6 +90,20 @@ export class LayoutEngine {
     return slot;
   }
 
+  /** Round 3 item 1 residual fix (found while verifying auto-fit against a
+   * real scenario run): a root task with 3+ siblings all fanned out at
+   * ONE constant x, stacked purely by y, builds a tall NARROW content
+   * bbox (one card wide, N cards tall). GraphState.autoFitCamera fits
+   * that bbox correctly, but min(width/contentW, height/contentH) is then
+   * dominated by the TALL dimension, so the fitted zoom leaves huge
+   * unused margins on both sides of a 1920x1080 viewport -- verified
+   * live: auto-fit was mathematically correct and the screen still read
+   * as ~80% empty black, reproducing critic 5's original squint
+   * complaint through a different mechanism. Fanning 2 subtasks per row
+   * (idx%2 picks the column, idx/2 picks the row) roughly SQUARES the
+   * bbox's aspect ratio for the common 2-4-sibling case, which is what
+   * actually lets auto-fit zoom in far enough to read as "fills the
+   * screen" on a landscape viewport. */
   placeSubtask(id: string, parentTaskId: string): Slot {
     const existing = this.subSlot.get(id);
     if (existing) return existing;
@@ -99,9 +113,11 @@ export class LayoutEngine {
     list.push(id);
     this.subOrder.set(parentTaskId, list);
     const { w, h } = this.cardSize("subtask");
-    const x = parentSlot.x + parentSlot.w + COL_GAP * this.scale;
+    const col = idx % 2;
+    const row = Math.floor(idx / 2);
+    const x = parentSlot.x + parentSlot.w + COL_GAP * this.scale + col * (w + COL_GAP * this.scale * 0.6);
     const pitch = h + ROW_GAP * this.scale + this.sessionReserve();
-    const y = parentSlot.y + idx * pitch;
+    const y = parentSlot.y + row * pitch;
     const slot: Slot = { x, y, w, h };
     this.subSlot.set(id, slot);
     return slot;
@@ -121,6 +137,32 @@ export class LayoutEngine {
     const slot: Slot = { x, y, w, h };
     this.sessSlot.set(id, slot);
     return slot;
+  }
+
+  /** Round 3 item-1 residual fix (found while verifying auto-fit against
+   * a real scenario run): every SSE event handler's ensureTaskNode call
+   * omits the kind/parentTaskId args (graphState.ts's applyEvent has no
+   * way to know them -- WorkEvent carries only a bare task_id), so a
+   * subtask's FIRST-seen live event -- routinely its very first
+   * heartbeat/tokens.turn/agent.run, well before the ~2s debounced
+   * self-heal reconcile could ever adopt it correctly -- places it via
+   * placeTask() as an extra top-level ROW in the root task's own column
+   * instead of fanning beside its real parent. Verified live: a 3-
+   * sibling subtask fan rendered as ONE tall narrow column of unrelated-
+   * looking "root tasks", which is exactly what defeated auto-fit's
+   * ability to actually fill a landscape viewport (content stayed
+   * portrait-shaped no matter how well the camera fit it). Called from
+   * GraphState.reconcile() the FIRST time a self-heal snapshot reveals
+   * the node's true kind/parent -- discards the wrong taskSlot entry
+   * (and its taskOrder row) so bounds()/future placeTask() rows don't
+   * carry the ghost of the wrong slot, then places it fresh as a real
+   * subtask. */
+  reslotAsSubtask(id: string, parentTaskId: string): Slot {
+    if (this.taskSlot.has(id)) {
+      this.taskSlot.delete(id);
+      this.taskOrder = this.taskOrder.filter((t) => t !== id);
+    }
+    return this.placeSubtask(id, parentTaskId);
   }
 
   /** Extent of everything placed so far, used to size the pan/zoom "world"

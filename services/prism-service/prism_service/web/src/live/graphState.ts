@@ -774,6 +774,28 @@ export class GraphState {
         }
         continue;
       }
+      // Round 3 item-1 residual fix: a subtask whose FIRST live event beat
+      // this reconcile got created as a plain "task" (ensureTaskNode's
+      // default) and placed in the root column instead of fanned beside
+      // its real parent -- see layout.ts's reslotAsSubtask doc. This is
+      // the ONE exception to "reconcile must be visually silent" (that
+      // rule protects an ALREADY-CORRECTLY-placed node from jitter; this
+      // node was never correctly placed to begin with) -- fix it once,
+      // the moment the snapshot reveals the truth, with a fresh spawn-in
+      // slide so the reposition reads as deliberate motion, not a glitch.
+      if (existing.kind === "task" && sn.kind === "subtask") {
+        const parentEdge = snapshot.edges.find((e) => e.kind === "parent_of" && e.target === sn.id);
+        const parentId = parentEdge?.source;
+        if (parentId) {
+          const newSlot = this.layout.reslotAsSubtask(sn.id, parentId);
+          existing.kind = "subtask";
+          existing.parentTaskId = parentId;
+          existing.spawnFromX = existing.x;
+          existing.spawnFromY = existing.y;
+          existing.spawnAt = now;
+          existing.slot = newSlot;
+        }
+      }
       const prevStatus = existing.status, prevGate = existing.gate_state;
       existing.status = sn.status;
       if (sn.workflow_step !== existing.workflow_step) {

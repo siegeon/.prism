@@ -54,9 +54,24 @@ export function drawQuietLine(
 ): void {
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
+  const fullText = needAttentionCount > 0
+    ? `queue is quiet · ${needAttentionCount} need attention`
+    : `queue is quiet · last activity ${Math.max(0, Math.floor(quietForS))}s ago`;
+  ctx.font = "11px system-ui, sans-serif";
+  // Opaque backing chip, independent of whatever the HUD sparkline's own
+  // curve happens to be drawing at this y (verified live: the sparkline
+  // is NOT clipped to its panel bounds, so a data spike can visually
+  // overlap this line otherwise) -- matches the docked-panel/chip
+  // treatment used everywhere else on this canvas (gatepanel.ts,
+  // toasts.ts) rather than relying on bare unbacked text.
+  const textW = ctx.measureText(fullText).width;
+  ctx.fillStyle = "rgba(18,22,32,0.85)";
+  ctx.beginPath();
+  ctx.roundRect(x - 8, y - 12, textW + 16, 24, 6);
+  ctx.fill();
+
   if (needAttentionCount > 0) {
     ctx.fillStyle = PALETTE.textDim;
-    ctx.font = "11px system-ui, sans-serif";
     ctx.fillText("queue is quiet · ", x, y);
     const prefixW = ctx.measureText("queue is quiet · ").width;
     ctx.fillStyle = PALETTE.red;
@@ -65,8 +80,7 @@ export function drawQuietLine(
     return;
   }
   ctx.fillStyle = PALETTE.textDim;
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.fillText(`queue is quiet · last activity ${Math.max(0, Math.floor(quietForS))}s ago`, x, y);
+  ctx.fillText(fullText, x, y);
 }
 
 /** `lastEventAt` is GraphState's single clock for "when did anything
