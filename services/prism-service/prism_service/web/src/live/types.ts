@@ -27,6 +27,12 @@ export type GraphNode = {
    * real "backed up" signal, distinct from merely counting parent_of
    * edges (which includes children already in flight). */
   queue_depth?: number;
+  /** Epoch seconds of the task's EARLIEST agent_runs row (api/work.py
+   * _drive_started_at) -- the /live mission clock's server anchor (task
+   * 4e6c4bf3 plan S1). Null when no telemetry exists yet; NEVER a
+   * client-invented clock start (mx-9f2018: no gauge renders from a
+   * value the server didn't send for THIS task). */
+  drive_started_at?: number | null;
   /** Session nodes only (api/work.py's session node, off the latest
    * agent_runs row) — drives palette.ts's glyphFor role-varied icon
    * (round 3 item 2: "icon varies by role: dev/qa/sm"). Absent/null for

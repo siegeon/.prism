@@ -57,7 +57,8 @@ _TASK_SPEND_LOCK = threading.Lock()
 def _task_node(task_id: str, title: str, status: str, workflow_step: str,
                gate_state: str, activity: dict, spend_usd: float = 0.0,
                gate_waiting_s: float | None = None,
-               queue_depth: int = 0) -> dict:
+               queue_depth: int = 0,
+               drive_started_at: float | None = None) -> dict:
     heartbeat = (activity or {}).get("heartbeat") or {}
     kind = "task"
     return {
@@ -74,8 +75,30 @@ def _task_node(task_id: str, title: str, status: str, workflow_step: str,
         "spend_usd": round(spend_usd or 0.0, 4),
         "gate_waiting_s": gate_waiting_s,
         "queue_depth": queue_depth,
+        "drive_started_at": drive_started_at,
         "href": f"/tasks/{task_id}",
     }
+
+
+def _drive_started_at(scores_db: str, task_id: str) -> float | None:
+    """Epoch seconds of `task_id`'s EARLIEST agent_runs row -- the /live
+    mission clock's server anchor (task 4e6c4bf3 plan S1, AC-1/AC-3).
+    None when no telemetry exists yet, never a client-invented start
+    time (mx-9f2018: no gauge renders from a value the server didn't
+    send for THIS task)."""
+    if not scores_db:
+        return None
+    from prism_service.services.agent_runs_data import (
+        get_task_agent_rollup, _ts_epoch,
+    )
+    try:
+        rollup = get_task_agent_rollup(scores_db, task_id)
+    except Exception:
+        return None
+    path = rollup.get("agent_path") or []
+    if not path:
+        return None
+    return _ts_epoch(path[0].get("started_at"))
 
 
 def _queue_depth(task_svc, task_id: str) -> int:
@@ -152,6 +175,10 @@ def work_graph(project: str = Query("default")) -> dict:
         override_dir = conductor._project_override_dir()
     except Exception:
         source_path, override_dir = "", ""
+    try:
+        scores_db = str(ctx._data_dir / "scores.db")
+    except Exception:
+        scores_db = ""
 
     roots = conductor.managed_tasks()
     for r in roots:
@@ -187,6 +214,7 @@ def work_graph(project: str = Query("default")) -> dict:
                     conductor.gate_waiting_s(task_obj)
                     if task_obj is not None else None),
                 queue_depth=_queue_depth(task_svc, r["id"]),
+                drive_started_at=_drive_started_at(scores_db, r["id"]),
             )
             node["kind"] = "subtask" if parent_id else "task"
             nodes.append(node)
@@ -214,6 +242,7 @@ def work_graph(project: str = Query("default")) -> dict:
                     project, child.id, task_svc, source_path, override_dir),
                 gate_waiting_s=conductor.gate_waiting_s(child),
                 queue_depth=_queue_depth(task_svc, child.id),
+                drive_started_at=_drive_started_at(scores_db, child.id),
             )
             cnode["kind"] = "subtask"
             nodes.append(cnode)
@@ -228,10 +257,6 @@ def work_graph(project: str = Query("default")) -> dict:
         token_turns_from_events,
     )
 
-    try:
-        scores_db = str(ctx._data_dir / "scores.db")
-    except Exception:
-        scores_db = ""
     now = time.time()
     seen_sessions: set[str] = set()
     for n in list(nodes):
