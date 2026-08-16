@@ -1715,3 +1715,167 @@ def test_action_strip_hit_test_mirrors_the_dock_decision_via_optional_ctx():
         "the mirrored dock decision must use the same getTransform() + "
         "canvas.height derivation as drawActionStrip")
     assert "y - STRIP_GAP - STRIP_H" in hit_body
+
+# ---------------------------------------------------------------------------
+# Round 8 (owner ask on /live: "the individual panels should be able to be
+# moved") -- drag-to-place. pointerdown on a card body arms a potential
+# drag; movement past a 5px screen-space threshold converts it (suppressing
+# the click/select action on release). The dropped position is a world-
+# space override GraphState.step() prefers over the deterministic layout
+# slot; wires/packets/the action strip already key off n.x/n.y so they
+# follow for free. Overrides persist to localStorage per project and
+# rehydrate on boot; auto-fit never fights a drag; reclassify never
+# clobbers an override; a "reset layout" text button clears them.
+# ---------------------------------------------------------------------------
+
+def test_live_page_card_drag_threshold_converts_and_suppresses_click():
+    src = _read(_LIVE_PAGE)
+    assert "const DRAG_THRESHOLD_PX = 5;" in src, (
+        "movement past ~5px screen space must be what converts a pointerdown "
+        "into a real drag, not a bare `moved` boolean with no threshold")
+    assert 'mode: "node"' in src, (
+        "pointerdown must be able to arm a potential CARD drag (mode "
+        "\"node\"), distinct from the existing empty-space pan drag")
+    assert "if (!d.moved && (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)) {" in src, (
+        "the threshold check must gate the mode/moved conversion in "
+        "onPointerMove")
+    assert 'if (mode === "node" && wasDrag && nodeId) {' in src, (
+        "a completed card drag must short-circuit BEFORE the existing "
+        "click/select/navigate path in onPointerUp, so releasing a drag "
+        "never also fires a select or a navigate")
+
+
+def test_live_page_action_strip_still_precedes_card_drag_arming():
+    # The build directive's "action-strip hits checked before node hits"
+    # must hold for pointerdown too, now that pointerdown can arm a card
+    # drag -- a press on the docked strip must never be misread as the
+    # start of dragging the card underneath it.
+    src = _read(_LIVE_PAGE)
+    down_src = src.split("const onPointerDown = useCallback(", 1)[1].split("const onPointerMove = useCallback(", 1)[0]
+    strip_idx = down_src.index("actionStripHitTest(selectedNode")
+    node_idx = down_src.index("state.nodeAtWorld(world.x, world.y)")
+    assert strip_idx < node_idx, (
+        "onPointerDown must check the action strip before nodeAtWorld, "
+        "the same ordering onPointerUp already used")
+
+
+def test_graph_state_owns_manual_position_overrides():
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "overrides = new Map<string, { x: number; y: number }>();" in state_src, (
+        "GraphState must own the nodeId -> {x,y} manual override map")
+    assert "setOverride(id: string, x: number, y: number): void {" in state_src
+    assert "clearAllOverrides(): void {" in state_src
+    assert "hydrateOverrides(saved: Record<string, { x: number; y: number }>): void {" in state_src, (
+        "rehydration must prune ids the current snapshot doesn't know "
+        "about, not carry forward dead state")
+    assert "serializeOverrides(): Record<string, { x: number; y: number }> {" in state_src
+
+
+def test_step_renders_the_override_before_the_layout_slot():
+    # step() must consult a manual override in ABSOLUTE preference to the
+    # normal spawn-in-ease-toward-slot path -- an overridden node never
+    # eases back toward its layout slot, live-tracking the pointer while a
+    # drag is in progress and holding still once released.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert (
+        "const override = this.overrides.get(n.id);\n"
+        "      if (override) {\n"
+        "        n.x = override.x;\n"
+        "        n.y = override.y;"
+    ) in state_src
+
+
+def test_live_page_persists_and_rehydrates_overrides_per_project():
+    page_src = _read(_LIVE_PAGE)
+    assert 'return `prism.live.positions.${project}`;' in page_src, (
+        "manual positions must persist under a per-project localStorage key")
+    assert "stateRef.current.hydrateOverrides(JSON.parse(raw));" in page_src, (
+        "boot must rehydrate saved overrides after bootstrap() has "
+        "populated GraphState.byId (hydrateOverrides prunes stale ids "
+        "against it)")
+    assert (
+        "localStorage.setItem(positionsKey(project), "
+        "JSON.stringify(stateRef.current.serializeOverrides()));"
+    ) in page_src, "a completed card drag must persist the override map on release"
+    assert "state.setOverride(d.nodeId, world.x - d.offsetX, world.y - d.offsetY);" in page_src, (
+        "the card must follow the pointer LIVE (every pointermove), not "
+        "just on release")
+
+
+def test_autofit_never_moves_camera_during_an_active_drag():
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "draggingNodeId: string | null = null;" in state_src
+    assert "if (this.draggingNodeId) return;" in state_src, (
+        "autoFitCamera must refuse to arm a fresh fit move while a card "
+        "is being dragged -- stronger than the post-release input "
+        "hold-off, since a mid-drag topology event must never re-aim the "
+        "camera under the user's hand")
+    # Dragged (and released) content must still be included in the
+    # auto-fit bbox -- no camera fight, no snap-back once released either.
+    assert (
+        "const override = this.overrides.get(n.id);\n"
+        "      const nx = override ? override.x : n.slot.x;\n"
+        "      const ny = override ? override.y : n.slot.y;"
+    ) in state_src
+
+    page_src = _read(_LIVE_PAGE)
+    assert "state.draggingNodeId = d.nodeId;" in page_src, (
+        "onPointerMove must arm draggingNodeId the moment a card drag "
+        "starts moving")
+    assert "stateRef.current.draggingNodeId = null;" in page_src, (
+        "onPointerUp must clear draggingNodeId unconditionally, even for "
+        "a non-drag click")
+
+
+def test_reset_layout_affordance_clears_overrides_and_storage():
+    src = _read(_LIVE_PAGE)
+    assert "reset layout" in src and "<button" in src, (
+        "a small text button reading 'reset layout' must exist so a user "
+        "who dragged a card is never stranded with no way back")
+    assert "const handleResetLayout = useCallback(() => {" in src
+    assert "stateRef.current.clearAllOverrides();" in src
+    assert "localStorage.removeItem(positionsKey(project));" in src, (
+        "reset must forget the persisted copy too, or a reload would "
+        "resurrect the cleared positions")
+    # Grammar-consistent: slate/muted text button, no new colors -- same
+    # border/text-muted/hover:text-primary pattern StepRail's own reset-
+    # style button already uses elsewhere in the app.
+    assert "text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]" in src
+
+
+def test_reclassify_never_touches_the_override_map():
+    # reclassifyAsSubtask rewrites node.slot freely (the resting target),
+    # but must NEVER read or write this.overrides -- step() already
+    # prefers an override over node.slot unconditionally, so a
+    # reclassified node's on-screen position must stay exactly where the
+    # user dropped it.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "NEVER touches `this.overrides`" in state_src, (
+        "reclassifyAsSubtask's own doc comment must record this invariant")
+    method_src = state_src.split(
+        "private reclassifyAsSubtask(node: LiveNode, parentTaskId: string, now: number): void {", 1,
+    )[1].split("private ensureEdge(", 1)[0]
+    assert "this.overrides" not in method_src, (
+        "reclassifyAsSubtask's body must never reference this.overrides")
+
+
+def test_version_bumped_for_draggable_cards():
+    import re
+
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
+    assert m, (
+        "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
+        f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
+    assert int(m.group(1)) >= 13, (
+        "the draggable-cards slice must bump the gamify version marker to "
+        f"at least .13; got .{m.group(1)}")

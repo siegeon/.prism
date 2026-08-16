@@ -321,6 +321,60 @@ export class GraphState {
    * viewer's own framing is never fought. 0 = never touched. */
   lastUserInputAt = 0;
 
+  /** Manual per-node position overrides (owner ask: "the individual
+   * panels should be able to be moved"), world-space top-left coords of
+   * the card. Consulted by step() in PREFERENCE to the node's layout slot
+   * -- an overridden node never eases toward n.slot again, it just sits
+   * where it was dropped. LivePage serializes this map to localStorage
+   * (prism.live.positions.<project>) on drag-commit and rehydrates it via
+   * hydrateOverrides() after bootstrap. NEVER touched by
+   * reclassifyAsSubtask/reslotAsSubtask -- a reclassified node's slot can
+   * change freely without moving an overridden card, since step() reads
+   * the override first regardless of what n.slot says. */
+  overrides = new Map<string, { x: number; y: number }>();
+  /** id of the node currently being manually dragged (LivePage's pointer
+   * handlers set this on drag-start, clear it on pointerup) -- while set,
+   * autoFitCamera refuses to arm a fresh fit move, so a mid-drag topology
+   * event (a sibling card spawning) can never fight the drag by moving
+   * the camera under the user's hand. Distinct from (and stronger than)
+   * the lastUserInputAt hold-off, which only protects the brief window
+   * right after a drag ends. */
+  draggingNodeId: string | null = null;
+
+  setOverride(id: string, x: number, y: number): void {
+    this.overrides.set(id, { x, y });
+  }
+
+  clearOverride(id: string): void {
+    this.overrides.delete(id);
+  }
+
+  /** The "reset layout" affordance (legend-area text button): drops every
+   * manual override so every card eases back to its deterministic layout
+   * slot. Does not touch localStorage itself -- LivePage's handler clears
+   * the persisted copy in the same breath. */
+  clearAllOverrides(): void {
+    this.overrides.clear();
+  }
+
+  /** Rehydrates saved per-node position overrides once bootstrap has
+   * populated byId -- an id the current snapshot doesn't know about (a
+   * task/subtask/session that no longer exists) is silently dropped
+   * rather than carried forward as dead state forever. */
+  hydrateOverrides(saved: Record<string, { x: number; y: number }>): void {
+    for (const [id, pos] of Object.entries(saved)) {
+      if (this.byId.has(id) && Number.isFinite(pos?.x) && Number.isFinite(pos?.y)) {
+        this.overrides.set(id, { x: pos.x, y: pos.y });
+      }
+    }
+  }
+
+  serializeOverrides(): Record<string, { x: number; y: number }> {
+    const out: Record<string, { x: number; y: number }> = {};
+    for (const [id, pos] of this.overrides) out[id] = pos;
+    return out;
+  }
+
   /** Round 5 item 1: the content bbox the CURRENT (or in-flight) camera
    * fit was computed against -- compared with a deadband against each
    * frame's fresh bbox so a materially-unchanged scene never re-aims the
@@ -590,7 +644,13 @@ export class GraphState {
    * true parent was known gets re-slotted beside that parent, its OWN
    * kind/parentTaskId corrected, a fresh spawn-in slide armed so the
    * reposition reads as deliberate motion, and any session cards already
-   * anchored to its (now-stale) old slot carried along with it. */
+   * anchored to its (now-stale) old slot carried along with it.
+   *
+   * NEVER touches `this.overrides` -- a reclassify only ever rewrites
+   * node.slot (the resting target), and step() reads a manual override
+   * BEFORE it ever looks at slot, so a dragged node's on-screen position
+   * is untouched by a reclassify even though its slot silently changed
+   * underneath it. */
   private reclassifyAsSubtask(node: LiveNode, parentTaskId: string, now: number): void {
     if (!this.byId.has(parentTaskId)) this.ensureTaskNode(parentTaskId, now);
     const newSlot = this.layout.reslotAsSubtask(node.id, parentTaskId);
@@ -883,14 +943,27 @@ export class GraphState {
    * rate decay + toast pruning. Called once per rAF frame. */
   step(dtMs: number, now: number): void {
     for (const n of this.nodes) {
-      const elapsed = now - n.spawnAt;
-      if (elapsed >= SPAWN_MS) {
-        n.x = n.slot.x;
-        n.y = n.slot.y;
+      // Manual drag override (owner ask: "panels should be able to be
+      // moved") takes ABSOLUTE precedence over the layout slot -- an
+      // overridden node never eases toward n.slot, live-updates every
+      // frame while a drag is in progress (LivePage calls setOverride on
+      // every pointermove), and simply holds still once released. Wires/
+      // packets/the action strip all already key off n.x/n.y (never
+      // n.slot.x/y directly), so they follow a dragged card for free.
+      const override = this.overrides.get(n.id);
+      if (override) {
+        n.x = override.x;
+        n.y = override.y;
       } else {
-        const e = easeOutCubic(elapsed / SPAWN_MS);
-        n.x = n.spawnFromX + (n.slot.x - n.spawnFromX) * e;
-        n.y = n.spawnFromY + (n.slot.y - n.spawnFromY) * e;
+        const elapsed = now - n.spawnAt;
+        if (elapsed >= SPAWN_MS) {
+          n.x = n.slot.x;
+          n.y = n.slot.y;
+        } else {
+          const e = easeOutCubic(elapsed / SPAWN_MS);
+          n.x = n.spawnFromX + (n.slot.x - n.spawnFromX) * e;
+          n.y = n.spawnFromY + (n.slot.y - n.spawnFromY) * e;
+        }
       }
       // Round 6 item 8 retires the separately-drained buffer bar computed
       // here -- see the doc comment above MAX_CONCURRENT_PER_WIRE. The bar is
@@ -988,14 +1061,28 @@ export class GraphState {
    * toward its target 10 seconds later. */
   private autoFitCamera(now: number): void {
     if (!this.booted || !this.nodes.length) return;
+    // Never move the camera while a card is being manually dragged --
+    // stronger than the input hold-off below (which only covers the brief
+    // window right after a drag ends): a topology event mid-drag (a
+    // sibling spawning) must not re-aim the fit out from under the user's
+    // hand.
+    if (this.draggingNodeId) return;
     if (this.lastUserInputAt && now - this.lastUserInputAt < AUTO_FIT_IDLE_MS) return;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of this.nodes) {
-      minX = Math.min(minX, n.slot.x);
-      minY = Math.min(minY, n.slot.y);
-      maxX = Math.max(maxX, n.slot.x + n.slot.w);
-      maxY = Math.max(maxY, n.slot.y + n.slot.h);
+      // A dragged-and-released node's content contributes from its
+      // OVERRIDE position, not its (now visually abandoned) layout slot --
+      // otherwise a card dropped far from its slot would render outside
+      // the auto-fit frame (no snap-back, but also no camera fight: the
+      // frame simply grows to include where the user actually put it).
+      const override = this.overrides.get(n.id);
+      const nx = override ? override.x : n.slot.x;
+      const ny = override ? override.y : n.slot.y;
+      minX = Math.min(minX, nx);
+      minY = Math.min(minY, ny);
+      maxX = Math.max(maxX, nx + n.slot.w);
+      maxY = Math.max(maxY, ny + n.slot.h);
     }
     if (!isFinite(minX)) return;
     const margin = 40;
