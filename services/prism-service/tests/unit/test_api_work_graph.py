@@ -530,3 +530,83 @@ def test_gate_waiting_s_is_none_when_not_pending(tmp_path, monkeypatch):
     assert resp.status_code == 200
     nodes = {n["id"]: n for n in resp.json()["nodes"]}
     assert nodes[root_id]["gate_waiting_s"] is None, f"got {nodes[root_id]!r}"
+
+
+# ---------------------------------------------------------------------------
+# drive_started_at (task 4e6c4bf3, plan S1, AC-1 + AC-3): a mission clock
+# anchor computed from the EARLIEST server-recorded agent_runs row for a
+# task, never a client-invented timestamp -- see
+# test_live_watchability_ui.py for the matching frontend renderer pins.
+# ---------------------------------------------------------------------------
+
+def _ctx_with_scores_db(tmp_path):
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.conductor_service import ConductorService
+
+    scores_db_path = tmp_path / "scores.db"
+    task_svc = TaskService(str(tmp_path / "tasks.db"), scores_db=str(scores_db_path))
+    conductor = ConductorService(str(scores_db_path), enable_engine=False, task_svc=task_svc)
+
+    class _Ctx:
+        pass
+
+    ctx = _Ctx()
+    ctx.conductor_svc = conductor
+    ctx.task_svc = task_svc
+    ctx._data_dir = tmp_path
+    return ctx, str(scores_db_path), task_svc
+
+
+def test_task_node_carries_drive_started_at_from_earliest_agent_run(tmp_path, monkeypatch):
+    from prism_service.services.agent_runs_data import upsert_agent_run
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from prism_service.api import work as work_api
+
+    ctx, scores_db, task_svc = _ctx_with_scores_db(tmp_path)
+    root = task_svc.create(title="Root epic — mission clock")
+    task_svc.update(root.id, status="in_progress", workflow_step="implement_tasks")
+
+    # Two agent_runs rows out of chronological insertion order -- the
+    # EARLIEST started_at must win regardless of row/insertion order.
+    upsert_agent_run(scores_db, {
+        "run_id": root.id, "task_id": root.id, "agent_id": f"{root.id}:red",
+        "role": "qa", "step": "write_failing_tests", "started_at": "1000000200.0",
+    })
+    upsert_agent_run(scores_db, {
+        "run_id": root.id, "task_id": root.id, "agent_id": f"{root.id}:plan",
+        "role": "sm", "step": "verify_plan", "started_at": "1000000100.0",
+    })
+
+    monkeypatch.setattr(work_api, "get_project", lambda p: ctx)
+    app = FastAPI()
+    app.include_router(work_api.router, prefix="/api/work")
+    resp = TestClient(app).get("/api/work/graph?project=gamify")
+    assert resp.status_code == 200
+    nodes = {n["id"]: n for n in resp.json()["nodes"]}
+    root_node = nodes.get(root.id)
+    assert root_node is not None, f"got nodes {resp.json()['nodes']!r}"
+    assert root_node.get("drive_started_at") == 1000000100.0, (
+        "drive_started_at must be the EARLIEST agent_runs.started_at for "
+        f"this task, not the latest or a client clock; got {root_node!r}")
+
+
+def test_task_node_drive_started_at_is_none_without_agent_runs(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from prism_service.api import work as work_api
+
+    ctx, scores_db, task_svc = _ctx_with_scores_db(tmp_path)
+    root = task_svc.create(title="Root epic — no runs yet")
+    task_svc.update(root.id, status="in_progress", workflow_step="implement_tasks")
+
+    monkeypatch.setattr(work_api, "get_project", lambda p: ctx)
+    app = FastAPI()
+    app.include_router(work_api.router, prefix="/api/work")
+    resp = TestClient(app).get("/api/work/graph?project=gamify")
+    assert resp.status_code == 200
+    nodes = {n["id"]: n for n in resp.json()["nodes"]}
+    root_node = nodes[root.id]
+    assert root_node.get("drive_started_at") is None, (
+        "a task with no agent_runs telemetry yet must render no mission "
+        f"clock rather than a fake one; got {root_node!r}")
