@@ -307,3 +307,59 @@ def test_learning_overview_surfaces_agent_runs(tmp_path, monkeypatch):
     assert "agent_runs" in body, (
         f"/api/learning must surface agent_runs aggregates: keys={list(body)}"
     )
+
+
+# ----------------------------------------------------------------------
+# Fresh-install ordering hole (gamify defect 1): agent_runs used to be
+# created ONLY by BrainEngine._init_scores_schema, reached lazily via
+# ProjectContext.brain_svc -- so on a genuinely fresh data dir where
+# ingest is the FIRST-EVER touch of scores.db (no brain.db, no
+# scores.db, nothing pre-warmed), POST /api/agent-runs/ingest 500'd
+# with "no such table: agent_runs". Deliberately does NOT call
+# _seed_schema()/warm Brain first -- that pre-warm is exactly what
+# masked the bug in every other test in this file.
+# ----------------------------------------------------------------------
+
+
+def test_ingest_succeeds_on_a_genuinely_fresh_data_dir_no_brain_warmup(
+    tmp_path, monkeypatch,
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from prism_service.api import agent_runs as agent_runs_api
+
+    data_dir = tmp_path / "fresh_project"
+    data_dir.mkdir()
+    assert not (data_dir / "scores.db").exists(), (
+        "test setup must not have touched scores.db yet"
+    )
+    assert not (data_dir / "brain.db").exists(), (
+        "test setup must not have warmed Brain (that would recreate the "
+        "exact lazy-init this test pins against)"
+    )
+
+    class _Ctx:
+        _data_dir = data_dir
+
+    monkeypatch.setattr(agent_runs_api, "get_project", lambda p: _Ctx())
+
+    app = FastAPI()
+    app.include_router(agent_runs_api.router, prefix="/api/agent-runs")
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/agent-runs/ingest",
+        params={"project": "prism"},
+        json=_row(run_id="fresh-run", agent_id="fresh-agent"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body.get("ok") is True, (
+        f"first-ever ingest on a fresh data dir must succeed, got {body}"
+    )
+
+    # Also prove the row is actually readable back, not just accepted.
+    got = client.get("/api/agent-runs", params={"project": "prism"})
+    assert got.status_code == 200, got.text
+    rows = got.json()["rows"]
+    assert any(r["run_id"] == "fresh-run" for r in rows), rows

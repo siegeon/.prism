@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.11"
+PRISM_VERSION = "7.10.54+gamify.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "gamify.12: two Linux/WSL verification defects fixed. (1) agent_runs "
+    "fresh-install ordering hole: the table was only ever created lazily "
+    "by BrainEngine._init_scores_schema via ProjectContext.brain_svc, so "
+    "POST /api/agent-runs/ingest 500'd on a genuinely fresh data dir "
+    "until something unrelated warmed brain_svc first. Fixed by "
+    "single-sourcing the schema in agent_runs_data.py (the module that "
+    "owns every read/write of the table) and applying it on every "
+    "_connect() -- brain_engine.py now imports that same constant "
+    "instead of keeping its own copy. drive_heartbeat.py already "
+    "self-inits its own schema per-connect; no hole there. (2) "
+    "test_live_graph_visual_grammar_ui.py's scenario-seeds-queued-"
+    "children test read E:\\gamify-lab\\sim\\scenario.py directly, a "
+    "path that only exists on this rig machine -- now skipif-guarded "
+    "with a named local-rig reason so it can never false-red elsewhere; "
+    "the product behavior it demonstrates (queue_depth from pending "
+    "never-entered children) is already pinned hermetically by "
+    "test_api_work_graph.py. "
     "gamify.11: the EXPLORE hop. A selected card docks a small action "
     "strip (open / magnifying-glass explore) just below it; explore "
     "navigates to /brain?session=<id> or /brain?task=<id>, new explicit "

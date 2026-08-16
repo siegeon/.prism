@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _SRC = _HERE.parent.parent.parent / "prism_service" / "web" / "src"
 _LIVE = _SRC / "live"
@@ -845,12 +847,31 @@ def test_queue_glyph_caps_with_overflow_count():
         "not silently stop at the cap with no indication more exist")
 
 
+_GAMIFY_LAB_SCENARIO = Path(r"E:\gamify-lab\sim\scenario.py")
+
+
+@pytest.mark.skipif(
+    not _GAMIFY_LAB_SCENARIO.exists(),
+    reason=(
+        "local-rig integration check: E:\\gamify-lab is the rig-capture "
+        "tooling for the /live gauntlet, deliberately kept OUTSIDE this "
+        "repo (only present on the machine that records the demo movies) "
+        "-- see the module docstring's reference to "
+        "E:\\gamify-lab\\DESIGN_DIRECTIVE.md. This test can never pass on "
+        "any other machine/CI runner; it only guards this machine's rig."
+    ),
+)
 def test_scenario_seeds_permanently_queued_children_for_the_glyph():
     # Item 3 (rig, not product): scenario.py must give the root task 2
     # children that stay pending/never-advanced the whole movie so
     # queue_depth > 0 is actually witnessable on film (api/work.py's
     # _queue_depth counts pending children with no workflow_step).
-    scenario_src = (Path(r"E:\gamify-lab\sim\scenario.py")).read_text(encoding="utf-8")
+    #
+    # The actual PRODUCT behavior this rig demonstrates -- queue_depth
+    # is the count of pending, never-entered children -- is pinned
+    # hermetically (no local-rig dependency) by
+    # test_api_work_graph.py::test_queue_depth_counts_pending_never_entered_children.
+    scenario_src = _GAMIFY_LAB_SCENARIO.read_text(encoding="utf-8")
     assert "queued" in scenario_src.lower()
     assert "set_parent(" in scenario_src
 
