@@ -297,11 +297,17 @@ export function drawHud(ctx: CanvasRenderingContext2D, state: GraphState, now: n
   ctx.fillText(gateAlarm ? "gates waiting" : "tasks in flight", x + meterW, rowY);
   rowY += STAT_H - 4;
 
-  // Sparkline: aggregate tok/s trend, taller with a filled area under
-  // the line and an emphasized endpoint dot (round1 critic praised the
-  // old thin-line sparkline as the dashboard's "one clear, uncontested
-  // win" — keep it, make it read better at a glance/downscale).
-  const spX = x, spY = rowY, spW = PANEL_W - 24, spH = SPARK_H - 8;
+  // Sparkline: aggregate tok/s trend with a filled area under the line
+  // and an emphasized endpoint dot (round1 critic praised the old
+  // thin-line sparkline as the dashboard's "one clear, uncontested win").
+  // Round 8 (owner report + task 04783650): the old `SPARK_H - 8` height
+  // (38px) started at rowY (190, wherever the stat-row cursor walk above
+  // actually lands) and ran the curve/fill/dot 25px past the panel's own
+  // bottom edge (206px, from the UNCHANGED panelH budget above) --
+  // panelH was never grown to chase it, spH shrinks to what's actually
+  // left in the existing budget instead, so the baseline sits inside the
+  // panel's own bottom padding rather than spilling under it.
+  const spX = x, spY = rowY, spW = PANEL_W - 24, spH = SPARK_H - 36;
   const hist = state.tokSHistory;
   if (hist.length >= 2) {
     const maxV = Math.max(1, ...hist.map((p) => p.v));
