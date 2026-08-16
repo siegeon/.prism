@@ -1583,3 +1583,90 @@ def test_version_bumped_for_the_explore_hop():
     assert int(m.group(1)) >= 11, (
         "the explore-hop slice must bump the gamify version marker to at "
         f"least .11; got .{m.group(1)}")
+
+
+# ---------------------------------------------------------------------------
+# Round 8 (board polish residuals, task 191d9f59): FR-1 the title's right-
+# side reserve must be MEASURED off whatever actually occupies that corner
+# (nothing / a done icon / the "Ns since signal" chip), never a flat 44px
+# guess; FR-2/FR-3 the docked action strip must dock ABOVE a selected card
+# instead of below it when the below-dock would cross the visible canvas's
+# own bottom edge, derived from the live transform, and the hit test must
+# mirror the same decision via an OPTIONAL 4th ctx param.
+# ---------------------------------------------------------------------------
+
+def test_title_truncation_reserve_comes_from_measured_content_not_a_flat_44px():
+    src = _read(_LIVE / "cards.ts")
+    assert "(w - 44) / 6.4" not in src, (
+        "drawCard must no longer reserve a hardcoded 44px for the title's "
+        "right-side content (icon/chip) -- a 'Ns since signal' chip in "
+        "10px monospace is far wider than 44px and collided with the "
+        "truncated title; the reserve must be MEASURED, not guessed")
+
+    draw_fn = src.split("export function drawCard(")[1]
+    icon_idx = draw_fn.index("STATUS_ICON[n.status]")
+    title_idx = draw_fn.index("titleMaxChars")
+    assert icon_idx < title_idx, (
+        "the icon-vs-age-chip decision (STATUS_ICON[n.status] / the "
+        "SIGNAL_AGE_CHIP_MS chip) must be made BEFORE titleMaxChars is "
+        "computed, so the truncation width can reserve room for whatever "
+        "is actually going to be drawn in that corner")
+    assert "ctx.measureText(" in draw_fn[icon_idx:title_idx], (
+        "the right-side reserve feeding titleMaxChars must come from "
+        "ctx.measureText() of the actual icon/chip text, not a constant")
+
+
+def test_action_strip_docks_above_when_below_would_cross_canvas_bottom():
+    src = _read(_LIVE / "cards.ts")
+    # NFR-3: no new function parameter -- draw.ts's call site
+    # `drawActionStrip(ctx, n);` must keep working, so the dock decision
+    # is derived from ctx's OWN current transform + the canvas's own
+    # pixel height, never a 3rd argument.
+    assert (
+        "export function drawActionStrip(ctx: CanvasRenderingContext2D, n: LiveNode): void {"
+        in src
+    ), "drawActionStrip's signature must stay exactly 2 params (no new param)"
+
+    strip_fn = src.split("export function drawActionStrip(")[1]
+    strip_body = (
+        strip_fn[: strip_fn.index("export function actionStripHitTest(")]
+        if "export function actionStripHitTest(" in strip_fn
+        else strip_fn
+    )
+    assert "ctx.getTransform()" in strip_body, (
+        "FR-2: the below-dock's canvas-bottom-edge check must be derived "
+        "from ctx.getTransform() (the live pan/zoom transform), not a "
+        "static assumption that there's always room underneath")
+    assert "ctx.canvas.height" in strip_body, (
+        "FR-2: the canvas-bottom-edge check needs the canvas's own pixel "
+        "height")
+    assert "y - STRIP_GAP - STRIP_H" in strip_body, (
+        "FR-2: when the below-dock would cross the canvas bottom edge, "
+        "the strip must dock ABOVE the card instead (STRIP_GAP above the "
+        "card's own top edge)")
+    # NFR-2 regression guard: adding the dock decision must not push the
+    # existing fillStyle/strokeStyle pin outside its 600-char scan window.
+    assert "ctx.fillStyle = PALETTE.card;" in src.split(
+        "export function drawActionStrip(")[1][:600]
+    assert "ctx.strokeStyle = PALETTE.selection;" in src.split(
+        "export function drawActionStrip(")[1][:600]
+
+
+def test_action_strip_hit_test_mirrors_the_dock_decision_via_optional_ctx():
+    src = _read(_LIVE / "cards.ts")
+    hit_sig_idx = src.index("export function actionStripHitTest(")
+    hit_fn = src[hit_sig_idx:]
+    assert "ctx?: CanvasRenderingContext2D" in hit_fn[:200], (
+        "FR-3: actionStripHitTest must gain an OPTIONAL 4th ctx param "
+        "mirroring drawActionStrip's dock decision")
+
+    ret_line = 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";'
+    hit_body = hit_fn[: hit_fn.index(ret_line)]
+    assert "if (ctx)" in hit_body, (
+        "the mirrored dock-above math must only run when ctx was "
+        "actually passed, defaulting to today's below-only math when "
+        "omitted (so LivePage.tsx's existing 3-arg call keeps working)")
+    assert "ctx.getTransform()" in hit_body and "ctx.canvas.height" in hit_body, (
+        "the mirrored dock decision must use the same getTransform() + "
+        "canvas.height derivation as drawActionStrip")
+    assert "y - STRIP_GAP - STRIP_H" in hit_body
