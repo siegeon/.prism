@@ -43,10 +43,40 @@ export function stepPackets(packets: Packet[], dtMs: number): Packet[] {
  * dim idle one -- the outline is what actually buys the contrast (a
  * near-white fill alone still washes out against a bright teal wire at
  * video-compression bitrates; the dark ring holds its shape regardless
- * of what's underneath). */
+ * of what's underneath).
+ *
+ * Round 4 item 5 (protect piece 2's win, fix its residuals): critic 2's
+ * two gaps were (a) the marker "flickers off in roughly 1 of 3 sampled
+ * frames" -- fixed in graphState.ts's ensureFlowingWiresCarryAMarker, a
+ * spawn-cadence fix, not a drawing one -- and (b) "the vertical wire's
+ * cycle leaves actual flow direction ambiguous". This fixes (b): a
+ * COMET TAIL of 2-3 fading, shrinking dots trailing BEHIND the head
+ * (i.e. closer to the wire's source) makes travel direction legible at a
+ * glance without reading which end is which -- the tail always points
+ * back the way the marker came from. */
+const TRAIL_STEPS = 3;
+const TRAIL_T_GAP = 0.045; // fraction-of-polyline behind the head, per trail dot
+
 export function drawPackets(ctx: CanvasRenderingContext2D, packets: Packet[]): void {
   for (const p of packets) {
     if (p.pts.length < 2) continue;
+
+    // Trail first (drawn under/behind the head), dimmest and smallest
+    // furthest back, so direction reads as "brightness fades toward
+    // where this thing came from".
+    for (let i = TRAIL_STEPS; i >= 1; i--) {
+      const tt = p.t - i * TRAIL_T_GAP;
+      if (tt <= 0) continue;
+      const at = pointAtFraction(p.pts, tt);
+      const size = 6 - i * 1.1;
+      ctx.globalAlpha = 0.5 * (1 - i / (TRAIL_STEPS + 1));
+      ctx.beginPath();
+      ctx.rect(at.x - size / 2, at.y - size / 2, size, size);
+      ctx.fillStyle = PALETTE.packet;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
     const at = pointAtFraction(p.pts, p.t);
     ctx.beginPath();
     ctx.rect(at.x - 3.5, at.y - 3.5, 7, 7);

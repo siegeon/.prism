@@ -11,7 +11,7 @@ import { drawCard, type CardMetrics } from "./cards";
 import { drawWire, routeOrthogonal, type WireKind } from "./wires";
 import { drawPackets } from "./packets";
 import { drawHud, drawLegend } from "./hud";
-import { drawLoading, drawQuietLine, isGraphQuiet } from "./idle";
+import { drawLoading, drawQuietLine, isGraphQuiet, quietDimAlpha } from "./idle";
 import { drawToasts } from "./toasts";
 import { drawGatePanel } from "./gatepanel";
 import { PALETTE } from "./palette";
@@ -45,7 +45,11 @@ function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics
     return {
       tokS: node.tok_s, tokensTotal: node.tokens_total, tokensLive: live,
       step: "", stepBarFrac: 0, stepLive: false,
-      gatePending: false, gateLabel: "", queueDepth: 0, bufferFrac: 0,
+      gatePending: false, gateLabel: "", queueDepth: 0,
+      // Round 4 item 2b: a session card gets the same throughput bar as
+      // a task/subtask, sourced from its OWN bufferFrac (computed
+      // uniformly for every node kind in graphState.step()).
+      bufferFrac: node.bufferFrac,
       spendUsd: 0,
     };
   }
@@ -144,11 +148,21 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
   // last real numbers stay exactly as they were (build item 3: "cards
   // keep their last real numbers, dim ~15%, never blanked"). A single
   // card's own STALLED state (piece 3) is a separate, per-node signal
-  // (red rings) layered on top of this, not replaced by it.
+  // (red rings) layered on top of this, not replaced by it. Round 4 item
+  // 1a: the alpha now EASES in over ~2s via idle.ts's quietDimAlpha
+  // instead of snapping in one frame the instant QUIET_MS elapses -- the
+  // snap landing on every card simultaneously is what critic 3 pixel-
+  // verified as a synchronized "collapse".
   const graphQuiet = isGraphQuiet(state, now);
+  const dimAlpha = quietDimAlpha(state, now);
   // Round 3 item 8 (idle refinement): counted alongside the per-node
   // cardState computation every frame is already doing (never a second
   // pass) -- feeds the quiet line's "N need attention" branch below.
+  // Round 4 item 1c: a STALLED card only "needs attention" while other
+  // cards are still active -- once the whole graph is quiet, a stopped
+  // signal is expected (everything stopped together), not an anomaly, so
+  // it no longer inflates the count. A pending GATE always needs a
+  // decision regardless of how quiet the rest of the graph is.
   let needAttentionCount = 0;
   for (const n of state.nodes) {
     const m = metricsFor(n, state, now);
@@ -164,10 +178,11 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
       const driver = state.nodes.find((d) => d.id === n.driverOfId);
       if (driver && driver.status === "done") cardState = "done";
     }
-    if (cardState === "stalled" || cardState === "waiting_gate") needAttentionCount += 1;
+    if (cardState === "waiting_gate") needAttentionCount += 1;
+    else if (cardState === "stalled" && !graphQuiet) needAttentionCount += 1;
     ctx.save();
-    if (graphQuiet) ctx.globalAlpha = 0.85;
-    drawCard(ctx, n, m, cardState, now);
+    ctx.globalAlpha = dimAlpha;
+    drawCard(ctx, n, m, cardState, now, graphQuiet);
     ctx.restore();
   }
 

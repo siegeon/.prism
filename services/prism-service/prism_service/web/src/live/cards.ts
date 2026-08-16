@@ -24,6 +24,9 @@ const ROW_START_Y = TITLE_H + 9;
 const DOT_R = 3.5;
 const CHIP_H = 30;
 const EDGE_STRIPE_W = 4;
+/** Round 4 item 3: "cap ~5 with a +N" -- one hollow square per queued
+ * child up to this many, then a small "+N" overflow caption. */
+const QUEUE_GLYPH_CAP = 5;
 
 function truncate(s: string, n: number): string {
   if (!s) return "";
@@ -177,6 +180,7 @@ function drawDoneChip(ctx: CanvasRenderingContext2D, n: LiveNode): void {
 
 export function drawCard(
   ctx: CanvasRenderingContext2D, n: LiveNode, m: CardMetrics, state: CardState, now: number,
+  graphQuiet = false,
 ): void {
   // DONE settles, then compacts to a slim chip -- witnessed, not vanished.
   if (state === "done" && n.doneAt && now - n.doneAt > COMPACT_AFTER_MS) {
@@ -187,10 +191,26 @@ export function drawCard(
   const { x, y } = n;
   const { w, h } = n.slot;
   const r = 6;
-  const deadColor = deadRingColorFor(state);
+  // Round 4 item 1c: red (and the stalled title tint) is only painted
+  // while OTHER cards are still active -- see palette.ts's doc comment.
+  const deadColor = deadRingColorFor(state, graphQuiet);
   // Round 3 item 6: one freshness value per card, applied to every row's
   // connector dot -- see signalFreshness's doc comment in graphState.ts.
   const freshness = signalFreshness(now, n.lastSignalAt);
+
+  // Round 4 item 6 (selection unmistakable): a selected card gets a
+  // slight lift (a few px up) in addition to its outline -- applied as a
+  // transform around the WHOLE card's draw calls, same technique as the
+  // existing "settling" transform below, so the lift moves body+outline
+  // together rather than just floating the stroke over a static body.
+  const lifted = n.selected;
+  if (lifted) {
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 6;
+    ctx.translate(0, -3);
+  }
 
   // Brief settle: scale 1.03 -> 1.0 around the card's own center, right
   // when a task hits done (build item 2). Applied as a transform around
@@ -211,6 +231,14 @@ export function drawCard(
   ctx.roundRect(x, y, w, h, r);
   ctx.fillStyle = PALETTE.card;
   ctx.fill();
+  // Shadow is only wanted under the card body itself (the lift), never
+  // on the text/dots drawn afterward -- clear it right after the one
+  // fill call it was set up for.
+  if (lifted) {
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+  }
 
   // STALLED desaturates: a translucent dark wash over the whole body,
   // under everything else, so numbers/labels stay legible but read
@@ -220,13 +248,15 @@ export function drawCard(
     ctx.fill();
   }
 
-  // STALLED thin red top border — red appears HERE, and on the dead
-  // connector rings, and nowhere else on the card.
+  // STALLED thin top border — red appears HERE (and on the dead
+  // connector rings) ONLY while other cards are still active; once the
+  // whole graph reads quiet this downgrades to the same neutral dim tone
+  // every other non-alarm border uses (round 4 item 1c).
   if (state === "stalled") {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
     ctx.lineTo(x + w - r, y);
-    ctx.strokeStyle = PALETTE.red;
+    ctx.strokeStyle = graphQuiet ? PALETTE.textDim : PALETTE.red;
     ctx.lineWidth = 2;
     ctx.stroke();
   }
@@ -272,7 +302,7 @@ export function drawCard(
   ctx.beginPath();
   ctx.roundRect(x, y, w, TITLE_H, [r, r, 0, 0]);
   ctx.clip();
-  ctx.fillStyle = titleTintFor(state);
+  ctx.fillStyle = titleTintFor(state, graphQuiet);
   ctx.fillRect(x, y, w, TITLE_H);
   if (settling) {
     const flashFrac = Math.max(0, n.settleUntil - now) / SETTLE_MS;
@@ -337,16 +367,18 @@ export function drawCard(
     rowY += ROW_H;
   }
 
-  // Recent-throughput BUFFER bar (round 2, piece 5; round 3 item 4) —
-  // task/subtask cards only, ~70% of card width, teal fill on a dark
-  // track, directly under the Tokens value it's the gauge FOR. This IS
-  // the flow gauge (fill = current/own-rolling-peak, drains to 0 over
-  // ~4s of silence -- graphState.ts's bufferLevelFrac), so its LENGTH
-  // alone answers "how loaded is this right now" (round1 critic: "no
-  // node ever shows load as a filling bar"). Bumped 6px -> 7px (round 3
-  // item 4: "thicker (7px)") and kept visually distinct from the THIN
-  // orange Step bar below (drawCapacityBar's h=4 default there).
-  if (n.kind !== "session") {
+  // Recent-throughput BUFFER bar (round 2, piece 5; round 3 item 4;
+  // round 4 item 2) — ~70% of card width, teal fill on a dark track,
+  // directly under the Tokens value it's the gauge FOR. Fill is
+  // scale.ts's shared fixed log scale (item 2a), drains to 0 over ~4s of
+  // silence, so its LENGTH alone answers "how loaded is this right now"
+  // (round1 critic: "no node ever shows load as a filling bar"). Round 4
+  // item 2b DROPS the old `n.kind !== "session"` guard: "the fastest-
+  // moving leaf nodes carry no bar at all" -- session/agent cards now
+  // get the identical bar, sized off their own tok_s. Bumped 6px -> 7px
+  // (round 3 item 4: "thicker (7px)") and kept visually distinct from
+  // the THIN orange Step bar below (drawCapacityBar's h=4 default there).
+  {
     const barW = Math.min(w * 0.7, valueRight - labelX);
     rowY += 8;
     drawCapacityBar(ctx, labelX, rowY, barW, m.bufferFrac, PALETTE.teal, m.bufferFrac > 0.015, 7);
@@ -377,12 +409,21 @@ export function drawCard(
   }
 
   // Queue depth: stacked hollow squares beside the step row when a task
-  // has subtasks waiting (grammar §2: "backed up / queued").
+  // has subtasks waiting (grammar §2: "backed up / queued"). Round 4
+  // item 3: one square per queued child, capped at QUEUE_GLYPH_CAP with
+  // a trailing "+N" once the real count exceeds what fits legibly.
   if (m.queueDepth > 0) {
     ctx.strokeStyle = PALETTE.textDim;
     ctx.lineWidth = 1;
-    for (let i = 0; i < Math.min(m.queueDepth, 4); i++) {
+    const shown = Math.min(m.queueDepth, QUEUE_GLYPH_CAP);
+    for (let i = 0; i < shown; i++) {
       ctx.strokeRect(labelX + i * 8, rowY - 12, 6, 6);
+    }
+    if (m.queueDepth > QUEUE_GLYPH_CAP) {
+      ctx.fillStyle = PALETTE.textDim;
+      ctx.font = "9px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(`+${m.queueDepth - QUEUE_GLYPH_CAP}`, labelX + shown * 8 + 2, rowY - 9);
     }
   }
 
@@ -424,4 +465,5 @@ export function drawCard(
   }
 
   if (settling) ctx.restore();
+  if (lifted) ctx.restore();
 }

@@ -32,6 +32,7 @@ def test_live_modules_exist_with_clean_seams():
     for name in (
         "layout.ts", "cards.ts", "wires.ts", "packets.ts",
         "hud.ts", "idle.ts", "graphState.ts", "draw.ts", "palette.ts",
+        "scale.ts",
     ):
         assert (_LIVE / name).is_file(), f"src/live/{name} must exist"
 
@@ -246,22 +247,25 @@ def test_task_card_gets_a_throughput_buffer_bar_that_drains():
         "a task/subtask card's buffer bar must be a real per-node field, "
         "not a static icon (round1 gap: 'no node ever shows load as a "
         "filling bar')")
-    # Round 3 item 4 SUPERSEDES round 2's fixed-span fill/drain model
-    # (BUFFER_DRAIN_PER_MS + bufferFillFor against a constant span) with a
-    # per-card ROLLING PEAK gauge that drains over a real ~4s window --
-    # see graphState.ts's bufferLevelFrac doc for why the fixed span
-    # never actually produced "siblings at visibly different fills".
+    # Round 4 item 2a SUPERSEDES round 3's per-card ROLLING PEAK gauge
+    # (bufferPeak/bufferLevelFrac, current/peak) -- critic 5's "second
+    # offense" caught the identical "rising peak shrinks a growing rate"
+    # bug this round3 model was built to fix on the HUD side, still live
+    # on every card's own bar. The bar now reads off scale.ts's shared
+    # FIXED log scale (logMeterFrac), the same law the HUD hero meter
+    # uses, so length is monotonic with the printed rate everywhere.
     assert "BUFFER_DRAIN_WINDOW_MS" in state_src, (
         "the buffer bar must drain to 0 over a real elapsed-time window "
         "since the last tokens.turn, not just ratchet up and sit at its "
         "high-water mark")
-    assert "bufferPeak" in state_src, (
-        "the buffer bar's fill must be relative to a per-card ROLLING "
-        "MAX (current/peak), not a fixed constant span shared by every "
-        "card regardless of its own typical throughput")
-    assert "function bufferLevelFrac(" in state_src, (
-        "the buffer bar must fill by an amount driven by the REAL tok_s "
-        "on the tokens.turn event, never a fixed timer tick")
+    assert "logMeterFrac(n.bufferLiveTokS)" in state_src, (
+        "the buffer bar's fill must come from the SAME shared fixed log "
+        "scale as the HUD hero meter (scale.ts), never a per-card "
+        "rolling peak that a rising value can shrink against")
+    assert "bufferPeak" not in state_src, (
+        "round 4 item 2a retired the peak-relative gauge entirely -- "
+        "a lingering bufferPeak field would mean the old bug is still "
+        "reachable")
 
 
 def test_hud_rebuilt_with_meter_bars_and_bigger_hero_number():
@@ -309,9 +313,9 @@ def test_version_bumped_for_this_change():
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
-    assert int(m.group(1)) >= 6, (
-        "round 3 must bump the gamify version marker to at least "
-        f".6; got .{m.group(1)}")
+    assert int(m.group(1)) >= 7, (
+        "round 4 must bump the gamify version marker to at least "
+        f".7; got .{m.group(1)}")
 
 
 # ---------------------------------------------------------------------------
@@ -336,13 +340,42 @@ def test_red_ring_color_is_reserved_for_stalled_only_never_hardcoded():
     # substring match): deadRingColorFor only returns PALETTE.red on the
     # "stalled" branch. Round1's exact failure was a red dot rendered
     # UNCONDITIONALLY on every Spend/Step row regardless of state.
-    assert 'if (state === "stalled") return PALETTE.red;' in palette_src
+    # Round 4 item 1c SUPERSEDES round1's unconditional literal: red is
+    # now further gated on `graphQuiet` (critic 1's "red stacking on
+    # every node with no recovery... reads as a system crash" -- see
+    # test_stalled_red_is_contextual_on_whether_the_graph_is_quiet below
+    # for the actual behavioral pin).
+    assert 'if (state === "stalled") return graphQuiet ? PALETTE.textDim : PALETTE.red;' in palette_src
     # Every connector dot's dead-fallback must route through this one
     # function -- never a hardcoded PALETTE.red re-introduced on a row.
-    assert "deadRingColorFor(state)" in cards_src
+    assert "deadRingColorFor(state, graphQuiet)" in cards_src
     assert cards_src.count("drawConnectorDot(ctx, dotX, rowY,") >= 3, (
         "Tokens/Step/Spend rows must all pass through the same "
         "state-derived dead-ring color, not their own hardcoded fallback")
+
+
+def test_stalled_red_is_contextual_on_whether_the_graph_is_quiet():
+    # Round 4 item 1c: "their COLOR depends on context: red/warm only
+    # when OTHER cards are actively receiving... neutral grey when the
+    # whole queue is quiet". Pinned end to end: drawCard takes a
+    # graphQuiet flag, the stalled top border reads it too (not just the
+    # connector rings), and draw.ts actually threads the SAME
+    # isGraphQuiet() result it already computes for the dim-alpha fix
+    # through to drawCard, plus excludes a globally-quiet stall from the
+    # "N need attention" count (a gate always still counts).
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "graphQuiet" in cards_src
+    assert 'ctx.strokeStyle = graphQuiet ? PALETTE.textDim : PALETTE.red;' in cards_src, (
+        "the stalled card's top border must downgrade to neutral when "
+        "the whole graph is quiet, not just the connector dot rings")
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "drawCard(ctx, n, m, cardState, now, graphQuiet);" in draw_src, (
+        "draw.ts must pass its own graphQuiet signal into drawCard")
+    assert 'cardState === "stalled" && !graphQuiet' in draw_src, (
+        "a stalled card must only inflate needAttentionCount while the "
+        "graph is NOT globally quiet -- a gate ('waiting_gate') always "
+        "counts regardless")
 
 
 def test_waiting_gate_state_gets_magenta_stripe_distinct_from_stalled_red():
@@ -512,24 +545,51 @@ def test_buffer_bar_is_a_per_card_rolling_peak_gauge_drawn_thicker():
         "item 4: the Tokens flow-gauge bar must be 7px (thicker than the "
         "orange Step bar's 4px default), directly under the token value")
 
+    # Round 4 item 2a retired BUFFER_PEAK_DECAY along with the rest of the
+    # peak-relative model (see test_task_card_gets_a_throughput_buffer_bar_
+    # that_drains above) -- lastTokenFlowAt is the part of this contract
+    # that's still real: the bar drains off SIGNAL-SPECIFIC silence, never
+    # the general lastSignalAt a heartbeat alone would also bump.
     state_src = _read(_LIVE / "graphState.ts")
-    assert "BUFFER_PEAK_DECAY" in state_src and "lastTokenFlowAt" in state_src, (
-        "the buffer bar must drain off SIGNAL-SPECIFIC silence "
-        "(lastTokenFlowAt), never the general lastSignalAt a heartbeat "
-        "alone would also bump")
+    assert "lastTokenFlowAt" in state_src
 
 
 def test_hud_hero_meter_is_log_scale_with_fixed_pips():
-    hud_src = _read(_LIVE / "hud.ts")
-    assert "export function logMeterFrac(" in hud_src, (
+    # Round 4 item 2a moved the scale out of hud.ts into scale.ts, a
+    # dedicated shared module, so cards.ts's per-node buffer bar can use
+    # the EXACT same law (see test_buffer_bar_shares_the_hud_log_scale
+    # below) instead of drifting into its own peak-relative model again
+    # (critic 5's "second offense" against the same bug class).
+    scale_src = _read(_LIVE / "scale.ts")
+    assert "export function logMeterFrac(" in scale_src, (
         "item 5: the hero tok/s meter needs a FIXED-anchor log scale so "
         "length is monotonic with the number regardless of what the "
         "recent history's own max happens to be")
-    assert "LOG_METER_PIPS = [10, 100, 1_000, 10_000]" in hud_src, (
+    assert "LOG_METER_PIPS = [10, 100, 1_000, 10_000]" in scale_src, (
         "the fixed pips must be literally 10/100/1k/10k per the brief")
+
+    hud_src = _read(_LIVE / "hud.ts")
+    assert 'from "./scale"' in hud_src, "hud.ts must import the shared scale, not redefine it"
     assert "drawLogMeter(ctx, x, rowY + 30, meterW, totals.tokS, PALETTE.teal);" in hud_src, (
         "the hero row must actually use the log meter, not the old "
         "totals.tokS / recentMax(...) moving-target scale")
+
+
+def test_buffer_bar_shares_the_hud_log_scale():
+    # Round 4 item 2a: "One shared scale util: the same fixed log scale
+    # ... drives BOTH the HUD hero meter and every card's throughput
+    # bar." Pinned as an actual shared import, not just two modules that
+    # happen to compute the same formula independently (which is exactly
+    # how round3's HUD fix and round2's per-card model drifted apart).
+    scale_src = _read(_LIVE / "scale.ts")
+    state_src = _read(_LIVE / "graphState.ts")
+    hud_src = _read(_LIVE / "hud.ts")
+    assert 'from "./scale"' in state_src, (
+        "graphState.ts's buffer-bar fraction must import scale.ts's "
+        "logMeterFrac rather than compute its own peak-relative ratio")
+    assert 'import { logMeterFrac' in state_src or "logMeterFrac(" in state_src
+    assert "export function logMeterFrac(" in scale_src
+    assert 'from "./scale"' in hud_src
 
 
 def test_connector_dots_fade_continuously_with_signal_age():
@@ -605,3 +665,179 @@ def test_reconcile_reclassifies_a_subtask_misplaced_as_a_root_task():
         "misclassification the moment a self-heal snapshot reveals the "
         "node's true kind/parent")
     assert "this.layout.reslotAsSubtask(sn.id, parentId)" in state_src
+
+
+# ---------------------------------------------------------------------------
+# Round 4 (gauntlet: quiet-dim blackout root cause, throughput bar
+# honesty second offense, queue glyph, no bare hex ids, marker comet
+# tail, selection outline). Pinned against E:\gamify-lab\R4_BRIEF.md's
+# numbered fix list. PROTECT THE WINS: piece 2 (edge motion) and piece 4
+# (idle) won blind in round 3 -- every assertion below is additive to
+# those, never a removal of the ticking signal-age chip, the quiet line,
+# or the scrolling sparkline.
+# ---------------------------------------------------------------------------
+
+def test_quiet_dim_eases_in_instead_of_snapping():
+    # Item 1a root cause (see the task's final report for the full
+    # evidence chain): the 0.85 dim FACTOR itself was already correct
+    # (never the inverted 0.15) -- the bug was a hard boolean snap
+    # landing on every card in the same frame, which read as a
+    # synchronized "collapse" (critic 3, pixel-verified). idle.ts now
+    # exposes a continuous quietDimAlpha() and draw.ts uses ITS result
+    # (not a bare isGraphQuiet() ? 0.85 : 1 ternary) for globalAlpha.
+    idle_src = _read(_LIVE / "idle.ts")
+    assert "export function quietDimAlpha(" in idle_src
+    assert "QUIET_DIM_FLOOR = 0.85" in idle_src, (
+        "the dim floor must stay ~15% dimming (alpha ~0.85), never the "
+        "inverted 0.15 the brief asked us to rule out")
+    assert "EASE_MS" in idle_src, (
+        "the dim must ease in over ~2s, not snap in one step")
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "quietDimAlpha(state, now)" in draw_src
+    assert "ctx.globalAlpha = dimAlpha;" in draw_src, (
+        "draw.ts must apply the eased alpha, not re-derive its own "
+        "binary 0.85-or-1 snap")
+
+
+def test_hud_cumulative_counts_never_zero_only_rates_do():
+    # Item 1b root cause: the HUD's hero number used to BE the decaying
+    # tok/s RATE (totals.tokS), so the single most visually dominant
+    # value on the canvas crashed to 0 the instant flow paused -- read by
+    # critics as "tasks 1.5K->0, sessions 2->0" collapsing. tokensTotal
+    # (summed from each session's own monotonic tokens_total) and
+    # agentsTotal (every session-kind node present, not just ones
+    # mid-tick) are the new headline values; only the genuinely-rate
+    # fields (tokS, agentsLiveNow, gatesWaiting) are allowed to read 0.
+    hud_src = _read(_LIVE / "hud.ts")
+    assert "tokensTotal: number;" in hud_src, (
+        "HudTotals needs a cumulative tokens-total field distinct from "
+        "the tok/s rate")
+    assert "agentsTotal += 1;" in hud_src, (
+        "agentsTotal must count every session-kind node present, not "
+        "just ones with tok_s>0 right now")
+    assert "tasksInFlight += 1;" in hud_src, (
+        "a cumulative tasks-in-flight count must exist so the combined "
+        "'tasks in flight / gates waiting' row (design directive) never "
+        "reads as a crashing task counter")
+    # The hero row's BIG number is the cumulative total; the RATE is
+    # relegated to the small dim sub-label where reading '0/s' is honest,
+    # not alarming.
+    assert 'drawGhostable(\n    ctx, `${fmtBig(totals.tokensTotal)}`' in hud_src or (
+        "fmtBig(totals.tokensTotal)" in hud_src
+    ), "the hero row's big value must be the cumulative total, not the rate"
+
+
+def test_agents_row_shades_live_vs_present_without_zeroing_the_count():
+    # Item 1b: the segmented meter must distinguish "how many agents
+    # exist" (never zeroes) from "how many are producing right now" (a
+    # genuine rate, allowed to zero) via shading, not by dropping the
+    # count itself.
+    hud_src = _read(_LIVE / "hud.ts")
+    assert "liveN?: number" in hud_src or "liveN?:" in hud_src, (
+        "drawSegments must accept an optional live-count so the agents "
+        "row can shade present-but-quiet units distinctly from the "
+        "currently-transmitting ones")
+    assert "totals.agentsTotal, 12, PALETTE.teal, totals.agentsLiveNow" in hud_src
+
+
+def test_contextual_signal_chip_color_never_reads_as_mass_crash():
+    # Item 1c: covered end-to-end by
+    # test_stalled_red_is_contextual_on_whether_the_graph_is_quiet above
+    # (palette.ts + cards.ts + draw.ts). This test additionally protects
+    # the win: the ticking "Ns since signal" chip TEXT itself (critic 4
+    # loved it) must keep rendering unconditionally -- round 4 only
+    # recolors the RING/BORDER around it, never removes or mutes the
+    # chip.
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "since signal" in cards_src
+    assert "SIGNAL_AGE_CHIP_MS" in cards_src
+
+
+def test_queue_glyph_caps_with_overflow_count():
+    # Item 3: "1 square per queued child, cap ~5 with a +N".
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "QUEUE_GLYPH_CAP = 5" in cards_src
+    assert "m.queueDepth > QUEUE_GLYPH_CAP" in cards_src, (
+        "queueDepth beyond the cap must render a '+N' overflow caption, "
+        "not silently stop at the cap with no indication more exist")
+
+
+def test_scenario_seeds_permanently_queued_children_for_the_glyph():
+    # Item 3 (rig, not product): scenario.py must give the root task 2
+    # children that stay pending/never-advanced the whole movie so
+    # queue_depth > 0 is actually witnessable on film (api/work.py's
+    # _queue_depth counts pending children with no workflow_step).
+    scenario_src = (Path(r"E:\gamify-lab\sim\scenario.py")).read_text(encoding="utf-8")
+    assert "queued" in scenario_src.lower()
+    assert "set_parent(" in scenario_src
+
+
+def test_no_bare_hex_id_labels_ever():
+    # Item 4: session cards and task/subtask placeholders used to label
+    # themselves `id.slice(0, 8)` -- a raw hex fragment -- until a later
+    # event happened to backfill something readable. Now both fall back
+    # to human text (role · driven-task-title, or a plain "starting"
+    # caption), never the id.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "id.slice(0, 8)" not in state_src, (
+        "no node label may ever fall back to a raw id fragment")
+    assert "function sessionLabelFor(" in state_src
+    assert "function placeholderTaskLabel(" in state_src
+
+
+def test_marker_comet_tail_shows_travel_direction():
+    # Item 5: "give markers a short comet tail (2-3 fading trail dots)
+    # indicating travel direction" -- protecting piece 2's win (the
+    # marker itself, its cadence, its outline) while fixing the residual
+    # ambiguity on a vertical wire.
+    packets_src = _read(_LIVE / "packets.ts")
+    assert "TRAIL_STEPS" in packets_src
+    assert "p.t - i * TRAIL_T_GAP" in packets_src, (
+        "trail dots must sit BEHIND the head along the same polyline "
+        "fraction, not be drawn as a generic glow")
+
+
+def test_marker_flicker_fixed_by_topping_up_flowing_wires():
+    # Item 5's other residual: "marker visibility flickers off in
+    # roughly 1 of 3 sampled frames on a busy wire". Root cause: real
+    # tokens.turn events arrive about once a second while a short wire's
+    # travel time can be shorter than that, so the wire legitimately
+    # empties between spawns. Fixed by topping up any wire graphState
+    # already knows is flowing (isEdgeFlowing, itself only ever set by
+    # real events) the moment it has zero packets in flight -- never a
+    # bare timer manufacturing motion.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "private ensureFlowingWiresCarryAMarker(" in state_src
+    assert "this.ensureFlowingWiresCarryAMarker(now);" in state_src, (
+        "step() must actually call the top-up every frame")
+    assert "this.isEdgeFlowing(e.source, e.target, now)" in state_src, (
+        "the top-up must gate on the real recent-flow signal, never "
+        "spawn on a wire that hasn't actually carried flow")
+
+
+def test_selection_gets_a_lift_in_addition_to_the_outline():
+    # Item 6: "steady orange 2px outline + slight card lift" -- the
+    # outline alone was already pinned (round1); this adds the lift.
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "const lifted = n.selected;" in cards_src
+    assert "ctx.translate(0, -3);" in cards_src, (
+        "a selected card must visually lift a few px, not just gain an "
+        "outline in place")
+    assert "ctx.shadowBlur" in cards_src, (
+        "the lift should read as elevation (a soft shadow), not just a "
+        "silent position shift")
+
+
+def test_session_cards_get_the_same_throughput_bar_as_tasks():
+    # Item 2b: "the fastest-moving leaf nodes carry no bar at all" -- the
+    # old `if (n.kind !== "session")` guard around the buffer-bar block
+    # is gone, and draw.ts's per-session CardMetrics now reads the node's
+    # real bufferFrac instead of hardcoding 0.
+    cards_src = _read(_LIVE / "cards.ts")
+    assert 'if (n.kind !== "session") {\n    const barW' not in cards_src, (
+        "the buffer bar block must no longer exclude session cards")
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "bufferFrac: node.bufferFrac," in draw_src, (
+        "a session card's CardMetrics.bufferFrac must read the node's "
+        "real field, not a hardcoded 0")

@@ -13,6 +13,7 @@
 import type { GraphState } from "./graphState";
 import { PALETTE, glyphFor } from "./palette";
 import { drawGhostable } from "./cards";
+import { logMeterFrac, logMeterPipFrac, LOG_METER_PIPS } from "./scale";
 
 const PAD = 14;
 const PANEL_W = 320;
@@ -21,42 +22,78 @@ const STAT_H = 40;
 const SPARK_H = 46;
 const GHOST_MS = 650;
 
+/** Round 4 item 1b (quiet-dim blackout root cause #2): a HUD row's BIG
+ * headline value must be a value that only moves on a real state change
+ * -- never a decaying RATE. Round1-3's hero row put the raw tok/s RATE
+ * (totals.tokS, decayed to 0 by graphState's QUIET_DECAY_MS) in the big
+ * 26px slot, so the single most visually dominant number on the whole
+ * canvas crashed to 0 the instant flow paused -- critic 3's "tasks
+ * 1.5K->0, sessions 2->0" reads as exactly this (a big corner number
+ * hitting zero), and critic 1's "reads as a system crash" is the same
+ * root cause from a different angle. `tokensTotal` (summed from each
+ * session's own monotonic tokens_total counter) and `agentsTotal` (every
+ * session-kind node currently on the graph, not just ones mid-tick) never
+ * drop just because the queue went quiet -- only genuinely RATE-shaped
+ * numbers (tokS, agentsLiveNow, gatesWaiting) are allowed to read 0. */
 export type HudTotals = {
+  /** Cumulative sum of every session's own tokens_total -- monotonic,
+   * never decays. This is the hero row's BIG number now. */
+  tokensTotal: number;
+  /** Aggregate rate across live sessions -- legitimately 0 when quiet;
+   * shown as a small dim sub-label AND still drives the log meter (the
+   * bar honestly reads "nothing flowing right now" while the headline
+   * number keeps the session's real total in view). */
   tokS: number;
   spendUsd: number;
-  agentsLive: number;
+  /** Every session-kind node present on the graph, live or gone quiet --
+   * cumulative, never zeroes just because nobody's mid-tick right now. */
+  agentsTotal: number;
+  /** Subset of agentsTotal currently emitting tok_s>0 -- a genuine RATE,
+   * allowed to read 0. Drives the segmented meter's bright-vs-dim split. */
+  agentsLiveNow: number;
+  /** Task/subtask nodes not yet done/cancelled -- cumulative, never
+   * zeroes from mere silence (item 1b: "tasks count... never zero"). */
+  tasksInFlight: number;
   gatesWaiting: number;
 };
 
 export function computeHudTotals(state: GraphState): HudTotals {
+  let tokensTotal = 0;
   let tokS = 0;
   let spendUsd = 0;
-  let agentsLive = 0;
+  let agentsTotal = 0;
+  let agentsLiveNow = 0;
+  let tasksInFlight = 0;
   let gatesWaiting = 0;
   for (const n of state.nodes) {
     if (n.kind === "session") {
-      if (n.tok_s && n.tok_s > 0) agentsLive += 1;
+      agentsTotal += 1;
+      tokensTotal += n.tokens_total || 0;
+      if (n.tok_s && n.tok_s > 0) agentsLiveNow += 1;
       tokS += n.tok_s || 0;
     } else {
       if (n.gate_state === "pending") gatesWaiting += 1;
+      if (n.status !== "done" && n.status !== "cancelled") tasksInFlight += 1;
       spendUsd += n.spend_usd || 0;
     }
   }
-  return { tokS, spendUsd, agentsLive, gatesWaiting };
+  return { tokensTotal, tokS, spendUsd, agentsTotal, agentsLiveNow, tasksInFlight, gatesWaiting };
 }
 
 // Module-scope ghost bookkeeping: the HUD's numbers are derived
 // aggregates with no natural "node" to hang a ghostUntil timestamp on
 // (unlike cards.ts), so a small closure-local record does the same job.
 let prevTotals: HudTotals | null = null;
-const ghostUntil = { tokS: 0, spendUsd: 0, agentsLive: 0, gatesWaiting: 0 };
+const ghostUntil = { tokensTotal: 0, spendUsd: 0, agentsTotal: 0, tasksGates: 0 };
 
 function updateGhosts(t: HudTotals, now: number): void {
   if (prevTotals) {
-    if (Math.round(t.tokS) !== Math.round(prevTotals.tokS)) ghostUntil.tokS = now + GHOST_MS;
+    if (Math.round(t.tokensTotal) !== Math.round(prevTotals.tokensTotal)) ghostUntil.tokensTotal = now + GHOST_MS;
     if (t.spendUsd.toFixed(2) !== prevTotals.spendUsd.toFixed(2)) ghostUntil.spendUsd = now + GHOST_MS;
-    if (t.agentsLive !== prevTotals.agentsLive) ghostUntil.agentsLive = now + GHOST_MS;
-    if (t.gatesWaiting !== prevTotals.gatesWaiting) ghostUntil.gatesWaiting = now + GHOST_MS;
+    if (t.agentsTotal !== prevTotals.agentsTotal) ghostUntil.agentsTotal = now + GHOST_MS;
+    if (t.tasksInFlight !== prevTotals.tasksInFlight || t.gatesWaiting !== prevTotals.gatesWaiting) {
+      ghostUntil.tasksGates = now + GHOST_MS;
+    }
   }
   prevTotals = t;
 }
@@ -91,35 +128,14 @@ function drawMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.fillRect(x, y, Math.max(0, Math.min(1, frac)) * w, h);
 }
 
-/** Round 3 item 5 (HUD meter honesty): the hero tok/s meter used to
- * normalize against `recentMax(tokSHistory)` -- a MOVING target, so the
- * bar's length answered "relative to the last 5 minutes' own peak", not
- * "how big is this number". Verified against critic 5's own numbers: 34
- * tok/s read ~87% full while 2.1K read shorter at ~78%, and both 2.3K
- * and 5.2K pinned to ~100% -- because whichever value happened to be the
- * recent max redefined the scale out from under every other reading.
- * LOG_MIN..LOG_MAX are FIXED anchors (never recomputed from history), so
- * length is monotonic with the number, always: 10 always maps to the
- * same x, 100 always further right than 10, 10k always maps to the same
- * x regardless of what this session's peak happens to be. */
-const LOG_METER_MIN = 1; // floor -- anything below this still reads as "just above empty"
-const LOG_METER_MAX = 10_000;
-const LOG_METER_PIPS = [10, 100, 1_000, 10_000];
-
-export function logMeterFrac(value: number): number {
-  if (value <= 0) return 0;
-  const clamped = Math.max(LOG_METER_MIN, Math.min(LOG_METER_MAX, value));
-  return Math.log10(clamped / LOG_METER_MIN) / Math.log10(LOG_METER_MAX / LOG_METER_MIN);
-}
-
-function pipFrac(pipValue: number): number {
-  return Math.log10(pipValue / LOG_METER_MIN) / Math.log10(LOG_METER_MAX / LOG_METER_MIN);
-}
-
-/** Fixed-scale log meter with tick marks at LOG_METER_PIPS (10/100/1k/
- * 10k) -- the pips themselves never move, only the fill does, which is
- * what makes the scale legible/checkable at a glance instead of trusted
- * blind. */
+/** Round 3 item 5 (HUD meter honesty), round 4 item 2a (SHARED scale):
+ * `logMeterFrac`/`LOG_METER_PIPS` now live in scale.ts so cards.ts's
+ * per-node throughput bar can point at the exact same fixed anchors --
+ * see scale.ts's doc comment for the full "second offense" history.
+ * LOG_MIN..LOG_MAX are FIXED (never recomputed from history), so length
+ * is monotonic with the number, always: 10 always maps to the same x,
+ * 100 always further right than 10, 10k always maps to the same x
+ * regardless of what this session's peak happens to be. */
 function drawLogMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, value: number, color: string): void {
   const h = 5;
   ctx.fillStyle = "rgba(255,255,255,0.08)";
@@ -128,22 +144,37 @@ function drawLogMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
   ctx.fillRect(x, y, logMeterFrac(value) * w, h);
   ctx.fillStyle = "rgba(18,22,32,0.85)";
   for (const pip of LOG_METER_PIPS) {
-    const px = x + pipFrac(pip) * w;
+    const px = x + logMeterPipFrac(pip) * w;
     ctx.fillRect(px - 0.5, y - 1, 1, h + 2);
   }
 }
 
-/** Segmented block meter for a small integer count (agents live, gates
- * waiting) — the grammar's "stacked hollow squares" language, but FILLED
- * per active unit so it doubles as a mini bar chart rather than a bare
- * number. */
-function drawSegments(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, count: number, cap: number, color: string): void {
+/** Segmented block meter for a small integer count (agents, tasks in
+ * flight, gates waiting) — the grammar's "stacked hollow squares"
+ * language, but FILLED per active unit so it doubles as a mini bar chart
+ * rather than a bare number.
+ *
+ * Round 4 item 1b: an optional `liveN` splits the filled segments into
+ * two shades -- BRIGHT for units currently producing (0..liveN) and a
+ * DIMMER-but-still-visibly-present tone for units that exist but are
+ * momentarily quiet (liveN..count). This is what lets the "agents" row
+ * show its count as a stable, never-zeroing cumulative total while still
+ * being honest that not all of them are transmitting RIGHT NOW, without
+ * needing a second number or row. */
+function drawSegments(
+  ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
+  count: number, cap: number, color: string, liveN?: number,
+): void {
   const n = Math.min(cap, Math.max(0, count));
+  const live = liveN === undefined ? n : Math.min(n, Math.max(0, liveN));
   const gap = 3;
   const segW = (w - gap * (cap - 1)) / cap;
   for (let i = 0; i < cap; i++) {
     const sx = x + i * (segW + gap);
-    ctx.fillStyle = i < n ? color : "rgba(255,255,255,0.08)";
+    let fill = "rgba(255,255,255,0.08)";
+    if (i < live) fill = color;
+    else if (i < n) fill = "rgba(45,212,191,0.32)"; // present but quiet right now
+    ctx.fillStyle = fill;
     ctx.fillRect(sx, y, Math.max(1, segW), 5);
   }
 }
@@ -181,22 +212,29 @@ export function drawHud(ctx: CanvasRenderingContext2D, state: GraphState, now: n
 
   const meterW = PANEL_W - 24 - 24;
 
-  // Hero row: tok/s, bigger than every other value on the panel.
+  // Hero row: round 4 item 1b -- the BIG number is now the cumulative
+  // tokens total (never zeroes just because flow paused), with the
+  // live RATE as a small dim sub-label ("N/s across live sessions" can
+  // honestly read "0/s" while quiet without reading as a crash, because
+  // it's clearly labeled a rate sitting next to a total that hasn't
+  // moved). The log meter still gauges the RATE (totals.tokS) on the
+  // shared fixed scale -- a bar honestly emptying while the headline
+  // number holds still is the correct "paused, not dead" read.
   let rowY = top + 6;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   ctx.fillStyle = PALETTE.textLabel;
   ctx.font = "13px system-ui, sans-serif";
   ctx.fillText("◈", x, rowY);
-  const heroGhost = ghostFracFor(ghostUntil.tokS, now);
+  const heroGhost = ghostFracFor(ghostUntil.tokensTotal, now);
   drawGhostable(
-    ctx, `${fmtBig(totals.tokS)}`, x + 24, rowY, PALETTE.teal,
+    ctx, `${fmtBig(totals.tokensTotal)}`, x + 24, rowY, PALETTE.teal,
     "700 26px ui-monospace, SFMono-Regular, monospace", heroGhost.active, heroGhost.frac,
   );
   ctx.fillStyle = PALETTE.textDim;
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText("tok/s across live sessions", x + 24, rowY + 20);
+  ctx.fillText(`tokens total  ·  ${fmtBig(totals.tokS)}/s now`, x + 24, rowY + 20);
   drawLogMeter(ctx, x, rowY + 30, meterW, totals.tokS, PALETTE.teal);
   rowY += HERO_H;
 
@@ -208,22 +246,42 @@ export function drawHud(ctx: CanvasRenderingContext2D, state: GraphState, now: n
   );
   rowY += STAT_H;
 
-  // Agents live — segmented teal blocks.
+  // Agents — round 4 item 1b: the printed count is agentsTotal (every
+  // session-kind node present, cumulative -- never zeroes just because
+  // nobody's mid-tick right now), the segmented meter shades the
+  // currently-transmitting subset bright and the rest dim-but-present,
+  // so "how many agents exist" and "how many are producing this instant"
+  // both read at a glance without a second number.
   statRow(
-    ctx, x, rowY, meterW, "●", `${totals.agentsLive}`, PALETTE.textPrimary,
-    ghostFracFor(ghostUntil.agentsLive, now),
-    () => drawSegments(ctx, x, rowY + 12, meterW, totals.agentsLive, 12, PALETTE.teal),
+    ctx, x, rowY, meterW, "●", `${totals.agentsTotal}`, PALETTE.textPrimary,
+    ghostFracFor(ghostUntil.agentsTotal, now),
+    () => drawSegments(ctx, x, rowY + 12, meterW, totals.agentsTotal, 12, PALETTE.teal, totals.agentsLiveNow),
   );
   rowY += STAT_H;
 
-  // Gates waiting — segmented magenta blocks; the ONLY row that ever
-  // reads as an alarm (locked palette: magenta = "needs a decision").
+  // Tasks in flight / gates waiting — design directive's combined row:
+  // "tasks in flight / gates waiting (magenta count when >0)". Normally
+  // shows tasksInFlight (cumulative -- never zeroes from mere silence,
+  // item 1b's exact ask), and switches to the magenta gate count + label
+  // the moment ANY gate is pending, the ONLY row that ever reads as an
+  // alarm (locked palette: magenta = "needs a decision").
+  const gateAlarm = totals.gatesWaiting > 0;
   statRow(
-    ctx, x, rowY, meterW, "◆", `${totals.gatesWaiting}`,
-    totals.gatesWaiting > 0 ? PALETTE.magenta : PALETTE.textPrimary,
-    ghostFracFor(ghostUntil.gatesWaiting, now),
-    () => drawSegments(ctx, x, rowY + 12, meterW, totals.gatesWaiting, 8, PALETTE.magenta),
+    ctx, x, rowY, meterW,
+    gateAlarm ? "◆" : "▣",
+    gateAlarm ? `${totals.gatesWaiting}` : `${totals.tasksInFlight}`,
+    gateAlarm ? PALETTE.magenta : PALETTE.textPrimary,
+    ghostFracFor(ghostUntil.tasksGates, now),
+    () => drawSegments(
+      ctx, x, rowY + 12, meterW,
+      gateAlarm ? totals.gatesWaiting : totals.tasksInFlight, gateAlarm ? 8 : 12,
+      gateAlarm ? PALETTE.magenta : "rgba(154,166,189,0.7)",
+    ),
   );
+  ctx.fillStyle = PALETTE.textDim;
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText(gateAlarm ? "gates waiting" : "tasks in flight", x + meterW, rowY);
   rowY += STAT_H - 4;
 
   // Sparkline: aggregate tok/s trend, taller with a filled area under

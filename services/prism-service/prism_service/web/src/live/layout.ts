@@ -14,7 +14,10 @@ export const BASE_CARD_W = 236;
 // without cramping the rows already below it (Step bar, Spend, gate).
 export const BASE_TASK_H = 128;
 export const BASE_SUB_H = 108;
-export const BASE_SESSION_H = 60;
+// Round 4 item 2b: session cards now also carry a throughput buffer bar
+// row (cards.ts no longer excludes `kind === "session"` from it), so the
+// card needs room for Title + Tokens row + bar, not just Title + Tokens.
+export const BASE_SESSION_H = 82;
 const COL_GAP = 96;
 const ROW_GAP = 22;
 const ORIGIN_X = 48;

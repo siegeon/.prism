@@ -70,15 +70,32 @@ export function glyphFor(kind: "task" | "subtask" | "session", role?: string | n
  * alarm-red. */
 export type CardState = "working" | "waiting_gate" | "stalled" | "young" | "done";
 
-export function deadRingColorFor(state: CardState): string {
-  if (state === "stalled") return PALETTE.red;
+/** Round 4 item 1c SUPERSEDES round1's unconditional "stalled -> red"
+ * rule: critic 1's residual was "red 'Xs since signal' stacking on every
+ * node with no recovery -- reads as a system crash, not a live graph
+ * with one blocked path". Root cause: when the WHOLE queue goes quiet,
+ * every card's lastSignalAt stops advancing at roughly the same moment,
+ * so every card crosses STALL_MS together and turns red in lockstep --
+ * indistinguishable from an actual mass failure. Red stays reserved for
+ * a card that's dead WHILE OTHERS ARE STILL WORKING (a genuinely
+ * anomalous, locally-blocked path); once the graph as a whole reads
+ * quiet (`graphQuiet`, draw.ts's isGraphQuiet), a stalled card downgrades
+ * to the same neutral treatment as YOUNG -- still visibly "not fresh"
+ * (the ring/border still draws, still fades with signalFreshness), just
+ * not an alarm, because silence-while-everything-is-silent is expected,
+ * not a crash. `deriveCardState` itself is untouched -- a card is still
+ * STRUCTURALLY "stalled" (its own signal really did go stale); only the
+ * COLOR this function hands back is context-dependent, per the build
+ * directive: "keep them ticking... but their COLOR depends on context." */
+export function deadRingColorFor(state: CardState, graphQuiet = false): string {
+  if (state === "stalled") return graphQuiet ? PALETTE.textDim : PALETTE.red;
   if (state === "waiting_gate") return PALETTE.magenta;
   return PALETTE.textDim; // young / working / done — never red
 }
 
-export function titleTintFor(state: CardState): string {
+export function titleTintFor(state: CardState, graphQuiet = false): string {
   if (state === "waiting_gate") return "#3a2f45"; // magenta-tinted slate
-  if (state === "stalled") return "#2e2a2a"; // desaturated, faintly cool-red
+  if (state === "stalled") return graphQuiet ? PALETTE.cardTitle : "#2e2a2a"; // neutral while the whole queue is quiet
   if (state === "done") return PALETTE.cardTitleDone;
   if (state === "working") return "#2c3550"; // teal-tinted slate
   return PALETTE.cardTitle; // young — the plain neutral default

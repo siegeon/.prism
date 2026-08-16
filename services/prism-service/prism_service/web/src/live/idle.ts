@@ -93,3 +93,26 @@ export function isGraphQuiet(state: { lastEventAt: number }, now: number): boole
   if (!state.lastEventAt) return false;
   return now - state.lastEventAt > QUIET_MS;
 }
+
+/** Round 4 item 1a (quiet-dim blackout): critic 3 (pixel-verified) caught
+ * "between t=68s and t=72s the ENTIRE canvas... collapses into
+ * near-total darkness simultaneously... a synchronized whole-dashboard
+ * blackout that reads as a crash" over a ~4s window. The dim FACTOR
+ * itself was already correct (draw.ts applies globalAlpha=0.85, i.e.
+ * ~15% dimming, never the inverted 0.15) -- the bug was that
+ * `isGraphQuiet` is a hard boolean, so the alpha SNAPPED from 1.0 to
+ * 0.85 in a single frame the instant QUIET_MS elapsed, and that single-
+ * frame snap landing at the same moment on EVERY card simultaneously is
+ * exactly what read as a synchronized "collapse". This eases the same
+ * 0.85 floor in continuously over EASE_MS once the quiet threshold is
+ * crossed, so the dim is a visible but gentle settle, not a cut. */
+const EASE_MS = 2_000;
+const QUIET_DIM_FLOOR = 0.85;
+
+export function quietDimAlpha(state: { lastEventAt: number }, now: number): number {
+  if (!state.lastEventAt) return 1;
+  const sinceLastEvent = now - state.lastEventAt;
+  if (sinceLastEvent <= QUIET_MS) return 1;
+  const easeFrac = Math.min(1, (sinceLastEvent - QUIET_MS) / EASE_MS);
+  return 1 - (1 - QUIET_DIM_FLOOR) * easeFrac;
+}
