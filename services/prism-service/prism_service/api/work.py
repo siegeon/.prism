@@ -312,10 +312,22 @@ def sim_tokens(project: str = Query("default"), row: dict = Body(...)) -> dict:
 
     from prism_service.events import bus
 
+    # gamify round6 item 2 (atomic card+wire): this dev-only door is what
+    # the recording rig's scenario actually drives tokens.turn through --
+    # see task_service.py's task.changed publish for the full rationale.
+    parent_id = ""
+    try:
+        ctx = get_project(project)
+        obj = ctx.task_svc.get(row.get("task_id"))
+        parent_id = (getattr(obj, "parent_id", "") or "") if obj else ""
+    except Exception:
+        pass
+
     event = {
         "project": project,
         "type": "tokens.turn",
         "task_id": row.get("task_id"),
+        "parent_id": parent_id,
         "session_id": row.get("session_id"),
         "out_tokens": row.get("out_tokens", 0),
         "dt_s": row.get("dt_s", 1.0),

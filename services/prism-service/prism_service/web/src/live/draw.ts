@@ -11,10 +11,11 @@ import { drawCard, type CardMetrics } from "./cards";
 import { drawWire, routeOrthogonal, type WireKind } from "./wires";
 import { drawPackets } from "./packets";
 import { drawHud, drawLegend } from "./hud";
-import { drawLoading, drawQuietLine, isGraphQuiet, quietDimAlpha } from "./idle";
+import { drawLoading, drawQuietLine, isGraphQuiet } from "./idle";
 import { drawToasts } from "./toasts";
 import { drawGatePanel } from "./gatepanel";
 import { PALETTE } from "./palette";
+import { logMeterFrac } from "./scale";
 
 function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, pan: { x: number; y: number }, zoom: number): void {
   ctx.fillStyle = PALETTE.ground;
@@ -35,6 +36,43 @@ function edgeKind(k: "parent_of" | "driven_in"): WireKind {
   return k === "driven_in" ? "token" : "structure";
 }
 
+/** `import.meta.env` isn't declared anywhere in this project (no
+ * vite-env.d.ts, no `types: ["vite/client"]` in tsconfig.app.json) -- a
+ * narrow local cast reads Vite's real, statically-replaced-at-build-time
+ * DEV flag (and the dead branch is eliminated from the prod bundle same
+ * as any other `import.meta.env.DEV` check) without widening this
+ * project's global type surface just for one dev-only assertion. */
+const isDevBuild = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;
+
+/** Round 6 item 2 (atomic card+wire) defensive invariant: dev-mode only,
+ * asserts EVERY card that has a KNOWN parent/driver (a subtask with
+ * parentTaskId set, or a session with driverOfId set) actually has its
+ * incident edge present in state.edges. A root task card is legitimately
+ * edge-less (it has no parent) and is never counted here. This is a
+ * regression guard for the exact r5 critic finding ("several nodes
+ * sitting isolated on screen with no wire to anything for a sustained
+ * span") -- graphState.ts's ensureTaskNode/reclassifyAsSubtask are the
+ * actual fix; this only makes a future regression LOUD in dev instead of
+ * silently reintroducing an orphan. Stripped from the prod build like any
+ * other import.meta.env.DEV-gated block (Vite dead-code-eliminates it). */
+function assertAtomicCardWireInvariant(state: GraphState): void {
+  let orphanCount = 0;
+  for (const n of state.nodes) {
+    const needsParentEdge = n.kind === "subtask" && !!n.parentTaskId;
+    const needsDriverEdge = n.kind === "session" && !!n.driverOfId;
+    if (!needsParentEdge && !needsDriverEdge) continue;
+    const hasEdge = state.edges.some((e) => (
+      (needsParentEdge && e.kind === "parent_of" && e.source === n.parentTaskId && e.target === n.id)
+      || (needsDriverEdge && e.kind === "driven_in" && e.source === n.id && e.target === n.driverOfId)
+    ));
+    if (!hasEdge) orphanCount += 1;
+  }
+  console.assert(
+    orphanCount === 0,
+    `atomic card+wire invariant violated: ${orphanCount} card(s) with a known parent/driver rendered with no incident edge`,
+  );
+}
+
 /** Roll a task/subtask card's own token stat up from every session
  * driven_in to it — a fan-out task shows the SUM of its agents' output,
  * not a blank row, even though the backend only stamps tok_s on session
@@ -42,14 +80,21 @@ function edgeKind(k: "parent_of" | "driven_in"): WireKind {
 function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics {
   if (node.kind === "session") {
     const live = !!node.tok_s && node.tok_s > 0;
+    const tokS = node.tok_s || 0;
     return {
       tokS: node.tok_s, tokensTotal: node.tokens_total, tokensLive: live,
       step: "", stepBarFrac: 0, stepLive: false,
       gatePending: false, gateLabel: "", queueDepth: 0,
-      // Round 4 item 2b: a session card gets the same throughput bar as
-      // a task/subtask, sourced from its OWN bufferFrac (computed
-      // uniformly for every node kind in graphState.step()).
-      bufferFrac: node.bufferFrac,
+      // Round 6 item 8 ("every rate has its bar") SUPERSEDES round 4 item
+      // 2b's separately-drained node.bufferFrac: the r5 critic caught a
+      // "dev agent" card printing a live 17.9K [1.5K/s] with a
+      // pixel-identically EMPTY bar (verdicts/round5/piece5_readouts.md)
+      // -- the old bar drained on its OWN 4s clock while the printed rate
+      // decayed on an 8s clock, so any tick gap in between showed a live
+      // number over a dead bar. The bar is now computed from the EXACT
+      // SAME tokS value this row prints, right here, so the two can never
+      // disagree.
+      bufferFrac: logMeterFrac(tokS),
       spendUsd: 0,
     };
   }
@@ -92,7 +137,11 @@ function metricsFor(node: LiveNode, state: GraphState, now: number): CardMetrics
     step: node.workflow_step, stepBarFrac: stepLive ? Math.max(heartbeatFrac, 0.08) : 0, stepLive,
     gatePending: node.gate_state === "pending",
     gateLabel,
-    queueDepth, bufferFrac: node.bufferFrac,
+    // Round 6 item 8: same fixed source of truth as the session branch
+    // above -- the task/subtask card's OWN Tokens row prints this exact
+    // `tokS` (the sum of its driving sessions' rates), so the bar reads
+    // off it directly.
+    queueDepth, bufferFrac: logMeterFrac(tokS),
     spendUsd: node.spend_usd || 0,
   };
 }
@@ -143,18 +192,21 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
   }
   drawPackets(ctx, state.packets);
 
-  // Round 2, piece 4 (honest idle): when the WHOLE graph has been quiet
-  // for a while, every card dims ~15% -- never blanked, never removed,
-  // last real numbers stay exactly as they were (build item 3: "cards
-  // keep their last real numbers, dim ~15%, never blanked"). A single
-  // card's own STALLED state (piece 3) is a separate, per-node signal
-  // (red rings) layered on top of this, not replaced by it. Round 4 item
-  // 1a: the alpha now EASES in over ~2s via idle.ts's quietDimAlpha
-  // instead of snapping in one frame the instant QUIET_MS elapses -- the
-  // snap landing on every card simultaneously is what critic 3 pixel-
-  // verified as a synchronized "collapse".
+  if (isDevBuild) assertAtomicCardWireInvariant(state);
+
+  // Round 6 item 1 REMOVES the whole-canvas quiet dim entirely -- three
+  // rounds of critics read every variant of it ("near-black",
+  // "near-invisible outlines", "uniform low-contrast grey", "the entire
+  // canvas collapses into near-total darkness simultaneously") as a crash,
+  // even the round4 eased version (verdicts/round5/piece1_living_graph.md:
+  // "the entire graph -- every card, every wire -- fades to a uniform
+  // low-contrast grey simultaneously... precisely the anti-pattern to
+  // avoid"). The game never dims. Quiet is communicated ONLY by: rates
+  // reading 0, the quiet line, the scrolling sparkline, and per-card
+  // state -- every card keeps its normal colors at every point in the
+  // film. idle.ts's QUIET_DECAY_MS-driven rate decay (tok_s -> 0) is
+  // untouched; that is the "eased HUD rate decay" this item keeps.
   const graphQuiet = isGraphQuiet(state, now);
-  const dimAlpha = quietDimAlpha(state, now);
   // Round 3 item 8 (idle refinement): counted alongside the per-node
   // cardState computation every frame is already doing (never a second
   // pass) -- feeds the quiet line's "N need attention" branch below.
@@ -163,7 +215,12 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
   // signal is expected (everything stopped together), not an anomaly, so
   // it no longer inflates the count. A pending GATE always needs a
   // decision regardless of how quiet the rest of the graph is.
+  // Round 6 item 3: `stalledAttentionCount` is tracked SEPARATELY from
+  // the combined `needAttentionCount` so the quiet line can color itself
+  // magenta (a decision, not a failure) when every attention-needing card
+  // is a waiting gate, reserving red for a genuine stall.
   let needAttentionCount = 0;
+  let stalledAttentionCount = 0;
   for (const n of state.nodes) {
     const m = metricsFor(n, state, now);
     let cardState = deriveCardState(n, now);
@@ -178,21 +235,13 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
       const driver = state.nodes.find((d) => d.id === n.driverOfId);
       if (driver && driver.status === "done") cardState = "done";
     }
-    if (cardState === "waiting_gate") needAttentionCount += 1;
-    else if (cardState === "stalled" && !graphQuiet) needAttentionCount += 1;
-    ctx.save();
-    // Round 5 item 5 (quiet card floor): dimAlpha alone already floors at
-    // 0.85 (idle.ts's QUIET_DIM_FLOOR) -- this Math.max is a hard,
-    // explicit invariant ("any card's effective alpha >= 0.6 at all
-    // times", per the brief) so a future per-node dim added here can
-    // never silently stack this global multiplier below the floor a
-    // title stays legibly readable at. The red/attention behavior is
-    // untouched (cards.ts's deadRingColorFor/titleTintFor still branch on
-    // `graphQuiet` exactly as before; this only bounds the whole-card
-    // alpha the state's chrome gets drawn at).
-    ctx.globalAlpha = Math.max(0.6, dimAlpha);
+    if (cardState === "waiting_gate") {
+      needAttentionCount += 1;
+    } else if (cardState === "stalled" && !graphQuiet) {
+      needAttentionCount += 1;
+      stalledAttentionCount += 1;
+    }
     drawCard(ctx, n, m, cardState, now, graphQuiet);
-    ctx.restore();
   }
 
   ctx.restore();
@@ -205,7 +254,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     // where the first task card starts) -- verified against a live
     // screenshot that y=232 visually collided with the top card's title
     // bar text; y=217 clears both.
-    drawQuietLine(ctx, 22, 217, (now - state.lastEventAt) / 1000, needAttentionCount);
+    drawQuietLine(ctx, 22, 217, (now - state.lastEventAt) / 1000, needAttentionCount, stalledAttentionCount);
   }
 
   // Legend chip -- fixed, screen space, bottom-left (round 3 item 2).

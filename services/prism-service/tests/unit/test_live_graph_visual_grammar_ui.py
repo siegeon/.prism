@@ -242,30 +242,36 @@ def test_packet_spawns_are_cooldown_gated_per_edge_sparse():
 
 def test_task_card_gets_a_throughput_buffer_bar_that_drains():
     cards_src = _read(_LIVE / "cards.ts")
-    state_src = _read(_LIVE / "graphState.ts")
-    assert "bufferFrac" in cards_src and "bufferFrac" in state_src, (
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "bufferFrac" in cards_src and "bufferFrac" in draw_src, (
         "a task/subtask card's buffer bar must be a real per-node field, "
         "not a static icon (round1 gap: 'no node ever shows load as a "
         "filling bar')")
-    # Round 4 item 2a SUPERSEDES round 3's per-card ROLLING PEAK gauge
-    # (bufferPeak/bufferLevelFrac, current/peak) -- critic 5's "second
-    # offense" caught the identical "rising peak shrinks a growing rate"
-    # bug this round3 model was built to fix on the HUD side, still live
-    # on every card's own bar. The bar now reads off scale.ts's shared
-    # FIXED log scale (logMeterFrac), the same law the HUD hero meter
-    # uses, so length is monotonic with the printed rate everywhere.
-    assert "BUFFER_DRAIN_WINDOW_MS" in state_src, (
-        "the buffer bar must drain to 0 over a real elapsed-time window "
-        "since the last tokens.turn, not just ratchet up and sit at its "
-        "high-water mark")
-    assert "logMeterFrac(n.bufferLiveTokS)" in state_src, (
-        "the buffer bar's fill must come from the SAME shared fixed log "
-        "scale as the HUD hero meter (scale.ts), never a per-card "
-        "rolling peak that a rising value can shrink against")
+    # Round 6 item 8 ("every rate has its bar") SUPERSEDES round 4 item
+    # 2a's separately-drained buffer model (graphState.ts's old
+    # BUFFER_DRAIN_WINDOW_MS/bufferLiveTokS/lastTokenFlowAt, itself a fix
+    # for round 3's per-card rolling-peak gauge): the r5 critic
+    # pixel-verified a "dev agent" card printing a live `17.9K [1.5K/s]`
+    # over a pixel-identically EMPTY bar (verdicts/round5/
+    # piece5_readouts.md) -- the bar's own drain clock (4s) was SHORTER
+    # than the printed rate's own decay clock (8s), so any real tick gap
+    # in between showed a live number over a dead bar. The bar is now
+    # computed in draw.ts's metricsFor directly from the EXACT SAME tokS
+    # value each card's Tokens row prints -- one source of truth, never a
+    # second independently-timed field that can fall out of sync with
+    # what's on screen.
+    assert "bufferFrac: logMeterFrac(tokS)" in draw_src, (
+        "the bar must be computed from the EXACT SAME tokS value the "
+        "card's own Tokens row prints, not a separately-decaying field")
+    state_src = _read(_LIVE / "graphState.ts")
     assert "bufferPeak" not in state_src, (
         "round 4 item 2a retired the peak-relative gauge entirely -- "
         "a lingering bufferPeak field would mean the old bug is still "
         "reachable")
+    assert "const BUFFER_DRAIN_WINDOW_MS" not in state_src, (
+        "round 6 item 8 retired the separately-drained buffer model -- a "
+        "lingering BUFFER_DRAIN_WINDOW_MS constant would mean the "
+        "two-clock print-vs-bar desync bug is still reachable")
 
 
 def test_hud_rebuilt_with_meter_bars_and_bigger_hero_number():
@@ -296,7 +302,11 @@ def test_graph_state_self_heals_nodes_created_after_boot():
         "forever (piece-4 cross-check: HUD ticked while cards read 0)")
     # every one of the four WorkEvent handlers must route through the
     # self-healing lookup rather than a bare byId.get(...) early return.
-    assert src.count("ensureTaskNode(event.task_id, now)") >= 4
+    # Round 6 item 2 (atomic card+wire) extended the call with the
+    # (kind, parentTaskId) pair derived from the event's own parent_id
+    # (parentInfoFor) -- the literal call shape changed but the "all four
+    # handlers use it" invariant is the same one this test pins.
+    assert src.count("ensureTaskNode(event.task_id, now, kind, parentTaskId)") >= 4
 
 
 def test_version_bumped_for_this_change():
@@ -542,9 +552,16 @@ def test_token_wire_is_dim_neutral_until_flowing_not_always_teal():
         "neutral, never a dimmed version of its flowing color")
 
     state_src = _read(_LIVE / "graphState.ts")
-    assert "const SPAWN_COOLDOWN_MS = 600;" in state_src, (
-        "item 3: hot wires must be able to spawn a marker up to every "
-        "0.6s, not round2's 1.2s floor")
+    # Round 6 item 4 ("marker pacing for human eyes") SUPERSEDES round 3
+    # item 3's 0.6s floor: r5's critic tracked 45 busy-phase frames and
+    # found zero cases of a marker gliding along a structurally-stable
+    # wire -- a cadence this fast reads as a flicker at normal viewing
+    # speed, not motion. Cadence is back to ~1.2s, matching packets.ts's
+    # own 1.2-1.8s fixed traverse duration (so a marker is usually still
+    # finishing its own crossing when the next spawn would fire).
+    assert "const SPAWN_COOLDOWN_MS = 1200;" in state_src, (
+        "item 4: markers must spawn at a HUMAN-PACED cadence (~1.2s), not "
+        "round3's 0.6s floor that reads as a flicker, not travel")
 
     packets_src = _read(_LIVE / "packets.ts")
     palette_src = _read(_LIVE / "palette.ts")
@@ -563,11 +580,17 @@ def test_buffer_bar_is_a_per_card_rolling_peak_gauge_drawn_thicker():
 
     # Round 4 item 2a retired BUFFER_PEAK_DECAY along with the rest of the
     # peak-relative model (see test_task_card_gets_a_throughput_buffer_bar_
-    # that_drains above) -- lastTokenFlowAt is the part of this contract
-    # that's still real: the bar drains off SIGNAL-SPECIFIC silence, never
-    # the general lastSignalAt a heartbeat alone would also bump.
+    # that_drains above). Round 6 item 8 goes further and retires
+    # lastTokenFlowAt too (this test used to pin it as "the part of this
+    # contract that's still real") -- a SEPARATE signal-specific drain
+    # clock is exactly what desynced from the printed rate's own decay
+    # clock and produced the r5 critic's "live rate, dead bar" bug; there
+    # is no second clock left to keep honest, only one shared tokS.
     state_src = _read(_LIVE / "graphState.ts")
-    assert "lastTokenFlowAt" in state_src
+    assert ".lastTokenFlowAt" not in state_src and "lastTokenFlowAt:" not in state_src, (
+        "round 6 item 8 retired the buffer bar's separate drain clock -- "
+        "a lingering lastTokenFlowAt field/assignment would mean the "
+        "two-clock desync bug is still reachable")
 
 
 def test_hud_hero_meter_is_log_scale_with_fixed_pips():
@@ -597,13 +620,18 @@ def test_buffer_bar_shares_the_hud_log_scale():
     # bar." Pinned as an actual shared import, not just two modules that
     # happen to compute the same formula independently (which is exactly
     # how round3's HUD fix and round2's per-card model drifted apart).
+    # Round 6 item 8 moved the buffer-bar computation itself out of
+    # graphState.ts's step() and into draw.ts's metricsFor (see
+    # test_task_card_gets_a_throughput_buffer_bar_that_drains) -- the
+    # import site moved with it, but the "one shared law" invariant this
+    # test protects is unchanged.
     scale_src = _read(_LIVE / "scale.ts")
-    state_src = _read(_LIVE / "graphState.ts")
+    draw_src = _read(_LIVE / "draw.ts")
     hud_src = _read(_LIVE / "hud.ts")
-    assert 'from "./scale"' in state_src, (
-        "graphState.ts's buffer-bar fraction must import scale.ts's "
+    assert 'from "./scale"' in draw_src, (
+        "draw.ts's buffer-bar fraction must import scale.ts's "
         "logMeterFrac rather than compute its own peak-relative ratio")
-    assert 'import { logMeterFrac' in state_src or "logMeterFrac(" in state_src
+    assert 'import { logMeterFrac' in draw_src or "logMeterFrac(" in draw_src
     assert "export function logMeterFrac(" in scale_src
     assert 'from "./scale"' in hud_src
 
@@ -690,7 +718,15 @@ def test_reconcile_reclassifies_a_subtask_misplaced_as_a_root_task():
         "GraphState.reconcile() must detect and correct this "
         "misclassification the moment a self-heal snapshot reveals the "
         "node's true kind/parent")
-    assert "this.layout.reslotAsSubtask(sn.id, parentId)" in state_src
+    # Round 6 refactor: the actual reslot + "carry along session cards"
+    # logic moved into a shared private method (reclassifyAsSubtask) so
+    # ensureTaskNode's own atomic-card-wire residual-correction path
+    # (round 6 item 2) can reuse the exact same fix instead of drifting
+    # into a second copy -- reconcile() now just detects the
+    # misclassification and delegates.
+    assert "this.reclassifyAsSubtask(existing, parentId, now)" in state_src
+    assert "private reclassifyAsSubtask(node: LiveNode, parentTaskId: string, now: number): void" in state_src
+    assert "this.layout.reslotAsSubtask(node.id, parentTaskId)" in state_src
 
 
 # ---------------------------------------------------------------------------
@@ -703,32 +739,35 @@ def test_reconcile_reclassifies_a_subtask_misplaced_as_a_root_task():
 # or the scrolling sparkline.
 # ---------------------------------------------------------------------------
 
-def test_quiet_dim_eases_in_instead_of_snapping():
-    # Item 1a root cause (see the task's final report for the full
-    # evidence chain): the 0.85 dim FACTOR itself was already correct
-    # (never the inverted 0.15) -- the bug was a hard boolean snap
-    # landing on every card in the same frame, which read as a
-    # synchronized "collapse" (critic 3, pixel-verified). idle.ts now
-    # exposes a continuous quietDimAlpha() and draw.ts uses ITS result
-    # (not a bare isGraphQuiet() ? 0.85 : 1 ternary) for globalAlpha.
+def test_quiet_dim_removed_entirely_never_a_whole_canvas_fade():
+    # Round 6 item 1 SUPERSEDES this whole mechanism (round 4's eased
+    # quietDimAlpha, itself a fix for round1's hard snap): THREE separate
+    # rounds of critics read every variant of a whole-canvas quiet dim as
+    # a crash -- round4's own eased version still drew "the entire graph
+    # -- every card, every wire -- fades to a uniform low-contrast grey
+    # simultaneously... precisely the anti-pattern to avoid"
+    # (verdicts/round5/piece1_living_graph.md). The game never dims, full
+    # stop; quiet is communicated only by rates reading 0, the quiet
+    # line, the scrolling sparkline, and per-card state. Retired here
+    # rather than silently deleted (per this file's own convention) so a
+    # future session can see the reversal was deliberate.
     idle_src = _read(_LIVE / "idle.ts")
-    assert "export function quietDimAlpha(" in idle_src
-    assert "QUIET_DIM_FLOOR = 0.85" in idle_src, (
-        "the dim floor must stay ~15% dimming (alpha ~0.85), never the "
-        "inverted 0.15 the brief asked us to rule out")
-    assert "EASE_MS" in idle_src, (
-        "the dim must ease in over ~2s, not snap in one step")
+    assert "export function quietDimAlpha(" not in idle_src, (
+        "round 6 item 1 retired the whole-canvas quiet-dim function -- a "
+        "lingering quietDimAlpha would mean the crash-reading mechanism "
+        "is still reachable")
+    assert "QUIET_DIM_FLOOR" not in idle_src
 
     draw_src = _read(_LIVE / "draw.ts")
-    assert "quietDimAlpha(state, now)" in draw_src
-    # Round 5 item 5 SUPERSEDES the bare assignment with an explicit
-    # Math.max(0.6, dimAlpha) floor -- dimAlpha itself is still exactly
-    # this eased quietDimAlpha() result, just guarded so a future
-    # per-node dim stacked on top can never push a card's effective
-    # alpha below what a title stays legibly readable at.
-    assert "ctx.globalAlpha = Math.max(0.6, dimAlpha);" in draw_src, (
-        "draw.ts must apply the eased alpha (floored at 0.6), not "
-        "re-derive its own binary 0.85-or-1 snap")
+    assert "quietDimAlpha" not in draw_src
+    assert "ctx.globalAlpha = Math.max(0.6, dimAlpha);" not in draw_src, (
+        "draw.ts must render every card at its normal alpha regardless "
+        "of graph-quiet state -- no per-card OR whole-canvas dimming")
+    # The graph-quiet SIGNAL itself is still very much alive -- it drives
+    # the quiet line, the HUD's own last-activity sub-label, and the
+    # stalled-vs-quiet color context (palette.ts's deadRingColorFor) --
+    # only the CANVAS-WIDE ALPHA application is gone.
+    assert "isGraphQuiet(state, now)" in draw_src
 
 
 def test_hud_cumulative_counts_never_zero_only_rates_do():
@@ -869,9 +908,14 @@ def test_session_cards_get_the_same_throughput_bar_as_tasks():
     assert 'if (n.kind !== "session") {\n    const barW' not in cards_src, (
         "the buffer bar block must no longer exclude session cards")
     draw_src = _read(_LIVE / "draw.ts")
-    assert "bufferFrac: node.bufferFrac," in draw_src, (
-        "a session card's CardMetrics.bufferFrac must read the node's "
-        "real field, not a hardcoded 0")
+    # Round 6 item 8 moved the source of truth from a standalone
+    # node.bufferFrac field to logMeterFrac(tokS) computed inline (see
+    # test_task_card_gets_a_throughput_buffer_bar_that_drains) -- the
+    # session branch of metricsFor must still carry a REAL, non-zero-
+    # capable bar, just sourced from the same tokS value it prints.
+    assert "bufferFrac: logMeterFrac(tokS)," in draw_src, (
+        "a session card's CardMetrics.bufferFrac must read a real "
+        "computed value off its own tokS, not a hardcoded 0")
 
 
 # ---------------------------------------------------------------------------
@@ -935,9 +979,14 @@ def test_reslot_also_carries_along_any_already_placed_session_cards():
         "so they can never drift apart")
 
     state_src = _read(_LIVE / "graphState.ts")
-    assert "this.layout.reslotSessionsOf(sn.id)" in state_src, (
-        "reconcile()'s reslot branch must call this right after "
-        "reslotAsSubtask, in the same breath the task itself moves")
+    # Round 6 refactor: this call now lives inside the shared
+    # reclassifyAsSubtask method (see
+    # test_reconcile_reclassifies_a_subtask_misplaced_as_a_root_task),
+    # reused by both reconcile() and ensureTaskNode's own atomic-card-wire
+    # residual-correction path -- same behavior, one place it can drift.
+    assert "this.layout.reslotSessionsOf(node.id)" in state_src, (
+        "reclassifyAsSubtask must call this right after reslotAsSubtask, "
+        "in the same breath the task itself moves")
     assert "sessNode.slot = newSessSlot.slot;" in state_src, (
         "the session LiveNode's own slot must actually be updated (and "
         "a fresh spawn-in armed) so it visually follows its driver")
@@ -1000,14 +1049,19 @@ def test_legend_done_green_is_hue_distinct_from_working_teal():
         "teal itself must be untouched -- only done's green moved")
 
 
-def test_quiet_card_alpha_floors_at_point_six():
-    # Item 5: "any card's effective alpha >= 0.6 at all times" -- an
-    # explicit hard clamp at the one call site that sets globalAlpha for
-    # every card's draw, so a future per-node dim added there can never
-    # silently stack the whole-graph quiet dim (idle.ts's 0.85 floor)
-    # below what a title stays legibly readable at.
+def test_no_whole_canvas_alpha_dim_at_all():
+    # Round 5 item 5's "alpha floor >= 0.6" clamp existed to bound a
+    # whole-canvas dim that round 6 item 1 deletes outright (see
+    # test_quiet_dim_removed_entirely_never_a_whole_canvas_fade) -- with
+    # no dim left to floor, the correct contract is simply "no globalAlpha
+    # assignment anywhere in the render-loop owner"; cards render at their
+    # normal alpha unconditionally, every frame, quiet or busy.
     draw_src = _read(_LIVE / "draw.ts")
-    assert "ctx.globalAlpha = Math.max(0.6, dimAlpha);" in draw_src
+    assert "globalAlpha" not in draw_src, (
+        "draw.ts must never touch ctx.globalAlpha for the card loop -- "
+        "every card draws at full, normal alpha regardless of graph-quiet "
+        "state (per-card state chrome like the stalled-body wash lives in "
+        "cards.ts, untouched by this)")
 
 
 def test_hud_hero_card_carries_its_own_last_activity_line_when_quiet():
@@ -1062,3 +1116,223 @@ def test_version_bumped_past_round_5():
     assert int(m.group(1)) >= 8, (
         "round 5 must bump the gamify version marker to at least "
         f".8; got .{m.group(1)}")
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (gauntlet: WIN pieces 1 living graph + 2 motion; protect the
+# confirmed wins 3/4/5). Pinned against E:\gamify-lab\R6_BRIEF.md's
+# numbered fix list and the round5 blind verdicts
+# (E:\gamify-lab\verdicts\round5\piece*.md) that motivated each fix.
+# ---------------------------------------------------------------------------
+
+_BACKEND_SRC = _HERE.parent.parent.parent / "prism_service"
+
+
+def test_every_work_event_publisher_stamps_the_real_parent_id():
+    # Item 2 (atomic card+wire): the /live SPA can only derive a
+    # subtask/task card's parent_of edge AT BIRTH if the event that births
+    # it already names the real parent -- so every bus publisher that can
+    # birth a task/subtask/session card via a route the recording rig's
+    # scenario.py actually exercises (including the dev-only sim door it
+    # drives tokens.turn through) must resolve and stamp parent_id.
+    #
+    # services/conductor_service.py's OWN agent.run publisher (used only
+    # by REAL conductor-driven `/implement` sessions, never by the sim
+    # scenario) is DELIBERATELY left untouched here -- it is one of
+    # control_plane.POLICY_FILES, and this branch is not going through the
+    # conductor for this round, so editing it would leave the file dirty
+    # against the daemon's own gate-integrity check
+    # (control_plane.dirty_judge_reason) for as long as this diff stays
+    # uncommitted, refusing every gate-adjudication test project-wide for
+    # a producer path the film protocol never exercises. See CLAUDE.md's
+    # "check POLICY_FILES up front" lesson.
+    task_service_src = _read(_BACKEND_SRC / "services" / "task_service.py")
+    assert '"parent_id": task.parent_id or "",' in task_service_src
+
+    heartbeat_src = _read(_BACKEND_SRC / "api" / "drive_heartbeat.py")
+    assert '"parent_id": parent_id,' in heartbeat_src
+
+    agent_runs_src = _read(_BACKEND_SRC / "api" / "agent_runs.py")
+    assert '"parent_id": parent_id,' in agent_runs_src
+
+    work_stream_src = _read(_BACKEND_SRC / "services" / "work_stream.py")
+    assert '"parent_id": parent_id,' in work_stream_src
+
+    # The dev-only sim door (api/work.py's /sim-tokens) is what the
+    # recording rig's scenario.py actually posts tokens.turn through --
+    # a fix that missed this one route would never show up on film at all.
+    work_api_src = _read(_BACKEND_SRC / "api" / "work.py")
+    assert '"parent_id": parent_id,' in work_api_src
+
+
+def test_work_event_type_carries_parent_id():
+    types_src = _read(_LIVE / "types.ts")
+    assert "parent_id?: string" in types_src, (
+        "the WorkEvent discriminated union must carry the optional "
+        "parent_id every publisher now stamps")
+
+
+def test_ensure_task_node_creates_parent_and_edge_atomically():
+    # Item 2's actual frontend fix: a subtask card may never render before
+    # its parent_of edge exists in the SAME update. If the parent itself
+    # isn't a known node yet, ensureTaskNode recursively creates ITS
+    # placeholder right here (never leaving a bare card waiting on a
+    # debounced self-heal reconcile to draw its wire a second or more
+    # later -- the r5 critic's "several nodes sitting isolated on screen
+    # with no wire to anything for a sustained span").
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "function parentInfoFor(event: { parent_id?: string })" in state_src, (
+        "graphState.ts must turn a WorkEvent's parent_id into the "
+        "(kind, parentTaskId) pair ensureTaskNode needs")
+    assert "if (kind === \"subtask\" && parentTaskId && !this.byId.has(parentTaskId)) {" in state_src, (
+        "an unknown parent must be created as a placeholder BEFORE the "
+        "child card, in the same call")
+    assert 'if (kind === "subtask" && parentTaskId) {\n      this.ensureEdge(parentTaskId, id, "parent_of");' in state_src, (
+        "the parent_of edge must be added in the SAME call that creates "
+        "the subtask card, not deferred to a later reconcile")
+
+
+def test_dev_mode_asserts_zero_orphan_cards_each_frame():
+    # Item 2's defensive invariant: dev-mode only, counts cards without an
+    # incident edge each frame and asserts zero -- a regression guard, not
+    # the fix itself (graphState.ts's ensureTaskNode is the fix).
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "function assertAtomicCardWireInvariant(state: GraphState): void" in draw_src
+    assert "if (isDevBuild) assertAtomicCardWireInvariant(state);" in draw_src, (
+        "the invariant must actually run every frame in dev mode")
+    assert "console.assert(" in draw_src
+
+
+def test_attention_chip_is_magenta_for_a_gate_never_red():
+    # Item 3: "1 need attention" must not be red when the need is a
+    # WAITING GATE (magenta, it is a decision, not a failure) -- red count
+    # only for stalled-while-others-work. draw.ts tracks stalledAttentionCount
+    # as a strict subset of needAttentionCount so idle.ts can pick the
+    # right color: magenta unless a genuine stall is present.
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "let stalledAttentionCount = 0;" in draw_src
+    assert "stalledAttentionCount += 1;" in draw_src
+    assert "needAttentionCount, stalledAttentionCount);" in draw_src, (
+        "draw.ts must pass BOTH counts to drawQuietLine")
+
+    idle_src = _read(_LIVE / "idle.ts")
+    assert "stalledAttentionCount > 0 ? PALETTE.red : PALETTE.magenta" in idle_src, (
+        "the attention chip color must be magenta UNLESS a real stall is "
+        "present -- a gate alone must never render red")
+
+
+def test_marker_traverse_duration_is_the_primary_constant():
+    # Item 4 ("marker pacing for human eyes"): r5's tighter layout
+    # shortened wires enough that the OLD constant-px/s model finished a
+    # traverse in well under 0.5s -- too fast to track (r5 critic: 45
+    # sampled busy-phase frames, zero cases of a marker gliding along a
+    # stable wire). Duration (1.2-1.8s) is now the primary constant;
+    # speed is DERIVED from it and only then clamped to a sane range.
+    packets_src = _read(_LIVE / "packets.ts")
+    assert "const TRAVERSE_MS_MIN = 1200;" in packets_src
+    assert "const TRAVERSE_MS_MAX = 1800;" in packets_src
+    assert "const durationMs = TRAVERSE_MS_MIN + Math.random() * (TRAVERSE_MS_MAX - TRAVERSE_MS_MIN);" in packets_src, (
+        "every marker's crossing time must be drawn from the fixed "
+        "1.2-1.8s window, independent of wire length")
+    assert "const impliedPxPerMs = len / durationMs;" in packets_src, (
+        "speed must be DERIVED from length/duration, never the reverse "
+        "(duration derived from a fixed speed)")
+    assert "MIN_PX_PER_S" in packets_src and "MAX_PX_PER_S" in packets_src, (
+        "the derived speed must still be clamped to a sane px/s range "
+        "for very long or very short wires")
+
+
+def test_marker_cadence_and_concurrency_cap():
+    # Item 4: "one spawn every ~1.2s, max 2 concurrent per wire" -- rate
+    # expresses itself as cadence + wire tint, never marker velocity or a
+    # denser train of simultaneous markers on one wire.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "const SPAWN_COOLDOWN_MS = 1200;" in state_src
+    assert "const MAX_CONCURRENT_PER_WIRE = 2;" in state_src
+    assert "if (inFlight >= MAX_CONCURRENT_PER_WIRE) return;" in state_src, (
+        "maybeSpawnPacket must refuse to spawn once a wire already has "
+        "MAX_CONCURRENT_PER_WIRE markers in flight")
+
+
+def test_no_static_glyph_drawn_on_a_wire():
+    # Item 5: only MOVING markers (packets.ts's drawPackets) may sit
+    # partway along a wire -- wires.ts's drawWire must draw ONLY strokes
+    # (the polyline itself), never a glyph/badge/icon at the elbow that a
+    # critic could mistake for a marker (r5's exact misread: "every
+    # parent->child edge carries exactly one circle-with-inset-square icon
+    # sitting at the wire's elbow... tracked across three busy-phase
+    # bursts and it never travels").
+    wires_src = _read(_LIVE / "wires.ts")
+    for forbidden in ("fillText", "arc(", "glyphFor", "roundRect"):
+        assert forbidden not in wires_src, (
+            f"wires.ts must never draw a glyph/icon/badge on a wire "
+            f"(found {forbidden!r}) -- the kind badge lives in the card "
+            f"title bar (cards.ts's glyphFor(n.kind, n.role) call)")
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "glyphFor(n.kind, n.role)" in cards_src, (
+        "the kind badge must be drawn in the card title bar")
+
+
+def test_done_and_passed_gate_are_terminal_in_reconcile():
+    # Item 6 ("DONE IS TERMINAL"): a reconcile snapshot can be stale (the
+    # ~5s spend cache, an in-flight fetch racing a later completion) and
+    # must never downgrade a card OUT of a terminal state -- verified live
+    # in the r5 clip: a completed, collapsed, checkmarked card reverted to
+    # a full expanded not-started card six seconds later
+    # (verdicts/round5/piece3_node_states.md, "state whiplash").
+    state_src = _read(_LIVE / "graphState.ts")
+    assert 'if (existing.status !== "done") {\n        existing.status = sn.status;' in state_src, (
+        "reconcile must never overwrite a done card's status with "
+        "anything else")
+    assert 'if (existing.gate_state !== "passed") {\n        existing.gate_state = sn.gate_state;' in state_src, (
+        "reconcile must never overwrite a passed gate's state with "
+        "anything else")
+
+
+def test_cumulative_numerics_never_decrease_from_a_snapshot():
+    # Items 6/9: cumulative fields (spend_usd, a session's tokens_total)
+    # may never decrease from a snapshot or a racing live write -- the r5
+    # clip showed the HUD's $ total climb to $0.05 then reset to $0.00
+    # (verdicts/round5/piece5_readouts.md), a reconcile write racing the
+    # live tokens.turn usd_total write with the LOWER value winning.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "if (typeof sn.spend_usd === \"number\" && sn.spend_usd >= existing.spend_usd) {" in state_src, (
+        "reconcile's spend_usd write must be guarded monotonic")
+    assert "if (typeof event.usd_total === \"number\" && event.usd_total >= (taskNode.spend_usd || 0)) {" in state_src, (
+        "the live tokens.turn usd_total write must ALSO be guarded "
+        "monotonic -- both write sites can race each other")
+    assert "if (event.tokens_total >= (sessionNode.tokens_total || 0)) {" in state_src, (
+        "a session's own cumulative tokens_total must be guarded "
+        "monotonic too")
+
+
+def test_identical_queued_state_renders_identically():
+    # Item 7 ("identical states, identical render"): the r5 clip showed
+    # two structurally-identical queued siblings ("Tokens 0 / Step 0 /
+    # Spend $0") render as one red/dead, one neutral grey, in the SAME
+    # frame (verdicts/round5/piece3_node_states.md) -- root cause was a
+    # RACE between two node-discovery paths (a live task.changed event
+    # stamps lastSignalAt=now; self-heal reconcile never bumps it at all),
+    # not deriveCardState itself being impure. Gating "stalled" on the
+    # node actually having entered the conductor (a real workflow_step)
+    # makes a never-engaged card YOUNG forever regardless of which
+    # discovery path won, so two semantically-identical queued/never-
+    # advanced cards can never diverge in color again.
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "if (!node.workflow_step) return \"young\";" in state_src, (
+        "a card that has never entered the conductor (no workflow_step) "
+        "must never be eligible for STALLED -- there was no real work in "
+        "flight to go silent FROM")
+
+
+def test_version_bumped_past_round_6():
+    import re
+
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
+        f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
+    assert int(m.group(1)) >= 9, (
+        "round 6 must bump the gamify version marker to at least "
+        f".9; got .{m.group(1)}")

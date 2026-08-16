@@ -50,9 +50,16 @@ export type GraphSnapshot = {
 };
 
 /** The four bus event types /sse/work forwards (routes/sse.py
- * _WORK_EVENT_TYPES) — a discriminated union on `type`. */
+ * _WORK_EVENT_TYPES) — a discriminated union on `type`.
+ *
+ * `parent_id` (round 6 item 2, "atomic card+wire"): every publisher now
+ * resolves and stamps the event's task's REAL parent_id (empty string for
+ * a genuine root task) at publish time, so the /live SPA can derive a
+ * subtask/task card's parent_of edge AT BIRTH instead of momentarily
+ * rendering it as an unwired root task until a debounced self-heal
+ * reconcile corrects it a second or more later. */
 export type WorkEvent =
-  | { project: string; type: "task.changed"; task_id: string; fields?: Record<string, unknown> }
-  | { project: string; type: "drive.heartbeat"; task_id: string; step?: string; last_tool?: string; work_units?: number; elapsed_s?: number; ts: number }
-  | { project: string; type: "agent.run"; task_id: string; session_id?: string; agent_id?: string; parent_agent_id?: string | null; step?: string; role?: string; model?: string; ok?: boolean; ts: number }
-  | { project: string; type: "tokens.turn"; task_id: string; session_id: string; out_tokens: number; dt_s: number; tok_s: number; tokens_total: number; ts: number; usd_total?: number };
+  | { project: string; type: "task.changed"; task_id: string; parent_id?: string; fields?: Record<string, unknown> }
+  | { project: string; type: "drive.heartbeat"; task_id: string; parent_id?: string; step?: string; last_tool?: string; work_units?: number; elapsed_s?: number; ts: number }
+  | { project: string; type: "agent.run"; task_id: string; parent_id?: string; session_id?: string; agent_id?: string; parent_agent_id?: string | null; step?: string; role?: string; model?: string; ok?: boolean; ts: number }
+  | { project: string; type: "tokens.turn"; task_id: string; parent_id?: string; session_id: string; out_tokens: number; dt_s: number; tok_s: number; tokens_total: number; ts: number; usd_total?: number };

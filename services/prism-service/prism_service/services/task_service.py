@@ -746,6 +746,14 @@ class TaskService:
                 "project": self.project,
                 "type": "task.changed",
                 "task_id": task.id,
+                # gamify round6 item 2 (atomic card+wire): carry the task's
+                # REAL parent_id on every event, not just when parent_id
+                # itself was the field that changed -- the /live SPA can
+                # only ever derive a subtask's parent_of edge at the same
+                # instant its card is born if the very event that births
+                # it already names the parent (empty string = a real
+                # root, no edge expected).
+                "parent_id": task.parent_id or "",
                 "fields": changed_fields,
                 "updated_at": task.updated_at,
             })

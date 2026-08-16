@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.8"
+PRISM_VERSION = "7.10.54+gamify.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "gamify.9: round6 WINS pieces 1+2, protects 3/4/5. Piece 1: the "
+    "whole-canvas quiet dim is GONE (3 rounds of critics read every "
+    "variant as a crash); every WorkEvent publisher now stamps the real "
+    "parent_id so a subtask/session card's edge exists in the SAME "
+    "update it's born in (atomic card+wire), with a dev-mode zero-orphan "
+    "invariant; the attention chip is magenta for a waiting gate, red "
+    "only for a genuine stall. Piece 2: markers now take a fixed 1.2-1.8s "
+    "to cross their own wire (duration is the primary constant, not a "
+    "constant px/s that r5's shorter wires made sub-0.5s/untrackable), "
+    "cadence ~1.2s capped at 2 concurrent per wire. Protect-the-wins: "
+    "done/passed-gate are terminal in reconcile (a completed card can no "
+    "longer revert), spend_usd/tokens_total are monotonic guarded at "
+    "every write site, a queued/never-engaged card can't drift into "
+    "STALLED just because a different discovery path won a race "
+    "(deriving 'stalled' now requires a real workflow_step), and the "
+    "per-node throughput bar reads off the EXACT SAME tokS value each "
+    "card's Tokens row prints instead of a separately-drained clock that "
+    "could show a live rate over a dead bar. "
     "gamify.8: round5 fixed the round4 regression -- a session card's "
     "label/position were captured ONCE (creation, or the next agent.run) "
     "from its driver task, which could still be a placeholder at that "

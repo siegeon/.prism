@@ -10,7 +10,6 @@ import { routeOrthogonal, type Point } from "./wires";
 import { spawnPacket, stepPackets, type Packet } from "./packets";
 import { spawnToast, pruneToasts, type Toast } from "./toasts";
 import { type CardState } from "./palette";
-import { logMeterFrac } from "./scale";
 
 export type { CardState };
 
@@ -48,7 +47,7 @@ const SETTLE_MS = 350;
 const COMPACT_AFTER_MS = 4_000;
 
 export function deriveCardState(node: {
-  status: string; gate_state: string; lastSignalAt: number;
+  status: string; gate_state: string; lastSignalAt: number; workflow_step?: string;
 }, now: number): CardState {
   if (node.status === "done" || node.gate_state === "passed") return "done";
   // Failed is dead, same as stalled -- red immediately, no need to wait
@@ -56,6 +55,25 @@ export function deriveCardState(node: {
   if (node.status === "failed") return "stalled";
   if (node.gate_state === "pending") return "waiting_gate";
   if (!node.lastSignalAt) return "young";
+  // Round 6 item 7 ("identical states, identical render"): a task that
+  // has never actually entered the conductor (no workflow_step) can never
+  // legitimately go STALLED -- there was no real work in flight to go
+  // silent FROM. Root cause of the r5 critic's "two queued siblings, one
+  // red/dead, one neutral grey, same frame" (verdicts/round5/
+  // piece3_node_states.md): a queued/never-advanced child's only ever
+  // "signal" is an incidental field-only task.changed (e.g. its
+  // set_parent PATCH), which the live-event path stamps lastSignalAt=now
+  // for -- while the SAME node discovered instead via self-heal reconcile
+  // never gets lastSignalAt bumped at all (reconcile's own doc comment:
+  // "NEVER bumps lastSignalAt -- that would fake freshness"). Two
+  // structurally-identical queued siblings then age on completely
+  // different clocks (or never age at all) purely because of WHICH
+  // discovery path happened to win a race, not because of any real
+  // difference in their state -- exactly the "order/heartbeat-history
+  // dependence" this item calls out. Gating on workflow_step makes a
+  // never-engaged card YOUNG forever, regardless of which path first
+  // created it or when its one incidental PATCH landed.
+  if (!node.workflow_step) return "young";
   const silentTooLong = now - node.lastSignalAt > STALL_MS;
   // NOT status === "in_progress": a task mid-drive through the conductor
   // reads status "pending" for most of its life (conductor_advance does
@@ -95,42 +113,34 @@ export function signalFreshness(now: number, lastSignalAt: number): number {
   return 1 - (age - FADE_START_MS) / (STALL_MS - FADE_START_MS);
 }
 
-/** Round 2, piece 5 (load as length): a node's Tokens buffer bar IS the
- * flow gauge -- almost always moving while work flows, visibly emptying
- * the moment it stops (never a static icon, the round1 critic's exact
- * complaint).
+/** Round 6 item 8 ("every rate has its bar") SUPERSEDES round 3/4's
+ * per-node drained-buffer model entirely: the r5 critic pixel-verified a
+ * "dev agent" card printing a live `17.9K [1.5K/s]` with a bar that was
+ * pixel-identically EMPTY to a genuinely idle sibling
+ * (verdicts/round5/piece5_readouts.md). Root cause -- the old model kept
+ * TWO independently-decaying clocks for the same underlying signal: the
+ * printed rate (`n.tok_s`) decayed to 0 over QUIET_DECAY_MS (8s), while
+ * the bar's own fraction (`bufferLiveTokS`/`lastTokenFlowAt`, drained
+ * here) emptied over the SHORTER BUFFER_DRAIN_WINDOW_MS (4s) -- so any
+ * real tick gap between 4s and 8s (routine jitter, not a bug in the
+ * ticker) showed a live number over a dead bar. The bar is now computed
+ * directly from the SAME value each card already prints (draw.ts's
+ * metricsFor, via scale.ts's shared logMeterFrac) -- one read of one
+ * field, never a second independently-timed pathway that can fall out of
+ * sync with what's on screen.
  *
- * Round 4 item 2a SUPERSEDES round 3's per-card ROLLING-PEAK model (a
- * remembered recent-max field feeding a current-over-peak ratio):
- * critic 5's "second offense" caught the identical bug that model was
- * built to fix, just relocated -- "t=24s: 3.5K [446/s], bar ~68%; t=30s:
- * 5.3K [470/s], a BIGGER number, bar collapsed to ~27%" -- because a
- * rising remembered peak shrinks the ratio even as the real rate climbs,
- * exactly like round2's HUD-vs-recentMax bug this round3 model was named
- * to fix on the HUD side while leaving it live on every card. The bar
- * now reads off
- * scale.ts's shared FIXED log scale (`logMeterFrac`) -- the SAME law the
- * HUD hero meter uses -- so a card's fill is monotonic with its own
- * printed rate always, with no per-card history to drift against.
- * `bufferFrac` is still multiplied by a linear drain that reaches 0 over
- * BUFFER_DRAIN_WINDOW_MS of no new tokens.turn at all (computed in
- * step() below, off lastTokenFlowAt, never off the general
- * lastSignalAt -- a heartbeat with no tokens must not hold the bar up),
- * and now applies uniformly to EVERY node kind including sessions (round
- * 4 item 2b: "the fastest-moving leaf nodes carry no bar at all" is
- * fixed by simply no longer excluding session nodes from this loop). */
-const BUFFER_DRAIN_WINDOW_MS = 4_000;
-
-/** Round 2, piece 2 (motion on the edges): a wire only carries a marker
- * every SPAWN_COOLDOWN_MS at most per edge ("SPARSE... cap ~1 marker per
- * wire per 1.2s"), and a structural (parent_of) wire only tints teal
- * while flow has propagated up it within FLOW_TINT_WINDOW_MS -- both
- * windows are real-event-driven (set on tokens.turn), never a timer.
- * Round 3 item 3: tightened 1200ms -> 600ms ("hot wires spawn up to
- * 1/0.6s") -- round2's 1.2s floor meant a wire that WAS on-screen still
- * only refreshed its marker every 1.2s, which under 3fps critic sampling
- * left long real gaps with nothing mid-wire to catch. */
-const SPAWN_COOLDOWN_MS = 600;
+ * SPAWN_COOLDOWN_MS/MAX_CONCURRENT_PER_WIRE (round 6 item 4, "marker
+ * pacing for human eyes") SUPERSEDES round 3 item 3's 0.6s floor: r5's
+ * critic tracked 45 busy-phase frames and found not one case of a marker
+ * gliding smoothly along a structurally-stable wire -- cadence that fast
+ * reads as a flicker at normal human viewing speed, not motion. Cadence
+ * is now ~1.2s per spawn (matching packets.ts's own 1.2-1.8s fixed
+ * TRAVERSE duration, so a marker is usually still finishing its own
+ * crossing when the next one would spawn) capped at
+ * MAX_CONCURRENT_PER_WIRE in flight per edge -- "rate expresses itself as
+ * cadence + wire tint, never a denser train on one wire." */
+const SPAWN_COOLDOWN_MS = 1200;
+const MAX_CONCURRENT_PER_WIRE = 2;
 const FLOW_TINT_WINDOW_MS = 4000;
 const MIN_FLOW_TOK_S = 3;
 
@@ -182,11 +192,6 @@ export type LiveNode = GraphNode & {
   stepGhostUntil: number;
   lastHeartbeatAt: number;
   selected: boolean;
-  /** Recent-throughput buffer bar fraction (0..1) -- EVERY node kind
-   * (round 4 item 2b), recomputed every frame in step() from
-   * bufferLiveTokS/lastTokenFlowAt below through scale.ts's shared fixed
-   * log scale (round 4 item 2a). */
-  bufferFrac: number;
   /** performance.now() of the last REAL signal that touched this node
    * (task.changed/drive.heartbeat/agent.run/tokens.turn) -- 0 means
    * "never signaled", which is what makes a card YOUNG rather than
@@ -212,18 +217,6 @@ export type LiveNode = GraphNode & {
   /** Brief scale+flash window right when doneAt is set (build item 2:
    * "the card does a brief settle animation"). */
   settleUntil: number;
-  /** Round 3 item 4 (real per-node throughput bar), round 4 item 2b
-   * (EVERY node kind, sessions included): performance.now() of this
-   * node's last tokens.turn contribution. Distinct from lastSignalAt,
-   * which also bumps on heartbeats/agent.run -- the buffer bar must
-   * drain on SILENCE FROM TOKENS SPECIFICALLY, not merely "some event
-   * happened". */
-  lastTokenFlowAt: number;
-  /** The tok_s carried by the most recent tokens.turn event that touched
-   * this node -- fed straight into scale.ts's shared logMeterFrac, same
-   * law the HUD hero meter uses, so the bar is monotonic with the
-   * printed rate always (round 4 item 2a). */
-  bufferLiveTokS: number;
   /** Round 5 item 0 (regression root cause, part A): true whenever this
    * node's CURRENT `label` was derived from something OTHER than a real
    * backend record (placeholderTaskLabel for a task/subtask born from a
@@ -287,6 +280,18 @@ function sessionLabelFor(driverLabel: string | undefined, role?: string | null):
 function placeholderTaskLabel(kind: "task" | "subtask", parentLabel?: string): string {
   if (kind === "subtask") return parentLabel ? `${parentLabel} · subtask` : "subtask starting…";
   return "task starting…";
+}
+
+/** Round 6 item 2 (atomic card+wire): every publisher now resolves and
+ * stamps a WorkEvent's real `parent_id` at publish time (types.ts's doc
+ * comment) -- this turns that into the (kind, parentTaskId) pair
+ * ensureTaskNode needs to place AND WIRE a task/subtask card in the SAME
+ * update it's born in. An empty/absent parent_id means a genuine root
+ * task (no edge expected, ever); any other value means a subtask whose
+ * parent_of edge must exist the instant this card does. */
+function parentInfoFor(event: { parent_id?: string }): { kind: "task" | "subtask"; parentTaskId: string | null } {
+  const parentId = event.parent_id || "";
+  return parentId ? { kind: "subtask", parentTaskId: parentId } : { kind: "task", parentTaskId: null };
 }
 
 export class GraphState {
@@ -379,11 +384,10 @@ export class GraphState {
       x: fromX, y: fromY, slot,
       spawnAt: now, spawnFromX: fromX, spawnFromY: fromY,
       pulseUntil: 0, tokensGhostUntil: 0, stepGhostUntil: 0,
-      lastHeartbeatAt: 0, selected: false, bufferFrac: 0,
+      lastHeartbeatAt: 0, selected: false,
       lastSignalAt, spend_usd: n.spend_usd || 0,
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
       gatePendingSince, doneAt, settleUntil: 0,
-      lastTokenFlowAt: 0, bufferLiveTokS: 0,
       // Every caller of makeNode EXCEPT the two lazy-create paths
       // (upsertSessionNode, ensureTaskNode) hands it a real backend
       // record (bootstrap's snapshot, or reconcile constructing a node
@@ -515,7 +519,29 @@ export class GraphState {
     id: string, now: number, kind: "task" | "subtask" = "task", parentTaskId: string | null = null,
   ): LiveNode {
     const existing = this.byId.get(id);
-    if (existing) return existing;
+    if (existing) {
+      // Round 6 item 2 residual: a node created BEFORE its parent_id was
+      // known (e.g. by an older cached event, or a call site that still
+      // omits it) can later turn out to be a subtask -- reclassify it the
+      // same way reconcile() already does the moment better information
+      // arrives, rather than leaving it a permanently-misfiled root.
+      if (existing.kind === "task" && kind === "subtask" && parentTaskId) {
+        this.reclassifyAsSubtask(existing, parentTaskId, now);
+      }
+      return existing;
+    }
+    // Round 6 item 2 (atomic card+wire): a subtask card may NEVER render
+    // without its parent_of edge existing in the same update -- if the
+    // parent itself isn't a known node yet, recursively create ITS
+    // placeholder (as a root task, the only safe default with no further
+    // ancestry info available from this one event) right here, so card
+    // and wire are always born together, never a bare card left waiting
+    // on a later self-heal reconcile to draw its wire a second or more
+    // later (the r5 critic's exact "several nodes sitting isolated on
+    // screen with no wire to anything for a sustained span").
+    if (kind === "subtask" && parentTaskId && !this.byId.has(parentTaskId)) {
+      this.ensureTaskNode(parentTaskId, now);
+    }
     const slot = kind === "subtask" && parentTaskId
       ? this.layout.placeSubtask(id, parentTaskId)
       : this.layout.placeTask(id);
@@ -533,6 +559,9 @@ export class GraphState {
     node.labelIsPlaceholder = true;
     this.nodes.push(node);
     this.byId.set(id, node);
+    if (kind === "subtask" && parentTaskId) {
+      this.ensureEdge(parentTaskId, id, "parent_of");
+    }
     // Round 2, piece 4 self-heal: a placeholder only ever carries what
     // the ONE event that created it happened to know (title stays the
     // truncated id, gate_state stays "none"). Schedule a debounced
@@ -540,6 +569,32 @@ export class GraphState {
     // instead of staying a bare id-labeled card forever.
     this.scheduleSelfHeal();
     return node;
+  }
+
+  /** Shared by ensureTaskNode's residual-correction path and reconcile()
+   * (round 6 item 2): a node that was placed as a root task before its
+   * true parent was known gets re-slotted beside that parent, its OWN
+   * kind/parentTaskId corrected, a fresh spawn-in slide armed so the
+   * reposition reads as deliberate motion, and any session cards already
+   * anchored to its (now-stale) old slot carried along with it. */
+  private reclassifyAsSubtask(node: LiveNode, parentTaskId: string, now: number): void {
+    if (!this.byId.has(parentTaskId)) this.ensureTaskNode(parentTaskId, now);
+    const newSlot = this.layout.reslotAsSubtask(node.id, parentTaskId);
+    node.kind = "subtask";
+    node.parentTaskId = parentTaskId;
+    node.spawnFromX = node.x;
+    node.spawnFromY = node.y;
+    node.spawnAt = now;
+    node.slot = newSlot;
+    this.ensureEdge(parentTaskId, node.id, "parent_of");
+    for (const newSessSlot of this.layout.reslotSessionsOf(node.id)) {
+      const sessNode = this.byId.get(newSessSlot.id);
+      if (!sessNode) continue;
+      sessNode.spawnFromX = sessNode.x;
+      sessNode.spawnFromY = sessNode.y;
+      sessNode.spawnAt = now;
+      sessNode.slot = newSessSlot.slot;
+    }
   }
 
   private ensureEdge(source: string, target: string, kind: GraphEdge["kind"]): void {
@@ -562,11 +617,17 @@ export class GraphState {
 
   /** Spawns at most one packet per edgeKey per SPAWN_COOLDOWN_MS -- the
    * grammar's "SPARSE... one visible marker per 300-600px" translated
-   * into a cadence cap rather than a density cap. */
+   * into a cadence cap rather than a density cap. Round 6 item 4 adds a
+   * hard concurrency cap (MAX_CONCURRENT_PER_WIRE) on top of the cadence
+   * floor: rate must express itself as CADENCE + wire tint, never as a
+   * denser train of simultaneous markers riding one wire. */
   private maybeSpawnPacket(edgeKey: string, pts: Point[] | null, now: number): void {
     if (!pts) return;
     const last = this.edgeLastSpawnAt.get(edgeKey);
     if (last !== undefined && now - last < SPAWN_COOLDOWN_MS) return;
+    let inFlight = 0;
+    for (const p of this.packets) if (p.edgeKey === edgeKey) inFlight += 1;
+    if (inFlight >= MAX_CONCURRENT_PER_WIRE) return;
     this.edgeLastSpawnAt.set(edgeKey, now);
     this.packets.push(spawnPacket(edgeKey, pts));
   }
@@ -632,7 +693,8 @@ export class GraphState {
     const now = performance.now();
     this.lastEventAt = now;
     if (event.type === "task.changed") {
-      const node = this.ensureTaskNode(event.task_id, now);
+      const { kind, parentTaskId } = parentInfoFor(event);
+      const node = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
       const prevStatus = node.status, prevGate = node.gate_state;
       const fields = event.fields ?? {};
       if (typeof fields.status === "string") node.status = fields.status;
@@ -657,7 +719,8 @@ export class GraphState {
       return;
     }
     if (event.type === "drive.heartbeat") {
-      const node = this.ensureTaskNode(event.task_id, now);
+      const { kind, parentTaskId } = parentInfoFor(event);
+      const node = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
       node.pulseUntil = now + PULSE_MS;
       node.lastHeartbeatAt = now;
       node.lastSignalAt = now;
@@ -668,7 +731,8 @@ export class GraphState {
       return;
     }
     if (event.type === "agent.run") {
-      const taskNode = this.ensureTaskNode(event.task_id, now);
+      const { kind, parentTaskId } = parentInfoFor(event);
+      const taskNode = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
       taskNode.lastSignalAt = now;
       if (event.session_id) {
         const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
@@ -702,10 +766,20 @@ export class GraphState {
       return;
     }
     if (event.type === "tokens.turn") {
-      const taskNode = this.ensureTaskNode(event.task_id, now);
+      const { kind, parentTaskId } = parentInfoFor(event);
+      const taskNode = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
       const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
       sessionNode.tok_s = event.tok_s;
-      sessionNode.tokens_total = event.tokens_total;
+      // Round 6 item 6 (cumulative numerics may never decrease): defensive
+      // monotonic guard on the session's own running total, matching the
+      // spend_usd guard below -- a real ticker's tokens_total should
+      // already be monotonic, but this closes the same class of bug
+      // (a stale/racing update clobbering a higher value) at every write
+      // site that touches a cumulative field, not just the one the r5
+      // critic happened to catch.
+      if (event.tokens_total >= (sessionNode.tokens_total || 0)) {
+        sessionNode.tokens_total = event.tokens_total;
+      }
       sessionNode.tokensGhostUntil = now + GHOST_MS;
       sessionNode.lastSignalAt = now;
       taskNode.lastSignalAt = now;
@@ -714,25 +788,21 @@ export class GraphState {
       // waiting on the real transcript-derived spend cache). Absent on
       // every real tokens.turn today; when present it's a running total,
       // same accumulation shape as tokens_total, never a per-tick delta.
-      if (typeof event.usd_total === "number") {
+      // Round 6 item 9 ($ spend monotonic): the HUD's $ total was
+      // observed climbing to $0.05 then resetting to $0.00 -- traced to
+      // THIS write racing reconcile()'s own spend_usd write (see
+      // reconcile()'s matching guard) with whichever one landed last
+      // winning, even when it carried the LOWER (stale) value. A
+      // cumulative dollar figure may only ever move forward.
+      if (typeof event.usd_total === "number" && event.usd_total >= (taskNode.spend_usd || 0)) {
         taskNode.spend_usd = event.usd_total;
       }
-      // Both the ghosted NUMBER and the buffer bar update off the same
-      // event, in the same synchronous call -- the piece-4 fix: a card
-      // can never show a stale number next to a fresh bar or vice versa.
+      // The ghosted NUMBER updates off this same event -- the piece-4
+      // fix: a card can never show a stale number next to a fresh bar or
+      // vice versa (round 6 item 8 moved the BAR itself to read straight
+      // off this same tok_s in draw.ts, so there is no second field left
+      // to keep in sync here at all).
       taskNode.tokensGhostUntil = now + GHOST_MS;
-      // Round 4 item 2a: fixed-scale buffer gauge (see the doc comment
-      // above BUFFER_DRAIN_WINDOW_MS). The actual rendered bufferFrac is
-      // recomputed every frame in step() from these two raw inputs, not
-      // set here -- that's what makes the ~4s drain a real elapsed-time
-      // function instead of a per-event ratchet. Round 4 item 2b: the
-      // SESSION node also gets its own buffer-bar inputs now, not just
-      // the task it drives -- "the fastest-moving leaf nodes carry no
-      // bar at all" is fixed by feeding this same pair to both.
-      taskNode.lastTokenFlowAt = now;
-      taskNode.bufferLiveTokS = event.tok_s;
-      sessionNode.lastTokenFlowAt = now;
-      sessionNode.bufferLiveTokS = event.tok_s;
       this.ensureEdge(event.session_id, event.task_id, "driven_in");
 
       const hasFlow = event.tok_s > MIN_FLOW_TOK_S;
@@ -797,18 +867,12 @@ export class GraphState {
         n.x = n.spawnFromX + (n.slot.x - n.spawnFromX) * e;
         n.y = n.spawnFromY + (n.slot.y - n.spawnFromY) * e;
       }
-      // Round 3 item 4, round 4 items 2a/2b: recomputed every frame from
-      // raw inputs (never ratcheted), for EVERY node kind including
-      // sessions -- level = logMeterFrac(current tok_s) on the SAME
-      // fixed scale the HUD hero meter uses, drain = linear 1->0 over
-      // BUFFER_DRAIN_WINDOW_MS since the last real tokens.turn. A node
-      // with no token flow yet (lastTokenFlowAt still 0) reads a flat
-      // empty bar, not a NaN/negative-age bar.
-      {
-        const sinceFlow = n.lastTokenFlowAt ? now - n.lastTokenFlowAt : Infinity;
-        const drain = Math.max(0, 1 - sinceFlow / BUFFER_DRAIN_WINDOW_MS);
-        n.bufferFrac = drain > 0 ? logMeterFrac(n.bufferLiveTokS) * drain : 0;
-      }
+      // Round 6 item 8 retires the separately-drained buffer bar computed
+      // here -- see the doc comment above SPAWN_COOLDOWN_MS. The bar is
+      // now derived straight from the same tok_s value each card prints,
+      // computed once in draw.ts's metricsFor (per node kind, right next
+      // to the rate it's gauging), never a second field with its own
+      // independent decay clock that can drift out of sync.
       // Round 2, piece 3/4 honest idle: a rate stat that never resets
       // itself reads as permanently "live" (the piece4 root cause,
       // generalized). Decaying tok_s to 0 once its OWN last signal is
@@ -1013,49 +1077,36 @@ export class GraphState {
       // the moment the snapshot reveals the truth, with a fresh spawn-in
       // slide so the reposition reads as deliberate motion, not a glitch.
       if (existing.kind === "task" && sn.kind === "subtask") {
+        // Round 5 item 0 fix (part B), round 6 refactor: the reslot +
+        // "carry any already-placed session cards along" logic now lives
+        // ONCE in reclassifyAsSubtask (shared with ensureTaskNode's own
+        // residual-correction path), so the two callers can never drift
+        // apart on what "fix a misclassified node" actually does.
         const parentEdge = snapshot.edges.find((e) => e.kind === "parent_of" && e.target === sn.id);
         const parentId = parentEdge?.source;
-        if (parentId) {
-          const newSlot = this.layout.reslotAsSubtask(sn.id, parentId);
-          existing.kind = "subtask";
-          existing.parentTaskId = parentId;
-          existing.spawnFromX = existing.x;
-          existing.spawnFromY = existing.y;
-          existing.spawnAt = now;
-          existing.slot = newSlot;
-          // Round 5 item 0 fix (part B): any session card already placed
-          // BELOW this task's OLD (wrong, root-column) position -- which
-          // happens whenever tokens.turn/agent.run fired for that session
-          // before this same reconcile discovered the true kind, a near-
-          // certainty during a staggered fan-out since the sim starts
-          // driving a subtask the SAME tick it creates it -- stayed
-          // anchored to a LayoutEngine slot that no longer describes
-          // anything once reslotAsSubtask deletes it. The task card
-          // visibly slides to its new fanned position (above); the
-          // session stayed frozen at the stale coordinates, so its wire
-          // endpoint no longer lines up with its driver -- verified live,
-          // this is exactly the "visually-adjacent card with no
-          // connecting wire drawn at all" critics 1/2 caught. Follow the
-          // move: recompute every session anchored to this driver id and
-          // slide each to its new slot the same way the driver itself
-          // just did.
-          for (const newSessSlot of this.layout.reslotSessionsOf(sn.id)) {
-            const sessNode = this.byId.get(newSessSlot.id);
-            if (!sessNode) continue;
-            sessNode.spawnFromX = sessNode.x;
-            sessNode.spawnFromY = sessNode.y;
-            sessNode.spawnAt = now;
-            sessNode.slot = newSessSlot.slot;
-          }
-        }
+        if (parentId) this.reclassifyAsSubtask(existing, parentId, now);
       }
       const prevStatus = existing.status, prevGate = existing.gate_state;
-      existing.status = sn.status;
+      // Round 6 item 6 (DONE IS TERMINAL): a reconcile snapshot can be
+      // stale (the ~5s spend cache, an in-flight fetch racing a LATER
+      // completion) and must never downgrade a card OUT of a terminal
+      // state -- verified live: a completed, collapsed, checkmarked "fast"
+      // slice card reverted to a full expanded not-started card six
+      // seconds later with no visible cause
+      // (verdicts/round5/piece3_node_states.md, "state whiplash"). Once
+      // done, always done; once a gate has passed, it stays passed --
+      // status/gate_state are only ever applied FORWARD from a terminal
+      // state, never backward.
+      if (existing.status !== "done") {
+        existing.status = sn.status;
+      }
       if (sn.workflow_step !== existing.workflow_step) {
         existing.workflow_step = sn.workflow_step;
         existing.stepGhostUntil = now + GHOST_MS;
       }
-      existing.gate_state = sn.gate_state;
+      if (existing.gate_state !== "passed") {
+        existing.gate_state = sn.gate_state;
+      }
       if (sn.label) {
         existing.label = sn.label;
         // A backend snapshot's label is always the real thing (task
@@ -1065,7 +1116,16 @@ export class GraphState {
         // transcript now has token events), stops being live-refreshed.
         existing.labelIsPlaceholder = false;
       }
-      if (typeof sn.spend_usd === "number") existing.spend_usd = sn.spend_usd;
+      // Round 6 items 6/9 (cumulative numerics may never decrease): the
+      // HUD's $ total was observed climbing to $0.05 then resetting to
+      // $0.00 -- this reconcile write racing the live tokens.turn
+      // usd_total write (graphState.ts's applyEvent), with whichever one
+      // landed last winning even when it carried the backend's STALE
+      // (lower/zero) cached figure. A cumulative dollar figure may only
+      // ever move forward, from either write site.
+      if (typeof sn.spend_usd === "number" && sn.spend_usd >= existing.spend_usd) {
+        existing.spend_usd = sn.spend_usd;
+      }
       existing.gate_waiting_s = sn.gate_waiting_s ?? null;
       existing.queue_depth = sn.queue_depth ?? 0;
       this.noteStatusGateTransition(existing, prevStatus, prevGate, now);

@@ -63,10 +63,22 @@ def ingest(
 
         from prism_service.events import bus
 
+        # gamify round6 item 2 (atomic card+wire): see task_service.py's
+        # task.changed publish for the full rationale -- a session's
+        # driver task/subtask must never render without ITS OWN parent
+        # edge in the same update this agent.run births it.
+        parent_id = ""
+        try:
+            obj = get_project(project).task_svc.get(row.get("task_id"))
+            parent_id = (getattr(obj, "parent_id", "") or "") if obj else ""
+        except Exception:
+            pass
+
         bus.publish({
             "project": project,
             "type": "agent.run",
             "task_id": row.get("task_id"),
+            "parent_id": parent_id,
             "session_id": row.get("session_id"),
             "agent_id": row.get("agent_id"),
             "parent_agent_id": row.get("parent_agent_id"),

@@ -85,6 +85,15 @@ def _tick_project(project: str) -> None:
     from prism_service.events import bus
 
     for task_id in task_ids:
+        # gamify round6 item 2 (atomic card+wire): resolved ONCE per task
+        # per tick (never per session) -- see task_service.py's
+        # task.changed publish for the full rationale.
+        parent_id = ""
+        try:
+            obj = task_svc.get(task_id)
+            parent_id = (getattr(obj, "parent_id", "") or "") if obj else ""
+        except Exception:
+            pass
         try:
             sessions = task_svc.sessions_for_task(task_id)
         except Exception:
@@ -151,6 +160,7 @@ def _tick_project(project: str) -> None:
                     "project": project,
                     "type": "tokens.turn",
                     "task_id": task_id,
+                    "parent_id": parent_id,
                     "session_id": sid,
                     "out_tokens": out_tokens,
                     "dt_s": round(dt_s, 2),

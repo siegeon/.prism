@@ -46,10 +46,23 @@ def beat(
         try:
             from prism_service.events import bus
 
+            # gamify round6 item 2 (atomic card+wire): best-effort resolve
+            # this task's real parent_id so a subtask's FIRST-ever card
+            # (born right here if no earlier event created it) is never
+            # rendered without the edge to draw it -- see
+            # task_service.py's task.changed publish for the same fix.
+            parent_id = ""
+            try:
+                obj = get_project(project).task_svc.get(row.get("task_id"))
+                parent_id = (getattr(obj, "parent_id", "") or "") if obj else ""
+            except Exception:
+                pass
+
             bus.publish({
                 "project": project,
                 "type": "drive.heartbeat",
                 "task_id": row.get("task_id"),
+                "parent_id": parent_id,
                 "step": row.get("step"),
                 "last_tool": row.get("last_tool"),
                 "work_units": row.get("work_units"),

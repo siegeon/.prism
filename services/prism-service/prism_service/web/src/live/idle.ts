@@ -49,8 +49,18 @@ const QUIET_MS = 8_000;
  * loop) branches the line's text AND adds a small colored count chip.
  * Plain "last activity Xs ago" is reserved for the genuinely-calm case:
  * nothing needs anyone. */
+/** Round 6 item 3: `stalledAttentionCount` (a strict subset of
+ * `needAttentionCount`) tells the chip which color to use. A card waiting
+ * on a gate is a DECISION, not a failure -- the r5-era build colored
+ * "1 need attention" red unconditionally, which reads as an alarm even
+ * when the whole count is a single waiting gate. Red stays reserved for
+ * a genuine stall (locally dead while others still work, the locked
+ * palette's ONLY "dead" meaning); a chip whose count is gate-waiting
+ * cards only renders magenta, matching every other waiting-gate affordance
+ * on this canvas (cards.ts's edge stripe, gatepanel.ts's panel border). */
 export function drawQuietLine(
-  ctx: CanvasRenderingContext2D, x: number, y: number, quietForS: number, needAttentionCount: number,
+  ctx: CanvasRenderingContext2D, x: number, y: number, quietForS: number,
+  needAttentionCount: number, stalledAttentionCount = 0,
 ): void {
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
@@ -74,7 +84,8 @@ export function drawQuietLine(
     ctx.fillStyle = PALETTE.textDim;
     ctx.fillText("queue is quiet · ", x, y);
     const prefixW = ctx.measureText("queue is quiet · ").width;
-    ctx.fillStyle = PALETTE.red;
+    const attentionColor = stalledAttentionCount > 0 ? PALETTE.red : PALETTE.magenta;
+    ctx.fillStyle = attentionColor;
     ctx.font = "600 11px system-ui, sans-serif";
     ctx.fillText(`${needAttentionCount} need attention`, x + prefixW, y);
     return;
@@ -94,25 +105,16 @@ export function isGraphQuiet(state: { lastEventAt: number }, now: number): boole
   return now - state.lastEventAt > QUIET_MS;
 }
 
-/** Round 4 item 1a (quiet-dim blackout): critic 3 (pixel-verified) caught
- * "between t=68s and t=72s the ENTIRE canvas... collapses into
- * near-total darkness simultaneously... a synchronized whole-dashboard
- * blackout that reads as a crash" over a ~4s window. The dim FACTOR
- * itself was already correct (draw.ts applies globalAlpha=0.85, i.e.
- * ~15% dimming, never the inverted 0.15) -- the bug was that
- * `isGraphQuiet` is a hard boolean, so the alpha SNAPPED from 1.0 to
- * 0.85 in a single frame the instant QUIET_MS elapsed, and that single-
- * frame snap landing at the same moment on EVERY card simultaneously is
- * exactly what read as a synchronized "collapse". This eases the same
- * 0.85 floor in continuously over EASE_MS once the quiet threshold is
- * crossed, so the dim is a visible but gentle settle, not a cut. */
-const EASE_MS = 2_000;
-const QUIET_DIM_FLOOR = 0.85;
-
-export function quietDimAlpha(state: { lastEventAt: number }, now: number): number {
-  if (!state.lastEventAt) return 1;
-  const sinceLastEvent = now - state.lastEventAt;
-  if (sinceLastEvent <= QUIET_MS) return 1;
-  const easeFrac = Math.min(1, (sinceLastEvent - QUIET_MS) / EASE_MS);
-  return 1 - (1 - QUIET_DIM_FLOOR) * easeFrac;
-}
+/** Round 6 item 1 RETIRES the whole-canvas quiet-dim mechanism entirely
+ * (round 4's eased `quietDimAlpha`, which itself superseded round1's hard
+ * snap). Three separate rounds of critics read every variant of it --
+ * "near-black", "near-invisible outlines", "uniform low-contrast grey",
+ * even the eased version's "the entire graph... fades to a uniform
+ * low-contrast grey simultaneously... precisely the anti-pattern to
+ * avoid" (verdicts/round5/piece1_living_graph.md) -- as a crash, no
+ * matter how gently it eased in. The game never dims, full stop; quiet is
+ * communicated only by rates reading 0, the quiet line below, the HUD's
+ * scrolling sparkline, and per-card state. Superseded here rather than
+ * silently deleted so a future session can see the reversal was
+ * deliberate, not drift (three prior "fix the dim" rounds already live in
+ * this file's git history). */
