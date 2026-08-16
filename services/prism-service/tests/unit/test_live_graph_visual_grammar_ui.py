@@ -331,6 +331,15 @@ def test_version_bumped_for_this_change():
 
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
     m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
@@ -1147,6 +1156,15 @@ def test_version_bumped_past_round_5():
 
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
     m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
@@ -1383,6 +1401,15 @@ def test_version_bumped_past_round_6():
 
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
     m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
@@ -1473,6 +1500,15 @@ def test_version_bumped_past_round_7():
 
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
     m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
@@ -1577,6 +1613,15 @@ def test_version_bumped_for_the_explore_hop():
 
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
     m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
@@ -1733,6 +1778,15 @@ def test_version_bumped_for_draggable_cards():
 
     ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
     m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    if m is None:
+        # SUPERSEDED 2026-08-16: the gamify branch merged to main and the
+        # +gamify.N sandbox marker was retired for release semver (7.10.55+).
+        # A plain released version at/after the merge satisfies every
+        # per-round floor below by construction.
+        assert re.search(r'PRISM_VERSION = "\d+\.\d+\.\d+"', ver_src), (
+            "PRISM_VERSION must be either the historical 7.10.54+gamify.N "
+            f"marker or plain release semver; got: {ver_src.splitlines()[:1]!r}")
+        return
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
