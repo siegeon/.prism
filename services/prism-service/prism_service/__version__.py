@@ -13,10 +13,27 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.12"
+PRISM_VERSION = "7.10.54+gamify.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "gamify.13: cards on /live are now draggable to a user-chosen "
+    "position (owner ask: 'the individual panels should be able to be "
+    "moved'). Pointerdown on a card body arms a potential drag; movement "
+    "past a 5px screen-space threshold converts it, suppressing the "
+    "click/select action on release. The dragged position is a world-"
+    "space override in GraphState (nodeId -> {x,y}), consulted by step() "
+    "in preference to the node's deterministic layout slot -- wires/"
+    "packets/the action strip already key off the node's animated x/y so "
+    "they follow for free. Overrides persist to localStorage per project "
+    "(prism.live.positions.<project>) and rehydrate on boot for nodes "
+    "that still exist; auto-fit never re-aims the camera while a drag is "
+    "in progress (GraphState.draggingNodeId) and includes dragged "
+    "positions in its content bbox afterward, so there's no snap-back or "
+    "camera fight. reclassifyAsSubtask/reslotAsSubtask never touch the "
+    "override map, so a reclassified node's on-screen position survives "
+    "unchanged. A 'reset layout' text button in the legend-area corner "
+    "clears every override for the project. "
     "gamify.12: two Linux/WSL verification defects fixed. (1) agent_runs "
     "fresh-install ordering hole: the table was only ever created lazily "
     "by BrainEngine._init_scores_schema via ProjectContext.brain_svc, so "
