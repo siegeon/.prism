@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.9"
+PRISM_VERSION = "7.10.54+gamify.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "gamify.10: round7 fixes edge motion (the last open piece). Verified "
+    "diagnosis: (1) two concurrent markers per wire (cap was 2) read as "
+    "one reversing object -- fixed to exactly ONE marker per wire, "
+    "cycle-spawned only after the previous one's own arrival plus a "
+    "200ms gap, never a wall-clock cooldown racing a live packet. (2) an "
+    "in-flight marker's polyline was frozen at spawn time, so the one "
+    "sanctioned mid-flight card reposition (reclassifyAsSubtask) could "
+    "teleport it -- a packet now stores its edge identity and "
+    "re-resolves pts fresh every frame while the edge exists (re-anchor "
+    "by t), fading out in place over <200ms if the edge disappears "
+    "instead. (3) idle wire tint (0.16 alpha) was too weak to read as "
+    "obviously different from a flowing wire in a pixel sample -- now "
+    "pins the directive's literal numbers (idle: neutral grey ~35% "
+    "alpha 2px, flowing: full teal 3px), with drawWire's compounded "
+    "double-alpha model (rgba alpha times a separate globalAlpha) "
+    "collapsed to the one dial. "
     "gamify.9: round6 WINS pieces 1+2, protects 3/4/5. Piece 1: the "
     "whole-canvas quiet dim is GONE (3 rounds of critics read every "
     "variant as a crash); every WorkEvent publisher now stamps the real "

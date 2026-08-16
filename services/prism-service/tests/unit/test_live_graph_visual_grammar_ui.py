@@ -203,7 +203,12 @@ def test_draw_composes_every_sub_renderer():
 
 def test_packets_travel_at_a_constant_speed_not_scaled_by_tok_s():
     src = _read(_LIVE / "packets.ts")
-    assert "export function spawnPacket(edgeKey: string, pts: Point[]): Packet" in src, (
+    # Round 7 item 2 SUPERSEDES the plain `edgeKey` signature: a packet now
+    # carries its own (source, target, reversed) edge identity instead of a
+    # frozen polyline, so graphState.ts can re-resolve its `pts` fresh every
+    # frame (re-anchor onto a card's new position instead of a silent
+    # teleport) -- see test_marker_reanchors_or_fades_on_geometry_change.
+    assert "export function spawnPacket(source: string, target: string, reversed: boolean, pts: Point[]): Packet" in src, (
         "spawnPacket must no longer take tokS -- speed is constant per the "
         "build directive, only spawn FREQUENCY scales with throughput")
     assert "polylineLength" in src, (
@@ -233,11 +238,15 @@ def test_wires_tint_structural_edges_on_recent_flow_not_always_grey():
 
 
 def test_packet_spawns_are_cooldown_gated_per_edge_sparse():
+    # Round 7 item 1 SUPERSEDES the SPAWN_COOLDOWN_MS wall-clock timer this
+    # test originally pinned -- see test_marker_cadence_and_concurrency_cap
+    # for the full cap+arrival-gap replacement and why (two markers sharing
+    # one wire read as one reversing object).
     src = _read(_LIVE / "graphState.ts")
-    assert "SPAWN_COOLDOWN_MS" in src, (
-        "a wire must carry at most one marker per cooldown window -- "
+    assert "MAX_CONCURRENT_PER_WIRE" in src, (
+        "a wire must carry at most one marker at a time -- "
         "grammar's SPARSE density, not a packet train")
-    assert "maybeSpawnPacket" in src or "edgeLastSpawnAt" in src
+    assert "maybeSpawnPacket" in src or "edgeArrivedAt" in src
 
 
 def test_task_card_gets_a_throughput_buffer_bar_that_drains():
@@ -547,21 +556,24 @@ def test_token_wire_is_dim_neutral_until_flowing_not_always_teal():
     # idle wire and a busy wire were the SAME HUE, just dimmer (verified
     # live against a real scenario run). Now color itself branches on
     # `flowing` for BOTH wire kinds through one shared early-return.
-    assert 'if (!flowing) return "rgba(255,255,255,0.16)";' in wires_src, (
+    # Round 7 item 3 SUPERSEDES round 3's 0.16-alpha idle value (too close
+    # to invisible against the near-black ground for a pixel-sample
+    # contrast check once run through video compression) -- pins the
+    # design directive's literal "idle: neutral grey ~35% alpha" number.
+    # See test_wire_tint_contrast_pins_the_directives_literal_numbers for
+    # the full idle/flowing pair and the drawWire width rule.
+    assert 'if (!flowing) return "rgba(255,255,255,0.35)";' in wires_src, (
         "an un-flowing wire (token OR structural) must render dim "
         "neutral, never a dimmed version of its flowing color")
 
     state_src = _read(_LIVE / "graphState.ts")
-    # Round 6 item 4 ("marker pacing for human eyes") SUPERSEDES round 3
-    # item 3's 0.6s floor: r5's critic tracked 45 busy-phase frames and
-    # found zero cases of a marker gliding along a structurally-stable
-    # wire -- a cadence this fast reads as a flicker at normal viewing
-    # speed, not motion. Cadence is back to ~1.2s, matching packets.ts's
-    # own 1.2-1.8s fixed traverse duration (so a marker is usually still
-    # finishing its own crossing when the next spawn would fire).
-    assert "const SPAWN_COOLDOWN_MS = 1200;" in state_src, (
-        "item 4: markers must spawn at a HUMAN-PACED cadence (~1.2s), not "
-        "round3's 0.6s floor that reads as a flicker, not travel")
+    # Round 7 item 1 SUPERSEDES round 6's SPAWN_COOLDOWN_MS wall-clock
+    # cadence: two markers could share one wire (cap was 2), reading as a
+    # single reversing object. Cadence is now cap=1 + a gap after the
+    # PREVIOUS marker's own arrival -- see
+    # test_marker_cadence_and_concurrency_cap for the full pin.
+    assert "const MAX_CONCURRENT_PER_WIRE = 1;" in state_src, (
+        "item 1: exactly one marker may ride a wire at a time")
 
     packets_src = _read(_LIVE / "packets.ts")
     palette_src = _read(_LIVE / "palette.ts")
@@ -1031,7 +1043,11 @@ def test_marker_gets_a_teal_halo_behind_its_bright_core():
     # near-white pixels (see the task's final report).
     assert "ctx.arc(at.x, at.y, 10, 0, Math.PI * 2);" in packets_src, (
         "the halo radius must be sized up from round4's 7px")
-    assert "ctx.globalAlpha = 0.75;" in packets_src
+    # Round 7 item 2 SUPERSEDES the bare "0.75" literal: the halo's alpha
+    # is now multiplied by fadeAlpha (1 for a live marker, ramping to 0
+    # for one whose wire just disappeared) instead of a flat constant --
+    # see test_marker_reanchors_or_fades_on_geometry_change.
+    assert "ctx.globalAlpha = 0.75 * fadeAlpha;" in packets_src
     assert "ctx.rect(at.x - 4.5, at.y - 4.5, 9, 9);" in packets_src, (
         "the core must be sized up from round4's 7x7")
 
@@ -1243,15 +1259,31 @@ def test_marker_traverse_duration_is_the_primary_constant():
 
 
 def test_marker_cadence_and_concurrency_cap():
-    # Item 4: "one spawn every ~1.2s, max 2 concurrent per wire" -- rate
-    # expresses itself as cadence + wire tint, never marker velocity or a
-    # denser train of simultaneous markers on one wire.
+    # Round 7 item 1 ("two concurrent markers read as one reversing
+    # object") SUPERSEDES round 6's "max 2 concurrent per wire" entirely --
+    # the round6 critic's own frame-by-frame trace found a tracked marker
+    # reversing direction and jumping backward on wires that, per this old
+    # cap, could legitimately carry two markers at once with no way for an
+    # observer to bind identity between them. Exactly ONE marker may ride a
+    # wire now; the next spawn is gated on the PREVIOUS one's own arrival
+    # (never a wall-clock timer running concurrently with a live packet).
     state_src = _read(_LIVE / "graphState.ts")
-    assert "const SPAWN_COOLDOWN_MS = 1200;" in state_src
-    assert "const MAX_CONCURRENT_PER_WIRE = 2;" in state_src
+    assert "const MAX_CONCURRENT_PER_WIRE = 1;" in state_src, (
+        "exactly one marker may ride a wire at a time -- this is the "
+        "direct fix for round6's non-monotonic/reversing marker tracks")
+    assert "const ARRIVAL_GAP_MS = 200;" in state_src, (
+        "the next spawn must wait a small breathing gap after the "
+        "PREVIOUS marker's own arrival, per the brief's cycle-spawn spec")
     assert "if (inFlight >= MAX_CONCURRENT_PER_WIRE) return;" in state_src, (
         "maybeSpawnPacket must refuse to spawn once a wire already has "
         "MAX_CONCURRENT_PER_WIRE markers in flight")
+    assert "if (arrivedAt !== undefined && now - arrivedAt < ARRIVAL_GAP_MS) return;" in state_src, (
+        "maybeSpawnPacket must also refuse to spawn until ARRIVAL_GAP_MS "
+        "has passed since this exact wire's previous marker arrived -- "
+        "the cycle-spawn gate, not a fixed cooldown timer")
+    assert "private edgeArrivedAt = new Map<string, number>();" in state_src, (
+        "arrival timestamps must be tracked per-edge, stamped only from "
+        "a REAL arrival (stepPackets' `arrived` list), never from a spawn")
 
 
 def test_no_static_glyph_drawn_on_a_wire():
@@ -1336,3 +1368,93 @@ def test_version_bumped_past_round_6():
     assert int(m.group(1)) >= 9, (
         "round 6 must bump the gamify version marker to at least "
         f".9; got .{m.group(1)}")
+
+
+# ---------------------------------------------------------------------------
+# Round 7 (gauntlet piece 2, "edge motion" -- the last open piece): verified
+# diagnosis was (1) two concurrent markers per wire read as one reversing
+# object, (2) an in-flight marker's polyline was frozen at spawn so the one
+# sanctioned mid-flight card reposition (reclassifyAsSubtask) could teleport
+# it, (3) idle/flowing wire contrast was too weak (0.16 alpha) to read as
+# obviously different in a pixel sample. Pinned against
+# E:\gamify-lab\R7_BRIEF.md and the round6 critic's verbatim forensics.
+# ---------------------------------------------------------------------------
+
+def test_wire_tint_contrast_pins_the_directives_literal_numbers():
+    # DESIGN_DIRECTIVE.md's exact "Idle wire: neutral grey ~35% alpha, 2px.
+    # Flowing wire: full teal, 3px." -- SUPERSEDES round3's compounded
+    # double-alpha model (wireColor's own rgba alpha AND drawWire's
+    # SEPARATE ctx.globalAlpha both scaling the same stroke), which is
+    # what let an idle wire and a busy wire of the same kind render at
+    # near-identical weight.
+    wires_src = _read(_LIVE / "wires.ts")
+    assert 'if (!flowing) return "rgba(255,255,255,0.35)";' in wires_src
+    assert 'return kind === "token" ? PALETTE.teal : "rgba(45,212,191,0.55)";' in wires_src, (
+        "a flowing token wire must render full-opacity teal; a flowing "
+        "structural (propagated) wire gets a dimmer but still clearly "
+        "lit tint, never the same weight as an idle wire")
+    assert "ctx.lineWidth = live ? 3 : 2;" in wires_src, (
+        "width must key on flowing state alone (3px flowing, 2px idle), "
+        "not a second kind-based width layered on top of the color split")
+    draw_wire_fn = wires_src.split("export function drawWire(", 1)[1]
+    assert "ctx.globalAlpha" not in draw_wire_fn, (
+        "drawWire's BODY must never touch ctx.globalAlpha -- wireColor's "
+        "own rgba alpha channel is the ONLY alpha dial now, so idle vs "
+        "flowing contrast can't be diluted by a second multiplier "
+        "(historical doc comments above the function may still mention "
+        "the retired globalAlpha model in prose)")
+
+
+def test_marker_reanchors_or_fades_on_geometry_change():
+    # Item 2 ("graceful marker re-anchoring/fade on geometry change"): a
+    # packet stores its edge identity, not a frozen polyline, so it can be
+    # re-resolved against the CURRENT wire endpoints every frame instead of
+    # teleporting when the one sanctioned mid-flight reposition
+    # (reclassifyAsSubtask) fires while it's mid-flight.
+    packets_src = _read(_LIVE / "packets.ts")
+    assert "source: string;" in packets_src and "target: string;" in packets_src, (
+        "Packet must carry its own edge identity (source/target), not "
+        "just an opaque edgeKey, so graphState can re-resolve its "
+        "geometry against the live edge every frame")
+    assert "reversed: boolean;" in packets_src, (
+        "Packet must remember whether it rides a structural wire's "
+        "reversed (child->parent propagated) direction, so a fresh "
+        "re-anchored polyline can be flipped the same way again")
+    assert "fadingSince: number;" in packets_src
+    assert "export const FADE_MS = 200;" in packets_src, (
+        "a marker whose wire disappeared must fade out in place within "
+        "the brief's <200ms bound, never teleport or vanish instantly")
+
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "if (p.fadingSince) continue;" in state_src, (
+        "step() must skip re-anchoring a packet that's already fading -- "
+        "its pts/t stay frozen at their last known value")
+    assert "p.pts = p.reversed ? [...raw].reverse() : raw;" in state_src, (
+        "a live packet's pts must be re-resolved from the CURRENT wire "
+        "endpoints every frame (re-anchor by t), not the polyline "
+        "captured once at spawn time")
+    assert "p.fadingSince = now;" in state_src, (
+        "a packet whose edge no longer resolves must start fading "
+        "in place, never keep riding stale coordinates")
+
+
+def test_packets_ts_reports_real_arrivals_for_the_cycle_spawn_gate():
+    packets_src = _read(_LIVE / "packets.ts")
+    assert "arrived: Packet[]" in packets_src, (
+        "stepPackets must report which packets crossed t>=1 THIS call so "
+        "graphState can stamp the per-edge arrival clock the cycle-spawn "
+        "gate reads -- a fade-out finishing must NOT count as an arrival")
+    assert "if (p.t >= 1) arrived.push(p);" in packets_src
+
+
+def test_version_bumped_past_round_7():
+    import re
+
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
+        f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
+    assert int(m.group(1)) >= 10, (
+        "round 7 must bump the gamify version marker to at least "
+        f".10; got .{m.group(1)}")

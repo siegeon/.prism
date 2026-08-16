@@ -129,18 +129,28 @@ export function signalFreshness(now: number, lastSignalAt: number): number {
  * field, never a second independently-timed pathway that can fall out of
  * sync with what's on screen.
  *
- * SPAWN_COOLDOWN_MS/MAX_CONCURRENT_PER_WIRE (round 6 item 4, "marker
- * pacing for human eyes") SUPERSEDES round 3 item 3's 0.6s floor: r5's
- * critic tracked 45 busy-phase frames and found not one case of a marker
- * gliding smoothly along a structurally-stable wire -- cadence that fast
- * reads as a flicker at normal human viewing speed, not motion. Cadence
- * is now ~1.2s per spawn (matching packets.ts's own 1.2-1.8s fixed
- * TRAVERSE duration, so a marker is usually still finishing its own
- * crossing when the next one would spawn) capped at
- * MAX_CONCURRENT_PER_WIRE in flight per edge -- "rate expresses itself as
- * cadence + wire tint, never a denser train on one wire." */
-const SPAWN_COOLDOWN_MS = 1200;
-const MAX_CONCURRENT_PER_WIRE = 2;
+ * MAX_CONCURRENT_PER_WIRE/ARRIVAL_GAP_MS (round 7 item 1, "two concurrent
+ * markers read as one reversing object") SUPERSEDES round 6 item 4's
+ * SPAWN_COOLDOWN_MS-timer model entirely: with cap=2 and a fixed 1.2s
+ * spawn cadence racing a 1.2-1.8s traverse, two markers routinely shared
+ * one wire -- an observer cannot bind identity between them, so their
+ * combined motion reads as a single object jittering/reversing (verified
+ * against the round6 critic's own frame-by-frame trace: a tracked y
+ * position on one wire read 421->497->459->461->417 across 0.8s, and a
+ * second marker on another wire moved backward, x 850->788, between
+ * consecutive 0.2s frames -- both are exactly what "two markers, read as
+ * one" produces). Exactly ONE marker may ride a wire at a time now
+ * (MAX_CONCURRENT_PER_WIRE=1); the NEXT spawn is gated purely on the
+ * PREVIOUS marker's own arrival (edgeArrivedAt, stamped from
+ * packets.ts's stepPackets `arrived` list) plus a small ARRIVAL_GAP_MS
+ * breathing gap -- never a wall-clock cooldown timer running concurrently
+ * with a marker still mid-flight. Flow RATE still expresses itself as
+ * spawn cadence (a busier wire's marker gets topped up again sooner
+ * after each arrival, since ensureFlowingWiresCarryAMarker retries every
+ * frame) plus wire tint (wires.ts's real idle/flowing contrast) -- never
+ * as a denser train of simultaneous markers on one wire. */
+const MAX_CONCURRENT_PER_WIRE = 1;
+const ARRIVAL_GAP_MS = 200;
 const FLOW_TINT_WINDOW_MS = 4000;
 const MIN_FLOW_TOK_S = 3;
 
@@ -338,9 +348,13 @@ export class GraphState {
    * structural wire's "flowing recently" tint (piece 2) and to gate the
    * HUD/card honesty around what's actually moving. */
   private edgeFlowAt = new Map<string, number>();
-  /** Per-edge last packet-spawn timestamp -- SPAWN_COOLDOWN_MS floor so
-   * a hot wire still reads as SPARSE motion, not a packet train. */
-  private edgeLastSpawnAt = new Map<string, number>();
+  /** Round 7 item 1: per-edge (by `${source}->${target}`) timestamp of
+   * the LAST marker to actually arrive on that wire -- the cycle-spawn
+   * gate (maybeSpawnPacket refuses a fresh spawn until ARRIVAL_GAP_MS
+   * has passed since this), replacing round6's fixed-cadence
+   * edgeLastSpawnAt timer entirely. Stamped from packets.ts's
+   * stepPackets `arrived` list in step(), never from a spawn itself. */
+  private edgeArrivedAt = new Map<string, number>();
 
   /** Docked completion/gate toasts (round 2, piece 3/4 build item 2) --
    * state lives here, rendering in toasts.ts, same split as `packets`. */
@@ -615,21 +629,34 @@ export class GraphState {
     return at !== undefined && now - at < FLOW_TINT_WINDOW_MS;
   }
 
-  /** Spawns at most one packet per edgeKey per SPAWN_COOLDOWN_MS -- the
-   * grammar's "SPARSE... one visible marker per 300-600px" translated
-   * into a cadence cap rather than a density cap. Round 6 item 4 adds a
-   * hard concurrency cap (MAX_CONCURRENT_PER_WIRE) on top of the cadence
-   * floor: rate must express itself as CADENCE + wire tint, never as a
-   * denser train of simultaneous markers riding one wire. */
-  private maybeSpawnPacket(edgeKey: string, pts: Point[] | null, now: number): void {
-    if (!pts) return;
-    const last = this.edgeLastSpawnAt.get(edgeKey);
-    if (last !== undefined && now - last < SPAWN_COOLDOWN_MS) return;
+  /** Round 7 item 1 (one marker per wire, cycle-spawn): spawns a packet
+   * on the edge (source, target, kind) only if (a) no packet is already
+   * in flight on it (MAX_CONCURRENT_PER_WIRE=1 -- the hard cap that
+   * fixes "two markers read as one reversing object") and (b) at least
+   * ARRIVAL_GAP_MS has passed since the PREVIOUS marker on this exact
+   * wire actually arrived (edgeArrivedAt, stamped in step()). `reversed`
+   * flips the freshly-resolved polyline for a structural wire's
+   * child->parent propagated flow (see spawnPacket's own doc). Refuses
+   * silently (never queues/retries) if the edge or its endpoints aren't
+   * currently resolvable -- callers (a real tokens.turn event, or the
+   * per-frame top-up below) simply try again on the next opportunity. */
+  private maybeSpawnPacket(
+    source: string, target: string, kind: GraphEdge["kind"], reversed: boolean, now: number,
+  ): void {
     let inFlight = 0;
-    for (const p of this.packets) if (p.edgeKey === edgeKey) inFlight += 1;
+    for (const p of this.packets) {
+      if (p.source === source && p.target === target && !p.fadingSince) inFlight += 1;
+    }
     if (inFlight >= MAX_CONCURRENT_PER_WIRE) return;
-    this.edgeLastSpawnAt.set(edgeKey, now);
-    this.packets.push(spawnPacket(edgeKey, pts));
+    const key = this.edgeKey(source, target);
+    const arrivedAt = this.edgeArrivedAt.get(key);
+    if (arrivedAt !== undefined && now - arrivedAt < ARRIVAL_GAP_MS) return;
+    const edge = this.edges.find((e) => e.source === source && e.target === target && e.kind === kind);
+    if (!edge) return;
+    const raw = this.wireEndpointsFor(edge);
+    if (!raw) return;
+    const pts = reversed ? [...raw].reverse() : raw;
+    this.packets.push(spawnPacket(source, target, reversed, pts));
   }
 
   /** Round 4 item 5 (marker flicker): critic 2's residual was a marker
@@ -645,14 +672,16 @@ export class GraphState {
    * `isEdgeFlowing` already says has carried real motion within
    * FLOW_TINT_WINDOW_MS (a window set exclusively by real tokens.turn
    * events), so a still wire stays still -- a flowing one just never
-   * goes visibly empty mid-flow, same cooldown floor as any other spawn. */
+   * goes visibly empty mid-flow, gated by the exact same cap+arrival-gap
+   * rule as any other spawn (maybeSpawnPacket). */
   private ensureFlowingWiresCarryAMarker(now: number): void {
-    const present = new Set(this.packets.map((p) => p.edgeKey));
     for (const e of this.edges) {
       if (!this.isEdgeFlowing(e.source, e.target, now)) continue;
-      const key = this.edgeKey(e.source, e.target);
-      if (present.has(key)) continue;
-      this.maybeSpawnPacket(key, this.wireEndpointsFor(e), now);
+      // A structural (parent_of) wire's marker always travels the
+      // reverse of its own source(parent)->target(child) direction --
+      // "aggregate flow reads upward" -- while a token (driven_in) wire
+      // already runs session->task in its natural direction.
+      this.maybeSpawnPacket(e.source, e.target, e.kind, e.kind === "parent_of", now);
     }
   }
 
@@ -809,9 +838,8 @@ export class GraphState {
       const directEdge = this.edges.find(
         (e) => e.source === event.session_id && e.target === event.task_id && e.kind === "driven_in");
       if (directEdge && hasFlow) {
-        const directKey = this.edgeKey(directEdge.source, directEdge.target);
-        this.edgeFlowAt.set(directKey, now);
-        this.maybeSpawnPacket(directKey, this.wireEndpointsFor(directEdge), now);
+        this.edgeFlowAt.set(this.edgeKey(directEdge.source, directEdge.target), now);
+        this.maybeSpawnPacket(directEdge.source, directEdge.target, "driven_in", false, now);
       }
 
       // Propagate up the structural wire: a subtask's token motion is
@@ -825,11 +853,8 @@ export class GraphState {
         const parentEdge = this.edges.find(
           (e) => e.kind === "parent_of" && e.source === taskNode.parentTaskId && e.target === taskNode.id);
         if (parentEdge) {
-          const structKey = this.edgeKey(parentEdge.source, parentEdge.target);
-          this.edgeFlowAt.set(structKey, now);
-          const downPts = this.wireEndpointsFor(parentEdge);
-          const upPts = downPts ? [...downPts].reverse() : null;
-          this.maybeSpawnPacket(structKey, upPts, now);
+          this.edgeFlowAt.set(this.edgeKey(parentEdge.source, parentEdge.target), now);
+          this.maybeSpawnPacket(parentEdge.source, parentEdge.target, "parent_of", true, now);
         }
       }
 
@@ -868,7 +893,7 @@ export class GraphState {
         n.y = n.spawnFromY + (n.slot.y - n.spawnFromY) * e;
       }
       // Round 6 item 8 retires the separately-drained buffer bar computed
-      // here -- see the doc comment above SPAWN_COOLDOWN_MS. The bar is
+      // here -- see the doc comment above MAX_CONCURRENT_PER_WIRE. The bar is
       // now derived straight from the same tok_s value each card prints,
       // computed once in draw.ts's metricsFor (per node kind, right next
       // to the rate it's gauging), never a second field with its own
@@ -902,7 +927,34 @@ export class GraphState {
         }
       }
     }
-    this.packets = stepPackets(this.packets, dtMs);
+    // Round 7 item 2 ("graceful marker re-anchoring/fade on geometry
+    // change"): every non-fading packet's `pts` is re-resolved from the
+    // CURRENT edge/endpoint positions before it's stepped -- append-only
+    // layout means this is a no-op for the overwhelming majority of
+    // packets (their wire's endpoints never move), but it's what makes
+    // the one sanctioned mid-flight reposition (reclassifyAsSubtask)
+    // harmless instead of a silent teleport: a packet re-anchors onto
+    // the node's new polyline BY t, same fractional progress, instead of
+    // riding coordinates a card has since moved away from. An edge that
+    // no longer resolves (removed, or an endpoint gone) starts a fade
+    // instead -- never leaves the packet riding stale, meaningless
+    // coordinates until it happens to reach t=1.
+    for (const p of this.packets) {
+      if (p.fadingSince) continue;
+      const edge = this.edges.find((e) => e.source === p.source && e.target === p.target);
+      const raw = edge ? this.wireEndpointsFor(edge) : null;
+      if (!raw) {
+        p.fadingSince = now;
+        continue;
+      }
+      p.pts = p.reversed ? [...raw].reverse() : raw;
+    }
+    const stepped = stepPackets(this.packets, dtMs, now);
+    this.packets = stepped.packets;
+    // The cycle-spawn gate (maybeSpawnPacket's ARRIVAL_GAP_MS check):
+    // only a REAL arrival (t crossed 1, not a fade finishing) starts the
+    // next wait -- a fade-out completing carries no such signal.
+    for (const p of stepped.arrived) this.edgeArrivedAt.set(this.edgeKey(p.source, p.target), now);
     this.ensureFlowingWiresCarryAMarker(now);
     this.toasts = pruneToasts(this.toasts, now);
 

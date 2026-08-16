@@ -79,20 +79,32 @@ export type WireKind = "token" | "structure";
  * reserved for the token wire itself).
  *
  * Round 3 item-0/3 fix: a TOKEN wire used to return PALETTE.teal
- * unconditionally regardless of `flowing`, differing only by
- * ctx.globalAlpha (0.9 vs 0.35) in drawWire below -- so an idle wire and
- * a busy wire were the SAME HUE, just dimmer, which is exactly critic
- * 2's "the wire's color/brightness is provably indifferent to
- * throughput... identical solid bright-teal line". Verified live against
- * a real scenario run (instrumented console capture): every idle token
- * wire sample logged the identical #2dd4bf hex, alpha-only. Now a token
- * wire is DIM NEUTRAL (same rgba as an idle structural wire) until real
- * flow has occurred within FLOW_TINT_WINDOW_MS, matching the structural
- * wire's own already-correct flowing/idle split -- one function, one
- * rule, for both wire kinds. */
+ * unconditionally regardless of `flowing`, differing only by an alpha
+ * multiplier in drawWire below -- so an idle wire and a busy wire were
+ * the SAME HUE, just dimmer, which is exactly critic 2's "the wire's
+ * color/brightness is provably indifferent to throughput... identical
+ * solid bright-teal line". Verified live against a real scenario run
+ * (instrumented console capture): every idle token wire sample logged
+ * the identical #2dd4bf hex, alpha-only. Now a token wire is DIM NEUTRAL
+ * until real flow has occurred within FLOW_TINT_WINDOW_MS.
+ *
+ * Round 7 item 3 ("flow tint with real contrast") SUPERSEDES round 3's
+ * 0.16-alpha idle value + its double-alpha model (this function's own
+ * rgba alpha channel AND drawWire's separate globalAlpha multiplier both
+ * scaled the same stroke -- two dials fighting over one swatch, and 0.16
+ * alpha against the near-black #1c2230 ground read as barely-there once
+ * run through video compression, exactly what the round6 critic's
+ * pixel-sample gap called out: "a card reading 0 tokens... sits beside a
+ * producing card, both wires rendered at identical teal weight"). Pins
+ * the design directive's literal numbers -- idle: neutral grey ~35%
+ * alpha; flowing: full-opacity teal for the real token wire (a dimmer
+ * teal tint for a structural/propagated wire, so the ONE genuinely-
+ * flowing token edge still reads as the brightest thing on screen, never
+ * diluted to the same weight as an edge merely reflecting
+ * upward-propagated flow). */
 export function wireColor(kind: WireKind, flowing: boolean): string {
-  if (!flowing) return "rgba(255,255,255,0.16)";
-  return kind === "token" ? PALETTE.teal : "rgba(45,212,191,0.4)";
+  if (!flowing) return "rgba(255,255,255,0.35)";
+  return kind === "token" ? PALETTE.teal : "rgba(45,212,191,0.55)";
 }
 
 export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: WireKind, live: boolean): void {
@@ -101,8 +113,10 @@ export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: Wire
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.strokeStyle = wireColor(kind, live);
-  ctx.lineWidth = kind === "token" ? 2.5 : 2;
-  ctx.globalAlpha = kind === "token" ? (live ? 0.95 : 0.5) : (live ? 0.75 : 0.5);
+  // Width now keys on flowing state alone, matching the directive's
+  // "idle: 2px, flowing: 3px" -- no second alpha dial layered on top of
+  // wireColor's own rgba alpha (that compounding is what made an idle
+  // and a busy wire of the same kind look nearly identical before).
+  ctx.lineWidth = live ? 3 : 2;
   ctx.stroke();
-  ctx.globalAlpha = 1;
 }

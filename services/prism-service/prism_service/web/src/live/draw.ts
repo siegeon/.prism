@@ -190,7 +190,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     );
     drawWire(ctx, pts, kind, live);
   }
-  drawPackets(ctx, state.packets);
+  drawPackets(ctx, state.packets, now);
 
   if (isDevBuild) assertAtomicCardWireInvariant(state);
 
