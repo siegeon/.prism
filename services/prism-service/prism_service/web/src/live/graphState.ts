@@ -68,32 +68,95 @@ export function deriveCardState(node: {
   return "working";
 }
 
-/** Round 2, piece 5 (load as length): a task/subtask's Tokens buffer bar
- * fills a real amount on every tokens.turn that targets it and drains
- * continuously, so its LENGTH is recent-throughput -- almost always
- * moving while work flows, visibly emptying the moment it stops (never
- * a static icon, the round1 critic's exact complaint). Fill scales with
- * tok_s (a hotter session fills more per arrival); drain is a fixed
- * leak, so the bar settles near an equilibrium proportional to
- * throughput rather than just ratcheting to 1 and sitting there. */
-const BUFFER_FILL_MIN = 0.06;
-const BUFFER_FILL_MAX = 0.4;
-const BUFFER_FILL_TOK_S_SPAN = 1200;
-const BUFFER_DRAIN_PER_MS = 1 / 5000;
+/** How long a card's signal can age before its connector dots start
+ * fading (round 3 item 6, "graded silence"). Round1/2 rendered a dot as
+ * a flat binary: fully filled while "live", an instant hollow ring the
+ * moment it wasn't -- so "one child stuck" and "everything's fine" could
+ * look identical right up until STALL_MS's hard flip to red. Between
+ * FADE_START_MS and STALL_MS a card's freshness now ramps continuously
+ * from 1 to 0, PRE-ANNOUNCING the coming stall instead of snapping to
+ * it. */
+const FADE_START_MS = 10_000;
+/** A card's signal reads noticeably old enough to caption once past this
+ * age -- drives cards.ts's "Ns since signal" chip. */
+const SIGNAL_AGE_CHIP_MS = 15_000;
 
-function bufferFillFor(tokS: number): number {
-  const frac = Math.max(0, Math.min(1, (tokS || 0) / BUFFER_FILL_TOK_S_SPAN));
-  return BUFFER_FILL_MIN + frac * (BUFFER_FILL_MAX - BUFFER_FILL_MIN);
+/** 1 = signal fresh (<FADE_START_MS old), 0 = at/past STALL_MS (the card
+ * is -- or is about to become -- STALLED, where deriveCardState's own
+ * hard red takes over). Linear ramp in between. A node with no signal at
+ * all (lastSignalAt===0, i.e. `deriveCardState`'s "young") never calls
+ * this -- youngness is a distinct state, not a faded-out working one. */
+export function signalFreshness(now: number, lastSignalAt: number): number {
+  if (!lastSignalAt) return 1;
+  const age = now - lastSignalAt;
+  if (age <= FADE_START_MS) return 1;
+  if (age >= STALL_MS) return 0;
+  return 1 - (age - FADE_START_MS) / (STALL_MS - FADE_START_MS);
+}
+
+/** Round 2, piece 5 (load as length): a task/subtask's Tokens buffer bar
+ * IS the flow gauge -- almost always moving while work flows, visibly
+ * emptying the moment it stops (never a static icon, the round1 critic's
+ * exact complaint).
+ *
+ * Round 3 item 4 SUPERSEDES round 2's fixed-span model (bufferFillFor
+ * against a constant BUFFER_FILL_TOK_S_SPAN, drained by a flat
+ * BUFFER_DRAIN_PER_MS leak): the fixed span meant a 35 tok/s task
+ * permanently read near-empty next to a 2000 tok/s one, and the fill
+ * never actually reached the critic's asked-for "measurably drains
+ * 75%->40% in 6s with siblings at visibly different fills" behavior --
+ * verified against a real scenario run, the old bar barely moved for the
+ * slow/root nodes at all. Now: `bufferPeak` is a ROLLING max of this
+ * card's own recent tok_s (each new tokens.turn knocks 10% off the
+ * remembered peak before taking the max against the new value, so an old
+ * spike fades rather than pinning the gauge forever), and the rendered
+ * fraction is CURRENT/PEAK -- a relative "how hot right now vs. its own
+ * recent high" gauge -- multiplied by a linear drain that reaches 0 over
+ * BUFFER_DRAIN_WINDOW_MS of no new tokens.turn at all (computed in
+ * step() below, off lastTokenFlowAt, never off the general
+ * lastSignalAt -- a heartbeat with no tokens must not hold the bar up). */
+const BUFFER_DRAIN_WINDOW_MS = 4_000;
+const BUFFER_PEAK_DECAY = 0.9;
+const BUFFER_MIN_LEVEL_FRAC = 0.05;
+
+function bufferLevelFrac(tokS: number, peak: number): number {
+  if (peak <= 0) return 0;
+  return Math.max(BUFFER_MIN_LEVEL_FRAC, Math.min(1, tokS / peak));
 }
 
 /** Round 2, piece 2 (motion on the edges): a wire only carries a marker
  * every SPAWN_COOLDOWN_MS at most per edge ("SPARSE... cap ~1 marker per
  * wire per 1.2s"), and a structural (parent_of) wire only tints teal
  * while flow has propagated up it within FLOW_TINT_WINDOW_MS -- both
- * windows are real-event-driven (set on tokens.turn), never a timer. */
-const SPAWN_COOLDOWN_MS = 1200;
+ * windows are real-event-driven (set on tokens.turn), never a timer.
+ * Round 3 item 3: tightened 1200ms -> 600ms ("hot wires spawn up to
+ * 1/0.6s") -- round2's 1.2s floor meant a wire that WAS on-screen still
+ * only refreshed its marker every 1.2s, which under 3fps critic sampling
+ * left long real gaps with nothing mid-wire to catch. */
+const SPAWN_COOLDOWN_MS = 600;
 const FLOW_TINT_WINDOW_MS = 4000;
 const MIN_FLOW_TOK_S = 3;
+
+/** Round 3 item 1 (camera + density): a continuous fit-to-content camera,
+ * eased, active unless the viewer panned/zoomed within the last
+ * AUTO_FIT_IDLE_MS. Root cause this closes (item 0's diagnosis): bootstrap()
+ * used to set pan/zoom ONCE and never touch it again, so any card placed
+ * outside that first frame -- which is EVERY card born after boot, since
+ * layout.ts rows new root tasks ~300px+ apart -- rendered fully off-screen
+ * forever. Verified live: a real scenario run with 4 active nodes and 30
+ * packet spawns across 24s rendered as one static card and a black void,
+ * because every OTHER node's wire (carrying the very motion the round2
+ * critics went looking for) was never inside the camera at all. */
+const AUTO_FIT_IDLE_MS = 10_000;
+const AUTO_FIT_MIN_ZOOM = 0.35;
+const AUTO_FIT_MAX_ZOOM = 1.8;
+/** Content should fill roughly this fraction of the viewport -- "~80%
+ * viewport fill" per the brief; a small scene (1-5 cards) still reads
+ * LARGE rather than shrinking to a dot in a black field. */
+const AUTO_FIT_FILL_FRAC = 0.82;
+/** Camera eases toward its target with this time constant (ms) -- a
+ * smooth swoop, never an instant snap-to-fit. */
+const AUTO_FIT_TIME_CONST_MS = 450;
 
 export type LiveNode = GraphNode & {
   parentTaskId: string | null; // subtask -> its root task id
@@ -108,7 +171,8 @@ export type LiveNode = GraphNode & {
   lastHeartbeatAt: number;
   selected: boolean;
   /** Recent-throughput buffer bar fraction (0..1), task/subtask cards
-   * only -- see the BUFFER_FILL_ and BUFFER_DRAIN_PER_MS constants above. */
+   * only -- recomputed every frame in step() from bufferPeak/
+   * bufferLiveTokS/lastTokenFlowAt below, see bufferLevelFrac's doc. */
   bufferFrac: number;
   /** performance.now() of the last REAL signal that touched this node
    * (task.changed/drive.heartbeat/agent.run/tokens.turn) -- 0 means
@@ -135,6 +199,23 @@ export type LiveNode = GraphNode & {
   /** Brief scale+flash window right when doneAt is set (build item 2:
    * "the card does a brief settle animation"). */
   settleUntil: number;
+  /** Round 3 item 4 (real per-node throughput bar): performance.now() of
+   * this node's last tokens.turn contribution (task/subtask cards only
+   * -- a session's own Tokens row already reads its live tok_s directly,
+   * no buffer gauge needed). Distinct from lastSignalAt, which also
+   * bumps on heartbeats/agent.run -- the buffer bar must drain on
+   * SILENCE FROM TOKENS SPECIFICALLY, not merely "some event happened". */
+  lastTokenFlowAt: number;
+  /** Slow-decaying rolling max of tok_s seen on this card's incoming
+   * tokens.turn events -- the buffer bar's fill is CURRENT/PEAK, a
+   * relative "how hot right now vs. its own recent high" gauge, so
+   * siblings at very different absolute rates can each still read a
+   * meaningful fill instead of a low-rate task pinning permanently near
+   * empty against a fixed span. */
+  bufferPeak: number;
+  /** The tok_s carried by the most recent tokens.turn event that touched
+   * this card -- the numerator for bufferPeak's ratio. */
+  bufferLiveTokS: number;
 };
 
 export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
@@ -156,6 +237,10 @@ export class GraphState {
   pan = { x: 0, y: 0 };
   zoom = 1;
   booted = false;
+  /** performance.now() of the last user pan/zoom/drag input -- auto-fit
+   * (round 3 item 1) stands down for AUTO_FIT_IDLE_MS after this so a
+   * viewer's own framing is never fought. 0 = never touched. */
+  lastUserInputAt = 0;
 
   private byId = new Map<string, LiveNode>();
   /** tok/s samples for the HUD sparkline: {t: performance.now(), v: total tok/s}. */
@@ -216,6 +301,7 @@ export class GraphState {
       lastSignalAt, spend_usd: n.spend_usd || 0,
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
       gatePendingSince, doneAt, settleUntil: 0,
+      lastTokenFlowAt: 0, bufferPeak: 0, bufferLiveTokS: 0,
     };
   }
 
@@ -383,12 +469,18 @@ export class GraphState {
 
   /** Shared by applyEvent's task.changed and reconcile(): detects a
    * status->done or gate_state->pending TRANSITION (compares against
-   * what the caller captured BEFORE writing the new values) and fires
-   * the matching toast exactly once. Working identically whether the
-   * transition arrived live over SSE or was only discovered by a
-   * self-heal refetch is the whole point -- build item 6a's "gate flip
-   * writes sqlite directly, which fires NO SSE" case has to reach the
-   * screen through THIS same path, not a second one. */
+   * what the caller captured BEFORE writing the new values). Working
+   * identically whether the transition arrived live over SSE or was only
+   * discovered by a self-heal refetch is the whole point -- build item
+   * 6a's "gate flip writes sqlite directly, which fires NO SSE" case has
+   * to reach the screen through THIS same path, not a second one.
+   *
+   * Round 3 item 7: only DONE still fires a one-shot toast. A gate going
+   * pending no longer spawns anything here -- gatepanel.ts's
+   * drawGatePanel reads gate_state/gatePendingSince straight off live
+   * node state every frame, so the persistent panel is simply always
+   * correct without an event needing to announce it (and stays correct
+   * across a self-heal reconcile too, for the same reason). */
   private noteStatusGateTransition(
     node: LiveNode, prevStatus: string, prevGate: string, now: number,
   ): void {
@@ -403,7 +495,6 @@ export class GraphState {
       // now" (which silently drops the real wait time shown on the card).
       node.gatePendingSince = node.gate_waiting_s != null
         ? now - node.gate_waiting_s * 1000 : now;
-      spawnToast(this.toasts, "gate", `gate · ${node.label} needs a decision`, now);
     } else if (node.gate_state !== "pending") {
       node.gatePendingSince = 0;
     }
@@ -453,6 +544,12 @@ export class GraphState {
         this.ensureEdge(event.session_id, event.task_id, "driven_in");
         sessionNode.pulseUntil = now + PULSE_MS;
         sessionNode.lastSignalAt = now;
+        // Round 3 item 2: a live agent.run may be the FIRST time this
+        // session's role is known (the boot snapshot only carries it if
+        // agent_runs telemetry already existed) -- backfill it so
+        // glyphFor's dev/qa/sm icon isn't stuck on the generic dot for a
+        // session that started after page load.
+        if (event.role) sessionNode.role = event.role;
       }
       return;
     }
@@ -476,7 +573,14 @@ export class GraphState {
       // event, in the same synchronous call -- the piece-4 fix: a card
       // can never show a stale number next to a fresh bar or vice versa.
       taskNode.tokensGhostUntil = now + GHOST_MS;
-      taskNode.bufferFrac = Math.min(1, taskNode.bufferFrac + bufferFillFor(event.tok_s));
+      // Round 3 item 4: rolling-peak buffer gauge (see bufferLevelFrac's
+      // doc comment). The actual rendered bufferFrac is recomputed every
+      // frame in step() from these three raw inputs, not set here --
+      // that's what makes the ~4s drain a real elapsed-time function
+      // instead of a per-event ratchet.
+      taskNode.lastTokenFlowAt = now;
+      taskNode.bufferPeak = Math.max(taskNode.bufferPeak * BUFFER_PEAK_DECAY, event.tok_s, 1);
+      taskNode.bufferLiveTokS = event.tok_s;
       this.ensureEdge(event.session_id, event.task_id, "driven_in");
 
       const hasFlow = event.tok_s > MIN_FLOW_TOK_S;
@@ -541,8 +645,15 @@ export class GraphState {
         n.x = n.spawnFromX + (n.slot.x - n.spawnFromX) * e;
         n.y = n.spawnFromY + (n.slot.y - n.spawnFromY) * e;
       }
-      if (n.kind !== "session" && n.bufferFrac > 0) {
-        n.bufferFrac = Math.max(0, n.bufferFrac - BUFFER_DRAIN_PER_MS * dtMs);
+      if (n.kind !== "session") {
+        // Round 3 item 4: recomputed every frame from raw inputs (never
+        // ratcheted) -- level = current-tok_s/own-rolling-peak, drain =
+        // linear 1->0 over BUFFER_DRAIN_WINDOW_MS since the last real
+        // tokens.turn. A card with no token flow yet (lastTokenFlowAt
+        // still 0) reads a flat empty bar, not a NaN/negative-age bar.
+        const sinceFlow = n.lastTokenFlowAt ? now - n.lastTokenFlowAt : Infinity;
+        const drain = Math.max(0, 1 - sinceFlow / BUFFER_DRAIN_WINDOW_MS);
+        n.bufferFrac = drain > 0 ? bufferLevelFrac(n.bufferLiveTokS, n.bufferPeak) * drain : 0;
       }
       // Round 2, piece 3/4 honest idle: a rate stat that never resets
       // itself reads as permanently "live" (the piece4 root cause,
@@ -566,6 +677,57 @@ export class GraphState {
       this.lastSampleAt = now;
       this.recordTokSample(now);
     }
+
+    this.autoFitCamera(dtMs, now);
+  }
+
+  /** Round 3 item 1: called every frame, no-ops (leaves pan/zoom exactly
+   * as the viewer left them) whenever the viewer has panned/zoomed/
+   * dragged within the last AUTO_FIT_IDLE_MS, or when there's nothing
+   * placed yet to fit. Otherwise eases pan/zoom toward a camera that
+   * frames every current node's SLOT (resting position, not the
+   * mid-spawn-in animated x/y) at ~AUTO_FIT_FILL_FRAC of the viewport,
+   * clamped to the same zoom range the manual wheel-zoom already
+   * respects. This is the fix for item 0's root cause: without it, any
+   * card placed after boot (i.e. nearly every card in a real recording)
+   * renders fully outside the fixed {pan:0,0 / zoom:1} camera bootstrap()
+   * set once and never touched again. */
+  private autoFitCamera(dtMs: number, now: number): void {
+    if (!this.booted || !this.nodes.length) return;
+    if (this.lastUserInputAt && now - this.lastUserInputAt < AUTO_FIT_IDLE_MS) return;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of this.nodes) {
+      minX = Math.min(minX, n.slot.x);
+      minY = Math.min(minY, n.slot.y);
+      maxX = Math.max(maxX, n.slot.x + n.slot.w);
+      maxY = Math.max(maxY, n.slot.y + n.slot.h);
+    }
+    if (!isFinite(minX)) return;
+    const margin = 40;
+    minX -= margin; minY -= margin; maxX += margin; maxY += margin;
+    const contentW = Math.max(100, maxX - minX);
+    const contentH = Math.max(100, maxY - minY);
+
+    const fitZoom = Math.min(this.width / contentW, this.height / contentH) * AUTO_FIT_FILL_FRAC;
+    const targetZoom = Math.max(AUTO_FIT_MIN_ZOOM, Math.min(AUTO_FIT_MAX_ZOOM, fitZoom));
+    // Center the content bbox in the viewport at targetZoom -- inverts
+    // the same screen = (world - pan) * zoom transform draw.ts/toWorld
+    // use, so the fitted camera and every hit-test agree.
+    const targetPanX = minX + contentW / 2 - this.width / 2 / targetZoom;
+    const targetPanY = minY + contentH / 2 - this.height / 2 / targetZoom;
+
+    const rate = 1 - Math.exp(-dtMs / AUTO_FIT_TIME_CONST_MS);
+    this.zoom += (targetZoom - this.zoom) * rate;
+    this.pan.x += (targetPanX - this.pan.x) * rate;
+    this.pan.y += (targetPanY - this.pan.y) * rate;
+  }
+
+  /** LivePage calls this from onPointerMove (drag) and onWheel so
+   * autoFitCamera knows to stand down -- a viewer's own framing is never
+   * fought by the continuous fit. */
+  noteUserCameraInput(now: number): void {
+    this.lastUserInputAt = now;
   }
 
   setReconcileFetcher(fn: () => Promise<GraphSnapshot>): void {
@@ -659,4 +821,4 @@ export class GraphState {
   }
 }
 
-export { HEARTBEAT_DECAY_MS, STALL_MS, SETTLE_MS, COMPACT_AFTER_MS };
+export { HEARTBEAT_DECAY_MS, STALL_MS, SETTLE_MS, COMPACT_AFTER_MS, SIGNAL_AGE_CHIP_MS };

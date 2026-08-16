@@ -27,6 +27,11 @@ export type GraphNode = {
    * real "backed up" signal, distinct from merely counting parent_of
    * edges (which includes children already in flight). */
   queue_depth?: number;
+  /** Session nodes only (api/work.py's session node, off the latest
+   * agent_runs row) — drives palette.ts's glyphFor role-varied icon
+   * (round 3 item 2: "icon varies by role: dev/qa/sm"). Absent/null for
+   * a session with no agent_runs telemetry yet. */
+  role?: string | null;
   href: string;
 };
 

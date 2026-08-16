@@ -30,13 +30,32 @@ export const PALETTE = {
   textLabel: "#9aa6bd",
   textDim: "#6b7280",
 
-  packet: "#5eead4",
+  // Round 3 item-0/3 fix: the old packet color (#5eead4) sat in the SAME
+  // teal hue family as a live wire's #2dd4bf, so a 6x6 marker riding a
+  // bright 0.9-alpha teal wire had almost no hue contrast -- verified
+  // live: instrumentation confirmed markers WERE spawning (30 in a 24s
+  // window against real flow) yet round2's critics still called them
+  // "rare/subtle" or missed them outright. A marker is a MOTION cue, not
+  // a resource-type color, so it gets its own near-white highlight with a
+  // dark outline (packetOutline) instead of reusing any of the 5 locked
+  // semantic hues -- pops against a teal wire, a dim neutral wire, and an
+  // orange structural wire alike.
+  packet: "#fef9e7",
+  packetOutline: "#0f1420",
 } as const;
 
-export function glyphFor(kind: "task" | "subtask" | "session"): string {
+/** Round 3 item 2 (node type vocabulary): a session/agent card's glyph
+ * now varies by ROLE (dev/qa/sm), not just kind -- distinct silhouettes
+ * so the legend chip (hud.ts's drawLegend) can name all of them at a
+ * glance. `role` is optional/best-effort (api/work.py's session node
+ * carries it off the latest agent_runs row; a session with no telemetry
+ * yet falls back to the generic dev/agent dot). */
+export function glyphFor(kind: "task" | "subtask" | "session", role?: string | null): string {
   if (kind === "task") return "▣"; // ▣ root task
   if (kind === "subtask") return "◇"; // ◇ subtask
-  return "●"; // ● session/agent
+  if (role === "qa") return "▲"; // ▲ verifier
+  if (role === "sm") return "■"; // ■ steward
+  return "●"; // ● dev / unknown agent
 }
 
 /** Round 2, piece 3 (node state while working): the five states a card

@@ -10,9 +10,10 @@ import { HEARTBEAT_DECAY_MS, deriveCardState } from "./graphState";
 import { drawCard, type CardMetrics } from "./cards";
 import { drawWire, routeOrthogonal, type WireKind } from "./wires";
 import { drawPackets } from "./packets";
-import { drawHud } from "./hud";
+import { drawHud, drawLegend } from "./hud";
 import { drawLoading, drawQuietLine, isGraphQuiet } from "./idle";
 import { drawToasts } from "./toasts";
+import { drawGatePanel } from "./gatepanel";
 import { PALETTE } from "./palette";
 
 function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, pan: { x: number; y: number }, zoom: number): void {
@@ -145,6 +146,10 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
   // card's own STALLED state (piece 3) is a separate, per-node signal
   // (red rings) layered on top of this, not replaced by it.
   const graphQuiet = isGraphQuiet(state, now);
+  // Round 3 item 8 (idle refinement): counted alongside the per-node
+  // cardState computation every frame is already doing (never a second
+  // pass) -- feeds the quiet line's "N need attention" branch below.
+  let needAttentionCount = 0;
   for (const n of state.nodes) {
     const m = metricsFor(n, state, now);
     let cardState = deriveCardState(n, now);
@@ -159,6 +164,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
       const driver = state.nodes.find((d) => d.id === n.driverOfId);
       if (driver && driver.status === "done") cardState = "done";
     }
+    if (cardState === "stalled" || cardState === "waiting_gate") needAttentionCount += 1;
     ctx.save();
     if (graphQuiet) ctx.globalAlpha = 0.85;
     drawCard(ctx, n, m, cardState, now);
@@ -175,10 +181,18 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     // where the first task card starts) -- verified against a live
     // screenshot that y=232 visually collided with the top card's title
     // bar text; y=217 clears both.
-    drawQuietLine(ctx, 22, 217, (now - state.lastEventAt) / 1000);
+    drawQuietLine(ctx, 22, 217, (now - state.lastEventAt) / 1000, needAttentionCount);
   }
 
-  // Docked completion/gate toasts -- screen space, independent of
-  // pan/zoom, drawn last so they sit above everything.
+  // Legend chip -- fixed, screen space, bottom-left (round 3 item 2).
+  drawLegend(ctx, 22, height - 14);
+
+  // Persistent gate-wait panel -- fixed, screen space, right edge (round
+  // 3 item 7). Drawn BEFORE the completion toasts so a toast sliding in
+  // over the bottom-right corner never gets clipped under it.
+  drawGatePanel(ctx, state.nodes, now, width, height);
+
+  // Docked completion toasts -- screen space, independent of pan/zoom,
+  // drawn last so they sit above everything.
   drawToasts(ctx, state.toasts, width, height, now);
 }

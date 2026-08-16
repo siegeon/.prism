@@ -39,12 +39,33 @@ const QUIET_MS = 8_000;
  * overlay — once QUIET_MS has passed with no WorkEvent at all. Carries
  * the one honest tiny motion this state is allowed (build item 3): a
  * ticking "last activity Xs ago" counter, so a viewer can tell the page
- * is still alive and simply has nothing new to report, not hung. */
-export function drawQuietLine(ctx: CanvasRenderingContext2D, x: number, y: number, quietForS: number): void {
-  ctx.fillStyle = PALETTE.textDim;
-  ctx.font = "11px system-ui, sans-serif";
+ * is still alive and simply has nothing new to report, not hung.
+ *
+ * Round 3 item 8 (idle refinement, protecting the piece 4 win): critic
+ * 4's residual was that "the localized red stall-ring and the global
+ * quiet caption land in the same window with nothing separating 'one
+ * child stuck' from 'system calm'" -- so `needAttentionCount` (stalled +
+ * waiting_gate cards, counted by draw.ts's already-existing per-node
+ * loop) branches the line's text AND adds a small colored count chip.
+ * Plain "last activity Xs ago" is reserved for the genuinely-calm case:
+ * nothing needs anyone. */
+export function drawQuietLine(
+  ctx: CanvasRenderingContext2D, x: number, y: number, quietForS: number, needAttentionCount: number,
+): void {
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
+  if (needAttentionCount > 0) {
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText("queue is quiet · ", x, y);
+    const prefixW = ctx.measureText("queue is quiet · ").width;
+    ctx.fillStyle = PALETTE.red;
+    ctx.font = "600 11px system-ui, sans-serif";
+    ctx.fillText(`${needAttentionCount} need attention`, x + prefixW, y);
+    return;
+  }
+  ctx.fillStyle = PALETTE.textDim;
+  ctx.font = "11px system-ui, sans-serif";
   ctx.fillText(`queue is quiet · last activity ${Math.max(0, Math.floor(quietForS))}s ago`, x, y);
 }
 

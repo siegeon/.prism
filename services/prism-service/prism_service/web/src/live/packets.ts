@@ -38,13 +38,22 @@ export function stepPackets(packets: Packet[], dtMs: number): Packet[] {
   return packets.filter((p) => p.t < 1);
 }
 
+/** Round 3 item 3: bumped from 6x6 to 7x7 with a dark outline stroke so a
+ * marker reads as unmistakable against EITHER a bright flowing wire or a
+ * dim idle one -- the outline is what actually buys the contrast (a
+ * near-white fill alone still washes out against a bright teal wire at
+ * video-compression bitrates; the dark ring holds its shape regardless
+ * of what's underneath). */
 export function drawPackets(ctx: CanvasRenderingContext2D, packets: Packet[]): void {
-  ctx.fillStyle = PALETTE.packet;
   for (const p of packets) {
     if (p.pts.length < 2) continue;
     const at = pointAtFraction(p.pts, p.t);
     ctx.beginPath();
-    ctx.rect(at.x - 3, at.y - 3, 6, 6);
+    ctx.rect(at.x - 3.5, at.y - 3.5, 7, 7);
+    ctx.fillStyle = PALETTE.packet;
     ctx.fill();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = PALETTE.packetOutline;
+    ctx.stroke();
   }
 }

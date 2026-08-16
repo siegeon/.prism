@@ -1,21 +1,26 @@
-/** Docked completion/gate toasts — round 2, piece 3/4 build directive
- * item 2 ("completion/unlock motion... rubric #12"). A small stack of
- * toasts slides in bottom-right, independent of pan/zoom (screen space,
- * same fixed-overlay treatment as hud.ts), and self-prunes after its
- * hold window. State (the list itself) is owned by GraphState, mirroring
- * the packets.ts split: this module only spawns/prunes/draws, never
- * decides WHEN a toast fires (that's a state-transition call made in
+/** Docked completion toasts — round 2, piece 3/4 build directive item 2
+ * ("completion/unlock motion... rubric #12"). A small stack of toasts
+ * slides in bottom-right, independent of pan/zoom (screen space, same
+ * fixed-overlay treatment as hud.ts), and self-prunes after its hold
+ * window. State (the list itself) is owned by GraphState, mirroring the
+ * packets.ts split: this module only spawns/prunes/draws, never decides
+ * WHEN a toast fires (that's a state-transition call made in
  * graphState.ts's applyEvent/reconcile, per the module's own ownership:
  * "graphState.ts (state transitions)").
  *
- * Two kinds only, per the locked palette: "done" (green accent) for a
- * task settling to done, "gate" (magenta accent) for a task's gate
- * flipping to pending — never a third color, so a toast's accent alone
- * tells you which of the two decision-relevant events just happened. */
+ * Round 3 item 7 SUPERSEDES round 2's second "gate" toast kind: critic 3
+ * called out that a momentary, gone-in-4s toast is the WRONG treatment
+ * for a gate wait, which is an ONGOING state that can last many minutes
+ * ("every node-level event funnels through one generic bottom-right
+ * toast, differing only by a thin border tint and text"). A gate wait
+ * now gets its own persistent panel (gatepanel.ts's drawGatePanel,
+ * recomputed live from node state every frame, never a spawned one-shot
+ * event) -- toasts stay reserved for what's ACTUALLY momentary: a task
+ * settling to done. */
 
 import { PALETTE } from "./palette";
 
-export type ToastKind = "done" | "gate";
+export type ToastKind = "done";
 
 export type Toast = {
   id: string;
@@ -67,7 +72,7 @@ export function drawToasts(
     let alpha = 1;
     if (age > HOLD_MS) alpha = Math.max(0, 1 - (age - HOLD_MS) / FADE_MS);
 
-    const accent = t.kind === "done" ? PALETTE.green : PALETTE.magenta;
+    const accent = PALETTE.green; // "done" is the only kind left -- see ToastKind's doc.
 
     ctx.save();
     ctx.globalAlpha = alpha;

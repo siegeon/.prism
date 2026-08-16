@@ -123,6 +123,7 @@ export default function LivePage() {
       const state = stateRef.current;
       state.pan.x -= dx / state.zoom;
       state.pan.y -= dy / state.zoom;
+      state.noteUserCameraInput(performance.now());
       d.lastX = ev.clientX;
       d.lastY = ev.clientY;
     }
@@ -163,6 +164,7 @@ export default function LivePage() {
     const after = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
     state.pan.x += before.x - after.x;
     state.pan.y += before.y - after.y;
+    state.noteUserCameraInput(performance.now());
   }, []);
 
   return (

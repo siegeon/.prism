@@ -14,7 +14,7 @@
  * the card list never adds, removes, or recolors anything". */
 
 import type { LiveNode } from "./graphState";
-import { COMPACT_AFTER_MS, SETTLE_MS } from "./graphState";
+import { COMPACT_AFTER_MS, SETTLE_MS, SIGNAL_AGE_CHIP_MS, signalFreshness } from "./graphState";
 import { PALETTE, glyphFor, deadRingColorFor, titleTintFor, type CardState } from "./palette";
 
 const TITLE_H = 24;
@@ -75,19 +75,36 @@ export function drawGhostable(
  * rule "red is RESERVED for dead... never 'slow'". A young/pending card
  * with no signal yet, or a healthy working card with a stat that simply
  * hasn't ticked (e.g. Spend at $0 on a fresh task), both fall back to a
- * neutral dim ring instead. */
+ * neutral dim ring instead.
+ *
+ * Round 3 item 6 (graded silence): `freshness` (0..1, from graphState's
+ * signalFreshness) replaces the old plain boolean `live` — round1/2 drew
+ * a dot as a flat binary (fully filled or an instant hollow ring), so a
+ * card 44s into going quiet looked pixel-identical to one that ticked a
+ * second ago right up until STALL_MS's hard flip to red (critic 3's
+ * exact gap). Now the filled dot's alpha ramps down and the dead ring's
+ * alpha ramps up together as freshness falls, so a viewer sees a card
+ * visibly cooling off well before it's declared stalled. */
 function drawConnectorDot(
-  ctx: CanvasRenderingContext2D, x: number, y: number, color: string, live: boolean, deadColor: string,
+  ctx: CanvasRenderingContext2D, x: number, y: number, color: string, freshness: number, deadColor: string,
 ): void {
+  const f = Math.max(0, Math.min(1, freshness));
   ctx.beginPath();
   ctx.arc(x, y, DOT_R, 0, Math.PI * 2);
-  if (live) {
+  if (f > 0) {
+    ctx.globalAlpha = f;
     ctx.fillStyle = color;
     ctx.fill();
-  } else {
+    ctx.globalAlpha = 1;
+  }
+  if (f < 1) {
+    ctx.beginPath();
+    ctx.arc(x, y, DOT_R, 0, Math.PI * 2);
     ctx.strokeStyle = deadColor;
     ctx.lineWidth = 1.4;
+    ctx.globalAlpha = Math.max(0.35, 1 - f);
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -171,6 +188,9 @@ export function drawCard(
   const { w, h } = n.slot;
   const r = 6;
   const deadColor = deadRingColorFor(state);
+  // Round 3 item 6: one freshness value per card, applied to every row's
+  // connector dot -- see signalFreshness's doc comment in graphState.ts.
+  const freshness = signalFreshness(now, n.lastSignalAt);
 
   // Brief settle: scale 1.03 -> 1.0 around the card's own center, right
   // when a task hits done (build item 2). Applied as a transform around
@@ -267,7 +287,7 @@ export function drawCard(
   ctx.font = "11px system-ui, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillText(glyphFor(n.kind), x + PAD_X, y + TITLE_H / 2);
+  ctx.fillText(glyphFor(n.kind, n.role), x + PAD_X, y + TITLE_H / 2);
 
   ctx.fillStyle = PALETTE.textPrimary;
   ctx.font = "600 12px system-ui, sans-serif";
@@ -279,6 +299,17 @@ export function drawCard(
     ctx.fillStyle = PALETTE.green;
     ctx.textAlign = "right";
     ctx.fillText(icon, x + w - PAD_X, y + TITLE_H / 2);
+  } else if (n.lastSignalAt && now - n.lastSignalAt > SIGNAL_AGE_CHIP_MS) {
+    // Round 3 item 6: "Ns since signal" once a card's own age crosses
+    // 15s -- only where the done checkmark isn't already occupying this
+    // corner. Pairs with the connector dots' continuous fade so a
+    // viewer gets both a color cue AND a readable number for how stale
+    // this card's last real event is.
+    const ageS = Math.floor((now - n.lastSignalAt) / 1000);
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+    ctx.textAlign = "right";
+    ctx.fillText(`${ageS}s since signal`, x + w - PAD_X, y + TITLE_H / 2);
   }
 
   // Rows.
@@ -291,7 +322,7 @@ export function drawCard(
   {
     const ghostActive = n.tokensGhostUntil > now;
     const ghostFrac = ghostActive ? 1 - (n.tokensGhostUntil - now) / 650 : 0;
-    drawConnectorDot(ctx, dotX, rowY, PALETTE.teal, m.tokensLive, deadColor);
+    drawConnectorDot(ctx, dotX, rowY, PALETTE.teal, m.tokensLive ? freshness : 0, deadColor);
     ctx.fillStyle = PALETTE.textLabel;
     ctx.font = "10px system-ui, sans-serif";
     ctx.textAlign = "left";
@@ -306,17 +337,19 @@ export function drawCard(
     rowY += ROW_H;
   }
 
-  // Recent-throughput BUFFER bar (round 2, piece 5) — task/subtask cards
-  // only, ~70% of card width, teal fill on a dark track. Fills a real
-  // amount on every tokens.turn that targets this node and drains
-  // continuously in GraphState.step(), so its LENGTH alone answers "how
-  // loaded is this right now" (round1 critic: "no node ever shows load
-  // as a filling bar... every load judgment forces reading and
-  // comparing five-digit numbers instead of glancing at a bar").
+  // Recent-throughput BUFFER bar (round 2, piece 5; round 3 item 4) —
+  // task/subtask cards only, ~70% of card width, teal fill on a dark
+  // track, directly under the Tokens value it's the gauge FOR. This IS
+  // the flow gauge (fill = current/own-rolling-peak, drains to 0 over
+  // ~4s of silence -- graphState.ts's bufferLevelFrac), so its LENGTH
+  // alone answers "how loaded is this right now" (round1 critic: "no
+  // node ever shows load as a filling bar"). Bumped 6px -> 7px (round 3
+  // item 4: "thicker (7px)") and kept visually distinct from the THIN
+  // orange Step bar below (drawCapacityBar's h=4 default there).
   if (n.kind !== "session") {
     const barW = Math.min(w * 0.7, valueRight - labelX);
     rowY += 8;
-    drawCapacityBar(ctx, labelX, rowY, barW, m.bufferFrac, PALETTE.teal, m.bufferFrac > 0.015, 6);
+    drawCapacityBar(ctx, labelX, rowY, barW, m.bufferFrac, PALETTE.teal, m.bufferFrac > 0.015, 7);
     rowY += ROW_H - 8;
   }
 
@@ -328,7 +361,7 @@ export function drawCard(
   if (n.kind !== "session") {
     const ghostActive = n.stepGhostUntil > now;
     const ghostFrac = ghostActive ? 1 - (n.stepGhostUntil - now) / 650 : 0;
-    drawConnectorDot(ctx, dotX, rowY, PALETTE.orange, m.stepLive, deadColor);
+    drawConnectorDot(ctx, dotX, rowY, PALETTE.orange, m.stepLive ? freshness : 0, deadColor);
     ctx.fillStyle = PALETTE.textLabel;
     ctx.font = "10px system-ui, sans-serif";
     ctx.textAlign = "left";
@@ -361,7 +394,7 @@ export function drawCard(
   // the value is m.spendUsd, ticking live off tokens.turn's usd_total.
   if (h >= 96) {
     const spendLive = m.spendUsd > 0;
-    drawConnectorDot(ctx, dotX, rowY, PALETTE.green, spendLive, deadColor);
+    drawConnectorDot(ctx, dotX, rowY, PALETTE.green, spendLive ? freshness : 0, deadColor);
     ctx.fillStyle = PALETTE.textLabel;
     ctx.font = "10px system-ui, sans-serif";
     ctx.textAlign = "left";

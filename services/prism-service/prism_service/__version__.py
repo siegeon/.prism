@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.5"
+PRISM_VERSION = "7.10.54+gamify.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4570,4 +4570,31 @@ PRISM_VERSION_NOTES += (
     "reaches the screen. layout.ts floors the session-card drop at 150px "
     "(was ~12px) so the session->task wire is long enough to see a "
     "marker mid-span."
+)
+PRISM_VERSION_NOTES += (
+    " v7.10.54+gamify.6: ROUND 3 GAUNTLET - item 0 diagnosis (live-"
+    "instrumented against a real scenario run): markers WERE spawning "
+    "correctly, but (a) GraphState never re-fit its camera after boot, so "
+    "any card born after the first frame -- nearly every card in a real "
+    "recording -- rendered fully off-screen, and (b) wireColor() always "
+    "painted a token wire teal regardless of flow, differing only by "
+    "alpha. Fixes: GraphState.autoFitCamera() eases pan/zoom to frame "
+    "all current nodes every frame unless the viewer panned/zoomed "
+    "within 10s; wireColor is dim-neutral until real flow, teal only "
+    "while flowing (both wire kinds, one shared rule); packets get a "
+    "high-contrast outlined marker distinct from the teal hue family, "
+    "600ms spawn cooldown (was 1200ms). Node cards get a role-varied "
+    "glyph (dev/qa/sm) and a bottom-left legend chip naming the glyph + "
+    "5-color vocabulary. The Tokens buffer bar is now a per-card ROLLING-"
+    "PEAK gauge (current/own-recent-max) draining over a real 4s window "
+    "since the last tokens.turn, 7px thick, directly under the value. "
+    "The HUD hero tok/s meter is a fixed-anchor log scale (10/100/1k/10k "
+    "pips) instead of normalizing against a moving recent-max. Connector "
+    "dots fade continuously from 10s to STALL_MS instead of snapping "
+    "binary, and a card shows 'Ns since signal' past 15s. A gate wait "
+    "moved from a momentary toast to gatepanel.ts's persistent docked "
+    "right-edge panel (toasts stay reserved for done-settling, the "
+    "actually-momentary case). The idle quiet line reads 'N need "
+    "attention' (red count) when >=1 card is stalled/gated, plain "
+    "last-activity text only when nothing needs anyone."
 )

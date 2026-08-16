@@ -92,7 +92,10 @@ def test_live_page_canvas_is_devicepixelratio_crisp():
 def test_cards_draws_title_bar_and_glyph():
     src = _read(_LIVE / "cards.ts")
     assert "export function drawCard(" in src
-    assert "glyphFor(n.kind)" in src, "title bar must render the kind's leading glyph"
+    # Round 3 item 2 SUPERSEDES the plain glyphFor(n.kind) call: a
+    # session/agent card's glyph now also varies by role (dev/qa/sm), so
+    # the title bar passes n.role through too.
+    assert "glyphFor(n.kind, n.role)" in src, "title bar must render the kind+role glyph"
     assert "TITLE_H" in src, "a distinct title-bar band must be drawn"
 
 
@@ -243,12 +246,22 @@ def test_task_card_gets_a_throughput_buffer_bar_that_drains():
         "a task/subtask card's buffer bar must be a real per-node field, "
         "not a static icon (round1 gap: 'no node ever shows load as a "
         "filling bar')")
-    assert "BUFFER_DRAIN_PER_MS" in state_src, (
-        "the buffer bar must drain continuously, not just ratchet up and "
-        "sit at its high-water mark")
-    assert "bufferFillFor(" in state_src, (
-        "the buffer bar must fill by an amount driven by the REAL tok_s on "
-        "the tokens.turn event, never a fixed timer tick")
+    # Round 3 item 4 SUPERSEDES round 2's fixed-span fill/drain model
+    # (BUFFER_DRAIN_PER_MS + bufferFillFor against a constant span) with a
+    # per-card ROLLING PEAK gauge that drains over a real ~4s window --
+    # see graphState.ts's bufferLevelFrac doc for why the fixed span
+    # never actually produced "siblings at visibly different fills".
+    assert "BUFFER_DRAIN_WINDOW_MS" in state_src, (
+        "the buffer bar must drain to 0 over a real elapsed-time window "
+        "since the last tokens.turn, not just ratchet up and sit at its "
+        "high-water mark")
+    assert "bufferPeak" in state_src, (
+        "the buffer bar's fill must be relative to a per-card ROLLING "
+        "MAX (current/peak), not a fixed constant span shared by every "
+        "card regardless of its own typical throughput")
+    assert "function bufferLevelFrac(" in state_src, (
+        "the buffer bar must fill by an amount driven by the REAL tok_s "
+        "on the tokens.turn event, never a fixed timer tick")
 
 
 def test_hud_rebuilt_with_meter_bars_and_bigger_hero_number():
@@ -296,9 +309,9 @@ def test_version_bumped_for_this_change():
     assert m, (
         "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
         f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
-    assert int(m.group(1)) >= 5, (
-        "gauntlet piece 1 must bump the gamify version marker to at least "
-        f".5; got .{m.group(1)}")
+    assert int(m.group(1)) >= 6, (
+        "round 3 must bump the gamify version marker to at least "
+        f".6; got .{m.group(1)}")
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +364,7 @@ def test_done_card_settles_then_compacts_to_a_witnessed_chip():
         "compacts -- build directive: 'the completion must be witnessed'")
 
 
-def test_toasts_module_exists_and_graphstate_spawns_both_kinds():
+def test_toasts_module_exists_and_graphstate_spawns_done_only():
     toasts_src = _read(_LIVE / "toasts.ts")
     assert "export function spawnToast(" in toasts_src
     assert "export function drawToasts(" in toasts_src
@@ -359,7 +372,15 @@ def test_toasts_module_exists_and_graphstate_spawns_both_kinds():
 
     state_src = _read(_LIVE / "graphState.ts")
     assert 'spawnToast(this.toasts, "done"' in state_src
-    assert 'spawnToast(this.toasts, "gate"' in state_src
+    # Round 3 item 7 SUPERSEDES round 2's second "gate" toast kind: a
+    # gate wait is an ONGOING state (can last minutes), not a momentary
+    # notification, so it no longer spawns a one-shot toast at all -- it
+    # gets gatepanel.ts's persistent docked panel instead (see the
+    # dedicated test below). Toasts stay reserved for what's actually
+    # momentary: a task settling to done.
+    assert 'spawnToast(this.toasts, "gate"' not in state_src, (
+        "a gate wait must no longer fire a momentary toast -- it's a "
+        "persistent panel now (round 3 item 7)")
 
     draw_src = _read(_LIVE / "draw.ts")
     assert "drawToasts(" in draw_src
@@ -414,3 +435,141 @@ def test_layout_session_drop_is_floored_at_150px():
         "at 150px so the session->task wire is long enough for an "
         "in-transit marker to sit visibly mid-span (round1 gap: "
         "'wire run ~15-50px, markers flash sub-200ms')")
+
+
+# ---------------------------------------------------------------------------
+# Round 3 (gauntlet: camera auto-fit, icon vocabulary + legend, unmistakable
+# markers + honest wire tint, real per-node throughput bar, log-scale HUD
+# meter, graded silence, gate panel vs completion toasts, idle refinement).
+# Pinned against E:\gamify-lab\R3_BRIEF.md's numbered fix list.
+# ---------------------------------------------------------------------------
+
+def test_camera_continuously_auto_fits_content_and_stands_down_for_user_input():
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "private autoFitCamera(" in state_src, (
+        "GraphState must own a continuous fit-to-content camera -- item 1's "
+        "fix for the item-0 root cause (bootstrap() set pan/zoom ONCE and "
+        "never touched it again, so any card born after boot rendered "
+        "fully off-screen)")
+    assert "AUTO_FIT_IDLE_MS" in state_src and "lastUserInputAt" in state_src, (
+        "auto-fit must stand down for a while after the viewer's own "
+        "pan/zoom/drag, never fighting their framing")
+    assert "noteUserCameraInput(" in state_src
+    assert "this.autoFitCamera(dtMs, now);" in state_src, (
+        "auto-fit must run every step() frame, not just once at boot")
+
+    page_src = _read(_LIVE_PAGE)
+    assert page_src.count("noteUserCameraInput(") >= 2, (
+        "LivePage must report BOTH drag-pan and wheel-zoom as user camera "
+        "input, or auto-fit will fight a viewer who just zoomed in")
+
+
+def test_node_icon_vocabulary_varies_by_role_and_a_legend_exists():
+    palette_src = _read(_LIVE / "palette.ts")
+    assert 'role === "qa"' in palette_src and 'role === "sm"' in palette_src, (
+        "glyphFor must give a session/agent card a distinct icon per role "
+        "(dev/qa/sm), not one generic dot for every agent (item 2)")
+
+    hud_src = _read(_LIVE / "hud.ts")
+    assert "export function drawLegend(" in hud_src, (
+        "a small fixed legend chip naming the glyphs and state colors "
+        "must exist (item 2: 'Small fixed legend chip (bottom-left)')")
+    assert "LEGEND_STATES" in hud_src and "LEGEND_GLYPHS" in hud_src
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "drawLegend(" in draw_src, "draw.ts must actually render the legend"
+
+
+def test_token_wire_is_dim_neutral_until_flowing_not_always_teal():
+    wires_src = _read(_LIVE / "wires.ts")
+    # The item-0 root cause, pinned directly: wireColor used to return
+    # PALETTE.teal unconditionally for a token-kind wire regardless of
+    # `flowing`, differing only by ctx.globalAlpha in drawWire -- so an
+    # idle wire and a busy wire were the SAME HUE, just dimmer (verified
+    # live against a real scenario run). Now color itself branches on
+    # `flowing` for BOTH wire kinds through one shared early-return.
+    assert 'if (!flowing) return "rgba(255,255,255,0.16)";' in wires_src, (
+        "an un-flowing wire (token OR structural) must render dim "
+        "neutral, never a dimmed version of its flowing color")
+
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "const SPAWN_COOLDOWN_MS = 600;" in state_src, (
+        "item 3: hot wires must be able to spawn a marker up to every "
+        "0.6s, not round2's 1.2s floor")
+
+    packets_src = _read(_LIVE / "packets.ts")
+    palette_src = _read(_LIVE / "palette.ts")
+    assert "packetOutline" in palette_src and "packetOutline" in packets_src, (
+        "item 3: the in-transit marker needs its own high-contrast "
+        "outline color, distinct from the teal hue family the old "
+        "packet color (#5eead4) shared with a live wire (#2dd4bf) -- "
+        "low hue-contrast was part of why markers read as 'rare/subtle'")
+
+
+def test_buffer_bar_is_a_per_card_rolling_peak_gauge_drawn_thicker():
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "drawCapacityBar(ctx, labelX, rowY, barW, m.bufferFrac, PALETTE.teal, m.bufferFrac > 0.015, 7);" in cards_src, (
+        "item 4: the Tokens flow-gauge bar must be 7px (thicker than the "
+        "orange Step bar's 4px default), directly under the token value")
+
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "BUFFER_PEAK_DECAY" in state_src and "lastTokenFlowAt" in state_src, (
+        "the buffer bar must drain off SIGNAL-SPECIFIC silence "
+        "(lastTokenFlowAt), never the general lastSignalAt a heartbeat "
+        "alone would also bump")
+
+
+def test_hud_hero_meter_is_log_scale_with_fixed_pips():
+    hud_src = _read(_LIVE / "hud.ts")
+    assert "export function logMeterFrac(" in hud_src, (
+        "item 5: the hero tok/s meter needs a FIXED-anchor log scale so "
+        "length is monotonic with the number regardless of what the "
+        "recent history's own max happens to be")
+    assert "LOG_METER_PIPS = [10, 100, 1_000, 10_000]" in hud_src, (
+        "the fixed pips must be literally 10/100/1k/10k per the brief")
+    assert "drawLogMeter(ctx, x, rowY + 30, meterW, totals.tokS, PALETTE.teal);" in hud_src, (
+        "the hero row must actually use the log meter, not the old "
+        "totals.tokS / recentMax(...) moving-target scale")
+
+
+def test_connector_dots_fade_continuously_with_signal_age():
+    state_src = _read(_LIVE / "graphState.ts")
+    assert "export function signalFreshness(" in state_src, (
+        "item 6: a card's connector dots must fade CONTINUOUSLY with "
+        "signal age starting ~10s, not snap binarily at STALL_MS -- "
+        "critic 3's gap: a 44s-quiet node was pixel-identical to a "
+        "just-ticked one right up until the hard red flip")
+    assert "FADE_START_MS = 10_000" in state_src
+
+    cards_src = _read(_LIVE / "cards.ts")
+    assert "signalFreshness(now, n.lastSignalAt)" in cards_src
+    assert "since signal" in cards_src, (
+        "item 6: a card must show a small 'Ns since signal' chip once "
+        "its age crosses SIGNAL_AGE_CHIP_MS (15s)")
+
+
+def test_gate_panel_is_a_persistent_docked_module_not_a_toast():
+    gp_src = _read(_LIVE / "gatepanel.ts")
+    assert "export function drawGatePanel(" in gp_src, (
+        "item 7: a gate wait is an ONGOING state (can last minutes), not "
+        "a momentary event -- it needs its own persistent docked panel, "
+        "computed live from node state, never a spawned one-shot toast")
+    assert "PALETTE.magenta" in gp_src
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "drawGatePanel(ctx, state.nodes, now, width, height);" in draw_src
+
+
+def test_quiet_line_distinguishes_needs_attention_from_genuinely_calm():
+    idle_src = _read(_LIVE / "idle.ts")
+    assert "needAttentionCount" in idle_src, (
+        "item 8: 'queue is quiet' must read 'N need attention' when "
+        ">=1 card is stalled/gated, and the plain last-activity line "
+        "ONLY when nothing needs anyone -- critic 4's residual gap was "
+        "'nothing separating one child stuck from system calm'")
+    assert "need attention" in idle_src
+
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "needAttentionCount" in draw_src, (
+        "draw.ts must actually compute the count (stalled + "
+        "waiting_gate cards) and pass it to drawQuietLine")

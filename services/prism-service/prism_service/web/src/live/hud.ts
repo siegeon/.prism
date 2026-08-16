@@ -11,7 +11,7 @@
  * per the build directive rather than reinvented). */
 
 import type { GraphState } from "./graphState";
-import { PALETTE } from "./palette";
+import { PALETTE, glyphFor } from "./palette";
 import { drawGhostable } from "./cards";
 
 const PAD = 14;
@@ -91,6 +91,48 @@ function drawMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.fillRect(x, y, Math.max(0, Math.min(1, frac)) * w, h);
 }
 
+/** Round 3 item 5 (HUD meter honesty): the hero tok/s meter used to
+ * normalize against `recentMax(tokSHistory)` -- a MOVING target, so the
+ * bar's length answered "relative to the last 5 minutes' own peak", not
+ * "how big is this number". Verified against critic 5's own numbers: 34
+ * tok/s read ~87% full while 2.1K read shorter at ~78%, and both 2.3K
+ * and 5.2K pinned to ~100% -- because whichever value happened to be the
+ * recent max redefined the scale out from under every other reading.
+ * LOG_MIN..LOG_MAX are FIXED anchors (never recomputed from history), so
+ * length is monotonic with the number, always: 10 always maps to the
+ * same x, 100 always further right than 10, 10k always maps to the same
+ * x regardless of what this session's peak happens to be. */
+const LOG_METER_MIN = 1; // floor -- anything below this still reads as "just above empty"
+const LOG_METER_MAX = 10_000;
+const LOG_METER_PIPS = [10, 100, 1_000, 10_000];
+
+export function logMeterFrac(value: number): number {
+  if (value <= 0) return 0;
+  const clamped = Math.max(LOG_METER_MIN, Math.min(LOG_METER_MAX, value));
+  return Math.log10(clamped / LOG_METER_MIN) / Math.log10(LOG_METER_MAX / LOG_METER_MIN);
+}
+
+function pipFrac(pipValue: number): number {
+  return Math.log10(pipValue / LOG_METER_MIN) / Math.log10(LOG_METER_MAX / LOG_METER_MIN);
+}
+
+/** Fixed-scale log meter with tick marks at LOG_METER_PIPS (10/100/1k/
+ * 10k) -- the pips themselves never move, only the fill does, which is
+ * what makes the scale legible/checkable at a glance instead of trusted
+ * blind. */
+function drawLogMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, value: number, color: string): void {
+  const h = 5;
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, logMeterFrac(value) * w, h);
+  ctx.fillStyle = "rgba(18,22,32,0.85)";
+  for (const pip of LOG_METER_PIPS) {
+    const px = x + pipFrac(pip) * w;
+    ctx.fillRect(px - 0.5, y - 1, 1, h + 2);
+  }
+}
+
 /** Segmented block meter for a small integer count (agents live, gates
  * waiting) — the grammar's "stacked hollow squares" language, but FILLED
  * per active unit so it doubles as a mini bar chart rather than a bare
@@ -155,7 +197,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, state: GraphState, now: n
   ctx.font = "12px system-ui, sans-serif";
   ctx.textAlign = "left";
   ctx.fillText("tok/s across live sessions", x + 24, rowY + 20);
-  drawMeter(ctx, x, rowY + 30, meterW, totals.tokS / recentMax(state.tokSHistory), PALETTE.teal);
+  drawLogMeter(ctx, x, rowY + 30, meterW, totals.tokS, PALETTE.teal);
   rowY += HERO_H;
 
   // $ spend — meter vs its own recent-max history.
@@ -228,4 +270,69 @@ export function drawHud(ctx: CanvasRenderingContext2D, state: GraphState, now: n
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
+}
+
+/** Round 3 item 2: a small fixed legend chip, bottom-left, screen space
+ * -- names the node-kind/role glyph vocabulary (item 2's icons) and the
+ * 5 locked state colors (item 6's legend text) in one glance, so a
+ * viewer never has to already know the convention to read the canvas.
+ * Kept deliberately tiny/low-contrast itself (it's a REFERENCE, not
+ * content) -- never competes with the cards/wires it's explaining. */
+const LEGEND_GLYPHS: { glyph: string; label: string }[] = [
+  { glyph: glyphFor("task"), label: "task" },
+  { glyph: glyphFor("subtask"), label: "subtask" },
+  { glyph: glyphFor("session", "dev"), label: "dev" },
+  { glyph: glyphFor("session", "qa"), label: "qa" },
+  { glyph: glyphFor("session", "sm"), label: "sm" },
+];
+
+const LEGEND_STATES: { color: string; label: string }[] = [
+  { color: PALETTE.teal, label: "working" },
+  { color: PALETTE.magenta, label: "waiting" },
+  { color: PALETTE.textDim, label: "not started" },
+  { color: PALETTE.red, label: "dead" },
+  { color: PALETTE.green, label: "done" },
+];
+
+export function drawLegend(ctx: CanvasRenderingContext2D, x: number, bottomY: number): void {
+  const rowH = 16;
+  const panelH = rowH * 2 + 16;
+  const panelW = 372;
+  const top = bottomY - panelH;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(18,22,32,0.72)";
+  ctx.beginPath();
+  ctx.roundRect(x - 8, top, panelW, panelH, 8);
+  ctx.fill();
+
+  ctx.textBaseline = "middle";
+  ctx.font = "10px system-ui, sans-serif";
+
+  // Glyph row.
+  let gx = x;
+  const gy = top + 12;
+  for (const g of LEGEND_GLYPHS) {
+    ctx.fillStyle = PALETTE.textLabel;
+    ctx.textAlign = "left";
+    ctx.fillText(g.glyph, gx, gy);
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.fillText(g.label, gx + 14, gy);
+    gx += 14 + g.label.length * 5.6 + 12;
+  }
+
+  // Color-swatch row.
+  let sx = x;
+  const sy = top + 12 + rowH;
+  for (const s of LEGEND_STATES) {
+    ctx.beginPath();
+    ctx.arc(sx + 4, sy, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.textAlign = "left";
+    ctx.fillText(s.label, sx + 12, sy);
+    sx += 12 + s.label.length * 5.6 + 12;
+  }
+  ctx.restore();
 }

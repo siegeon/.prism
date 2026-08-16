@@ -76,10 +76,23 @@ export type WireKind = "token" | "structure";
  * color, a marker, or motion" -- a structure wire now tints faintly teal
  * while flow is propagating up it, dim neutral otherwise, so color still
  * never means two things in the same view: full-saturation teal stays
- * reserved for the token wire itself). */
+ * reserved for the token wire itself).
+ *
+ * Round 3 item-0/3 fix: a TOKEN wire used to return PALETTE.teal
+ * unconditionally regardless of `flowing`, differing only by
+ * ctx.globalAlpha (0.9 vs 0.35) in drawWire below -- so an idle wire and
+ * a busy wire were the SAME HUE, just dimmer, which is exactly critic
+ * 2's "the wire's color/brightness is provably indifferent to
+ * throughput... identical solid bright-teal line". Verified live against
+ * a real scenario run (instrumented console capture): every idle token
+ * wire sample logged the identical #2dd4bf hex, alpha-only. Now a token
+ * wire is DIM NEUTRAL (same rgba as an idle structural wire) until real
+ * flow has occurred within FLOW_TINT_WINDOW_MS, matching the structural
+ * wire's own already-correct flowing/idle split -- one function, one
+ * rule, for both wire kinds. */
 export function wireColor(kind: WireKind, flowing: boolean): string {
-  if (kind === "token") return PALETTE.teal;
-  return flowing ? "rgba(45,212,191,0.4)" : "rgba(255,255,255,0.16)";
+  if (!flowing) return "rgba(255,255,255,0.16)";
+  return kind === "token" ? PALETTE.teal : "rgba(45,212,191,0.4)";
 }
 
 export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: WireKind, live: boolean): void {
@@ -89,7 +102,7 @@ export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: Wire
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.strokeStyle = wireColor(kind, live);
   ctx.lineWidth = kind === "token" ? 2.5 : 2;
-  ctx.globalAlpha = kind === "token" ? (live ? 0.9 : 0.35) : (live ? 0.75 : 0.5);
+  ctx.globalAlpha = kind === "token" ? (live ? 0.95 : 0.5) : (live ? 0.75 : 0.5);
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
