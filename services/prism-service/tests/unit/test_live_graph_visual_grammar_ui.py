@@ -1458,3 +1458,107 @@ def test_version_bumped_past_round_7():
     assert int(m.group(1)) >= 10, (
         "round 7 must bump the gamify version marker to at least "
         f".10; got .{m.group(1)}")
+
+
+# ---------------------------------------------------------------------------
+# The EXPLORE hop (final /live slice): owner ask "every node can click
+# through to this explore session where we can see the content used to
+# drive it visually". A selected card docks a small action strip (open /
+# explore); explore navigates to /brain?session=<id> or /brain?task=<id>,
+# new explicit ExplorePage params that seed the mesh directly on that
+# entity, bypassing the last-focus/newest-task/newest-session ladder.
+# ---------------------------------------------------------------------------
+
+_EXPLORE_PAGE = _SRC / "pages" / "ExplorePage.tsx"
+
+
+def test_cards_draws_a_docked_action_strip_only_when_selected():
+    src = _read(_LIVE / "cards.ts")
+    assert "export function drawActionStrip(" in src
+    assert "if (!n.selected) return;" in src, (
+        "the action strip must only ever render for a SELECTED card")
+    assert '"↗"' in src, "the open button must render its glyph"
+    assert '"🔍"' in src, "the explore button must render a magnifying-glass glyph"
+    # Grammar: slate strip (PALETTE.card body), orange ONLY on the
+    # selection stroke -- no new colors introduced by this slice.
+    assert "ctx.fillStyle = PALETTE.card;" in src.split("export function drawActionStrip(")[1][:600]
+    assert "ctx.strokeStyle = PALETTE.selection;" in src.split("export function drawActionStrip(")[1][:600]
+
+
+def test_action_strip_hit_test_resolves_open_vs_explore():
+    src = _read(_LIVE / "cards.ts")
+    assert "export function actionStripHitTest(" in src
+    assert 'export type ActionStripHit = "open" | "explore" | null;' in src
+    assert 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";' in src, (
+        "the strip must resolve which HALF of the docked strip a click "
+        "landed in, not just whether it hit the strip at all")
+
+
+def test_explore_href_targets_session_or_task_param_by_node_kind():
+    src = _read(_LIVE / "cards.ts")
+    assert "export function exploreHrefFor(" in src
+    assert 'n.kind === "session" ? "session" : "task"' in src, (
+        "a session node's explore hop must target ?session=<id>, a "
+        "task/subtask node ?task=<id>")
+    assert '`/brain?${param}=${encodeURIComponent(n.id)}`' in src
+
+
+def test_draw_renders_the_action_strip_after_the_card():
+    draw_src = _read(_LIVE / "draw.ts")
+    assert "drawActionStrip(ctx, n);" in draw_src, (
+        "draw.ts must actually call drawActionStrip for every node, right "
+        "after drawCard (drawActionStrip itself no-ops when unselected)")
+
+
+def test_live_page_action_strip_hit_precedes_generic_node_hit_test():
+    src = _read(_LIVE_PAGE)
+    assert "actionStripHitTest" in src and "exploreHrefFor" in src
+    # The strip check must run BEFORE nodeAtWorld -- it floats outside the
+    # card's own slot bounds, so a click meant for it would otherwise fall
+    # through onto nodeAtWorld's card-rectangle-only hit test.
+    strip_idx = src.index("actionStripHitTest(selectedNode")
+    node_idx = src.index("state.nodeAtWorld(world.x, world.y)")
+    assert strip_idx < node_idx, (
+        "the action-strip hit test must be checked before nodeAtWorld")
+    assert 'navigate(exploreHrefFor(selectedNode))' in src, (
+        "an 'explore' hit must navigate to the built /brain URL")
+    assert 'navigate(selectedNode.href)' in src, (
+        "an 'open' hit must navigate to the SAME href a second click on "
+        "the card body already gave")
+
+
+def test_explore_page_supports_explicit_session_and_task_params():
+    src = _read(_EXPLORE_PAGE)
+    assert 'p.get("session") || p.get("task")' in src, (
+        "ExplorePage must read explicit ?session=/?task= params -- kept "
+        "SEPARATE from ?focus=, which deepLink above always treats as a "
+        "FILE for the code-symbol seed lookup, so a raw task/session id "
+        "landing there would misfire that path instead")
+    assert "paramFocusSeed" in src
+    assert "setFocus(paramFocusSeed, { replace: true })" in src, (
+        "an explicit session/task param must normalize into the mesh's "
+        "own ?focus=<token> token space (Mesh accepts any xref token "
+        "generically), not stay as its own separate un-consumed param")
+
+
+def test_explore_page_default_ladder_skips_when_a_param_focus_is_present():
+    src = _read(_EXPLORE_PAGE)
+    assert "if (deepLink || focus || paramFocusSeed) return;" in src, (
+        "the last-focus/newest-task/newest-session probing ladder must "
+        "not fire when an explicit ?session=/?task= deep link already "
+        "resolved the mesh's focus -- paramFocusSeed is a synchronous "
+        "useMemo read of the URL (like deepLink), so this guard sees it "
+        "in the very first effect pass, before any async probing starts")
+
+
+def test_version_bumped_for_the_explore_hop():
+    import re
+
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "7\.10\.54\+gamify\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must stay a readable 7.10.54+gamify.N marker; "
+        f"got a version line that doesn't match: {ver_src.splitlines()[:1]!r}")
+    assert int(m.group(1)) >= 11, (
+        "the explore-hop slice must bump the gamify version marker to at "
+        f"least .11; got .{m.group(1)}")

@@ -224,9 +224,26 @@ export default function ExplorePage() {
     return file ? { file, symbol: p.get("symbol") } : null;
   }, []);
 
-  useEffect(() => { if (!deepLink) run(""); }, [run, deepLink]);
+  // Explicit /brain?session=<id> / /brain?task=<id> deep links (the /live
+  // graph's EXPLORE hop, owner ask: "every node can click through to this
+  // explore session where we can see the content used to drive it
+  // visually"). Deliberately SEPARATE param names from ?focus= above --
+  // that one is always treated as a FILE by deepLink/focusSeed, so a raw
+  // task/session id landing there would misfire a code-symbol seed lookup.
+  // Read once on mount, same pattern as deepLink; normalized straight into
+  // the mesh's own ?focus=<token> token space in the effect below (Mesh
+  // accepts any xref token generically -- see the `focus` state and
+  // MeshFocus prop just above), so it never lingers as a second URL param.
+  const paramFocusSeed = useMemo(() => {
+    const p = new URLSearchParams(window.location.search);
+    return p.get("session") || p.get("task") || null;
+  }, []);
+
+  useEffect(() => { if (!deepLink && !paramFocusSeed) run(""); }, [run, deepLink, paramFocusSeed]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (deepLink) focusSeed(deepLink.file, deepLink.symbol); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (paramFocusSeed && !focus) setFocus(paramFocusSeed, { replace: true }); }, []);
 
   // Persist the last focused token — the first rung of the default-focus
   // ladder below, so a bare /explore visit picks up where you left off.
@@ -238,9 +255,14 @@ export default function ExplorePage() {
   // most recent session. Runs once per project; guarded so it never fires
   // again after an explicit Full-map click clears the focus.
   const defaultResolvedProjectRef = useRef<string | null>(null);
-  const [resolvingDefault, setResolvingDefault] = useState(!deepLink);
+  const [resolvingDefault, setResolvingDefault] = useState(!deepLink && !paramFocusSeed);
   useEffect(() => {
-    if (deepLink || focus) return;
+    // paramFocusSeed is resolved synchronously (a plain useMemo read of the
+    // URL, not an async probe) at the same time deepLink is, so this guard
+    // sees it in the very first effect pass -- the explore hop's ?session=/
+    // ?task= never fires the last-focus/newest-task/newest-session probing
+    // ladder below, same as an explicit ?focus= deep link already didn't.
+    if (deepLink || focus || paramFocusSeed) return;
     if (defaultResolvedProjectRef.current === project) return;
     defaultResolvedProjectRef.current = project;
     let alive = true;
@@ -298,7 +320,7 @@ export default function ExplorePage() {
       }
     })();
     return () => { alive = false; };
-  }, [project, deepLink, focus, setFocus]);
+  }, [project, deepLink, focus, paramFocusSeed, setFocus]);
 
   useEffect(() => {
     api.get<{ graph_json_exists: boolean; viewer_url: string }>(`/api/graph/summary?project=${project}`)

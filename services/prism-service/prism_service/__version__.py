@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.10.54+gamify.10"
+PRISM_VERSION = "7.10.54+gamify.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "gamify.11: the EXPLORE hop. A selected card docks a small action "
+    "strip (open / magnifying-glass explore) just below it; explore "
+    "navigates to /brain?session=<id> or /brain?task=<id>, new explicit "
+    "ExplorePage params that seed the mesh directly on that entity, "
+    "bypassing the last-focus/newest-task/newest-session default ladder. "
     "gamify.10: round7 fixes edge motion (the last open piece). Verified "
     "diagnosis: (1) two concurrent markers per wire (cap was 2) read as "
     "one reversing object -- fixed to exactly ONE marker per wire, "

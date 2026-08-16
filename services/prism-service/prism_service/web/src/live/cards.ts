@@ -24,6 +24,18 @@ const ROW_START_Y = TITLE_H + 9;
 const DOT_R = 3.5;
 const CHIP_H = 30;
 const EDGE_STRIPE_W = 4;
+/** Explore-hop action strip (owner ask: "every node can click through to
+ * this explore session where we can see the content used to drive it
+ * visually"). Docked just below a SELECTED card's bottom edge -- the
+ * 150px-floored session-drop gap (layout.ts) and subtask fan spacing both
+ * leave this much room clear underneath any card, so the strip never
+ * collides with a row of cards below it. Two glyph buttons: "open" (the
+ * same href a second click on the card body already navigated to) and
+ * "explore" (the NEW hop, a magnifying glass -> /brain?session=/?task=). */
+const STRIP_H = 20;
+const STRIP_BTN_W = 28;
+const STRIP_W = STRIP_BTN_W * 2;
+const STRIP_GAP = 6;
 /** Round 4 item 3: "cap ~5 with a +N" -- one hollow square per queued
  * child up to this many, then a small "+N" overflow caption. */
 const QUEUE_GLYPH_CAP = 5;
@@ -176,6 +188,72 @@ function drawDoneChip(ctx: CanvasRenderingContext2D, n: LiveNode): void {
   ctx.font = "600 11px system-ui, sans-serif";
   const maxChars = Math.max(8, Math.floor((w - 40) / 6.2));
   ctx.fillText(truncate(n.label, maxChars), x + PAD_X + 16, y + CHIP_H / 2);
+}
+
+/** Slate strip, orange stroke ONLY while selected (grammar: orange is the
+ * locked selection color, per palette.ts's own doc comment "orange =
+ * compute / step progress / selection outline") -- no new colors
+ * introduced. World-space coordinates, same as drawCard, so draw.ts calls
+ * this inside the same pan/zoom transform right after drawCard. */
+export function drawActionStrip(ctx: CanvasRenderingContext2D, n: LiveNode): void {
+  if (!n.selected) return;
+  const { x, y } = n;
+  const { w, h } = n.slot;
+  const stripX = x + w - STRIP_W;
+  const stripY = y + h + STRIP_GAP;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(stripX, stripY, STRIP_W, STRIP_H, 4);
+  ctx.fillStyle = PALETTE.card;
+  ctx.fill();
+  ctx.strokeStyle = PALETTE.selection;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(stripX + STRIP_BTN_W, stripY + 3);
+  ctx.lineTo(stripX + STRIP_BTN_W, stripY + STRIP_H - 3);
+  ctx.strokeStyle = PALETTE.border;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = PALETTE.textPrimary;
+  ctx.fillText("↗", stripX + STRIP_BTN_W / 2, stripY + STRIP_H / 2 + 1);
+  ctx.fillText("🔍", stripX + STRIP_BTN_W + STRIP_BTN_W / 2, stripY + STRIP_H / 2 + 1);
+  ctx.restore();
+}
+
+export type ActionStripHit = "open" | "explore" | null;
+
+/** World-space hit test, same coordinate space LivePage's onPointerUp
+ * already converts a click into (state.toWorld) before calling
+ * nodeAtWorld -- callers check this FIRST, since the strip floats outside
+ * the card's own slot bounds (nodeAtWorld would otherwise miss it, or a
+ * click meant for the strip could fall through onto whatever's behind it). */
+export function actionStripHitTest(n: LiveNode, worldX: number, worldY: number): ActionStripHit {
+  if (!n.selected) return null;
+  const { x, y } = n;
+  const { w, h } = n.slot;
+  const stripX = x + w - STRIP_W;
+  const stripY = y + h + STRIP_GAP;
+  if (worldX < stripX || worldX > stripX + STRIP_W || worldY < stripY || worldY > stripY + STRIP_H) {
+    return null;
+  }
+  return worldX < stripX + STRIP_BTN_W ? "open" : "explore";
+}
+
+/** The explore hop's target: a session node resolves to ?session=<id>, a
+ * task/subtask to ?task=<id> -- both explicit ExplorePage params (added
+ * this slice) that seed the mesh directly on that entity, bypassing the
+ * whole last-focus/newest-task/newest-session default-resolution ladder
+ * (ExplorePage.tsx's defaultResolvedProjectRef effect). */
+export function exploreHrefFor(n: LiveNode): string {
+  const param = n.kind === "session" ? "session" : "task";
+  return `/brain?${param}=${encodeURIComponent(n.id)}`;
 }
 
 export function drawCard(

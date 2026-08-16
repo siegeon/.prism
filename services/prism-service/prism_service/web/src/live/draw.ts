@@ -7,7 +7,7 @@
 
 import type { GraphState, LiveNode } from "./graphState";
 import { HEARTBEAT_DECAY_MS, deriveCardState } from "./graphState";
-import { drawCard, type CardMetrics } from "./cards";
+import { drawCard, drawActionStrip, type CardMetrics } from "./cards";
 import { drawWire, routeOrthogonal, type WireKind } from "./wires";
 import { drawPackets } from "./packets";
 import { drawHud, drawLegend } from "./hud";
@@ -242,6 +242,10 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
       stalledAttentionCount += 1;
     }
     drawCard(ctx, n, m, cardState, now, graphQuiet);
+    // Explore-hop action strip -- selected-only, world-space, drawn right
+    // after the card it's docked to (see cards.ts's drawActionStrip doc
+    // comment for why "below the card" never collides with a row beneath).
+    drawActionStrip(ctx, n);
   }
 
   ctx.restore();

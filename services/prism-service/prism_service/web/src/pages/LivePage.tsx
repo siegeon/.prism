@@ -6,6 +6,7 @@ import { useVersion } from "@/lib/version";
 import { Page, ErrorBanner } from "@/components/ui";
 import { GraphState } from "@/live/graphState";
 import { draw } from "@/live/draw";
+import { actionStripHitTest, exploreHrefFor } from "@/live/cards";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
 
 /** /live — "PRISM shows its work": every running task is a live card-node
@@ -140,6 +141,16 @@ export default function LivePage() {
     const rect = canvas.getBoundingClientRect();
     const state = stateRef.current;
     const world = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    // The docked action strip floats just below a SELECTED card's own
+    // slot bounds, so it must be checked BEFORE nodeAtWorld (which only
+    // hit-tests the card rectangle itself) -- "open" is the same href a
+    // second click on the body already gives; "explore" is the new hop.
+    const selectedNode = state.nodes.find((n) => n.selected);
+    if (selectedNode) {
+      const hit = actionStripHitTest(selectedNode, world.x, world.y);
+      if (hit === "open") { navigate(selectedNode.href); return; }
+      if (hit === "explore") { navigate(exploreHrefFor(selectedNode)); return; }
+    }
     const node = state.nodeAtWorld(world.x, world.y);
     if (!node) {
       state.select(null);
