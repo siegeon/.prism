@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.20"
+PRISM_VERSION = "7.11.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -52,6 +52,12 @@ PRISM_VERSION_NOTES = (
     "approveDesignPacket() call now also requires !gateOverride, so an "
     "override release never forges a design-packet owner_explicit "
     "approval receipt. "
+    "7.11.17: /live gate decision panel (task d56f3b25, S3 of the "
+    "conductor-into-live migration) - a card parked at plan_gate/"
+    "green_gate gets a 3rd docked action-strip button; clicking it mounts "
+    "LiveGatePanel in place (URL stays /live) with the real DesignPacket/"
+    "DecisionPacket as Plan/Evidence and the same POST /api/conductor/gate "
+    "TaskDetailPage.gateDecide already calls. "
     "7.11.13: /live wires now dock at movable side ports (task b9ce0450) "
     "-- wires.ts's PortSide/WirePort/portPoint/portFromWorld/autoPort/"
     "wireKey/laneFor/drawPort is the single geometry source of truth for "
