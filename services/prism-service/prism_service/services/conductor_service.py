@@ -2040,6 +2040,22 @@ class ConductorService:
                 return None
         except Exception:
             return None
+        # EXIT-half reachability tooth (task c944cac2): refuse a slice whose
+        # diff adds a new production entry point with no non-test production
+        # caller anywhere in the tree -- the "green tests, mocked collaborator,
+        # nothing actually constructs it" shape. Reads the task's real
+        # worktree GIT DIFF (never allowed_files, measured inert on 48/48
+        # active tasks). Pre-flight, abstain-only like the two teeth above:
+        # a truthy refusal PARKS pending with the reason (never failed).
+        try:
+            from prism_service.services import reachability_check
+            _reach_reason = reachability_check.unreachable_entry_point_reason(
+                task)
+        except Exception:
+            _reach_reason = ""
+        if _reach_reason:
+            self._park_green_refusal(task_id, _reach_reason)
+            return None
         # Owner rule (2026-07-18, task eaafdf75): the machine seat signs off
         # ONLY an OBJECTIVE-OBSERVABLE oracle — a test suite passes
         # (pytest_ids) or an http probe returns ok (http_probe). Anything
