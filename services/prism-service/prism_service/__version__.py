@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.2"
+PRISM_VERSION = "7.11.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "perf sweep for 'PRISM feels instant' (task 9974d407): the work "
+    "ticker no longer walks conductor.managed_tasks() (full board render: "
+    "phase_progress + histories + sessions per tile) every 1.5s just to "
+    "learn which ids are active -- TaskService.active_ids() is one slim "
+    "indexed query; advance_rows_all() serves an event-invalidated "
+    "snapshot (invalidated on advance_task history writes) instead of "
+    "full-scanning task_history twice per tile render, and gains a "
+    "covering index (action, task_id, timestamp); GET /tasks/:id/tests "
+    "discovery no longer re-reads every file under tests/** per page "
+    "open (measured 3.9s) -- per-root text cache validated by mtime/size "
+    "stat walk; GET /tasks/:id/delivery's per-commit git subprocess "
+    "storm sits behind a 30s TTL cache like /stranded; sessions_for_task "
+    "reuses a thread-local scores.db connection instead of "
+    "connect+CREATE TABLE per call; agent_runs schema DDL runs once per "
+    "path per process, and started_at gains an index; sqlite chokepoint "
+    "now sets PRAGMA synchronous=NORMAL (standard WAL pairing); GET "
+    "/api/tasks honors ?status= pushdown. Also killed on this machine: a "
+    "daemon leaked by test_daemon_self_heal (ports 8898/8899) that had "
+    "read 583GB / written 124GB from the shared data dir since 00:52. "
     "gamify.13: cards on /live are now draggable to a user-chosen "
     "position (owner ask: 'the individual panels should be able to be "
     "moved'). Pointerdown on a card body arms a potential drag; movement "

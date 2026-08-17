@@ -15,6 +15,11 @@ Canonical settings (do not diverge — change them HERE):
 - ``PRAGMA journal_mode=WAL``   — readers never block the writer
 - ``PRAGMA busy_timeout=5000``  — cap the writer-lock wait so a stuck txn
   surfaces as SQLITE_BUSY instead of stalling the uvicorn loop (issue #38)
+- ``PRAGMA synchronous=NORMAL`` — the standard WAL pairing: fsync at the
+  checkpoint boundary instead of every commit. Corruption-safe under WAL;
+  the only exposure is the last few commits on a full OS crash, and the
+  default FULL was costing an fsync per task_history/agent_runs write on
+  every SDLC transition (task 9974d407, "PRISM feels instant")
 """
 
 from __future__ import annotations
@@ -35,4 +40,5 @@ def connect(path: "str | Path", *, timeout: float = 5.0, **kwargs) -> sqlite3.Co
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
