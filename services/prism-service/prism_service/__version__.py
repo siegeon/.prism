@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.19"
+PRISM_VERSION = "7.11.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.20: /live's ghost guards wake the snapshot self-heal before "
+    "returning (task 0fb0f163) - a cold-booted board heals to real "
+    "titled cards within the debounce instead of staying empty; ghost "
+    "births remain impossible. "
     "7.11.19: red_gate anchor resolution gains a third tier (task "
     "ed3263b4) - a driver-attested pre-change ref (`red-anchor-ref: "
     "<sha>` marker in red-step completion_proof) is resolved and run by "

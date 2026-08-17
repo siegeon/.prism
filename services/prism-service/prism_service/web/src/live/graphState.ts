@@ -948,6 +948,10 @@ export class GraphState {
       const known = this.byId.get(event.task_id);
       if (!known && !(typeof fields.title === "string" && fields.title &&
           typeof fields.workflow_step === "string" && fields.workflow_step)) {
+        // task 0fb0f163: an unknown-task reference IS the drift signal --
+        // wake the debounced snapshot refetch so reconcile births the
+        // REAL titled card; never birth from the bare event itself.
+        this.scheduleSelfHeal();
         return;
       }
       const node = known ?? this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
@@ -990,7 +994,11 @@ export class GraphState {
       // telemetry alone (no title, no step fields) must never birth a
       // card; the snapshot/reconcile owns discovery of real tasks.
       const taskNode = this.byId.get(event.task_id);
-      if (!taskNode) return;
+      if (!taskNode) {
+        // task 0fb0f163: unknown task -> wake the snapshot self-heal.
+        this.scheduleSelfHeal();
+        return;
+      }
       taskNode.lastSignalAt = now;
       const runSid = String(event.session_id ?? "").trim();
       if (runSid) {
@@ -1032,7 +1040,12 @@ export class GraphState {
       // to the snapshot/reconcile (and to titled task.changed events).
       const sid = String(event.session_id ?? "").trim();
       const taskKnown = this.byId.get(event.task_id);
-      if (!taskKnown || !sid) return;
+      if (!taskKnown || !sid) {
+        // task 0fb0f163: unknown task (or blank session) -> wake the
+        // snapshot self-heal; the healed snapshot supplies real cards.
+        if (!taskKnown) this.scheduleSelfHeal();
+        return;
+      }
       const taskNode = taskKnown;
       const sessionNode = this.upsertSessionNode(sid, event.task_id, now);
       sessionNode.tok_s = event.tok_s;
