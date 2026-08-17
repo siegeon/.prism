@@ -55,6 +55,9 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 _SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
 _CONDUCTOR_TSX = _SRC / "pages" / "ConductorPage.tsx"
+# Task 40c29b83 (FR-1): ManagedTask's declaration moved out of ConductorPage
+# into the shared hook both LiveBar and ConductorPage now consume.
+_CONDUCTOR_STATE_HOOK = _SRC / "lib" / "useConductorState.ts"
 
 
 def _read(p: Path) -> str:
@@ -189,11 +192,16 @@ def test_claimed_is_additive_existing_keys_unchanged(tmp_path, monkeypatch):
 
 
 def test_managed_task_type_carries_claimed_field():
-    src = _read(_CONDUCTOR_TSX)
+    # SUPERSEDED location (task 40c29b83, FR-1): ManagedTask no longer lives
+    # as a private type in ConductorPage.tsx -- it moved to the shared
+    # useConductorState hook that LiveBar.tsx now also consumes, so the real
+    # invariant (TaskTile can read task.claimed) is pinned against ITS type
+    # declaration rather than a copy ConductorPage no longer owns.
+    src = _read(_CONDUCTOR_STATE_HOOK)
     type_block = src[src.index("type ManagedTask"): src.index("type ManagedTask") + 900]
     assert "claimed" in type_block, (
-        "ManagedTask must declare a `claimed` field so TaskTile can read "
-        "task.claimed — not present today"
+        "ManagedTask (lib/useConductorState.ts) must declare a `claimed` "
+        "field so TaskTile can read task.claimed — not present today"
     )
 
 
