@@ -33,6 +33,14 @@ export type GraphNode = {
    * client-invented clock start (mx-9f2018: no gauge renders from a
    * value the server didn't send for THIS task). */
   drive_started_at?: number | null;
+  /** Whether the OWNER can act on this node's pending gate right now, and
+   * (if not) who it's actually waiting on -- api/work.py's _gate_actionability,
+   * derived by CALLING api/conductor.py's gate_readiness (mx-d6c1df: never a
+   * second client-side implementation of its teeth). Only meaningful when
+   * gate_state==="pending"; absent/false+"" otherwise. Drives gatepanel.ts's
+   * "YOUR REVIEW" vs "waiting on others" split (task edf38154). */
+  owner_actionable?: boolean;
+  waiting_on?: string;
   /** Session nodes only (api/work.py's session node, off the latest
    * agent_runs row) — drives palette.ts's glyphFor role-varied icon
    * (round 3 item 2: "icon varies by role: dev/qa/sm"). Absent/null for

@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.17"
+PRISM_VERSION = "7.11.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.19: red_gate anchor resolution gains a third tier (task "
+    "ed3263b4) - a driver-attested pre-change ref (`red-anchor-ref: "
+    "<sha>` marker in red-step completion_proof) is resolved and run by "
+    "the SEAT itself (checkout + pinned-test overlay + real pytest), "
+    "never a pasted transcript; mint_red_evidence and "
+    "adjudicate_test_red_gate both gain the tier, and a park with no "
+    "resolvable anchor now writes a gate_reason naming both missing "
+    "sources instead of silently abstaining. gate_readiness names the "
+    "red-anchor-ref option too. "
+    "7.11.18: /live stops fabricating cards (task ea92640f) - bare "
+    "telemetry (task.changed without title+step, agent.run, tokens.turn) "
+    "no longer births board nodes; blank-session agent.run events never "
+    "reach the bus (row still stored for the audit spine); reconcile "
+    "prunes client-born nodes the snapshot disowns twice. "
+    "7.11.17: Inbox nav entry + /inbox route hidden behind INBOX_ENABLED "
+    "(task d1854966, default false) while the feature bakes - hide not "
+    "delete, item literal/route/lazy import all stay in source, one-line "
+    "flip restores both; a typed/bookmarked /inbox redirects to Dashboard. "
     "7.11.15: the /conductor tile regains its deleted metrics (task "
     "ac91be51) - 2x2 MetricCell grid, EtaCountdownBar, SlicesBar epic "
     "hero and TokenTurns' session_quiet_s quiet-clock, restored from "
@@ -4856,4 +4874,13 @@ PRISM_VERSION_NOTES += (
     "every approve - it says that only when body.gate_step is the terminal "
     "green_gate, and still names the next step for plan_gate/story_gate/"
     "red_gate advances."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.20 (task 43cefc52): premise_grounded now recognises numbered "
+    "claim lists ('1.' / '1)') identically to '-'/'*' bullets in "
+    "_claim_lines (arc_governance.py) - a driver who wrote a numbered "
+    "'## Premises' list used to get the misleading 'section is present "
+    "but empty' refusal. The genuinely-empty-section and unrecognised-"
+    "bullet-form (prose-only) refusals are now distinct messages; "
+    "grounding (_claim_is_grounded) is unchanged."
 )

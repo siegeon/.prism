@@ -361,6 +361,66 @@ def ui_artifact_gate_reason(tags: object, proof_type: object,
     return ""
 
 
+# A "surface" the oracle names for a person to look at, distinct from a
+# METRIC that merely mentions the word "surface" in prose (task 8a737f2f
+# test A2: "default MCP tool surface 41 -> 31" must NOT trip this). Keyed on
+# concrete, machine-recognizable locators a person actually navigates to —
+# a URL, the dev :8888 host, or an explicit route/nav-entry phrase — never
+# on the bare English word "surface".
+_SCREEN_LOCATOR_SIGNALS = (
+    "http://", "https://", "127.0.0.1", ":8888", "/tasks/", "nav entry",
+    "landing page",
+)
+
+
+def _screen_claim_gate_reason(tags: object, proof_type: object,
+                             oracle: object) -> str:
+    """A test-proof ticket cannot claim a screen (task 8a737f2f, HOLE 1).
+
+    Narrows FR-4's proof_type opt-out (ui_artifact_gate_reason above): that
+    tooth lets ANY declared non-demo proof_type (typically 'test') bypass
+    the demonstrable-UI requirement entirely, with no check of what the
+    oracle TEXT actually claims. When a `ui`-tagged task declares a
+    non-demo/non-empty proof_type AND its oracle names a user-reachable
+    surface (a URL, the :8888 dev host, a route, a nav entry — something a
+    PERSON looks at), a pytest receipt proves a suite ran, not what renders
+    there — so this stays a HUMAN sign-off.
+
+    Returns a non-empty reason when the shape is flagged, else "". Never
+    fires for proof_type='demo' (STRAND C's own territory) or an unset
+    proof_type (the existing demo/screenshot requirement already applies).
+    Never fires for a non-`ui` task (out of scope, not this tooth's
+    business).
+
+    PRIVATE ON PURPOSE (`_` prefix): both production callers live in THIS
+    module (adjudicate_green_gate and the human-judgment branch of
+    gate_decide), so this is a module-internal helper like
+    _metric_gate_reason / _artifact_path_reason / _unshipped_gate_reason,
+    NOT an entry point. The public siblings here (ui_artifact_gate_reason,
+    green_gate_artifact_reason, board_health) are public precisely because
+    api/conductor.py imports them; publishing a name with no external
+    consumer is the "construction site" reachability_check refuses. If a
+    readiness/API surface ever needs this verdict, make it public IN THAT
+    slice, together with the call site that consumes it."""
+    tag_set = {str(t).strip().lower() for t in (tags or [])}
+    if "ui" not in tag_set:
+        return ""
+    pt = str(proof_type or "").strip().lower()
+    if not pt or pt == "demo":
+        return ""
+    text = str(oracle or "").lower()
+    if not any(sig in text for sig in _SCREEN_LOCATOR_SIGNALS):
+        return ""
+    return (
+        f"ui task declares proof_type={pt!r} (a machine-runnable receipt), "
+        "but its oracle names a user-reachable SCREEN — a pytest/http "
+        "receipt proves a suite ran, not what renders on that surface. "
+        "This stays a HUMAN sign-off: a distinct person must open the "
+        "surface and confirm (their own look at the screen is the "
+        "evidence); a plain Approve from them still closes the gate."
+    )
+
+
 # --- Proof-carrying artifacts, generalized to ALL gates (task 3826dac3) ---
 # The ui-artifact tooth proved that self-attested strings are not proof. We
 # generalize it: red_gate requires a committed FAILING-TEST TRACE; green_gate
@@ -2060,6 +2120,28 @@ class ConductorService:
         if _reach_reason:
             self._park_green_refusal(task_id, _reach_reason)
             return None
+        # SCREEN-CLAIM + SHIPPED-NESS PRE-FLIGHT (task 8a737f2f). Two
+        # ABSTAIN-ONLY teeth, computed together so a single refusal names
+        # BOTH counts when they co-occur (b22576bb replay, test C3):
+        # screen-claim narrows FR-4 (HOLE 1 — a ui task's non-demo proof_type
+        # opts out of the demo tooth even when its oracle names a screen a
+        # pytest receipt cannot see); shipped-ness (HOLE 2) refuses to let
+        # the machine stamp done on a trailer origin/main cannot see. Both
+        # PARK pending with the reason recorded (never failed, task
+        # e0149f1f's precedent) rather than silently `return None`. A
+        # captured screenshot does NOT satisfy the screen-claim half (unlike
+        # STRAND C above) — the oracle names something SEEN, not measured,
+        # so this stays a human sign-off even with real evidence on file.
+        _screen_reason = _screen_claim_gate_reason(
+            getattr(task, "tags", None), getattr(task, "proof_type", ""),
+            getattr(task, "oracle", ""))
+        _ship_reason = self._unshipped_gate_reason(task)
+        if _screen_reason or _ship_reason:
+            self._park_green_refusal(
+                task_id,
+                " | ".join(r for r in (_screen_reason, _ship_reason) if r),
+            )
+            return None
         # Owner rule (2026-07-18, task eaafdf75): the machine seat signs off
         # ONLY an OBJECTIVE-OBSERVABLE oracle — a test suite passes
         # (pytest_ids) or an http probe returns ok (http_probe). Anything
@@ -2208,6 +2290,81 @@ class ConductorService:
         except Exception:
             return
 
+    def _unshipped_gate_reason(self, task) -> str:
+        """HOLE 2 (task 8a737f2f): DONE means SHIPPED (mx:
+        feedback_done_means_shipped) — refuse to stamp
+        full_outcome_complete/status=done while this task's own
+        `[task:<id8>]` commit trailer has not reached origin/main.
+
+        Resolved the SAME way the Dashboard's stranded-work panel already
+        does (api/tasks.py:_is_shipped_on_main — `git log origin/main
+        --grep`), never `merge-base --is-ancestor` (false-negative on
+        squash merges, task 499ba9c9) and never the daemon's own checkout
+        HEAD — this reads the TASK'S OWN worktree.
+
+        FAIL-OPEN (returns ""), never a refusal, when: no workspace is
+        resolvable for the task, that workspace has no `origin/main` ref at
+        all (e.g. a synthetic/local-only repo with no remote — an
+        unverifiable shipped-ness is not this tooth's business; other teeth
+        own the un-evidenced case), OR the task never committed anything
+        under its own `[task:<id8>]` trailer ANYWHERE in this workspace
+        (local history included) — a measurement-only ticket (metric/
+        http_probe oracle, zero code changes) has nothing to ship, so
+        "unshipped" does not apply to it. Regression guard: this last case
+        is what test_conductor_work_honest_green.py's bare-loop walk hit
+        (task 8a737f2f qa discovery) before this fail-open existed — that
+        fixture's workspace resolves to a real repo+origin/main but the
+        task itself never makes a commit, so the naive origin/main-only
+        check misread "nothing committed yet" as "committed but unshipped"."""
+        task_id = str(getattr(task, "id", "") or "")
+        if not task_id:
+            return ""
+        try:
+            from prism_service.services import task_workspace
+            ws = task_workspace.workspace_for(task_id) or {}
+            repo = str(ws.get("path") or "")
+        except Exception:
+            repo = ""
+        if not repo:
+            return ""
+        import subprocess
+        try:
+            # --all: the task's own commit may live on ITS OWN branch while
+            # HEAD sits elsewhere (e.g. checked back out to main) — a bare
+            # `git log` only walks the current branch and would misread a
+            # real unpushed commit as "never committed at all" (test C2/C3).
+            local_trailer = subprocess.run(
+                ["git", "-C", repo, "log", "--all", "--fixed-strings",
+                 "--grep", f"[task:{task_id[:8]}]", "-n", "1",
+                 "--format=%H"],
+                capture_output=True, text=True, timeout=10)
+        except Exception:
+            return ""
+        if local_trailer.returncode != 0 or not local_trailer.stdout.strip():
+            return ""
+        try:
+            ref_check = subprocess.run(
+                ["git", "-C", repo, "rev-parse", "--verify", "-q",
+                 "origin/main"],
+                capture_output=True, text=True, timeout=10)
+        except Exception:
+            return ""
+        if ref_check.returncode != 0:
+            return ""
+        try:
+            from prism_service.api.tasks import _is_shipped_on_main
+            shipped = _is_shipped_on_main(repo, task_id)
+        except Exception:
+            return ""
+        if shipped:
+            return ""
+        return (
+            f"green_gate: this task's [task:{task_id[:8]}] commit trailer "
+            "is not yet reachable from origin/main — DONE means SHIPPED "
+            "(mx: feedback_done_means_shipped); merge/land the branch "
+            "before full_outcome_complete/status=done can be set"
+        )
+
     def _receipt_adapter_mismatch_reason(self, task, receipt) -> Optional[str]:
         """Refuse a receipt whose ADAPTER cannot evidence what the task pins
         (task e0149f1f, 2026-07-21). 5a6837a0 closed on adapter=http_probe
@@ -2292,6 +2449,20 @@ class ConductorService:
             model="machine")
         return res if res and res.get("ok") else None
 
+    def _park_red_gate(self, task_id: str, reason: str) -> None:
+        """Record a COMPUTED red_gate refusal onto the task — gate_state
+        stays 'pending' (never 'failed') and gate_reason carries the real,
+        actionable reason so a driving agent can self-diagnose instead of
+        pinging a human at an empty gate_reason (task ed3263b4)."""
+        if self._task_svc is None:
+            return
+        self._task_svc.update(task_id, gate_state="pending",
+                              gate_reason=reason)
+        self._task_svc.record_history(
+            task_id, action="gate_decide",
+            details=f"gate=red_gate; action=park; reason={reason}",
+            actor="conductor")
+
     def mint_red_evidence(self, task_id: str,
                           session_id: Optional[str] = None) -> dict:
         """Mint the RED EvidenceReceipt at the write_failing_tests report
@@ -2323,6 +2494,19 @@ class ConductorService:
         # pre-tests -> 'no tests ran' -> permanent strand. Fall back to the
         # worktree HEAD only when no tests-only [task:<id>] commit resolves.
         red_sha, red_repo = self._red_tests_commit(task_id)
+        # TIER 2 (task ed3263b4): no tests-only commit — try a driver-
+        # attested pre-change ref. The SEAT resolves it in the task's own
+        # worktree (never trusts the driver's word) and, if it resolves,
+        # OVERLAYS the pinned test files onto that pre-change checkout
+        # before running them, because the pre-change commit predates the
+        # tests by construction (the 19e4e7f7 bundled-commit shape).
+        overlay_from = ""
+        if not (red_sha and red_repo):
+            attested = self._attested_red_ref(task)
+            if attested:
+                a_sha, a_repo = self._resolve_attested_ref(task_id, attested)
+                if a_sha and a_repo:
+                    red_sha, red_repo, overlay_from = a_sha, a_repo, a_repo
         if not (red_sha and red_repo):
             red_repo, red_sha = self._workspace_and_head(task_id)
         if not (red_repo and red_sha):
@@ -2331,10 +2515,11 @@ class ConductorService:
         self._task_svc.record_history(
             task_id, action="red_step_sha", details=red_sha,
             actor=session_id or "conductor")
-        receipt = osp.run_red_oracle(
-            spec, task, red_sha,
-            ctx={"project": self._project_name or "default",
-                 "workspace": red_repo})
+        ctx = {"project": self._project_name or "default",
+               "workspace": red_repo}
+        if overlay_from:
+            ctx["overlay_from"] = overlay_from
+        receipt = osp.run_red_oracle(spec, task, red_sha, ctx=ctx)
         return {"ok": receipt.status == osp.ST_RED,
                 "reason": receipt.reason, "red_sha": red_sha}
 
@@ -2374,8 +2559,36 @@ class ConductorService:
         if spec is None:
             return None
         red_sha = self._red_step_sha(task_id)
+        overlay_from = ""
         if not red_sha:
-            return None
+            # TIER 2 / TIER 3 PARK (task ed3263b4): a tooth that computes a
+            # refusal and returns None has only half-shipped it — record the
+            # reason on the task (pending, never failed) so a driving agent
+            # can self-diagnose instead of pinging a human at an empty
+            # gate_reason.
+            attested = self._attested_red_ref(task)
+            if not attested:
+                self._park_red_gate(task_id, (
+                    "red_gate: no anchor to demonstrate red from — neither "
+                    "a tests-only [task:<id8>] commit exists in history "
+                    "(commit the failing tests as their OWN commit before "
+                    "the fix) nor an attested pre-change ref is on file "
+                    "(add a `red-anchor-ref: <sha>` marker line to the "
+                    "red-step completion_proof naming a commit before the "
+                    "fix landed)."))
+                return None
+            a_sha, a_repo = self._resolve_attested_ref(task_id, attested)
+            if not (a_sha and a_repo):
+                self._park_red_gate(task_id, (
+                    f"red_gate: the attested pre-change ref "
+                    f"{attested[:12]!r} could not be resolved in this "
+                    "task's own worktree — verify the sha is correct and "
+                    "reachable there, then re-attest."))
+                return None
+            red_sha, overlay_from = a_sha, a_repo
+            self._task_svc.record_history(
+                task_id, action="red_step_sha", details=red_sha,
+                actor=ADJUDICATOR_SEAT)
         project = self._project_name or "default"
         fresh = osp.fresh_red_receipt(project, task_id, red_sha,
                                       spec.spec_hash())
@@ -2386,12 +2599,14 @@ class ConductorService:
             if tried:
                 return None
             _s, red_repo = self._red_tests_commit(task_id)
-            ws_path = red_repo or self._workspace_and_head(task_id)[0]
+            ws_path = (red_repo or overlay_from
+                      or self._workspace_and_head(task_id)[0])
             if not ws_path:
                 return None
-            osp.run_red_oracle(spec, task, red_sha,
-                               ctx={"project": project,
-                                    "workspace": ws_path})
+            _ctx = {"project": project, "workspace": ws_path}
+            if overlay_from:
+                _ctx["overlay_from"] = overlay_from
+            osp.run_red_oracle(spec, task, red_sha, ctx=_ctx)
             fresh = osp.fresh_red_receipt(project, task_id, red_sha,
                                           spec.spec_hash())
         if fresh is None:
@@ -2539,6 +2754,46 @@ class ConductorService:
             return r.returncode == 0
         except Exception:
             return False
+
+    _RED_ANCHOR_REF_RE = re.compile(r"red-anchor-ref:\s*([0-9a-fA-F]{6,40})")
+
+    def _attested_red_ref(self, task: object) -> str:
+        """The pre-change ref a driver ATTESTS in the red-step
+        completion_proof via a ``red-anchor-ref: <sha>`` marker line (task
+        ed3263b4, tier 2): when tests+fix land in ONE commit (the 19e4e7f7
+        shape), tier 1 (``_red_tests_commit``) finds no tests-only commit.
+        Parsing the marker is NOT trusting the driver — ``_resolve_attested_
+        ref`` below re-derives the sha in the task's own worktree, and
+        ``mint_red_evidence`` checks it out and runs the pinned tests there
+        itself (distinct-actor rule: a pasted transcript is never evidence).
+        '' when no marker line is present."""
+        proof = str(_task_attr(task, "completion_proof", "") or "")
+        m = self._RED_ANCHOR_REF_RE.search(proof)
+        return m.group(1) if m else ""
+
+    def _resolve_attested_ref(self, task_id: str,
+                              ref: str) -> tuple[str, str]:
+        """Resolve an attested ref against the TASK'S OWN worktree — the
+        seat rev-parses it itself, never the driver's word. Returns
+        (sha, repo) on success, ('', '') when ``ref`` does not resolve
+        there (task ed3263b4)."""
+        ref = (ref or "").strip()
+        if not ref:
+            return "", ""
+        ws_path, _head = self._workspace_and_head(task_id)
+        if not ws_path:
+            return "", ""
+        import subprocess as _sp
+        try:
+            r = _sp.run(["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+                        cwd=ws_path, capture_output=True, text=True,
+                        timeout=15)
+        except Exception:
+            return "", ""
+        if r.returncode != 0:
+            return "", ""
+        sha = r.stdout.strip()
+        return (sha, ws_path) if sha else ("", "")
 
     def _red_step_sha(self, task_id: str) -> str:
         """The commit red is anchored to. Prefer a recorded ``red_step_sha``
@@ -3352,6 +3607,32 @@ class ConductorService:
                     "gate_state": "pending",
                     "reason": ui_reason,
                 }
+        # SHIPPED-NESS PRE-FLIGHT (HOLE 2, task 8a737f2f): DONE means
+        # SHIPPED (mx: feedback_done_means_shipped) — refuse to stamp
+        # full_outcome_complete/status=done while this task's own
+        # [task:<id8>] commit trailer has not reached origin/main.
+        # _unshipped_gate_reason (below) fails OPEN (no objection) when no
+        # workspace/origin-main is resolvable, so this only ever fires when
+        # the shipped-ness question is actually answerable. PARKS pending
+        # with the reason, never failed (task e0149f1f precedent) — an
+        # honest owner Approve/override remains available once it ships.
+        if gate_step_id == "green_gate":
+            _ship_reason = self._unshipped_gate_reason(task)
+            if _ship_reason:
+                self._park_green_refusal(task_id, _ship_reason)
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate_step_id}; action=approve; "
+                             f"shipped-ness=not-yet; reason={_ship_reason}"),
+                    actor="conductor",
+                )
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "gate_step": gate_step_id,
+                    "gate_state": "pending",
+                    "reason": _ship_reason,
+                }
         # EPIC GREEN_GATE ROLL-UP (issue #171): a parent whose children all
         # carry passing completion_proof satisfies its OWN green_gate via the
         # children — it need not reproduce a separate red->green. This is an
@@ -3400,8 +3681,18 @@ class ConductorService:
             try:
                 from prism_service.services import oracle_spec as _osp
                 _pt = str(getattr(_live, "proof_type", "") or "").strip().lower()
+                # A screen-claim shape (task 8a737f2f, HOLE 1) is human
+                # judgment too, even when OracleSpec derives an objective
+                # http_probe from the URL in the oracle text — the derived
+                # adapter proves reachability, not what a person SEES on
+                # that surface, so a plain distinct-actor Approve (not the
+                # machine seat, which abstains separately in
+                # adjudicate_green_gate) is still the correct sign-off.
                 _human_judgment = _pt in ("demo", "review") or \
-                    _osp.is_human_judgment(_osp.OracleSpec.from_task(_live))
+                    _osp.is_human_judgment(_osp.OracleSpec.from_task(_live)) or \
+                    bool(_screen_claim_gate_reason(
+                        getattr(_live, "tags", None), _pt,
+                        getattr(_live, "oracle", "")))
             except Exception:
                 _human_judgment = False
         # ROLLUP-NEVER-DECIDES-A-HUMAN-GATE (task 457b38db, mx-7e03ff):

@@ -435,8 +435,10 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             return {"receipt_ok": False,
                     "receipt_refusal": (
                         "no red-step commit derivable — commit the failing "
-                        "tests with a [task:<id>] trailer, or decide the "
-                        "gate manually")}
+                        "tests with a [task:<id>] trailer, or attest a "
+                        "pre-change ref by adding a `red-anchor-ref: <sha>` "
+                        "marker line to the red-step completion_proof, or "
+                        "decide the gate manually")}
         if _blocks:
             return {"receipt_ok": False,
                     "receipt_refusal": (

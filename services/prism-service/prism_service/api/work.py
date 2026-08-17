@@ -58,7 +58,9 @@ def _task_node(task_id: str, title: str, status: str, workflow_step: str,
                gate_state: str, activity: dict, spend_usd: float = 0.0,
                gate_waiting_s: float | None = None,
                queue_depth: int = 0,
-               drive_started_at: float | None = None) -> dict:
+               drive_started_at: float | None = None,
+               owner_actionable: bool = False,
+               waiting_on: str = "") -> dict:
     heartbeat = (activity or {}).get("heartbeat") or {}
     kind = "task"
     return {
@@ -76,6 +78,8 @@ def _task_node(task_id: str, title: str, status: str, workflow_step: str,
         "gate_waiting_s": gate_waiting_s,
         "queue_depth": queue_depth,
         "drive_started_at": drive_started_at,
+        "owner_actionable": bool(owner_actionable),
+        "waiting_on": waiting_on or "",
         "href": f"/tasks/{task_id}",
     }
 
@@ -138,6 +142,43 @@ def _queue_depth(task_svc, task_id: str) -> int:
         if (getattr(c, "status", "") or "") == "pending"
         and not (getattr(c, "workflow_step", "") or "")
     )
+
+
+def _gate_actionability(project: str, task_id: str, workflow_step: str,
+                         is_root: bool) -> tuple[bool, str]:
+    """owner_actionable/waiting_on for a gate_state=='pending' node, derived
+    by CALLING api/conductor.py's gate_readiness -- never re-implementing
+    its teeth client-side here (mx-d6c1df). A per-node readiness
+    failure/exception degrades ONLY this node (False, ''), never the whole
+    /api/work/graph response (task edf38154 AC-3)."""
+    try:
+        from prism_service.api import conductor as conductor_api
+        readiness = conductor_api.gate_readiness(task_id=task_id, project=project)
+    except Exception:
+        return False, ""
+    # red_gate is ALWAYS the machine seat's, whatever the refusal prose
+    # says about "no owner action needed" (AC-5) -- checked before any
+    # receipt-shape branch below.
+    if workflow_step == "red_gate":
+        return False, "machine seat"
+    receipt = (readiness or {}).get("receipt") or {}
+    adapter = str(receipt.get("adapter", "") or "")
+    status = str(receipt.get("status", "") or "")
+    if adapter == "epic-rollup":
+        if status == "rollup_blocked":
+            n = len((readiness or {}).get("blocking_children") or [])
+            return False, f"{n} child task(s) unfinished"
+        return True, "you"
+    # An unapproved/stale design packet on a ROOT plan_gate task is the
+    # OWNER'S plan_gate stop (D-4/FR-12/AC-15), not the driver's -- even
+    # though the receipt itself reads receipt_ok=False (AC-6).
+    if workflow_step == "plan_gate" and is_root and not readiness.get("receipt_ok"):
+        return True, "you"
+    if readiness.get("receipt_ok"):
+        return True, "you"
+    # Everything else pending is a driver-owned refusal (story rubric,
+    # needs_visual_evidence, ...) -- the driver's to clear, never "you".
+    return False, "driver"
 
 
 def _task_spend_usd(project: str, task_id: str, task_svc,
@@ -229,6 +270,11 @@ def work_graph(project: str = Query("default")) -> dict:
             parent_id = (
                 getattr(task_obj, "parent_id", "") or ""
                 if task_obj is not None else "")
+            _oa, _wo = (False, "")
+            if (r.get("gate_state") or "none") == "pending":
+                _oa, _wo = _gate_actionability(
+                    project, r["id"], r.get("workflow_step") or "",
+                    is_root=not parent_id)
             node = _task_node(
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
@@ -239,6 +285,7 @@ def work_graph(project: str = Query("default")) -> dict:
                     if task_obj is not None else None),
                 queue_depth=_queue_depth(task_svc, r["id"]),
                 drive_started_at=_drive_started_at(scores_db, r["id"]),
+                owner_actionable=_oa, waiting_on=_wo,
             )
             node["kind"] = "subtask" if parent_id else "task"
             nodes.append(node)
@@ -257,6 +304,12 @@ def work_graph(project: str = Query("default")) -> dict:
                 c_activity = conductor.activity_for(child, pp)
             except Exception:
                 c_activity = {}
+            _c_oa, _c_wo = (False, "")
+            if (getattr(child, "gate_state", "none") or "none") == "pending":
+                _c_oa, _c_wo = _gate_actionability(
+                    project, child.id,
+                    getattr(child, "workflow_step", "") or "",
+                    is_root=False)
             cnode = _task_node(
                 child.id, child.title, child.status,
                 getattr(child, "workflow_step", ""),
@@ -267,6 +320,7 @@ def work_graph(project: str = Query("default")) -> dict:
                 gate_waiting_s=conductor.gate_waiting_s(child),
                 queue_depth=_queue_depth(task_svc, child.id),
                 drive_started_at=_drive_started_at(scores_db, child.id),
+                owner_actionable=_c_oa, waiting_on=_c_wo,
             )
             cnode["kind"] = "subtask"
             nodes.append(cnode)
