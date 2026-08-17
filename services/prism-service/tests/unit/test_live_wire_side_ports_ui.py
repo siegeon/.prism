@@ -277,10 +277,11 @@ def test_port_hover_shows_grab_cursor():
     src = _strip_comments(_read(_LIVE_PAGE))
     assert "portAtWorld" in src.split("const onPointerMove", 1)[1].split("const onPointerUp", 1)[0], (
         "onPointerMove must hit-test portAtWorld when no drag is active")
-    cls = src[src.index("className="):]
-    cls = cls[: cls.index(">")]
+    canvas = src[src.index("<canvas"):]
+    cls = canvas[canvas.index("className="):]
+    cls = cls[: cls.index("`}") + 2] if "`}" in cls[:300] else cls[: cls.index(">")]
     assert "cursor-grab" in cls and "cursor-grabbing" in cls and "cursor-pointer" in cls, (
-        "the canvas className must offer grab (hover), grabbing (drag) and pointer")
+        "the CANVAS className must offer grab (hover), grabbing (drag) and pointer")
 
 
 def test_idle_wire_stays_dim():
