@@ -3741,8 +3741,14 @@ class ConductorService:
             receipt_reason, _fresh = self._oracle_receipt_refusal(
                 _live, override=False, reason=reason)
             if receipt_reason:
+                # REFUSAL PARKS PENDING, never `failed` (task 97d92854, epic
+                # 37c9207b): "evidence not ready" is the system's verdict on
+                # the RECEIPT, not on the work — writing `failed` here forced
+                # the next honest approve through override=true. Mirrors
+                # _park_green_refusal: pending + reason + audit rows, and the
+                # refusal itself mints nothing.
                 self._task_svc.update(
-                    task_id, gate_state="failed", gate_reason=receipt_reason,
+                    task_id, gate_state="pending", gate_reason=receipt_reason,
                 )
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
@@ -3752,14 +3758,14 @@ class ConductorService:
                 )
                 self._record_agent_run(
                     task_id, gate_step_id, session_id, model=model,
-                    gate_state="failed", ok=False,
+                    gate_state="pending", ok=False,
                     verdict_summary=("oracle-receipt: " + receipt_reason)[:200],
                 )
                 return {
                     "ok": False,
                     "task_id": task_id,
                     "gate_step": gate_step_id,
-                    "gate_state": "failed",
+                    "gate_state": "pending",
                     "reason": receipt_reason,
                 }
             green_outcome_note = (
@@ -3850,8 +3856,13 @@ class ConductorService:
                 receipt_reason, _fresh_ov = self._oracle_receipt_refusal(
                     _live, override=True, reason=reason)
                 if receipt_reason:
+                    # Same parking as the plain branch (task 97d92854): the
+                    # override refusal keeps NO-OVERRIDE-SKIPS-THE-ORACLE
+                    # intact (still ok:False, no receipt minted) but leaves
+                    # the gate PENDING so a later honest approve — after the
+                    # evidence lands — needs no override escalation.
                     self._task_svc.update(
-                        task_id, gate_state="failed",
+                        task_id, gate_state="pending",
                         gate_reason=receipt_reason,
                     )
                     self._task_svc.record_history(
@@ -3865,7 +3876,7 @@ class ConductorService:
                         "ok": False,
                         "task_id": task_id,
                         "gate_step": gate_step_id,
-                        "gate_state": "failed",
+                        "gate_state": "pending",
                         "reason": receipt_reason,
                     }
             # Manual override path — bypass the verifier entirely but
