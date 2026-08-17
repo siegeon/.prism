@@ -245,3 +245,49 @@ def test_live_page_hydrates_persists_and_resets_port_overrides():
     reset_body = src[reset_start:next_const]
     assert "portsKey" in reset_body or "prism.live.ports." in reset_body, (
         "'reset layout' must also drop the persisted port overrides (AC-9)")
+
+
+# ---------------------------------------------------------------------------
+# task 763168f8: the drag handle must be SEEN. Idle wires draw at 35% alpha
+# and drawPort inherited that exact color, so the shipped movable-port
+# feature was invisible on a quiet board (owner: "i dont even see my
+# movable lines").
+# ---------------------------------------------------------------------------
+
+def test_port_dots_visible_when_idle():
+    """AC-1: drawPort selects its own fill by `live` -- the idle arm is a
+    full-opacity literal, never the wire's 0.35-alpha stroke -- and the
+    dot is big enough to read at default zoom."""
+    src = _strip_comments(_read(_LIVE / "wires.ts"))
+    body = _function_body(src, "export function drawPort")
+    assert "live ?" in body or "live\n" in body, (
+        "drawPort must branch its fill on `live` instead of trusting the "
+        "caller's wire color for the idle case")
+    assert "0.35" not in body, "the idle handle must not reuse the dim wire alpha"
+    assert re.search(r'#[0-9a-fA-F]{6}|PORT_HANDLE', body), (
+        "the idle arm needs a full-opacity handle color literal/constant")
+    m = re.search(r"PORT_DOT_R\s*=\s*(\d+)", src)
+    assert m and int(m.group(1)) >= 4, "PORT_DOT_R must be >= 4 to read at default zoom"
+
+
+def test_port_hover_shows_grab_cursor():
+    """AC-2: pointermove outside an active drag consults the REAL
+    portAtWorld hit-test and the canvas className gains a cursor-grab
+    branch keyed on it."""
+    src = _strip_comments(_read(_LIVE_PAGE))
+    assert "portAtWorld" in src.split("const onPointerMove", 1)[1].split("const onPointerUp", 1)[0], (
+        "onPointerMove must hit-test portAtWorld when no drag is active")
+    canvas = src[src.index("<canvas"):]
+    cls = canvas[canvas.index("className="):]
+    cls = cls[: cls.index("`}") + 2] if "`}" in cls[:300] else cls[: cls.index(">")]
+    assert "cursor-grab" in cls and "cursor-grabbing" in cls and "cursor-pointer" in cls, (
+        "the CANVAS className must offer grab (hover), grabbing (drag) and pointer")
+
+
+def test_idle_wire_stays_dim():
+    """AC-3 anti-misfire: fixing the DOT must not brighten the idle WIRE."""
+    src = _strip_comments(_read(_LIVE / "wires.ts"))
+    body = _function_body(src, "export function wireColor")
+    assert "0.35" in body, (
+        "wireColor's non-flowing arm must keep the dim 0.35 stroke -- "
+        "brightening the wire is the named misfire, not the fix")

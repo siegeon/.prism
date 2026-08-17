@@ -282,7 +282,12 @@ export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: Wire
 
 /** Radius (px) of a drawn/hit-tested port dot -- also PORT_HIT_R's basis
  * in graphState.ts's portAtWorld (a few px of slop on top of this). */
-export const PORT_DOT_R = 3;
+export const PORT_DOT_R = 4;
+/** task 763168f8: a handle's job is to be SEEN. Idle wires draw at 35%
+ * alpha, and a dot painted in that same color vanishes at default zoom
+ * (owner: "i dont even see my movable lines") — so the idle dot gets its
+ * own full-opacity light-slate paint, while the wire stroke stays dim. */
+export const PORT_HANDLE_IDLE = "#cbd5e1";
 
 /** Draws ONE wire's endpoint dot at `at`, under the cards (draw.ts calls
  * this from the same under-cards wire loop that calls drawWire), in the
@@ -293,7 +298,10 @@ export const PORT_DOT_R = 3;
 export function drawPort(ctx: CanvasRenderingContext2D, at: Point, color: string, live: boolean): void {
   const r = live ? PORT_DOT_R + 1 : PORT_DOT_R;
   ctx.save();
-  ctx.fillStyle = color;
+  // Flowing wire: the dot wears the wire's own bright stroke. Idle wire:
+  // the caller passes the 0.35-alpha idle stroke, which made the handle
+  // invisible — paint the handle in its own full-opacity color instead.
+  ctx.fillStyle = live ? color : PORT_HANDLE_IDLE;
   ctx.fillRect(at.x - r, at.y - r, r * 2, r * 2);
   ctx.restore();
 }
