@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.19"
+PRISM_VERSION = "7.11.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4868,4 +4868,13 @@ PRISM_VERSION_NOTES += (
     "every approve - it says that only when body.gate_step is the terminal "
     "green_gate, and still names the next step for plan_gate/story_gate/"
     "red_gate advances."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.20 (task 43cefc52): premise_grounded now recognises numbered "
+    "claim lists ('1.' / '1)') identically to '-'/'*' bullets in "
+    "_claim_lines (arc_governance.py) - a driver who wrote a numbered "
+    "'## Premises' list used to get the misleading 'section is present "
+    "but empty' refusal. The genuinely-empty-section and unrecognised-"
+    "bullet-form (prose-only) refusals are now distinct messages; "
+    "grounding (_claim_is_grounded) is unchanged."
 )

@@ -247,14 +247,16 @@ def _claim_lines(section_body: str) -> list[str]:
     """Return each load-bearing claim bullet from a markdown section body,
     folding wrapped/indented continuation lines into their claim (mirrors
     _ac_lines' bullet-folding, generalized to any bulleted claim line — a
-    premise claim carries no required id, unlike an AC)."""
+    premise claim carries no required id, unlike an AC). Recognises '-'/'*'
+    bullets AND numbered lists ('1.' / '1)') identically (task 43cefc52) —
+    grounding (_claim_is_grounded) is untouched by bullet form."""
     entries: list[str] = []
     for raw in (section_body or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
             continue
         stripped = line.strip()
-        if re.match(r"^\s*[-*]\s+", line):
+        if re.match(r"^\s*(?:[-*]|\d+[.)])\s+", line):
             entries.append(stripped)
         elif entries:
             entries[-1] += " " + stripped
@@ -320,11 +322,18 @@ def score_premise_grounded(evidence: dict, rubric: dict) -> dict:
                            "review_previous_notes")}
     claims = _claim_lines(section_body)
     if not claims:
+        if not section_body.strip():
+            return {"ok": False,
+                     "reason": (f"premise_grounded: '{section_name}' "
+                                "section is present but empty - record "
+                                "each load-bearing claim from the ticket, "
+                                "or drop the empty section")}
         return {"ok": False,
-                "reason": (f"premise_grounded: '{section_name}' section is "
-                           "present but empty - record each load-bearing "
-                           "claim from the ticket, or drop the empty "
-                           "section")}
+                "reason": (f"premise_grounded: '{section_name}' section "
+                           "has content but no recognised claim bullet "
+                           "('-', '*', '1.', '1)') - record each "
+                           "load-bearing claim as its own bullet or "
+                           "numbered list item")}
     ungrounded = [c for c in claims if not _claim_is_grounded(c)]
     if ungrounded:
         shown = "; ".join(c[:100] for c in ungrounded)
