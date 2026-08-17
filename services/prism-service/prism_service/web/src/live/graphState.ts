@@ -255,6 +255,12 @@ export type LiveNode = GraphNode & {
    * touched by the live-echo loop again, so a real backend label is
    * never clobbered by a driver-title guess. */
   labelIsPlaceholder: boolean;
+  /** task ea92640f (ghost cards): reconcile bookkeeping. A node the
+   * snapshot has confirmed at least once is durable; a client-born node
+   * the snapshot disowns on 2 consecutive reconciles is pruned along
+   * with its edges. Confirmation resets the miss counter. */
+  snapshotConfirmed: boolean;
+  snapshotMisses: number;
 };
 
 export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
@@ -545,6 +551,8 @@ export class GraphState {
       lastHeartbeatAt: 0, selected: false,
       lastSignalAt, spend_usd: n.spend_usd || 0,
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
+      owner_actionable: n.owner_actionable ?? false,
+      waiting_on: n.waiting_on ?? "",
       gatePendingSince, doneAt, settleUntil: 0,
       driveStartedAt: this.driveStartedAtPerf(n.drive_started_at, now),
       // Every caller of makeNode EXCEPT the two lazy-create paths
@@ -553,6 +561,11 @@ export class GraphState {
       // it just discovered) -- those two flip this back to true right
       // after construction, since their `label` is a same-instant guess.
       labelIsPlaceholder: false,
+      // task ea92640f: default UNCONFIRMED -- snapshot/reconcile births
+      // and confirmations flip this true; event births leave it false so
+      // the reconcile prune can retire disowned ghosts.
+      snapshotConfirmed: false,
+      snapshotMisses: 0,
     };
   }
 
@@ -595,6 +608,7 @@ export class GraphState {
     for (const n of byKind("task")) {
       const slot = this.layout.placeTask(n.id);
       const node = this.makeNode(n, null, null, slot, now, slot.x, slot.y);
+      node.snapshotConfirmed = true;
       this.nodes.push(node);
       this.byId.set(n.id, node);
     }
@@ -605,6 +619,7 @@ export class GraphState {
       const node = this.makeNode(
         n, parentId || null, null, slot, now,
         parentSlot?.x ?? slot.x, parentSlot?.y ?? slot.y);
+      node.snapshotConfirmed = true;
       this.nodes.push(node);
       this.byId.set(n.id, node);
     }
@@ -615,6 +630,7 @@ export class GraphState {
       const node = this.makeNode(
         n, null, driverId || null, slot, now,
         driverSlot?.x ?? slot.x, driverSlot?.y ?? slot.y);
+      node.snapshotConfirmed = true;
       this.nodes.push(node);
       this.byId.set(n.id, node);
     }
@@ -923,9 +939,19 @@ export class GraphState {
     this.lastEventAt = now;
     if (event.type === "task.changed") {
       const { kind, parentTaskId } = parentInfoFor(event);
-      const node = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
-      const prevStatus = node.status, prevGate = node.gate_state;
       const fields = event.fields ?? {};
+      // task ea92640f (ghost cards): birth a NEW card only when the event
+      // carries a real fields.title AND fields.workflow_step. A bare
+      // pending task.changed (e.g. task_create's echo) waits for the
+      // snapshot/reconcile instead of fabricating a dead
+      // "task starting..." card with a climbing signal-age chip.
+      const known = this.byId.get(event.task_id);
+      if (!known && !(typeof fields.title === "string" && fields.title &&
+          typeof fields.workflow_step === "string" && fields.workflow_step)) {
+        return;
+      }
+      const node = known ?? this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
+      const prevStatus = node.status, prevGate = node.gate_state;
       if (typeof fields.status === "string") node.status = fields.status;
       if (typeof fields.workflow_step === "string" && fields.workflow_step !== node.workflow_step) {
         node.workflow_step = fields.workflow_step;
@@ -960,12 +986,16 @@ export class GraphState {
       return;
     }
     if (event.type === "agent.run") {
-      const { kind, parentTaskId } = parentInfoFor(event);
-      const taskNode = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
+      // task ea92640f (ghost cards): agent.run updates KNOWN tasks only --
+      // telemetry alone (no title, no step fields) must never birth a
+      // card; the snapshot/reconcile owns discovery of real tasks.
+      const taskNode = this.byId.get(event.task_id);
+      if (!taskNode) return;
       taskNode.lastSignalAt = now;
-      if (event.session_id) {
-        const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
-        this.ensureEdge(event.session_id, event.task_id, "driven_in");
+      const runSid = String(event.session_id ?? "").trim();
+      if (runSid) {
+        const sessionNode = this.upsertSessionNode(runSid, event.task_id, now);
+        this.ensureEdge(runSid, event.task_id, "driven_in");
         sessionNode.pulseUntil = now + PULSE_MS;
         sessionNode.lastSignalAt = now;
         // Round 3 item 2: a live agent.run may be the FIRST time this
@@ -995,9 +1025,16 @@ export class GraphState {
       return;
     }
     if (event.type === "tokens.turn") {
-      const { kind, parentTaskId } = parentInfoFor(event);
-      const taskNode = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
-      const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
+      // task ea92640f (ghost cards): tokens.turn UPDATES, never births.
+      // An unknown task or a blank/whitespace session id would fabricate
+      // a placeholder card carrying this session's GLOBAL totals -- the
+      // exact dead "task starting..." cards the owner saw. Births belong
+      // to the snapshot/reconcile (and to titled task.changed events).
+      const sid = String(event.session_id ?? "").trim();
+      const taskKnown = this.byId.get(event.task_id);
+      if (!taskKnown || !sid) return;
+      const taskNode = taskKnown;
+      const sessionNode = this.upsertSessionNode(sid, event.task_id, now);
       sessionNode.tok_s = event.tok_s;
       // Round 6 item 6 (cumulative numerics may never decrease): defensive
       // monotonic guard on the session's own running total, matching the
@@ -1032,11 +1069,11 @@ export class GraphState {
       // off this same tok_s in draw.ts, so there is no second field left
       // to keep in sync here at all).
       taskNode.tokensGhostUntil = now + GHOST_MS;
-      this.ensureEdge(event.session_id, event.task_id, "driven_in");
+      this.ensureEdge(sid, event.task_id, "driven_in");
 
       const hasFlow = event.tok_s > MIN_FLOW_TOK_S;
       const directEdge = this.edges.find(
-        (e) => e.source === event.session_id && e.target === event.task_id && e.kind === "driven_in");
+        (e) => e.source === sid && e.target === event.task_id && e.kind === "driven_in");
       if (directEdge && hasFlow) {
         this.edgeFlowAt.set(this.edgeKey(directEdge.source, directEdge.target), now);
         this.maybeSpawnPacket(directEdge.source, directEdge.target, "driven_in", false, now);
@@ -1344,8 +1381,14 @@ export class GraphState {
           created.label = sn.label;
           created.labelIsPlaceholder = false;
         }
+        if (created) {
+          created.snapshotConfirmed = true;
+          created.snapshotMisses = 0;
+        }
         continue;
       }
+      existing.snapshotConfirmed = true;
+      existing.snapshotMisses = 0;
       // Round 3 item-1 residual fix: a subtask whose FIRST live event beat
       // this reconcile got created as a plain "task" (ensureTaskNode's
       // default) and placed in the root column instead of fanned beside
@@ -1407,6 +1450,8 @@ export class GraphState {
       }
       existing.gate_waiting_s = sn.gate_waiting_s ?? null;
       existing.queue_depth = sn.queue_depth ?? 0;
+      existing.owner_actionable = sn.owner_actionable ?? false;
+      existing.waiting_on = sn.waiting_on ?? "";
       // AC-1 residual: a node born from a live event (ensureTaskNode)
       // never knew drive_started_at -- backfill the FIRST time reconcile
       // learns it, never overwrite once known (the anchor never moves).
@@ -1418,6 +1463,25 @@ export class GraphState {
     for (const e of snapshot.edges) {
       if (e.kind === "parent_of") this.ensureEdge(e.source, e.target, "parent_of");
     }
+    // task ea92640f (ghost cards): prune client-born nodes the snapshot
+    // disowns on 2 consecutive reconciles. Confirmed nodes are durable
+    // (their absence would be a server change, not a ghost); sessions the
+    // snapshot never carries survive while their token stream keeps them
+    // meaningful and age out here once truly disowned twice.
+    const snapIds = new Set(snapshot.nodes.map((n) => n.id));
+    const keep: LiveNode[] = [];
+    for (const n of this.nodes) {
+      if (snapIds.has(n.id) || n.snapshotConfirmed) { keep.push(n); continue; }
+      n.snapshotMisses += 1;
+      if (n.snapshotMisses >= 2) {
+        this.byId.delete(n.id);
+        this.edges = this.edges.filter((e) => e.source !== n.id && e.target !== n.id);
+        // (selection is a per-node flag; a pruned node simply leaves)
+        continue;
+      }
+      keep.push(n);
+    }
+    this.nodes = keep;
   }
 
   /** Screen -> world, inverting the pan/zoom camera. */

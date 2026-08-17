@@ -30,13 +30,26 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
+/** Task edf38154 (owner 2026-08-17, "this says im waiting on gates but im
+ * not, there is nothing i can do for them"): a pending gate is no longer
+ * one undifferentiated alarm list. Partitioned on n.owner_actionable --
+ * derived server-side by api/work.py's _gate_actionability, which itself
+ * only ever CALLS api/conductor.py's gate_readiness (never a second,
+ * drifting implementation of its teeth, mx-d6c1df) -- into a magenta
+ * "YOUR REVIEW" section (things only the owner can clear) and a dim
+ * "waiting on others" section (fully listed, never capped, each row
+ * naming who/what it's actually waiting on via n.waiting_on) so the two
+ * read as genuinely different, not the same card in a different color. */
 export function drawGatePanel(
   ctx: CanvasRenderingContext2D, nodes: LiveNode[], now: number, screenW: number, screenH: number,
 ): void {
-  const waiting = nodes.filter((n) => n.gate_state === "pending");
-  if (!waiting.length) return;
+  const pending = nodes.filter((n) => n.gate_state === "pending");
+  if (!pending.length) return;
+  const mine = pending.filter((n) => n.owner_actionable);
+  const others = pending.filter((n) => !n.owner_actionable);
 
-  const panelH = HEADER_H + waiting.length * ROW_H + 8;
+  const sectionH = (rows: number) => (rows ? HEADER_H + rows * ROW_H : 0);
+  const panelH = 8 + sectionH(mine.length) + sectionH(others.length);
   const x = screenW - MARGIN - PANEL_W;
   const top = Math.max(MARGIN, (screenH - panelH) / 2);
 
@@ -56,21 +69,43 @@ export function drawGatePanel(
   ctx.fill();
 
   ctx.textBaseline = "middle";
-  ctx.fillStyle = PALETTE.magenta;
-  ctx.font = "600 11px system-ui, sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText(`◆ GATES WAITING (${waiting.length})`, x + 14, top + HEADER_H / 2 + 2);
+  let rowY = top;
 
-  let rowY = top + HEADER_H;
-  for (const n of waiting) {
-    const waitS = (now - n.gatePendingSince) / 1000;
-    ctx.fillStyle = PALETTE.textPrimary;
-    ctx.font = "600 11px system-ui, sans-serif";
-    ctx.fillText(truncate(n.label, 26), x + 14, rowY + 12);
+  if (mine.length) {
     ctx.fillStyle = PALETTE.magenta;
-    ctx.font = "10px system-ui, sans-serif";
-    ctx.fillText(`${n.workflow_step || "gate"} · waiting ${fmtWaitingMins(waitS)}`, x + 14, rowY + 25);
-    rowY += ROW_H;
+    ctx.font = "600 11px system-ui, sans-serif";
+    ctx.fillText(`◆ YOUR REVIEW (${mine.length})`, x + 14, rowY + HEADER_H / 2 + 2);
+    rowY += HEADER_H;
+    for (const n of mine) {
+      const waitS = (now - n.gatePendingSince) / 1000;
+      ctx.fillStyle = PALETTE.textPrimary;
+      ctx.font = "600 11px system-ui, sans-serif";
+      ctx.fillText(truncate(n.label, 26), x + 14, rowY + 12);
+      ctx.fillStyle = PALETTE.magenta;
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillText(`${n.workflow_step || "gate"} · waiting ${fmtWaitingMins(waitS)}`, x + 14, rowY + 25);
+      rowY += ROW_H;
+    }
+  }
+
+  // "waiting on others" -- FULL, uncapped list (never sliced/truncated to
+  // N rows): a driver-owned or machine-seat gate is still real state the
+  // owner is entitled to see, it's just dim because it's not theirs to
+  // click.
+  if (others.length) {
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.font = "600 11px system-ui, sans-serif";
+    ctx.fillText(`waiting on others (${others.length})`, x + 14, rowY + HEADER_H / 2 + 2);
+    rowY += HEADER_H;
+    for (const n of others) {
+      ctx.fillStyle = PALETTE.textDim;
+      ctx.font = "600 11px system-ui, sans-serif";
+      ctx.fillText(truncate(n.label, 26), x + 14, rowY + 12);
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillText(n.waiting_on || n.workflow_step || "gate", x + 14, rowY + 25);
+      rowY += ROW_H;
+    }
   }
   ctx.restore();
 }
