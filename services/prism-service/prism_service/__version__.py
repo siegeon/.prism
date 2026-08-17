@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.9"
+PRISM_VERSION = "7.11.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.10: /live wires now dock at movable side ports (task b9ce0450) "
+    "-- wires.ts's PortSide/WirePort/portPoint/portFromWorld/autoPort/"
+    "wireKey/laneFor/drawPort is the single geometry source of truth for "
+    "draw+route+hit-test (mx-0a0bf4); routeOrthogonal gains an optional "
+    "3rd RouteOpts arg (fromPort/toPort/obstacles/lane) while its 2-arg "
+    "call stays byte-identical; draw.ts and GraphState.wireEndpointsFor "
+    "collapse to one router call site; GraphState gains portOverrides/"
+    "portAtWorld/draggingPortId mirroring the position-override machinery; "
+    "LivePage's onPointerDown gains a 'port' drag mode ordered after the "
+    "action-strip check and before nodeAtWorld; port placements persist "
+    "to prism.live.ports.<project>, cleared by 'reset layout'. "
     "7.11.6: fixed the /live mission clock's server anchor "
     "(_drive_started_at, api/work.py) so it survives a null first "
     "telemetry row -- SQLite sorts NULL first in ASC order and every "
