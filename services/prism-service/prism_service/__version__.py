@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.6"
+PRISM_VERSION = "7.11.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4751,4 +4751,15 @@ PRISM_VERSION_NOTES += (
     "backdates every node's driveStartedAt through it; draw.ts renders "
     "'MISSION mm:ss' per in-flight task/subtask card, reading only that "
     "card's own field, never a page-level shared clock (mx-9f2018)."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.7 (task 39adc067): GET /api/conductor/gate/readiness stops "
+    "re-litigating an ALREADY-DECIDED gate (task.gate_state == 'passed') "
+    "through the same STALE-tree refusal text a genuinely unsound PENDING "
+    "approval produces (e0149f1f mirror image). A settled gate now reads "
+    "receipt_ok:true with a reason naming the decided-at tree (parsed from "
+    "gate_reason's 'tree=<sha>' token); tree drift since the decision "
+    "renders as informational history appended to the reason, never a "
+    "refusal. Pending gates with a foreign-tree receipt are unaffected - "
+    "the false-green catch stays exactly as strict."
 )
