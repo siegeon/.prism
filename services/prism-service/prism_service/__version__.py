@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.6"
+PRISM_VERSION = "7.11.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.7: green_gate grew a reachability tooth (task c944cac2) -- the "
+    "EXIT-half counterpart to oracle_authoring's authoring-time check. "
+    "ConductorService.adjudicate_green_gate now pre-flights "
+    "reachability_check.unreachable_entry_point_reason(task): reads the "
+    "task's real worktree GIT DIFF (never allowed_files) and refuses when "
+    "the diff adds a new, undecorated, public function/method with no "
+    "non-test production caller anywhere in the tree -- symbol-level, so a "
+    "module that IS imported/constructed elsewhere (the work_item_sync.py "
+    "shape) no longer hides an unwired new entry point. Abstain-only: a "
+    "truthy refusal parks pending WITH the reason via _park_green_refusal, "
+    "never flips to failed. "
     "7.11.6: fixed the /live mission clock's server anchor "
     "(_drive_started_at, api/work.py) so it survives a null first "
     "telemetry row -- SQLite sorts NULL first in ASC order and every "
