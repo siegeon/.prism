@@ -2023,6 +2023,10 @@ class ConductorService:
         if not str(getattr(task, "oracle", "") or "").strip():
             return None
         # Epics stay with a human: their roll-up verdict reads children.
+        # Unconditional on proof_type (task 457b38db, belt-and-suspenders
+        # with the gate_decide consume-site fix): a demo/review
+        # (human-judgment) epic with all children done abstains here too —
+        # pinned by test_adjudicator_seat_abstains_for_demo_epic_with_children.
         try:
             if self._task_svc.list(parent_id=task_id):
                 return None
@@ -3532,12 +3536,20 @@ class ConductorService:
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
-        elif rollup_ok:
+        elif rollup_ok and not _human_judgment:
             # Epic roll-up satisfies the green_gate WITHOUT override and
             # WITHOUT the epic's own verifier diff — the children's proofs are
             # the proof (issue #171). The artifact tooth is skipped below.
             # The real deciding actor is persisted (task 1bc13307); 'conductor'
             # is only the fallback when neither actor nor session_id is given.
+            # NOT taken for a demo/review (human-judgment) epic (task
+            # 457b38db, mx-7e03ff): child completeness is never, by itself,
+            # machine evidence for a gate whose proof burden is a person's
+            # own judgment of the ASSEMBLED feature — falls through to the
+            # SAME human-judgment path a non-epic demo/review gate already
+            # uses (distinct-actor approve + its own artifact tooth), so
+            # rollup completeness is at most informational (see the
+            # rollup_has_children branch of the artifact tooth below).
             actor = _decided_by("conductor")
             detail_bits = [f"gate={gate_step_id}", "action=approve",
                            "epic-rollup=pass"]
@@ -3643,8 +3655,12 @@ class ConductorService:
             reason,
             getattr(task, "proof_type", ""),
         )
-        if rollup_ok:
+        if rollup_ok and not _human_judgment:
             # The children's proofs ARE the epic's artifact (issue #171).
+            # A demo/review (human-judgment) epic does NOT get this skip
+            # (task 457b38db): its own artifact tooth still applies, same
+            # as the non-epic human-judgment gate — rollup completeness
+            # alone never substitutes for the epic's own evidenced sign-off.
             artifact_reason = ""
         elif artifact_reason and has_captured_evidence(
                 task_id, self._project_name or "default"):
