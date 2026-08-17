@@ -3343,6 +3343,10 @@ class ConductorService:
         rollup_ok = False
         rollup_reason = ""
         rollup_has_children = False
+        # Scoped strictly to the task's OWN proof_type (child 457b38db):
+        # rollup must never stand in for the human-only demo/review sign-off
+        # (owner rule eaafdf75), whatever the epic's oracle prose reads like.
+        _epic_proof_type = str(getattr(task, "proof_type", "") or "").strip().lower()
         if gate_step_id == "green_gate":
             _kids = list(self._task_svc.list(parent_id=task_id))
             rollup_has_children = bool(_kids)
@@ -3532,17 +3536,62 @@ class ConductorService:
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
-        elif rollup_ok:
+        elif rollup_ok and _epic_proof_type not in ("demo", "review"):
             # Epic roll-up satisfies the green_gate WITHOUT override and
             # WITHOUT the epic's own verifier diff — the children's proofs are
             # the proof (issue #171). The artifact tooth is skipped below.
             # The real deciding actor is persisted (task 1bc13307); 'conductor'
             # is only the fallback when neither actor nor session_id is given.
+            # HUMAN-ONLY EXCLUSION (child 457b38db; mx-7e03ff/mx-e2868f):
+            # a proof_type=demo/review epic must NEVER close on rollup alone —
+            # owner rule eaafdf75 makes that gate human-only, and adjudicate_
+            # green_gate's call-site guard only stops the MACHINE seat from
+            # reaching here. Any other caller (a driving agent session
+            # reporting through conductor_work) still landed on this branch
+            # before, closing 64ba4755 with no human ever reviewing the demo.
+            # Scoped to proof_type only (not the broader is_human_judgment
+            # oracle-text heuristic) so a proof_type=test epic whose oracle
+            # prose happens to read as subjective still rolls up cleanly.
             actor = _decided_by("conductor")
             detail_bits = [f"gate={gate_step_id}", "action=approve",
                            "epic-rollup=pass"]
             if reason:
                 detail_bits.append(f"reason={reason}")
+        elif rollup_ok and _epic_proof_type in ("demo", "review"):
+            # The children are all done and rollup would otherwise pass, but
+            # this is a human-only proof_type (demo/review) epic: child
+            # completion status is not a substitute for a person actually
+            # reviewing the demo end to end. Refuse WITHOUT degrading
+            # gate_state (oracle clause 4) so the genuine human Approve click
+            # still works next.
+            human_reason = (
+                f"proof_type={_epic_proof_type} "
+                "epic green_gate is human-only (owner rule eaafdf75): "
+                f"child status ({rollup_reason or 'all children done'}) is "
+                "not a substitute for a person reviewing the demo end to "
+                "end. Open the task and click Approve yourself after "
+                "reviewing it; a rollup-flavored approve from a driving "
+                "session cannot clear this gate."
+            )
+            self._task_svc.record_history(
+                task_id, action="gate_decide",
+                details=(f"gate={gate_step_id}; action=approve; "
+                         f"epic-rollup=refused-human-only; "
+                         f"reason={human_reason}"),
+                actor="conductor",
+            )
+            self._record_agent_run(
+                task_id, gate_step_id, session_id, model=model,
+                gate_state="pending", ok=False,
+                verdict_summary="epic-rollup refused: human-only proof_type",
+            )
+            return {
+                "ok": False,
+                "task_id": task_id,
+                "gate_step": gate_step_id,
+                "gate_state": task.gate_state,
+                "reason": human_reason,
+            }
         elif self._verifier_svc is None:
             # Legacy [1/4] behavior — no verifier wired (bare
             # ConductorService used by unit tests and meta-only
