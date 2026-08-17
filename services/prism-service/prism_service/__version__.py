@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.6"
+PRISM_VERSION = "7.11.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4751,4 +4751,11 @@ PRISM_VERSION_NOTES += (
     "backdates every node's driveStartedAt through it; draw.ts renders "
     "'MISSION mm:ss' per in-flight task/subtask card, reading only that "
     "card's own field, never a page-level shared clock (mx-9f2018)."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.7 (task 37c9207b, child 457b38db): gate_decide's epic-rollup "
+    "arm no longer closes a proof_type=demo/review green_gate on child "
+    "completion status alone -- scoped to task.proof_type, refuses with "
+    "an actionable reason WITHOUT degrading gate_state, so the genuine "
+    "human Approve click still works next (mx-7e03ff/mx-e2868f)."
 )
