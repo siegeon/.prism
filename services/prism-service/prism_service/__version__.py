@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.5"
+PRISM_VERSION = "7.11.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.6: fixed the /live mission clock's server anchor "
+    "(_drive_started_at, api/work.py) so it survives a null first "
+    "telemetry row -- SQLite sorts NULL first in ASC order and every "
+    "drive step lands a NULL-started_at row alongside a real-epoch one, "
+    "so the old path[0] read anchored to None. Now reads min(non-null "
+    "started_at) across all of a task's agent_runs rows, falling back "
+    "to min(non-null recorded_at) only when none carry a started_at "
+    "(task 9c6401dc). "
     "instant.2 (epic 9974d407 children): b0138f17 cold start goes "
     "offline-first -- the embedder resolves its local HF snapshot "
     "(local_files_only, zero network) and main.py warms it on a boot "
