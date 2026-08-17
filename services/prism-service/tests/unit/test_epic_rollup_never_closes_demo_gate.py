@@ -1,24 +1,17 @@
 """An epic-rollup receipt must never close a human-only demo/review gate
 (child 457b38db; epic 37c9207b oracle clause; mx-7e03ff/mx-e2868f).
 
-DEFERRED (verify_green_state, 2026-08-17): a fix for this exact defect was
-committed directly on THIS epic's own branch (65e68bb) -- but epic 37c9207b's
-own approved plan (plan_doc, Wave B) scopes this fix to child 457b38db and
-requires the OWNER'S EXPLICIT control-plane authorisation before it lands,
-because it edits conductor_service.py (a control_plane.POLICY_FILES entry).
-plan_gate's history row for this task reads `reason=a` from
-`conductor-autoclear` -- a rubric autoclear, never a human answering the
-Wave-B authorisation ask -- so that authorisation was never actually given.
-Landing it here anyway is precisely the candidate-controls-judge smuggling
-epic 37c9207b's own likely_misfire forbids ("Adding policy-change/control-
-plane from inside a drive to clear the candidate-controls-judge tooth is
-precisely the smuggling that tooth exists to stop"). The fix commit was
-reverted from this branch (see mx recorded against task 37c9207b) and this
-test is skipped rather than deleted (file deletion was blocked by the
-session's own tool classifier) so the well-designed fix and its rationale
-are not lost -- child 457b38db owns landing this for real, with its own
-worktree and test file (test_rollup_never_decides_human_gate.py), once the
-owner grants Wave-B authorisation.
+LANDED (2026-08-17): the deferral below is over. Child 457b38db shipped the
+production fix to main via PR #2143 (the plain-approve park branch in
+ConductorService.gate_decide, alongside its own suite
+test_rollup_never_decides_human_gate.py), with the owner's control-plane
+authorisation given in that child's own drive. This file is the EPIC's
+pinned suite for the same contract and is unskipped now that the behaviour
+it pins exists on main. History of the deferral: an earlier lane committed
+the fix directly on this epic's branch (65e68bb) without authorisation;
+verify_green_state reverted it (4e808bc) and skip-marked this suite rather
+than delete it, so the pins survived until 457b38db landed the fix through
+its own gates.
 
 THE BUG: ConductorService.gate_decide's epic roll-up branch
 (services/prism-service/prism_service/services/conductor_service.py, the
@@ -62,13 +55,6 @@ _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
-
-pytestmark = pytest.mark.skip(
-    reason="fix deferred to child 457b38db pending owner control-plane "
-           "authorisation for conductor_service.py (task 37c9207b Wave B); "
-           "the corresponding production fix was reverted from this "
-           "branch -- see this file's module docstring")
-
 
 def _services(tmp_path):
     from prism_service.services.task_service import TaskService
