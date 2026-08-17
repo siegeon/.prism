@@ -8,6 +8,7 @@ import { GraphState } from "@/live/graphState";
 import { draw } from "@/live/draw";
 import { actionStripHitTest, exploreHrefFor } from "@/live/cards";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
+import LiveGatePanel from "@/components/live/LiveGatePanel";
 
 /** localStorage key for a project's manual card-position overrides (owner
  * ask: "the individual panels should be able to be moved") — read once
@@ -83,6 +84,9 @@ export default function LivePage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GraphState>(new GraphState());
   const [error, setError] = useState<string | null>(null);
+  // Task d56f3b25 (S3): which task's gate decision panel is open, mounted
+  // in place (URL stays /live) -- never a navigate() to /tasks/<id>.
+  const [gatePanelTaskId, setGatePanelTaskId] = useState<string | null>(null);
   // Only used to switch the CSS cursor (grabbing while a card drag is
   // live) — the canvas itself repaints via rAF, not React re-render.
   const [grabbing, setGrabbing] = useState(false);
@@ -355,6 +359,12 @@ export default function LivePage() {
       const hit = actionStripHitTest(selectedNode, world.x, world.y);
       if (hit === "open") { navigate(selectedNode.href); return; }
       if (hit === "explore") { navigate(exploreHrefFor(selectedNode)); return; }
+      if (hit === "gate") {
+        // FR-2: mounts the panel in place, no route change -- the URL
+        // stays /live.
+        setGatePanelTaskId(selectedNode.id);
+        return;
+      }
     }
     const node = state.nodeAtWorld(world.x, world.y);
     if (!node) {
@@ -414,6 +424,13 @@ export default function LivePage() {
         >
           reset layout
         </button>
+        {gatePanelTaskId && (
+          <LiveGatePanel
+            taskId={gatePanelTaskId}
+            project={project}
+            onClose={() => setGatePanelTaskId(null)}
+          />
+        )}
       </div>
     </Page>
   );

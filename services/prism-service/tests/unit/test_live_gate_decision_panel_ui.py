@@ -300,8 +300,18 @@ def test_live_gate_panel_approve_button_disabled_state_derives_from_readiness():
     src = _read(_LIVE_GATE_PANEL)
     assert 'onClick={() => gateDecide("approve")}' in src
     assert 'onClick={() => gateDecide("reject")}' in src
-    approve_tag = src[src.index('onClick={() => gateDecide("approve")}'):]
-    approve_tag = approve_tag[: approve_tag.index(">") + 1] if ">" in approve_tag[:400] else approve_tag[:400]
+    onclick_lit = 'onClick={() => gateDecide("approve")}'
+    approve_tag = src[src.index(onclick_lit):]
+    # SUPERSEDED 2026-08-17 (task d56f3b25): the arrow syntax's own "=>"
+    # already carries a ">" 13 chars into onclick_lit, so a bare
+    # approve_tag.index(">") always cut the window off INSIDE the matched
+    # literal itself, before ever reaching the tag's real closing ">" --
+    # unsatisfiable by any implementation carrying the exact onclick_lit
+    # text above. Skip past the matched literal's own length first, then
+    # hunt for the tag's actual close.
+    rest = approve_tag[len(onclick_lit):]
+    close_idx = rest.index(">") if ">" in rest[:400] else 400
+    approve_tag = approve_tag[: len(onclick_lit) + close_idx + 1]
     assert "disabled=" in approve_tag, (
         "FR-8: Approve's enabled state must derive from live readiness, "
         "never render unconditionally clickable")
