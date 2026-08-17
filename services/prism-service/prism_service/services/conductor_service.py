@@ -2292,10 +2292,19 @@ class ConductorService:
         HEAD — this reads the TASK'S OWN worktree.
 
         FAIL-OPEN (returns ""), never a refusal, when: no workspace is
-        resolvable for the task, or that workspace has no `origin/main` ref
-        at all (e.g. a synthetic/local-only repo with no remote — an
+        resolvable for the task, that workspace has no `origin/main` ref at
+        all (e.g. a synthetic/local-only repo with no remote — an
         unverifiable shipped-ness is not this tooth's business; other teeth
-        own the un-evidenced case)."""
+        own the un-evidenced case), OR the task never committed anything
+        under its own `[task:<id8>]` trailer ANYWHERE in this workspace
+        (local history included) — a measurement-only ticket (metric/
+        http_probe oracle, zero code changes) has nothing to ship, so
+        "unshipped" does not apply to it. Regression guard: this last case
+        is what test_conductor_work_honest_green.py's bare-loop walk hit
+        (task 8a737f2f qa discovery) before this fail-open existed — that
+        fixture's workspace resolves to a real repo+origin/main but the
+        task itself never makes a commit, so the naive origin/main-only
+        check misread "nothing committed yet" as "committed but unshipped"."""
         task_id = str(getattr(task, "id", "") or "")
         if not task_id:
             return ""
@@ -2308,6 +2317,20 @@ class ConductorService:
         if not repo:
             return ""
         import subprocess
+        try:
+            # --all: the task's own commit may live on ITS OWN branch while
+            # HEAD sits elsewhere (e.g. checked back out to main) — a bare
+            # `git log` only walks the current branch and would misread a
+            # real unpushed commit as "never committed at all" (test C2/C3).
+            local_trailer = subprocess.run(
+                ["git", "-C", repo, "log", "--all", "--fixed-strings",
+                 "--grep", f"[task:{task_id[:8]}]", "-n", "1",
+                 "--format=%H"],
+                capture_output=True, text=True, timeout=10)
+        except Exception:
+            return ""
+        if local_trailer.returncode != 0 or not local_trailer.stdout.strip():
+            return ""
         try:
             ref_check = subprocess.run(
                 ["git", "-C", repo, "rev-parse", "--verify", "-q",

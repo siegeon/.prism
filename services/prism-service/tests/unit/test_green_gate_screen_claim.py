@@ -397,6 +397,44 @@ def test_C3_b22576bb_replay_parks_with_a_reason_covering_both_counts(
     )
 
 
+def test_C4_a_task_with_no_commits_at_all_is_not_unshipped(
+    tmp_path, monkeypatch,
+):
+    """Regression guard (task 8a737f2f qa discovery): a task whose workspace
+    resolves to a real repo with a real origin/main, but which never
+    committed ANYTHING under its own [task:<id8>] trailer, has nothing to
+    ship — "unshipped" must not fire. This is exactly the shape
+    test_conductor_work_honest_green.py's bare-loop walk hit: a
+    measurement-only ticket (metric/http_probe oracle) that makes zero code
+    changes still gets a real git workspace, and the naive origin/main-only
+    check misread "never committed" as "committed but unshipped"."""
+    from prism_service.services import task_workspace
+
+    task_svc, task = _gated_task(
+        tmp_path, tags=["conductor"], oracle="GET /health returns 200",
+        proof_type="test",
+        completion_proof=_BACKEND_PROOF,
+    )
+    repo = _repo_with_bare_origin(tmp_path)
+    # No commit is ever made under this task's own trailer — the repo sits
+    # exactly at the baseline the workspace was cut from.
+    monkeypatch.setattr(task_workspace, "workspace_for",
+                        lambda _tid: {"path": str(repo)})
+
+    cond = _conductor(tmp_path, task_svc)
+    result = cond.gate_decide(task.id, action="approve",
+                              reason="test: measurement-only, no commits")
+
+    assert result["ok"] is True, (
+        f"a task that never committed anything under its own trailer was "
+        f"rejected as 'unshipped' (reason={result.get('reason')!r}) — "
+        "there is nothing to ship, so this tooth is not its business"
+    )
+    assert result["gate_state"] == "passed"
+    after = task_svc.get(task.id)
+    assert after.status == "done"
+
+
 # ── Group D — a genuine human sign-off still works ────────────────────────
 
 
