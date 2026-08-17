@@ -17,6 +17,12 @@ PRISM_VERSION = "7.11.16"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.15: the /conductor tile regains its deleted metrics (task "
+    "ac91be51) - 2x2 MetricCell grid, EtaCountdownBar, SlicesBar epic "
+    "hero and TokenTurns' session_quiet_s quiet-clock, restored from "
+    "c9166c4^ and remounted on the shared useConductorState hook's "
+    "ManagedTask type; the ring-timeline/eta absence contracts retired "
+    "in-slice with supersession notes. "
     "7.11.16: DesignPacket.tsx (task 73f13267) - the 'Approve design' "
     "footer now renders BEFORE the prototype iframe/diagram/plan_doc "
     "(was last, ~5 screens down) so it's reachable without scrolling past "

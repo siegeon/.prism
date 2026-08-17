@@ -25,7 +25,7 @@
       "status": "delivered",
       "proof_node_id": "tests/integration/test_conductor_tile_ring_timeline_production.py::test_tasktile_hero_is_ring_plus_step_summary",
       "guard_node_id": null,
-      "note": "The prototype's 2x2 metric grid (Current phase/Time left/Throughput/Idle) was superseded and is NOT rendered."
+      "note": "SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51): the note used to say the 2x2 metric grid was NOT rendered; ac91be51 restores it. That restoration is its own AC-METRICGRID-2 below."
     },
     {
       "id": "AC-TIMELINE-3",
@@ -61,11 +61,35 @@
     },
     {
       "id": "AC-ETA-UI",
-      "statement": "The tile renders a task-card ETA UI (EtaCountdownBar + '~Xm left' chip) consuming eta_s/eta_total_s.",
-      "status": "moved:68a9720e",
-      "proof_node_id": null,
-      "guard_node_id": "tests/unit/test_conductor_per_step_eta.py::test_conductor_page_eta_ui_RETIRED_superseded_by_ring_arc_and_idle_clock",
-      "note": "The showcase tile never ported an ETA UI; a real task-card ETA remains OPEN + tracked on task 68a9720e and is NOT fake-satisfied. Backend ETA projection + SdlcProgress caption are delivered/proven by the runtime oracles in the same test file."
+      "statement": "The tile renders a task-card ETA UI (EtaCountdownBar, draining MM:SS) gated on eta_s>5 && eta_total_s>0 and the honest activity state.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_conductor_tile_restored_metrics_ui.py::test_eta_countdown_bar_is_mounted_and_gated_on_real_eta_fields",
+      "guard_node_id": null,
+      "note": "SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51): was moved:68a9720e while the showcase tile had genuinely dropped the ETA UI. ac91be51 restores EtaCountdownBar; task 68a9720e's tracked gap is closed by this AC."
+    },
+    {
+      "id": "AC-METRICGRID-2",
+      "statement": "TileHero renders a 2x2 grid of 4 MetricCell instances (Current phase / Time left / Throughput / Idle) beside the ring, sourced from live task.phase_progress/task.activity.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_conductor_tile_restored_metrics_ui.py::test_tilehero_renders_four_metric_cells_beside_the_ring",
+      "guard_node_id": null,
+      "note": "Restores the grid dropped by c9166c4 (task ac91be51). See AC-HERO-2's superseded note."
+    },
+    {
+      "id": "AC-SLICESBAR-EPIC",
+      "statement": "SlicesBar renders the epic hero line ('Slice N/M · ▶ title · step') when task.subtasks is non-empty, and is absent for a leaf task.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_conductor_tile_restored_metrics_ui.py::test_slicesbar_mounted_and_gated_on_real_subtasks",
+      "guard_node_id": null,
+      "note": "Restores the epic slices hero dropped by c9166c4 (task ac91be51); ManagedTask.subtasks (:44-46) is now genuinely consumed."
+    },
+    {
+      "id": "AC-TOKENTURNS-QUIET",
+      "statement": "<TokenTurns> receives a real session_quiet_s prop so its shipped quiet-clock branch renders live data.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_conductor_tile_restored_metrics_ui.py::test_tokenturns_call_site_passes_session_quiet_s",
+      "guard_node_id": null,
+      "note": "Restores the session_quiet_s wiring dropped by c9166c4 (task ac91be51); TokenTurns.tsx's quiet-clock branch (:66,:73) previously had no caller."
     },
     {
       "id": "AC-TOKENSOURCE-UI",
