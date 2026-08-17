@@ -17,6 +17,10 @@ PRISM_VERSION = "7.11.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.24: /live port handles are visible on idle wires (task "
+    "763168f8) - full-opacity light-slate dot at radius 4 while the wire "
+    "stroke stays dim, and hovering a port shows a grab cursor keyed on "
+    "the real portAtWorld hit-test. "
     "7.11.21: a stale tab survives a redeploy (task 6a094d45) - vite's "
     "vite:preloadError now routes into the existing guarded stale-chunk "
     "recovery, covering the case where React lazy swallows the import "
