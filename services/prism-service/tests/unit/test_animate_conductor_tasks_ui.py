@@ -10,6 +10,7 @@ source-assert pattern (no JS test runner) as the other *_ui.py contracts.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _HERE = Path(__file__).resolve()
@@ -30,10 +31,25 @@ def _read(p: Path) -> str:
 # pulse is visible on EVERY page, not just the board (ws5 oracle).
 # ---------------------------------------------------------------------------
 
+# SUPERSEDED 2026-08-12 (task 40c29b83): the /api/conductor/state fetch
+# moved OUT of LiveBar.tsx into the shared lib/useConductorState.ts hook
+# (FR-1/FR-3) -- LiveBar now reaches the endpoint only by IMPORTING the
+# hook, so the literal check moves to the hook file and this test instead
+# pins the import shape.
+_HOOK = _SRC / "lib" / "useConductorState.ts"
+
+
 def test_live_bar_reads_real_conductor_state():
     src = _read(_LIVEBAR)
-    assert "/api/conductor/state" in src, \
-        "LiveBar must read the conductor's real work-state endpoint"
+    assert re.search(
+        r'import\s*\{[^}]*\buseConductorState\b[^}]*\}\s*from\s*'
+        r'["\']@/lib/useConductorState["\']',
+        src,
+    ), "LiveBar must import useConductorState (the shared conductor work-state hook)"
+    assert _HOOK.exists(), f"expected {_HOOK} to own the endpoint fetch"
+    hook_src = _read(_HOOK)
+    assert "/api/conductor/state" in hook_src, \
+        "useConductorState must read the conductor's real work-state endpoint"
 
 
 def test_live_bar_is_mounted_in_the_app_shell():
