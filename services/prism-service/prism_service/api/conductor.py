@@ -292,6 +292,44 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                 "receipt": {"adapter": "control-plane", "passed": True,
                             "status": "judge_dirty_caveat", "ended_at": "",
                             "reason": _dirty_reason}}
+    # SETTLED GATE READINESS (task 39adc067, e0149f1f mirror image): a gate
+    # that is ALREADY DECIDED (task.gate_state == "passed") must never be
+    # re-litigated through the same STALE-tree refusal text a genuinely
+    # unsound PENDING approval would produce - a reader could not otherwise
+    # tell a sound decided gate from a false-green one. Fires ONLY for a
+    # settled gate; gate_state != "passed" falls through to the branches
+    # below unchanged, so the e0149f1f false-green catch for PENDING gates
+    # is untouched (task stop_if).
+    if str(getattr(task, "gate_state", "") or "").strip().lower() == "passed":
+        import re as _re_settled
+        _reason_txt = str(getattr(task, "gate_reason", "") or "")
+        _m = _re_settled.search(r"tree=([0-9a-f]{6,40})", _reason_txt)
+        _decided_tree = _m.group(1) if _m else ""
+        _drift_note = ""
+        if _decided_tree:
+            try:
+                from prism_service.services import oracle_spec as osp
+                from prism_service.services import task_workspace
+                ws = task_workspace.workspace_for(task_id)
+                _cur = osp.current_tree_sha(
+                    (ws or {}).get("path") if ws else None)
+                if _cur and not _cur.startswith(_decided_tree):
+                    _drift_note = (
+                        " (informational: the tree has moved to "
+                        f"{_cur[:12]} since this gate was decided at "
+                        f"{_decided_tree} - the decision still stands)")
+            except Exception:
+                pass
+        _settled_reason = (f"gate already decided at tree={_decided_tree}"
+                           if _decided_tree else "gate already decided")
+        if _reason_txt:
+            _settled_reason += f" - {_reason_txt}"
+        _settled_reason += _drift_note
+        return {"receipt_ok": True, "receipt_refusal": "",
+                "manual_review": True,
+                "receipt": {"adapter": "settled", "passed": True,
+                            "status": "decided", "ended_at": "",
+                            "reason": _settled_reason}}
     # PLAN-GATE READINESS (task c016667f, FR-10): the design-packet approval
     # status IS the live parked reason - self-diagnosable without a stale
     # gate_reason relay, mirroring the red_gate branch below.
