@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.23"
+PRISM_VERSION = "7.11.25"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4891,4 +4891,14 @@ PRISM_VERSION_NOTES += (
     "but empty' refusal. The genuinely-empty-section and unrecognised-"
     "bullet-form (prose-only) refusals are now distinct messages; "
     "grounding (_claim_is_grounded) is unchanged."
+)
+
+PRISM_VERSION_NOTES += (
+    " v7.11.25 (task 97d92854): a refused green_gate approve now PARKS the"
+    " gate pending with the refusal reason recorded, instead of writing"
+    " gate_state=failed - both the plain and override oracle-receipt"
+    " refusal branches in gate_decide. The refusal itself is unchanged"
+    " (ok:false, nothing minted, override still cannot skip the oracle);"
+    " only the strand is gone: the next honest approve after fresh"
+    " evidence lands needs no override escalation."
 )
