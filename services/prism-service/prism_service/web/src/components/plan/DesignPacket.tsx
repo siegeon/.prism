@@ -33,6 +33,7 @@ export default function DesignPacket({
   prototypeSrc,
   onApprove,
   hideApproval = false,
+  refreshToken,
 }: {
   taskId: string;
   project?: string;
@@ -48,6 +49,12 @@ export default function DesignPacket({
   // are the single affordance, so the packet's footer must not render a
   // second one - same forked-approve rule as onApprove above.
   hideApproval?: boolean;
+  // Bumped by an external approve (task fa7735bd) to retrigger `load()`
+  // without changing taskId/project - the [taskId, project]-only fetch
+  // below never refires on its own after gateDecide's approveDesignPacket()
+  // flips approval.approved, so this card would keep rendering the stale
+  // not-approved branch until a full page reload.
+  refreshToken?: number;
 }) {
   const [data, setData] = useState<DesignPacketData | null>(null);
 
@@ -58,7 +65,7 @@ export default function DesignPacket({
       .catch(() => setData(null));
   }, [taskId, project]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshToken]);
 
   if (!data) return null;
 
@@ -79,6 +86,42 @@ export default function DesignPacket({
           ? `highest order on file: ${order.actual} (this feature admits ${order.admits})`
           : `below order: this feature admits an interactive ${order.admits}, but the packet only carries a ${order.actual}`}
       </div>
+
+      {/* FR-6/FR-7/task 73f13267: the ONLY approval affordance — an explicit
+          owner write action, never a render/browser receipt. Rendered here,
+          BEFORE the prototype iframe and diagram (not last), so a reviewer
+          reaches Approve without scrolling past them; the prototype below
+          still renders unconditionally, never collapsed. Hidden when the
+          gate panel mounts this packet as evidence: its decision controls
+          own the click. */}
+      {!hideApproval && (
+      <div className="rounded-md px-3 py-2.5 border border-[color:var(--border-default)] space-y-2">
+        {approval.approved ? (
+          <div className="text-[12px]" style={{ color: "var(--accent-sage-fg)" }}>
+            ✓ design packet approved — plan_gate can clear
+          </div>
+        ) : (
+          <>
+            <div className="text-[12px] text-[color:var(--text-secondary)]">
+              {approval.stale
+                ? "the design packet changed since it was approved — re-approval is required"
+                : approval.reason || "this design packet needs an explicit owner approval before plan_gate can clear"}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={!onApprove}
+                onClick={onApprove}
+                className="text-2xs font-semibold px-2.5 py-1 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
+                style={{ color: "var(--accent-teal-fg)" }}
+              >
+                Approve design
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      )}
 
       {data.prototype.exists && prototypeSrc && (
         <div>
@@ -123,37 +166,6 @@ export default function DesignPacket({
         </div>
       )}
 
-      {/* FR-6/FR-7: the ONLY approval affordance — an explicit owner write
-          action, never a render/browser receipt. Hidden when the gate panel
-          mounts this packet as evidence: its decision controls own the click. */}
-      {!hideApproval && (
-      <div className="rounded-md px-3 py-2.5 border border-[color:var(--border-default)] space-y-2">
-        {approval.approved ? (
-          <div className="text-[12px]" style={{ color: "var(--accent-sage-fg)" }}>
-            ✓ design packet approved — plan_gate can clear
-          </div>
-        ) : (
-          <>
-            <div className="text-[12px] text-[color:var(--text-secondary)]">
-              {approval.stale
-                ? "the design packet changed since it was approved — re-approval is required"
-                : approval.reason || "this design packet needs an explicit owner approval before plan_gate can clear"}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={!onApprove}
-                onClick={onApprove}
-                className="text-2xs font-semibold px-2.5 py-1 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)] disabled:opacity-40"
-                style={{ color: "var(--accent-teal-fg)" }}
-              >
-                Approve design
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-      )}
     </div>
   );
 }

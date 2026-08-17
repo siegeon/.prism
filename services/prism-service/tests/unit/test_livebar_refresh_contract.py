@@ -276,7 +276,12 @@ def test_comment_stripping_instrument_rejects_comment_only_tokens():
 # ---------------------------------------------------------------------------
 
 def test_at_least_one_load_path_reachable_while_sse_healthy_and_visible():
-    src = _strip_comments(_read("components/LiveBar.tsx"))
+    # SUPERSEDED 2026-08-12 (task 40c29b83): this machinery (load-path
+    # reachability, EventSource target, staleness sweep, sseHealthy
+    # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
+    # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
+    # only its location moved. Re-anchored here rather than deleted.
+    src = _strip_comments(_read("lib/useConductorState.ts"))
     assert _reachable_while_healthy_visible(src), (
         "every recurring load() call site's enclosing guard requires "
         "sseHealthy to read false (or the tab to be hidden) before it can "
@@ -292,7 +297,12 @@ def test_at_least_one_load_path_reachable_while_sse_healthy_and_visible():
 # ---------------------------------------------------------------------------
 
 def test_eventsource_targets_sse_sessions_and_onmessage_reaches_load():
-    src = _strip_comments(_read("components/LiveBar.tsx"))
+    # SUPERSEDED 2026-08-12 (task 40c29b83): this machinery (load-path
+    # reachability, EventSource target, staleness sweep, sseHealthy
+    # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
+    # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
+    # only its location moved. Re-anchored here rather than deleted.
+    src = _strip_comments(_read("lib/useConductorState.ts"))
     m = re.search(r"new EventSource\(\s*(`[^`]*`|\"[^\"]*\"|'[^']*')", src)
     assert m, "LiveBar must open `new EventSource(...)`"
     es_arg = m.group(1)
@@ -317,7 +327,12 @@ def test_eventsource_targets_sse_sessions_and_onmessage_reaches_load():
 # ---------------------------------------------------------------------------
 
 def test_load_still_reachable_without_the_visibilitychange_listener():
-    src = _strip_comments(_read("components/LiveBar.tsx"))
+    # SUPERSEDED 2026-08-12 (task 40c29b83): this machinery (load-path
+    # reachability, EventSource target, staleness sweep, sseHealthy
+    # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
+    # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
+    # only its location moved. Re-anchored here rather than deleted.
+    src = _strip_comments(_read("lib/useConductorState.ts"))
     mutated = re.sub(
         r'document\.addEventListener\(\s*["\']visibilitychange["\'][^;]*;',
         "",
@@ -340,7 +355,12 @@ def test_load_still_reachable_without_the_visibilitychange_listener():
 # ---------------------------------------------------------------------------
 
 def test_fallback_sweep_guards_on_visibility_and_named_staleness_threshold():
-    src = _strip_comments(_read("components/LiveBar.tsx"))
+    # SUPERSEDED 2026-08-12 (task 40c29b83): this machinery (load-path
+    # reachability, EventSource target, staleness sweep, sseHealthy
+    # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
+    # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
+    # only its location moved. Re-anchored here rather than deleted.
+    src = _strip_comments(_read("lib/useConductorState.ts"))
     guard = _fallback_sweep_guard(src)
     assert guard is not None, (
         "expected a setInterval-driven fallback sweep whose callback body "
@@ -364,7 +384,12 @@ def test_fallback_sweep_guards_on_visibility_and_named_staleness_threshold():
 # ---------------------------------------------------------------------------
 
 def test_heartbeat_label_reads_as_time_since_fetch_not_poll_interval():
-    src = _strip_comments(_read("components/LiveBar.tsx"))
+    # SUPERSEDED 2026-08-12 (task 40c29b83): this machinery (load-path
+    # reachability, EventSource target, staleness sweep, sseHealthy
+    # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
+    # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
+    # only its location moved. Re-anchored here rather than deleted.
+    src = _strip_comments(_read("lib/useConductorState.ts"))
     i = src.index("const heartbeat = ")
     stmt = src[i:src.index(";", i) + 1]
     assert re.search(r"poll\s*\$\{", stmt) is None, (
@@ -399,7 +424,12 @@ def test_version_patch_bumped_with_task_note():
 # ---------------------------------------------------------------------------
 
 def test_sseHealthy_is_fully_retired():
-    src = _strip_comments(_read("components/LiveBar.tsx"))
+    # SUPERSEDED 2026-08-12 (task 40c29b83): this machinery (load-path
+    # reachability, EventSource target, staleness sweep, sseHealthy
+    # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
+    # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
+    # only its location moved. Re-anchored here rather than deleted.
+    src = _strip_comments(_read("lib/useConductorState.ts"))
     assert "sseHealthy" not in src, (
         "sseHealthy must be deleted along with its inverted guard, not "
         f"left dangling unused; still present in stripped source (first "

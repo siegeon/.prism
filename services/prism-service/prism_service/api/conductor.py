@@ -224,12 +224,26 @@ def design_packet_approve(task_id: str = Body(..., embed=True),
     """FR-6/FR-7: the ONLY way a design-packet approval is recorded - an
     explicit owner write action, never a render/browser receipt (design_
     packet.record_approval raises ValueError on a non-owner_explicit method,
-    which this route surfaces as 400 rather than silently accepting it)."""
+    which this route surfaces as 400 rather than silently accepting it).
+
+    Task 98d38111: `approver` must resolve to a real HUMAN identity via
+    ActorService (a real user id/email in the workspace store) before the
+    ledger writes an owner_explicit receipt for it - refusing boilerplate
+    audit-reason text or any other unresolvable string, so the receipt this
+    tooth exists to demand can never be forged for nobody."""
+    from prism_service.services import actor_service as actor_service_module
     from prism_service.services import design_packet as dp
+    from prism_service.models.actor import ActorKind
     s = _svc(project)
     task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
     if task is None:
         raise HTTPException(404, "unknown task")
+    identity = actor_service_module.get_actor_service().resolve(approver)
+    if identity.kind != ActorKind.HUMAN:
+        raise HTTPException(
+            400,
+            f"approver {approver!r} does not resolve to a real signed-in "
+            "identity - a design-packet approval must name a real user")
     try:
         appr = dp.record_approval(project, task_id, task, approver=approver,
                                   method="owner_explicit")
@@ -292,6 +306,44 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                 "receipt": {"adapter": "control-plane", "passed": True,
                             "status": "judge_dirty_caveat", "ended_at": "",
                             "reason": _dirty_reason}}
+    # SETTLED GATE READINESS (task 39adc067, e0149f1f mirror image): a gate
+    # that is ALREADY DECIDED (task.gate_state == "passed") must never be
+    # re-litigated through the same STALE-tree refusal text a genuinely
+    # unsound PENDING approval would produce - a reader could not otherwise
+    # tell a sound decided gate from a false-green one. Fires ONLY for a
+    # settled gate; gate_state != "passed" falls through to the branches
+    # below unchanged, so the e0149f1f false-green catch for PENDING gates
+    # is untouched (task stop_if).
+    if str(getattr(task, "gate_state", "") or "").strip().lower() == "passed":
+        import re as _re_settled
+        _reason_txt = str(getattr(task, "gate_reason", "") or "")
+        _m = _re_settled.search(r"tree=([0-9a-f]{6,40})", _reason_txt)
+        _decided_tree = _m.group(1) if _m else ""
+        _drift_note = ""
+        if _decided_tree:
+            try:
+                from prism_service.services import oracle_spec as osp
+                from prism_service.services import task_workspace
+                ws = task_workspace.workspace_for(task_id)
+                _cur = osp.current_tree_sha(
+                    (ws or {}).get("path") if ws else None)
+                if _cur and not _cur.startswith(_decided_tree):
+                    _drift_note = (
+                        " (informational: the tree has moved to "
+                        f"{_cur[:12]} since this gate was decided at "
+                        f"{_decided_tree} - the decision still stands)")
+            except Exception:
+                pass
+        _settled_reason = (f"gate already decided at tree={_decided_tree}"
+                           if _decided_tree else "gate already decided")
+        if _reason_txt:
+            _settled_reason += f" - {_reason_txt}"
+        _settled_reason += _drift_note
+        return {"receipt_ok": True, "receipt_refusal": "",
+                "manual_review": True,
+                "receipt": {"adapter": "settled", "passed": True,
+                            "status": "decided", "ended_at": "",
+                            "reason": _settled_reason}}
     # PLAN-GATE READINESS (task c016667f, FR-10): the design-packet approval
     # status IS the live parked reason - self-diagnosable without a stale
     # gate_reason relay, mirroring the red_gate branch below.
@@ -342,6 +394,27 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                 "status": fresh.status,
                                 "ended_at": fresh.ended_at,
                                 "reason": str(fresh.reason)[:300]}}
+        # SWEPT AND REFUSED (task 5c61e0e6): fresh_red_receipt only matches
+        # status==ST_RED, so a receipt already on file at this red_sha+spec
+        # with a NOT-red verdict (the seat ran run_red_oracle, the pinned
+        # suite PASSED at the immutable anchor, and adjudicate_test_red_gate's
+        # own `tried` guard abstains forever once ANY receipt exists there)
+        # is invisible to `fresh` but is NOT unswept. Read it explicitly so
+        # readiness never promises a sweep that structurally cannot come.
+        _swept = None
+        if red_sha and spec is not None:
+            for _r in reversed(osp.read_receipts(project, task_id)):
+                if _r.tree_sha == red_sha and _r.spec_hash == spec.spec_hash():
+                    _swept = _r
+                    break
+        if _swept is not None and _swept.status != osp.ST_RED:
+            return {"receipt_ok": False,
+                    "receipt_refusal": (
+                        f"{str(_swept.reason)[:300]} — the machine seat "
+                        "already swept this anchor and will not retry (the "
+                        "pinned suite passes there, so a red demonstration "
+                        "can never be produced from this history). This "
+                        "gate needs a distinct actor's decision now.")}
         # Does the machine red seat actually TAKE this ticket? Promising "no
         # owner action needed" for a sweep that can never come is how an owner
         # waits forever (owner 2026-07-21: task 89e90d1a sat at red_gate while
@@ -362,8 +435,10 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             return {"receipt_ok": False,
                     "receipt_refusal": (
                         "no red-step commit derivable — commit the failing "
-                        "tests with a [task:<id>] trailer, or decide the "
-                        "gate manually")}
+                        "tests with a [task:<id>] trailer, or attest a "
+                        "pre-change ref by adding a `red-anchor-ref: <sha>` "
+                        "marker line to the red-step completion_proof, or "
+                        "decide the gate manually")}
         if _blocks:
             return {"receipt_ok": False,
                     "receipt_refusal": (

@@ -264,9 +264,12 @@ def test_green_gate_refuses_without_receipt(tmp_path):
                    completion_proof="all unit tests pass")
     res = cond.gate_decide(t.id, "approve", reason=_GREEN_REASON,
                            actor="qa-final", session_id="qa-final")
-    assert res["ok"] is False and res["gate_state"] == "failed"
+    # Superseded by task 97d92854: a receipt refusal PARKS the gate
+    # pending (reason recorded, nothing minted) instead of writing "failed",
+    # so the next honest approve needs no override escalation.
+    assert res["ok"] is False and res["gate_state"] == "pending"
     assert "oracle" in res["reason"].lower()
-    assert task_svc.get(t.id).gate_state == "failed"
+    assert task_svc.get(t.id).gate_state == "pending"
 
 
 def test_green_gate_refuses_on_failing_receipt(tmp_path):
@@ -282,7 +285,8 @@ def test_green_gate_refuses_on_failing_receipt(tmp_path):
         srv.shutdown()
     res = cond.gate_decide(t.id, "approve", reason=_GREEN_REASON,
                            actor="qa-final", session_id="qa-final")
-    assert res["ok"] is False and res["gate_state"] == "failed"
+    # Superseded by task 97d92854: refusals park pending, never failed.
+    assert res["ok"] is False and res["gate_state"] == "pending"
 
 
 def test_green_gate_claimable_on_fresh_passing_receipt(tmp_path):
@@ -324,7 +328,8 @@ def test_green_gate_refuses_stale_tree_sha(tmp_path):
     assert sha_b != sha_a
     res = cond.gate_decide(t.id, "approve", reason=_GREEN_REASON,
                            actor="qa-final", session_id="qa-final")
-    assert res["ok"] is False and res["gate_state"] == "failed"
+    # Superseded by task 97d92854: refusals park pending, never failed.
+    assert res["ok"] is False and res["gate_state"] == "pending"
     assert "stale" in res["reason"].lower()
 
 
@@ -345,7 +350,8 @@ def test_green_gate_refuses_stale_spec_hash(tmp_path):
     task_svc.update(t.id, oracle=url.rstrip("/") + "/edited")   # spec drift
     res = cond.gate_decide(t.id, "approve", reason=_GREEN_REASON,
                            actor="qa-final", session_id="qa-final")
-    assert res["ok"] is False and res["gate_state"] == "failed"
+    # Superseded by task 97d92854: refusals park pending, never failed.
+    assert res["ok"] is False and res["gate_state"] == "pending"
 
 
 def test_override_cannot_green_without_receipt(tmp_path):
@@ -359,5 +365,6 @@ def test_override_cannot_green_without_receipt(tmp_path):
                            reason="independent review, overriding to green",
                            override=True, actor="qa-override",
                            session_id="qa-override")
-    assert res["ok"] is False and res["gate_state"] == "failed"
+    # Superseded by task 97d92854: refusals park pending, never failed.
+    assert res["ok"] is False and res["gate_state"] == "pending"
     assert "oracle" in res["reason"].lower()

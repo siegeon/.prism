@@ -303,7 +303,10 @@ def test_green_gate_refuses_receipt_under_different_policy_hash(tmp_path):
         srv.shutdown()
     res = cond.gate_decide(t.id, "approve", reason=_GREEN_REASON,
                            actor="qa-final", session_id="qa-final")
-    assert res["ok"] is False and res["gate_state"] == "failed"
+    # Superseded by task 97d92854: an oracle-receipt refusal (stale policy
+    # pin included) PARKS the gate pending with the reason recorded, never
+    # "failed" — the refusal itself is unchanged (ok is False).
+    assert res["ok"] is False and res["gate_state"] == "pending"
     assert "stale" in res["reason"].lower()
 
 

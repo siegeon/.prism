@@ -307,18 +307,25 @@ def test_hud_no_longer_carries_dead_unused_rows():
 
 
 def test_graph_state_self_heals_nodes_created_after_boot():
+    # SUPERSEDED (task ea92640f, ghost cards): the old invariant -- "all
+    # four event handlers birth nodes via ensureTaskNode" -- was itself
+    # the defect: bare telemetry fabricated dead "task starting..." cards
+    # with global token totals on the owner's board. The surviving REAL
+    # invariant: post-boot discovery still exists, but it belongs to the
+    # SNAPSHOT path (reconcile's ensureTaskNode births) and to
+    # task.changed events that carry a real title+step; drive.heartbeat
+    # keeps its self-healing lookup (it only fires for genuinely driven
+    # tasks). Bare agent.run/tokens.turn update known nodes only.
     src = _read(_LIVE / "graphState.ts")
     assert "ensureTaskNode" in src, (
-        "a task/subtask referenced by an event that arrives after the page's "
-        "boot snapshot must get a placeholder card, not be silently dropped "
-        "forever (piece-4 cross-check: HUD ticked while cards read 0)")
-    # every one of the four WorkEvent handlers must route through the
-    # self-healing lookup rather than a bare byId.get(...) early return.
-    # Round 6 item 2 (atomic card+wire) extended the call with the
-    # (kind, parentTaskId) pair derived from the event's own parent_id
-    # (parentInfoFor) -- the literal call shape changed but the "all four
-    # handlers use it" invariant is the same one this test pins.
-    assert src.count("ensureTaskNode(event.task_id, now, kind, parentTaskId)") >= 4
+        "post-boot discovery (reconcile + titled task.changed) must still "
+        "create cards -- dropping ensureTaskNode entirely would silently "
+        "orphan late-arriving real tasks")
+    assert src.count("ensureTaskNode(event.task_id, now, kind, parentTaskId)") >= 2, (
+        "the guarded task.changed birth and drive.heartbeat's self-heal "
+        "must keep routing through ensureTaskNode")
+    assert src.count("ensureTaskNode(sn.id, now") >= 2, (
+        "reconcile's snapshot-discovery births must survive")
 
 
 def test_version_bumped_for_this_change():
@@ -1546,10 +1553,21 @@ def test_cards_draws_a_docked_action_strip_only_when_selected():
 def test_action_strip_hit_test_resolves_open_vs_explore():
     src = _read(_LIVE / "cards.ts")
     assert "export function actionStripHitTest(" in src
-    assert 'export type ActionStripHit = "open" | "explore" | null;' in src
-    assert 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";' in src, (
-        "the strip must resolve which HALF of the docked strip a click "
-        "landed in, not just whether it hit the strip at all")
+    # SUPERSEDED 2026-08-17 (task d56f3b25): the strip widened from a fixed
+    # open/explore pair to a 3rd "gate" button on cards parked at
+    # plan_gate/green_gate (FR-1), so the literal 2-value union and the
+    # 2-way ternary body below are gone by design. The 3-slot resolution
+    # (and the shared owner-gate predicate drawActionStrip/
+    # actionStripHitTest both consult) is pinned by
+    # test_action_strip_hit_test_resolves_three_slots and
+    # test_shared_owner_gate_predicate_guards_draw_and_hit_test in
+    # test_live_gate_decision_panel_ui.py.
+    assert 'export type ActionStripHit = "open" | "explore" | "gate" | null;' in src, (
+        "ActionStripHit must widen to a 3rd gate target, never stay the "
+        "old fixed 2-value union")
+    assert 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";' not in src, (
+        "the old 2-way ternary body must be gone -- a button-count-derived "
+        "3-slot resolution replaces it")
 
 
 def test_explore_href_targets_session_or_task_param_by_node_kind():
@@ -1706,8 +1724,18 @@ def test_action_strip_hit_test_mirrors_the_dock_decision_via_optional_ctx():
         "FR-3: actionStripHitTest must gain an OPTIONAL 4th ctx param "
         "mirroring drawActionStrip's dock decision")
 
-    ret_line = 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";'
-    hit_body = hit_fn[: hit_fn.index(ret_line)]
+    # SUPERSEDED 2026-08-17 (task d56f3b25): the old anchor sliced up to the
+    # literal 2-way ternary `return ... ? "open" : "explore";`, which FR-1
+    # deletes outright (see test_action_strip_hit_test_resolves_open_vs_explore
+    # above). The real invariant this test protects -- the ctx dock-above
+    # math runs BEFORE the strip resolves which slot a click landed in --
+    # is re-anchored to the bounds check that still precedes slot
+    # resolution today, regardless of how many slots the strip now has.
+    bounds_line = "worldY < stripY || worldY > stripY + STRIP_H"
+    assert bounds_line in hit_fn, (
+        "actionStripHitTest must still bounds-check the click against the "
+        "strip's (possibly dock-above) box before resolving a slot")
+    hit_body = hit_fn[: hit_fn.index(bounds_line)]
     assert "if (ctx)" in hit_body, (
         "the mirrored dock-above math must only run when ctx was "
         "actually passed, defaulting to today's below-only math when "
@@ -1999,3 +2027,104 @@ def test_attention_caption_relocated_outside_sparkline_bounds():
         f"the attention caption (y={caption_y}) must render below the "
         f"sparkline's real bottom edge ({sparkline_bottom_px}px) -- a "
         f"caption baseline above that overlaps the curve/fill/dot")
+
+
+# ---------------------------------------------------------------------------
+# task ea92640f: empty telemetry cannot birth a ghost card. Ghost cards =
+# event-born nodes with placeholder titles + global token totals that
+# reconcile never prunes. These tests parse the ENCLOSING EVENT BRANCH
+# (sliced between `if (event.type === ...)` markers, comments stripped),
+# never a fixed character window.
+# ---------------------------------------------------------------------------
+
+def _gs_nocomments() -> str:
+    src = _read(_LIVE / "graphState.ts")
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    return re.sub(r"(?m)^\s*//.*$", "", src)
+
+
+def _event_branch(src: str, ev: str) -> str:
+    start = src.index(f'if (event.type === "{ev}")')
+    # the branch ends at the next event branch OR at applyEvent's first
+    # following method (recordTokSample) -- structural boundaries, never a
+    # fixed character window.
+    markers = [src.find(f'if (event.type === "{o}")', start + 1)
+               for o in ("task.changed", "drive.heartbeat", "agent.run", "tokens.turn")]
+    markers.append(src.find("private recordTokSample", start + 1))
+    ends = [i for i in markers if i > start]
+    return src[start:min(ends)] if ends else src[start:]
+
+
+def test_bare_task_changed_births_no_card():
+    """AC-2: a task.changed for an UNCONFIRMED task births a node only when
+    the event carries a real title AND workflow_step; a bare pending event
+    creates nothing (it waits for reconcile)."""
+    b = _event_branch(_gs_nocomments(), "task.changed")
+    assert "ensureTaskNode(" in b
+    guard = b[: b.index("ensureTaskNode(")]
+    assert ("fields.title" in guard and "fields.workflow_step" in guard) or \
+        re.search(r"has\w*\(|\.get\(", guard), (
+        "task.changed's ensureTaskNode must sit behind an existing-node or "
+        "title+step guard; unconditional birth is the ghost-card maker")
+
+
+def test_tokens_turn_cannot_birth_ghosts():
+    """AC-3: tokens.turn only updates EXISTING task nodes and never creates
+    a session node for a blank id."""
+    b = _event_branch(_gs_nocomments(), "tokens.turn")
+    assert "ensureTaskNode(" not in b, (
+        "tokens.turn must not birth task cards -- it painted global session "
+        "totals onto placeholder cards on the owner's board")
+    assert "upsertSessionNode(" in b
+    sguard = b[: b.index("upsertSessionNode(")]
+    assert re.search(r"session_id\s*[)&.]|\.trim\(\)", sguard), (
+        "upsertSessionNode in tokens.turn must sit behind a truthy "
+        "session-id guard")
+
+
+def test_reconcile_prunes_unconfirmed_nodes():
+    """AC-4: client-born nodes the snapshot disowns twice in a row are
+    removed (node + edges); snapshot confirmation resets the miss count."""
+    src = _gs_nocomments()
+    assert "snapshotMisses" in src and "snapshotConfirmed" in src, (
+        "reconcile needs client-born bookkeeping (snapshotConfirmed + "
+        "snapshotMisses) -- today NO node-removal path exists at all")
+    assert re.search(r"snapshotMisses\s*(\+=\s*1|\+\+)", src), (
+        "a snapshot miss must increment the counter")
+    assert re.search(r"snapshotMisses\s*(>=|>)\s*2|>=\s*MISS", src), (
+        "two consecutive misses must trigger the prune")
+    assert re.search(r"snapshotMisses\s*=\s*0", src), (
+        "a snapshot confirmation must reset the miss counter")
+
+
+def test_snapshot_label_heal_survives():
+    """AC-5: reconcile still heals placeholder labels from the snapshot for
+    confirmed nodes -- the fix must not break the healing path."""
+    src = _gs_nocomments()
+    heals = re.findall(r"\.label\s*=\s*sn\.label", src)
+    assert len(heals) >= 2, (
+        "both reconcile heal sites (created + existing) must keep "
+        "assigning sn.label")
+    assert re.search(r"labelIsPlaceholder\s*=\s*false", src), (
+        "healing must still clear labelIsPlaceholder")
+
+
+def test_guards_still_wake_self_heal():
+    """task 0fb0f163: the ghost guards (PR #2221) must not swallow the
+    drift signal -- each guard early-return wakes the debounced snapshot
+    self-heal BEFORE returning, so a cold-booted board heals with REAL
+    snapshot cards instead of staying empty forever."""
+    src = _gs_nocomments()
+    checks = [
+        ("task.changed", "return;"),
+        ("agent.run", "return;"),
+        ("tokens.turn", "return;"),
+    ]
+    for ev, ret in checks:
+        b = _event_branch(src, ev)
+        first_ret = b.index(ret)
+        guard_region = b[:first_ret]
+        assert "scheduleSelfHeal()" in guard_region, (
+            f"{ev}'s guard early-return must call this.scheduleSelfHeal() "
+            "before returning -- swallowing the unknown-task signal leaves "
+            "a cold-booted board empty forever")

@@ -6,7 +6,10 @@
 
 import type { GraphEdge, GraphNode, GraphSnapshot, WorkEvent } from "./types";
 import { LayoutEngine, type Slot } from "./layout";
-import { routeOrthogonal, type Point } from "./wires";
+import {
+  routeOrthogonal, portPoint, portFromWorld, autoPort, wireKey, laneFor,
+  type Point, type WirePort,
+} from "./wires";
 import { spawnPacket, stepPackets, type Packet } from "./packets";
 import { spawnToast, pruneToasts, type Toast } from "./toasts";
 import { type CardState } from "./palette";
@@ -252,9 +255,22 @@ export type LiveNode = GraphNode & {
    * touched by the live-echo loop again, so a real backend label is
    * never clobbered by a driver-title guess. */
   labelIsPlaceholder: boolean;
+  /** task ea92640f (ghost cards): reconcile bookkeeping. A node the
+   * snapshot has confirmed at least once is durable; a client-born node
+   * the snapshot disowns on 2 consecutive reconciles is pruned along
+   * with its edges. Confirmation resets the miss counter. */
+  snapshotConfirmed: boolean;
+  snapshotMisses: number;
 };
 
 export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
+
+/** A hit on a wire's port dot — which wire (wireKey-shaped `key`), which
+ * end ("from"|"to"), and the card id that end is anchored to. A type
+ * alias (not an inline object literal) so portAtWorld's OWN opening `{`
+ * is unambiguous for source-scanning tests that brace-match from the
+ * signature. */
+export type PortHit = { key: string; end: "from" | "to"; nodeId: string };
 
 function easeOutCubic(t: number): number {
   const c = Math.max(0, Math.min(1, t));
@@ -356,6 +372,35 @@ export class GraphState {
    * right after a drag ends. */
   draggingNodeId: string | null = null;
 
+  /** FR-1/FR-8 (task b9ce0450): manual per-WIRE-END port placement,
+   * mirroring `overrides` field-by-field. Keyed `${wireKey}:${end}`
+   * (end = "from" | "to") so each end of a wire can be independently
+   * docked. Consulted by wireEndpointsFor() in PREFERENCE to autoPort --
+   * an overridden port never re-derives from the peer's position, it
+   * just sits on the side/offset it was dropped on. LivePage serializes
+   * this to localStorage (prism.live.ports.<project>) on drag-release and
+   * rehydrates it via hydratePortOverrides() after bootstrap. */
+  portOverrides = new Map<string, WirePort>();
+  /** `${wireKey}:${end}` of the port dot currently under the user's
+   * pointer, mirroring draggingNodeId -- autoFitCamera stands down while
+   * set, same reasoning as the node case. */
+  draggingPortId: string | null = null;
+
+  setPortOverride(key: string, end: "from" | "to", port: WirePort): void {
+    this.portOverrides.set(`${key}:${end}`, port);
+  }
+
+  /** Resolves a world-space drop point against the CARD the given end is
+   * anchored to (`nodeId`) via portFromWorld -- the inverse of the
+   * portPoint geometry the renderer/hit-test both use -- and writes it
+   * into portOverrides. Called on every port-drag pointermove (AC-6). */
+  setPortFromWorld(key: string, end: "from" | "to", nodeId: string, wx: number, wy: number): void {
+    const node = this.byId.get(nodeId);
+    if (!node) return;
+    const slot = { x: node.x, y: node.y, w: node.slot.w, h: node.slot.h };
+    this.setPortOverride(key, end, portFromWorld(slot, wx, wy));
+  }
+
   setOverride(id: string, x: number, y: number): void {
     this.overrides.set(id, { x, y });
   }
@@ -370,6 +415,7 @@ export class GraphState {
    * the persisted copy in the same breath. */
   clearAllOverrides(): void {
     this.overrides.clear();
+    this.portOverrides.clear();
   }
 
   /** Rehydrates saved per-node position overrides once bootstrap has
@@ -387,6 +433,30 @@ export class GraphState {
   serializeOverrides(): Record<string, { x: number; y: number }> {
     const out: Record<string, { x: number; y: number }> = {};
     for (const [id, pos] of this.overrides) out[id] = pos;
+    return out;
+  }
+
+  /** Rehydrates saved per-wire-end port overrides once bootstrap has
+   * populated edges -- a key whose wire no longer exists in the current
+   * snapshot is silently dropped, same drop-unknown-ids rule as
+   * hydrateOverrides above. */
+  hydratePortOverrides(saved: Record<string, WirePort>): void {
+    for (const [k, port] of Object.entries(saved)) {
+      if (!port || (port.side !== "left" && port.side !== "right" && port.side !== "top" && port.side !== "bottom")) continue;
+      if (!Number.isFinite(port.t)) continue;
+      const end = k.endsWith(":from") ? "from" : k.endsWith(":to") ? "to" : null;
+      if (!end) continue;
+      const key = k.slice(0, k.length - (end.length + 1));
+      const [source, target] = key.split("->");
+      if (this.edges.some((e) => e.source === source && e.target === target)) {
+        this.portOverrides.set(k, { side: port.side, t: port.t });
+      }
+    }
+  }
+
+  serializePortOverrides(): Record<string, WirePort> {
+    const out: Record<string, WirePort> = {};
+    for (const [k, port] of this.portOverrides) out[k] = port;
     return out;
   }
 
@@ -481,6 +551,8 @@ export class GraphState {
       lastHeartbeatAt: 0, selected: false,
       lastSignalAt, spend_usd: n.spend_usd || 0,
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
+      owner_actionable: n.owner_actionable ?? false,
+      waiting_on: n.waiting_on ?? "",
       gatePendingSince, doneAt, settleUntil: 0,
       driveStartedAt: this.driveStartedAtPerf(n.drive_started_at, now),
       // Every caller of makeNode EXCEPT the two lazy-create paths
@@ -489,6 +561,11 @@ export class GraphState {
       // it just discovered) -- those two flip this back to true right
       // after construction, since their `label` is a same-instant guess.
       labelIsPlaceholder: false,
+      // task ea92640f: default UNCONFIRMED -- snapshot/reconcile births
+      // and confirmations flip this true; event births leave it false so
+      // the reconcile prune can retire disowned ghosts.
+      snapshotConfirmed: false,
+      snapshotMisses: 0,
     };
   }
 
@@ -531,6 +608,7 @@ export class GraphState {
     for (const n of byKind("task")) {
       const slot = this.layout.placeTask(n.id);
       const node = this.makeNode(n, null, null, slot, now, slot.x, slot.y);
+      node.snapshotConfirmed = true;
       this.nodes.push(node);
       this.byId.set(n.id, node);
     }
@@ -541,6 +619,7 @@ export class GraphState {
       const node = this.makeNode(
         n, parentId || null, null, slot, now,
         parentSlot?.x ?? slot.x, parentSlot?.y ?? slot.y);
+      node.snapshotConfirmed = true;
       this.nodes.push(node);
       this.byId.set(n.id, node);
     }
@@ -551,6 +630,7 @@ export class GraphState {
       const node = this.makeNode(
         n, null, driverId || null, slot, now,
         driverSlot?.x ?? slot.x, driverSlot?.y ?? slot.y);
+      node.snapshotConfirmed = true;
       this.nodes.push(node);
       this.byId.set(n.id, node);
     }
@@ -562,18 +642,61 @@ export class GraphState {
     this.height = height;
   }
 
-  private wireEndpointsFor(edge: LiveEdge): Point[] | null {
+  /** AC-5: the ONE router entry point -- draw.ts's wire loop and packet
+   * spawning (maybeSpawnPacket below) both resolve a wire's polyline
+   * through this method, so the drawn wire and the in-transit marker can
+   * never diverge. Resolves each end's port (manual override first, else
+   * autoPort facing the peer) and passes every OTHER node as an obstacle
+   * rectangle for routeOrthogonal's channel search (AC-4). No longer
+   * `private`: draw.ts calls it directly (state.wireEndpointsFor(e)). */
+  wireEndpointsFor(edge: LiveEdge): Point[] | null {
     const a = this.byId.get(edge.source);
     const b = this.byId.get(edge.target);
     if (!a || !b) return null;
+    const key = wireKey(edge.source, edge.target);
+    const lane = laneFor(key);
     // routeOrthogonal wants (from, to) as SLOTS in the direction the wire
     // visually flows: structure edges parent(task)->child(subtask) flow
     // left->right; token edges session->task flow session(below) up into
     // the task, which routeOrthogonal's fallback branch already handles.
-    return routeOrthogonal(
-      { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h },
-      { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h },
-    );
+    const fromSlot = { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h };
+    const toSlot = { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h };
+    const fromPort = this.portOverrides.get(`${key}:from`) ?? autoPort(fromSlot, toSlot, lane);
+    const toPort = this.portOverrides.get(`${key}:to`) ?? autoPort(toSlot, fromSlot, lane);
+    const obstacles: Slot[] = [];
+    for (const n of this.nodes) {
+      if (n.id === a.id || n.id === b.id) continue;
+      obstacles.push({ x: n.x, y: n.y, w: n.slot.w, h: n.slot.h });
+    }
+    return routeOrthogonal(fromSlot, toSlot, { fromPort, toPort, obstacles, lane });
+  }
+
+  /** Hit-tests every wire's two port dots against a world point, within
+   * PORT_HIT_R -- calls the SAME portPoint the renderer/router use (AC-8,
+   * mx-0a0bf4: the hit-test must MIRROR the draw, never re-derive its own
+   * copy of the side/offset math). Returns the closest hit, or null. */
+  portAtWorld(wx: number, wy: number): PortHit | null {
+    const PORT_HIT_R = 10;
+    let best: PortHit | null = null;
+    let bestDist = PORT_HIT_R;
+    for (const e of this.edges) {
+      const a = this.byId.get(e.source);
+      const b = this.byId.get(e.target);
+      if (!a || !b) continue;
+      const key = wireKey(e.source, e.target);
+      const lane = laneFor(key);
+      const fromSlot = { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h };
+      const toSlot = { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h };
+      const fromPort = this.portOverrides.get(`${key}:from`) ?? autoPort(fromSlot, toSlot, lane);
+      const toPort = this.portOverrides.get(`${key}:to`) ?? autoPort(toSlot, fromSlot, lane);
+      const p0 = portPoint(fromSlot, fromPort);
+      const d0 = Math.hypot(wx - p0.x, wy - p0.y);
+      if (d0 < bestDist) { bestDist = d0; best = { key, end: "from", nodeId: a.id }; }
+      const p1 = portPoint(toSlot, toPort);
+      const d1 = Math.hypot(wx - p1.x, wy - p1.y);
+      if (d1 < bestDist) { bestDist = d1; best = { key, end: "to", nodeId: b.id }; }
+    }
+    return best;
   }
 
   private upsertSessionNode(id: string, driverId: string, now: number): LiveNode {
@@ -816,9 +939,23 @@ export class GraphState {
     this.lastEventAt = now;
     if (event.type === "task.changed") {
       const { kind, parentTaskId } = parentInfoFor(event);
-      const node = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
-      const prevStatus = node.status, prevGate = node.gate_state;
       const fields = event.fields ?? {};
+      // task ea92640f (ghost cards): birth a NEW card only when the event
+      // carries a real fields.title AND fields.workflow_step. A bare
+      // pending task.changed (e.g. task_create's echo) waits for the
+      // snapshot/reconcile instead of fabricating a dead
+      // "task starting..." card with a climbing signal-age chip.
+      const known = this.byId.get(event.task_id);
+      if (!known && !(typeof fields.title === "string" && fields.title &&
+          typeof fields.workflow_step === "string" && fields.workflow_step)) {
+        // task 0fb0f163: an unknown-task reference IS the drift signal --
+        // wake the debounced snapshot refetch so reconcile births the
+        // REAL titled card; never birth from the bare event itself.
+        this.scheduleSelfHeal();
+        return;
+      }
+      const node = known ?? this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
+      const prevStatus = node.status, prevGate = node.gate_state;
       if (typeof fields.status === "string") node.status = fields.status;
       if (typeof fields.workflow_step === "string" && fields.workflow_step !== node.workflow_step) {
         node.workflow_step = fields.workflow_step;
@@ -853,12 +990,20 @@ export class GraphState {
       return;
     }
     if (event.type === "agent.run") {
-      const { kind, parentTaskId } = parentInfoFor(event);
-      const taskNode = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
+      // task ea92640f (ghost cards): agent.run updates KNOWN tasks only --
+      // telemetry alone (no title, no step fields) must never birth a
+      // card; the snapshot/reconcile owns discovery of real tasks.
+      const taskNode = this.byId.get(event.task_id);
+      if (!taskNode) {
+        // task 0fb0f163: unknown task -> wake the snapshot self-heal.
+        this.scheduleSelfHeal();
+        return;
+      }
       taskNode.lastSignalAt = now;
-      if (event.session_id) {
-        const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
-        this.ensureEdge(event.session_id, event.task_id, "driven_in");
+      const runSid = String(event.session_id ?? "").trim();
+      if (runSid) {
+        const sessionNode = this.upsertSessionNode(runSid, event.task_id, now);
+        this.ensureEdge(runSid, event.task_id, "driven_in");
         sessionNode.pulseUntil = now + PULSE_MS;
         sessionNode.lastSignalAt = now;
         // Round 3 item 2: a live agent.run may be the FIRST time this
@@ -888,9 +1033,21 @@ export class GraphState {
       return;
     }
     if (event.type === "tokens.turn") {
-      const { kind, parentTaskId } = parentInfoFor(event);
-      const taskNode = this.ensureTaskNode(event.task_id, now, kind, parentTaskId);
-      const sessionNode = this.upsertSessionNode(event.session_id, event.task_id, now);
+      // task ea92640f (ghost cards): tokens.turn UPDATES, never births.
+      // An unknown task or a blank/whitespace session id would fabricate
+      // a placeholder card carrying this session's GLOBAL totals -- the
+      // exact dead "task starting..." cards the owner saw. Births belong
+      // to the snapshot/reconcile (and to titled task.changed events).
+      const sid = String(event.session_id ?? "").trim();
+      const taskKnown = this.byId.get(event.task_id);
+      if (!taskKnown || !sid) {
+        // task 0fb0f163: unknown task (or blank session) -> wake the
+        // snapshot self-heal; the healed snapshot supplies real cards.
+        if (!taskKnown) this.scheduleSelfHeal();
+        return;
+      }
+      const taskNode = taskKnown;
+      const sessionNode = this.upsertSessionNode(sid, event.task_id, now);
       sessionNode.tok_s = event.tok_s;
       // Round 6 item 6 (cumulative numerics may never decrease): defensive
       // monotonic guard on the session's own running total, matching the
@@ -925,11 +1082,11 @@ export class GraphState {
       // off this same tok_s in draw.ts, so there is no second field left
       // to keep in sync here at all).
       taskNode.tokensGhostUntil = now + GHOST_MS;
-      this.ensureEdge(event.session_id, event.task_id, "driven_in");
+      this.ensureEdge(sid, event.task_id, "driven_in");
 
       const hasFlow = event.tok_s > MIN_FLOW_TOK_S;
       const directEdge = this.edges.find(
-        (e) => e.source === event.session_id && e.target === event.task_id && e.kind === "driven_in");
+        (e) => e.source === sid && e.target === event.task_id && e.kind === "driven_in");
       if (directEdge && hasFlow) {
         this.edgeFlowAt.set(this.edgeKey(directEdge.source, directEdge.target), now);
         this.maybeSpawnPacket(directEdge.source, directEdge.target, "driven_in", false, now);
@@ -1237,8 +1394,14 @@ export class GraphState {
           created.label = sn.label;
           created.labelIsPlaceholder = false;
         }
+        if (created) {
+          created.snapshotConfirmed = true;
+          created.snapshotMisses = 0;
+        }
         continue;
       }
+      existing.snapshotConfirmed = true;
+      existing.snapshotMisses = 0;
       // Round 3 item-1 residual fix: a subtask whose FIRST live event beat
       // this reconcile got created as a plain "task" (ensureTaskNode's
       // default) and placed in the root column instead of fanned beside
@@ -1300,6 +1463,8 @@ export class GraphState {
       }
       existing.gate_waiting_s = sn.gate_waiting_s ?? null;
       existing.queue_depth = sn.queue_depth ?? 0;
+      existing.owner_actionable = sn.owner_actionable ?? false;
+      existing.waiting_on = sn.waiting_on ?? "";
       // AC-1 residual: a node born from a live event (ensureTaskNode)
       // never knew drive_started_at -- backfill the FIRST time reconcile
       // learns it, never overwrite once known (the anchor never moves).
@@ -1311,6 +1476,25 @@ export class GraphState {
     for (const e of snapshot.edges) {
       if (e.kind === "parent_of") this.ensureEdge(e.source, e.target, "parent_of");
     }
+    // task ea92640f (ghost cards): prune client-born nodes the snapshot
+    // disowns on 2 consecutive reconciles. Confirmed nodes are durable
+    // (their absence would be a server change, not a ghost); sessions the
+    // snapshot never carries survive while their token stream keeps them
+    // meaningful and age out here once truly disowned twice.
+    const snapIds = new Set(snapshot.nodes.map((n) => n.id));
+    const keep: LiveNode[] = [];
+    for (const n of this.nodes) {
+      if (snapIds.has(n.id) || n.snapshotConfirmed) { keep.push(n); continue; }
+      n.snapshotMisses += 1;
+      if (n.snapshotMisses >= 2) {
+        this.byId.delete(n.id);
+        this.edges = this.edges.filter((e) => e.source !== n.id && e.target !== n.id);
+        // (selection is a per-node flag; a pruned node simply leaves)
+        continue;
+      }
+      keep.push(n);
+    }
+    this.nodes = keep;
   }
 
   /** Screen -> world, inverting the pan/zoom camera. */

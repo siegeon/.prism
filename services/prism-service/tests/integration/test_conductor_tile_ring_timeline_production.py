@@ -71,12 +71,17 @@ def test_tasktile_no_longer_renders_abstract_sdlcdots():
 # ── AC-1: completion RING = done steps / total, center label 'n/N phases' ────
 def test_tasktile_renders_completion_ring():
     src = _page()
-    # The branch's showcase hero ring reads its center as the live step count
-    # ("{done}" over "of {total}") with a "steps complete" caption/aria-label,
-    # not the prototype's literal "n/N phases".
-    assert "of {total}" in src and "steps complete" in src, (
+    # SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51): this used to require
+    # the showcase's plain "of {total}" + "steps complete" ring-center text.
+    # ac91be51 restores the classic hero (ring center = "{done}/{total}" over
+    # a bare "steps" caption, with the 2x2 MetricCell grid filling the space
+    # the text summary used to occupy) — the two hero layouts are mutually
+    # exclusive, so the showcase's exact wording is retired rather than left
+    # standing as a contradiction. The restored ring is pinned honestly
+    # (brace-depth JSX parsing) by tests/unit/test_conductor_tile_restored_metrics_ui.py.
+    assert "{done}/{total}" in src, (
         "completion-ring center label is missing — the hero must lead with a ring "
-        "reading done SDLC steps / total ('of {total}' + 'steps complete') (AC-1)"
+        "reading done SDLC steps / total ('{done}/{total}') (AC-1)"
     )
     assert "<svg" in src and "strokeDashoffset" in src, (
         "the completion ring must render as an SVG arc whose fill drains via "
@@ -115,18 +120,25 @@ def test_tile_sdlc_steps_match_backend_workflow():
 #    would be laundering, so we pin the real hero the component renders instead.
 def test_tasktile_hero_is_ring_plus_step_summary():
     src = _page()
-    assert "{done}/{total} steps" in src and "of {total}" in src, (
-        "the hero must lead with the ring + '{done}/{total} steps complete' "
-        "summary sourced from the live step count (AC-2)"
+    # SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51): this used to require
+    # the showcase's plain '{done}/{total} steps complete' text summary. That
+    # summary occupied the exact slot ac91be51 restores the 2x2 MetricCell
+    # grid into, so the two are mutually exclusive; the ring itself still
+    # reads '{done}/{total}' (checked in test_tasktile_renders_completion_ring).
+    assert "MetricCell" in src, (
+        "the hero must lead with the ring + the restored 2x2 MetricCell grid (AC-2)"
     )
     # The tile is wired to LIVE task data (phase_progress / activity), not mock.
     assert "phase_progress" in src, (
         "the hero must read live task.phase_progress, not hardcoded mock values"
     )
-    # The retired 2x2 metric cells must stay gone (regression + honesty guard).
-    assert "Time left" not in src and "Throughput" not in src, (
-        "the superseded 2x2 metric grid cells must not reappear un-manifested"
-    )
+    # SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51): this used to assert
+    # "Time left"/"Throughput" stayed ABSENT — true only while the showcase
+    # rebuild (c9166c4) had genuinely dropped the 2x2 metric grid. ac91be51
+    # restores it (4 MetricCell instances beside the ring), so the absence
+    # premise is retired rather than left standing as a contradiction. The
+    # restored grid is pinned honestly (brace-depth JSX parsing, not a bare
+    # substring) by tests/unit/test_conductor_tile_restored_metrics_ui.py.
 
 
 # ── AC-3: labeled timeline — a VISIBLE stepLabel caption per real step ───────
@@ -163,7 +175,17 @@ def test_tasktile_honest_activity_states_render():
     assert "task.activity?.state" in src, (
         "the pill must read the honest task.activity.state, not the raw status"
     )
-    assert "ACT_TILE" in src, "the tile must map activity states via ACT_TILE"
+    # SUPERSEDED (task 40c29b83, FR-7): the tile's own private ACT_TILE map
+    # (no `driving` entry, drifted from what LiveBar showed for the identical
+    # payload) is deleted in favor of the ONE shared vocabulary every activity
+    # surface renders through -- components/conductor/SdlcProgress.tsx's
+    # ACTIVITY_META. test_conductor_panel_single_source_ui.py's FR-7 check
+    # (AC-8) now pins `"ACT_TILE" not in src` as the positive contract; this
+    # suite re-anchors to the successor name so the real invariant (activity
+    # states DO map to a label+tone here) survives the rename.
+    assert "ACTIVITY_META" in src, (
+        "the tile must map activity states via the shared ACTIVITY_META"
+    )
 
 
 # ── AC-5: RETIRED (inverted-flow #4). The AC was "the tile's throughput

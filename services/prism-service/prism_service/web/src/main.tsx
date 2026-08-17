@@ -31,6 +31,15 @@ function recoverFromStaleChunk(reason: unknown): void {
 }
 window.addEventListener("unhandledrejection", (e) => recoverFromStaleChunk(e.reason));
 window.addEventListener("error", (e) => recoverFromStaleChunk(e.error ?? e.message));
+// task 6a094d45: React's lazy machinery can CATCH the import rejection
+// before the global listeners above ever see it (the owner's Work click
+// no-op'd 2026-08-17 with this recovery present). Vite's own preload
+// helper dispatches vite:preloadError on window regardless of who later
+// handles the promise — wire it into the same guarded recovery.
+window.addEventListener("vite:preloadError", (e) => {
+  e.preventDefault();
+  recoverFromStaleChunk("Loading chunk failed (vite:preloadError)");
+});
 
 createRoot(document.getElementById("root")!).render(
   <BrowserRouter>

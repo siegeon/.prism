@@ -741,12 +741,35 @@ def run_oracle(spec: OracleSpec, task: Any, ctx: Optional[dict] = None,
     return receipt
 
 
+def _test_files_from_spec(spec: OracleSpec) -> list[str]:
+    """Unique test file paths (the part before ``::``) named by a pytest_ids
+    spec's target — used to OVERLAY the pinned tests onto a pre-change
+    checkout that predates them (task ed3263b4 tier 2: an attested ref names
+    a commit before the tests existed)."""
+    files: list[str] = []
+    for tok in re.split(r"[\s,]+", spec.target.strip()):
+        if not tok:
+            continue
+        path = tok.split("::", 1)[0].strip()
+        if path and path not in files:
+            files.append(path)
+    return files
+
+
 def _red_worktree_run(spec: OracleSpec, workspace: str, red_sha: str,
                       ctx: dict) -> tuple[list, str, str]:
     """Check out ``red_sha`` in a throwaway worktree and run the spec's
     pytest adapter there. Red is demonstrated iff the run yields pytest
     rc==1 (tests ran and failed) — a pass, a timeout, a collection error or
-    an unrunnable environment is honestly NOT a demonstration."""
+    an unrunnable environment is honestly NOT a demonstration.
+
+    ``ctx['overlay_from']`` (task ed3263b4 tier 2 — an attested pre-change
+    ref): when set, the pinned test files are copied from that checkout
+    (where they exist, at the driver's current HEAD) onto the freshly
+    checked-out ``red_sha`` worktree BEFORE running pytest — the pre-change
+    commit predates the tests by construction, so nothing runs there
+    otherwise. The SEAT does this copy itself; it never trusts a driver-
+    supplied transcript (distinct-actor rule)."""
     import shutil
     import tempfile
     tmp = tempfile.mkdtemp(prefix="prism-red-")
@@ -759,6 +782,15 @@ def _red_worktree_run(spec: OracleSpec, workspace: str, red_sha: str,
             return [], ST_ERROR, (
                 f"red oracle: could not check out red-step commit "
                 f"{red_sha[:12]} ({(add.stderr or '').strip()[:160]})")
+        overlay_from = ctx.get("overlay_from")
+        if overlay_from:
+            for rel in _test_files_from_spec(spec):
+                src = Path(str(overlay_from)) / rel
+                if not src.is_file():
+                    continue
+                dst = Path(wt) / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst))
         runner = _ADAPTERS.get(ADAPTER_PYTEST)
         obs, _arts, passed, _st, run_reason = runner(
             spec, dict(ctx, workspace=wt))
