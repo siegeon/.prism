@@ -1056,6 +1056,19 @@ export default function TaskDetailPage() {
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
   const [gateOverride, setGateOverride] = useState(false);
+  // Real signed-in identity (task 98d38111): the browser's actual approver,
+  // never boilerplate reason text - forwarded into gateDecide's two wire
+  // calls so a gate_decide history row resolves to a real HUMAN, not
+  // unknown:conductor. Same pattern as PageHeader.tsx's IdentityChip.
+  const [me, setMe] = useState<{ id: string; email: string } | null>(null);
+  useEffect(() => {
+    let cancel = false;
+    api.get<{ user?: { id: string; email: string } }>("/api/auth/me")
+      .then((r) => { if (!cancel) setMe(r.user ?? null); })
+      .catch(() => { if (!cancel) setMe(null); });
+    return () => { cancel = true; };
+  }, []);
+  const approverIdentity = me?.email || me?.id || "";
   // Pre-fill a truthful suggested reason INSIDE the expanded panel body
   // (task c7ce0fc3) — a render-time effect of the panel being open, never a
   // side effect of the banner's own expand-click. Approve stays one click
@@ -1450,7 +1463,7 @@ export default function TaskDetailPage() {
       // POST, inside the SAME try{} - a failed design-packet approve
       // throws and the gate POST below never fires.
       if (isAwaitingDesignApproval && action === "approve") {
-        await approveDesignPacket(id ?? "", decisionReason, project);
+        await approveDesignPacket(id ?? "", approverIdentity, project);
       }
       const r = await fetch(`/api/conductor/gate?project=${project}`, {
         method: "POST",
@@ -1460,6 +1473,7 @@ export default function TaskDetailPage() {
           action,
           reason: decisionReason,
           override: gateOverride,
+          actor: approverIdentity,
         }),
       });
       const body = await r.json().catch(() => ({}));

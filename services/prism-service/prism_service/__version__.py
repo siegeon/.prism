@@ -13,10 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
+<<<<<<< HEAD
 PRISM_VERSION = "7.11.9"
+=======
+PRISM_VERSION = "7.11.11"
+>>>>>>> origin/main
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.10: CONDUCTOR PAGE STOPS CONTRADICTING ITS OWN LIVE BAR "
+    "[task 40c29b83]. New web/src/lib/useConductorState.ts owns the ONE "
+    "fetch of /api/conductor/state, the polled/observed guard, the "
+    "/sse/sessions push refresh and the staleness sweep, lifted from "
+    "LiveBar.tsx's already-hardened machinery. LiveBar and ConductorPage "
+    "both consume it now; ConductorPage's own load()/setInterval(load,5000) "
+    "and data===null-swallows-errors are gone. The 'Under conductor' panel "
+    "branches on observed/error/empty instead of `managed.length === 0` "
+    "alone: pre-first-fetch renders neutral copy, a fetch failure renders "
+    "its own reachability branch, and the genuine-empty state names the "
+    "second symptom (work happening outside conductor tracking, not just "
+    "'no tasks'). ConductorPage's stale ACT_TILE activity map (no `driving` "
+    "entry) is deleted in favor of the shared ACTIVITY_META every other "
+    "activity surface already renders through. "
     "7.11.6: fixed the /live mission clock's server anchor "
     "(_drive_started_at, api/work.py) so it survives a null first "
     "telemetry row -- SQLite sorts NULL first in ASC order and every "
@@ -4775,6 +4793,7 @@ PRISM_VERSION_NOTES += (
     "reads pending with no owner call to action."
 )
 PRISM_VERSION_NOTES += (
+<<<<<<< HEAD
     " v7.11.9 (task fa7735bd): the Design tab's own DesignPacket card now "
     "confirms an Approve click in place, no page reload. TaskDetailPage "
     "bumps a designPacketRefreshToken state INSIDE gateDecide's success "
@@ -4787,4 +4806,29 @@ PRISM_VERSION_NOTES += (
     "every approve - it says that only when body.gate_step is the terminal "
     "green_gate, and still names the next step for plan_gate/story_gate/"
     "red_gate advances."
+=======
+    " v7.11.9 (task 98d38111): an owner's plan_gate Approve click now leaves "
+    "an honest actor record. TaskDetailPage.tsx fetches the real signed-in "
+    "identity (/api/auth/me, same pattern as PageHeader's IdentityChip) and "
+    "forwards it as `actor` on the /api/conductor/gate POST and as the real "
+    "`approver` on the design-packet-approve POST - previously both wire "
+    "calls carried no real identity, so every human click resolved to "
+    "unknown:conductor (ActorKind.UNKNOWN). The design-packet-approve route "
+    "now also resolves `approver` through ActorService and refuses (400) an "
+    "approver that is not a real HUMAN identity, so an owner_explicit "
+    "receipt can never be written for an unresolvable string."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.10 (task c944cac2): green_gate grew a reachability tooth -- the "
+    "EXIT-half counterpart to oracle_authoring's authoring-time check. "
+    "ConductorService.adjudicate_green_gate now pre-flights "
+    "reachability_check.unreachable_entry_point_reason(task): reads the "
+    "task's real worktree GIT DIFF (never allowed_files) and refuses when "
+    "the diff adds a new, undecorated, public function/method with no "
+    "non-test production caller anywhere in the tree -- symbol-level, so a "
+    "module that IS imported/constructed elsewhere (the work_item_sync.py "
+    "shape) no longer hides an unwired new entry point. Abstain-only: a "
+    "truthy refusal parks pending WITH the reason via _park_green_refusal, "
+    "never flips to failed."
+>>>>>>> origin/main
 )
