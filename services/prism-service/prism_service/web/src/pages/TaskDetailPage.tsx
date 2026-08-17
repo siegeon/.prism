@@ -1047,6 +1047,11 @@ export default function TaskDetailPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped ONLY inside gateDecide's success branch, after both
+  // approveDesignPacket() and the gate POST resolve (task fa7735bd) - lets
+  // the Design tab's own <DesignPacket> card refetch and drop its
+  // not-approved branch without a full page reload.
+  const [designPacketRefreshToken, setDesignPacketRefreshToken] = useState(0);
   // Operable conductor gate: a REQUIRED reason + an override checkbox feed
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
@@ -1478,12 +1483,21 @@ export default function TaskDetailPage() {
           text: `${action} refused: ${body.reason ?? "unknown"}`,
         });
       } else {
+        // Only the terminal green_gate actually releases the task
+        // (models/workflow.py WORKFLOW_STEPS - green_gate is the one
+        // step nothing follows). A plan_gate/story_gate/red_gate advance
+        // must name the next step, never claim release (clause E).
         setGateResult({
           kind: "ok",
-          text: `Gate ${action}d${body.to_step ? ` → ${body.to_step}` : ""}. ${action === "approve" ? "This task is released." : ""}`,
+          text: `Gate ${action}d${body.to_step ? ` → ${body.to_step}` : ""}. ${action === "approve" && body.gate_step === "green_gate" ? "This task is released." : ""}`,
         });
         setGateReason("");
         setGateOverride(false);
+        // Refetch the Design tab's own card too, so a successful design
+        // approve confirms in place without a full page reload (never
+        // bumped before this point - a refused/failed approve must not
+        // show a false approved state).
+        setDesignPacketRefreshToken((n) => n + 1);
       }
       load();
     } catch (e) {
@@ -2210,6 +2224,7 @@ export default function TaskDetailPage() {
             fullOutcomeComplete={task.full_outcome_complete}
             isAwaitingDesignApproval={isAwaitingDesignApproval}
             onApproveDesign={() => gateDecide("approve")}
+            designPacketRefreshToken={designPacketRefreshToken}
             conductor={conductorOn ? {
               step: task.workflow_step,
               gateState: task.gate_state,

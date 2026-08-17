@@ -4830,3 +4830,17 @@ PRISM_VERSION_NOTES += (
     "truthy refusal parks pending WITH the reason via _park_green_refusal, "
     "never flips to failed."
 )
+PRISM_VERSION_NOTES += (
+    " v7.11.14 (task fa7735bd): the Design tab's own DesignPacket card now "
+    "confirms an Approve click in place, no page reload. TaskDetailPage "
+    "bumps a designPacketRefreshToken state INSIDE gateDecide's success "
+    "branch (after both approveDesignPacket() and the gate POST resolve, "
+    "never optimistically before), threaded through PlanView into "
+    "DesignPacket's refreshToken prop and its load effect's deps, so "
+    "approval.approved flipping true retires the not-approved branch and "
+    "its Approve button without a refetch of the whole page. The success "
+    "toast also stops unconditionally claiming 'This task is released.' on "
+    "every approve - it says that only when body.gate_step is the terminal "
+    "green_gate, and still names the next step for plan_gate/story_gate/"
+    "red_gate advances."
+)
