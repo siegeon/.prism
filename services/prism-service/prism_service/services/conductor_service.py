@@ -373,7 +373,7 @@ _SCREEN_LOCATOR_SIGNALS = (
 )
 
 
-def screen_claim_gate_reason(tags: object, proof_type: object,
+def _screen_claim_gate_reason(tags: object, proof_type: object,
                              oracle: object) -> str:
     """A test-proof ticket cannot claim a screen (task 8a737f2f, HOLE 1).
 
@@ -390,7 +390,18 @@ def screen_claim_gate_reason(tags: object, proof_type: object,
     fires for proof_type='demo' (STRAND C's own territory) or an unset
     proof_type (the existing demo/screenshot requirement already applies).
     Never fires for a non-`ui` task (out of scope, not this tooth's
-    business)."""
+    business).
+
+    PRIVATE ON PURPOSE (`_` prefix): both production callers live in THIS
+    module (adjudicate_green_gate and the human-judgment branch of
+    gate_decide), so this is a module-internal helper like
+    _metric_gate_reason / _artifact_path_reason / _unshipped_gate_reason,
+    NOT an entry point. The public siblings here (ui_artifact_gate_reason,
+    green_gate_artifact_reason, board_health) are public precisely because
+    api/conductor.py imports them; publishing a name with no external
+    consumer is the "construction site" reachability_check refuses. If a
+    readiness/API surface ever needs this verdict, make it public IN THAT
+    slice, together with the call site that consumes it."""
     tag_set = {str(t).strip().lower() for t in (tags or [])}
     if "ui" not in tag_set:
         return ""
@@ -2121,7 +2132,7 @@ class ConductorService:
         # captured screenshot does NOT satisfy the screen-claim half (unlike
         # STRAND C above) — the oracle names something SEEN, not measured,
         # so this stays a human sign-off even with real evidence on file.
-        _screen_reason = screen_claim_gate_reason(
+        _screen_reason = _screen_claim_gate_reason(
             getattr(task, "tags", None), getattr(task, "proof_type", ""),
             getattr(task, "oracle", ""))
         _ship_reason = self._unshipped_gate_reason(task)
@@ -3581,7 +3592,7 @@ class ConductorService:
                 # adjudicate_green_gate) is still the correct sign-off.
                 _human_judgment = _pt in ("demo", "review") or \
                     _osp.is_human_judgment(_osp.OracleSpec.from_task(_live)) or \
-                    bool(screen_claim_gate_reason(
+                    bool(_screen_claim_gate_reason(
                         getattr(_live, "tags", None), _pt,
                         getattr(_live, "oracle", "")))
             except Exception:

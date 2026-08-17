@@ -122,15 +122,15 @@ def _conductor(tmp_path, task_svc, verifier=None):
     return cond
 
 
-# ── Group A — screen_claim_gate_reason: pure, text-driven tooth ──────────
+# ── Group A — _screen_claim_gate_reason: pure, text-driven tooth ──────────
 
 
 def test_A1_ui_test_task_naming_a_screen_is_flagged():
     from prism_service.services.conductor_service import (
-        screen_claim_gate_reason,
+        _screen_claim_gate_reason,
     )
 
-    reason = screen_claim_gate_reason(
+    reason = _screen_claim_gate_reason(
         ["ui"], "test",
         "load http://127.0.0.1:8888/tasks/8a737f2f and see the card render",
     )
@@ -145,14 +145,14 @@ def test_A1_ui_test_task_naming_a_screen_is_flagged():
 
 def test_A2_ui_test_task_with_no_surface_in_oracle_is_unaffected():
     from prism_service.services.conductor_service import (
-        screen_claim_gate_reason,
+        _screen_claim_gate_reason,
     )
 
     # FR-4's narrowing target: a ui task that declares proof_type='test'
     # AND whose oracle names a metric/build-count (no screen) must keep the
     # existing opt-out untouched — the tooth narrows, it must not
     # blanket-block every non-demo ui task.
-    reason = screen_claim_gate_reason(
+    reason = _screen_claim_gate_reason(
         ["ui"], "test", "build-count: default MCP tool surface 41 -> 31",
     )
     assert reason == "", (
@@ -163,12 +163,12 @@ def test_A2_ui_test_task_with_no_surface_in_oracle_is_unaffected():
 
 def test_A3_demo_proof_type_is_governed_by_the_existing_ui_artifact_tooth():
     from prism_service.services.conductor_service import (
-        screen_claim_gate_reason,
+        _screen_claim_gate_reason,
     )
 
     # proof_type='demo' is STRAND C's own territory (ui_artifact_gate_reason)
     # — this tooth must not double-fire on it.
-    reason = screen_claim_gate_reason(
+    reason = _screen_claim_gate_reason(
         ["ui"], "demo", "see it render at http://127.0.0.1:8888/tasks/x",
     )
     assert reason == ""
@@ -176,13 +176,13 @@ def test_A3_demo_proof_type_is_governed_by_the_existing_ui_artifact_tooth():
 
 def test_A4_non_ui_task_is_never_this_tooths_business():
     from prism_service.services.conductor_service import (
-        screen_claim_gate_reason,
+        _screen_claim_gate_reason,
     )
 
     # A ui TAG is not what decides this — but the absence of the tag still
     # must not trip it (stop_if: never key off the tag alone in the OTHER
     # direction either — a non-ui task citing a URL is simply out of scope).
-    reason = screen_claim_gate_reason(
+    reason = _screen_claim_gate_reason(
         ["backend"], "test",
         "hit http://127.0.0.1:8888/api/x and confirm the response",
     )
@@ -191,10 +191,10 @@ def test_A4_non_ui_task_is_never_this_tooths_business():
 
 def test_A5_unset_proof_type_is_governed_by_the_existing_ui_artifact_tooth():
     from prism_service.services.conductor_service import (
-        screen_claim_gate_reason,
+        _screen_claim_gate_reason,
     )
 
-    reason = screen_claim_gate_reason(
+    reason = _screen_claim_gate_reason(
         ["ui"], "", "see it render at http://127.0.0.1:8888/tasks/x",
     )
     assert reason == ""
@@ -270,7 +270,7 @@ def test_B3_wiring_the_machine_seat_actually_consults_both_teeth():
     from prism_service.services.conductor_service import ConductorService
 
     src = inspect.getsource(ConductorService.adjudicate_green_gate)
-    assert "screen_claim_gate_reason" in src
+    assert "_screen_claim_gate_reason" in src
     assert "_unshipped_gate_reason" in src
 
 
