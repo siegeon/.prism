@@ -37,9 +37,17 @@ def test_stalled_label_never_says_needs_you():
 
 
 def test_stalled_reads_no_active_driver():
-    """Both label maps carry the honest replacement."""
+    """The honest replacement lives in the ONE shared map."""
     assert 'stalled: { label: "no active driver"' in SDLC
-    assert 'stalled: { label: "no active driver"' in CONDUCTOR
+    # SUPERSEDED (task 40c29b83, FR-7): ConductorPage's own private map (this
+    # test used to pin a SECOND copy of the literal here) is deleted in favor
+    # of importing SdlcProgress.tsx's ACTIVITY_META, so the "no active
+    # driver" wording now has exactly ONE source instead of two copies that
+    # could drift apart. The invariant survives as "ConductorPage imports
+    # the shared map" rather than "ConductorPage repeats the literal".
+    assert 'ACTIVITY_META' in CONDUCTOR and '"@/components/conductor/SdlcProgress"' in CONDUCTOR, (
+        "ConductorPage must render the stalled label through the shared "
+        "ACTIVITY_META import, not a re-declared local copy")
 
 
 def test_driving_state_renders_the_heartbeat_tool():
