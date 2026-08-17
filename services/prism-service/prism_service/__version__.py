@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.25"
+PRISM_VERSION = "7.11.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4905,4 +4905,15 @@ PRISM_VERSION_NOTES += (
     " (ok:false, nothing minted, override still cannot skip the oracle);"
     " only the strand is gone: the next honest approve after fresh"
     " evidence lands needs no override escalation."
+)
+
+PRISM_VERSION_NOTES += (
+    " v7.11.26 (task 377b00a8): override checkbox copy states truthfully"
+    " that it bypasses the verifier only, never the oracle receipt check,"
+    " and names the working remedy (re-run the oracle, then Approve)."
+    " gateDecide() wires an AbortController + 180s timeout into the gate"
+    " POST, surfaces real elapsed seconds while CHECKING, and on a client"
+    " timeout clears busy and returns control with a stated next action"
+    " instead of hanging forever. Server-side pending-park shipped via"
+    " child 97d92854 (v7.11.25)."
 )
