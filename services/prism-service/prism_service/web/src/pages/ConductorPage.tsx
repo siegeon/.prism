@@ -616,7 +616,7 @@ function SlicesBar({ subtasks, stage, reduced }: {
             {sliceLabel(focus)}
           </span>
           {active && stage && (
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm shrink-0"
+            <span className="text-2xs font-mono px-1.5 py-0.5 rounded-sm shrink-0"
               style={{ background: "var(--accent-teal-bg)", color: "var(--accent-teal-fg)", boxShadow: "inset 0 0 0 1px var(--accent-teal-ring)" }}>
               {stage}
             </span>
