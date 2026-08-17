@@ -17,6 +17,15 @@ PRISM_VERSION = "7.11.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.19: red_gate anchor resolution gains a third tier (task "
+    "ed3263b4) - a driver-attested pre-change ref (`red-anchor-ref: "
+    "<sha>` marker in red-step completion_proof) is resolved and run by "
+    "the SEAT itself (checkout + pinned-test overlay + real pytest), "
+    "never a pasted transcript; mint_red_evidence and "
+    "adjudicate_test_red_gate both gain the tier, and a park with no "
+    "resolvable anchor now writes a gate_reason naming both missing "
+    "sources instead of silently abstaining. gate_readiness names the "
+    "red-anchor-ref option too. "
     "7.11.18: /live stops fabricating cards (task ea92640f) - bare "
     "telemetry (task.changed without title+step, agent.run, tokens.turn) "
     "no longer births board nodes; blank-session agent.run events never "
