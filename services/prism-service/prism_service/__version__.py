@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.7"
+PRISM_VERSION = "7.11.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4762,4 +4762,15 @@ PRISM_VERSION_NOTES += (
     "renders as informational history appended to the reason, never a "
     "refusal. Pending gates with a foreign-tree receipt are unaffected - "
     "the false-green catch stays exactly as strict."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.8 (task 5c61e0e6): readiness's red_gate branch stops promising "
+    "'no owner action needed' for a sweep that structurally cannot come. "
+    "When the machine seat already swept this red_sha+spec and recorded a "
+    "NOT-red verdict (pinned suite passes at the immutable anchor), "
+    "readiness now surfaces that stored refusal reason and says the gate "
+    "needs a distinct actor's decision now, instead of the optimistic "
+    "'next sweep will decide it' placeholder. A genuinely unswept gate "
+    "(no receipt at all for this anchor+spec) is unaffected and still "
+    "reads pending with no owner call to action."
 )
