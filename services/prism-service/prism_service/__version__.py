@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.6"
+PRISM_VERSION = "7.11.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.7: DesignPacket.tsx (task 73f13267) - the 'Approve design' "
+    "footer now renders BEFORE the prototype iframe/diagram/plan_doc "
+    "(was last, ~5 screens down) so it's reachable without scrolling past "
+    "the prototype, which still renders unconditionally. gateDecide's "
+    "approveDesignPacket() call now also requires !gateOverride, so an "
+    "override release never forges a design-packet owner_explicit "
+    "approval receipt. "
     "7.11.6: fixed the /live mission clock's server anchor "
     "(_drive_started_at, api/work.py) so it survives a null first "
     "telemetry row -- SQLite sorts NULL first in ASC order and every "

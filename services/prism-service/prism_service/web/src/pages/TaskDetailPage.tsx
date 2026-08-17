@@ -1443,8 +1443,12 @@ export default function TaskDetailPage() {
       // the design-packet ledger's own approval, or the packet stays
       // unapproved forever after the gate releases. Runs BEFORE the gate
       // POST, inside the SAME try{} - a failed design-packet approve
-      // throws and the gate POST below never fires.
-      if (isAwaitingDesignApproval && action === "approve") {
+      // throws and the gate POST below never fires. Gated off by
+      // !gateOverride (task 73f13267): an override release is an audited
+      // manual bypass, never an explicit owner_explicit sign-off on the
+      // packet - recording an approval receipt from an override click would
+      // forge that sign-off.
+      if (isAwaitingDesignApproval && action === "approve" && !gateOverride) {
         await approveDesignPacket(id ?? "", decisionReason, project);
       }
       const r = await fetch(`/api/conductor/gate?project=${project}`, {
