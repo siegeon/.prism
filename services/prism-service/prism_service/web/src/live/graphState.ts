@@ -545,6 +545,8 @@ export class GraphState {
       lastHeartbeatAt: 0, selected: false,
       lastSignalAt, spend_usd: n.spend_usd || 0,
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
+      owner_actionable: n.owner_actionable ?? false,
+      waiting_on: n.waiting_on ?? "",
       gatePendingSince, doneAt, settleUntil: 0,
       driveStartedAt: this.driveStartedAtPerf(n.drive_started_at, now),
       // Every caller of makeNode EXCEPT the two lazy-create paths
@@ -1407,6 +1409,8 @@ export class GraphState {
       }
       existing.gate_waiting_s = sn.gate_waiting_s ?? null;
       existing.queue_depth = sn.queue_depth ?? 0;
+      existing.owner_actionable = sn.owner_actionable ?? false;
+      existing.waiting_on = sn.waiting_on ?? "";
       // AC-1 residual: a node born from a live event (ensureTaskNode)
       // never knew drive_started_at -- backfill the FIRST time reconcile
       // learns it, never overwrite once known (the anchor never moves).
