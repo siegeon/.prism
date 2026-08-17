@@ -8,7 +8,7 @@
 import type { GraphState, LiveNode } from "./graphState";
 import { HEARTBEAT_DECAY_MS, deriveCardState } from "./graphState";
 import { drawCard, drawActionStrip, type CardMetrics } from "./cards";
-import { drawWire, routeOrthogonal, type WireKind } from "./wires";
+import { drawWire, drawPort, wireColor, type WireKind } from "./wires";
 import { drawPackets } from "./packets";
 import { drawHud, drawLegend } from "./hud";
 import { drawLoading, drawQuietLine, isGraphQuiet } from "./idle";
@@ -207,11 +207,17 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     // tracks per edge (piece 2: a structural edge tints teal only while
     // real motion has actually propagated up it, never permanently).
     const live = kind === "token" ? !!a.tok_s && a.tok_s > 0 : state.isEdgeFlowing(e.source, e.target, now);
-    const pts = routeOrthogonal(
-      { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h },
-      { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h },
-    );
+    // AC-5: ONE router entry point -- both the drawn wire and packet
+    // spawn math (graphState.ts's maybeSpawnPacket) resolve through
+    // state.wireEndpointsFor, so they can never diverge.
+    const pts = state.wireEndpointsFor(e);
+    if (!pts || pts.length < 2) continue;
     drawWire(ctx, pts, kind, live);
+    // AC-1: each endpoint gets exactly one port dot, drawn under the
+    // cards in the wire's own stroke color.
+    const portColor = wireColor(kind, live);
+    drawPort(ctx, pts[0], portColor, live);
+    drawPort(ctx, pts[pts.length - 1], portColor, live);
   }
   drawPackets(ctx, state.packets, now);
 
