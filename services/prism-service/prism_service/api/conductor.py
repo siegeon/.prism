@@ -380,6 +380,27 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                 "status": fresh.status,
                                 "ended_at": fresh.ended_at,
                                 "reason": str(fresh.reason)[:300]}}
+        # SWEPT AND REFUSED (task 5c61e0e6): fresh_red_receipt only matches
+        # status==ST_RED, so a receipt already on file at this red_sha+spec
+        # with a NOT-red verdict (the seat ran run_red_oracle, the pinned
+        # suite PASSED at the immutable anchor, and adjudicate_test_red_gate's
+        # own `tried` guard abstains forever once ANY receipt exists there)
+        # is invisible to `fresh` but is NOT unswept. Read it explicitly so
+        # readiness never promises a sweep that structurally cannot come.
+        _swept = None
+        if red_sha and spec is not None:
+            for _r in reversed(osp.read_receipts(project, task_id)):
+                if _r.tree_sha == red_sha and _r.spec_hash == spec.spec_hash():
+                    _swept = _r
+                    break
+        if _swept is not None and _swept.status != osp.ST_RED:
+            return {"receipt_ok": False,
+                    "receipt_refusal": (
+                        f"{str(_swept.reason)[:300]} — the machine seat "
+                        "already swept this anchor and will not retry (the "
+                        "pinned suite passes there, so a red demonstration "
+                        "can never be produced from this history). This "
+                        "gate needs a distinct actor's decision now.")}
         # Does the machine red seat actually TAKE this ticket? Promising "no
         # owner action needed" for a sweep that can never come is how an owner
         # waits forever (owner 2026-07-21: task 89e90d1a sat at red_gate while
