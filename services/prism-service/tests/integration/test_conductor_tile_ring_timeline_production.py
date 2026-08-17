@@ -123,10 +123,13 @@ def test_tasktile_hero_is_ring_plus_step_summary():
     assert "phase_progress" in src, (
         "the hero must read live task.phase_progress, not hardcoded mock values"
     )
-    # The retired 2x2 metric cells must stay gone (regression + honesty guard).
-    assert "Time left" not in src and "Throughput" not in src, (
-        "the superseded 2x2 metric grid cells must not reappear un-manifested"
-    )
+    # SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51): this used to assert
+    # "Time left"/"Throughput" stayed ABSENT — true only while the showcase
+    # rebuild (c9166c4) had genuinely dropped the 2x2 metric grid. ac91be51
+    # restores it (4 MetricCell instances beside the ring), so the absence
+    # premise is retired rather than left standing as a contradiction. The
+    # restored grid is pinned honestly (brace-depth JSX parsing, not a bare
+    # substring) by tests/unit/test_conductor_tile_restored_metrics_ui.py.
 
 
 # ── AC-3: labeled timeline — a VISIBLE stepLabel caption per real step ───────
