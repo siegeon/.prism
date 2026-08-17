@@ -307,18 +307,25 @@ def test_hud_no_longer_carries_dead_unused_rows():
 
 
 def test_graph_state_self_heals_nodes_created_after_boot():
+    # SUPERSEDED (task ea92640f, ghost cards): the old invariant -- "all
+    # four event handlers birth nodes via ensureTaskNode" -- was itself
+    # the defect: bare telemetry fabricated dead "task starting..." cards
+    # with global token totals on the owner's board. The surviving REAL
+    # invariant: post-boot discovery still exists, but it belongs to the
+    # SNAPSHOT path (reconcile's ensureTaskNode births) and to
+    # task.changed events that carry a real title+step; drive.heartbeat
+    # keeps its self-healing lookup (it only fires for genuinely driven
+    # tasks). Bare agent.run/tokens.turn update known nodes only.
     src = _read(_LIVE / "graphState.ts")
     assert "ensureTaskNode" in src, (
-        "a task/subtask referenced by an event that arrives after the page's "
-        "boot snapshot must get a placeholder card, not be silently dropped "
-        "forever (piece-4 cross-check: HUD ticked while cards read 0)")
-    # every one of the four WorkEvent handlers must route through the
-    # self-healing lookup rather than a bare byId.get(...) early return.
-    # Round 6 item 2 (atomic card+wire) extended the call with the
-    # (kind, parentTaskId) pair derived from the event's own parent_id
-    # (parentInfoFor) -- the literal call shape changed but the "all four
-    # handlers use it" invariant is the same one this test pins.
-    assert src.count("ensureTaskNode(event.task_id, now, kind, parentTaskId)") >= 4
+        "post-boot discovery (reconcile + titled task.changed) must still "
+        "create cards -- dropping ensureTaskNode entirely would silently "
+        "orphan late-arriving real tasks")
+    assert src.count("ensureTaskNode(event.task_id, now, kind, parentTaskId)") >= 2, (
+        "the guarded task.changed birth and drive.heartbeat's self-heal "
+        "must keep routing through ensureTaskNode")
+    assert src.count("ensureTaskNode(sn.id, now") >= 2, (
+        "reconcile's snapshot-discovery births must survive")
 
 
 def test_version_bumped_for_this_change():
@@ -2017,9 +2024,13 @@ def _gs_nocomments() -> str:
 
 def _event_branch(src: str, ev: str) -> str:
     start = src.index(f'if (event.type === "{ev}")')
-    nxt = [src.find(f'if (event.type === "{o}")', start + 1)
-           for o in ("task.changed", "drive.heartbeat", "agent.run", "tokens.turn")]
-    ends = [i for i in nxt if i > start]
+    # the branch ends at the next event branch OR at applyEvent's first
+    # following method (recordTokSample) -- structural boundaries, never a
+    # fixed character window.
+    markers = [src.find(f'if (event.type === "{o}")', start + 1)
+               for o in ("task.changed", "drive.heartbeat", "agent.run", "tokens.turn")]
+    markers.append(src.find("private recordTokSample", start + 1))
+    ends = [i for i in markers if i > start]
     return src[start:min(ends)] if ends else src[start:]
 
 
