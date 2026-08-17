@@ -1450,12 +1450,32 @@ export default function TaskDetailPage() {
     }
     const decisionReason = gateReason.trim() || "approved by owner (one-click from the task page)";
     setBusy(true);
-    setGateResult({
-      kind: "checking",
-      text: gateOverride
+    // FR-4 (task 377b00a8): a wedged POST used to leave CHECKING indistinguishable
+    // from a dead page forever. An AbortController + a generous timeout (longer
+    // than a healthy mint) guarantees control returns to the owner, and an
+    // elapsed-seconds ticker (real Date.now() reads, not a static label) proves
+    // the page is still alive while it waits.
+    const GATE_DECIDE_TIMEOUT_MS = 180_000;
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), GATE_DECIDE_TIMEOUT_MS);
+    const checkingText = () => {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      return (gateOverride
         ? "recording your audited manual release…"
-        : "running the machine check — this takes up to a few minutes; stay on this page…",
-    });
+        : "running the machine check — this takes up to a few minutes; stay on this page…")
+        + ` (${elapsed}s elapsed)`;
+    };
+    // A recursive setTimeout, never a fixed-interval timer — this file is
+    // pinned (test_no_fixed_interval_readiness_poll_and_one_choke_point)
+    // to carry no such timer at all, so a local UI tick still has to
+    // reschedule itself one setTimeout at a time.
+    let elapsedTimer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      setGateResult({ kind: "checking", text: checkingText() });
+      elapsedTimer = setTimeout(tick, 1000);
+    };
+    tick();
     try {
       // FR-6 (task 791602a9): a plain plan_gate approve must also record
       // the design-packet ledger's own approval, or the packet stays
@@ -1479,7 +1499,10 @@ export default function TaskDetailPage() {
           override: gateOverride,
           actor: approverIdentity,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+      clearTimeout(elapsedTimer);
       const body = await r.json().catch(() => ({}));
       if (body.ok === false) {
         setGateResult({
@@ -1505,7 +1528,21 @@ export default function TaskDetailPage() {
       }
       load();
     } catch (e) {
-      setGateResult({ kind: "refused", text: `Gate ${action} failed: ${(e as Error).message ?? e}` });
+      clearTimeout(timeoutId);
+      clearTimeout(elapsedTimer);
+      if ((e as Error).name === "AbortError") {
+        // Client-side timeout, distinct from a real server refusal: the
+        // server check may still be finishing, so give the owner a next
+        // action instead of an opaque failure (mx-d6c1df — CHECKING must
+        // never look identical to dead).
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        setGateResult({
+          kind: "refused",
+          text: `Gate ${action} timed out after ${elapsed}s — the server check may still be running. Reload to check readiness, or try again.`,
+        });
+      } else {
+        setGateResult({ kind: "refused", text: `Gate ${action} failed: ${(e as Error).message ?? e}` });
+      }
     } finally {
       setBusy(false);
     }
@@ -2098,7 +2135,7 @@ export default function TaskDetailPage() {
                 {gateVerdict !== "ready" && (
                   <label className="flex items-center gap-2 text-[12px] cursor-pointer">
                     <input type="checkbox" checked={gateOverride} onChange={(e) => setGateOverride(e.target.checked)} />
-                    <span><b style={{ color: "var(--accent-rose-fg)" }}>Override</b> — bypass the verifier and release on manual judgment. Audited.</span>
+                    <span><b style={{ color: "var(--accent-rose-fg)" }}>Override</b> — bypasses the verifier's automated check only. Audited. The oracle evidence receipt is still required: a stale or refused receipt still refuses this Approve even with override ticked. To recover, re-run the oracle for a fresh receipt, then Approve with override unticked.</span>
                   </label>
                 )}
                 {gateResult && (

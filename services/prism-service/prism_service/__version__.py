@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.16"
+PRISM_VERSION = "7.11.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.17: Override checkbox copy (task 377b00a8) states truthfully "
+    "that it bypasses the verifier only, not the oracle receipt check, "
+    "and names the working remedy (re-run the oracle, then Approve with "
+    "override unticked). gateDecide() now wires an AbortController + "
+    "180s timeout into the gate POST, surfaces real elapsed seconds "
+    "while CHECKING, and on a client timeout clears busy and returns "
+    "control with a stated next action instead of hanging forever. The "
+    "server-side pending-vs-failed strand (conductor_service.py, a "
+    "control-plane policy file) is split into child task 97d92854, "
+    "blocked on owner authorisation. "
     "7.11.15: the /conductor tile regains its deleted metrics (task "
     "ac91be51) - 2x2 MetricCell grid, EtaCountdownBar, SlicesBar epic "
     "hero and TokenTurns' session_quiet_s quiet-clock, restored from "
