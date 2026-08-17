@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.22"
+PRISM_VERSION = "7.11.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.21: a stale tab survives a redeploy (task 6a094d45) - vite's "
+    "vite:preloadError now routes into the existing guarded stale-chunk "
+    "recovery, covering the case where React lazy swallows the import "
+    "rejection before the global listeners fire. "
     "7.11.20: /live's ghost guards wake the snapshot self-heal before "
     "returning (task 0fb0f163) - a cold-booted board heals to real "
     "titled cards within the debounce instead of staying empty; ghost "
