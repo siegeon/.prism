@@ -3708,8 +3708,36 @@ class ConductorService:
         # demoted to informational context. An audited override=True
         # approve is a deliberate human act and is unaffected (handled by
         # the `if override:` branch below, evaluated before this).
+        # Two narrowings (task dbfe3727, live incident 2026-08-17 on epic
+        # 37c9207b, where this tooth refused the OWNER'S OWN CLICK with
+        # advice a plain approve could never satisfy):
+        # (1) an approve whose actor RESOLVES TO A REAL HUMAN (the
+        #     ActorService join on the signed-in user, the identity the
+        #     /api/conductor/gate route passes through since 98d38111) IS
+        #     the owner's own judgment of the oracle - parking it made
+        #     "Approve as the reviewing owner" unsatisfiable. Resolution
+        #     failure fails CLOSED (parks), mirroring
+        #     same_actor_override_reason.
+        # (2) a proof_type=test epic is machine-graded (rule eaafdf75):
+        #     its rollup is the legitimate machine path (epic 37c9207b
+        #     suite AC-3), so only demo/review/screen-claim shapes park -
+        #     an unset proof_type still parks (conservative default).
+        _pt_low = str(getattr(_live, "proof_type", "") or "").strip().lower()
+        _rollup_screen_claim = bool(_screen_claim_gate_reason(
+            getattr(_live, "tags", None), _pt_low,
+            getattr(_live, "oracle", "")))
+        _rollup_human_gate = _rollup_screen_claim or (
+            _human_judgment and _pt_low != "test")
+        _approver_human = False
+        try:
+            _aid = _resolve_actor_identity(
+                str(actor or session_id or "").strip())
+            _approver_human = getattr(_aid, "kind", "") == "human"
+        except Exception:
+            _approver_human = False
         if (gate_step_id == "green_gate" and not override
-                and rollup_has_children and rollup_ok and _human_judgment):
+                and rollup_has_children and rollup_ok
+                and _rollup_human_gate and not _approver_human):
             _pt_txt = (str(getattr(_live, "proof_type", "") or "").strip()
                        or "human-judgment")
             _oracle_txt = str(getattr(_live, "oracle", "") or "").strip()
