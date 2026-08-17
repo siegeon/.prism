@@ -407,16 +407,27 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
         # parent_id-scoped (idx_tasks_parent) rather than a full-table read
         # filtered in Python — same rows, one indexed query.
         kids = list(s._task_svc.list(parent_id=task_id))
-        if kids:
-            ok_roll, why_roll = epic_rollup_verdict(kids)
+        # task 16388421: TaskService.list returns cancelled AND soft-deleted
+        # rows too, so a task whose ONLY child is dead still had a non-empty
+        # `kids` and entered this branch — even though epic_rollup_verdict
+        # itself would say "not an epic" given the chance. Filter to LIVE
+        # children (not cancelled/deleted) BEFORE the branch decision, and
+        # derive blocking_children from that SAME filtered list, so a dead
+        # child is never named as a blocker either.
+        live_kids = [c for c in kids
+                    if str(_task_attr(c, "status", "")) not in
+                    ("cancelled", "deleted")]
+        if live_kids:
+            ok_roll, why_roll = epic_rollup_verdict(live_kids)
             # AC-3 (task a646cbd1): epic_rollup_verdict's own reason string
             # is prose ("N child task(s) not done") with no ids — name the
-            # specific unfinished child(ren) here from the SAME `kids` list
-            # it was computed from, so the UI can link, not just read prose.
+            # specific unfinished child(ren) here from the SAME `live_kids`
+            # list it was computed from, so the UI can link, not just read
+            # prose.
             blocking_children = [
                 {"id": str(_task_attr(c, "id", "")),
                  "title": str(_task_attr(c, "title", ""))}
-                for c in kids
+                for c in live_kids
                 if str(_task_attr(c, "status", "")) not in ("done", "cancelled")
             ]
             # A clean roll-up still has to satisfy the ui-artifact tooth (owner:
