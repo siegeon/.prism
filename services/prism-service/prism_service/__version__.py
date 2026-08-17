@@ -13,10 +13,21 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.2"
+PRISM_VERSION = "7.11.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.3: gate/readiness no longer lets a cancelled-or-deleted-only "
+    "child fake an epic. api/conductor.py's gate_readiness read a task's "
+    "children raw (kids = task_svc.list(parent_id=...)) and branched into "
+    "the epic-rollup adapter on bare `if kids:`, even though "
+    "epic_rollup_verdict itself already excludes cancelled children and "
+    "would say 'not an epic' given the chance. Fixed by filtering to LIVE "
+    "children (status not in cancelled/deleted) before that branch "
+    "decision, and deriving blocking_children from the same filtered "
+    "list -- a demo task whose only child is dead now falls through to "
+    "the clean human-judgment Approve instead of a false 'rollup_blocked' "
+    "banner; a genuine epic with a live child is unchanged. "
     "gamify.13: cards on /live are now draggable to a user-chosen "
     "position (owner ask: 'the individual panels should be able to be "
     "moved'). Pointerdown on a card body arms a potential drag; movement "
