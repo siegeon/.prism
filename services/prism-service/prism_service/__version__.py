@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.20"
+PRISM_VERSION = "7.11.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.21: a stale tab survives a redeploy (task 6a094d45) - vite's "
+    "vite:preloadError now routes into the existing guarded stale-chunk "
+    "recovery, covering the case where React lazy swallows the import "
+    "rejection before the global listeners fire. "
     "7.11.19: red_gate anchor resolution gains a third tier (task "
     "ed3263b4) - a driver-attested pre-change ref (`red-anchor-ref: "
     "<sha>` marker in red-step completion_proof) is resolved and run by "
