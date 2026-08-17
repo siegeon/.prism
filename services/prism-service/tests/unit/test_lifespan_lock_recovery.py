@@ -84,7 +84,11 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # tasks' linked-session transcripts every ~1.5s and publishes
     # tokens.turn onto the bus for /sse/work + the /live graph — live
     # token burn isn't event-shaped, so nothing else pushes it.
-    assert len(started) == 12
+    # 13 as of task b0138f17 ("a cold PRISM answers without calling the
+    # internet"): warm_embedder (engines/brain_engine.py) preloads the
+    # embedding model at boot, offline-first, so the first request after
+    # a restart never pays the model load or a huggingface round trip.
+    assert len(started) == 13
 
 
 def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
@@ -97,8 +101,8 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
         _run_lifespan()
 
     started = [c for c in mock_t.return_value.start.mock_calls]
-    # Same 12 threads — see test_lifespan_starts_threads_when_no_lock.
-    assert len(started) == 12  # threads started despite the stale lock
+    # Same 13 threads — see test_lifespan_starts_threads_when_no_lock.
+    assert len(started) == 13  # threads started despite the stale lock
 
     err = capsys.readouterr().err
     assert "stale lock detected" in err

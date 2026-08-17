@@ -5,7 +5,7 @@ import re
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -196,6 +196,12 @@ def list_tasks(project: str = Query("default"),
               parent_id: Optional[str] = Query(
                   None, description="Scope to one epic's direct children "
                                      "(or '' for root tasks only)."),
+              status: Optional[str] = Query(
+                  None, description="Filter to one status (pending/"
+                                     "in_progress/blocked/done/...). "
+                                     "Pushed down to the store so a "
+                                     "one-column view never materializes "
+                                     "the whole board (task 9974d407)."),
               fields: Optional[str] = Query(
                   None, description="Comma-separated projection (task "
                                      "842248bd, FR-7 parity with the MCP "
@@ -203,12 +209,21 @@ def list_tasks(project: str = Query("default"),
                                      "instead of the full record. "
                                      "'mirror_url'/'mirrors' are derived "
                                      "fields, not raw Task attributes."),
-              principal: Principal = Depends(current_principal)) -> dict:
+              principal: Principal = Depends(current_principal),
+              request: Request = None, response: Response = None):
     # Soft-deleted tasks stay in the store for audit but must NOT surface on
     # the board / task list — a deleted task is removed, not active work (it
     # was still feeding the AWAITING-REVIEW bar and the kanban). Opt in with
     # ?include_deleted=true for an admin/audit view.
-    tasks = _svc(project).list(parent_id=parent_id) if parent_id is not None else _svc(project).list()
+    _list_kw: dict = {}
+    if parent_id is not None:
+        _list_kw["parent_id"] = parent_id
+    # isinstance guard: tests call this handler DIRECTLY, where an omitted
+    # param is the fastapi Query default object, not None — truthy, and
+    # sqlite can't bind it.
+    if isinstance(status, str) and status:
+        _list_kw["status"] = status
+    tasks = _svc(project).list(**_list_kw)
     if not include_deleted:
         tasks = [t for t in tasks
                  if str(getattr(t, "status", "") or "") != "deleted"]
@@ -231,8 +246,34 @@ def list_tasks(project: str = Query("default"),
                 else:
                     row[f] = getattr(t, f, None)
             rows.append(row)
-        return {"tasks": rows}
-    return {"tasks": tasks}
+        return _tasks_reply({"tasks": rows}, request, response)
+    return _tasks_reply({"tasks": tasks}, request, response)
+
+
+def _tasks_reply(body: dict, request, response):
+    """Attach a content ETag (+ Cache-Control: no-cache) to the board list
+    so the browser's own revalidation turns an UNCHANGED 5s poll into a
+    ~300-byte 304 instead of a full payload — the board used to re-transfer
+    ~117KB twelve times a minute on an idle tab (task fb163fcf, "the board
+    polls at a human cadence"). no-cache means REVALIDATE EVERY TIME, so
+    the data is never stale: a changed board hashes to a new ETag and the
+    very next poll transfers the full fresh payload. Direct (non-HTTP)
+    callers pass no request/response and get the plain dict, unchanged."""
+    if request is None or response is None:
+        return body
+    import hashlib
+    import json as _json
+    etag = 'W/"' + hashlib.md5(
+        _json.dumps(body, default=str, sort_keys=True).encode("utf-8")
+    ).hexdigest() + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    try:
+        if (request.headers.get("if-none-match") or "") == etag:
+            return Response(status_code=304, headers=headers)
+    except Exception:
+        return body
+    response.headers.update(headers)
+    return body
 
 
 class TaskCreate(BaseModel):
@@ -935,6 +976,55 @@ def _resolve_delivery_branch(repo: str, task_id: str) -> tuple[str, str]:
     return cur, "HEAD"
 
 
+# /delivery spawns a git subprocess per commit per flag (pushed/merged/tag —
+# 3 per commit, plus branch resolution): dozens of process spawns per GET,
+# refetched on every task-page open. Same medicine as the stranded scan just
+# above: a short TTL cache on the GIT-DERIVED facts (branch state changes on
+# push/merge cadence, not per page view). `verified` stays live — it reads
+# the task row, never git (task 9974d407, "PRISM feels instant").
+_DELIVERY_TTL_S = 30.0
+_delivery_cache: dict = {}
+_delivery_lock = _threading.Lock()
+
+
+def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool]:
+    """(branch, commits, shipped_on_main) for the task, TTL-cached."""
+    key = (repo, task_id)
+    now = _time.monotonic()
+    with _delivery_lock:
+        hit = _delivery_cache.get(key)
+        if hit and now - hit[0] < _DELIVERY_TTL_S:
+            return hit[1]
+    branch, rev = _resolve_delivery_branch(repo, task_id)
+    commits: list[dict] = []
+    rc, log = _git(repo, "log", "--grep", f"task:{task_id[:8]}",
+                   "--format=%h%x09%s", "-n", "20", rev)
+    if rc == 0 and log:
+        main_ref = "origin/main"
+        if _git(repo, "rev-parse", "--verify", "-q", main_ref)[0] != 0:
+            main_ref = "main"
+        for line in log.splitlines():
+            sha, _, subject = line.partition("\t")
+            sha = sha.strip()
+            if not sha:
+                continue
+            pushed = bool(_git(repo, "branch", "-r", "--contains", sha)[1])
+            merged = _git(repo, "merge-base", "--is-ancestor", sha, main_ref)[0] == 0
+            tags = _git(repo, "tag", "--contains", sha)[1]
+            commits.append({
+                "sha": sha, "subject": subject.strip(),
+                "pushed": pushed, "merged_to_main": merged,
+                "released_in": tags.splitlines()[0] if tags else "",
+            })
+    shipped = _is_shipped_on_main(repo, task_id)
+    val = (branch, commits, shipped)
+    with _delivery_lock:
+        _delivery_cache[key] = (now, val)
+        while len(_delivery_cache) > 256:
+            _delivery_cache.pop(next(iter(_delivery_cache)))
+    return val
+
+
 @router.get("/{task_id}/delivery")
 def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     """WHERE the task's work lives and what's left to ship (owner 2026-07-16:
@@ -964,28 +1054,10 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
         pass
 
     commits: list[dict] = []
-    branch, rev = "", "HEAD"
+    branch = ""
+    shipped_on_main = False
     if repo:
-        branch, rev = _resolve_delivery_branch(repo, task_id)
-        rc, log = _git(repo, "log", "--grep", f"task:{task_id[:8]}",
-                       "--format=%h%x09%s", "-n", "20", rev)
-        if rc == 0 and log:
-            main_ref = "origin/main"
-            if _git(repo, "rev-parse", "--verify", "-q", main_ref)[0] != 0:
-                main_ref = "main"
-            for line in log.splitlines():
-                sha, _, subject = line.partition("\t")
-                sha = sha.strip()
-                if not sha:
-                    continue
-                pushed = bool(_git(repo, "branch", "-r", "--contains", sha)[1])
-                merged = _git(repo, "merge-base", "--is-ancestor", sha, main_ref)[0] == 0
-                tags = _git(repo, "tag", "--contains", sha)[1]
-                commits.append({
-                    "sha": sha, "subject": subject.strip(),
-                    "pushed": pushed, "merged_to_main": merged,
-                    "released_in": tags.splitlines()[0] if tags else "",
-                })
+        branch, commits, shipped_on_main = _delivery_git_facts(repo, task_id)
 
     def _all(flag: str) -> bool:
         return bool(commits) and all(c[flag] for c in commits)
@@ -996,7 +1068,7 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     # [task:<id8>] trailer directly on origin/main via _is_shipped_on_main
     # (tasks.py:278), which matches the delimited trailer only -- never a
     # bare/prefix-collision substring (FR-5).
-    merged_ok = _all("merged_to_main") or (bool(repo) and _is_shipped_on_main(repo, task_id))
+    merged_ok = _all("merged_to_main") or shipped_on_main
 
     stage_states = [
         ("verified", "verified", verified,
@@ -1302,6 +1374,53 @@ def _checkout_tests_root():
     return Path(__file__).resolve().parents[2] / "tests"
 
 
+# get_task_tests' discovery pass used to READ the full text of every file
+# under tests/** (two roots when a task workspace exists) on EVERY task-page
+# open — measured 3.9s per GET against the real checkout (task 9974d407,
+# "PRISM feels instant"). The texts barely change between requests, so cache
+# them per root, validated per-file by (mtime_ns, size) from one stat walk:
+# a request re-reads only files that actually changed. LRU-capped so stale
+# per-task workspace roots can't accumulate ~20MB of text each forever.
+_TESTS_TEXT_CACHE: dict = {}
+_TESTS_TEXT_LOCK = _threading.Lock()
+_TESTS_TEXT_MAX_ROOTS = 6
+
+
+def _tests_texts(tests_root) -> list:
+    """[(rel_path, text)] for every .py under ``tests_root``, rel to its
+    parent (the run root) — same pairs the old rglob+read loop produced,
+    in the same sorted order, served from the validated cache."""
+    root_key = str(tests_root)
+    with _TESTS_TEXT_LOCK:
+        cached = dict(_TESTS_TEXT_CACHE.get(root_key) or {})
+    fresh: dict = {}
+    out: list = []
+    base = tests_root.parent
+    for p in sorted(tests_root.rglob("*.py")):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        rel = p.relative_to(base).as_posix()
+        stamp = (st.st_mtime_ns, st.st_size)
+        hit = cached.get(rel)
+        if hit is not None and hit[0] == stamp:
+            text = hit[1]
+        else:
+            try:
+                text = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+        fresh[rel] = (stamp, text)
+        out.append((rel, text))
+    with _TESTS_TEXT_LOCK:
+        _TESTS_TEXT_CACHE.pop(root_key, None)
+        _TESTS_TEXT_CACHE[root_key] = fresh
+        while len(_TESTS_TEXT_CACHE) > _TESTS_TEXT_MAX_ROOTS:
+            _TESTS_TEXT_CACHE.pop(next(iter(_TESTS_TEXT_CACHE)))
+    return out
+
+
 @router.get("/{task_id}/tests")
 def get_task_tests(task_id: str, run: bool = Query(False),
                    project: str = Query("default")):
@@ -1362,14 +1481,9 @@ def get_task_tests(task_id: str, run: bool = Query(False),
         if not tests_root.is_dir():
             continue
         tests_root_run_root = tests_root.parent
-        for p in sorted(tests_root.rglob("*.py")):
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
-                continue
+        for rel, text in _tests_texts(tests_root):
             # OWNERSHIP, not mention (task e0149f1f) — see file_owns_task.
             if file_owns_task(text, task_id):
-                rel = p.relative_to(tests_root.parent).as_posix()
                 if rel in seen_rel:
                     continue
                 seen_rel.add(rel)
@@ -1549,14 +1663,11 @@ def _discover_pinned_test_rows(task_id: str) -> list[dict]:
     for tests_root in roots:
         if not tests_root.is_dir():
             continue
-        for p in sorted(tests_root.rglob("*.py")):
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
-                continue
+        # Served from the same per-root text cache as /tests — this fallback
+        # used to re-read the whole tests tree on every gate_evidence GET.
+        for rel, text in _tests_texts(tests_root):
             # OWNERSHIP, not mention (task e0149f1f) — see file_owns_task.
             if file_owns_task(text, task_id):
-                rel = p.relative_to(tests_root.parent).as_posix()
                 if rel in seen_rel:
                     continue
                 seen_rel.add(rel)

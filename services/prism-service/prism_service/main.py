@@ -179,6 +179,70 @@ def _own_pidfile_write() -> None:
         _log.warning("could not write own pidfile %s: %s", p, exc)
 
 
+_DAEMON_LOCK_FH = None  # held for the process lifetime; OS releases on death
+
+
+def _acquire_single_daemon_lock(wait_s: float = 0.0):
+    """One daemon per data dir (task 033cb54a). A second prism_service.main
+    against the SAME PRISM_DATA_DIR must refuse to start, loudly — on
+    2026-08-16 a stray daemon (leaked by a test run onto fallback ports)
+    shared the real data dir with the live one for 18 hours and read 583GB
+    from its SQLite files; every UI query competed with that firehose.
+
+    An OS-level exclusive lock on <data_dir>/daemon.lock: released
+    automatically when the holder dies (no stale-pidfile problem), never
+    inherited by children. Returns the open handle on success, None when
+    another live daemon holds it. PRISM_ALLOW_MULTI_DAEMON=1 opts out
+    (parallel test rigs with a shared dir, if ever needed)."""
+    if os.environ.get("PRISM_ALLOW_MULTI_DAEMON", "").strip() == "1":
+        return True
+    # env-first at CALL time (config.DATA_DIR froze at import): the lock
+    # must guard the dir this process will actually serve.
+    _dd = os.environ.get("PRISM_DATA_DIR", "").strip()
+    if not _dd:
+        from prism_service.config import DATA_DIR as _cfg_dd
+        _dd = str(_cfg_dd)
+    lock_path = Path(_dd) / "daemon.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "a+")
+    except OSError as exc:
+        _log.warning("single-daemon lock unavailable (%s); continuing", exc)
+        return True
+    try:
+        if _sys.platform.startswith("win"):
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        # Retry window: os.execv restarts (auto-update / dev-watch) are
+        # spawn-child-then-exit-parent on Windows, so the fresh image can
+        # race the dying parent's still-held lock for a moment. A genuine
+        # rival daemon never exits, so it is still refused at the deadline.
+        if wait_s > 0:
+            deadline = time.monotonic() + wait_s
+            while time.monotonic() < deadline:
+                time.sleep(0.25)
+                again = _acquire_single_daemon_lock(0.0)
+                if again is not None:
+                    return again
+        return None
+    try:
+        fh.seek(0)
+        fh.truncate()
+        fh.write(str(os.getpid()))
+        fh.flush()
+    except OSError:
+        pass
+    global _DAEMON_LOCK_FH
+    _DAEMON_LOCK_FH = fh
+    return fh
+
+
 def _own_pidfile_cleanup() -> None:
     """Unlink the pidfile only if it still names THIS process, so the
     daemon clears its own pidfile on graceful exit (issue #66 fix #2)."""
@@ -454,6 +518,13 @@ async def lifespan(_app: FastAPI):
         # (live token burn isn't event-shaped) rather than a publisher.
         from prism_service.services.work_stream import start_work_ticker
         threading.Thread(target=start_work_ticker, daemon=True).start()
+        # task b0138f17 — warm the embedding model at boot, off the request
+        # path, so the FIRST brain/memory/task-create call after a restart
+        # never pays the model load (and, with brain_engine's offline-first
+        # snapshot resolution, never a huggingface round trip: a cold PRISM
+        # answers without calling the internet).
+        from prism_service.engines.brain_engine import warm_embedder
+        threading.Thread(target=warm_embedder, daemon=True).start()
         # Phase 3 (epic 4fd1e6b4) — TIMERS RETIRED ONTO THE BUS. The
         # Reflection Worker and Memory Summary Worker no longer run on their
         # own polling clocks; session.imported reflects (coalesced, read-
@@ -693,6 +764,18 @@ if __name__ == "__main__":
     # which binds uvicorn below) rather than any intermediate launcher pid.
     # prism status/stop and the out-of-process supervisor then act on the live
     # server. Done BEFORE _server.run() so the truth is on disk before bind.
+    # One daemon per data dir (task 033cb54a) — refuse before touching the
+    # pidfile or binding anything, so a stray second launch can never
+    # shadow the live instance's databases.
+    if _acquire_single_daemon_lock(wait_s=10.0) is None:
+        _log.critical(
+            "another prism_service.main already holds this data dir "
+            "(daemon.lock is locked) — refusing to start a second daemon "
+            "against the same databases. Stop the other process first, or "
+            "set PRISM_ALLOW_MULTI_DAEMON=1 if you truly mean it.")
+        print("PRISM: refusing to start — another daemon already serves "
+              "this data dir (task 033cb54a).", file=_sys.stderr)
+        raise SystemExit(2)
     _own_pidfile_write()
     # The daemon is the authority that clears its own pidfile on a
     # graceful exit (issue #66 fix #2) — atexit covers normal exit and

@@ -40,24 +40,19 @@ _TICK_STATE: dict[str, dict[str, float]] = {}
 _STATE_LOCK = threading.Lock()
 
 
-def _active_task_ids(conductor) -> list[str]:
-    """Root + subtask ids the conductor considers currently managed and
-    in motion -- status in_progress, or a live workflow_step. Mirrors the
-    same fields managed_tasks() already computes, so this reuses its walk
-    rather than re-deriving activity."""
-    out: list[str] = []
+def _active_task_ids(task_svc) -> list[str]:
+    """Task ids currently in motion -- status in_progress, or a live
+    workflow_step on a non-terminal row. ONE slim indexed query
+    (TaskService.active_ids). This used to call conductor.managed_tasks(),
+    which computes phase_progress + activity + histories + sessions for
+    every tile -- the full board render -- every 1.5s tick just to learn
+    WHICH ids to look at; that walk was the daemon's dominant idle SQL
+    load (task 9974d407, "PRISM feels instant")."""
     try:
-        roots = conductor.managed_tasks()
+        return task_svc.active_ids()
     except Exception:
-        logger.exception("work ticker: managed_tasks() failed")
-        return out
-    for r in roots:
-        if r.get("status") == "in_progress" or r.get("workflow_step"):
-            out.append(r["id"])
-        for c in r.get("subtasks") or []:
-            if (c.get("status") or "") == "in_progress":
-                out.append(c["id"])
-    return out
+        logger.exception("work ticker: active_ids() failed")
+        return []
 
 
 def _tick_project(project: str) -> None:
@@ -70,7 +65,7 @@ def _tick_project(project: str) -> None:
     conductor = ctx.conductor_svc
     task_svc = ctx.task_svc
 
-    task_ids = _active_task_ids(conductor)
+    task_ids = _active_task_ids(task_svc)
     if not task_ids:
         return
 

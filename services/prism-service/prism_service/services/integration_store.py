@@ -507,7 +507,13 @@ class IntegrationStore:
         if container_id is not None:
             sql += " AND container_id = ?"
             params.append(container_id)
-        sql += " ORDER BY started_at DESC, id"
+        # rowid DESC as the tie-break: two runs started inside the same
+        # clock tick (Windows' coarse system clock trivially produces
+        # identical started_at strings) must still resolve "latest" by
+        # insertion order — the old `, id` tie-break was a RANDOM uuid, so
+        # last_sync was a coin flip under a tied timestamp (flaked live in
+        # test_jira_status_last_sync_is_the_most_recent_run, 2026-08-16).
+        sql += " ORDER BY started_at DESC, rowid DESC"
         return [self._run(r) for r in self._db.execute(sql, params).fetchall()]
 
     def append_receipt(

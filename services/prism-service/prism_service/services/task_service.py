@@ -115,6 +115,11 @@ CREATE INDEX IF NOT EXISTS idx_task_history_task_ts
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 -- list(parent_id=...): root-vs-children scoping on every board load.
 CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
+-- advance_rows_all(): WHERE action='advance_task' ORDER BY task_id,
+-- timestamp — without this it full-scans task_history on every
+-- phase_progress render (task 9974d407, "PRISM feels instant").
+CREATE INDEX IF NOT EXISTS idx_task_history_action_task_ts
+    ON task_history(action, task_id, timestamp);
 """
 
 
@@ -280,6 +285,12 @@ class TaskService:
         # (e.g. hook smoke tests); create/update still succeeds, the
         # row just lacks an embedding until re-indexed.
         self._embed_fn: Optional[EmbedFn] = embed_fn
+        # Event-invalidated snapshot of advance_rows_all(): the conductor's
+        # step-duration stats (_median_step_s + _per_step_typical) both call
+        # it on EVERY phase_progress render, and the underlying rows only
+        # change on an advance_task transition — so serve the same grouped
+        # dict until _record_history sees one (task 9974d407).
+        self._advance_rows_cache: Optional[dict] = None
 
     # ------------------------------------------------------------------
     # Per-thread connection factory (task 0584addb)
@@ -416,6 +427,9 @@ class TaskService:
             (task_id, actor, action, details, now),
         )
         self._db.commit()
+        if action == "advance_task":
+            # New advance row → the cached advance_rows_all snapshot is stale.
+            self._advance_rows_cache = None
 
     def record_history(
         self, task_id: str, action: str, details: str = "", actor: str = "",
@@ -648,6 +662,19 @@ class TaskService:
 
         return tasks
 
+    def active_ids(self) -> list[str]:
+        """Ids of tasks currently in motion — status in_progress, or a live
+        workflow_step on a non-terminal row. ONE slim indexed query for the
+        pollers (work_stream ticker) that previously walked the conductor's
+        full managed_tasks() board — phase_progress, histories, sessions and
+        all — every 1.5s just to learn which ids to look at (task 9974d407)."""
+        rows = self._db.execute(
+            "SELECT id FROM tasks WHERE status = 'in_progress' "
+            "OR (workflow_step <> '' "
+            "    AND status NOT IN ('done', 'cancelled', 'deleted'))"
+        ).fetchall()
+        return [r["id"] for r in rows]
+
     def update(self, task_id: str, **kwargs: object) -> Optional[Task]:
         """Update arbitrary fields on a task. Records change history."""
         task = self.get(task_id)
@@ -847,6 +874,9 @@ class TaskService:
         that does not even depend on which task is being viewed. The filter
         rides in SQL so the rows that never mattered are never deserialized.
         """
+        cached = self._advance_rows_cache
+        if cached is not None:
+            return cached
         rows = self._db.execute(
             "SELECT task_id, timestamp, details FROM task_history "
             "WHERE action = 'advance_task' ORDER BY task_id, timestamp ASC"
@@ -855,11 +885,26 @@ class TaskService:
         for r in rows:
             out.setdefault(r["task_id"], []).append(
                 (r["timestamp"] or "", r["details"] or ""))
+        self._advance_rows_cache = out
         return out
 
     # ------------------------------------------------------------------
     # Task <-> session association (LL — activates task_sessions)
     # ------------------------------------------------------------------
+
+    def _scores_conn_cached(self) -> sqlite3.Connection:
+        """The calling thread's connection to scores.db — same thread-local
+        pattern as ``self._db`` for tasks.db. sessions_for_task used to open
+        a fresh connection (plus CREATE TABLE DDL) on EVERY call, and it is
+        invoked once per tile per board render; the connect+DDL tax was pure
+        overhead (task 9974d407). task_sessions DDL runs once per connection.
+        Callers must NOT close the returned connection."""
+        conn = getattr(self._tlocal, "scores_conn", None)
+        if conn is None:
+            conn = sqlite_db.connect(self._scores_db, timeout=5.0)
+            self._ensure_task_sessions(conn)
+            self._tlocal.scores_conn = conn
+        return conn
 
     @staticmethod
     def _ensure_task_sessions(conn: sqlite3.Connection) -> None:
@@ -918,28 +963,24 @@ class TaskService:
             if ended_at is not None:
                 row["ended_at"] = ended_at
             return True
-        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
-        try:
-            self._ensure_task_sessions(conn)
-            existing = [
-                r[0] for r in conn.execute(
-                    "SELECT session_id FROM task_sessions WHERE task_id=?",
-                    (task_id,),
-                ).fetchall()
-            ]
-            if self._is_truncated_prefix(session_id, existing):
-                return False
-            conn.execute(
-                "INSERT INTO task_sessions "
-                "(task_id, session_id, started_at, ended_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(task_id, session_id) DO UPDATE SET "
-                "ended_at=COALESCE(excluded.ended_at, task_sessions.ended_at)",
-                (task_id, session_id, now, ended_at),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._scores_conn_cached()
+        existing = [
+            r[0] for r in conn.execute(
+                "SELECT session_id FROM task_sessions WHERE task_id=?",
+                (task_id,),
+            ).fetchall()
+        ]
+        if self._is_truncated_prefix(session_id, existing):
+            return False
+        conn.execute(
+            "INSERT INTO task_sessions "
+            "(task_id, session_id, started_at, ended_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(task_id, session_id) DO UPDATE SET "
+            "ended_at=COALESCE(excluded.ended_at, task_sessions.ended_at)",
+            (task_id, session_id, now, ended_at),
+        )
+        conn.commit()
         return True
 
     def sessions_for_task(self, task_id: str) -> list[dict]:
@@ -957,10 +998,8 @@ class TaskService:
                  "files_read": 0, "files_modified": 0, "skills_invoked": 0}
                 for r in self._session_links.get(task_id, {}).values()
             ]
-        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
-        conn.row_factory = sqlite3.Row
+        conn = self._scores_conn_cached()
         try:
-            self._ensure_task_sessions(conn)
             # session_outcomes is Brain-owned schema — on a scores.db where
             # no session outcome was ever recorded the table is absent and
             # the LEFT JOIN raises OperationalError, which used to be
@@ -998,8 +1037,6 @@ class TaskService:
             ).fetchall()
         except sqlite3.OperationalError:
             return []
-        finally:
-            conn.close()
         return [dict(r) for r in rows]
 
     def task_for_session(self, session_id: str) -> str:
@@ -1013,9 +1050,8 @@ class TaskService:
                 if session_id in links:
                     return task_id
             return ""
-        conn = sqlite_db.connect(self._scores_db, timeout=5.0)
         try:
-            self._ensure_task_sessions(conn)
+            conn = self._scores_conn_cached()
             row = conn.execute(
                 "SELECT task_id FROM task_sessions WHERE session_id=? "
                 "ORDER BY started_at DESC LIMIT 1",
@@ -1024,5 +1060,3 @@ class TaskService:
             return row[0] if row else ""
         except sqlite3.OperationalError:
             return ""
-        finally:
-            conn.close()

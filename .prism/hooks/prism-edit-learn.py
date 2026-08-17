@@ -103,15 +103,12 @@ def _mark_dirty(root: Path) -> None:
         pass
 
 
-def main() -> None:
-    try:
-        raw = sys.stdin.read()
-        if not raw:
-            return
-        data = json.loads(raw)
-    except Exception:
-        return
-
+def handle(data: dict, conn: "tuple[str, str] | None" = None) -> None:
+    """The hook body, callable in-process by the merged PostToolUse
+    dispatcher (prism-feedback-signal.py) so ONE python start serves an
+    Edit instead of two (task 86fac34e). ``conn`` is the dispatcher's
+    already-probed (base, project); None resolves from .mcp.json as the
+    standalone path always did."""
     tool_name = data.get("tool_name") or ""
     if tool_name not in _TARGET_TOOLS:
         return
@@ -143,7 +140,8 @@ def main() -> None:
     except (OSError, UnicodeError):
         return
 
-    conn = _mcp_url_and_project(root)
+    if conn is None:
+        conn = _mcp_url_and_project(root)
     if conn is None:
         return
     base, project = conn
@@ -152,6 +150,17 @@ def main() -> None:
         "skip_graph": True,
     })
     _mark_dirty(root)
+
+
+def main() -> None:
+    try:
+        raw = sys.stdin.read()
+        if not raw:
+            return
+        data = json.loads(raw)
+    except Exception:
+        return
+    handle(data)
 
 
 if __name__ == "__main__":
