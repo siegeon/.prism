@@ -257,7 +257,12 @@ def _gated_task(tmp_path, oracle=_HTTP_ORACLE, proof_type=""):
     task_svc = TaskService(str(tmp_path / "tasks.db"))
     t = task_svc.create(title="adjudicate me", oracle=oracle,
                         proof_type=proof_type)
-    task_svc.update(t.id, workflow_step="green_gate", gate_state="pending")
+    # Runner+pass signal in completion_proof so the PRE-EXISTING, unrelated
+    # green_gate_artifact_reason tooth (conductor_service.py) clears -- these
+    # tests validate the NEW reachability tooth, not that older artifact-
+    # proof requirement.
+    task_svc.update(t.id, workflow_step="green_gate", gate_state="pending",
+                    completion_proof="pytest run: 3 passed, 0 failed")
     return task_svc, task_svc.get(t.id)
 
 
@@ -316,7 +321,11 @@ def test_reachable_slice_is_not_blocked_by_the_new_tooth(tmp_path, monkeypatch):
         passed = True
         status = "passed"
         policy_hash = ""
-        reason = "forced pass (test double)"
+        # Runner+pass signal so this double clears the PRE-EXISTING,
+        # unrelated green_gate_artifact_reason tooth (conductor_service.py)
+        # -- this test validates the NEW reachability tooth's non-
+        # interference, not that older artifact-proof requirement.
+        reason = "pytest run: 3 passed, 0 failed (test double)"
     monkeypatch.setattr(cond, "_oracle_receipt_refusal",
                         lambda *a, **k: ("", _R()))
 
