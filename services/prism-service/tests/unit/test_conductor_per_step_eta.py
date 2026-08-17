@@ -279,35 +279,24 @@ def test_sdlc_progress_type_and_caption_render_eta():
 
 
 def test_conductor_page_eta_ui_RETIRED_superseded_by_ring_arc_and_idle_clock():
-    """RETIRED (inverted-flow #4). The AC was a task-card ETA UI on the conductor
-    tile (an EtaCountdownBar + an '~Xm left' chip consuming eta_s/eta_total_s).
-    The showcase ConductorPage that SUPERSEDES the PR-#212 tile (owner chose
-    'timeline D') NEVER ported that ETA surface — so re-pointing this test to the
-    ring arc + idle clock (as commit 89194d6 did) was laundering: it made an
-    ETA-named test pass off unrelated elements. We RETIRE the ETA-UI assertion
-    honestly here.
+    """RETIRED-then-SUPERSEDED (mx-09c412 / mx-a30372 / task ac91be51). This
+    test used to assert the task-card ETA UI (EtaCountdownBar) was ABSENT —
+    that was correct while the showcase ConductorPage rebuild (c9166c4)
+    genuinely dropped it. Task ac91be51 restores EtaCountdownBar (draining
+    MM:SS, gated on eta_s>5 && eta_total_s>0) and the eta_total_s/eta_sample_n
+    payload consumption, so the absence premise below is no longer true and
+    is retired here rather than left standing as a contradiction (repo
+    lesson: 'a contradiction left standing is a red main'). The restored
+    surface is pinned honestly, with a real gate/mount check (not a bare
+    substring), by tests/unit/test_conductor_tile_restored_metrics_ui.py.
 
-    The real, task-card ETA remains an OPEN, tracked deliverable on task
-    68a9720e — it is deliberately NOT fake-satisfied by this test. What the
-    backend DOES deliver (the learned per-step ETA projection + phase_progress
-    payload) stays proven by the runtime oracles above in this file, and the
-    SdlcProgress '~Xm left/rough' caption stays proven by
-    test_sdlc_progress_type_and_caption_render_eta.
+    What still holds and stays proven here: the SdlcProgress '~Xm left/rough'
+    caption (test_sdlc_progress_type_and_caption_render_eta) and the backend
+    learned per-step ETA projection (the runtime oracles above in this file).
     """
     tsx = _read_web("pages", "ConductorPage.tsx")
-    # The ETA UI is genuinely absent — assert the retirement, don't fake it. The
-    # tile neither renders an EtaCountdownBar nor CONSUMES the ETA payload fields
-    # (eta_total_s / eta_sample_n). (Note: the string 'eta_s' appears only in a
-    # source COMMENT, so we do NOT key on it — that would be inverse-laundering.)
-    assert "EtaCountdownBar" not in tsx, (
-        "the tile must not render an EtaCountdownBar — the task-card ETA UI AC is "
-        "retired here and still tracked on task 68a9720e; do not force it green"
-    )
-    assert "eta_total_s" not in tsx and "eta_sample_n" not in tsx, (
-        "the tile does not consume the ETA payload fields — retirement premise"
-    )
-    # Pin the REAL progress/motion surfaces the showcase tile DOES render, under
-    # an honest name (these are NOT the ETA — they are what superseded it).
+    # Pin the REAL progress/motion surfaces the showcase tile renders — these
+    # never went away and remain true regardless of the EtaCountdownBar restore.
     assert "strokeDashoffset" in tsx, (
         "the tile conveys progress via the draining completion-ring arc"
     )

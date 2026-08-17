@@ -13,10 +13,16 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.14"
+PRISM_VERSION = "7.11.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.15: the /conductor tile regains its deleted metrics (task "
+    "ac91be51) - 2x2 MetricCell grid, EtaCountdownBar, SlicesBar epic "
+    "hero and TokenTurns' session_quiet_s quiet-clock, restored from "
+    "c9166c4^ and remounted on the shared useConductorState hook's "
+    "ManagedTask type; the ring-timeline/eta absence contracts retired "
+    "in-slice with supersession notes. "
     "7.11.13: /live wires now dock at movable side ports (task b9ce0450) "
     "-- wires.ts's PortSide/WirePort/portPoint/portFromWorld/autoPort/"
     "wireKey/laneFor/drawPort is the single geometry source of truth for "
