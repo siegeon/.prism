@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.7"
+PRISM_VERSION = "7.11.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4751,4 +4751,38 @@ PRISM_VERSION_NOTES += (
     "backdates every node's driveStartedAt through it; draw.ts renders "
     "'MISSION mm:ss' per in-flight task/subtask card, reading only that "
     "card's own field, never a page-level shared clock (mx-9f2018)."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.7 (task 39adc067): GET /api/conductor/gate/readiness stops "
+    "re-litigating an ALREADY-DECIDED gate (task.gate_state == 'passed') "
+    "through the same STALE-tree refusal text a genuinely unsound PENDING "
+    "approval produces (e0149f1f mirror image). A settled gate now reads "
+    "receipt_ok:true with a reason naming the decided-at tree (parsed from "
+    "gate_reason's 'tree=<sha>' token); tree drift since the decision "
+    "renders as informational history appended to the reason, never a "
+    "refusal. Pending gates with a foreign-tree receipt are unaffected - "
+    "the false-green catch stays exactly as strict."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.8 (task 5c61e0e6): readiness's red_gate branch stops promising "
+    "'no owner action needed' for a sweep that structurally cannot come. "
+    "When the machine seat already swept this red_sha+spec and recorded a "
+    "NOT-red verdict (pinned suite passes at the immutable anchor), "
+    "readiness now surfaces that stored refusal reason and says the gate "
+    "needs a distinct actor's decision now, instead of the optimistic "
+    "'next sweep will decide it' placeholder. A genuinely unswept gate "
+    "(no receipt at all for this anchor+spec) is unaffected and still "
+    "reads pending with no owner call to action."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.9 (task 98d38111): an owner's plan_gate Approve click now leaves "
+    "an honest actor record. TaskDetailPage.tsx fetches the real signed-in "
+    "identity (/api/auth/me, same pattern as PageHeader's IdentityChip) and "
+    "forwards it as `actor` on the /api/conductor/gate POST and as the real "
+    "`approver` on the design-packet-approve POST - previously both wire "
+    "calls carried no real identity, so every human click resolved to "
+    "unknown:conductor (ActorKind.UNKNOWN). The design-packet-approve route "
+    "now also resolves `approver` through ActorService and refuses (400) an "
+    "approver that is not a real HUMAN identity, so an owner_explicit "
+    "receipt can never be written for an unresolvable string."
 )
