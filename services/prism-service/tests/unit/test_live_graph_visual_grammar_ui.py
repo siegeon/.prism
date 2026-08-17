@@ -2086,3 +2086,24 @@ def test_snapshot_label_heal_survives():
         "assigning sn.label")
     assert re.search(r"labelIsPlaceholder\s*=\s*false", src), (
         "healing must still clear labelIsPlaceholder")
+
+
+def test_guards_still_wake_self_heal():
+    """task 0fb0f163: the ghost guards (PR #2221) must not swallow the
+    drift signal -- each guard early-return wakes the debounced snapshot
+    self-heal BEFORE returning, so a cold-booted board heals with REAL
+    snapshot cards instead of staying empty forever."""
+    src = _gs_nocomments()
+    checks = [
+        ("task.changed", "return;"),
+        ("agent.run", "return;"),
+        ("tokens.turn", "return;"),
+    ]
+    for ev, ret in checks:
+        b = _event_branch(src, ev)
+        first_ret = b.index(ret)
+        guard_region = b[:first_ret]
+        assert "scheduleSelfHeal()" in guard_region, (
+            f"{ev}'s guard early-return must call this.scheduleSelfHeal() "
+            "before returning -- swallowing the unknown-task signal leaves "
+            "a cold-booted board empty forever")
