@@ -6,7 +6,10 @@
 
 import type { GraphEdge, GraphNode, GraphSnapshot, WorkEvent } from "./types";
 import { LayoutEngine, type Slot } from "./layout";
-import { routeOrthogonal, type Point } from "./wires";
+import {
+  routeOrthogonal, portPoint, portFromWorld, autoPort, wireKey, laneFor,
+  type Point, type WirePort,
+} from "./wires";
 import { spawnPacket, stepPackets, type Packet } from "./packets";
 import { spawnToast, pruneToasts, type Toast } from "./toasts";
 import { type CardState } from "./palette";
@@ -256,6 +259,13 @@ export type LiveNode = GraphNode & {
 
 export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
 
+/** A hit on a wire's port dot — which wire (wireKey-shaped `key`), which
+ * end ("from"|"to"), and the card id that end is anchored to. A type
+ * alias (not an inline object literal) so portAtWorld's OWN opening `{`
+ * is unambiguous for source-scanning tests that brace-match from the
+ * signature. */
+export type PortHit = { key: string; end: "from" | "to"; nodeId: string };
+
 function easeOutCubic(t: number): number {
   const c = Math.max(0, Math.min(1, t));
   return 1 - Math.pow(1 - c, 3);
@@ -356,6 +366,35 @@ export class GraphState {
    * right after a drag ends. */
   draggingNodeId: string | null = null;
 
+  /** FR-1/FR-8 (task b9ce0450): manual per-WIRE-END port placement,
+   * mirroring `overrides` field-by-field. Keyed `${wireKey}:${end}`
+   * (end = "from" | "to") so each end of a wire can be independently
+   * docked. Consulted by wireEndpointsFor() in PREFERENCE to autoPort --
+   * an overridden port never re-derives from the peer's position, it
+   * just sits on the side/offset it was dropped on. LivePage serializes
+   * this to localStorage (prism.live.ports.<project>) on drag-release and
+   * rehydrates it via hydratePortOverrides() after bootstrap. */
+  portOverrides = new Map<string, WirePort>();
+  /** `${wireKey}:${end}` of the port dot currently under the user's
+   * pointer, mirroring draggingNodeId -- autoFitCamera stands down while
+   * set, same reasoning as the node case. */
+  draggingPortId: string | null = null;
+
+  setPortOverride(key: string, end: "from" | "to", port: WirePort): void {
+    this.portOverrides.set(`${key}:${end}`, port);
+  }
+
+  /** Resolves a world-space drop point against the CARD the given end is
+   * anchored to (`nodeId`) via portFromWorld -- the inverse of the
+   * portPoint geometry the renderer/hit-test both use -- and writes it
+   * into portOverrides. Called on every port-drag pointermove (AC-6). */
+  setPortFromWorld(key: string, end: "from" | "to", nodeId: string, wx: number, wy: number): void {
+    const node = this.byId.get(nodeId);
+    if (!node) return;
+    const slot = { x: node.x, y: node.y, w: node.slot.w, h: node.slot.h };
+    this.setPortOverride(key, end, portFromWorld(slot, wx, wy));
+  }
+
   setOverride(id: string, x: number, y: number): void {
     this.overrides.set(id, { x, y });
   }
@@ -370,6 +409,7 @@ export class GraphState {
    * the persisted copy in the same breath. */
   clearAllOverrides(): void {
     this.overrides.clear();
+    this.portOverrides.clear();
   }
 
   /** Rehydrates saved per-node position overrides once bootstrap has
@@ -387,6 +427,30 @@ export class GraphState {
   serializeOverrides(): Record<string, { x: number; y: number }> {
     const out: Record<string, { x: number; y: number }> = {};
     for (const [id, pos] of this.overrides) out[id] = pos;
+    return out;
+  }
+
+  /** Rehydrates saved per-wire-end port overrides once bootstrap has
+   * populated edges -- a key whose wire no longer exists in the current
+   * snapshot is silently dropped, same drop-unknown-ids rule as
+   * hydrateOverrides above. */
+  hydratePortOverrides(saved: Record<string, WirePort>): void {
+    for (const [k, port] of Object.entries(saved)) {
+      if (!port || (port.side !== "left" && port.side !== "right" && port.side !== "top" && port.side !== "bottom")) continue;
+      if (!Number.isFinite(port.t)) continue;
+      const end = k.endsWith(":from") ? "from" : k.endsWith(":to") ? "to" : null;
+      if (!end) continue;
+      const key = k.slice(0, k.length - (end.length + 1));
+      const [source, target] = key.split("->");
+      if (this.edges.some((e) => e.source === source && e.target === target)) {
+        this.portOverrides.set(k, { side: port.side, t: port.t });
+      }
+    }
+  }
+
+  serializePortOverrides(): Record<string, WirePort> {
+    const out: Record<string, WirePort> = {};
+    for (const [k, port] of this.portOverrides) out[k] = port;
     return out;
   }
 
@@ -562,18 +626,61 @@ export class GraphState {
     this.height = height;
   }
 
-  private wireEndpointsFor(edge: LiveEdge): Point[] | null {
+  /** AC-5: the ONE router entry point -- draw.ts's wire loop and packet
+   * spawning (maybeSpawnPacket below) both resolve a wire's polyline
+   * through this method, so the drawn wire and the in-transit marker can
+   * never diverge. Resolves each end's port (manual override first, else
+   * autoPort facing the peer) and passes every OTHER node as an obstacle
+   * rectangle for routeOrthogonal's channel search (AC-4). No longer
+   * `private`: draw.ts calls it directly (state.wireEndpointsFor(e)). */
+  wireEndpointsFor(edge: LiveEdge): Point[] | null {
     const a = this.byId.get(edge.source);
     const b = this.byId.get(edge.target);
     if (!a || !b) return null;
+    const key = wireKey(edge.source, edge.target);
+    const lane = laneFor(key);
     // routeOrthogonal wants (from, to) as SLOTS in the direction the wire
     // visually flows: structure edges parent(task)->child(subtask) flow
     // left->right; token edges session->task flow session(below) up into
     // the task, which routeOrthogonal's fallback branch already handles.
-    return routeOrthogonal(
-      { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h },
-      { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h },
-    );
+    const fromSlot = { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h };
+    const toSlot = { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h };
+    const fromPort = this.portOverrides.get(`${key}:from`) ?? autoPort(fromSlot, toSlot, lane);
+    const toPort = this.portOverrides.get(`${key}:to`) ?? autoPort(toSlot, fromSlot, lane);
+    const obstacles: Slot[] = [];
+    for (const n of this.nodes) {
+      if (n.id === a.id || n.id === b.id) continue;
+      obstacles.push({ x: n.x, y: n.y, w: n.slot.w, h: n.slot.h });
+    }
+    return routeOrthogonal(fromSlot, toSlot, { fromPort, toPort, obstacles, lane });
+  }
+
+  /** Hit-tests every wire's two port dots against a world point, within
+   * PORT_HIT_R -- calls the SAME portPoint the renderer/router use (AC-8,
+   * mx-0a0bf4: the hit-test must MIRROR the draw, never re-derive its own
+   * copy of the side/offset math). Returns the closest hit, or null. */
+  portAtWorld(wx: number, wy: number): PortHit | null {
+    const PORT_HIT_R = 10;
+    let best: PortHit | null = null;
+    let bestDist = PORT_HIT_R;
+    for (const e of this.edges) {
+      const a = this.byId.get(e.source);
+      const b = this.byId.get(e.target);
+      if (!a || !b) continue;
+      const key = wireKey(e.source, e.target);
+      const lane = laneFor(key);
+      const fromSlot = { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h };
+      const toSlot = { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h };
+      const fromPort = this.portOverrides.get(`${key}:from`) ?? autoPort(fromSlot, toSlot, lane);
+      const toPort = this.portOverrides.get(`${key}:to`) ?? autoPort(toSlot, fromSlot, lane);
+      const p0 = portPoint(fromSlot, fromPort);
+      const d0 = Math.hypot(wx - p0.x, wy - p0.y);
+      if (d0 < bestDist) { bestDist = d0; best = { key, end: "from", nodeId: a.id }; }
+      const p1 = portPoint(toSlot, toPort);
+      const d1 = Math.hypot(wx - p1.x, wy - p1.y);
+      if (d1 < bestDist) { bestDist = d1; best = { key, end: "to", nodeId: b.id }; }
+    }
+    return best;
   }
 
   private upsertSessionNode(id: string, driverId: string, now: number): LiveNode {

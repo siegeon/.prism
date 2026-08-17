@@ -33,6 +33,7 @@ export default function DesignPacket({
   prototypeSrc,
   onApprove,
   hideApproval = false,
+  refreshToken,
 }: {
   taskId: string;
   project?: string;
@@ -48,6 +49,12 @@ export default function DesignPacket({
   // are the single affordance, so the packet's footer must not render a
   // second one - same forked-approve rule as onApprove above.
   hideApproval?: boolean;
+  // Bumped by an external approve (task fa7735bd) to retrigger `load()`
+  // without changing taskId/project - the [taskId, project]-only fetch
+  // below never refires on its own after gateDecide's approveDesignPacket()
+  // flips approval.approved, so this card would keep rendering the stale
+  // not-approved branch until a full page reload.
+  refreshToken?: number;
 }) {
   const [data, setData] = useState<DesignPacketData | null>(null);
 
@@ -58,7 +65,7 @@ export default function DesignPacket({
       .catch(() => setData(null));
   }, [taskId, project]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshToken]);
 
   if (!data) return null;
 

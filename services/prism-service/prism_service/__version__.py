@@ -13,17 +13,28 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.12"
+PRISM_VERSION = "7.11.16"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "7.11.12: DesignPacket.tsx (task 73f13267) - the 'Approve design' "
+    "7.11.16: DesignPacket.tsx (task 73f13267) - the 'Approve design' "
     "footer now renders BEFORE the prototype iframe/diagram/plan_doc "
     "(was last, ~5 screens down) so it's reachable without scrolling past "
     "the prototype, which still renders unconditionally. gateDecide's "
     "approveDesignPacket() call now also requires !gateOverride, so an "
     "override release never forges a design-packet owner_explicit "
     "approval receipt. "
+    "7.11.13: /live wires now dock at movable side ports (task b9ce0450) "
+    "-- wires.ts's PortSide/WirePort/portPoint/portFromWorld/autoPort/"
+    "wireKey/laneFor/drawPort is the single geometry source of truth for "
+    "draw+route+hit-test (mx-0a0bf4); routeOrthogonal gains an optional "
+    "3rd RouteOpts arg (fromPort/toPort/obstacles/lane) while its 2-arg "
+    "call stays byte-identical; draw.ts and GraphState.wireEndpointsFor "
+    "collapse to one router call site; GraphState gains portOverrides/"
+    "portAtWorld/draggingPortId mirroring the position-override machinery; "
+    "LivePage's onPointerDown gains a 'port' drag mode ordered after the "
+    "action-strip check and before nodeAtWorld; port placements persist "
+    "to prism.live.ports.<project>, cleared by 'reset layout'. "
     "7.11.10: CONDUCTOR PAGE STOPS CONTRADICTING ITS OWN LIVE BAR "
     "[task 40c29b83]. New web/src/lib/useConductorState.ts owns the ONE "
     "fetch of /api/conductor/state, the polled/observed guard, the "
@@ -4819,4 +4830,18 @@ PRISM_VERSION_NOTES += (
     "shape) no longer hides an unwired new entry point. Abstain-only: a "
     "truthy refusal parks pending WITH the reason via _park_green_refusal, "
     "never flips to failed."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.14 (task fa7735bd): the Design tab's own DesignPacket card now "
+    "confirms an Approve click in place, no page reload. TaskDetailPage "
+    "bumps a designPacketRefreshToken state INSIDE gateDecide's success "
+    "branch (after both approveDesignPacket() and the gate POST resolve, "
+    "never optimistically before), threaded through PlanView into "
+    "DesignPacket's refreshToken prop and its load effect's deps, so "
+    "approval.approved flipping true retires the not-approved branch and "
+    "its Approve button without a refetch of the whole page. The success "
+    "toast also stops unconditionally claiming 'This task is released.' on "
+    "every approve - it says that only when body.gate_step is the terminal "
+    "green_gate, and still names the next step for plan_gate/story_gate/"
+    "red_gate advances."
 )
