@@ -153,6 +153,29 @@ function fmtWaitingMins(waitS: number): string {
   return m < 1 ? "<1m" : `${m}m`;
 }
 
+/** AC-1/AC-3 (task 4e6c4bf3 plan S1): a MISSION clock stamped above every
+ * in-flight task/subtask card, counting up from THIS card's OWN
+ * driveStartedAt (a server-anchored performance.now() offset, never a
+ * bare Date.now()/performance.now() read here) -- so a page reload does
+ * not reset it, and one card's clock never bleeds onto another's
+ * (mx-9f2018: a page-level shared "now" is exactly the forbidden shape).
+ * Renders nothing until the backend has real agent_runs telemetry for
+ * this task (driveStartedAt === 0, the "unknown yet" sentinel). */
+function drawMissionClock(ctx: CanvasRenderingContext2D, n: LiveNode, now: number): void {
+  if (n.kind === "session" || !n.driveStartedAt || n.status === "done") return;
+  const elapsedS = Math.max(0, (now - n.driveStartedAt) / 1000);
+  const mm = Math.floor(elapsedS / 60);
+  const ss = Math.floor(elapsedS % 60);
+  const label = `MISSION ${mm}:${ss.toString().padStart(2, "0")}`;
+  ctx.save();
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.fillStyle = PALETTE.textDim;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(label, n.x, n.y - 4);
+  ctx.restore();
+}
+
 export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: number, version: string): void {
   const { width, height } = state;
   // Deliberately no setTransform() here: LivePage's ResizeObserver sets a
@@ -242,6 +265,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
       stalledAttentionCount += 1;
     }
     drawCard(ctx, n, m, cardState, now, graphQuiet);
+    drawMissionClock(ctx, n, now);
     // Explore-hop action strip -- selected-only, world-space, drawn right
     // after the card it's docked to (see cards.ts's drawActionStrip doc
     // comment for why "below the card" never collides with a row beneath).

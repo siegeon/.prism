@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.1"
+PRISM_VERSION = "7.11.2"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4684,4 +4684,14 @@ PRISM_VERSION_NOTES += (
     "actually-momentary case). The idle quiet line reads 'N need "
     "attention' (red count) when >=1 card is stalled/gated, plain "
     "last-activity text only when nothing needs anyone."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.1 (task 4e6c4bf3 S1): /live grows a per-task MISSION clock "
+    "anchored to the task's real earliest agent_runs.started_at row "
+    "(api/work.py drive_started_at), never a client Date.now()/"
+    "performance.now(). GraphState derives a client/server clock skew "
+    "ONCE at bootstrap from the boot snapshot's own generated_at and "
+    "backdates every node's driveStartedAt through it; draw.ts renders "
+    "'MISSION mm:ss' per in-flight task/subtask card, reading only that "
+    "card's own field, never a page-level shared clock (mx-9f2018)."
 )

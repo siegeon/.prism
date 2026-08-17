@@ -220,6 +220,13 @@ export type LiveNode = GraphNode & {
    * the backend's own gate_waiting_s where available so "waiting Xm"
    * never lies about when the wait actually began. 0 = not waiting. */
   gatePendingSince: number;
+  /** performance.now() the drive actually started, backdated from the
+   * backend's server-epoch drive_started_at via GraphState.clockSkewMs
+   * (task 4e6c4bf3 plan S1) -- 0 = unknown yet (no agent_runs telemetry).
+   * NEVER a client Date.now()/performance.now() invented at first render
+   * (would reset on reload) and NEVER a page-level shared value (would
+   * bleed this task's mission clock onto every other card, mx-9f2018). */
+  driveStartedAt: number;
   /** performance.now() this node's status flipped to done; 0 = not done.
    * Drives the settle flash + the compact-to-chip timer, never re-fired
    * by reconcile once already set. */
@@ -316,6 +323,14 @@ export class GraphState {
   pan = { x: 0, y: 0 };
   zoom = 1;
   booted = false;
+  /** Date.now() minus the boot snapshot's own server generated_at
+   * (epoch seconds), computed ONCE at bootstrap (task 4e6c4bf3 plan S1,
+   * AC-1): converts any later server-epoch field (drive_started_at) into
+   * this page's performance.now() coordinate space via the SERVER's
+   * clock, not the browser's -- the browser's Date.now() can be minutes
+   * off from the server and must never be trusted directly for a mission
+   * clock that must not reset on reload. */
+  clockSkewMs = 0;
   /** performance.now() of the last user pan/zoom/drag input -- auto-fit
    * (round 3 item 1) stands down for AUTO_FIT_IDLE_MS after this so a
    * viewer's own framing is never fought. 0 = never touched. */
@@ -422,6 +437,17 @@ export class GraphState {
   private selfHealTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSampleAt = 0;
 
+  /** Converts a server-epoch-seconds field (drive_started_at) into this
+   * page's performance.now() coordinate space, corrected by the
+   * clockSkewMs computed once at bootstrap -- same backdating pattern as
+   * gatePendingSince/lastSignalAt above, just anchored to an ABSOLUTE
+   * server timestamp instead of a relative "age" one. */
+  private driveStartedAtPerf(driveStartedAt: number | null | undefined, now: number): number {
+    if (driveStartedAt == null) return 0;
+    const serverNowMs = Date.now() - this.clockSkewMs;
+    return now - (serverNowMs - driveStartedAt * 1000);
+  }
+
   private makeNode(
     n: GraphNode, parentTaskId: string | null, driverOfId: string | null,
     slot: Slot, now: number, fromX: number, fromY: number,
@@ -456,6 +482,7 @@ export class GraphState {
       lastSignalAt, spend_usd: n.spend_usd || 0,
       gate_waiting_s: n.gate_waiting_s ?? null, queue_depth: n.queue_depth || 0,
       gatePendingSince, doneAt, settleUntil: 0,
+      driveStartedAt: this.driveStartedAtPerf(n.drive_started_at, now),
       // Every caller of makeNode EXCEPT the two lazy-create paths
       // (upsertSessionNode, ensureTaskNode) hands it a real backend
       // record (bootstrap's snapshot, or reconcile constructing a node
@@ -493,6 +520,12 @@ export class GraphState {
     }
 
     const now = performance.now();
+    // AC-1: derive the client/server clock skew ONCE, right here, from
+    // this boot snapshot's own generated_at -- every driveStartedAt this
+    // page ever computes (here and in later reconcile() ticks) goes
+    // through this one value, so the mission clock counts from the
+    // SERVER's clock for the life of the page.
+    this.clockSkewMs = Date.now() - snapshot.generated_at * 1000;
     // Place tasks first, then subtasks (need parent slot), then sessions.
     const byKind = (k: string) => snapshot.nodes.filter((n) => n.kind === k);
     for (const n of byKind("task")) {
@@ -1267,6 +1300,12 @@ export class GraphState {
       }
       existing.gate_waiting_s = sn.gate_waiting_s ?? null;
       existing.queue_depth = sn.queue_depth ?? 0;
+      // AC-1 residual: a node born from a live event (ensureTaskNode)
+      // never knew drive_started_at -- backfill the FIRST time reconcile
+      // learns it, never overwrite once known (the anchor never moves).
+      if (existing.driveStartedAt === 0 && sn.drive_started_at != null) {
+        existing.driveStartedAt = this.driveStartedAtPerf(sn.drive_started_at, now);
+      }
       this.noteStatusGateTransition(existing, prevStatus, prevGate, now);
     }
     for (const e of snapshot.edges) {
