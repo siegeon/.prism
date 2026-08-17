@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.15"
+PRISM_VERSION = "7.11.16"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -23,6 +23,13 @@ PRISM_VERSION_NOTES = (
     "c9166c4^ and remounted on the shared useConductorState hook's "
     "ManagedTask type; the ring-timeline/eta absence contracts retired "
     "in-slice with supersession notes. "
+    "7.11.16: DesignPacket.tsx (task 73f13267) - the 'Approve design' "
+    "footer now renders BEFORE the prototype iframe/diagram/plan_doc "
+    "(was last, ~5 screens down) so it's reachable without scrolling past "
+    "the prototype, which still renders unconditionally. gateDecide's "
+    "approveDesignPacket() call now also requires !gateOverride, so an "
+    "override release never forges a design-packet owner_explicit "
+    "approval receipt. "
     "7.11.13: /live wires now dock at movable side ports (task b9ce0450) "
     "-- wires.ts's PortSide/WirePort/portPoint/portFromWorld/autoPort/"
     "wireKey/laneFor/drawPort is the single geometry source of truth for "
