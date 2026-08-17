@@ -34,7 +34,6 @@ const EDGE_STRIPE_W = 4;
  * "explore" (the NEW hop, a magnifying glass -> /brain?session=/?task=). */
 const STRIP_H = 20;
 const STRIP_BTN_W = 28;
-const STRIP_W = STRIP_BTN_W * 2;
 const STRIP_GAP = 6;
 /** Round 4 item 3: "cap ~5 with a +N" -- one hollow square per queued
  * child up to this many, then a small "+N" overflow caption. */
@@ -190,6 +189,15 @@ function drawDoneChip(ctx: CanvasRenderingContext2D, n: LiveNode): void {
   ctx.fillText(truncate(n.label, maxChars), x + PAD_X + 16, y + CHIP_H / 2);
 }
 
+/** Task d56f3b25 (S3, conductor-into-live migration): the ONE predicate
+ * deciding whether a card's docked strip carries a 3rd "gate" button --
+ * consulted by BOTH drawActionStrip and actionStripHitTest so draw and
+ * hit-test can never disagree about whether the button exists. */
+export function isGateStripEligible(n: LiveNode): boolean {
+  return n.gate_state === "pending" &&
+    (n.workflow_step === "plan_gate" || n.workflow_step === "green_gate");
+}
+
 /** Slate strip, orange stroke ONLY while selected (grammar: orange is the
  * locked selection color, per palette.ts's own doc comment "orange =
  * compute / step progress / selection outline") -- no new colors
@@ -197,17 +205,17 @@ function drawDoneChip(ctx: CanvasRenderingContext2D, n: LiveNode): void {
  * this inside the same pan/zoom transform right after drawCard. */
 export function drawActionStrip(ctx: CanvasRenderingContext2D, n: LiveNode): void {
   if (!n.selected) return;
-  const { x, y } = n;
-  const { w, h } = n.slot;
-  const stripX = x + w - STRIP_W;
-  const t = ctx.getTransform(); // FR-2: dock above past canvas bottom.
+  const { x, y } = n, { w, h } = n.slot;
+  const stripW = STRIP_BTN_W * (isGateStripEligible(n) ? 3 : 2);
+  const stripX = x + w - stripW;
+  const t = ctx.getTransform();
   const belowY = y + h + STRIP_GAP;
   const bottomWorld = (ctx.canvas.height - t.f) / t.d;
   const stripY = belowY + STRIP_H > bottomWorld ? y - STRIP_GAP - STRIP_H : belowY;
 
   ctx.save();
   ctx.beginPath();
-  ctx.roundRect(stripX, stripY, STRIP_W, STRIP_H, 4);
+  ctx.roundRect(stripX, stripY, stripW, STRIP_H, 4);
   ctx.fillStyle = PALETTE.card;
   ctx.fill();
   ctx.strokeStyle = PALETTE.selection;
@@ -227,10 +235,25 @@ export function drawActionStrip(ctx: CanvasRenderingContext2D, n: LiveNode): voi
   ctx.fillStyle = PALETTE.textPrimary;
   ctx.fillText("↗", stripX + STRIP_BTN_W / 2, stripY + STRIP_H / 2 + 1);
   ctx.fillText("🔍", stripX + STRIP_BTN_W + STRIP_BTN_W / 2, stripY + STRIP_H / 2 + 1);
+
+  // FR-1: a card parked at plan_gate/green_gate gets a 3rd button -- same
+  // divider treatment as the open|explore split above, magenta glyph
+  // matching the WAITING_GATE grammar (palette.ts: "magenta = needs a
+  // decision").
+  if (isGateStripEligible(n)) {
+    ctx.beginPath();
+    ctx.moveTo(stripX + STRIP_BTN_W * 2, stripY + 3);
+    ctx.lineTo(stripX + STRIP_BTN_W * 2, stripY + STRIP_H - 3);
+    ctx.strokeStyle = PALETTE.border;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = PALETTE.magenta;
+    ctx.fillText("⚑", stripX + STRIP_BTN_W * 2 + STRIP_BTN_W / 2, stripY + STRIP_H / 2 + 1);
+  }
   ctx.restore();
 }
 
-export type ActionStripHit = "open" | "explore" | null;
+export type ActionStripHit = "open" | "explore" | "gate" | null;
 
 /** World-space hit test, same coordinate space LivePage's onPointerUp
  * already converts a click into (state.toWorld) before calling
@@ -243,7 +266,9 @@ export function actionStripHitTest(
   if (!n.selected) return null;
   const { x, y } = n;
   const { w, h } = n.slot;
-  const stripX = x + w - STRIP_W;
+  const gated = isGateStripEligible(n);
+  const stripW = STRIP_BTN_W * (gated ? 3 : 2);
+  const stripX = x + w - stripW;
   // FR-3: mirror drawActionStrip's dock decision -- only when a ctx is
   // passed (LivePage.tsx's existing 3-arg call keeps today's below-only
   // math); optional so no caller is forced to thread one through.
@@ -254,10 +279,15 @@ export function actionStripHitTest(
     const canvasBottomWorld = (ctx.canvas.height - t.f) / t.d;
     if (belowY + STRIP_H > canvasBottomWorld) stripY = y - STRIP_GAP - STRIP_H;
   }
-  if (worldX < stripX || worldX > stripX + STRIP_W || worldY < stripY || worldY > stripY + STRIP_H) {
+  if (worldX < stripX || worldX > stripX + stripW || worldY < stripY || worldY > stripY + STRIP_H) {
     return null;
   }
-  return worldX < stripX + STRIP_BTN_W ? "open" : "explore";
+  // FR-1: 3-slot resolution, gated by the SAME shared predicate drawing
+  // consulted -- draw and hit-test can never disagree about whether the
+  // 3rd slot exists.
+  if (worldX < stripX + STRIP_BTN_W) return "open";
+  if (worldX < stripX + STRIP_BTN_W * 2) return "explore";
+  return gated ? "gate" : null;
 }
 
 /** The explore hop's target: a session node resolves to ?session=<id>, a
