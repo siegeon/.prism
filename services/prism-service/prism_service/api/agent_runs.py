@@ -74,12 +74,20 @@ def ingest(
         except Exception:
             pass
 
+        # task ea92640f: a blank/whitespace session id must never reach the
+        # bus -- the /live client would birth a ghost session card no token
+        # stream can ever feed. The ROW is still stored above (audit spine
+        # intact); only the ghost-making broadcast is suppressed.
+        _sid = str(row.get("session_id") or "").strip()
+        if not _sid:
+            return {"ok": True, "run_id": row.get("run_id"),
+                    "agent_id": row.get("agent_id"), "step": row.get("step")}
         bus.publish({
             "project": project,
             "type": "agent.run",
             "task_id": row.get("task_id"),
             "parent_id": parent_id,
-            "session_id": row.get("session_id"),
+            "session_id": _sid,
             "agent_id": row.get("agent_id"),
             "parent_agent_id": row.get("parent_agent_id"),
             "step": row.get("step"),

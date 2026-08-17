@@ -5,7 +5,7 @@ import { resolveInitialProject } from "@/lib/project";
 import { api, ApiError } from "@/lib/api";
 import ClaimPage from "@/pages/ClaimPage";
 import KeyGatePage from "@/pages/KeyGatePage";
-import Sidebar from "@/components/Sidebar";
+import Sidebar, { INBOX_ENABLED } from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
@@ -142,7 +142,11 @@ export default function App() {
               element={<MemoryConceptRedirect />}
             />
             <Route path="/okf" element={<Navigate to="/understand" replace />} />
-            <Route path="/inbox" element={<InboxPage />} />
+            {/* Hidden behind INBOX_ENABLED while under development (task
+                d1854966) — a typed/bookmarked /inbox redirects to the
+                Dashboard until the flag flips; InboxPage stays imported
+                and wired for that flip. */}
+            <Route path="/inbox" element={INBOX_ENABLED ? <InboxPage /> : <Navigate to="/" replace />} />
             <Route path="/tasks" element={<TasksPage />} />
             {/* Completed work lives on its own surface, off the active board
                 (feedback: done-tasks-off-board). Static segment ranks above

@@ -109,7 +109,9 @@ def test_no_receipt_keeps_the_refusal(tmp_path):
     res = cond.gate_decide(t.id, "approve", reason="should refuse")
     assert res.get("ok") is False, res
     live = task_svc.get(t.id)
-    assert live.gate_state == "failed", live.gate_state
+    # Superseded by task 97d92854: the refusal parks the gate PENDING with
+    # the reason recorded — the refusal itself is unchanged (ok is False).
+    assert live.gate_state == "pending", live.gate_state
 
 
 def test_recovery_recheck_honors_fresh_receipt(tmp_path):
@@ -119,12 +121,13 @@ def test_recovery_recheck_honors_fresh_receipt(tmp_path):
     task_svc.update(t.id, completion_proof=_GREEN_PROOF)
     _to_green_gate(task_svc, cond, t.id)
     _wire_failing_green(cond)
-    # First approve without a receipt: refused -> gate_state failed.
+    # First approve without a receipt: refused -> parked pending
+    # (task 97d92854 superseded the old gate_state="failed" strand).
     cond._oracle_receipt_refusal = lambda task, override, reason: (
         "no EvidenceReceipt on file", None)
     first = cond.gate_decide(t.id, "approve", reason="first try")
     assert first.get("ok") is False
-    assert task_svc.get(t.id).gate_state == "failed"
+    assert task_svc.get(t.id).gate_state == "pending"
     # Evidence fixed (fresh passing receipt): the RECOVERY approve (no
     # override) now releases despite the still-failing shell verifier.
     receipt = SimpleNamespace(job_id="r2-fresh", adapter="http_probe",

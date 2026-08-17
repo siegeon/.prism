@@ -8,6 +8,7 @@ import { GraphState } from "@/live/graphState";
 import { draw } from "@/live/draw";
 import { actionStripHitTest, exploreHrefFor } from "@/live/cards";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
+import LiveGatePanel from "@/components/live/LiveGatePanel";
 
 /** localStorage key for a project's manual card-position overrides (owner
  * ask: "the individual panels should be able to be moved") — read once
@@ -83,9 +84,17 @@ export default function LivePage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<GraphState>(new GraphState());
   const [error, setError] = useState<string | null>(null);
+  // Task d56f3b25 (S3): which task's gate decision panel is open, mounted
+  // in place (URL stays /live) -- never a navigate() to /tasks/<id>.
+  const [gatePanelTaskId, setGatePanelTaskId] = useState<string | null>(null);
   // Only used to switch the CSS cursor (grabbing while a card drag is
   // live) — the canvas itself repaints via rAF, not React re-render.
   const [grabbing, setGrabbing] = useState(false);
+  // task 763168f8: true while the pointer rests on a port handle (no drag
+  // armed) — drives the cursor-grab affordance so the movable wires are
+  // discoverable. React bails on same-value sets, so per-move cost is
+  // one hit-test.
+  const [hoverPort, setHoverPort] = useState(false);
 
   // Pan/card-drag bookkeeping (mutable ref — no need to re-render React on
   // every pointermove, the canvas repaints itself via rAF).
@@ -269,7 +278,18 @@ export default function LivePage() {
 
   const onPointerMove = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
     const d = dragRef.current;
-    if (d.mode === "none") return;
+    if (d.mode === "none") {
+      // task 763168f8: with no drag armed, hover the REAL port hit-test
+      // (portAtWorld — the same slop the drag uses, mx-0a0bf4) so the
+      // cursor says "grab" exactly where dragging actually works.
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const w = stateRef.current.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+        setHoverPort(!!stateRef.current.portAtWorld(w.x, w.y));
+      }
+      return;
+    }
     const dx = ev.clientX - d.lastX, dy = ev.clientY - d.lastY;
     if (!d.moved && (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)) {
       d.moved = true;
@@ -355,6 +375,12 @@ export default function LivePage() {
       const hit = actionStripHitTest(selectedNode, world.x, world.y);
       if (hit === "open") { navigate(selectedNode.href); return; }
       if (hit === "explore") { navigate(exploreHrefFor(selectedNode)); return; }
+      if (hit === "gate") {
+        // FR-2: mounts the panel in place, no route change -- the URL
+        // stays /live.
+        setGatePanelTaskId(selectedNode.id);
+        return;
+      }
     }
     const node = state.nodeAtWorld(world.x, world.y);
     if (!node) {
@@ -399,7 +425,7 @@ export default function LivePage() {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onWheel={onWheel}
-          className={`w-full h-full touch-none ${grabbing ? "cursor-grabbing" : "cursor-pointer"}`}
+          className={`w-full h-full touch-none ${grabbing ? "cursor-grabbing" : hoverPort ? "cursor-grab" : "cursor-pointer"}`}
         />
         {/* Sits just above the canvas-drawn legend chip (hud.ts's
             drawLegend(ctx, 22, height - 14), bottom-left) -- same slate/
@@ -414,6 +440,13 @@ export default function LivePage() {
         >
           reset layout
         </button>
+        {gatePanelTaskId && (
+          <LiveGatePanel
+            taskId={gatePanelTaskId}
+            project={project}
+            onClose={() => setGatePanelTaskId(null)}
+          />
+        )}
       </div>
     </Page>
   );
