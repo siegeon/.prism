@@ -13,11 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-<<<<<<< HEAD
-PRISM_VERSION = "7.11.9"
-=======
-PRISM_VERSION = "7.11.11"
->>>>>>> origin/main
+PRISM_VERSION = "7.11.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4793,20 +4789,6 @@ PRISM_VERSION_NOTES += (
     "reads pending with no owner call to action."
 )
 PRISM_VERSION_NOTES += (
-<<<<<<< HEAD
-    " v7.11.9 (task fa7735bd): the Design tab's own DesignPacket card now "
-    "confirms an Approve click in place, no page reload. TaskDetailPage "
-    "bumps a designPacketRefreshToken state INSIDE gateDecide's success "
-    "branch (after both approveDesignPacket() and the gate POST resolve, "
-    "never optimistically before), threaded through PlanView into "
-    "DesignPacket's refreshToken prop and its load effect's deps, so "
-    "approval.approved flipping true retires the not-approved branch and "
-    "its Approve button without a refetch of the whole page. The success "
-    "toast also stops unconditionally claiming 'This task is released.' on "
-    "every approve - it says that only when body.gate_step is the terminal "
-    "green_gate, and still names the next step for plan_gate/story_gate/"
-    "red_gate advances."
-=======
     " v7.11.9 (task 98d38111): an owner's plan_gate Approve click now leaves "
     "an honest actor record. TaskDetailPage.tsx fetches the real signed-in "
     "identity (/api/auth/me, same pattern as PageHeader's IdentityChip) and "
@@ -4830,5 +4812,18 @@ PRISM_VERSION_NOTES += (
     "shape) no longer hides an unwired new entry point. Abstain-only: a "
     "truthy refusal parks pending WITH the reason via _park_green_refusal, "
     "never flips to failed."
->>>>>>> origin/main
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.14 (task fa7735bd): the Design tab's own DesignPacket card now "
+    "confirms an Approve click in place, no page reload. TaskDetailPage "
+    "bumps a designPacketRefreshToken state INSIDE gateDecide's success "
+    "branch (after both approveDesignPacket() and the gate POST resolve, "
+    "never optimistically before), threaded through PlanView into "
+    "DesignPacket's refreshToken prop and its load effect's deps, so "
+    "approval.approved flipping true retires the not-approved branch and "
+    "its Approve button without a refetch of the whole page. The success "
+    "toast also stops unconditionally claiming 'This task is released.' on "
+    "every approve - it says that only when body.gate_step is the terminal "
+    "green_gate, and still names the next step for plan_gate/story_gate/"
+    "red_gate advances."
 )
