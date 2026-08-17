@@ -219,6 +219,7 @@ export default function PlanView({
   fullOutcomeComplete,
   isAwaitingDesignApproval,
   onApproveDesign,
+  designPacketRefreshToken,
 }: {
   diagram?: string;
   doc?: string;
@@ -272,6 +273,10 @@ export default function PlanView({
   // path the main gate panel does.
   isAwaitingDesignApproval?: boolean;
   onApproveDesign?: () => void;
+  // Bumped by the parent's gateDecide AFTER a successful approve resolves
+  // (task fa7735bd) - forwarded into <DesignPacket refreshToken=.../> so
+  // that card refetches and confirms in place, no page reload.
+  designPacketRefreshToken?: number;
 }) {
   const hasDiagram = !!diagram?.trim();
   const hasDoc = !!doc?.trim();
@@ -369,6 +374,7 @@ export default function PlanView({
           project={project}
           prototypeSrc={prototypeSrc}
           onApprove={onApproveDesign}
+          refreshToken={designPacketRefreshToken}
         />
       )}
 
