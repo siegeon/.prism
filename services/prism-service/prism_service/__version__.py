@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.16"
+PRISM_VERSION = "7.11.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.17: Inbox nav entry + /inbox route hidden behind INBOX_ENABLED "
+    "(task d1854966, default false) while the feature bakes - hide not "
+    "delete, item literal/route/lazy import all stay in source, one-line "
+    "flip restores both; a typed/bookmarked /inbox redirects to Dashboard. "
     "7.11.15: the /conductor tile regains its deleted metrics (task "
     "ac91be51) - 2x2 MetricCell grid, EtaCountdownBar, SlicesBar epic "
     "hero and TokenTurns' session_quiet_s quiet-clock, restored from "
