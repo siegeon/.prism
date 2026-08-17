@@ -77,7 +77,19 @@ AGENT_RUNS_SCHEMA = """
         ON agent_runs(session_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_workflow
         ON agent_runs(workflow_name);
+    -- get_agent_runs orders by started_at DESC on every read; without
+    -- this an unfiltered call full-sorts the table (task 9974d407).
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_started_at
+        ON agent_runs(started_at);
 """
+
+# Paths whose agent_runs schema this process has already materialized —
+# _connect() used to re-run the whole CREATE TABLE/INDEX executescript on
+# EVERY call (each ingest, each list, each rollup), which is schema-lock
+# churn for a guaranteed no-op after the first call (task 9974d407).
+import threading as _threading
+_SCHEMA_READY: set[str] = set()
+_SCHEMA_LOCK = _threading.Lock()
 
 
 def is_passing_gate_state(value) -> bool:
@@ -155,7 +167,11 @@ def _connect(scores_db: str) -> sqlite3.Connection:
     (embeddings/FTS/vector setup) here."""
     conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.row_factory = sqlite3.Row
-    conn.executescript(AGENT_RUNS_SCHEMA)
+    key = str(scores_db)
+    if key not in _SCHEMA_READY:
+        conn.executescript(AGENT_RUNS_SCHEMA)
+        with _SCHEMA_LOCK:
+            _SCHEMA_READY.add(key)
     return conn
 
 

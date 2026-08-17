@@ -137,6 +137,18 @@ def _parse_transcript(transcript_path: str) -> dict:
             "tokens_used": total_tokens}
 
 
+def _sibling(name: str):
+    """Load a sibling hook script as a module (hyphenated filenames can't
+    be imported normally). Used by the merged Stop dispatch (task 86fac34e)."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / name
+    spec = importlib.util.spec_from_file_location(
+        name.replace("-", "_").removesuffix(".py"), path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main() -> int:
     try:
         data = json.loads(sys.stdin.read() or "{}")
@@ -146,7 +158,13 @@ def main() -> int:
     if not session_id:
         return 0
     root = _project_root()
-    conn = _mcp_url_and_project(root)
+    # Reachability-probed + cached resolver (shared with the PostToolUse
+    # dispatcher) — a Stop against an absent daemon used to pay two ~2s
+    # connection-refused waits (task 86fac34e); now one cached 300ms probe.
+    try:
+        conn = _sibling("prism-feedback-signal.py")._resolve_live_mcp(root)
+    except Exception:
+        conn = _mcp_url_and_project(root)
     if conn is None:
         return 0
     base, project = conn
@@ -172,6 +190,15 @@ def main() -> int:
             "file_paths": [],
         },
     })
+    # Merged Stop dispatch (task 86fac34e): the graph-rebuild flush runs
+    # LAST, in this same process — the fast metrics writes above are never
+    # queued behind it, and .claude/settings.json registers ONE Stop hook
+    # instead of two cold python starts. Rebuild still only fires when
+    # edit-learn left the graph-dirty sentinel.
+    try:
+        _sibling("prism-idle-rebuild.py").handle(root, (base, project))
+    except Exception:
+        pass
     return 0
 
 

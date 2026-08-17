@@ -74,20 +74,20 @@ def _mcp_call(base: str, project: str, tool: str, args: dict,
             pass
 
 
-def main() -> int:
-    # Drain stdin so Claude Code doesn't block writing to a closed pipe;
-    # payload is unused (no per-session state needed for graph_rebuild).
-    try:
-        sys.stdin.read()
-    except Exception:
-        pass
-
-    root = _project_root()
+def handle(root: "Path | None" = None,
+           conn: "tuple[str, str] | None" = None) -> int:
+    """The hook body, callable in-process by the merged Stop dispatcher
+    (prism-stop.py) so ONE python start serves a Stop instead of two
+    (task 86fac34e). Runs AFTER the fast metrics write — graph_rebuild is
+    the slow half and only fires when edit-learn left the sentinel."""
+    if root is None:
+        root = _project_root()
     sentinel = root / _DIRTY_SENTINEL
     if not sentinel.exists():
         return 0
 
-    conn = _mcp_url_and_project(root)
+    if conn is None:
+        conn = _mcp_url_and_project(root)
     if conn is None:
         # No reachable MCP — leave the sentinel for the next session.
         return 0
@@ -102,6 +102,16 @@ def main() -> int:
     except OSError:
         pass
     return 0
+
+
+def main() -> int:
+    # Drain stdin so Claude Code doesn't block writing to a closed pipe;
+    # payload is unused (no per-session state needed for graph_rebuild).
+    try:
+        sys.stdin.read()
+    except Exception:
+        pass
+    return handle()
 
 
 if __name__ == "__main__":
