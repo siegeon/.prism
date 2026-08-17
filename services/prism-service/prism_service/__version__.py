@@ -4800,3 +4800,16 @@ PRISM_VERSION_NOTES += (
     "approver that is not a real HUMAN identity, so an owner_explicit "
     "receipt can never be written for an unresolvable string."
 )
+PRISM_VERSION_NOTES += (
+    " v7.11.10 (task c944cac2): green_gate grew a reachability tooth -- the "
+    "EXIT-half counterpart to oracle_authoring's authoring-time check. "
+    "ConductorService.adjudicate_green_gate now pre-flights "
+    "reachability_check.unreachable_entry_point_reason(task): reads the "
+    "task's real worktree GIT DIFF (never allowed_files) and refuses when "
+    "the diff adds a new, undecorated, public function/method with no "
+    "non-test production caller anywhere in the tree -- symbol-level, so a "
+    "module that IS imported/constructed elsewhere (the work_item_sync.py "
+    "shape) no longer hides an unwired new entry point. Abstain-only: a "
+    "truthy refusal parks pending WITH the reason via _park_green_refusal, "
+    "never flips to failed."
+)
