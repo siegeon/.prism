@@ -5,7 +5,7 @@ import re
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -209,7 +209,8 @@ def list_tasks(project: str = Query("default"),
                                      "instead of the full record. "
                                      "'mirror_url'/'mirrors' are derived "
                                      "fields, not raw Task attributes."),
-              principal: Principal = Depends(current_principal)) -> dict:
+              principal: Principal = Depends(current_principal),
+              request: Request = None, response: Response = None):
     # Soft-deleted tasks stay in the store for audit but must NOT surface on
     # the board / task list — a deleted task is removed, not active work (it
     # was still feeding the AWAITING-REVIEW bar and the kanban). Opt in with
@@ -245,8 +246,34 @@ def list_tasks(project: str = Query("default"),
                 else:
                     row[f] = getattr(t, f, None)
             rows.append(row)
-        return {"tasks": rows}
-    return {"tasks": tasks}
+        return _tasks_reply({"tasks": rows}, request, response)
+    return _tasks_reply({"tasks": tasks}, request, response)
+
+
+def _tasks_reply(body: dict, request, response):
+    """Attach a content ETag (+ Cache-Control: no-cache) to the board list
+    so the browser's own revalidation turns an UNCHANGED 5s poll into a
+    ~300-byte 304 instead of a full payload — the board used to re-transfer
+    ~117KB twelve times a minute on an idle tab (task fb163fcf, "the board
+    polls at a human cadence"). no-cache means REVALIDATE EVERY TIME, so
+    the data is never stale: a changed board hashes to a new ETag and the
+    very next poll transfers the full fresh payload. Direct (non-HTTP)
+    callers pass no request/response and get the plain dict, unchanged."""
+    if request is None or response is None:
+        return body
+    import hashlib
+    import json as _json
+    etag = 'W/"' + hashlib.md5(
+        _json.dumps(body, default=str, sort_keys=True).encode("utf-8")
+    ).hexdigest() + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    try:
+        if (request.headers.get("if-none-match") or "") == etag:
+            return Response(status_code=304, headers=headers)
+    except Exception:
+        return body
+    response.headers.update(headers)
+    return body
 
 
 class TaskCreate(BaseModel):

@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.3"
+PRISM_VERSION = "7.11.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "instant.2 (epic 9974d407 children): b0138f17 cold start goes "
+    "offline-first -- the embedder resolves its local HF snapshot "
+    "(local_files_only, zero network) and main.py warms it on a boot "
+    "thread, so the first request after a restart pays neither the model "
+    "load nor a huggingface round trip. fb163fcf board cadence -- GET "
+    "/api/tasks stamps a content ETag + Cache-Control: no-cache, so the "
+    "5s poll's unchanged ticks are ~300-byte 304s instead of ~117KB "
+    "re-transfers (cadence untouched: a changed board hashes new and the "
+    "next poll carries the full payload). 86fac34e hook cost -- the two "
+    "overlapping PostToolUse matchers merge into one dispatcher process "
+    "(feedback-signal dispatches edit-learn in-process), Stop merges the "
+    "same way, and hooks probe daemon reachability (300ms TCP, cached "
+    "120s) instead of paying ~2s connection-refused per call against the "
+    "absent release daemon: measured per-Edit 4.5s -> 0.18-0.6s, and the "
+    "edit-learn ingest actually lands again (it had been silently dead "
+    "against port 7777). 033cb54a one daemon per data dir -- an OS-level "
+    "exclusive lock on <data_dir>/daemon.lock refuses a second "
+    "prism_service.main against the same databases (10s retry window "
+    "covers the os.execv restart race). "
     "perf sweep for 'PRISM feels instant' (task 9974d407): the work "
     "ticker no longer walks conductor.managed_tasks() (full board render: "
     "phase_progress + histories + sessions per tile) every 1.5s just to "

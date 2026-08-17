@@ -553,6 +553,58 @@ def _load_model2vec(model_id: str):
     return StaticModel.from_pretrained(model_id)
 
 
+def _local_snapshot_or_id(model_id: str) -> str:
+    """Prefer the LOCAL HuggingFace cache: resolve ``model_id`` to its cached
+    snapshot directory with ``local_files_only=True`` — zero network by
+    contract. Loading from that path means the hub is never consulted, so a
+    cold daemon start makes no external call and cannot stall on an
+    unreachable huggingface.co (task b0138f17, "a cold PRISM answers without
+    calling the internet" — the first request after a restart paid a ~5-11s
+    hub round trip, or a full connect timeout offline). Only a genuinely
+    uncached model falls back to the online repo id, once, after which the
+    cache serves every later boot."""
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore
+        return snapshot_download(model_id, local_files_only=True)
+    except Exception:
+        return model_id
+
+
+def warm_embedder() -> bool:
+    """Load the embedding model into the process-wide cache OFF the request
+    path — called from a boot thread (main.py lifespan, task b0138f17) so
+    the FIRST brain/memory/task-create call after a restart never pays the
+    model load. Same lock, same thread-pinning, same offline-first snapshot
+    resolution as _try_enable_vector's load; a request that races the warm
+    simply blocks on _MODEL_LOCK and finds _MODEL ready. Failure is benign:
+    the lazy request-path load remains the fallback."""
+    import os
+    global _MODEL, _MODEL_ID
+    preset = os.environ.get("PRISM_EMBEDDER", "potion").strip().lower()
+    if preset not in _EMBEDDER_PRESETS:
+        preset = "potion"
+    backend, model_id = _EMBEDDER_PRESETS[preset]
+    with _MODEL_LOCK:
+        if _MODEL is not None:
+            return True
+        try:
+            pin_native_threads_permanently()
+            with _threadpool_limit_1():
+                _src = _local_snapshot_or_id(model_id)
+                if backend == "model2vec":
+                    _MODEL = _load_model2vec(_src)
+                elif backend == "sentence-transformers":
+                    _MODEL = _load_sentence_transformer(_src)
+            _MODEL_ID = model_id
+            print(f"Brain: embedder warmed at boot = {preset} "
+                  f"({backend}: {model_id})", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"Brain: boot embedder warm failed ({preset}: {e!r}); "
+                  f"lazy load remains", file=sys.stderr)
+            return False
+
+
 def _try_enable_vector(db: sqlite3.Connection) -> bool:
     """Attempt to load sqlite-vec extension and an embedding model.
 
@@ -595,10 +647,13 @@ def _try_enable_vector(db: sqlite3.Connection) -> bool:
             # scoped `with` below double-pins the load itself.
             pin_native_threads_permanently()
             with _threadpool_limit_1():
+                # Offline-first: a cached model loads from its local
+                # snapshot path and never touches the hub (task b0138f17).
+                _src = _local_snapshot_or_id(model_id)
                 if backend == "model2vec":
-                    _MODEL = _load_model2vec(model_id)
+                    _MODEL = _load_model2vec(_src)
                 elif backend == "sentence-transformers":
-                    _MODEL = _load_sentence_transformer(model_id)
+                    _MODEL = _load_sentence_transformer(_src)
                 # Log INSIDE the pin so the proof reflects the load context.
                 log_threadpool_info("after-model-load")
             _MODEL_ID = model_id

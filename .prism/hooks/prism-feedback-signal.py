@@ -51,6 +51,64 @@ def _mcp_url_and_project(root: Path) -> tuple[str, str] | None:
     return None
 
 
+_ALIVE_CACHE_REL = ".prism/.mcp-alive.json"
+_ALIVE_TTL_S = 120.0
+
+
+def _resolve_live_mcp(root: Path) -> "tuple[str, str] | None":
+    """(base, project) for a REACHABLE MCP daemon, or None.
+
+    .mcp.json names the release port (7777); on a dev box that daemon is
+    often absent, and every hook paid a ~2s connection-refused wait per
+    _mcp_call against it — measured as the whole 2276ms median per-Edit
+    hook cost (task 86fac34e). Probe candidates with a 300ms TCP connect
+    (env PRISM_HOOK_MCP_URL first, then .mcp.json, then the dev-port
+    swap 7777->8887) and cache the verdict — ALIVE or DEAD — for 120s,
+    so an absent daemon costs one probe per 2 minutes, not 2s per edit."""
+    import os
+    import socket
+    from urllib.parse import urlsplit
+
+    conn = _mcp_url_and_project(root)
+    if conn is None:
+        return None
+    base, project = conn
+    cands = [base]
+    if ":7777" in base:
+        cands.append(base.replace(":7777", ":8887"))
+    env = os.environ.get("PRISM_HOOK_MCP_URL", "").strip().rstrip("/")
+    if env:
+        cands.insert(0, env)
+
+    cache = root / _ALIVE_CACHE_REL
+    now = time.time()
+    try:
+        c = json.loads(cache.read_text(encoding="utf-8"))
+        if now - float(c.get("ts", 0)) < _ALIVE_TTL_S and c.get("cands") == cands:
+            b = c.get("base")
+            return (b, project) if b else None
+    except Exception:
+        pass
+
+    live = None
+    for cand in cands:
+        try:
+            u = urlsplit(cand)
+            port = u.port or (443 if u.scheme == "https" else 80)
+            with socket.create_connection((u.hostname, port), timeout=0.3):
+                live = cand
+                break
+        except Exception:
+            continue
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"base": live, "ts": now, "cands": cands}),
+                         encoding="utf-8")
+    except Exception:
+        pass
+    return (live, project) if live else None
+
+
 def _buffer_path(root: Path) -> Path:
     return root / _BUFFER_REL
 
@@ -149,12 +207,14 @@ def _handle_search(root: Path, tool_response) -> None:
 
 
 def _handle_read_or_edit(root: Path, tool_input: dict,
-                         signal: str = "up") -> None:
+                         signal: str = "up",
+                         conn: "tuple[str, str] | None" = None) -> None:
     fp = (tool_input or {}).get("file_path") or ""
     if not fp:
         return
     buf = _load_buffer(root)
-    conn = _mcp_url_and_project(root)
+    if conn is None:
+        conn = _resolve_live_mcp(root)
     if conn is None:
         return
     base, project = conn
@@ -189,12 +249,32 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     tool_response = data.get("tool_response") or {}
     root = _project_root()
+    # ONE daemon probe (cached 120s) shared by every handler this dispatch
+    # runs — never a per-call 2s connection-refused wait (task 86fac34e).
+    conn = _resolve_live_mcp(root)
 
     if tool_name.endswith("brain_search"):
         _handle_search(root, tool_response)
     elif tool_name in ("Read", "Edit", "Write"):
-        signal = "up" if tool_name == "Read" else "up"
-        _handle_read_or_edit(root, tool_input, signal=signal)
+        if conn is not None:
+            _handle_read_or_edit(root, tool_input, signal="up", conn=conn)
+
+    # Merged PostToolUse dispatch (task 86fac34e): Edit/Write/NotebookEdit
+    # also feed edit-learn IN THIS PROCESS — .claude/settings.json used to
+    # register a second hook entry for it, so a single Edit paid two cold
+    # python starts (and, with the release daemon absent, two dead-daemon
+    # waits). Same handler, same side effects, one interpreter.
+    if tool_name in ("Edit", "Write", "NotebookEdit") and conn is not None:
+        try:
+            import importlib.util
+            _el_path = Path(__file__).resolve().parent / "prism-edit-learn.py"
+            spec = importlib.util.spec_from_file_location(
+                "prism_edit_learn_hook", _el_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.handle(data, conn)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
