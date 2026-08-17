@@ -40,10 +40,16 @@ def _sidebar() -> str:
 
 
 def test_a_person_can_reach_the_inbox_from_the_nav():
-    """THE AFFORDANCE. Not a constant, not a route table — the entry in the
-    sidebar that a human clicks. e139295d shipped a section whose SectionId,
-    KNOWN_SECTIONS and SECTION_META were all correct and green while the
-    surface stayed unreachable, because the nav lives elsewhere."""
+    """SUPERSEDED IN PART (task d1854966, 2026-08-17): while the feature is
+    under development the nav item is hidden behind INBOX_ENABLED and no
+    longer actually reachable — that live-reachability contract now lives in
+    test_inbox_hidden_ui.py. What survives here is the reversibility
+    invariant this test originally protected: the item's literal definition
+    (to/label) must remain in source so re-enabling stays a one-line flip,
+    not a rebuild. e139295d shipped a section whose SectionId, KNOWN_SECTIONS
+    and SECTION_META were all correct and green while the surface stayed
+    unreachable, because the nav lives elsewhere — same trap, different
+    direction: source presence here is deliberately NOT reachability."""
     src = _sidebar()
     item = re.search(r'\{[^{}]*to:\s*"/inbox"[^{}]*\}', src)
     assert item, 'no sidebar item points at "/inbox"'
@@ -52,13 +58,17 @@ def test_a_person_can_reach_the_inbox_from_the_nav():
 
 
 def test_the_inbox_sits_above_work_in_activity():
-    """The mock puts Inbox first in the Activity group, above Work. Order is
-    the whole point of an inbox: it is the thing you check first."""
+    """SUPERSEDED IN PART (task d1854966, 2026-08-17): while hidden the item
+    no longer RENDERS above Work (it does not render at all) — the rendered
+    order contract now lives in test_inbox_hidden_ui.py
+    (test_sibling_activity_items_stay_in_order). What survives here: the
+    item's literal SOURCE position stays above Work's, preserving the
+    original ordering decision for whenever the flag flips back on."""
     src = _sidebar()
     inbox_at = src.find('to: "/inbox"')
     work_at = src.find('to: "/tasks", label: "Work"')
     assert inbox_at != -1 and work_at != -1, "both nav entries must exist"
-    assert inbox_at < work_at, "Inbox must render above Work in the nav"
+    assert inbox_at < work_at, "Inbox's source position must precede Work's"
 
 
 def test_the_nav_entry_is_not_relabelled_my_work():
@@ -72,11 +82,21 @@ def test_the_nav_entry_is_not_relabelled_my_work():
 
 
 def test_the_route_lands_on_a_real_page():
+    """SUPERSEDED IN PART (task d1854966, 2026-08-17): a bookmarked /inbox no
+    longer lands on InboxPage while INBOX_ENABLED is off — it redirects to
+    Dashboard instead (test_inbox_hidden_ui.py). What survives here: the
+    Route's element must still REFERENCE InboxPage somewhere in its (now
+    guarded) definition, so the registration itself is not deleted. Also
+    fixes the original regex, which named itself in this task's context as
+    passing "only by token-order accident": `[^>]*` stopped at the first
+    literal `>` inside `<InboxPage />`, so it never actually captured past
+    the element open tag — replaced with an element-attribute capture that
+    reads the real `element={...}` expression."""
     src = (_WEB / "App.tsx").read_text(encoding="utf-8")
-    route = re.search(r'<Route\s+path="/inbox"[^>]*>', src)
+    route = re.search(r'<Route\s+path="/inbox"[^>]*element=\{([^}]*)\}[^>]*/>', src)
     assert route, "no <Route path=\"/inbox\"> is registered"
-    assert "InboxPage" in route.group(0), (
-        f"/inbox does not render InboxPage: {route.group(0)}")
+    assert "InboxPage" in route.group(1), (
+        f"/inbox's route registration no longer references InboxPage: {route.group(1)}")
 
 
 def test_the_page_reads_live_state_not_a_fixture():
