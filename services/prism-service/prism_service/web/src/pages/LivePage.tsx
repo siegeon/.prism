@@ -17,12 +17,22 @@ function positionsKey(project: string): string {
   return `prism.live.positions.${project}`;
 }
 
+/** localStorage key for a project's manual PORT placements (task
+ * b9ce0450, owner correction 2026-08-16: "the owner can drag that port
+ * dot anywhere they want on the pane... the placement survives a page
+ * reload") -- same convention as positionsKey above, read once after
+ * bootstrap (GraphState.hydratePortOverrides), written on port-drag
+ * release and cleared by "reset layout". */
+function portsKey(project: string): string {
+  return `prism.live.ports.${project}`;
+}
+
 /** Screen-space px a pointer must travel past pointerdown before a press
  * converts into an actual pan or card drag — keeps a plain click/select
  * from being swallowed by 1px of jitter. */
 const DRAG_THRESHOLD_PX = 5;
 
-type DragMode = "none" | "pan" | "node";
+type DragMode = "none" | "pan" | "node" | "port";
 type DragState = {
   mode: DragMode;
   moved: boolean;
@@ -30,13 +40,21 @@ type DragState = {
   lastY: number;
   /** mode==="node" only: the id being dragged, and the world-space offset
    * from the pointer to the card's own x/y (so the card doesn't jump to
-   * re-center under the cursor the instant the drag starts). */
+   * re-center under the cursor the instant the drag starts). mode==="port"
+   * reuses nodeId for the CARD the dragged port is anchored to. */
   nodeId: string | null;
   offsetX: number;
   offsetY: number;
+  /** mode==="port" only: which wire (wireKey) and which end ("from"/"to")
+   * is being re-docked. */
+  portKey: string | null;
+  portEnd: "from" | "to" | null;
 };
 
-const IDLE_DRAG: DragState = { mode: "none", moved: false, lastX: 0, lastY: 0, nodeId: null, offsetX: 0, offsetY: 0 };
+const IDLE_DRAG: DragState = {
+  mode: "none", moved: false, lastX: 0, lastY: 0, nodeId: null, offsetX: 0, offsetY: 0,
+  portKey: null, portEnd: null,
+};
 
 /** /live — "PRISM shows its work": every running task is a live card-node
  * on a deterministic circuit-board canvas (design directive in
@@ -100,6 +118,12 @@ export default function LivePage() {
         } catch {
           // corrupt/unavailable storage — boot with the deterministic
           // layout, same as a first-ever visit
+        }
+        try {
+          const rawPorts = localStorage.getItem(portsKey(project));
+          if (rawPorts) stateRef.current.hydratePortOverrides(JSON.parse(rawPorts));
+        } catch {
+          // corrupt/unavailable storage — boot with auto-placed ports
         }
       })
       .catch((e) => { if (!cancel) setError(e instanceof Error ? e.message : String(e)); });
@@ -171,6 +195,16 @@ export default function LivePage() {
     }
   }, [project]);
 
+  // Mirrors persistOverrides — called on every port-drag release (AC-9);
+  // the live placement is already in GraphState.portOverrides by then.
+  const persistPortOverrides = useCallback(() => {
+    try {
+      localStorage.setItem(portsKey(project), JSON.stringify(stateRef.current.serializePortOverrides()));
+    } catch {
+      // storage full/unavailable — the drag still holds for this session
+    }
+  }, [project]);
+
   // The legend-area "reset layout" affordance: drop every manual override
   // (cards ease back to their deterministic slot) and forget the saved
   // copy so a reload doesn't resurrect it.
@@ -178,6 +212,10 @@ export default function LivePage() {
     stateRef.current.clearAllOverrides();
     try {
       localStorage.removeItem(positionsKey(project));
+      // AC-9: "reset layout" clears BOTH position overrides and any
+      // manually-docked ports (portsKey), same as clearAllOverrides()
+      // clears both maps in GraphState.
+      localStorage.removeItem(portsKey(project));
     } catch {
       // ignore — nothing left to clean up if storage isn't available
     }
@@ -198,7 +236,22 @@ export default function LivePage() {
     // on the strip must never be mistaken for the start of a card drag.
     const selectedNode = state.nodes.find((n) => n.selected);
     if (selectedNode && actionStripHitTest(selectedNode, world.x, world.y)) {
-      dragRef.current = { mode: "none", moved: false, lastX: ev.clientX, lastY: ev.clientY, nodeId: null, offsetX: 0, offsetY: 0 };
+      dragRef.current = { ...IDLE_DRAG, lastX: ev.clientX, lastY: ev.clientY };
+      return;
+    }
+
+    // AC-7 / stop_if: a port dot sits ON the card edge that nodeAtWorld's
+    // AABB already claims, so this check must run BEFORE nodeAtWorld (and
+    // after the action-strip check, which floats outside the slot bounds
+    // and already owns that region) -- this exact ordering is the whole
+    // disambiguation between the new port gesture and card-drag/pan.
+    const portHit = state.portAtWorld(world.x, world.y);
+    if (portHit) {
+      dragRef.current = {
+        mode: "port", moved: false, lastX: ev.clientX, lastY: ev.clientY,
+        nodeId: portHit.nodeId, offsetX: 0, offsetY: 0,
+        portKey: portHit.key, portEnd: portHit.end,
+      };
       return;
     }
 
@@ -207,10 +260,11 @@ export default function LivePage() {
       dragRef.current = {
         mode: "node", moved: false, lastX: ev.clientX, lastY: ev.clientY,
         nodeId: node.id, offsetX: world.x - node.x, offsetY: world.y - node.y,
+        portKey: null, portEnd: null,
       };
       return;
     }
-    dragRef.current = { mode: "pan", moved: false, lastX: ev.clientX, lastY: ev.clientY, nodeId: null, offsetX: 0, offsetY: 0 };
+    dragRef.current = { ...IDLE_DRAG, mode: "pan", lastX: ev.clientX, lastY: ev.clientY };
   }, []);
 
   const onPointerMove = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -219,7 +273,7 @@ export default function LivePage() {
     const dx = ev.clientX - d.lastX, dy = ev.clientY - d.lastY;
     if (!d.moved && (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)) {
       d.moved = true;
-      if (d.mode === "node") setGrabbing(true);
+      if (d.mode === "node" || d.mode === "port") setGrabbing(true);
     }
     if (!d.moved) return;
 
@@ -233,13 +287,26 @@ export default function LivePage() {
       d.lastY = ev.clientY;
       return;
     }
-    // mode === "node": the card follows the pointer in world space every
-    // move — wires/packets/the action strip re-derive from n.x/n.y each
-    // frame, so they carry along for free (see graphState.ts's step()).
     const canvas = canvasRef.current;
     if (!canvas || !d.nodeId) return;
     const rect = canvas.getBoundingClientRect();
     const world = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+
+    if (d.mode === "port" && d.portKey && d.portEnd) {
+      // The wire re-routes live during the drag (AC-6): setPortFromWorld
+      // writes the override every move, and wireEndpointsFor (called from
+      // draw.ts every frame) reads it straight back.
+      state.draggingPortId = d.portKey;
+      state.setPortFromWorld(d.portKey, d.portEnd, d.nodeId, world.x, world.y);
+      state.noteUserCameraInput(now);
+      d.lastX = ev.clientX;
+      d.lastY = ev.clientY;
+      return;
+    }
+
+    // mode === "node": the card follows the pointer in world space every
+    // move — wires/packets/the action strip re-derive from n.x/n.y each
+    // frame, so they carry along for free (see graphState.ts's step()).
     state.draggingNodeId = d.nodeId;
     state.setOverride(d.nodeId, world.x - d.offsetX, world.y - d.offsetY);
     state.noteUserCameraInput(now);
@@ -254,6 +321,7 @@ export default function LivePage() {
     const nodeId = d.nodeId;
     dragRef.current = { ...IDLE_DRAG };
     stateRef.current.draggingNodeId = null;
+    stateRef.current.draggingPortId = null;
     if (grabbing) setGrabbing(false);
 
     if (mode === "node" && wasDrag && nodeId) {
@@ -261,6 +329,14 @@ export default function LivePage() {
       // pointermove wrote it) — release just commits it to localStorage
       // and suppresses the click/select/navigate path below.
       persistOverrides();
+      return;
+    }
+    if (mode === "port") {
+      // AC-6/AC-7: a drag commits the already-live override to
+      // localStorage; an un-moved press on a dot (a plain click) is
+      // swallowed here too, rather than falling through to select or
+      // navigate the card underneath it.
+      if (wasDrag) persistPortOverrides();
       return;
     }
     if (wasDrag) return;
@@ -290,7 +366,7 @@ export default function LivePage() {
     } else {
       state.select(node.id);
     }
-  }, [navigate, grabbing, persistOverrides]);
+  }, [navigate, grabbing, persistOverrides, persistPortOverrides]);
 
   const onWheel = useCallback((ev: React.WheelEvent<HTMLCanvasElement>) => {
     ev.preventDefault();

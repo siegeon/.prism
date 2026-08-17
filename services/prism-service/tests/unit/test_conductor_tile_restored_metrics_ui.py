@@ -317,11 +317,17 @@ def test_tilehero_doc_comment_only_claims_surfaces_tilehero_itself_renders():
 # ---------------------------------------------------------------------------
 
 def test_managed_task_subtasks_field_is_consumed_not_dead_residue():
+    # SUPERSEDED ANCHOR (merge with task 40c29b83's useConductorState hook):
+    # the private `type ManagedTask = {` moved into the shared hook, whose
+    # ManagedTask declares `subtasks`; ConductorPage keeps a narrow local
+    # extension (`Omit<SharedManagedTask, ...>`). The INVARIANT is unchanged:
+    # subtasks must be READ by a real call site (SlicesBar), never dead type
+    # residue.
     src = _page()
-    type_start = src.index("type ManagedTask = {")
+    type_start = src.index("type ManagedTask = Omit<SharedManagedTask")
     type_end = src.index("};", type_start)
     usage_src = src[type_end:]
     assert "task.subtasks" in usage_src, (
-        "ManagedTask.subtasks (:44-46) must be READ by a real call site "
-        "(SlicesBar), not merely declared on the type"
+        "ManagedTask.subtasks (shared hook type) must be READ by a real "
+        "call site (SlicesBar), not merely declared on the type"
     )

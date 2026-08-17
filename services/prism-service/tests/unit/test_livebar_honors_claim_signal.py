@@ -54,6 +54,9 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 _SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
 _LIVEBAR = _SRC / "components" / "LiveBar.tsx"
+# Task 40c29b83 (FR-1): ManagedTask's declaration moved out of LiveBar.tsx
+# into the shared hook LiveBar and ConductorPage now both consume.
+_LIVEBAR_STATE_HOOK = _SRC / "lib" / "useConductorState.ts"
 
 
 def _read(p: Path) -> str:
@@ -89,12 +92,17 @@ def _balanced_statement(src: str, marker: str) -> str:
 
 
 def test_managed_task_type_carries_claimed_field():
-    src = _read(_LIVEBAR)
+    # SUPERSEDED location (task 40c29b83, FR-1): ManagedTask no longer lives
+    # as a private type in LiveBar.tsx -- it moved to the shared
+    # useConductorState hook that ConductorPage.tsx now also consumes, so the
+    # real invariant (the bucketing logic can read m.claimed) is pinned
+    # against ITS type declaration rather than a copy LiveBar no longer owns.
+    src = _read(_LIVEBAR_STATE_HOOK)
     idx = src.index("type ManagedTask")
-    type_block = src[idx: idx + 400]
+    type_block = src[idx: idx + 900]
     assert "claimed" in type_block, (
-        "LiveBar's local ManagedTask type must declare `claimed?: boolean` "
-        f"so the bucketing logic can read it — not present today:\n{type_block!r}"
+        "ManagedTask (lib/useConductorState.ts) must declare `claimed?: "
+        f"boolean` so the bucketing logic can read it — not present today:\n{type_block!r}"
     )
 
 
