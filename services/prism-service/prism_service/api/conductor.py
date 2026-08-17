@@ -224,12 +224,26 @@ def design_packet_approve(task_id: str = Body(..., embed=True),
     """FR-6/FR-7: the ONLY way a design-packet approval is recorded - an
     explicit owner write action, never a render/browser receipt (design_
     packet.record_approval raises ValueError on a non-owner_explicit method,
-    which this route surfaces as 400 rather than silently accepting it)."""
+    which this route surfaces as 400 rather than silently accepting it).
+
+    Task 98d38111: `approver` must resolve to a real HUMAN identity via
+    ActorService (a real user id/email in the workspace store) before the
+    ledger writes an owner_explicit receipt for it - refusing boilerplate
+    audit-reason text or any other unresolvable string, so the receipt this
+    tooth exists to demand can never be forged for nobody."""
+    from prism_service.services import actor_service as actor_service_module
     from prism_service.services import design_packet as dp
+    from prism_service.models.actor import ActorKind
     s = _svc(project)
     task = getattr(s, "_task_svc", None) and s._task_svc.get(task_id)
     if task is None:
         raise HTTPException(404, "unknown task")
+    identity = actor_service_module.get_actor_service().resolve(approver)
+    if identity.kind != ActorKind.HUMAN:
+        raise HTTPException(
+            400,
+            f"approver {approver!r} does not resolve to a real signed-in "
+            "identity - a design-packet approval must name a real user")
     try:
         appr = dp.record_approval(project, task_id, task, approver=approver,
                                   method="owner_explicit")

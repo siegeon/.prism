@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.8"
+PRISM_VERSION = "7.11.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4773,4 +4773,16 @@ PRISM_VERSION_NOTES += (
     "'next sweep will decide it' placeholder. A genuinely unswept gate "
     "(no receipt at all for this anchor+spec) is unaffected and still "
     "reads pending with no owner call to action."
+)
+PRISM_VERSION_NOTES += (
+    " v7.11.9 (task 98d38111): an owner's plan_gate Approve click now leaves "
+    "an honest actor record. TaskDetailPage.tsx fetches the real signed-in "
+    "identity (/api/auth/me, same pattern as PageHeader's IdentityChip) and "
+    "forwards it as `actor` on the /api/conductor/gate POST and as the real "
+    "`approver` on the design-packet-approve POST - previously both wire "
+    "calls carried no real identity, so every human click resolved to "
+    "unknown:conductor (ActorKind.UNKNOWN). The design-packet-approve route "
+    "now also resolves `approver` through ActorService and refuses (400) an "
+    "approver that is not a real HUMAN identity, so an owner_explicit "
+    "receipt can never be written for an unresolvable string."
 )
