@@ -85,20 +85,44 @@ def _drive_started_at(scores_db: str, task_id: str) -> float | None:
     mission clock's server anchor (task 4e6c4bf3 plan S1, AC-1/AC-3).
     None when no telemetry exists yet, never a client-invented start
     time (mx-9f2018: no gauge renders from a value the server didn't
-    send for THIS task)."""
-    if not scores_db:
+    send for THIS task).
+
+    Reads started_at/recorded_at directly for ALL of the task's rows
+    (task 9c6401dc) rather than trusting only the first row of
+    get_task_agent_rollup's ORDER BY started_at ASC, recorded_at ASC
+    path: SQLite sorts NULL first in ASC order, and every drive step
+    deliberately lands TWO rows -- the in-process conductor row with a
+    real epoch, and the step agent's curl-ingested row with
+    started_at=NULL (its timing lands in recorded_at on ingest instead).
+    So the anchor is min(non-null started_at) across every row, falling
+    back to min(non-null recorded_at) only when NO row carries a
+    started_at at all."""
+    from pathlib import Path
+    if not scores_db or not Path(scores_db).exists():
         return None
-    from prism_service.services.agent_runs_data import (
-        get_task_agent_rollup, _ts_epoch,
-    )
+    from prism_service.services import sqlite_db
+    from prism_service.services.agent_runs_data import _ts_epoch
     try:
-        rollup = get_task_agent_rollup(scores_db, task_id)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
+        try:
+            rows = conn.execute(
+                "SELECT started_at, recorded_at FROM agent_runs "
+                "WHERE task_id = ?",
+                (task_id,),
+            ).fetchall()
+        finally:
+            conn.close()
     except Exception:
         return None
-    path = rollup.get("agent_path") or []
-    if not path:
+    if not rows:
         return None
-    return _ts_epoch(path[0].get("started_at"))
+    started = [_ts_epoch(r["started_at"]) for r in rows]
+    started = [s for s in started if s is not None]
+    if started:
+        return min(started)
+    recorded = [_ts_epoch(r["recorded_at"]) for r in rows]
+    recorded = [r for r in recorded if r is not None]
+    return min(recorded) if recorded else None
 
 
 def _queue_depth(task_svc, task_id: str) -> int:

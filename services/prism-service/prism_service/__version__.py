@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.2"
+PRISM_VERSION = "7.11.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.3: fixed the /live mission clock's server anchor "
+    "(_drive_started_at, api/work.py) so it survives a null first "
+    "telemetry row -- SQLite sorts NULL first in ASC order and every "
+    "drive step lands a NULL-started_at row alongside a real-epoch one, "
+    "so the old path[0] read anchored to None. Now reads min(non-null "
+    "started_at) across all of a task's agent_runs rows, falling back "
+    "to min(non-null recorded_at) only when none carry a started_at "
+    "(task 9c6401dc). "
     "gamify.13: cards on /live are now draggable to a user-chosen "
     "position (owner ask: 'the individual panels should be able to be "
     "moved'). Pointerdown on a card body arms a potential drag; movement "
