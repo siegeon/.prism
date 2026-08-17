@@ -33,6 +33,11 @@ export type ManagedTask = {
   updated_at?: string;
   tags?: string[];
   phase_progress?: PhaseProgress | null;
+  // Task 2dfa94bd: True iff conductor_work has genuinely claimed this task
+  // (task_workspace.workspace_record exists — ensure_workspace ran at its
+  // first PEEK). A task someone flipped in_progress by hand, without ever
+  // driving it through conductor_work, must NOT wear SDLC-drive chrome.
+  claimed?: boolean;
   // Honest work state (server: conductor_service.activity_for) — the pill
   // and burn graph read THIS, never the raw status.
   activity?: Activity | null;
