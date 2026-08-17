@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.26"
+PRISM_VERSION = "7.11.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4916,4 +4916,13 @@ PRISM_VERSION_NOTES += (
     " timeout clears busy and returns control with a stated next action"
     " instead of hanging forever. Server-side pending-park shipped via"
     " child 97d92854 (v7.11.25)."
+)
+
+PRISM_VERSION_NOTES += (
+    " v7.11.27 (epic 37c9207b): Gates a human can always finish - epic"
+    " complete. A person at a parked plan_gate or green_gate can decide it"
+    " from the page they land on: the card states the decider's real"
+    " verdict, the offered control repairs the actual refusal, a refused"
+    " approve parks pending instead of stranding to failed, override says"
+    " truthfully what it cannot bypass, and no gate check waits silently."
 )
