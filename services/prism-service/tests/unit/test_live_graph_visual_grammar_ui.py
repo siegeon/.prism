@@ -1546,10 +1546,21 @@ def test_cards_draws_a_docked_action_strip_only_when_selected():
 def test_action_strip_hit_test_resolves_open_vs_explore():
     src = _read(_LIVE / "cards.ts")
     assert "export function actionStripHitTest(" in src
-    assert 'export type ActionStripHit = "open" | "explore" | null;' in src
-    assert 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";' in src, (
-        "the strip must resolve which HALF of the docked strip a click "
-        "landed in, not just whether it hit the strip at all")
+    # SUPERSEDED 2026-08-17 (task d56f3b25): the strip widened from a fixed
+    # open/explore pair to a 3rd "gate" button on cards parked at
+    # plan_gate/green_gate (FR-1), so the literal 2-value union and the
+    # 2-way ternary body below are gone by design. The 3-slot resolution
+    # (and the shared owner-gate predicate drawActionStrip/
+    # actionStripHitTest both consult) is pinned by
+    # test_action_strip_hit_test_resolves_three_slots and
+    # test_shared_owner_gate_predicate_guards_draw_and_hit_test in
+    # test_live_gate_decision_panel_ui.py.
+    assert 'export type ActionStripHit = "open" | "explore" | "gate" | null;' in src, (
+        "ActionStripHit must widen to a 3rd gate target, never stay the "
+        "old fixed 2-value union")
+    assert 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";' not in src, (
+        "the old 2-way ternary body must be gone -- a button-count-derived "
+        "3-slot resolution replaces it")
 
 
 def test_explore_href_targets_session_or_task_param_by_node_kind():
@@ -1706,8 +1717,18 @@ def test_action_strip_hit_test_mirrors_the_dock_decision_via_optional_ctx():
         "FR-3: actionStripHitTest must gain an OPTIONAL 4th ctx param "
         "mirroring drawActionStrip's dock decision")
 
-    ret_line = 'return worldX < stripX + STRIP_BTN_W ? "open" : "explore";'
-    hit_body = hit_fn[: hit_fn.index(ret_line)]
+    # SUPERSEDED 2026-08-17 (task d56f3b25): the old anchor sliced up to the
+    # literal 2-way ternary `return ... ? "open" : "explore";`, which FR-1
+    # deletes outright (see test_action_strip_hit_test_resolves_open_vs_explore
+    # above). The real invariant this test protects -- the ctx dock-above
+    # math runs BEFORE the strip resolves which slot a click landed in --
+    # is re-anchored to the bounds check that still precedes slot
+    # resolution today, regardless of how many slots the strip now has.
+    bounds_line = "worldY < stripY || worldY > stripY + STRIP_H"
+    assert bounds_line in hit_fn, (
+        "actionStripHitTest must still bounds-check the click against the "
+        "strip's (possibly dock-above) box before resolving a slot")
+    hit_body = hit_fn[: hit_fn.index(bounds_line)]
     assert "if (ctx)" in hit_body, (
         "the mirrored dock-above math must only run when ctx was "
         "actually passed, defaulting to today's below-only math when "
