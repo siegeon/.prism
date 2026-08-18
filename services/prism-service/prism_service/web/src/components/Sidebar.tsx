@@ -300,7 +300,7 @@ export default function Sidebar() {
           >
             ◐ <span className="sr-only">toggle theme</span>
           </button>
-          <span>Slate Blue · v{version?.version ?? "…"}</span>
+          <span>v{version?.version ?? "…"}</span>
           {version?.dev_mode && (
             <span
               className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-2xs font-bold tracking-widest bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] border border-[color:var(--accent-amber-ring)]"

@@ -411,12 +411,6 @@ export default function LivePage() {
 
   return (
     <Page>
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-[color:var(--text-primary)]">Live</h1>
-        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">
-          PRISM shows its work — live agent activity
-        </div>
-      </div>
       {error && <ErrorBanner>{error}</ErrorBanner>}
       <div className="relative rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] h-[calc(100vh-220px)] min-h-[420px] overflow-hidden">
         <canvas
