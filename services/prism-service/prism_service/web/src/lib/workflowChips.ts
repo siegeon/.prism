@@ -1,24 +1,18 @@
 // Conductor's visible signal language — step + gate chips. Tone selection
 // for both is owned by the single resolver in lib/domainTone (domainTone
-// "step" / "gate"); this module only builds the chip class strings and
-// exposes the ordered step list. Only render when conductor is engaged on a
-// task (workflow_step !== '' or gate_state !== 'none').
+// "step" / "gate"); this module only builds the chip class strings. Only
+// render when conductor is engaged on a task (workflow_step !== '' or
+// gate_state !== 'none').
+//
+// This file deliberately knows NO step ids. It used to export
+// WORKFLOW_STEPS_ORDERED — a hand-copied duplicate of the backend's
+// models/workflow.py WORKFLOW_STEPS — plus a `WorkflowStep` string union
+// listing the same ids a second time (which nothing ever imported). Both
+// are gone: the ordering now comes from GET /api/workflows via
+// lib/useWorkflowDef. Every helper below takes the step id it is GIVEN, so
+// a step added or renamed server-side needs no edit here.
 
 import { domainTone, toneClass } from "./domainTone";
-
-export type WorkflowStep =
-  | ""
-  | "intake"
-  | "review_previous_notes"
-  | "draft_story"
-  | "story_gate"
-  | "verify_plan"
-  | "plan_gate"
-  | "write_failing_tests"
-  | "red_gate"
-  | "implement_tasks"
-  | "verify_green_state"
-  | "green_gate";
 
 export type GateState = "none" | "pending" | "passed" | "failed";
 
@@ -64,21 +58,3 @@ export function personaLabel(id: string | undefined | null): string {
   if (!id) return "";
   return PERSONA_LABELS[id] ?? id;
 }
-
-// Each step's `persona` is the role that OWNS it, aligned to the backend
-// step_roles map: sm-planning + ALL GATES are Steward-reviewed (gates are no
-// longer blank — the Steward is the distinct-actor reviewer), qa authors/checks
-// tests, dev implements. StepRail reads `persona` to tag WHO owns each row.
-export const WORKFLOW_STEPS_ORDERED: { id: string; persona: string; type: "agent" | "gate" | "intake" }[] = [
-  { id: "intake", persona: "", type: "intake" },
-  { id: "review_previous_notes", persona: "sm", type: "agent" },
-  { id: "draft_story", persona: "sm", type: "agent" },
-  { id: "story_gate", persona: "sm", type: "gate" },
-  { id: "verify_plan", persona: "sm", type: "agent" },
-  { id: "plan_gate", persona: "sm", type: "gate" },
-  { id: "write_failing_tests", persona: "qa", type: "agent" },
-  { id: "red_gate", persona: "sm", type: "gate" },
-  { id: "implement_tasks", persona: "dev", type: "agent" },
-  { id: "verify_green_state", persona: "qa", type: "agent" },
-  { id: "green_gate", persona: "sm", type: "gate" },
-];

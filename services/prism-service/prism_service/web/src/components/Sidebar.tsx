@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Activity, AppWindow, Brain, Eye, FolderTree, Inbox, Info,
+  Activity, AppWindow, Bot, Brain, Eye, FolderTree, Inbox, Info,
   KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
   Radio, ScrollText, Search, Settings, Sparkles, Workflow,
   type LucideIcon,
@@ -81,6 +81,10 @@ const MAIN_SECTIONS: Section[] = [
       // agent activity flowing onto a node graph (task.changed,
       // drive.heartbeat, agent.run, tokens.turn over /sse/work).
       { to: "/live", label: "Live", icon: Radio },
+      // A workflow IS a bot: the conductor's FSM plus the role-carded agents
+      // that drive it, wired on a canvas. `Workflow` already belongs to
+      // Conductor above, so this wears `Bot` — the thing it actually shows.
+      { to: "/workflows", label: "Workflows", icon: Bot },
       { to: "/retrievals", label: "Retrievals", icon: Search },
     ],
   },
