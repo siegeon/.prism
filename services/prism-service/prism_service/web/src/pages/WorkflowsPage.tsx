@@ -289,6 +289,10 @@ export default function WorkflowsPage() {
       if (pts.length >= 2) {
         g.editor.pruneIfStraightened(d.wireKey, d.waypointIndex, pts[0], pts[pts.length - 1]);
       }
+      // Settle the surviving bends onto clean rails before they are saved,
+      // so a refresh reloads the path as drawn rather than the raw drag
+      // coordinates behind it.
+      g.settleWire(d.wireKey);
     }
     if (d.mode === "port" || d.mode === "waypoint") persistWires();
   }, [grabbing, persist, persistWires]);
@@ -315,6 +319,7 @@ export default function WorkflowsPage() {
     const leg = g.legAtWorld(wire, world.x, world.y);
     if (!leg) return;
     g.editor.insertWaypoint(wire.key, leg.leg, leg.point);
+    g.settleWire(wire.key);
     persistWires();
   }, [persistWires]);
 

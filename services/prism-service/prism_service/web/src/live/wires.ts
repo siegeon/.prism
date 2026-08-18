@@ -266,12 +266,17 @@ export function wireColor(kind: WireKind, flowing: boolean): string {
   return kind === "token" ? PALETTE.teal : "rgba(45,212,191,0.55)";
 }
 
-export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: WireKind, live: boolean): void {
+/** `color` overrides the kind/flow palette for callers that need the whole
+ * stroke to mean something else — the /workflows canvas paints a SELECTED
+ * wire entirely in the selection hue (owner, ticket 53cc9bcc: "if the
+ * wires are active please make the whole thing orange"). Omitted, every
+ * existing caller keeps wireColor's exact current behavior. */
+export function drawWire(ctx: CanvasRenderingContext2D, pts: Point[], kind: WireKind, live: boolean, color?: string): void {
   if (pts.length < 2) return;
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.strokeStyle = wireColor(kind, live);
+  ctx.strokeStyle = color ?? wireColor(kind, live);
   // Width now keys on flowing state alone, matching the directive's
   // "idle: 2px, flowing: 3px" -- no second alpha dial layered on top of
   // wireColor's own rgba alpha (that compounding is what made an idle
