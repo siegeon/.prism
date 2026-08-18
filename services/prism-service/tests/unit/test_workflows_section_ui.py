@@ -151,9 +151,16 @@ def test_the_canvas_reuses_the_live_wire_and_packet_primitives():
         "live/workflowGraph.ts must import the shared wire primitives")
     assert re.search(r'from\s+"\./packets"', graph), (
         "live/workflowGraph.ts must import the shared packet primitives")
+    # SUPERSEDED (increment 2): these symbols used to be pinned to
+    # workflowGraph.ts alone. The wire-editing slice moved routing one
+    # module deeper (live/workflowWires.ts owns the waypoint leg builder,
+    # and workflowGraph calls it), so the canvas SURFACE is now two files.
+    # The invariant is unchanged — the live primitives are reused, not
+    # forked — so it is checked against the surface rather than one file.
+    surface = graph + _read("live", "workflowWires.ts")
     for symbol in ("routeOrthogonal", "drawWire", "spawnPacket",
                    "stepPackets", "drawPackets"):
-        assert symbol in graph, (
+        assert symbol in surface, (
             f"{symbol} is not used by the workflows canvas — the section is "
             "supposed to REUSE the live board's grammar, not re-invent it")
 
