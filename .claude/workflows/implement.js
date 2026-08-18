@@ -1,6 +1,6 @@
 export const meta = {
   name: 'implement',
-  description: 'Drive one PRISM task through the conductor-gated SDLC (review → story → verify_plan → red tests → red_gate → implement → verify_green → green_gate). Brain is the primary knowledge source; grepping source on disk is the fallback. The build-half companion to the `prototype` planning workflow.',
+  description: 'Drive one PRISM task through the conductor-gated SDLC (review -> story -> verify_plan -> red tests -> red_gate -> implement -> verify_green -> green_gate). Brain is the primary knowledge source; grepping source on disk is the fallback. The build-half companion to the `prototype` planning workflow.',
   whenToUse: 'Run to actually WORK a task through PRISM\'s conductor. Invoke as Workflow({name:"implement", args:{task_id:"<uuid>"}}). Omit task_id to let it pull task_next. Pass {dry_run:true} to trace the whole SDLC read-only (no conductor mutations, no file writes), or {stop_after:"red_gate"} to halt the drive at a named step.',
   phases: [
     { title: 'Locate', detail: 'Read task + conductor state; brain-first context; ensure a feature branch' },
@@ -15,7 +15,7 @@ export const meta = {
   ],
 }
 
-// ── Input normalization ────────────────────────────────────────────────
+// -- Input normalization ------------------------------------------------
 // args may arrive as a JSON string, a plain object, or a bare task id.
 let _in = args
 if (typeof _in === 'string') {
@@ -25,7 +25,7 @@ _in = _in && typeof _in === 'object' ? _in : {}
 const TASK_ID = (_in.task_id || _in.id || '').trim()
 const DRY = _in.dry_run === true || _in.dry_run === 'true'
 const STOP_AFTER = (_in.stop_after || '').trim() // e.g. 'red_gate' to halt the drive there
-// The DRIVING Claude session id — sourced by the orchestrator from
+// The DRIVING Claude session id - sourced by the orchestrator from
 // CLAUDE_CODE_SESSION_ID and passed in via args (workflow JS has no
 // env/process access). Threaded into task_link_session + conductor_advance
 // so the task<->session JOIN resolves. GUARDED: empty SID => today's behavior.
@@ -39,7 +39,7 @@ const RUN_ID = (_in.run_id || _in.runId || SID || TASK_ID || 'run-adhoc').trim()
 // topology (7778). The MCP daemon serves /api/* on the same FastAPI app.
 const API_BASE = (_in.api_base || 'http://127.0.0.1:8888').replace(/\/$/, '')
 
-// ── Conductor state machine (mirror of models/workflow.py:WORKFLOW_STEPS) ─
+// -- Conductor state machine (mirror of models/workflow.py:WORKFLOW_STEPS) -
 // Only red_gate and green_gate are blocking gates. The *_complete/_coverage
 // validations on agent steps are advisory notes recorded on conductor_advance.
 //
@@ -50,7 +50,7 @@ const API_BASE = (_in.api_base || 'http://127.0.0.1:8888').replace(/\/$/, '')
 // working-tree edits, so a gate's verifier returns status=error / "no diff
 // in scope" even though the change is real. Gate handlers below treat that
 // specific signal as STRUCTURALLY BLIND and recover via override using the
-// agent's OWN executed test trace as evidence — but never override a gate
+// agent's OWN executed test trace as evidence - but never override a gate
 // whose verifier actually saw the diff and reported a genuine failure.
 const ORDER = [
   'review_previous_notes', 'draft_story', 'verify_plan',
@@ -58,11 +58,11 @@ const ORDER = [
   'implement_tasks', 'verify_green_state', 'green_gate',
 ]
 
-// ── Shared agent preamble ──────────────────────────────────────────────
+// -- Shared agent preamble ----------------------------------------------
 const PRISM_TOOLS = 'You have PRISM MCP tools via ToolSearch. Load what you need, e.g. ToolSearch("select:mcp__prism__brain_search,mcp__prism__brain_understand,mcp__prism__brain_call_chain,mcp__prism__memory_recall,mcp__prism__task_list,mcp__prism__conductor_advance,mcp__prism__conductor_gate,mcp__prism__task_update"). Project slug is "prism".'
 
 const KNOWLEDGE = [
-  'KNOWLEDGE PROTOCOL — Brain is the primary repository, disk is the fallback:',
+  'KNOWLEDGE PROTOCOL - Brain is the primary repository, disk is the fallback:',
   '1. FIRST query the Brain: brain_search (try 3-4 query variants), brain_understand for a subgraph, brain_call_chain for blast radius, memory_recall for conventions/decisions.',
   '2. ONLY for what the Brain does not answer, fall back to Grep/Glob/Read on source under E:/.prism.',
   '3. Read before you cite. Every claim about code carries a concrete file:line. Never cite an unread source.',
@@ -72,7 +72,7 @@ const CONVENTIONS = [
   'PRISM CONVENTIONS (hard rules):',
   '- Never commit to main/master/staging/develop. Work on the feature branch this workflow created.',
   '- File writes: max ~30 lines per edit operation; chunk larger writes.',
-  '- Hooks are advisory (exit 0) — never block tool execution.',
+  '- Hooks are advisory (exit 0) - never block tool execution.',
   '- Destructive ops: validate paths, never -ErrorAction SilentlyContinue, no inline destructive PowerShell.',
   '- If the change is user-visible, patch-bump PRISM_VERSION in the same commit.',
 ].join('\n')
@@ -83,11 +83,11 @@ const CONVENTIONS = [
 // rung is WebSearch/WebFetch today; Context7 MCP (clean library docs) is a
 // not-yet-wired follow-up.
 const SELF_HEAL = [
-  'SELF-HEAL DOCTRINE — when a step fails, a gate GENUINELY rejects (NOT the verifier-blind case above), or a tool/runtime error fires, climb the ladder before giving up:',
-  '1. PRISM-FIRST: brain_search + memory_recall for a known resolution. PRISM is the knowledge AND time authority — it server-stamps run timestamps; never reach for a client clock.',
+  'SELF-HEAL DOCTRINE - when a step fails, a gate GENUINELY rejects (NOT the verifier-blind case above), or a tool/runtime error fires, climb the ladder before giving up:',
+  '1. PRISM-FIRST: brain_search + memory_recall for a known resolution. PRISM is the knowledge AND time authority - it server-stamps run timestamps; never reach for a client clock.',
   '2. RESEARCH: if PRISM has no answer, research best practices via WebSearch/WebFetch and cite sources.',
   '3. APPLY the smallest fix.',
-  '4. RECORD: memory_store(type="failure", with file:line + the fix) so PRISM HAS THE ANSWER next time — failures become memories.',
+  '4. RECORD: memory_store(type="failure", with file:line + the fix) so PRISM HAS THE ANSWER next time - failures become memories.',
 ].join('\n')
 
 const dryNote = DRY
@@ -98,9 +98,9 @@ function preamble(role) {
   return `${PRISM_TOOLS}\n\nYou are acting as the PRISM "${role}" persona inside the conductor SDLC.\n\n${KNOWLEDGE}\n\n${CONVENTIONS}\n\n${SELF_HEAL}${dryNote}`
 }
 
-// ── Agent-run telemetry emitter (task f4498190) ─────────────────────────
+// -- Agent-run telemetry emitter (task f4498190) -------------------------
 // ONE shared row builder + POST so the serial loop AND the parallel fanout
-// wrapper emit an IDENTICAL row shape — no telemetry gap between the two
+// wrapper emit an IDENTICAL row shape - no telemetry gap between the two
 // execution paths. The agent_runs spine is idempotent on
 // (run_id, agent_id, step), so a retried step UPDATES rather than dupes.
 // Per-agent agentId/timing/tokens/tool_uses live in the harness journal +
@@ -155,7 +155,7 @@ async function fanout(jobs) {
   }))
 }
 
-// ── Schemas ─────────────────────────────────────────────────────────────
+// -- Schemas -------------------------------------------------------------
 const LOCATE_SCHEMA = {
   type: 'object',
   required: ['task_id', 'title', 'current_step', 'gate_state', 'branch', 'context_summary', 'requirements'],
@@ -184,8 +184,8 @@ const STEP_SCHEMA = {
   },
 }
 
-// ── Phase: Pre-flight (fail fast) ───────────────────────────────────────
-// AC1: assert the run can even succeed BEFORE the drive — turns 7-min-to-fail
+// -- Phase: Pre-flight (fail fast) ---------------------------------------
+// AC1: assert the run can even succeed BEFORE the drive - turns 7-min-to-fail
 // runs into ~5-second fails with one actionable line. Workflow scripts have no
 // fs/process access, so the checks run inside the first agent (read-only bash).
 const PREFLIGHT_SCHEMA = {
@@ -201,21 +201,21 @@ const PREFLIGHT_SCHEMA = {
 }
 phase('Pre-flight')
 const preflight = await agent(
-  `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD — run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 — a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap — the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. datenow_clean=false on ANY match — PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/api/version\` must be 200 — the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean${DRY ? '' : ' AND daemon_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main — rebase or branch fresh off main", "client clock in <file>:<line> — PRISM server-stamps time, remove it (mx-9945f2)", or "daemon down on :8888 — start dev (prism-dev) before driving".`,
+  `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD - run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 - a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap - the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. datenow_clean=false on ANY match - PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8888/api/version\` must be 200 - the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n\nSet ok=true ONLY if sane_branch AND datenow_clean${DRY ? '' : ' AND daemon_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main - rebase or branch fresh off main", "client clock in <file>:<line> - PRISM server-stamps time, remove it (mx-9945f2)", or "daemon down on :8888 - start dev (prism-dev) before driving".`,
   { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA })
 if (!preflight.ok) {
-  throw new Error(`PRE-FLIGHT HALT — ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok}]`)
+  throw new Error(`PRE-FLIGHT HALT - ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok}]`)
 }
-log(`Pre-flight OK — branch sane, workflow scripts clock-clean (PRISM owns time)${DRY ? '' : ', daemon reachable'}.`)
+log(`Pre-flight OK - branch sane, workflow scripts clock-clean (PRISM owns time)${DRY ? '' : ', daemon reachable'}.`)
 
-// ── Phase: Locate ───────────────────────────────────────────────────────
+// -- Phase: Locate -------------------------------------------------------
 phase('Locate')
 const pick = TASK_ID
   ? `Read task id ${TASK_ID} via task_list and find the row whose id matches.`
   : 'No task id was supplied. Call task_next to choose the highest-priority unblocked task, then read its row via task_list.'
 
 const locate = await agent(
-  `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list — each item independently testable.\n- BRANCH: report the git branch the work will land on. If currently on main/master/staging/develop${DRY ? ', report the branch name you WOULD create (do not create it).' : ', create a feature branch off main (e.g. feat/<task-slug>) and switch to it, then report its name.'}\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") — do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id — never the request_id default).` : ''}\n\nReturn the structured locate result.`,
+  `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen:\n- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first, disk grep only for gaps), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list - each item independently testable.\n- BRANCH: report the git branch the work will land on. If currently on main/master/staging/develop${DRY ? ', report the branch name you WOULD create (do not create it).' : ', create a feature branch off main (e.g. feat/<task-slug>) and switch to it, then report its name.'}\n${DRY ? '' : '- REQUIRED FIRST ACTION: immediately call task_update(id, status="in_progress") - do this before anything else so the tasks/kanban view shows the task as actively worked (not stranded in the pending column) while the SDLC runs.'}${SID && !DRY ? `\n- IMMEDIATELY AFTER that first action, call task_link_session(task_id="${TASK_ID}", session_id="${SID}") to tie this driving session to the task (explicit session_id - never the request_id default).` : ''}\n\nReturn the structured locate result.`,
   { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA })
 
 const startStep = locate.current_step && ORDER.includes(locate.current_step)
@@ -224,7 +224,7 @@ const startStep = locate.current_step && ORDER.includes(locate.current_step)
 const startIdx = ORDER.indexOf(startStep)
 log(`Task "${locate.title}" is at "${startStep}" (gate=${locate.gate_state}) on branch ${locate.branch}. Driving${DRY ? ' (DRY-RUN)' : ''} from there.`)
 
-// ── Per-step handler prompts ────────────────────────────────────────────
+// -- Per-step handler prompts --------------------------------------------
 const ctx = `TASK: ${locate.title} (id ${locate.task_id})\nBRANCH: ${locate.branch}\nREQUIREMENTS:\n- ${locate.requirements.join('\n- ')}\n\nCONTEXT (brain-first):\n${locate.context_summary}`
 
 function advanceInstr(stepId, validationHint) {
@@ -245,7 +245,7 @@ const commitInstr = (kind, scope) => DRY
 // executed test command is the ground truth; the conductor verifier may be
 // blind to this checkout (see VERIFIER-BLINDNESS NOTE).
 const gateDoctrine = (expectWord, evidenceWord) =>
-  `GATE DOCTRINE: First run the real test command yourself and capture the trace — it must be ${expectWord}. Then call conductor_gate(id="${locate.task_id}", action="approve", reason="<exact command + ${evidenceWord} summary>") WITHOUT override. Inspect the result: (a) ok:true -> the verifier saw the diff and agreed, done. (b) ok:false with gate_state=failed AND a reason that means the verifier saw NOTHING ("no diff in scope" / status=error / "no claims to verify") -> the verifier is STRUCTURALLY BLIND to this checkout; recover by re-calling conductor_gate(action="approve", override=true, reason="<your real command + ${evidenceWord} trace; verifier blind to working tree>"). (c) ok:false because the verifier SAW the diff and it disagreed with your local result -> do NOT override; set ok:false and put the verifier reason in halt_reason. If the gate was ALREADY gate_state=failed when this step started (a prior blind run), go straight to the override path in (b). Report final to_step + gate_state.`
+  `GATE DOCTRINE: First run the real test command yourself and capture the trace - it must be ${expectWord}. Then call conductor_gate(id="${locate.task_id}", action="approve", reason="<exact command + ${evidenceWord} summary>") WITHOUT override. Inspect the result: (a) ok:true -> the verifier saw the diff and agreed, done. (b) ok:false with gate_state=failed AND a reason that means the verifier saw NOTHING ("no diff in scope" / status=error / "no claims to verify") -> the verifier is STRUCTURALLY BLIND to this checkout; recover by re-calling conductor_gate(action="approve", override=true, reason="<your real command + ${evidenceWord} trace; verifier blind to working tree>"). (c) ok:false because the verifier SAW the diff and it disagreed with your local result -> do NOT override; set ok:false and put the verifier reason in halt_reason. If the gate was ALREADY gate_state=failed when this step started (a prior blind run), go straight to the override path in (b). Report final to_step + gate_state.`
 
 const HANDLERS = {
   review_previous_notes: (role = 'sm') => agent(
@@ -253,27 +253,27 @@ const HANDLERS = {
     { label: 'review_previous_notes', phase: 'Review notes', schema: STEP_SCHEMA }),
 
   draft_story: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete — advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) — the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). If the task has none, record it: task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="test").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
+    `${preamble(role)}\n\nSTEP draft_story (validation kind: story_complete - advisory, not a blocking gate).\n\n${ctx}\n\nWORK: draft a crisp story: user-facing goal, scope, and a numbered acceptance-criteria list that the failing tests will pin. Keep it grounded in the requirements above; push anything unsupported into open questions.${DRY ? '' : ` Then set the ORACLE (goalbuddy completion contract) - the single OBSERVABLE signal that proves the user outcome (what the completion_proof must show at green_gate). If the task has none, record it: task_update(id="${locate.task_id}", oracle="<observable signal>", proof_type="test").`} ${advanceInstr('draft_story', 'story + acceptance criteria drafted')}`,
     { label: 'draft_story', phase: 'Draft story', schema: STEP_SCHEMA }),
 
   verify_plan: (role = 'sm') => agent(
-    `${preamble(role)}\n\nSTEP verify_plan (validation kind: plan_coverage — advisory).\n\n${ctx}\n\nWORK: verify the plan covers EVERY requirement and names the concrete files/functions each will touch (brain_call_chain for blast radius first, disk only for gaps). If a requirement has no plan, that is a coverage gap — state it. ${advanceInstr('verify_plan', 'plan covers all requirements; files identified')}`,
+    `${preamble(role)}\n\nSTEP verify_plan (validation kind: plan_coverage - advisory).\n\n${ctx}\n\nWORK: verify the plan covers EVERY requirement and names the concrete files/functions each will touch (brain_call_chain for blast radius first, disk only for gaps). If a requirement has no plan, that is a coverage gap - state it. ${advanceInstr('verify_plan', 'plan covers all requirements; files identified')}`,
     { label: 'verify_plan', phase: 'Verify plan', schema: STEP_SCHEMA }),
 
   write_failing_tests: (role = 'qa') => agent(
-    `${preamble(role)}\n\nSTEP write_failing_tests (validation kind: red_with_trace).\n\n${ctx}\n\nWORK: write the SMALLEST set of tests that pin the acceptance criteria and FAIL today (red). Put them where the suite lives (find it brain-first, then on disk). CRITICAL — pin the USER-FACING INTEGRATION, not just unit contracts: a test that merely imports a service class or calls a method will pass even if that code is DEAD (no MCP verb, no API field, no hook, no UI). That exact gap has shipped false-greens. For any wiring/feature task, assert the real seam end-to-end — the MCP verb is reachable through the tool DISPATCHER (not just defined), the API route returns the new field, a queue/store survives across SEPARATE calls (not one in-memory instance), the hook actually dispenses, the UI actually renders. If your only red tests are unit-level, you have NOT pinned the feature. ${DRY ? 'Report the test files and assertions you would add and the command that would prove red.' : 'Run the exact test command, confirm it FAILS for the right reason, and capture the failing trace.'}${commitInstr('test', 'red scaffold')} Record the command + result in evidence. ${advanceInstr('write_failing_tests', 'failing tests landed + committed; red trace captured')}`,
+    `${preamble(role)}\n\nSTEP write_failing_tests (validation kind: red_with_trace).\n\n${ctx}\n\nWORK: write the SMALLEST set of tests that pin the acceptance criteria and FAIL today (red). Put them where the suite lives (find it brain-first, then on disk). CRITICAL - pin the USER-FACING INTEGRATION, not just unit contracts: a test that merely imports a service class or calls a method will pass even if that code is DEAD (no MCP verb, no API field, no hook, no UI). That exact gap has shipped false-greens. For any wiring/feature task, assert the real seam end-to-end - the MCP verb is reachable through the tool DISPATCHER (not just defined), the API route returns the new field, a queue/store survives across SEPARATE calls (not one in-memory instance), the hook actually dispenses, the UI actually renders. If your only red tests are unit-level, you have NOT pinned the feature. ${DRY ? 'Report the test files and assertions you would add and the command that would prove red.' : 'Run the exact test command, confirm it FAILS for the right reason, and capture the failing trace.'}${commitInstr('test', 'red scaffold')} Record the command + result in evidence. ${advanceInstr('write_failing_tests', 'failing tests landed + committed; red trace captured')}`,
     { label: 'write_failing_tests', phase: 'Red tests', schema: STEP_SCHEMA }),
 
   red_gate: (role = 'qa') => agent(
-    `${preamble(role)}\n\nSTEP red_gate (BLOCKING gate). The verifier expects the suite to be RED (status=fail, tier0=fail) — that proves the tests bite before any implementation. On approve+pass the conductor auto-advances to implement_tasks.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would run the test command (expecting RED), then call conductor_gate(approve) with the red trace, and the expected to_step (implement_tasks). Do not call anything.' : gateDoctrine('RED (failing for the right reason)', 'red')}`,
+    `${preamble(role)}\n\nSTEP red_gate (BLOCKING gate). The verifier expects the suite to be RED (status=fail, tier0=fail) - that proves the tests bite before any implementation. On approve+pass the conductor auto-advances to implement_tasks.\n\n${ctx}\n\nWORK: ${DRY ? 'Report that you would run the test command (expecting RED), then call conductor_gate(approve) with the red trace, and the expected to_step (implement_tasks). Do not call anything.' : gateDoctrine('RED (failing for the right reason)', 'red')}`,
     { label: 'red_gate', phase: 'Red gate', schema: STEP_SCHEMA }),
 
   implement_tasks: (role = 'dev') => agent(
-    `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. WORKER CONTRACT (goalbuddy-ported): re-read this task via task_list — if it defines allowed_files, treat that allowlist as a HARD scope boundary: do NOT edit any file outside it. Honor stop_if — if you need a file outside allowed_files, the behavior is ambiguous, or verification fails twice, STOP: set ok:false and put the triggered stop_if condition in halt_reason rather than pushing through. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
+    `${preamble(role)}\n\nSTEP implement_tasks (validation kind: green).\n\n${ctx}\n\nWORK: make the SMALLEST change that turns the failing tests green. Chunk edits to ~30 lines. Reuse existing patterns (find them brain-first). If the change is user-visible, patch-bump PRISM_VERSION in the same change. WORKER CONTRACT (goalbuddy-ported): re-read this task via task_list - if it defines allowed_files, treat that allowlist as a HARD scope boundary: do NOT edit any file outside it. Honor stop_if - if you need a file outside allowed_files, the behavior is ambiguous, or verification fails twice, STOP: set ok:false and put the triggered stop_if condition in halt_reason rather than pushing through. ${DRY ? 'Report the files/edits you would make and the command that would prove green. Do not write.' : 'Run the test command and confirm it now PASSES; capture the green result in evidence.'}${commitInstr('feat', 'impl')} ${advanceInstr('implement_tasks', 'implementation complete + committed; targeted tests green')}`,
     { label: 'implement_tasks', phase: 'Implement', schema: STEP_SCHEMA }),
 
   verify_green_state: (role = 'qa') => agent(
-    `${preamble(role)}\n\nSTEP verify_green_state (validation kind: green_full).\n\n${ctx}\n\nWORK: run the FULL relevant suite (not just the new tests) and verify every acceptance criterion is met. ${DRY ? 'Report the full command you would run.' : 'Capture the exact command + full-green result. If the ticket lists curl/UI verification, DO those against the running surface — tests-pass is not feature-works.'} If anything is red, set ok:false with the failure in halt_reason. ${advanceInstr('verify_green_state', 'full suite green; acceptance verified')}`,
+    `${preamble(role)}\n\nSTEP verify_green_state (validation kind: green_full).\n\n${ctx}\n\nWORK: run the FULL relevant suite (not just the new tests) and verify every acceptance criterion is met. ${DRY ? 'Report the full command you would run.' : 'Capture the exact command + full-green result. If the ticket lists curl/UI verification, DO those against the running surface - tests-pass is not feature-works.'} If anything is red, set ok:false with the failure in halt_reason. ${advanceInstr('verify_green_state', 'full suite green; acceptance verified')}`,
     { label: 'verify_green_state', phase: 'Verify green', schema: STEP_SCHEMA }),
 
   green_gate: (role = 'lead') => agent(
@@ -281,7 +281,7 @@ const HANDLERS = {
     { label: 'green_gate', phase: 'Green gate', schema: STEP_SCHEMA }),
 }
 
-// Role each step's agent persona carries — mirrors the HANDLERS defaults so
+// Role each step's agent persona carries - mirrors the HANDLERS defaults so
 // the telemetry row's `role` matches the persona that actually ran the step.
 const ROLE_BY_STEP = {
   review_previous_notes: 'sm', draft_story: 'sm', verify_plan: 'sm',
@@ -289,14 +289,14 @@ const ROLE_BY_STEP = {
   implement_tasks: 'dev', verify_green_state: 'qa', green_gate: 'lead',
 }
 
-// ── Deterministic drive: one step at a time, halt on failure/gate-reject ─
+// -- Deterministic drive: one step at a time, halt on failure/gate-reject -
 const trace = []
 let halted = null
 for (let i = startIdx; i < ORDER.length; i++) {
   const stepId = ORDER[i]
   const res = await HANDLERS[stepId]()
   trace.push(res)
-  // Emit one agent-run telemetry row after this step's agent() returns —
+  // Emit one agent-run telemetry row after this step's agent() returns -
   // serial path; the parallel fanout() wrapper routes the SAME emitter.
   // Timing is stamped server-side on ingest (workflow scripts forbid client clocks).
   await postAgentRun(res, { role: ROLE_BY_STEP[stepId], step: stepId })
@@ -305,12 +305,12 @@ for (let i = startIdx; i < ORDER.length; i++) {
     break
   }
   if (STOP_AFTER && stepId === STOP_AFTER) {
-    log(`Reached stop_after="${STOP_AFTER}" — halting the drive as requested.`)
+    log(`Reached stop_after="${STOP_AFTER}" - halting the drive as requested.`)
     break
   }
 }
 
-// ── Report ──────────────────────────────────────────────────────────────
+// -- Report --------------------------------------------------------------
 const lastStep = trace.length ? trace[trace.length - 1].to_step : startStep
 return {
   task_id: locate.task_id,
