@@ -259,3 +259,124 @@ def test_the_rail_still_gets_intake_and_a_persona_per_step():
     assert "persona" in hook and "type" in hook, (
         "the rail's step shape is {id, persona, type} — consumers key off "
         "both persona (owner column) and type (gate caption guard)")
+
+
+# --------------------------------------------------------------------------
+# Increment 2 (owner at green_gate review): "The wires need to do a better
+# job — I should be able to click on them like draw.io / mxGraph so that I
+# can move this and help ensure their path is the way I want it to be."
+#
+# Direct manipulation of a wire: select it, re-dock either endpoint port,
+# and bend the middle with waypoints. All CLIENT state — no new entity, no
+# backend change — persisted per project exactly like node positions.
+# --------------------------------------------------------------------------
+
+def _wire_editor() -> str:
+    """The wire-interaction module. Split out of workflowGraph.ts to keep
+    that file from becoming the very god-module the /live board's
+    graphState.ts already is."""
+    return _read("live", "workflowWires.ts")
+
+
+def test_clicking_a_wire_selects_it():
+    """A wire is a thing you can point at. Without a polyline hit-test the
+    owner has nothing to grab, which is the whole complaint."""
+    graph = _read("live", "workflowGraph.ts")
+    editor = _wire_editor()
+
+    assert re.search(r'\bwireAtWorld\s*\(', graph), (
+        "workflowGraph.ts exposes no wireAtWorld hit-test — a wire cannot "
+        "be clicked")
+    assert re.search(r'export\s+function\s+nearestOnPolyline\s*\(', editor), (
+        "the polyline hit-test must be a real distance-to-segment helper "
+        "in live/workflowWires.ts, not an approximation of the endpoints")
+    assert re.search(r'\bselected\b', graph) or re.search(r'\bselected\b', editor), (
+        "nothing tracks which wire is selected")
+
+
+def test_a_selected_wire_reads_as_selected():
+    """Selection the owner can SEE — the live stroke, so a selected wire is
+    unmistakable against the dim idle ones."""
+    graph = _read("live", "workflowGraph.ts")
+    assert re.search(r'drawWire\([^)]*(isSel|selected)', graph) or re.search(
+        r'(isSel|selected)[^;\n]*drawWire', graph), (
+        "drawWorkflows must draw the SELECTED wire with the live stroke — "
+        "a selection nobody can see is not a selection")
+
+
+def test_endpoint_ports_can_be_re_docked_and_survive_a_reload():
+    """Drag either end of a wire to another side of its node. Mirrors the
+    live board's scheme (graphState.ts portOverrides keyed `<wire>:from` /
+    `<wire>:to`) rather than inventing a second one."""
+    graph = _read("live", "workflowGraph.ts")
+    editor = _wire_editor()
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert re.search(r'\bportAtWorld\s*\(', graph), (
+        "no portAtWorld hit-test — the endpoint dots are not grabbable")
+    assert "portFromWorld" in editor, (
+        "re-docking must resolve the new side through live/wires.ts's "
+        "portFromWorld, never a hand-rolled side/offset calculation")
+    assert re.search(r'`prism\.workflows\.ports\.\$\{project\}`', page), (
+        "port placements must persist per project under "
+        "prism.workflows.ports.<project>")
+
+
+def test_waypoints_can_be_inserted_moved_and_removed():
+    """The genuinely new affordance: bend a wire's middle. Insert, move and
+    remove must all exist or the owner can create a bend and never undo it."""
+    editor = _wire_editor()
+    graph = _read("live", "workflowGraph.ts")
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    for fn in ("insertWaypoint", "moveWaypoint", "removeWaypoint"):
+        assert re.search(rf'\b{fn}\s*\(', editor), (
+            f"live/workflowWires.ts has no {fn} — a waypoint the owner "
+            "cannot undo is a trap, not an affordance")
+    assert re.search(r'\bwaypointAtWorld\s*\(', graph), (
+        "no waypointAtWorld hit-test — a placed waypoint cannot be grabbed")
+    assert re.search(r'onDoubleClick', page), (
+        "double-click is the insert/remove gesture; the canvas binds no "
+        "double-click handler")
+    assert re.search(r'`prism\.workflows\.waypoints\.\$\{project\}`', page), (
+        "waypoints must persist per project under "
+        "prism.workflows.waypoints.<project>")
+
+
+def test_waypoint_paths_still_route_through_the_one_orthogonal_router():
+    """A bent wire is still ORTHOGONAL. Every hop — node to waypoint,
+    waypoint to waypoint, waypoint to node — goes through the SAME
+    routeOrthogonal the straight wires use. A second hand-rolled path
+    builder is exactly how the two canvases would drift into two
+    grammars."""
+    editor = _wire_editor()
+
+    assert re.search(r'routeOrthogonal[^;]*from\s+"\./wires"', editor, re.DOTALL), (
+        "live/workflowWires.ts must import routeOrthogonal from ./wires")
+    assert re.search(r'routeOrthogonal\s*\(', editor), (
+        "the waypoint path builder never calls routeOrthogonal — it is "
+        "constructing its own polyline")
+    for owned_elsewhere in ("routeOrthogonal", "portPoint", "portFromWorld",
+                            "autoPort", "drawWire"):
+        assert not re.search(
+            rf'(export\s+)?function\s+{owned_elsewhere}\s*\(', editor), (
+            f"live/workflowWires.ts re-defines {owned_elsewhere} instead of "
+            "importing it from live/wires")
+
+
+def test_deselect_and_reset_clear_the_manual_wire_state():
+    """Escape / clicking empty space lets go, and 'reset layout' drops
+    ports and waypoints along with positions — otherwise the escape hatch
+    only half-works and a wire stays bent with no way back."""
+    page = _read("pages", "WorkflowsPage.tsx")
+    editor = _wire_editor()
+
+    assert re.search(r'(Escape|"Escape")', page), (
+        "Escape must deselect the active wire")
+    for key in ("prism\\.workflows\\.positions", "prism\\.workflows\\.ports",
+                "prism\\.workflows\\.waypoints"):
+        assert re.search(rf'removeItem\(\s*{key}|{key}', page), (
+            f"reset layout must also forget {key}.<project>")
+    assert re.search(r'\bclear\w*\s*\(', editor), (
+        "the wire editor exposes no clear — reset layout has nothing to "
+        "call to drop port/waypoint overrides")
