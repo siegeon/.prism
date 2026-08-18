@@ -3,7 +3,7 @@ import { useProject } from "@/lib/project";
 import { fetchWorkflowDef } from "@/lib/useWorkflowDef";
 import { Page, ErrorBanner } from "@/components/ui";
 import { WorkflowGraph, drawWorkflows } from "@/live/workflowGraph";
-import type { WireEnd } from "@/live/workflowWires";
+import type { SegmentGrab, WireEnd } from "@/live/workflowWires";
 import type { Point, WirePort } from "@/live/wires";
 
 /** /workflows — the conductor's FSM and the bots that drive it, per project.
@@ -62,7 +62,7 @@ const DRAG_THRESHOLD_PX = 5;
 const POLL_MS = 10_000;
 
 type DragState = {
-  mode: "none" | "pan" | "node" | "port" | "waypoint";
+  mode: "none" | "pan" | "node" | "port" | "waypoint" | "segment";
   moved: boolean;
   lastX: number;
   lastY: number;
@@ -74,11 +74,13 @@ type DragState = {
   wireKey: string | null;
   wireEnd: WireEnd | null;
   waypointIndex: number;
+  /** mode "segment": the grabbed run and the anchors bounding it. */
+  segment: SegmentGrab | null;
 };
 
 const IDLE_DRAG: DragState = {
   mode: "none", moved: false, lastX: 0, lastY: 0, nodeId: null, offsetX: 0, offsetY: 0,
-  wireKey: null, wireEnd: null, waypointIndex: -1,
+  wireKey: null, wireEnd: null, waypointIndex: -1, segment: null,
 };
 
 export default function WorkflowsPage() {
@@ -219,6 +221,19 @@ export default function WorkflowsPage() {
       };
       return;
     }
+    // Body drag beats the node hit, but only on the wire the owner has
+    // already selected — so it is always a deliberate second gesture, never
+    // a wire stealing a press meant for the card underneath it.
+    const selected = g.editor.selected;
+    if (selected) {
+      const grab = g.beginSegmentDrag(selected, world.x, world.y);
+      if (grab) {
+        dragRef.current = {
+          ...IDLE_DRAG, ...base, mode: "segment", wireKey: selected, segment: grab,
+        };
+        return;
+      }
+    }
     const node = g.nodeAtWorld(world.x, world.y);
     if (node) {
       dragRef.current = {
@@ -268,6 +283,10 @@ export default function WorkflowsPage() {
       if (slot) g.editor.setPortFromWorld(d.wireKey, d.wireEnd, slot, world.x, world.y);
     } else if (d.mode === "waypoint" && d.wireKey) {
       g.editor.moveWaypoint(d.wireKey, d.waypointIndex, world.x, world.y);
+    } else if (d.mode === "segment" && d.segment) {
+      // Perpendicular only — the run keeps its own axis, which is what
+      // makes the path stay orthogonal while it moves.
+      g.editor.moveSegment(d.segment, d.segment.axis === "x" ? world.x : world.y);
     }
     d.lastX = ev.clientX;
     d.lastY = ev.clientY;
@@ -294,7 +313,10 @@ export default function WorkflowsPage() {
       // coordinates behind it.
       g.settleWire(d.wireKey);
     }
-    if (d.mode === "port" || d.mode === "waypoint") persistWires();
+    // A segment drag settles the same way: anchors it made redundant retire
+    // themselves instead of lingering for a manual double-click.
+    if (d.mode === "segment" && d.wireKey) graphRef.current.settleWire(d.wireKey);
+    if (d.mode === "port" || d.mode === "waypoint" || d.mode === "segment") persistWires();
   }, [grabbing, persist, persistWires]);
 
   /** Double-click is the bend gesture: on a placed waypoint it removes it,
@@ -338,14 +360,8 @@ export default function WorkflowsPage() {
 
   return (
     <Page>
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-[color:var(--text-primary)]">Workflows</h1>
-        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">
-          The conductor pipeline and the bots that drive it
-        </div>
-      </div>
       {error && <ErrorBanner>{error}</ErrorBanner>}
-      <div className="relative rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] h-[calc(100vh-220px)] min-h-[420px] overflow-hidden">
+      <div className="relative rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] h-[calc(100vh-140px)] min-h-[420px] overflow-hidden">
         <canvas
           ref={canvasRef}
           onPointerDown={onPointerDown}

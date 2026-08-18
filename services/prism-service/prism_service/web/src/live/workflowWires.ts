@@ -36,6 +36,10 @@ export type PortHit = { key: string; end: WireEnd; nodeId: string };
  * waypoint list. */
 export type WaypointHit = { key: string; index: number };
 
+/** A grabbed wire segment: the two anchor indices bounding it, and the
+ * axis it slides along (perpendicular to the run itself). */
+export type SegmentGrab = { key: string; a: number; b: number; axis: "x" | "y" };
+
 /** Grab radii, in WORLD px. Ports match /live's PORT_HIT_R; a waypoint is
  * a little larger because it has no card edge to aim at, and the wire
  * body is tighter so grabbing a wire never steals a port's click. */
@@ -266,6 +270,49 @@ export class WireEditor {
     return true;
   }
 
+  /** Turns the wire's CURRENTLY DRAWN path into explicit bends and returns
+   * the two that bound segment `seg`, so dragging that run moves real
+   * anchors.
+   *
+   * This is what makes "just drag the wire" work with no setup (owner:
+   * "I can't drag the wire at all", and stop making them "micromanage the
+   * need for the double-click anchors") — the anchors the new shape needs
+   * are minted here rather than placed by hand first.
+   *
+   * Materializing is EXACT, not approximate: routeOrthogonal between two
+   * corners that already share a rail collapses straight back to that run
+   * once simplifyPath merges it, so the path does not jump the moment a
+   * drag begins.
+   *
+   * The two endpoints can't move — they are docked ports — so a segment
+   * touching one gets a duplicate of that endpoint as its movable anchor.
+   */
+  grabSegment(key: string, pts: Point[], seg: number): SegmentGrab | null {
+    if (pts.length < 2 || seg < 0 || seg > pts.length - 2) return null;
+    const A = pts[seg], B = pts[seg + 1];
+    // Perpendicular by construction: a vertical run slides along x, a
+    // horizontal run slides along y.
+    const axis: "x" | "y" = Math.abs(A.x - B.x) <= Math.abs(A.y - B.y) ? "x" : "y";
+    const chain = pts.map((p) => ({ ...p }));
+    let a = seg, b = seg + 1;
+    if (b === chain.length - 1) chain.splice(b, 0, { ...chain[b] });
+    if (a === 0) { chain.splice(1, 0, { ...chain[0] }); a = 1; b += 1; }
+    this.waypoints.set(key, chain.slice(1, -1));
+    return { key, a: a - 1, b: b - 1, axis };
+  }
+
+  /** Slides a grabbed segment perpendicular to its own axis by moving both
+   * of its anchors onto one new rail. */
+  moveSegment(grab: SegmentGrab, value: number): void {
+    const list = [...this.waypointsFor(grab.key)];
+    if (!list[grab.a] || !list[grab.b]) return;
+    const onRail = (p: Point): Point =>
+      grab.axis === "x" ? { x: value, y: p.y } : { x: p.x, y: value };
+    list[grab.a] = onRail(list[grab.a]);
+    list[grab.b] = onRail(list[grab.b]);
+    this.waypoints.set(grab.key, list);
+  }
+
   /** Snaps STORED bends onto shared rails with their neighbours, so a
    * saved path is already clean. Without this a drag would persist its
    * raw pointer coordinates and reload as the exact staircase the
@@ -281,7 +328,16 @@ export class WireEditor {
         if (Math.abs(chain[i].y - neighbour.y) < eps) chain[i].y = neighbour.y;
       }
     }
-    this.waypoints.set(key, chain.slice(1, -1));
+    // An anchor a drag has made redundant RETIRES ITSELF — one that landed
+    // on a neighbour, or that no longer bends anything. Snapping alone
+    // would leave it in the list: invisible in the path, but still drawn
+    // as a handle (stacked on the port dot when it collapsed onto an end)
+    // and accumulating with every drag. dropCollinear never removes the
+    // two endpoints, so a coincident anchor yields to them, not the
+    // reverse.
+    const kept = dropCollinear(chain).slice(1, -1);
+    if (kept.length) this.waypoints.set(key, kept);
+    else this.waypoints.delete(key);
   }
 
   /** "reset layout": drop every manual wire edit. Positions are cleared
