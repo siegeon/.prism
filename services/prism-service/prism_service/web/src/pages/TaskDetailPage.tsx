@@ -20,6 +20,7 @@ import { fmtTokens } from "@/lib/format";
 import { relativeTime } from "@/lib/relativeTime";
 import SpendPanel, { type SpendData } from "@/components/SpendPanel";
 import { gateSeverity } from "../lib/gateSeverity";
+import { subscribeStream } from "@/lib/sharedStream";
 
 // The task's real counterpart issue (task a7c989c6) — built server-side from
 // the active WorkItemExternalLink, never a client-derived field.
@@ -1158,16 +1159,14 @@ export default function TaskDetailPage() {
   // refetch-everything anti-pattern this task's likely_misfire names.
   useEffect(() => {
     if (!id) return;
-    const es = new EventSource(`/sse/tasks?project=${project}&task_id=${id}`);
-    es.onmessage = (ev) => {
+    return subscribeStream(`/sse/tasks?project=${project}&task_id=${id}`, (data) => {
       try {
-        const payload = JSON.parse(ev.data) as { task_id?: string; fields?: Partial<Task> };
+        const payload = JSON.parse(data) as { task_id?: string; fields?: Partial<Task> };
         if (payload.task_id !== id || !payload.fields) return;
         const fields = payload.fields;
         setTask((prev) => (prev ? { ...prev, ...fields } : prev));
       } catch { /* ignore malformed payloads */ }
-    };
-    return () => es.close();
+    });
   }, [id, project]);
 
   // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
