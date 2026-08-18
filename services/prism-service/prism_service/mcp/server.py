@@ -68,6 +68,16 @@ _MCP_VIEWER_TOOLS = {
     "memory_recall",
     "prism_guide",
 }
+
+# These tools dereference a caller-supplied host path. Project membership
+# alone cannot prove that the path belongs to the selected workspace, so team
+# mode fails closed until source roots have an ownership-scoped data model.
+_TEAM_UNSCOPED_HOST_PATH_TOOLS = frozenset({
+    "register_claude_source",
+    "verifier_run",
+})
+
+
 def _tool_error(status: int, detail: str) -> CallToolResult:
     return CallToolResult(
         isError=True,
@@ -151,6 +161,14 @@ async def call_tool(name: str, arguments: dict):
                 return _tool_error(400, "invalid project id")
             if target_project != selected_project:
                 return _tool_error(403, "project selector does not match connection")
+    if (
+        ctx.principal.mode == "team"
+        and name in _TEAM_UNSCOPED_HOST_PATH_TOOLS
+    ):
+        return _tool_error(
+            403,
+            "tool is unavailable in team mode until its host path is scoped",
+        )
     if ctx.principal.mode == "team" and name == "project_list":
         visible = get_workspace_service().list_projects_for_user(
             ctx.principal.user_id

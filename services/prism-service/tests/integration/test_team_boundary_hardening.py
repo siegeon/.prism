@@ -724,7 +724,7 @@ def test_local_mcp_keeps_host_path_tools_available(
     ):
         result = asyncio.run(server_module.call_tool(tool_name, arguments))
 
-    assert _mcp_payload(result) == {"ok": True}
+    assert json.loads(result[0].text) == {"ok": True}
     assert dispatched == [f"project-a:{tool_name}"]
 
 
