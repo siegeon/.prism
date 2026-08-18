@@ -17,7 +17,7 @@ import { autoPort, drawPort, drawWire, laneFor, wireColor, wireKey, type Point }
 import {
   PORT_HIT_R, WAYPOINT_HIT_R, WIRE_HIT_R, WireEditor,
   joinLegs, nearestOnPolyline, routeLegs, simplifyPath,
-  type PortHit, type WaypointHit, type WireEnd,
+  type PortHit, type SegmentGrab, type WaypointHit, type WireEnd,
 } from "./workflowWires";
 import type { Slot } from "./layout";
 import type { WorkflowDef } from "@/lib/useWorkflowDef";
@@ -253,6 +253,29 @@ export class WorkflowGraph {
       if (d < bestDist) { bestDist = d; best = { key, index }; }
     });
     return best;
+  }
+
+  /** Index of the polyline run under a world point — which segment a body
+   * drag has grabbed. */
+  segmentAtWorld(w: Wire, wx: number, wy: number): number | null {
+    const pts = this.route(w);
+    let best: number | null = null;
+    let bestDist = WIRE_HIT_R;
+    for (let i = 1; i < pts.length; i++) {
+      const hit = nearestOnPolyline([pts[i - 1], pts[i]], wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = i - 1; }
+    }
+    return best;
+  }
+
+  /** Starts a body drag: resolves the run under the cursor and materializes
+   * the anchors it needs. Null when the point isn't on the wire. */
+  beginSegmentDrag(key: string, wx: number, wy: number): SegmentGrab | null {
+    const w = this.wire(key);
+    if (!w) return null;
+    const seg = this.segmentAtWorld(w, wx, wy);
+    if (seg === null) return null;
+    return this.editor.grabSegment(key, this.route(w), seg);
   }
 
   /** World-space slot a wire end is docked to — what a port drag re-docks

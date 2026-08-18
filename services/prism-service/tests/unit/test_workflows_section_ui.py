@@ -470,3 +470,93 @@ def test_the_orange_stroke_goes_through_the_shared_wire_renderer():
         "caller keeps its exact current color")
     assert "ctx.lineWidth = live ? 3 : 2;" in wires, (
         "the live board's width rule must survive the added parameter")
+
+
+# --------------------------------------------------------------------------
+# Increment 4 (owner: "this is a great step thank you", plus refinements):
+# drag the wire BODY, mint/retire anchors automatically, and stop wasting a
+# whole band on a page title that duplicates the global header.
+# --------------------------------------------------------------------------
+
+def test_the_wire_body_itself_can_be_dragged():
+    """Owner: "I can't drag the wire at all." Draw.io's core gesture is
+    grabbing a SEGMENT and sliding it perpendicular to its own axis — a
+    horizontal run moves vertically, a vertical run moves horizontally."""
+    editor = _wire_editor()
+    graph = _read("live", "workflowGraph.ts")
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert re.search(r'\bgrabSegment\s*\(', editor), (
+        "live/workflowWires.ts cannot grab a segment — there is nothing "
+        "for a body drag to move")
+    assert re.search(r'\bmoveSegment\s*\(', editor), (
+        "a grabbed segment cannot be slid")
+    assert re.search(r'\bsegmentAtWorld\s*\(', graph), (
+        "workflowGraph exposes no segmentAtWorld — the page cannot tell "
+        "WHICH run of the wire is under the cursor")
+    assert re.search(r'"segment"', page), (
+        "the page has no segment drag mode")
+
+
+def test_dragging_a_segment_mints_its_anchors_automatically():
+    """Owner: stop making them "micromanage the need for the double-click
+    anchors". A body drag materializes the anchors the new shape needs by
+    itself; double-click stays as the explicit manual path."""
+    editor = _wire_editor()
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "grabSegment" in editor, "grabSegment does not exist yet"
+    grab = editor.split("grabSegment", 1)[1][:1200]
+    assert "waypoints.set" in grab, (
+        "grabSegment must WRITE the materialized bends — otherwise the "
+        "drag has no anchors to move and the owner is back to "
+        "double-clicking first")
+    assert re.search(r'onDoubleClick', page), (
+        "double-click must REMAIN the explicit add/remove path")
+
+
+def test_a_segment_drag_is_settled_like_every_other_edit():
+    """Anchors a drag makes redundant must retire themselves — the same
+    simplify/settle pass, so a body drag can't leave junk anchors behind
+    that only a manual double-click could clear."""
+    page = _read("pages", "WorkflowsPage.tsx")
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'simplifyPath\s*\(', graph), (
+        "the drawn path must stay simplified while a segment is dragged")
+    settle = [m.start() for m in re.finditer(r'settleWire\s*\(', page)]
+    persist = [m.start() for m in re.finditer(r'persistWires\s*\(\)', page)]
+    assert settle and persist and min(settle) < max(persist), (
+        "a segment drag must settle before it persists, like the other "
+        "wire edits")
+
+
+def test_the_section_title_lives_in_the_global_header():
+    """The page-level title row duplicated the global header one band
+    below it. The header now names the active section, and it derives that
+    name from the SAME nav items the sidebar renders — PageHeader's own
+    TITLES map had already drifted (it said "Tasks" while the nav said
+    "Work")."""
+    header = _read("components", "PageHeader.tsx")
+    sidebar = _read("components", "Sidebar.tsx")
+
+    assert re.search(r'export\s+function\s+sectionTitleFor\s*\(', sidebar), (
+        "Sidebar must export the one section-name resolver, derived from "
+        "its own items array")
+    assert re.search(r'sectionTitleFor[^;]*from\s+"@/components/Sidebar"',
+                     header, re.DOTALL), (
+        "PageHeader must consume that resolver, not keep a second map")
+    assert not re.search(r'const\s+TITLES\s*:', header), (
+        "PageHeader still declares its own TITLES map — that is the "
+        "duplicate source that drifted in the first place")
+
+
+def test_the_workflows_page_no_longer_repeats_its_own_title():
+    """The reclaimed band goes to the canvas."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "<h1" not in page, (
+        "WorkflowsPage still renders its own <h1> — that is the wasted "
+        "band the owner called out, now that the global header names the "
+        "section")
+    assert "<canvas" in page, "the canvas must survive the title removal"
