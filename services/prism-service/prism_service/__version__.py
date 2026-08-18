@@ -4950,3 +4950,20 @@ PRISM_VERSION_NOTES += (
     " approve parks pending instead of stranding to failed, override says"
     " truthfully what it cannot bypass, and no gate check waits silently."
 )
+PRISM_VERSION_NOTES += (
+    "v7.11.33: THE LIVE BOARD'S WIRES EDIT LIKE THE WORKFLOWS ONES "
+    "[task be7a5d2d]. Click a wire on /live and it selects, orange end to "
+    "end with its endpoint dots and bend handles in the same hue; drag any "
+    "run of its body and the run slides, minting the anchors it needs and "
+    "retiring the ones it makes redundant; double-click to add or drop a "
+    "bend; edits persist per surface per project and reload as drawn. "
+    "These gestures already existed on /workflows, and the owner read the "
+    "two boards as one component that had drifted, so the interaction "
+    "layer was PROMOTED rather than copied: live/workflowWires.ts is now "
+    "live/wireEditing.ts, a canvas-agnostic module both canvases consume, "
+    "and neither carries a line of editor logic. graphState.ts is "
+    "integrated, not rewritten -- every port name it exposed survives and "
+    "wireEndpointsFor is still the one geometry source. An untouched live "
+    "wire renders exactly as before: the simplify pass is gated so it can "
+    "never flatten the obstacle-avoidance jogs that board depends on."
+)

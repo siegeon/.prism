@@ -156,8 +156,20 @@ def test_draw_ts_has_a_single_router_entry_point_no_duplicate_route_call():
 
 
 def test_draw_ts_draws_a_port_dot_per_endpoint():
+    """RE-ANCHORED by task be7a5d2d: draw.ts no longer calls drawPort
+    itself. The selected-wire paint (orange body, orange endpoint dots,
+    bend handles) was promoted into wireEditing.ts's drawEditableWire so
+    the /live and /workflows canvases cannot drift into two oranges, and
+    that one renderer is what now draws the dot per endpoint. The
+    invariant is unchanged -- every wire endpoint gets exactly one port
+    dot -- only its home moved."""
     src = _strip_comments(_read(_LIVE / "draw.ts"))
-    assert "drawPort(" in src, "draw.ts's wire loop must draw a port dot per endpoint (AC-1)"
+    assert "drawEditableWire(" in src, (
+        "draw.ts's wire loop must paint through the shared drawEditableWire")
+    shared = _strip_comments(_read(_LIVE / "wireEditing.ts"))
+    body = _function_body(shared, "export function drawEditableWire")
+    assert body.count("drawPort(") == 2, (
+        "drawEditableWire must draw a port dot at BOTH endpoints (AC-1)")
 
 
 # ---------------------------------------------------------------------------
@@ -176,18 +188,42 @@ def test_graph_state_declares_port_override_machinery():
 
 
 def test_clear_all_overrides_clears_both_position_and_port_maps():
+    """RE-ANCHORED by task be7a5d2d: the port map is no longer a second
+    map living on GraphState -- graphState.portOverrides is now a view
+    onto the shared WireEditor's one store, so clearAllOverrides clears
+    positions and then sweeps the shared editor (which drops re-docked
+    ends AND bends). The invariant is unchanged and in fact widened:
+    'reset layout' must still reset EVERYTHING."""
     src = _read(_LIVE / "graphState.ts")
     body = _function_body(src, "clearAllOverrides(): void")
-    assert "overrides" in body and "portOverrides" in body, (
-        "clearAllOverrides must clear BOTH maps so 'reset layout' resets everything (AC-9)")
+    assert "overrides.clear()" in body, (
+        "clearAllOverrides must still drop the manual card positions (AC-9)")
+    assert "wireEdits.clear()" in body, (
+        "clearAllOverrides must sweep the shared wire editor, which owns "
+        "the docked ports and the bends -- a reset that left wires bent "
+        "would only half-work (AC-9)")
 
 
 def test_port_at_world_calls_portPoint_mirroring_the_draw():
-    src = _read(_LIVE / "graphState.ts")
-    body = _function_body(src, "portAtWorld(")
-    assert "portPoint(" in body, (
-        "portAtWorld must call the SAME portPoint geometry the renderer "
-        "uses (AC-8, mx-0a0bf4), never re-derive its own copy")
+    """RE-ANCHORED by task be7a5d2d: the hit-test moved one module deeper
+    into the shared wireEditing.ts, and it now mirrors the draw MORE
+    strictly than this used to. It no longer recomputes portPoint from
+    the override map at all -- it reads the endpoints of the very
+    polyline the renderer strokes, which is also correct for a wire drawn
+    as a plain elbow whose ends are edge midpoints rather than ports.
+    mx-0a0bf4 is preserved, not weakened."""
+    graph = _read(_LIVE / "graphState.ts")
+    assert "wireEdits.portAtWorld(" in _strip_comments(graph), (
+        "GraphState.portAtWorld must delegate to the shared interaction "
+        "layer rather than keeping a second copy of the hit-test")
+    body = _function_body(_read(_LIVE / "wireEditing.ts"), "portAtWorld(")
+    assert "this.route(" in body, (
+        "the shared portAtWorld must hit-test against the SAME polyline "
+        "the renderer strokes (AC-8, mx-0a0bf4), never re-derive its own "
+        "copy of the side/offset math")
+    assert "portPoint(" not in body, (
+        "reading route() IS the mirror -- recomputing portPoint here "
+        "would be the second copy this rule exists to forbid")
 
 
 # ---------------------------------------------------------------------------

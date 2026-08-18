@@ -3,7 +3,7 @@ import { useProject } from "@/lib/project";
 import { fetchWorkflowDef } from "@/lib/useWorkflowDef";
 import { Page, ErrorBanner } from "@/components/ui";
 import { WorkflowGraph, drawWorkflows } from "@/live/workflowGraph";
-import type { SegmentGrab, WireEnd } from "@/live/workflowWires";
+import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
 
 /** /workflows — the conductor's FSM and the bots that drive it, per project.
@@ -106,11 +106,10 @@ export default function WorkflowsPage() {
           // Wire edits rehydrate AFTER setDef: both maps are keyed by wire,
           // and the wire list only exists once a definition has landed.
           // Unknown keys are dropped inside the editor.
-          const known = graphRef.current.wireKeys();
           readJson<Record<string, WirePort>>(portsKey(project), (raw) =>
-            graphRef.current.editor.hydratePorts(raw, known));
+            graphRef.current.wireEdits.hydrate(raw, undefined));
           readJson<Record<string, Point[]>>(waypointsKey(project), (raw) =>
-            graphRef.current.editor.hydrateWaypoints(raw, known));
+            graphRef.current.wireEdits.hydrate(undefined, raw));
           const canvas = canvasRef.current;
           graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
         })
@@ -163,9 +162,9 @@ export default function WorkflowsPage() {
   }, [project]);
 
   const persistWires = useCallback(() => {
-    const { editor } = graphRef.current;
-    writeJson(portsKey(project), editor.serializePorts());
-    writeJson(waypointsKey(project), editor.serializeWaypoints());
+    const saved = graphRef.current.wireEdits.serialize();
+    writeJson(portsKey(project), saved.ports);
+    writeJson(waypointsKey(project), saved.waypoints);
   }, [project]);
 
   const handleReset = useCallback(() => {

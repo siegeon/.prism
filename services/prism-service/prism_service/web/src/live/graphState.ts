@@ -6,10 +6,8 @@
 
 import type { GraphEdge, GraphNode, GraphSnapshot, WorkEvent } from "./types";
 import { LayoutEngine, type Slot } from "./layout";
-import {
-  routeOrthogonal, portPoint, portFromWorld, autoPort, wireKey, laneFor,
-  type Point, type WirePort,
-} from "./wires";
+import { wireKey, type Point, type WirePort } from "./wires";
+import { WireInteraction, type WireSurface } from "./wireEditing";
 import { spawnPacket, stepPackets, type Packet } from "./packets";
 import { spawnToast, pruneToasts, type Toast } from "./toasts";
 import { type CardState } from "./palette";
@@ -380,7 +378,50 @@ export class GraphState {
    * just sits on the side/offset it was dropped on. LivePage serializes
    * this to localStorage (prism.live.ports.<project>) on drag-release and
    * rehydrates it via hydratePortOverrides() after bootstrap. */
-  portOverrides = new Map<string, WirePort>();
+  get portOverrides(): Map<string, WirePort> {
+    return this.wireEdits.editor.portMap;
+  }
+
+  /** How the shared interaction layer reads THIS board (task be7a5d2d).
+   * The two policy answers are all that is ours: /live is always
+   * port-aware (no plain elbow), and it must NOT simplify an unbent
+   * route -- SIMPLIFY_EPS 12 exceeds wires.ts's LANE_STEP 10, so the
+   * pass would snap flat exactly the lane offsets that carry a wire
+   * around an intervening card. */
+  private readonly wireSurface: WireSurface = {
+    keys: () => this.edges.map((e) => wireKey(e.source, e.target)),
+    ends: (key) => {
+      const edge = this.edges.find((e) => wireKey(e.source, e.target) === key);
+      const a = edge && this.byId.get(edge.source);
+      const b = edge && this.byId.get(edge.target);
+      if (!edge || !a || !b) return null;
+      return {
+        from: { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h },
+        to: { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h },
+        fromId: a.id,
+        toId: b.id,
+      };
+    },
+    obstacles: (key) => {
+      const edge = this.edges.find((e) => wireKey(e.source, e.target) === key);
+      if (!edge) return [];
+      const out: Slot[] = [];
+      for (const n of this.nodes) {
+        if (n.id === edge.source || n.id === edge.target) continue;
+        out.push({ x: n.x, y: n.y, w: n.slot.w, h: n.slot.h });
+      }
+      return out;
+    },
+    prefersPlainElbow: () => false,
+    simplifyUnbentRoutes: false,
+  };
+
+  /** Wire selection, re-docked ends and bends -- the SAME module the
+   * /workflows canvas drives, so the two boards share one grammar rather
+   * than drifting into two (task be7a5d2d). `portOverrides` above is a
+   * view onto this one store, not a second map. */
+  readonly wireEdits = new WireInteraction(this.wireSurface);
+
   /** `${wireKey}:${end}` of the port dot currently under the user's
    * pointer, mirroring draggingNodeId -- autoFitCamera stands down while
    * set, same reasoning as the node case. */
@@ -391,14 +432,14 @@ export class GraphState {
   }
 
   /** Resolves a world-space drop point against the CARD the given end is
-   * anchored to (`nodeId`) via portFromWorld -- the inverse of the
-   * portPoint geometry the renderer/hit-test both use -- and writes it
-   * into portOverrides. Called on every port-drag pointermove (AC-6). */
+   * anchored to (`nodeId`) and writes it into the shared editor, which
+   * runs it through the same portFromWorld the renderer's geometry
+   * inverts. Called on every port-drag pointermove (AC-6). */
   setPortFromWorld(key: string, end: "from" | "to", nodeId: string, wx: number, wy: number): void {
     const node = this.byId.get(nodeId);
     if (!node) return;
     const slot = { x: node.x, y: node.y, w: node.slot.w, h: node.slot.h };
-    this.setPortOverride(key, end, portFromWorld(slot, wx, wy));
+    this.wireEdits.editor.setPortFromWorld(key, end, slot, wx, wy);
   }
 
   setOverride(id: string, x: number, y: number): void {
@@ -415,7 +456,11 @@ export class GraphState {
    * the persisted copy in the same breath. */
   clearAllOverrides(): void {
     this.overrides.clear();
-    this.portOverrides.clear();
+    // Every manual WIRE edit too -- re-docked ends AND bends. A reset
+    // that left wires bent would only half-work, which is worse than no
+    // escape hatch at all (the shared editor owns both; this used to
+    // clear a local portOverrides map that no longer exists).
+    this.wireEdits.clear();
   }
 
   /** Rehydrates saved per-node position overrides once bootstrap has
@@ -441,23 +486,24 @@ export class GraphState {
    * snapshot is silently dropped, same drop-unknown-ids rule as
    * hydrateOverrides above. */
   hydratePortOverrides(saved: Record<string, WirePort>): void {
-    for (const [k, port] of Object.entries(saved)) {
-      if (!port || (port.side !== "left" && port.side !== "right" && port.side !== "top" && port.side !== "bottom")) continue;
-      if (!Number.isFinite(port.t)) continue;
-      const end = k.endsWith(":from") ? "from" : k.endsWith(":to") ? "to" : null;
-      if (!end) continue;
-      const key = k.slice(0, k.length - (end.length + 1));
-      const [source, target] = key.split("->");
-      if (this.edges.some((e) => e.source === source && e.target === target)) {
-        this.portOverrides.set(k, { side: port.side, t: port.t });
-      }
-    }
+    this.wireEdits.hydrate(saved, undefined);
   }
 
   serializePortOverrides(): Record<string, WirePort> {
-    const out: Record<string, WirePort> = {};
-    for (const [k, port] of this.portOverrides) out[k] = port;
-    return out;
+    return this.wireEdits.serialize().ports;
+  }
+
+  /** Bends, saved and restored exactly the way ports already are, so a
+   * wire the owner shaped on /live reloads as drawn. Persisted by
+   * LivePage under prism.live.waypoints.<project> -- a key that names
+   * BOTH the surface and the project, so a /live edit can never move a
+   * /workflows wire. */
+  hydrateWireWaypoints(saved: Record<string, Point[]>): void {
+    this.wireEdits.hydrate(undefined, saved);
+  }
+
+  serializeWireWaypoints(): Record<string, Point[]> {
+    return this.wireEdits.serialize().waypoints;
   }
 
   /** Round 5 item 1: the content bbox the CURRENT (or in-flight) camera
@@ -650,53 +696,24 @@ export class GraphState {
    * rectangle for routeOrthogonal's channel search (AC-4). No longer
    * `private`: draw.ts calls it directly (state.wireEndpointsFor(e)). */
   wireEndpointsFor(edge: LiveEdge): Point[] | null {
-    const a = this.byId.get(edge.source);
-    const b = this.byId.get(edge.target);
-    if (!a || !b) return null;
-    const key = wireKey(edge.source, edge.target);
-    const lane = laneFor(key);
-    // routeOrthogonal wants (from, to) as SLOTS in the direction the wire
-    // visually flows: structure edges parent(task)->child(subtask) flow
-    // left->right; token edges session->task flow session(below) up into
-    // the task, which routeOrthogonal's fallback branch already handles.
-    const fromSlot = { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h };
-    const toSlot = { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h };
-    const fromPort = this.portOverrides.get(`${key}:from`) ?? autoPort(fromSlot, toSlot, lane);
-    const toPort = this.portOverrides.get(`${key}:to`) ?? autoPort(toSlot, fromSlot, lane);
-    const obstacles: Slot[] = [];
-    for (const n of this.nodes) {
-      if (n.id === a.id || n.id === b.id) continue;
-      obstacles.push({ x: n.x, y: n.y, w: n.slot.w, h: n.slot.h });
-    }
-    return routeOrthogonal(fromSlot, toSlot, { fromPort, toPort, obstacles, lane });
+    // STILL the one router entry point -- it now resolves through the
+    // shared interaction layer, which honors any manual bends or
+    // re-docked ends and otherwise hands back routeOrthogonal's own
+    // polyline UNTOUCHED (WireSurface.simplifyUnbentRoutes is false
+    // here), so an unedited live wire renders exactly as it always has.
+    const pts = this.wireEdits.route(wireKey(edge.source, edge.target));
+    return pts.length >= 2 ? pts : null;
   }
 
-  /** Hit-tests every wire's two port dots against a world point, within
-   * PORT_HIT_R -- calls the SAME portPoint the renderer/router use (AC-8,
+  /** Hit-tests every wire's two port dots against a world point (AC-8,
    * mx-0a0bf4: the hit-test must MIRROR the draw, never re-derive its own
-   * copy of the side/offset math). Returns the closest hit, or null. */
+   * copy of the side/offset math). The shared layer now owns it and
+   * mirrors the draw even more directly than this used to -- it reads the
+   * endpoints of the polyline the renderer actually strokes rather than
+   * recomputing portPoint from the override map. Returns the closest hit,
+   * or null. */
   portAtWorld(wx: number, wy: number): PortHit | null {
-    const PORT_HIT_R = 10;
-    let best: PortHit | null = null;
-    let bestDist = PORT_HIT_R;
-    for (const e of this.edges) {
-      const a = this.byId.get(e.source);
-      const b = this.byId.get(e.target);
-      if (!a || !b) continue;
-      const key = wireKey(e.source, e.target);
-      const lane = laneFor(key);
-      const fromSlot = { x: a.x, y: a.y, w: a.slot.w, h: a.slot.h };
-      const toSlot = { x: b.x, y: b.y, w: b.slot.w, h: b.slot.h };
-      const fromPort = this.portOverrides.get(`${key}:from`) ?? autoPort(fromSlot, toSlot, lane);
-      const toPort = this.portOverrides.get(`${key}:to`) ?? autoPort(toSlot, fromSlot, lane);
-      const p0 = portPoint(fromSlot, fromPort);
-      const d0 = Math.hypot(wx - p0.x, wy - p0.y);
-      if (d0 < bestDist) { bestDist = d0; best = { key, end: "from", nodeId: a.id }; }
-      const p1 = portPoint(toSlot, toPort);
-      const d1 = Math.hypot(wx - p1.x, wy - p1.y);
-      if (d1 < bestDist) { bestDist = d1; best = { key, end: "to", nodeId: b.id }; }
-    }
-    return best;
+    return this.wireEdits.portAtWorld(wx, wy);
   }
 
   private upsertSessionNode(id: string, driverId: string, now: number): LiveNode {
