@@ -23,6 +23,7 @@
  */
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { subscribeStream } from "@/lib/sharedStream";
 
 export type ServiceVersion = { version: string; notes: string; dev_mode?: boolean };
 
@@ -43,15 +44,18 @@ function startLiveWatchdog() {
     else if (v !== initial) window.location.reload();
   };
   // Fast path: SSE reconnect after a backend swap surfaces the new version.
-  try {
-    const es = new EventSource("/sse/live");
-    es.onmessage = (ev) => {
-      sseHealthy = true;
-      try { onVersion((JSON.parse(ev.data) as { version?: string }).version); }
+  // Subscribes through lib/sharedStream (task b835f639) so this watchdog costs
+  // no connection of its own — it used to hold one in EVERY tab, on every page.
+  // Health now arrives via onHealth instead of a locally-owned es.onerror; the
+  // 15s fallback below stays gated on it exactly as before (D-6).
+  subscribeStream(
+    "/sse/live",
+    (data) => {
+      try { onVersion((JSON.parse(data) as { version?: string }).version); }
       catch { /* ignore malformed payloads */ }
-    };
-    es.onerror = () => { sseHealthy = false; };
-  } catch { /* EventSource unavailable — polling still covers it */ }
+    },
+    (healthy) => { sseHealthy = healthy; },
+  );
   // Robust fallback: poll every 15s, but ONLY while the SSE channel above
   // looks unhealthy — /sse/live already pushes the version on connect and
   // reconnect, so this still covers a throttled/suspended tab whose SSE

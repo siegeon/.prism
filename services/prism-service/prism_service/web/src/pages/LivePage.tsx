@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import { subscribeStream } from "@/lib/sharedStream";
 import { useVersion } from "@/lib/version";
 import { Page, ErrorBanner } from "@/components/ui";
 import { GraphState } from "@/live/graphState";
@@ -161,18 +162,17 @@ export default function LivePage() {
   }, [project]);
 
   // Incremental push.
-  useEffect(() => {
-    const es = new EventSource(`/sse/work?project=${encodeURIComponent(project)}`);
-    es.onmessage = (m) => {
+  useEffect(() => subscribeStream(
+    `/sse/work?project=${encodeURIComponent(project)}`,
+    (data) => {
       try {
-        const event = JSON.parse(m.data) as WorkEvent;
+        const event = JSON.parse(data) as WorkEvent;
         stateRef.current.applyEvent(event);
       } catch {
         // malformed frame — drop it, keep the stream alive
       }
-    };
-    return () => es.close();
-  }, [project]);
+    },
+  ), [project]);
 
   // Canvas sizing — crisp at devicePixelRatio, backing store scaled, CSS
   // size unscaled, so lines/text stay sharp on hi-DPI displays.

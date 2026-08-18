@@ -16,6 +16,7 @@
  * rather than silently collapsing into "empty".
  */
 import { useEffect, useState, useCallback, useRef } from "react";
+import { subscribeStream } from "@/lib/sharedStream";
 import { api } from "@/lib/api";
 import { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
 
@@ -126,11 +127,9 @@ export function useConductorState(project: string) {
   // (same route SessionsPage.tsx uses) — TaskService.update publishes
   // task.changed on every conductor step/gate write, so this reaches load()
   // on real motion.
-  useEffect(() => {
-    const es = new EventSource(`/sse/sessions?project=${project}`);
-    es.onmessage = () => { load(); };
-    return () => es.close();
-  }, [project, load]);
+  useEffect(() => subscribeStream(`/sse/sessions?project=${project}`, () => {
+    load();
+  }), [project, load]);
 
   // Fallback sweep only: gates on tab visibility + genuine staleness, never
   // on "is the push connection alive" (onopen fires once and stays true

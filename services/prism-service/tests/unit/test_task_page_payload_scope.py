@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 _HERE = Path(__file__).resolve()
@@ -75,6 +76,19 @@ def _walk_braces(src: str, brace: int) -> str:
 def _brace_body(src: str, marker: str) -> str:
     i = src.index(marker)
     return _walk_braces(src, src.index("{", i))
+
+
+def _subscribe_callback_body(src: str) -> str:
+    """Body of the callback passed to `subscribeStream(url, (…) => { … })`.
+
+    Added 2026-08-18 (task b835f639). Deliberately NOT _brace_body: the url is
+    a template literal whose `${project}` interpolation contains the first `{`
+    after the marker, so a naive scan would walk the literal's braces instead
+    of the callback's. Anchors on the arrow that follows the argument list.
+    """
+    i = src.index("subscribeStream(")
+    arrow = src.index("=>", i)
+    return _walk_braces(src, src.index("{", arrow))
 
 
 def _fn_body_from_signature_line(src: str, marker: str) -> str:
@@ -225,14 +239,22 @@ def test_task_detail_page_has_no_setinterval_poll():
 
 
 def test_sse_handler_patches_state_and_never_refetches():
+    # RE-ANCHORED 2026-08-18 (task b835f639): TaskDetailPage no longer holds
+    # its own EventSource — lib/sharedStream.ts owns every stream in the SPA so
+    # one socket is shared per URL and across tabs (three global streams per
+    # tab were exhausting the browser's ~6-per-origin cap and starving new
+    # navigations). The D-3/D-4 invariants below are unchanged: this page still
+    # follows the task-scoped /sse/tasks stream, and its handler still PATCHES
+    # from `fields` rather than refetching.
     src = _read("pages/TaskDetailPage.tsx")
-    assert "new EventSource(" in src and "/sse/tasks" in src, (
-        "TaskDetailPage must open an EventSource against "
+    assert "new EventSource(" not in src, (
+        "TaskDetailPage must not construct its own EventSource — it must "
+        "subscribe through lib/sharedStream.ts (task b835f639)")
+    assert "subscribeStream(" in src and "/sse/tasks" in src, (
+        "TaskDetailPage must subscribe against "
         "/sse/tasks?project=&task_id= (D-3) — no task-scoped SSE "
         "subscription found")
-    assert "es.onmessage" in src, (
-        "TaskDetailPage must wire an onmessage handler on the /sse/tasks EventSource")
-    handler_body = _brace_body(src, "es.onmessage = (")
+    handler_body = _subscribe_callback_body(src)
     assert "load(" not in handler_body and "api.get(" not in handler_body, (
         "the onmessage handler must PATCH local task state from the "
         "pushed event's `fields` (D-4), never call load()/api.get() — "
@@ -254,20 +276,40 @@ def test_livebar_no_longer_polls_conductor_state_unconditionally():
 
 
 def test_livebar_subscribes_to_sse():
+    # RE-ANCHORED 2026-08-18 (task b835f639). D-6's intent was that LiveBar's
+    # refresh is driven by a real SSE push rather than an unconditional poll.
+    # LiveBar's OWN subscription turned out to be a duplicate of the one
+    # lib/useConductorState.ts already opens for it — same url, and both
+    # handlers only called the same refresh() — so it is now deleted outright
+    # rather than routed through the shared module. The push-driven invariant
+    # survives via the hook; what must NOT come back is a self-opened stream
+    # or an ungated poll.
     src = _read("components/LiveBar.tsx")
-    assert "new EventSource(" in src, (
-        "LiveBar must open an EventSource so its poll can be gated on "
-        "real SSE health (D-6) rather than firing unconditionally")
+    assert "new EventSource(" not in src, (
+        "LiveBar must not re-open a stream of its own — it duplicated the "
+        "hook's /sse/sessions subscription and cost a connection in EVERY "
+        "tab against the browser's ~6-per-origin cap (task b835f639)")
+    assert re.search(r"useConductorState\(\s*project\s*\)", src), (
+        "LiveBar must still be push-refreshed through useConductorState(project), "
+        "whose subscription reaches load() — that is what keeps D-6 honest now "
+        "that the bar opens no stream itself")
 
 
 def test_version_poll_is_gated_on_sse_health():
+    # RE-ANCHORED 2026-08-18 (task b835f639): version.ts no longer owns an
+    # EventSource, so it cannot read es.onerror itself. lib/sharedStream.ts
+    # reports stream health back through subscribeStream's onHealth callback.
+    # D-6's invariant is untouched — the 15s /api/version poll must still run
+    # ONLY while the stream looks unhealthy, never always-on.
     src = _read("lib/version.ts")
     fn_body = _fn_body_from_signature_line(src, "function startLiveWatchdog(")
-    assert ("es.onerror" in fn_body) or ("readyState" in fn_body), (
-        "startLiveWatchdog must gate its fallback poll on SSE health "
-        "(es.onerror / es.readyState) per D-6 — otherwise there is no "
-        f"honest justification for keeping any poll at all; got: {fn_body!r}")
-    marker = "es.onerror" if "es.onerror" in fn_body else "readyState"
+    assert ("onHealth" in fn_body) or ("es.onerror" in fn_body) or ("readyState" in fn_body), (
+        "startLiveWatchdog must gate its fallback poll on stream health "
+        "(subscribeStream's onHealth, or es.onerror / es.readyState if it "
+        "still owned a stream) per D-6 — otherwise there is no honest "
+        f"justification for keeping any poll at all; got: {fn_body!r}")
+    marker = ("onHealth" if "onHealth" in fn_body
+              else "es.onerror" if "es.onerror" in fn_body else "readyState")
     top_level = fn_body.split(marker, 1)[0]
     assert "setInterval(poll, 15000)" not in top_level, (
         "the /api/version fallback poll must not run unconditionally at "

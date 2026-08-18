@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import { subscribeStream } from "@/lib/sharedStream";
 import { Page, Kpi, SectionLabel, Empty } from "@/components/ui";
 import { EntityChip } from "@/components/EntityChip";
 import { fmtTokens } from "@/lib/format";
@@ -76,9 +77,7 @@ export default function SessionsPage() {
 
   useEffect(() => {
     load();
-    const es = new EventSource(`/sse/sessions?project=${project}`);
-    es.onmessage = () => load();
-    return () => es.close();
+    return subscribeStream(`/sse/sessions?project=${project}`, () => { load(); });
   }, [project, load]);
 
   const tokens = outcomes.map((o) => o.tokens ?? o.tokens_used ?? 0).filter(Boolean);
