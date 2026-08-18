@@ -636,7 +636,17 @@ class TaskService:
 
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = self._db.execute(
-            f"SELECT * FROM tasks{where} ORDER BY priority DESC, created_at ASC",
+            # FIFO: oldest first (owner 2026-08-07, "i would like work
+            # ordered fifo"). This was `priority DESC, created_at ASC`, so
+            # creation order only broke ties within one priority and the
+            # oldest thing on the board could sit under anything scored
+            # higher, indefinitely. Priority is still a field you set and
+            # read; it no longer decides who goes first. next_task() picks
+            # unblocked[0] off this same ordering, so DISPENSING becomes
+            # FIFO too - intended, and asserted in
+            # tests/unit/test_work_is_ordered_fifo.py rather than left as an
+            # invisible consequence of an ORDER BY edit.
+            f"SELECT * FROM tasks{where} ORDER BY created_at ASC",
             params,
         ).fetchall()
 
@@ -770,13 +780,16 @@ class TaskService:
     # ------------------------------------------------------------------
 
     def next_task(self) -> Optional[dict]:
-        """Return the highest-priority unblocked pending task.
+        """Return the OLDEST unblocked pending task (FIFO).
 
         Algorithm:
         1. Fetch all pending tasks.
         2. Filter out tasks whose dependencies are not all 'done'.
-        3. Sort by priority DESC, created_at ASC.
-        4. Return top result with a reason string.
+        3. Take the oldest, since list() orders created_at ASC.
+        4. Return it with a reason string.
+
+        Was "highest-priority" until 2026-08-07; the owner asked for work
+        ordered FIFO, so priority no longer decides who is dispensed.
         """
         pending = self.list(status="pending")
         if not pending:
@@ -795,14 +808,14 @@ class TaskService:
         if not unblocked:
             return None
 
-        # Already sorted by priority DESC, created_at ASC from list()
+        # Already sorted created_at ASC (FIFO) by list()
         best = unblocked[0]
         reason_parts = [f"priority={best.priority}"]
         if best.assigned_agent:
             reason_parts.append(f"assigned to {best.assigned_agent}")
         if best.story_file:
             reason_parts.append(f"story={best.story_file}")
-        reason = "Highest priority unblocked task: " + ", ".join(reason_parts)
+        reason = "Oldest unblocked task (FIFO): " + ", ".join(reason_parts)
 
         return {"task": best, "reason": reason}
 
