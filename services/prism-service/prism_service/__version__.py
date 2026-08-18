@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.28"
+PRISM_VERSION = "7.11.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.29: A PER-PROJECT WORKFLOWS SECTION ON THE CANVAS [task f506ece4]. "
+    "/workflows draws the conductor FSM as a wired chain with the four bots "
+    "(Steward/Verifier/Builder/Architect) wired to the steps they own, a "
+    "count badge where live tasks are standing, and ambient packets on the "
+    "wires that are carrying work. No new entities: GET /api/workflows "
+    "assembles it from WORKFLOW_STEPS, STEP_ROLES, ROLE_CARDS and the "
+    "existing task rows, and is now the SINGLE source of the step ordering "
+    "- lib/workflowChips.ts no longer carries a hand-copied duplicate of "
+    "the backend FSM. "
     "7.11.28: THE OWNER'S PLAIN APPROVE FINISHES AN EPIC GATE [task dbfe3727]. gate_decide's rollup park tooth (457b38db) now lets an approve whose actor resolves to a real human decide a demo/review epic (the advertised remedy works), and no longer parks machine-graded proof_type=test epics (epic 37c9207b suite AC-3 restored). Non-human approves still park; resolution failure fails closed. "
     "7.11.24: /live port handles are visible on idle wires (task "
     "763168f8) - full-opacity light-slate dot at radius 4 while the wire "

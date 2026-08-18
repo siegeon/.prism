@@ -9,7 +9,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "motion/react";
-import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
+import { stepLabel, personaLabel } from "@/lib/workflowChips";
+import { useWorkflowSteps } from "@/lib/useWorkflowDef";
 import { domainTone } from "@/lib/domainTone";
 import { fmtTokens } from "@/lib/format";
 import { Lozenge } from "@/components/Lozenge";
@@ -199,7 +200,7 @@ export default function StepRail({
   // Completion proof & risk — rendered in the completion gate's evidence area.
   completion?: GateCompletion;
 }) {
-  const steps = WORKFLOW_STEPS_ORDERED;
+  const steps = useWorkflowSteps();
   const byStep = turnsByStep(turns ?? []);
   const durByStep = stageDurations(turns ?? []);
   // Bar scale: the heaviest stage across the run (so bars are relative to it).

@@ -122,8 +122,18 @@ def test_the_page_is_a_real_project_scoped_page():
         "WorkflowsPage.tsx must default-export the page component")
     assert "<Page>" in page, "the page must render inside the shared <Page> chrome"
     assert "useProject()" in page, "the page must read the selected project"
-    assert re.search(r'/api/workflows\?project=\$\{encodeURIComponent\(project\)\}', page), (
-        "the page must scope its fetch to the selected project")
+    # SUPERSEDED (this slice): this used to require the raw
+    # `/api/workflows?project=${encodeURIComponent(project)}` literal in the
+    # page. The endpoint ended up with TWO consumers on different clocks —
+    # this page's per-project occupancy poll and the conductor rail's
+    # cached one-shot — so the URL is owned once by lib/useWorkflowDef and
+    # both call through it. The invariant is unchanged (the page's read is
+    # scoped to the selected project); only WHERE the scoping is spelled
+    # moved, and the literal is still pinned, on its owner, in
+    # test_the_step_ordering_is_sourced_from_the_api below.
+    assert re.search(r'fetchWorkflowDef\(project\)', page), (
+        "the page must scope its fetch to the selected project via the "
+        "shared fetcher")
     assert "<canvas" in page, "the Workflows section is a canvas surface"
 
 
@@ -209,11 +219,15 @@ def test_the_step_ordering_is_sourced_from_the_api():
     """One hook owns the fetch, so there is exactly one place the ordering
     can come from."""
     hook = _read("lib", "useWorkflowDef.ts")
-    assert "/api/workflows" in hook, (
-        "lib/useWorkflowDef.ts must fetch the step definition from "
-        "GET /api/workflows")
+    assert re.search(
+        r'/api/workflows\?project=\$\{encodeURIComponent\(project\)\}', hook), (
+        "lib/useWorkflowDef.ts must fetch the definition from "
+        "GET /api/workflows, scoped to the requested project")
     assert re.search(r'export\s+function\s+useWorkflowSteps\s*\(', hook), (
         "useWorkflowSteps() is the hook the conductor rail consumes")
+    assert re.search(r'export\s+function\s+fetchWorkflowDef\s*\(', hook), (
+        "one exported fetcher owns the endpoint — the rail and the canvas "
+        "must not each spell the URL")
 
 
 def test_the_conductor_rail_consumes_the_hook():

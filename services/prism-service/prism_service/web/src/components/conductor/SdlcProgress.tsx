@@ -10,7 +10,8 @@ import { motion, useMotionValue, useTransform, useAnimationFrame } from "motion/
 // useSpring tweens the current-step fill between 5s polls; its config keys off
 // `reduced` so prefers-reduced-motion collapses the tween (see segSpring below).
 import { useSpring } from "motion/react";
-import { WORKFLOW_STEPS_ORDERED, stepLabel, personaLabel } from "@/lib/workflowChips";
+import { stepLabel, personaLabel } from "@/lib/workflowChips";
+import { useWorkflowSteps } from "@/lib/useWorkflowDef";
 import { fmtTokens } from "@/lib/format";
 import { activityLabel } from "@/lib/activityLabel";
 
@@ -154,7 +155,7 @@ export default function SdlcProgress({
   // token readout + the amber token bar so token info isn't duplicated.
   hideTokens?: boolean;
 }) {
-  const steps = WORKFLOW_STEPS_ORDERED;
+  const steps = useWorkflowSteps();
   const curIdx = steps.findIndex((s) => s.id === step);
   const tokens = phase?.tokens_since_step ?? 0;
   const basis = phase?.basis ?? "time";
