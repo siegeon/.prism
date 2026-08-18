@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import {
@@ -19,16 +19,16 @@ function isInTauri(): boolean {
   return typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 }
 
-type SectionId = "projects" | "connections" | "activity" | "logs" | "service";
+type SectionId = "projects" | "integrations" | "activity" | "logs" | "service";
 
 const SECTION_META: Record<SectionId, { title: string; description: string }> = {
   projects: {
     title: "Projects",
     description: "Add, configure, sync, and delete tracked repos.",
   },
-  connections: {
-    title: "Claude auth",
-    description: "OAuth subscription PRISM uses to run analyzers and answer ask-the-knowledge queries. PRISM reads tokens from your host's ~/.claude directory (native install) or the bind-mounted /root/.claude (docker install), so any `claude login` you've already done is reused — no second login here.",
+  integrations: {
+    title: "Integrations",
+    description: "The accounts PRISM works through — Claude (AI: analyzers + claude -p mapping inference) and the task SOURCES Jira & GitHub. PRISM syncs your project's tasks with their system: connect an account, confirm the auto-suggested project mapping and user link, then pull their issues in as PRISM tasks.",
   },
   activity: {
     title: "Background activity",
@@ -44,13 +44,14 @@ const SECTION_META: Record<SectionId, { title: string; description: string }> = 
   },
 };
 
-const KNOWN_SECTIONS: SectionId[] = ["projects", "connections", "activity", "logs", "service"];
+const KNOWN_SECTIONS: SectionId[] = ["projects", "integrations", "activity", "logs", "service"];
 
 function resolveSection(raw: string | undefined): SectionId {
   // Legacy URL aliases — keep bookmarked links and prior versions working.
-  // `auth` (v5.1.8) is now Connections; `jobs` and `workers` are now
-  // the unified `activity` page.
-  if (raw === "auth") return "connections";
+  // `auth` (v5.1.8) and `connections` folded into Integrations — Claude is
+  // now a first-class integration alongside the trackers. `jobs`/`workers`
+  // are the unified `activity` page.
+  if (raw === "auth" || raw === "connections") return "integrations";
   if (raw === "jobs" || raw === "workers") return "activity";
   return (raw && (KNOWN_SECTIONS as string[]).includes(raw)) ? (raw as SectionId) : "projects";
 }
@@ -205,31 +206,69 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      {section === "connections" && (
+      {section === "integrations" && (
         <div className="space-y-6">
+          <div className="rounded-lg border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)]/40 px-4 py-3">
+            <div className="font-serif text-base">Integrations</div>
+            <p className="text-xs opacity-70 mt-1 leading-relaxed">
+              The accounts PRISM works through. Claude is the AI integration;
+              Jira and GitHub are task SOURCES — PRISM syncs your project's tasks
+              with their system. Each connector is one guided setup: connect the
+              account, confirm the auto-suggested project mapping and user link,
+              then pull.
+            </p>
+          </div>
+
+          {/* Claude — the AI integration. Powers analyzers + the claude -p
+              mapping inference the trackers below lean on. */}
           <Card>
-            <SectionLabel>Claude auth</SectionLabel>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-[0.08em] border bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] border-[color:var(--accent-emerald-ring)]">
+                <span className="w-1.5 h-1.5 rounded-[2px] bg-current mr-1.5" /> Claude
+              </span>
+              <SectionLabel>Claude · AI integration</SectionLabel>
+            </div>
+            <p className="text-xs opacity-60 mb-3 leading-snug">
+              The AI account PRISM runs analyzers on — and shells out to as{" "}
+              <span className="font-mono">claude -p</span> to infer how a pulled
+              Jira/GitHub issue becomes a well-formed PRISM task.
+            </p>
             <ClaudeAuthCard />
           </Card>
           <Card>
             <SectionLabel>Claude source</SectionLabel>
             <ClaudeSourceCard project={active} />
           </Card>
+
+          {/* Jira — one connector, one guided flow: connect account ->
+              auto-suggested project mapping -> auto-figured user link -> pull. */}
           <Card>
-            <SectionLabel>Jira Cloud</SectionLabel>
+            <div className="flex items-center gap-2 mb-3">
+              <SourceBadge src="jira" />
+              <SectionLabel>Jira Cloud · connect account</SectionLabel>
+            </div>
+            <JiraSyncSummary />
             <JiraAuthCard />
           </Card>
           <Card>
-            <SectionLabel>Jira source</SectionLabel>
+            <SectionLabel>Jira ⇌ project mapping (auto-suggested)</SectionLabel>
             <JiraMappingCard />
           </Card>
           <Card>
-            <SectionLabel>Sync activity</SectionLabel>
-            <JiraSyncActivityCard />
+            <SectionLabel>Jira account ⇌ PRISM user (auto-figured)</SectionLabel>
+            <UserIdentityCard />
           </Card>
           <Card>
-            <SectionLabel>Identity &amp; Users</SectionLabel>
-            <UserIdentityCard />
+            <SectionLabel>Jira sync activity</SectionLabel>
+            <JiraSyncActivityCard />
+          </Card>
+
+          <Card>
+            <div className="flex items-center gap-2 mb-3">
+              <SourceBadge src="github" />
+              <SectionLabel>GitHub Issues</SectionLabel>
+            </div>
+            <GithubIssuesConnectorCard />
           </Card>
         </div>
       )}
@@ -708,6 +747,150 @@ type JiraAuthStatus = {
   base_url: string;
 };
 
+/** Source provenance badge — one tone per issue-tracker domain (jira→teal,
+ * github→violet), matching domainTone's role/tier hue convention. No new
+ * palette: reuses the --accent-{tone}-{bg,ring,fg} triples. */
+function SourceBadge({ src }: { src: "jira" | "github" }) {
+  const tone = src === "github" ? "violet" : "teal";
+  return (
+    <span className={
+      "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-[0.08em] border " +
+      `bg-[color:var(--accent-${tone}-bg)] text-[color:var(--accent-${tone}-fg)] border-[color:var(--accent-${tone}-ring)]`
+    }>
+      <span className="w-1.5 h-1.5 rounded-[2px] bg-current" />
+      {src}
+    </span>
+  );
+}
+
+/** One-line "who + what" summary for the Jira connector — makes the SYNC
+ * relationship explicit: the signed-in ACCOUNT and each PRISM project ⇌ Jira
+ * project key it's syncing (e.g. "Account: john@company.com · syncing project
+ * prism ⇌ PRIS"). Reads GET /api/jira/status + /api/jira/mappings; renders
+ * nothing until connected (JiraAuthCard below owns the connect UI). */
+function JiraSyncSummary() {
+  const [status, setStatus] = useState<JiraAuthStatus | null>(null);
+  const [mappings, setMappings] = useState<JiraMapping[]>([]);
+
+  useEffect(() => {
+    let cancel = false;
+    const load = () => {
+      api.get<JiraAuthStatus>("/api/jira/status")
+        .then((s) => { if (!cancel) setStatus(s); }).catch(() => {});
+      api.get<{ mappings: JiraMapping[] }>("/api/jira/mappings")
+        .then((m) => { if (!cancel) setMappings(m.mappings ?? []); }).catch(() => {});
+    };
+    load();
+    window.addEventListener("jira-sync-refresh", load);
+    return () => { cancel = true; window.removeEventListener("jira-sync-refresh", load); };
+  }, []);
+
+  if (!status?.authenticated) return null;
+  const account = status.email || status.fingerprint || "connected account";
+  return (
+    <div className="mb-3 rounded-md border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] px-3 py-2 text-xs flex items-center gap-x-2 gap-y-1 flex-wrap">
+      <span className="text-[color:var(--accent-teal-fg)]">
+        Account: <span className="font-medium">{account}</span>
+      </span>
+      {mappings.length === 0 ? (
+        <span className="opacity-70">· no PRISM project mapped yet — bind one below</span>
+      ) : (
+        mappings.map((m) => (
+          <span key={m.project_id} className="opacity-90">
+            · syncing project <span className="font-mono">{m.project_id}</span> ⇌{" "}
+            <span className="font-mono">{m.jira_project_key}</span>
+          </span>
+        ))
+      )}
+    </div>
+  );
+}
+
+type GithubIssuesStatus = {
+  authenticated: boolean;
+  email?: string;
+  account?: string;
+  fingerprint?: string;
+  owner?: string;
+  repo?: string;
+};
+
+/** GitHub Issues connector — SYMMETRIC to Jira as a task SOURCE. The backend
+ * (/api/github/*) isn't built yet, so this is a SCAFFOLD: it probes
+ * /api/github/status but degrades to a not-connected state if the endpoint is
+ * absent (guarded fetch — never crashes), and "Connect GitHub" surfaces a
+ * coming-soon notice instead of a broken flow. Mirrors JiraAuthCard's
+ * connected/not-connected shape + the same pull-issues-as-tasks messaging. */
+function GithubIssuesConnectorCard() {
+  const [status, setStatus] = useState<GithubIssuesStatus | null>(null);
+  const [notice, setNotice] = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    api.get<GithubIssuesStatus>("/api/github/status")
+      .then((s) => { if (!cancel) setStatus(s); })
+      .catch(() => { if (!cancel) setStatus({ authenticated: false }); });
+    return () => { cancel = true; };
+  }, []);
+
+  const connected = !!status?.authenticated;
+  const account = status?.email || status?.account || status?.fingerprint;
+  const repo = status?.owner && status?.repo ? `${status.owner}/${status.repo}` : null;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={
+          "inline-flex items-center px-2 py-0.5 rounded-full text-[9px] uppercase tracking-wider " +
+          (connected
+            ? "bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)]"
+            : "bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)]")
+        }>
+          {connected ? "connected" : "not connected"}
+        </span>
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--midground-base)]/10 text-[color:var(--text-muted)] text-[9px] uppercase tracking-wider">
+          scaffold · coming soon
+        </span>
+      </div>
+
+      <p className="text-xs opacity-70 leading-snug">
+        Pull GitHub issues in as PRISM tasks and keep status in step — the same
+        sync relationship as Jira. PRISM syncs your project's tasks with{" "}
+        <span className="font-mono">github.com/{repo || "<owner>/<repo>"}</span>.
+      </p>
+
+      {connected ? (
+        <dl className="text-sm grid grid-cols-[120px_1fr] gap-y-1.5">
+          {account && (<>
+            <dt className="text-[color:var(--text-label)]">Account</dt>
+            <dd className="text-xs">{account}</dd>
+          </>)}
+          {repo && (<>
+            <dt className="text-[color:var(--text-label)]">Repo</dt>
+            <dd className="font-mono text-xs">{repo}</dd>
+          </>)}
+        </dl>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setNotice(true)}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-[color:var(--accent-violet-ring)] bg-[color:var(--accent-violet-bg)] text-[color:var(--accent-violet-fg)] text-sm uppercase tracking-wider hover:opacity-90"
+        >
+          <Github className="w-4 h-4" /> Connect GitHub
+        </button>
+      )}
+
+      {notice && (
+        <div className="rounded-md border border-[color:var(--accent-amber-ring)] bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] px-3 py-2 text-xs">
+          GitHub Issues sync isn't wired up yet — this connector is a scaffold.
+          It's symmetric to Jira (connect → map a repo → pull issues as tasks)
+          and lights up once <span className="font-mono">/api/github/*</span> lands.
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Jira Cloud connect — OAuth 3LO (primary) or an email + API-token
  * fallback. Mirrors GithubAuthCard's status/configure/clear idiom; the
  * raw token never returns — only a masked `fingerprint` reaches the SPA. */
@@ -731,7 +914,7 @@ function JiraAuthCard() {
   useEffect(() => { load(); }, [load]);
 
   // Handle the OAuth callback return: /api/jira/callback 303-redirects to
-  // /settings/connections?jira=connected|error. Surface it, refetch, then
+  // /settings/integrations?jira=connected|error. Surface it, refetch, then
   // strip the param so a refresh doesn't re-toast.
   useEffect(() => {
     const j = searchParams.get("jira");
@@ -1101,6 +1284,41 @@ type JiraMapping = {
   updated_at?: string;
 };
 
+type JiraProject = { key: string; name: string };
+
+/** Deterministic PRISM-project ⇌ Jira-project affinity (NO LLM): case-
+ * insensitive shared-prefix on the Jira KEY (weighted highest) + name/key
+ * substring overlap. Powers the pre-filled mapping suggestion — e.g. a PRISM
+ * project 'prism' scores highest against Jira 'PRIS'. */
+function mappingAffinity(prismId: string, jp: JiraProject): number {
+  const p = prismId.toLowerCase();
+  const k = (jp.key || "").toLowerCase();
+  const n = (jp.name || "").toLowerCase();
+  if (!p || !k) return 0;
+  let pre = 0;
+  while (pre < p.length && pre < k.length && p[pre] === k[pre]) pre++;
+  let score = pre * 3;
+  if (n && (n.includes(p) || p.includes(n))) score += Math.min(p.length, n.length) * 2;
+  if (k.includes(p) || p.includes(k)) score += Math.min(p.length, k.length);
+  return score;
+}
+
+/** Best (prismProject, jiraProject) pairing over the UNMAPPED PRISM projects,
+ * or null when nothing scores. Deterministic — first max wins. */
+function suggestMapping(
+  prismProjects: string[], jiraProjects: JiraProject[], mapped: Set<string>,
+): { pid: string; jkey: string } | null {
+  let best: { pid: string; jkey: string; score: number } | null = null;
+  for (const pid of prismProjects) {
+    if (mapped.has(pid)) continue;
+    for (const jp of jiraProjects) {
+      const score = mappingAffinity(pid, jp);
+      if (score > 0 && (!best || score > best.score)) best = { pid, jkey: jp.key, score };
+    }
+  }
+  return best ? { pid: best.pid, jkey: best.jkey } : null;
+}
+
 /** Jira source — bind a PRISM project to a Jira project key, then PULL that
  * project's issues in as PRISM tasks (deterministic, keyed by issue key —
  * no inference). Gated on Jira being connected. POSTs /api/jira/mapping,
@@ -1110,29 +1328,49 @@ function JiraMappingCard() {
   const [mappings, setMappings] = useState<JiraMapping[] | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [projects, setProjects] = useState<string[]>([]);
+  const [jiraProjects, setJiraProjects] = useState<JiraProject[]>([]);
+  const [suggested, setSuggested] = useState<{ pid: string; jkey: string } | null>(null);
   const [pid, setPid] = useState("");
   const [jkey, setJkey] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [pulling, setPulling] = useState<string | null>(null);
   const [pullResult, setPullResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const didPrefill = useRef(false);
 
   const load = useCallback(async () => {
     try {
-      const [m, s, p] = await Promise.all([
+      const [m, s, p, jp] = await Promise.all([
         api.get<{ mappings: JiraMapping[] }>("/api/jira/mappings"),
         api.get<{ authenticated: boolean }>("/api/jira/status"),
         api.get<{ projects: string[] }>("/api/projects"),
+        api.get<{ projects: JiraProject[] }>("/api/jira/projects"),
       ]);
       setMappings(m.mappings ?? []);
       setConnected(!!s.authenticated);
       setProjects(p.projects ?? []);
+      setJiraProjects(jp.projects ?? []);
     } catch (e) {
       setError(String((e as Error).message ?? e));
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-suggest a mapping from the REAL Jira project list by name/key
+  // affinity, and PRE-FILL the form once (deterministic — no LLM). The user
+  // confirms or overrides; we never clobber a value they've already typed.
+  useEffect(() => {
+    if (mappings === null) return;
+    const mapped = new Set(mappings.map((m) => m.project_id));
+    const s = suggestMapping(projects, jiraProjects, mapped);
+    setSuggested(s);
+    if (s && !didPrefill.current && !pid && !jkey) {
+      didPrefill.current = true;
+      setPid(s.pid);
+      setJkey(s.jkey);
+    }
+  }, [projects, jiraProjects, mappings, pid, jkey]);
 
   const bind = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1241,6 +1479,24 @@ function JiraMappingCard() {
         </ul>
       )}
 
+      {connected && suggested && (
+        <div className="rounded-md border border-[color:var(--accent-teal-ring)] bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)] px-3 py-2 text-xs flex items-center gap-2 flex-wrap">
+          <span>Auto-suggested:</span>
+          <span className="font-mono">{suggested.pid}</span> ⇌{" "}
+          <span className="font-mono">{suggested.jkey}</span>
+          <span className="opacity-70">· matched by name/key affinity — confirm or change below.</span>
+          {(pid !== suggested.pid || jkey !== suggested.jkey) && (
+            <button
+              type="button"
+              onClick={() => { setPid(suggested.pid); setJkey(suggested.jkey); }}
+              className="ml-auto px-2 py-0.5 rounded-md border border-[color:var(--accent-teal-ring)] uppercase tracking-wider"
+            >
+              Use
+            </button>
+          )}
+        </div>
+      )}
+
       <form onSubmit={bind} className="flex items-end gap-2 flex-wrap">
         <label className="block flex-1 min-w-[180px]">
           <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">PRISM project</span>
@@ -1254,15 +1510,29 @@ function JiraMappingCard() {
             {projects.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
-        <label className="block flex-1 min-w-[140px]">
-          <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">Jira project key</span>
-          <input
-            value={jkey}
-            onChange={(e) => setJkey(e.target.value)}
-            placeholder="PLAT"
-            disabled={!connected}
-            className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs disabled:opacity-40"
-          />
+        <label className="block flex-1 min-w-[160px]">
+          <span className="text-[10px] uppercase tracking-[0.18em] opacity-60">Jira project</span>
+          {jiraProjects.length > 0 ? (
+            <select
+              value={jkey}
+              onChange={(e) => setJkey(e.target.value)}
+              disabled={!connected}
+              className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 text-sm disabled:opacity-40"
+            >
+              <option value="">— select Jira project —</option>
+              {jiraProjects.map((jp) => (
+                <option key={jp.key} value={jp.key}>{jp.key} — {jp.name}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={jkey}
+              onChange={(e) => setJkey(e.target.value)}
+              placeholder="PLAT"
+              disabled={!connected}
+              className="mt-1 w-full rounded-md border border-[color:var(--midground-base)]/15 bg-[color:var(--midground-base)]/[0.03] px-3 py-2 font-mono text-xs disabled:opacity-40"
+            />
+          )}
         </label>
         <button
           type="submit"

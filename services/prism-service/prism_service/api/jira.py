@@ -25,7 +25,7 @@ class MappingBody(BaseModel):
     project_id: str = ""
     jira_project_key: str = ""
 
-_SPA_CONNECTIONS = "/settings/connections"
+_SPA_CONNECTIONS = "/settings/integrations"
 
 
 class PullBody(BaseModel):
@@ -136,6 +136,22 @@ def pull(body: PullBody, project: str = "default") -> dict:
     svc = _pull_task_svc(project)
     key = (body.project_key or "").strip() or None
     return jira_sync.pull_from_jira(svc, jira_project_key=key)
+
+
+@router.get("/projects")
+def list_jira_projects() -> dict:
+    """The real Jira projects the credential can see ([{key, name}]) — the
+    Integrations UI populates its mapping dropdown from this and auto-suggests
+    a PRISM-project ⇌ Jira-project pairing by name/key affinity. Empty-safe
+    ({projects: []}) when disconnected or the call fails, so the UI degrades
+    to the plain form rather than erroring."""
+    from prism_service.services import jira_client
+    if not ja.is_authenticated():
+        return {"projects": []}
+    try:
+        return {"projects": jira_client.list_projects()}
+    except Exception:
+        return {"projects": []}
 
 
 @router.get("/mappings")

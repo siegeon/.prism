@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Brain, Eye, FolderTree, Info,
-  Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
-  ScrollText, Search, Settings, Sparkles, Workflow,
+  Layers, LayoutDashboard, ListChecks, MessageSquare,
+  ScrollText, Search, Settings, Sparkles, Waypoints, Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -82,7 +82,7 @@ const SETTINGS_SECTIONS: Section[] = [
     label: "Settings",
     items: [
       { to: "/settings/projects", label: "Projects", icon: FolderTree },
-      { to: "/settings/connections", label: "Claude auth", icon: Plug },
+      { to: "/settings/integrations", label: "Integrations", icon: Waypoints },
       { to: "/settings/activity", label: "Background activity", icon: Activity },
       { to: "/settings/logs", label: "Logs", icon: ScrollText },
       { to: "/settings/service", label: "Service", icon: Info },

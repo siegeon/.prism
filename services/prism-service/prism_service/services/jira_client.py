@@ -119,6 +119,20 @@ def list_updated_since(ts) -> list[dict]:
     return issues if isinstance(issues, list) else []
 
 
+def list_projects() -> list[dict]:
+    """All Jira projects visible to the credential, as [{key, name}] — the
+    real project list the Integrations UI offers + auto-suggests a mapping
+    from. Uses GET /rest/api/3/project/search (paginated; one page of 50 is
+    plenty for the picker). No fuzzy matching here — just the raw catalog."""
+    cred = _cred()
+    q = urllib.parse.urlencode({"maxResults": 50, "orderBy": "key"})
+    data = _request("GET", f"{_api_base(cred)}/project/search?{q}")
+    values = data.get("values")
+    rows = values if isinstance(values, list) else []
+    return [{"key": str(p.get("key") or ""), "name": str(p.get("name") or "")}
+            for p in rows if p.get("key")]
+
+
 def search_project(project_key: str) -> list[dict]:
     """All issues in a Jira project (deterministic pull-in source), newest-
     updated first. Returns the raw issue dicts ([] when none). JQL is
