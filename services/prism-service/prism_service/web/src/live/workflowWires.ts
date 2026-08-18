@@ -102,6 +102,84 @@ export function routeLegs(
   return legs;
 }
 
+/** Smallest jog an orthogonal path is allowed to keep, in world px.
+ * Anything tighter reads as a rendering glitch rather than a deliberate
+ * bend, so it gets snapped flat. */
+export const SIMPLIFY_EPS = 12;
+
+function pathKey(pts: Point[]): string {
+  return pts.map((p) => `${p.x},${p.y}`).join("|");
+}
+
+/** Drops exact duplicates, then any point whose neighbours share its rail
+ * (three points on one line need only two). */
+function dropCollinear(pts: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of pts) {
+    const prev = out[out.length - 1];
+    if (prev && prev.x === p.x && prev.y === p.y) continue;
+    out.push({ ...p });
+  }
+  for (let i = 1; i < out.length - 1;) {
+    const a = out[i - 1], b = out[i], c = out[i + 1];
+    if ((a.x === b.x && b.x === c.x) || (a.y === b.y && b.y === c.y)) out.splice(i, 1);
+    else i++;
+  }
+  return out;
+}
+
+/** Pulls two near-aligned points onto ONE rail. The two ENDPOINTS never
+ * move — they are the docked ports — so an interior point always yields
+ * to an endpoint.
+ *
+ * Between two interior points the LATER one yields to the earlier: the
+ * rail propagates forward. Meeting in the middle instead looks fairer but
+ * mints a brand-new coordinate every pass, so the path never reaches a
+ * fixed point and re-simplifying a saved path keeps nudging it. Snapping
+ * to an existing rail is idempotent, which is what makes a persisted
+ * path reload exactly as it was drawn. */
+function alignAxis(pts: Point[], i: number, j: number, axis: "x" | "y"): void {
+  const last = pts.length - 1;
+  if (i === 0 && j === last) return;
+  if (j === last) pts[i][axis] = pts[j][axis];
+  else pts[j][axis] = pts[i][axis];
+}
+
+function snapRails(pts: Point[], eps: number): Point[] {
+  const out = pts.map((p) => ({ ...p }));
+  for (let i = 0; i < out.length - 1; i++) {
+    const dx = Math.abs(out[i].x - out[i + 1].x);
+    const dy = Math.abs(out[i].y - out[i + 1].y);
+    if (dx > 0 && dx < eps) alignAxis(out, i, i + 1, "x");
+    if (dy > 0 && dy < eps) alignAxis(out, i, i + 1, "y");
+  }
+  return out;
+}
+
+/** Turns a routed polyline into the path a person would have drawn.
+ *
+ * Routing per hop and concatenating is what mints staircases: every hop
+ * contributes its own stub-and-jog, so a couple of bends can stack a
+ * dozen 3px steps inside a 150px span (owner, ticket 53cc9bcc: "the lines
+ * are all kinda messed up"). Snapping sub-eps jogs onto one rail and then
+ * merging the collinear runs collapses each hop to a clean L or Z.
+ *
+ * POST-PROCESSING, never a second router — routeOrthogonal still produces
+ * every corner; this only removes the ones that carry no meaning. The two
+ * passes feed each other (a snap creates collinearity, a merge exposes
+ * the next near-alignment), so it iterates to a fixed point.
+ */
+export function simplifyPath(pts: Point[], eps = SIMPLIFY_EPS): Point[] {
+  if (pts.length < 3) return pts.map((p) => ({ ...p }));
+  let out = pts.map((p) => ({ ...p }));
+  for (let pass = 0; pass < 4; pass++) {
+    const before = pathKey(out);
+    out = dropCollinear(snapRails(out, eps));
+    if (pathKey(out) === before) break;
+  }
+  return out;
+}
+
 /** Flattens routeLegs into the single polyline the renderer strokes and
  * packets ride, dropping the duplicate point where two legs meet. */
 export function joinLegs(legs: Point[][]): Point[] {
@@ -186,6 +264,24 @@ export class WireEditor {
     if (nearestOnSegment(prev, next, wp.x, wp.y).dist > WAYPOINT_HIT_R) return false;
     this.removeWaypoint(key, index);
     return true;
+  }
+
+  /** Snaps STORED bends onto shared rails with their neighbours, so a
+   * saved path is already clean. Without this a drag would persist its
+   * raw pointer coordinates and reload as the exact staircase the
+   * renderer had just simplified away — the bend would look right until
+   * you refreshed. */
+  simplifyWaypoints(key: string, from: Point, to: Point, eps = SIMPLIFY_EPS): void {
+    const list = this.waypointsFor(key);
+    if (!list.length) return;
+    const chain = [from, ...list.map((p) => ({ ...p })), to];
+    for (let i = 1; i < chain.length - 1; i++) {
+      for (const neighbour of [chain[i - 1], chain[i + 1]]) {
+        if (Math.abs(chain[i].x - neighbour.x) < eps) chain[i].x = neighbour.x;
+        if (Math.abs(chain[i].y - neighbour.y) < eps) chain[i].y = neighbour.y;
+      }
+    }
+    this.waypoints.set(key, chain.slice(1, -1));
   }
 
   /** "reset layout": drop every manual wire edit. Positions are cleared

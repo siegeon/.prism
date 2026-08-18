@@ -16,7 +16,7 @@ import { drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
 import { autoPort, drawPort, drawWire, laneFor, wireColor, wireKey, type Point } from "./wires";
 import {
   PORT_HIT_R, WAYPOINT_HIT_R, WIRE_HIT_R, WireEditor,
-  joinLegs, nearestOnPolyline, routeLegs,
+  joinLegs, nearestOnPolyline, routeLegs, simplifyPath,
   type PortHit, type WaypointHit, type WireEnd,
 } from "./workflowWires";
 import type { Slot } from "./layout";
@@ -145,7 +145,19 @@ export class WorkflowGraph {
   /** Current polyline for a wire, re-derived every frame so a dragged node
    * drags its wires (and any packet riding them) along for free. */
   route(w: Wire): Point[] {
-    return joinLegs(this.legs(w));
+    // Simplify AFTER joining: chaining a route per hop is what produces
+    // the staircases, so the cleanup has to see the whole path at once.
+    return simplifyPath(joinLegs(this.legs(w)));
+  }
+
+  /** Settles a wire's stored bends onto clean rails. Called when a drag
+   * ends and before persisting, so a saved path never reloads as the
+   * staircase the renderer had already smoothed over. */
+  settleWire(key: string): void {
+    const w = this.wire(key);
+    if (!w) return;
+    const pts = this.route(w);
+    if (pts.length >= 2) this.editor.simplifyWaypoints(key, pts[0], pts[pts.length - 1]);
   }
 
   /** The same geometry, one polyline per anchor-to-anchor hop. Drawing
@@ -359,13 +371,17 @@ export function drawWorkflows(
     // A selected wire wears the LIVE stroke (bright + 3px) so it is
     // unmistakable against the dim idle runs around it — selection has to
     // be visible or there is nothing to aim the next drag at.
+    // Owner (53cc9bcc): an active wire is orange END TO END — body,
+    // ports and handles one color. Orange only at the handles was the
+    // half-signal that got rejected.
     const isSelected = g.editor.selected === wire.key;
-    drawWire(ctx, pts, wire.kind, wire.live || isSelected);
+    const selColor = isSelected ? PALETTE.selection : undefined;
+    drawWire(ctx, pts, wire.kind, wire.live || isSelected, selColor);
     // Visual parity with the Live board (draw.ts): each endpoint gets one
     // port dot in the wire's own stroke color, drawn under the cards. A
     // selected wire's handles switch to the selection hue, marking the two
     // dots that are actually draggable right now.
-    const portColor = isSelected ? PALETTE.selection : wireColor(wire.kind, wire.live);
+    const portColor = selColor ?? wireColor(wire.kind, wire.live);
     drawPort(ctx, pts[0], portColor, wire.live || isSelected);
     drawPort(ctx, pts[pts.length - 1], portColor, wire.live || isSelected);
     if (isSelected) drawWaypoints(ctx, g.editor.waypointsFor(wire.key));

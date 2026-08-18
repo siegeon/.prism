@@ -387,3 +387,86 @@ def test_deselect_and_reset_clear_the_manual_wire_state():
     assert re.search(r'\bclear\w*\s*\(', editor), (
         "the wire editor exposes no clear — reset layout has nothing to "
         "call to drop port/waypoint overrides")
+
+
+# --------------------------------------------------------------------------
+# Increment 3 (owner rejected the first cut at green_gate, ticket 53cc9bcc,
+# screenshot of the Steward -> story_gate wire): "it's not working yet, the
+# lines are all kinda messed up, and if the wires are active please make the
+# whole thing orange."
+# --------------------------------------------------------------------------
+
+def test_routed_paths_are_simplified_instead_of_staircasing():
+    """Routing per hop and concatenating is what mints staircases: every
+    hop contributes its own stub-and-jog, so a couple of bends can stack a
+    dozen 3px steps inside a 150px span. The fix is POST-PROCESSING the
+    joined polyline — merge collinear runs, snap sub-threshold jogs onto
+    one rail — never a second router."""
+    editor = _wire_editor()
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'export\s+function\s+simplifyPath\s*\(', editor), (
+        "live/workflowWires.ts exposes no simplifyPath — a chained path "
+        "keeps every micro-jog the per-hop router emitted")
+    assert re.search(r'simplifyPath\s*\(', graph), (
+        "workflowGraph.route must run the joined polyline through "
+        "simplifyPath, or the canvas draws the raw staircase")
+    assert not re.search(r'(export\s+)?function\s+routeOrthogonal\s*\(', editor), (
+        "simplification must stay POST-processing on routeOrthogonal's "
+        "output — re-implementing the router is the thing this whole "
+        "section is not allowed to do")
+
+
+def test_a_dragged_bend_is_settled_before_it_is_saved():
+    """Dragging must not mint micro-staircases, and a SAVED path must
+    already be clean — persisting raw drag coordinates would reload the
+    exact staircase the renderer just simplified away."""
+    editor = _wire_editor()
+    page = _read("pages", "WorkflowsPage.tsx")
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'simplifyWaypoints\s*\(', editor), (
+        "the editor cannot settle stored bends onto clean rails")
+    assert re.search(r'settleWire\s*\(', graph), (
+        "workflowGraph exposes no settleWire for the page to call")
+    settle = [m.start() for m in re.finditer(r'settleWire\s*\(', page)]
+    persist = [m.start() for m in re.finditer(r'persistWires\s*\(\)', page)]
+    assert settle and persist, (
+        "the page must settle the wire AND persist it after an edit")
+    assert min(settle) < max(persist), (
+        "settleWire must run BEFORE the path is persisted, or the saved "
+        "copy is the unsimplified one")
+
+
+def test_an_active_wire_is_orange_end_to_end():
+    """Owner: "if the wires are active please make the whole thing
+    orange." Body, endpoint ports and bend handles all take the SAME
+    selection token — a wire that is orange only at its handles is exactly
+    the half-signal that got rejected."""
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'drawWire\([^)]*selColor', graph), (
+        "the selected wire's BODY still takes its color from wireColor — "
+        "the stroke must be the selection hue too, not just the handles")
+    assert re.search(r'selColor\s*=\s*isSelected\s*\?\s*PALETTE\.selection', graph), (
+        "the one selection color must come from the PALETTE token the "
+        "handles already use, never a second orange literal")
+    assert re.search(r'portColor\s*=\s*selColor', graph), (
+        "the endpoint ports must reuse that same selection color")
+
+
+def test_the_orange_stroke_goes_through_the_shared_wire_renderer():
+    """Whole-stroke recoloring must be an OPTIONAL argument to the shared
+    drawWire, not a local re-implementation of stroking a polyline — that
+    is how the two canvases stay one grammar. The live board's own pins
+    (width rule, no globalAlpha in the body) must survive untouched."""
+    wires = _read("live", "wires.ts")
+
+    assert re.search(r'export function drawWire\([^)]*color\?:\s*string', wires), (
+        "drawWire takes no optional color override — the workflows canvas "
+        "would have to fork it to draw a selected wire")
+    assert "color ?? wireColor(" in wires, (
+        "the override must FALL BACK to wireColor, so every existing "
+        "caller keeps its exact current color")
+    assert "ctx.lineWidth = live ? 3 : 2;" in wires, (
+        "the live board's width rule must survive the added parameter")
