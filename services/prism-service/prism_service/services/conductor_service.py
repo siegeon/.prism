@@ -1535,6 +1535,7 @@ class ConductorService:
         validation: Optional[str] = None,
         session_id: Optional[str] = None,
         model: Optional[str] = None,
+        usage: Optional[dict] = None,
     ) -> dict:
         """Move a task to the next entry in WORKFLOW_STEPS.
 
@@ -1669,6 +1670,7 @@ class ConductorService:
             self._record_agent_run(
                 task_id, current_id, session_id, model=model,
                 started_at=self._step_entry_epoch(task_id, current_id),
+                usage=usage,
             )
 
         return {
@@ -1725,7 +1727,7 @@ class ConductorService:
         self, task_id: str, step: str, session_id: Optional[str],
         model: Optional[str] = None, gate_state: Optional[str] = None,
         verdict_summary: Optional[str] = None, ok: bool = True,
-        started_at: Optional[float] = None,
+        started_at: Optional[float] = None, usage: Optional[dict] = None,
     ) -> None:
         """Best-effort per-role token attribution: write ONE agent_runs row
         for the just-completed step. role = models.roles.role_for_step(step);
@@ -1735,26 +1737,46 @@ class ConductorService:
         try:
             import time as _time
             from prism_service.models.roles import role_for_step
-            from prism_service.services.agent_runs_data import upsert_agent_run
+            from prism_service.services.agent_runs_data import (
+                session_tokens_total,
+                upsert_agent_run,
+            )
 
             role = role_for_step(step)
             now = _time.time()
+            # CARRY, never re-derive (task 9a51e670). When the caller hands us
+            # the run's own usage -- the authoritative whole-run figures
+            # claude_cli._usage_from_result took from the single `result`
+            # event -- that IS the answer and the transcript is not consulted.
+            # The transcript branch only ever worked for real (UUID) human
+            # sessions: a bot reports under a SEAT NAME that has no transcript
+            # on disk, so re-deriving pinned every bot row at 0 regardless of
+            # which project dir the meter watched. Reading BOTH would
+            # double-count the same turn -- this task's named likely_misfire.
+            usage = usage if isinstance(usage, dict) and usage else None
             tokens = 0
-            try:
-                if session_id:
-                    from prism_service.services.claude_transcripts import (
-                        live_token_events_for_session,
-                    )
-                    events = live_token_events_for_session(
-                        session_id,
-                        self._project_source_path(),
-                        override_dir=self._project_override_dir(),
-                    )
-                    for epoch_s, tok in events:
-                        if started_at is None or epoch_s >= started_at:
-                            tokens += int(tok or 0)
-            except Exception:
-                tokens = 0
+            cost_usd = None
+            if usage:
+                tokens = (int(usage.get("input_tokens") or 0)
+                          + int(usage.get("output_tokens") or 0))
+                cost_usd = float(usage.get("cost_usd") or 0.0)
+                model = usage.get("model") or model
+            else:
+                try:
+                    if session_id:
+                        from prism_service.services import claude_transcripts
+                        events = (
+                            claude_transcripts.live_token_events_for_session(
+                                session_id,
+                                self._project_source_path(),
+                                override_dir=self._project_override_dir(),
+                            )
+                        )
+                        for epoch_s, tok in events:
+                            if started_at is None or epoch_s >= started_at:
+                                tokens += int(tok or 0)
+                except Exception:
+                    tokens = 0
             win_start = started_at if started_at is not None else now
             duration_ms = int(max(0.0, now - win_start) * 1000)
             row = {
@@ -1771,6 +1793,7 @@ class ConductorService:
                 "ended_at": now,
                 "duration_ms": duration_ms,
                 "tokens": tokens,
+                "cost_usd": cost_usd,
                 "tool_uses": None,
                 "ok": ok,
                 "gate_state": gate_state,
@@ -1796,8 +1819,43 @@ class ConductorService:
                 "ok": ok,
                 "ts": now,
             })
+            # A bot step has no human transcript, so work_stream's ticker can
+            # never meter it -- publish its burn here instead, in the SAME
+            # `tokens.turn` shape the ticker uses (work_stream.py:154-165) so
+            # the existing /live consumer needs no change. Only when usage was
+            # CARRIED: a transcript-attributed (human) step is already metered
+            # by the ticker, and publishing here too would double-count it.
+            if usage and tokens > 0:
+                out_tokens = int(usage.get("output_tokens") or 0)
+                dt_s = max(0.1, (duration_ms or 0) / 1000.0)
+                bus.publish({
+                    "project": self._project_name or "default",
+                    "type": "tokens.turn",
+                    "task_id": task_id,
+                    "parent_id": self._parent_id_of(task_id),
+                    "session_id": session_id or "",
+                    "out_tokens": out_tokens,
+                    "dt_s": round(dt_s, 2),
+                    "tok_s": round(out_tokens / dt_s, 1),
+                    # RUNNING per-session total, read back from the spine
+                    # (this row included). graphState.ts:1057 discards any
+                    # update whose total is lower than the node already holds,
+                    # so a per-step figure would make later steps vanish.
+                    "tokens_total": session_tokens_total(
+                        self._scores_db, task_id, session_id or ""),
+                    "ts": now,
+                })
         except Exception:
             pass
+
+    def _parent_id_of(self, task_id: str) -> str:
+        """The task's parent id for the atomic card+wire contract, or "".
+        Mirrors work_stream's per-task resolution; never raises."""
+        try:
+            obj = self._task_svc.get(task_id)
+            return (getattr(obj, "parent_id", "") or "") if obj else ""
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------
     # Gate verification helpers (issue #79 [3/4])

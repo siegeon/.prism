@@ -194,11 +194,25 @@ def _run_one_step(project: str, task_id: str) -> dict:
         outcome = {"ok": False,
                    "reason": f"exit={result.exit_code}, no usable output"}
 
+    # The run's OWN usage, straight off the `result` stream event that
+    # claude_cli already parsed for us. This seat reports under a SEAT NAME,
+    # not a session UUID, so nothing downstream can recover these figures from
+    # a transcript -- carrying them here is the only way a bot step's tokens,
+    # model and cost ever reach its agent_runs row (task 9a51e670).
+    # getattr-guarded: a lighter result object must never break the drive.
+    usage = getattr(result, "usage", None)
+    usage = dict(usage) if isinstance(usage, dict) and usage else None
+
     report = flow.flow_report(flow.Ident(
         task_id=task_id, session_id=SEAT_ID, outcome=outcome,
-        expected_step=step_id), project=project)
+        expected_step=step_id, usage=usage,
+        model=(usage or {}).get("model") or None), project=project)
     return {"ok": bool(report.get("ok")), "task_id": task_id,
-            "step": step_id, "run_id": result.run_id, "report": report}
+            "step": step_id, "run_id": result.run_id,
+            "tokens": (int((usage or {}).get("input_tokens") or 0)
+                       + int((usage or {}).get("output_tokens") or 0)),
+            "cost_usd": float((usage or {}).get("cost_usd") or 0.0),
+            "report": report}
 
 
 def sweep_once() -> Optional[dict]:
