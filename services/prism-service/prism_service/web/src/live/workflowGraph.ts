@@ -13,7 +13,7 @@
 import { drawGrid } from "./grid";
 import { PALETTE, glyphFor } from "./palette";
 import { drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
-import { autoPort, drawWire, laneFor, routeOrthogonal, wireKey, type Point } from "./wires";
+import { autoPort, drawPort, drawWire, laneFor, routeOrthogonal, wireColor, wireKey, type Point } from "./wires";
 import type { Slot } from "./layout";
 import type { WorkflowDef } from "@/lib/useWorkflowDef";
 
@@ -249,7 +249,13 @@ export function drawWorkflows(
 
   for (const wire of g.wires) {
     const pts = g.route(wire);
-    if (pts.length >= 2) drawWire(ctx, pts, wire.kind, wire.live);
+    if (pts.length < 2) continue;
+    drawWire(ctx, pts, wire.kind, wire.live);
+    // Visual parity with the Live board (draw.ts): each endpoint gets one
+    // port dot in the wire's own stroke color, drawn under the cards.
+    const portColor = wireColor(wire.kind, wire.live);
+    drawPort(ctx, pts[0], portColor, wire.live);
+    drawPort(ctx, pts[pts.length - 1], portColor, wire.live);
   }
   drawPackets(ctx, g.packets, now);
   for (const n of g.nodes) drawNode(ctx, n);
