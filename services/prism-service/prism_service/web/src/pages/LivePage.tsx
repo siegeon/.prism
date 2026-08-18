@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import { subscribeStream } from "@/lib/sharedStream";
 import { useVersion } from "@/lib/version";
 import { Page, ErrorBanner } from "@/components/ui";
 import { GraphState } from "@/live/graphState";
@@ -140,18 +141,17 @@ export default function LivePage() {
   }, [project]);
 
   // Incremental push.
-  useEffect(() => {
-    const es = new EventSource(`/sse/work?project=${encodeURIComponent(project)}`);
-    es.onmessage = (m) => {
+  useEffect(() => subscribeStream(
+    `/sse/work?project=${encodeURIComponent(project)}`,
+    (data) => {
       try {
-        const event = JSON.parse(m.data) as WorkEvent;
+        const event = JSON.parse(data) as WorkEvent;
         stateRef.current.applyEvent(event);
       } catch {
         // malformed frame — drop it, keep the stream alive
       }
-    };
-    return () => es.close();
-  }, [project]);
+    },
+  ), [project]);
 
   // Canvas sizing — crisp at devicePixelRatio, backing store scaled, CSS
   // size unscaled, so lines/text stay sharp on hi-DPI displays.
@@ -411,12 +411,6 @@ export default function LivePage() {
 
   return (
     <Page>
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-[color:var(--text-primary)]">Live</h1>
-        <div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">
-          PRISM shows its work — live agent activity
-        </div>
-      </div>
       {error && <ErrorBanner>{error}</ErrorBanner>}
       <div className="relative rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] h-[calc(100vh-220px)] min-h-[420px] overflow-hidden">
         <canvas

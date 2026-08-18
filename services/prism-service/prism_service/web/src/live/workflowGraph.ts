@@ -13,7 +13,12 @@
 import { drawGrid } from "./grid";
 import { PALETTE, glyphFor } from "./palette";
 import { drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
-import { autoPort, drawPort, drawWire, laneFor, routeOrthogonal, wireColor, wireKey, type Point } from "./wires";
+import { autoPort, drawPort, drawWire, laneFor, wireColor, wireKey, type Point } from "./wires";
+import {
+  PORT_HIT_R, WAYPOINT_HIT_R, WIRE_HIT_R, WireEditor,
+  joinLegs, nearestOnPolyline, routeLegs, simplifyPath,
+  type PortHit, type SegmentGrab, type WaypointHit, type WireEnd,
+} from "./workflowWires";
 import type { Slot } from "./layout";
 import type { WorkflowDef } from "@/lib/useWorkflowDef";
 
@@ -55,6 +60,9 @@ export class WorkflowGraph {
   packets: Packet[] = [];
   pan = { x: 0, y: 0 };
   zoom = 1;
+  /** Manual wire state — selection, re-docked ends, waypoints. Lives in
+   * its own module so this one stays a small fixed-node board. */
+  editor = new WireEditor();
   /** Manual positions, keyed by node id — persisted per project by the page. */
   private overrides = new Map<string, Point>();
   /** wireKey -> performance.now() the last packet on it arrived, so ambient
@@ -137,19 +145,143 @@ export class WorkflowGraph {
   /** Current polyline for a wire, re-derived every frame so a dragged node
    * drags its wires (and any packet riding them) along for free. */
   route(w: Wire): Point[] {
+    // Simplify AFTER joining: chaining a route per hop is what produces
+    // the staircases, so the cleanup has to see the whole path at once.
+    return simplifyPath(joinLegs(this.legs(w)));
+  }
+
+  /** Settles a wire's stored bends onto clean rails. Called when a drag
+   * ends and before persisting, so a saved path never reloads as the
+   * staircase the renderer had already smoothed over. */
+  settleWire(key: string): void {
+    const w = this.wire(key);
+    if (!w) return;
+    const pts = this.route(w);
+    if (pts.length >= 2) this.editor.simplifyWaypoints(key, pts[0], pts[pts.length - 1]);
+  }
+
+  /** The same geometry, one polyline per anchor-to-anchor hop. Drawing
+   * joins them; hit-testing needs them apart, because WHICH hop a click
+   * landed on is where a new waypoint gets inserted. */
+  legs(w: Wire): Point[][] {
     const from = this.node(w.from), to = this.node(w.to);
     if (!from || !to) return [];
-    if (w.kind === "token") return routeOrthogonal(from.slot, to.slot);
+    const waypoints = this.editor.waypointsFor(w.key);
+    // An untouched chain wire keeps the plain edge-midpoint elbow it has
+    // always drawn. Once the owner docks an end or bends it, it joins the
+    // port-aware path every structure wire already takes.
+    if (w.kind === "token" && !this.editor.hasPort(w.key) && !waypoints.length) {
+      return routeLegs(from.slot, to.slot, [], {});
+    }
     const lane = laneFor(w.key);
-    const obstacles = this.nodes
-      .filter((n) => n.id !== w.from && n.id !== w.to)
-      .map((n) => n.slot);
-    return routeOrthogonal(from.slot, to.slot, {
-      fromPort: autoPort(from.slot, to.slot, lane),
-      toPort: autoPort(to.slot, from.slot, lane),
-      obstacles,
+    return routeLegs(from.slot, to.slot, waypoints, {
+      fromPort: this.editor.portFor(w.key, "from", autoPort(from.slot, to.slot, lane)),
+      toPort: this.editor.portFor(w.key, "to", autoPort(to.slot, from.slot, lane)),
+      // Obstacle avoidance is dropped once waypoints exist: the owner has
+      // said where the path goes, and re-routing around a node would be
+      // overriding them.
+      obstacles: waypoints.length
+        ? undefined
+        : this.nodes.filter((n) => n.id !== w.from && n.id !== w.to).map((n) => n.slot),
       lane,
     });
+  }
+
+  wire(key: string): Wire | undefined {
+    return this.wires.find((w) => w.key === key);
+  }
+
+  /** The wire whose stroke passes nearest a world point — a real
+   * distance-to-segment test, so anywhere along a long run is grabbable,
+   * not just near an endpoint. */
+  wireAtWorld(wx: number, wy: number): Wire | undefined {
+    let best: Wire | undefined;
+    let bestDist = WIRE_HIT_R;
+    for (const w of this.wires) {
+      const pts = this.route(w);
+      if (pts.length < 2) continue;
+      const hit = nearestOnPolyline(pts, wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = w; }
+    }
+    return best;
+  }
+
+  /** Which hop of `w` a point lands on, and exactly where — the insertion
+   * index and position for a new waypoint. */
+  legAtWorld(w: Wire, wx: number, wy: number): { leg: number; point: Point } | null {
+    let best: { leg: number; point: Point } | null = null;
+    let bestDist = WIRE_HIT_R * 2;
+    this.legs(w).forEach((pts, i) => {
+      if (pts.length < 2) return;
+      const hit = nearestOnPolyline(pts, wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = { leg: i, point: hit.point }; }
+    });
+    return best;
+  }
+
+  /** Endpoint dots of the SELECTED wire only — an unselected board must
+   * not have 30 invisible grab targets sitting on every card edge. Reads
+   * the same polyline the renderer strokes, so the hit-test mirrors the
+   * draw rather than re-deriving it (mx-0a0bf4). */
+  portAtWorld(wx: number, wy: number): PortHit | null {
+    const key = this.editor.selected;
+    const w = key ? this.wire(key) : undefined;
+    if (!key || !w) return null;
+    const pts = this.route(w);
+    if (pts.length < 2) return null;
+    const ends: { end: WireEnd; at: Point; nodeId: string }[] = [
+      { end: "from", at: pts[0], nodeId: w.from },
+      { end: "to", at: pts[pts.length - 1], nodeId: w.to },
+    ];
+    let best: PortHit | null = null;
+    let bestDist = PORT_HIT_R;
+    for (const e of ends) {
+      const d = Math.hypot(wx - e.at.x, wy - e.at.y);
+      if (d < bestDist) { bestDist = d; best = { key, end: e.end, nodeId: e.nodeId }; }
+    }
+    return best;
+  }
+
+  /** Placed waypoints of the selected wire, same selected-only rule. */
+  waypointAtWorld(wx: number, wy: number): WaypointHit | null {
+    const key = this.editor.selected;
+    if (!key) return null;
+    let best: WaypointHit | null = null;
+    let bestDist = WAYPOINT_HIT_R;
+    this.editor.waypointsFor(key).forEach((p, index) => {
+      const d = Math.hypot(wx - p.x, wy - p.y);
+      if (d < bestDist) { bestDist = d; best = { key, index }; }
+    });
+    return best;
+  }
+
+  /** Index of the polyline run under a world point — which segment a body
+   * drag has grabbed. */
+  segmentAtWorld(w: Wire, wx: number, wy: number): number | null {
+    const pts = this.route(w);
+    let best: number | null = null;
+    let bestDist = WIRE_HIT_R;
+    for (let i = 1; i < pts.length; i++) {
+      const hit = nearestOnPolyline([pts[i - 1], pts[i]], wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = i - 1; }
+    }
+    return best;
+  }
+
+  /** Starts a body drag: resolves the run under the cursor and materializes
+   * the anchors it needs. Null when the point isn't on the wire. */
+  beginSegmentDrag(key: string, wx: number, wy: number): SegmentGrab | null {
+    const w = this.wire(key);
+    if (!w) return null;
+    const seg = this.segmentAtWorld(w, wx, wy);
+    if (seg === null) return null;
+    return this.editor.grabSegment(key, this.route(w), seg);
+  }
+
+  /** World-space slot a wire end is docked to — what a port drag re-docks
+   * against. */
+  slotForEnd(w: Wire, end: WireEnd): Slot | undefined {
+    return this.node(end === "from" ? w.from : w.to)?.slot;
   }
 
   /** Ambient motion, driven by real occupancy only: a bot->step wire whose
@@ -206,9 +338,18 @@ export class WorkflowGraph {
     }
   }
 
+  /** "reset layout": positions AND every manual wire edit. Leaving bent
+   * wires behind would make the escape hatch only half-work. */
   clearOverrides(): void {
     this.overrides.clear();
+    this.editor.clear();
     this.fitted = false;
+  }
+
+  /** Wire keys this board currently has — the drop-unknown-keys filter
+   * for rehydrating saved port/waypoint state. */
+  wireKeys(): Set<string> {
+    return new Set(this.wires.map((w) => w.key));
   }
 
   /** Frames the whole board once, then leaves the camera to the owner —
@@ -250,16 +391,45 @@ export function drawWorkflows(
   for (const wire of g.wires) {
     const pts = g.route(wire);
     if (pts.length < 2) continue;
-    drawWire(ctx, pts, wire.kind, wire.live);
+    // A selected wire wears the LIVE stroke (bright + 3px) so it is
+    // unmistakable against the dim idle runs around it — selection has to
+    // be visible or there is nothing to aim the next drag at.
+    // Owner (53cc9bcc): an active wire is orange END TO END — body,
+    // ports and handles one color. Orange only at the handles was the
+    // half-signal that got rejected.
+    const isSelected = g.editor.selected === wire.key;
+    const selColor = isSelected ? PALETTE.selection : undefined;
+    drawWire(ctx, pts, wire.kind, wire.live || isSelected, selColor);
     // Visual parity with the Live board (draw.ts): each endpoint gets one
-    // port dot in the wire's own stroke color, drawn under the cards.
-    const portColor = wireColor(wire.kind, wire.live);
-    drawPort(ctx, pts[0], portColor, wire.live);
-    drawPort(ctx, pts[pts.length - 1], portColor, wire.live);
+    // port dot in the wire's own stroke color, drawn under the cards. A
+    // selected wire's handles switch to the selection hue, marking the two
+    // dots that are actually draggable right now.
+    const portColor = selColor ?? wireColor(wire.kind, wire.live);
+    drawPort(ctx, pts[0], portColor, wire.live || isSelected);
+    drawPort(ctx, pts[pts.length - 1], portColor, wire.live || isSelected);
+    if (isSelected) drawWaypoints(ctx, g.editor.waypointsFor(wire.key));
   }
   drawPackets(ctx, g.packets, now);
   for (const n of g.nodes) drawNode(ctx, n);
 
+  ctx.restore();
+}
+
+/** The draggable bend handles on the selected wire. Hollow squares in the
+ * selection hue so they read as grab targets, never as packets (which are
+ * near-white filled squares — one shape, one meaning). */
+function drawWaypoints(ctx: CanvasRenderingContext2D, waypoints: Point[]): void {
+  const r = 5;
+  ctx.save();
+  ctx.strokeStyle = PALETTE.selection;
+  ctx.fillStyle = PALETTE.ground;
+  ctx.lineWidth = 2;
+  for (const p of waypoints) {
+    ctx.beginPath();
+    ctx.rect(p.x - r, p.y - r, r * 2, r * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   ctx.restore();
 }
 

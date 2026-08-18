@@ -3,28 +3,10 @@ import { useLocation } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject, useProjectsListChange } from "@/lib/project";
+// The nav owns the section names; the header renders whichever one is
+// active. One source, so the two can never disagree.
+import { sectionTitleFor } from "@/components/Sidebar";
 import { Skeleton } from "@/components/ui";
-
-const TITLES: Record<string, string> = {
-  "/": "Dashboard", "/brain": "Explore", "/graph": "Graph",
-  "/memory": "Memory", "/tasks": "Tasks", "/conductor": "Conductor",
-  "/live": "Live",
-  "/sessions": "Sessions", "/retrievals": "Retrievals",
-  "/learning": "Learning", "/consolidation": "Consolidation",
-  "/understand": "Understand", "/settings": "Settings",
-};
-
-// v6.0.15 — match nested routes (e.g. /tasks/:id -> "Tasks",
-// /settings/:section -> "Settings") by longest-prefix lookup so the
-// header doesn't fall back to the generic "PRISM" on detail pages.
-function resolveTitle(pathname: string): string {
-  if (TITLES[pathname]) return TITLES[pathname];
-  const candidates = Object.keys(TITLES).sort((a, b) => b.length - a.length);
-  for (const prefix of candidates) {
-    if (prefix !== "/" && pathname.startsWith(prefix + "/")) return TITLES[prefix];
-  }
-  return "PRISM";
-}
 
 type Me = { user?: { id: string; email: string; display_name: string } };
 
@@ -57,7 +39,7 @@ function IdentityChip() {
 
 export default function PageHeader() {
   const { pathname } = useLocation();
-  const title = resolveTitle(pathname);
+  const title = sectionTitleFor(pathname);
   const [project, setProject] = useProject();
   const [projects, setProjects] = useState<string[]>([]);
   // Gated on projects.length > 0 with projects=[] , the selector rendered

@@ -101,6 +101,37 @@ const MAIN_SECTIONS: Section[] = [
   },
 ];
 
+/** The active section's name, resolved from the SAME item arrays the nav
+ * renders — one source, so the global header can never drift from the
+ * sidebar. PageHeader used to keep its own parallel TITLES map, and it had
+ * already gone stale: it said "Tasks" for /tasks while the nav said "Work".
+ *
+ * Longest matching route wins, so a detail page keeps its section's name
+ * (/tasks/:id -> "Work"). A route with no nav item of its own falls back to
+ * the label of the section that owns its sub-pages (/settings -> "Settings"),
+ * and anything unrecognized falls back to the product name.
+ */
+export function sectionTitleFor(pathname: string): string {
+  const sections = [TOP_SECTION, ...MAIN_SECTIONS, ...SETTINGS_SECTIONS];
+  let best: Item | undefined;
+  for (const section of sections) {
+    for (const item of section.items) {
+      if (pathname === item.to) return item.label;
+      if (item.to !== "/" && pathname.startsWith(item.to + "/")
+          && (!best || item.to.length > best.to.length)) {
+        best = item;
+      }
+    }
+  }
+  if (best) return best.label;
+  for (const section of sections) {
+    if (section.label && section.items.some((i) => i.to.startsWith(pathname + "/"))) {
+      return section.label;
+    }
+  }
+  return "PRISM";
+}
+
 // Settings-mode body: when pathname starts with /settings, Knowledge +
 // Activity collapse and Settings categories take their place. Each
 // item routes to /settings/<id>; SettingsPage reads the URL param.
@@ -300,7 +331,7 @@ export default function Sidebar() {
           >
             ◐ <span className="sr-only">toggle theme</span>
           </button>
-          <span>Slate Blue · v{version?.version ?? "…"}</span>
+          <span>v{version?.version ?? "…"}</span>
           {version?.dev_mode && (
             <span
               className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-2xs font-bold tracking-widest bg-[color:var(--accent-amber-bg)] text-[color:var(--accent-amber-fg)] border border-[color:var(--accent-amber-ring)]"

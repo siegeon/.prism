@@ -151,9 +151,16 @@ def test_the_canvas_reuses_the_live_wire_and_packet_primitives():
         "live/workflowGraph.ts must import the shared wire primitives")
     assert re.search(r'from\s+"\./packets"', graph), (
         "live/workflowGraph.ts must import the shared packet primitives")
+    # SUPERSEDED (increment 2): these symbols used to be pinned to
+    # workflowGraph.ts alone. The wire-editing slice moved routing one
+    # module deeper (live/workflowWires.ts owns the waypoint leg builder,
+    # and workflowGraph calls it), so the canvas SURFACE is now two files.
+    # The invariant is unchanged — the live primitives are reused, not
+    # forked — so it is checked against the surface rather than one file.
+    surface = graph + _read("live", "workflowWires.ts")
     for symbol in ("routeOrthogonal", "drawWire", "spawnPacket",
                    "stepPackets", "drawPackets"):
-        assert symbol in graph, (
+        assert symbol in surface, (
             f"{symbol} is not used by the workflows canvas — the section is "
             "supposed to REUSE the live board's grammar, not re-invent it")
 
@@ -259,3 +266,297 @@ def test_the_rail_still_gets_intake_and_a_persona_per_step():
     assert "persona" in hook and "type" in hook, (
         "the rail's step shape is {id, persona, type} — consumers key off "
         "both persona (owner column) and type (gate caption guard)")
+
+
+# --------------------------------------------------------------------------
+# Increment 2 (owner at green_gate review): "The wires need to do a better
+# job — I should be able to click on them like draw.io / mxGraph so that I
+# can move this and help ensure their path is the way I want it to be."
+#
+# Direct manipulation of a wire: select it, re-dock either endpoint port,
+# and bend the middle with waypoints. All CLIENT state — no new entity, no
+# backend change — persisted per project exactly like node positions.
+# --------------------------------------------------------------------------
+
+def _wire_editor() -> str:
+    """The wire-interaction module. Split out of workflowGraph.ts to keep
+    that file from becoming the very god-module the /live board's
+    graphState.ts already is."""
+    return _read("live", "workflowWires.ts")
+
+
+def test_clicking_a_wire_selects_it():
+    """A wire is a thing you can point at. Without a polyline hit-test the
+    owner has nothing to grab, which is the whole complaint."""
+    graph = _read("live", "workflowGraph.ts")
+    editor = _wire_editor()
+
+    assert re.search(r'\bwireAtWorld\s*\(', graph), (
+        "workflowGraph.ts exposes no wireAtWorld hit-test — a wire cannot "
+        "be clicked")
+    assert re.search(r'export\s+function\s+nearestOnPolyline\s*\(', editor), (
+        "the polyline hit-test must be a real distance-to-segment helper "
+        "in live/workflowWires.ts, not an approximation of the endpoints")
+    assert re.search(r'\bselected\b', graph) or re.search(r'\bselected\b', editor), (
+        "nothing tracks which wire is selected")
+
+
+def test_a_selected_wire_reads_as_selected():
+    """Selection the owner can SEE — the live stroke, so a selected wire is
+    unmistakable against the dim idle ones."""
+    graph = _read("live", "workflowGraph.ts")
+    assert re.search(r'drawWire\([^)]*(isSel|selected)', graph) or re.search(
+        r'(isSel|selected)[^;\n]*drawWire', graph), (
+        "drawWorkflows must draw the SELECTED wire with the live stroke — "
+        "a selection nobody can see is not a selection")
+
+
+def test_endpoint_ports_can_be_re_docked_and_survive_a_reload():
+    """Drag either end of a wire to another side of its node. Mirrors the
+    live board's scheme (graphState.ts portOverrides keyed `<wire>:from` /
+    `<wire>:to`) rather than inventing a second one."""
+    graph = _read("live", "workflowGraph.ts")
+    editor = _wire_editor()
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert re.search(r'\bportAtWorld\s*\(', graph), (
+        "no portAtWorld hit-test — the endpoint dots are not grabbable")
+    assert "portFromWorld" in editor, (
+        "re-docking must resolve the new side through live/wires.ts's "
+        "portFromWorld, never a hand-rolled side/offset calculation")
+    assert re.search(r'`prism\.workflows\.ports\.\$\{project\}`', page), (
+        "port placements must persist per project under "
+        "prism.workflows.ports.<project>")
+
+
+def test_waypoints_can_be_inserted_moved_and_removed():
+    """The genuinely new affordance: bend a wire's middle. Insert, move and
+    remove must all exist or the owner can create a bend and never undo it."""
+    editor = _wire_editor()
+    graph = _read("live", "workflowGraph.ts")
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    for fn in ("insertWaypoint", "moveWaypoint", "removeWaypoint"):
+        assert re.search(rf'\b{fn}\s*\(', editor), (
+            f"live/workflowWires.ts has no {fn} — a waypoint the owner "
+            "cannot undo is a trap, not an affordance")
+    assert re.search(r'\bwaypointAtWorld\s*\(', graph), (
+        "no waypointAtWorld hit-test — a placed waypoint cannot be grabbed")
+    assert re.search(r'onDoubleClick', page), (
+        "double-click is the insert/remove gesture; the canvas binds no "
+        "double-click handler")
+    assert re.search(r'`prism\.workflows\.waypoints\.\$\{project\}`', page), (
+        "waypoints must persist per project under "
+        "prism.workflows.waypoints.<project>")
+
+
+def test_waypoint_paths_still_route_through_the_one_orthogonal_router():
+    """A bent wire is still ORTHOGONAL. Every hop — node to waypoint,
+    waypoint to waypoint, waypoint to node — goes through the SAME
+    routeOrthogonal the straight wires use. A second hand-rolled path
+    builder is exactly how the two canvases would drift into two
+    grammars."""
+    editor = _wire_editor()
+
+    assert re.search(r'routeOrthogonal[^;]*from\s+"\./wires"', editor, re.DOTALL), (
+        "live/workflowWires.ts must import routeOrthogonal from ./wires")
+    assert re.search(r'routeOrthogonal\s*\(', editor), (
+        "the waypoint path builder never calls routeOrthogonal — it is "
+        "constructing its own polyline")
+    for owned_elsewhere in ("routeOrthogonal", "portPoint", "portFromWorld",
+                            "autoPort", "drawWire"):
+        assert not re.search(
+            rf'(export\s+)?function\s+{owned_elsewhere}\s*\(', editor), (
+            f"live/workflowWires.ts re-defines {owned_elsewhere} instead of "
+            "importing it from live/wires")
+
+
+def test_deselect_and_reset_clear_the_manual_wire_state():
+    """Escape / clicking empty space lets go, and 'reset layout' drops
+    ports and waypoints along with positions — otherwise the escape hatch
+    only half-works and a wire stays bent with no way back."""
+    page = _read("pages", "WorkflowsPage.tsx")
+    editor = _wire_editor()
+
+    assert re.search(r'(Escape|"Escape")', page), (
+        "Escape must deselect the active wire")
+    for key in ("prism\\.workflows\\.positions", "prism\\.workflows\\.ports",
+                "prism\\.workflows\\.waypoints"):
+        assert re.search(rf'removeItem\(\s*{key}|{key}', page), (
+            f"reset layout must also forget {key}.<project>")
+    assert re.search(r'\bclear\w*\s*\(', editor), (
+        "the wire editor exposes no clear — reset layout has nothing to "
+        "call to drop port/waypoint overrides")
+
+
+# --------------------------------------------------------------------------
+# Increment 3 (owner rejected the first cut at green_gate, ticket 53cc9bcc,
+# screenshot of the Steward -> story_gate wire): "it's not working yet, the
+# lines are all kinda messed up, and if the wires are active please make the
+# whole thing orange."
+# --------------------------------------------------------------------------
+
+def test_routed_paths_are_simplified_instead_of_staircasing():
+    """Routing per hop and concatenating is what mints staircases: every
+    hop contributes its own stub-and-jog, so a couple of bends can stack a
+    dozen 3px steps inside a 150px span. The fix is POST-PROCESSING the
+    joined polyline — merge collinear runs, snap sub-threshold jogs onto
+    one rail — never a second router."""
+    editor = _wire_editor()
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'export\s+function\s+simplifyPath\s*\(', editor), (
+        "live/workflowWires.ts exposes no simplifyPath — a chained path "
+        "keeps every micro-jog the per-hop router emitted")
+    assert re.search(r'simplifyPath\s*\(', graph), (
+        "workflowGraph.route must run the joined polyline through "
+        "simplifyPath, or the canvas draws the raw staircase")
+    assert not re.search(r'(export\s+)?function\s+routeOrthogonal\s*\(', editor), (
+        "simplification must stay POST-processing on routeOrthogonal's "
+        "output — re-implementing the router is the thing this whole "
+        "section is not allowed to do")
+
+
+def test_a_dragged_bend_is_settled_before_it_is_saved():
+    """Dragging must not mint micro-staircases, and a SAVED path must
+    already be clean — persisting raw drag coordinates would reload the
+    exact staircase the renderer just simplified away."""
+    editor = _wire_editor()
+    page = _read("pages", "WorkflowsPage.tsx")
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'simplifyWaypoints\s*\(', editor), (
+        "the editor cannot settle stored bends onto clean rails")
+    assert re.search(r'settleWire\s*\(', graph), (
+        "workflowGraph exposes no settleWire for the page to call")
+    settle = [m.start() for m in re.finditer(r'settleWire\s*\(', page)]
+    persist = [m.start() for m in re.finditer(r'persistWires\s*\(\)', page)]
+    assert settle and persist, (
+        "the page must settle the wire AND persist it after an edit")
+    assert min(settle) < max(persist), (
+        "settleWire must run BEFORE the path is persisted, or the saved "
+        "copy is the unsimplified one")
+
+
+def test_an_active_wire_is_orange_end_to_end():
+    """Owner: "if the wires are active please make the whole thing
+    orange." Body, endpoint ports and bend handles all take the SAME
+    selection token — a wire that is orange only at its handles is exactly
+    the half-signal that got rejected."""
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'drawWire\([^)]*selColor', graph), (
+        "the selected wire's BODY still takes its color from wireColor — "
+        "the stroke must be the selection hue too, not just the handles")
+    assert re.search(r'selColor\s*=\s*isSelected\s*\?\s*PALETTE\.selection', graph), (
+        "the one selection color must come from the PALETTE token the "
+        "handles already use, never a second orange literal")
+    assert re.search(r'portColor\s*=\s*selColor', graph), (
+        "the endpoint ports must reuse that same selection color")
+
+
+def test_the_orange_stroke_goes_through_the_shared_wire_renderer():
+    """Whole-stroke recoloring must be an OPTIONAL argument to the shared
+    drawWire, not a local re-implementation of stroking a polyline — that
+    is how the two canvases stay one grammar. The live board's own pins
+    (width rule, no globalAlpha in the body) must survive untouched."""
+    wires = _read("live", "wires.ts")
+
+    assert re.search(r'export function drawWire\([^)]*color\?:\s*string', wires), (
+        "drawWire takes no optional color override — the workflows canvas "
+        "would have to fork it to draw a selected wire")
+    assert "color ?? wireColor(" in wires, (
+        "the override must FALL BACK to wireColor, so every existing "
+        "caller keeps its exact current color")
+    assert "ctx.lineWidth = live ? 3 : 2;" in wires, (
+        "the live board's width rule must survive the added parameter")
+
+
+# --------------------------------------------------------------------------
+# Increment 4 (owner: "this is a great step thank you", plus refinements):
+# drag the wire BODY, mint/retire anchors automatically, and stop wasting a
+# whole band on a page title that duplicates the global header.
+# --------------------------------------------------------------------------
+
+def test_the_wire_body_itself_can_be_dragged():
+    """Owner: "I can't drag the wire at all." Draw.io's core gesture is
+    grabbing a SEGMENT and sliding it perpendicular to its own axis — a
+    horizontal run moves vertically, a vertical run moves horizontally."""
+    editor = _wire_editor()
+    graph = _read("live", "workflowGraph.ts")
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert re.search(r'\bgrabSegment\s*\(', editor), (
+        "live/workflowWires.ts cannot grab a segment — there is nothing "
+        "for a body drag to move")
+    assert re.search(r'\bmoveSegment\s*\(', editor), (
+        "a grabbed segment cannot be slid")
+    assert re.search(r'\bsegmentAtWorld\s*\(', graph), (
+        "workflowGraph exposes no segmentAtWorld — the page cannot tell "
+        "WHICH run of the wire is under the cursor")
+    assert re.search(r'"segment"', page), (
+        "the page has no segment drag mode")
+
+
+def test_dragging_a_segment_mints_its_anchors_automatically():
+    """Owner: stop making them "micromanage the need for the double-click
+    anchors". A body drag materializes the anchors the new shape needs by
+    itself; double-click stays as the explicit manual path."""
+    editor = _wire_editor()
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "grabSegment" in editor, "grabSegment does not exist yet"
+    grab = editor.split("grabSegment", 1)[1][:1200]
+    assert "waypoints.set" in grab, (
+        "grabSegment must WRITE the materialized bends — otherwise the "
+        "drag has no anchors to move and the owner is back to "
+        "double-clicking first")
+    assert re.search(r'onDoubleClick', page), (
+        "double-click must REMAIN the explicit add/remove path")
+
+
+def test_a_segment_drag_is_settled_like_every_other_edit():
+    """Anchors a drag makes redundant must retire themselves — the same
+    simplify/settle pass, so a body drag can't leave junk anchors behind
+    that only a manual double-click could clear."""
+    page = _read("pages", "WorkflowsPage.tsx")
+    graph = _read("live", "workflowGraph.ts")
+
+    assert re.search(r'simplifyPath\s*\(', graph), (
+        "the drawn path must stay simplified while a segment is dragged")
+    settle = [m.start() for m in re.finditer(r'settleWire\s*\(', page)]
+    persist = [m.start() for m in re.finditer(r'persistWires\s*\(\)', page)]
+    assert settle and persist and min(settle) < max(persist), (
+        "a segment drag must settle before it persists, like the other "
+        "wire edits")
+
+
+def test_the_section_title_lives_in_the_global_header():
+    """The page-level title row duplicated the global header one band
+    below it. The header now names the active section, and it derives that
+    name from the SAME nav items the sidebar renders — PageHeader's own
+    TITLES map had already drifted (it said "Tasks" while the nav said
+    "Work")."""
+    header = _read("components", "PageHeader.tsx")
+    sidebar = _read("components", "Sidebar.tsx")
+
+    assert re.search(r'export\s+function\s+sectionTitleFor\s*\(', sidebar), (
+        "Sidebar must export the one section-name resolver, derived from "
+        "its own items array")
+    assert re.search(r'sectionTitleFor[^;]*from\s+"@/components/Sidebar"',
+                     header, re.DOTALL), (
+        "PageHeader must consume that resolver, not keep a second map")
+    assert not re.search(r'const\s+TITLES\s*:', header), (
+        "PageHeader still declares its own TITLES map — that is the "
+        "duplicate source that drifted in the first place")
+
+
+def test_the_workflows_page_no_longer_repeats_its_own_title():
+    """The reclaimed band goes to the canvas."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "<h1" not in page, (
+        "WorkflowsPage still renders its own <h1> — that is the wasted "
+        "band the owner called out, now that the global header names the "
+        "section")
+    assert "<canvas" in page, "the canvas must survive the title removal"
