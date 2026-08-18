@@ -48,6 +48,28 @@ def _read(*parts: str) -> str:
     return _strip_comments(path.read_text(encoding="utf-8"))
 
 
+def _function_body(src: str, signature: str) -> str:
+    """Everything between `signature`'s opening `{` and its matching
+    closing `}`, counted by brace depth — never a fixed character window,
+    which a comment above the code has been shown to push the real guard
+    out of. `_read` has already stripped comments. Added by task be7a5d2d,
+    when several assertions here moved from a whole-file substring match
+    onto a specific function in the shared wireEditing.ts."""
+    idx = src.find(signature)
+    assert idx != -1, f"{signature!r} not found in source"
+    brace_start = src.find("{", idx)
+    assert brace_start != -1, f"no body opened after {signature!r}"
+    depth = 0
+    for i in range(brace_start, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[brace_start:i + 1]
+    raise AssertionError(f"unbalanced braces after {signature!r}")
+
+
 def _backend_step_ids() -> list[str]:
     from prism_service.models.workflow import WORKFLOW_STEPS
 
@@ -153,11 +175,13 @@ def test_the_canvas_reuses_the_live_wire_and_packet_primitives():
         "live/workflowGraph.ts must import the shared packet primitives")
     # SUPERSEDED (increment 2): these symbols used to be pinned to
     # workflowGraph.ts alone. The wire-editing slice moved routing one
-    # module deeper (live/workflowWires.ts owns the waypoint leg builder,
+    # module deeper (live/wireEditing.ts owns the waypoint leg builder,
     # and workflowGraph calls it), so the canvas SURFACE is now two files.
+    # RE-ANCHORED again by task be7a5d2d: that module is no longer named
+    # for this canvas, because /live consumes it too.
     # The invariant is unchanged — the live primitives are reused, not
     # forked — so it is checked against the surface rather than one file.
-    surface = graph + _read("live", "workflowWires.ts")
+    surface = graph + _read("live", "wireEditing.ts")
     for symbol in ("routeOrthogonal", "drawWire", "spawnPacket",
                    "stepPackets", "drawPackets"):
         assert symbol in surface, (
@@ -281,8 +305,13 @@ def test_the_rail_still_gets_intake_and_a_persona_per_step():
 def _wire_editor() -> str:
     """The wire-interaction module. Split out of workflowGraph.ts to keep
     that file from becoming the very god-module the /live board's
-    graphState.ts already is."""
-    return _read("live", "workflowWires.ts")
+    graphState.ts already is.
+
+    RE-ANCHORED by task be7a5d2d: renamed workflowWires.ts ->
+    wireEditing.ts when the /live board became the second consumer. A
+    module named for one canvas but imported by both is the name that
+    invites the drift back; the contract below is otherwise unchanged."""
+    return _read("live", "wireEditing.ts")
 
 
 def test_clicking_a_wire_selects_it():
@@ -296,7 +325,7 @@ def test_clicking_a_wire_selects_it():
         "be clicked")
     assert re.search(r'export\s+function\s+nearestOnPolyline\s*\(', editor), (
         "the polyline hit-test must be a real distance-to-segment helper "
-        "in live/workflowWires.ts, not an approximation of the endpoints")
+        "in live/wireEditing.ts, not an approximation of the endpoints")
     assert re.search(r'\bselected\b', graph) or re.search(r'\bselected\b', editor), (
         "nothing tracks which wire is selected")
 
@@ -305,9 +334,15 @@ def test_a_selected_wire_reads_as_selected():
     """Selection the owner can SEE — the live stroke, so a selected wire is
     unmistakable against the dim idle ones."""
     graph = _read("live", "workflowGraph.ts")
-    assert re.search(r'drawWire\([^)]*(isSel|selected)', graph) or re.search(
-        r'(isSel|selected)[^;\n]*drawWire', graph), (
-        "drawWorkflows must draw the SELECTED wire with the live stroke — "
+    # RE-ANCHORED by task be7a5d2d: drawWorkflows no longer calls drawWire
+    # itself. It hands the selection state to the shared drawEditableWire,
+    # which /live's draw.ts also paints through — one renderer, so the two
+    # canvases cannot drift into two selections. The invariant is
+    # unchanged: a selected wire must be drawn as selected.
+    assert re.search(r'drawEditableWire\(', graph), (
+        "drawWorkflows must paint through the shared editable-wire renderer")
+    assert re.search(r'selected[,:]', _strip_comments(graph)), (
+        "drawWorkflows must pass the SELECTED state through to it — "
         "a selection nobody can see is not a selection")
 
 
@@ -338,7 +373,7 @@ def test_waypoints_can_be_inserted_moved_and_removed():
 
     for fn in ("insertWaypoint", "moveWaypoint", "removeWaypoint"):
         assert re.search(rf'\b{fn}\s*\(', editor), (
-            f"live/workflowWires.ts has no {fn} — a waypoint the owner "
+            f"live/wireEditing.ts has no {fn} — a waypoint the owner "
             "cannot undo is a trap, not an affordance")
     assert re.search(r'\bwaypointAtWorld\s*\(', graph), (
         "no waypointAtWorld hit-test — a placed waypoint cannot be grabbed")
@@ -359,7 +394,7 @@ def test_waypoint_paths_still_route_through_the_one_orthogonal_router():
     editor = _wire_editor()
 
     assert re.search(r'routeOrthogonal[^;]*from\s+"\./wires"', editor, re.DOTALL), (
-        "live/workflowWires.ts must import routeOrthogonal from ./wires")
+        "live/wireEditing.ts must import routeOrthogonal from ./wires")
     assert re.search(r'routeOrthogonal\s*\(', editor), (
         "the waypoint path builder never calls routeOrthogonal — it is "
         "constructing its own polyline")
@@ -367,7 +402,7 @@ def test_waypoint_paths_still_route_through_the_one_orthogonal_router():
                             "autoPort", "drawWire"):
         assert not re.search(
             rf'(export\s+)?function\s+{owned_elsewhere}\s*\(', editor), (
-            f"live/workflowWires.ts re-defines {owned_elsewhere} instead of "
+            f"live/wireEditing.ts re-defines {owned_elsewhere} instead of "
             "importing it from live/wires")
 
 
@@ -406,11 +441,22 @@ def test_routed_paths_are_simplified_instead_of_staircasing():
     graph = _read("live", "workflowGraph.ts")
 
     assert re.search(r'export\s+function\s+simplifyPath\s*\(', editor), (
-        "live/workflowWires.ts exposes no simplifyPath — a chained path "
+        "live/wireEditing.ts exposes no simplifyPath — a chained path "
         "keeps every micro-jog the per-hop router emitted")
-    assert re.search(r'simplifyPath\s*\(', graph), (
-        "workflowGraph.route must run the joined polyline through "
+    # RE-ANCHORED by task be7a5d2d: route composition moved into the
+    # shared WireInteraction, so the simplify call now lives there rather
+    # than in workflowGraph. The invariant is unchanged AND strengthened:
+    # the pass must still run on the joined polyline, and it is now gated
+    # so it can never flatten the /live board's obstacle avoidance.
+    interaction = _function_body(editor, "route(")
+    assert re.search(r'simplifyPath\s*\(', interaction), (
+        "WireInteraction.route must run the joined polyline through "
         "simplifyPath, or the canvas draws the raw staircase")
+    assert "joinLegs(" in interaction, (
+        "simplify must see the WHOLE path at once — per-hop cleanup is "
+        "what leaves the staircase behind")
+    assert re.search(r'wireEdits\.route\(', _strip_comments(graph)), (
+        "workflowGraph.route must delegate to that one implementation")
     assert not re.search(r'(export\s+)?function\s+routeOrthogonal\s*\(', editor), (
         "simplification must stay POST-processing on routeOrthogonal's "
         "output — re-implementing the router is the thing this whole "
@@ -443,16 +489,27 @@ def test_an_active_wire_is_orange_end_to_end():
     orange." Body, endpoint ports and bend handles all take the SAME
     selection token — a wire that is orange only at its handles is exactly
     the half-signal that got rejected."""
-    graph = _read("live", "workflowGraph.ts")
-
-    assert re.search(r'drawWire\([^)]*selColor', graph), (
+    # RE-ANCHORED by task be7a5d2d: the selected-wire paint moved into
+    # wireEditing.ts's drawEditableWire, and this assertion moved with it
+    # — strengthened, because the orange must now be identical on BOTH
+    # canvases, which is the whole point of that ticket. The owner's rule
+    # is untouched: body, ports and handles take ONE selection token.
+    body = _function_body(_wire_editor(), "export function drawEditableWire")
+    assert re.search(r'drawWire\([^)]*selColor', body), (
         "the selected wire's BODY still takes its color from wireColor — "
         "the stroke must be the selection hue too, not just the handles")
-    assert re.search(r'selColor\s*=\s*isSelected\s*\?\s*PALETTE\.selection', graph), (
+    assert re.search(r'selColor\s*=\s*w\.selected\s*\?\s*PALETTE\.selection', body), (
         "the one selection color must come from the PALETTE token the "
         "handles already use, never a second orange literal")
-    assert re.search(r'portColor\s*=\s*selColor', graph), (
+    assert re.search(r'portColor\s*=\s*selColor', body), (
         "the endpoint ports must reuse that same selection color")
+    for consumer in ("workflowGraph.ts", "draw.ts"):
+        src = _strip_comments(_read("live", consumer))
+        assert "drawEditableWire(" in src, (
+            f"live/{consumer} must reach the one orange through the shared "
+            "renderer")
+        assert "PALETTE.selection" not in src, (
+            f"live/{consumer} must not carry a second selection colour")
 
 
 def test_the_orange_stroke_goes_through_the_shared_wire_renderer():
@@ -487,7 +544,7 @@ def test_the_wire_body_itself_can_be_dragged():
     page = _read("pages", "WorkflowsPage.tsx")
 
     assert re.search(r'\bgrabSegment\s*\(', editor), (
-        "live/workflowWires.ts cannot grab a segment — there is nothing "
+        "live/wireEditing.ts cannot grab a segment — there is nothing "
         "for a body drag to move")
     assert re.search(r'\bmoveSegment\s*\(', editor), (
         "a grabbed segment cannot be slid")
@@ -522,8 +579,14 @@ def test_a_segment_drag_is_settled_like_every_other_edit():
     page = _read("pages", "WorkflowsPage.tsx")
     graph = _read("live", "workflowGraph.ts")
 
-    assert re.search(r'simplifyPath\s*\(', graph), (
+    # RE-ANCHORED by task be7a5d2d: same move as
+    # test_routed_paths_are_simplified_instead_of_staircasing — the
+    # simplify pass lives in the shared WireInteraction.route now, and
+    # workflowGraph delegates to it.
+    assert re.search(r'simplifyPath\s*\(', _function_body(_wire_editor(), "route(")), (
         "the drawn path must stay simplified while a segment is dragged")
+    assert re.search(r'wireEdits\.route\(', _strip_comments(graph)), (
+        "workflowGraph must resolve that path through the shared layer")
     settle = [m.start() for m in re.finditer(r'settleWire\s*\(', page)]
     persist = [m.start() for m in re.finditer(r'persistWires\s*\(\)', page)]
     assert settle and persist and min(settle) < max(persist), (

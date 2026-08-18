@@ -191,9 +191,19 @@ def test_idle_has_no_fullscreen_dead_state_once_booted():
 # ---------------------------------------------------------------------------
 
 def test_draw_composes_every_sub_renderer():
+    """RE-ANCHORED by task be7a5d2d: draw.ts reaches the wire stroke
+    through drawEditableWire now — the shared renderer that also paints
+    the /workflows canvas, so a selected wire is the same orange on both
+    boards. drawWire itself is one call deeper. The invariant is
+    unchanged: draw.ts is the render loop owner and must compose every
+    sub-renderer rather than inlining any of them."""
     src = _read(_LIVE / "draw.ts")
-    for fn in ("drawWire(", "drawPackets(", "drawCard(", "drawHud("):
+    for fn in ("drawEditableWire(", "drawPackets(", "drawCard(", "drawHud("):
         assert fn in src, f"draw.ts must call {fn} — it is the render loop owner"
+    shared = _read(_LIVE / "wireEditing.ts")
+    assert "drawWire(" in shared, (
+        "the shared editable-wire renderer must still stroke the wire "
+        "through live/wires.ts's drawWire, never its own path painter")
 
 
 # ---------------------------------------------------------------------------
