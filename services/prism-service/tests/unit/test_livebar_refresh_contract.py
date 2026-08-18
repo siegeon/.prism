@@ -206,11 +206,26 @@ def _setinterval_callback_spans(src: str):
 
 
 def _onmessage_body_span(src: str):
+    """The body of the SSE push handler, wherever it is wired.
+
+    RE-ANCHORED 2026-08-18 (task b835f639): the hook no longer owns an
+    EventSource, so there is no `es.onmessage = (...)` to find. Every stream
+    in the SPA is now opened by lib/sharedStream.ts and consumers attach with
+    `subscribeStream(url, (…) => { … })`. The invariant this file pins -- a
+    PUSH path reaches load() -- is unchanged; only the construct that carries
+    the callback moved. Still prefers a literal onmessage when one exists, so
+    the helper keeps working for any consumer that hasn't migrated.
+    """
     marker = ".onmessage = ("
-    if marker not in src:
+    if marker in src:
+        i = src.index(marker)
+        arrow = src.index("=>", i)
+        brace = src.index("{", arrow)
+        return (_walk_braces(src, brace), brace)
+    m = re.search(r"subscribeStream\(", src)
+    if not m:
         return None
-    i = src.index(marker)
-    arrow = src.index("=>", i)
+    arrow = src.index("=>", m.end())
     brace = src.index("{", arrow)
     return (_walk_braces(src, brace), brace)
 
@@ -302,18 +317,32 @@ def test_eventsource_targets_sse_sessions_and_onmessage_reaches_load():
     # retirement, heartbeat timing) moved OUT of LiveBar.tsx into the shared
     # lib/useConductorState.ts hook (FR-1/FR-3) -- the invariant survives,
     # only its location moved. Re-anchored here rather than deleted.
+    # RE-ANCHORED 2026-08-18 (task b835f639): the subscription construct moved
+    # from a raw `new EventSource(...)` owned by this hook to
+    # `subscribeStream(url, cb)` served by lib/sharedStream.ts, so that one
+    # socket can be shared across every subscriber AND every tab. The
+    # invariant is untouched: this hook still follows /sse/sessions, and its
+    # push handler still reaches load(). Precedent for re-anchoring rather
+    # than deleting: the SUPERSEDED notes above (task 40c29b83).
     src = _strip_comments(_read("lib/useConductorState.ts"))
-    m = re.search(r"new EventSource\(\s*(`[^`]*`|\"[^\"]*\"|'[^']*')", src)
-    assert m, "LiveBar must open `new EventSource(...)`"
+    assert "new EventSource(" not in src, (
+        "the hook must NOT hold its own EventSource -- every stream is owned "
+        "by lib/sharedStream.ts so subscribers share one connection (task "
+        "b835f639: three global streams per tab exhausted the browser's "
+        "~6-per-origin cap and starved new navigations)")
+    m = re.search(r"subscribeStream\(\s*(`[^`]*`|\"[^\"]*\"|'[^']*')", src)
+    assert m, "the hook must subscribe via `subscribeStream(url, ...)`"
     es_arg = m.group(1)
     assert "/sse/sessions" in es_arg, (
-        f"the EventSource must target /sse/sessions, not /sse/live -- "
+        f"the subscription must target /sse/sessions, not /sse/live -- "
         f"/sse/live only ever emits a connect payload plus keepalive "
-        f"comments, it can never fire onmessage; got {es_arg!r}")
+        f"comments, it can never fire a message; got {es_arg!r}")
     assert "/sse/live" not in es_arg, f"got {es_arg!r}"
 
     om = _onmessage_body_span(src)
-    assert om is not None, "the EventSource must wire an onmessage handler (`es.onmessage = (...) => { ... }`)"
+    assert om is not None, (
+        "the subscription must wire a push handler "
+        "(`subscribeStream(url, (...) => { ... })`)")
     handler_body, _ = om
     assert re.search(r"\bload\(", handler_body), (
         "the onmessage handler's body must reach load() via a RENDERED "
