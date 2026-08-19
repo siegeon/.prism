@@ -139,6 +139,50 @@ def producer_gate_verdict_reason(row: dict) -> str:
     )
 
 
+def _has_llm_turn_signature(row: dict) -> bool:
+    """True when a row's tokens are traceable to server-side accounting,
+    never a bare client claim.
+
+    ``cost_usd`` is set ONLY by the trusted in-process writer
+    (conductor_service._record_agent_run), straight off the real `claude -p`
+    usage dict -- the untrusted HTTP ingest producer's JSON template never
+    includes it (see .claude/workflows/implement.js's telemetryInstr), so its
+    presence alone proves the row's tokens were computed server-side, even
+    on a step that legitimately completed in a measured 0ms. Absent that,
+    fall back to the model/duration discriminator: a populated model AND a
+    measured nonzero duration is the shape of a real LLM turn.
+    """
+    if (row or {}).get("cost_usd") is not None:
+        return True
+    model = str((row or {}).get("model") or "").strip()
+    if not model:
+        return False
+    try:
+        return int((row or {}).get("duration_ms") or 0) != 0
+    except (TypeError, ValueError):
+        return False
+
+
+def sanitize_untrusted_tokens(row: dict) -> dict:
+    """Zero a claimed ``tokens`` value on a row with no LLM-turn signature
+    (task c740443e). A non-LLM bookkeeping event (gate transition, etc.)
+    has no tokens of its own to report, so a client-claimed number on such
+    a row is never trustworthy. Returns a new dict; does not mutate the
+    caller's row.
+    """
+    if _has_llm_turn_signature(row):
+        return row
+    try:
+        claimed = int((row or {}).get("tokens") or 0)
+    except (TypeError, ValueError):
+        claimed = 0
+    if claimed <= 0:
+        return row
+    row = dict(row)
+    row["tokens"] = 0
+    return row
+
+
 def gate_source_for_row(row) -> str | None:
     """How a PASSING verdict got into the spine, so a reader can tell a
     genuine machine decision from a producer-written one without squinting
@@ -204,6 +248,7 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
 def upsert_agent_run(scores_db: str, row: dict) -> None:
     """Insert or update one telemetry row, idempotent on
     (run_id, agent_id, step). Booleans are coerced to 0/1 for sqlite."""
+    row = sanitize_untrusted_tokens(row)
     vals = []
     for c in _COLS:
         v = row.get(c)
