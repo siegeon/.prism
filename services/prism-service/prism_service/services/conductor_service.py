@@ -3322,6 +3322,52 @@ class ConductorService:
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
                 return 1, "", str(exc)
 
+        def _merge_tree(cwd: str, ours: str, theirs: str) -> tuple[int, str, str]:
+            """Compute a merge tree without touching a checkout or its index.
+
+            Git 2.38 added ``merge-tree --write-tree``. Ubuntu 22.04 still
+            ships 2.34, so use a private temporary index there while keeping
+            the same headless, concurrency-safe contract.
+            """
+            rc, tree, err = _git(cwd, "merge-tree", "--write-tree", ours, theirs)
+            if rc == 0:
+                return rc, tree, err
+            if "unknown rev --write-tree" not in (tree + err) and "unknown option" not in (tree + err):
+                return rc, tree, err
+
+            import tempfile
+            rc, base, base_err = _git(cwd, "merge-base", ours, theirs)
+            if rc != 0 or not base:
+                return 1, "", base_err or "could not resolve merge base"
+            index_path = tempfile.mktemp(prefix="prism-merge-index-")
+            env = os.environ.copy()
+            env["GIT_INDEX_FILE"] = index_path
+            try:
+                read = subprocess.run(
+                    ["git", "read-tree", "-m", base, ours, theirs], cwd=cwd,
+                    env=env, capture_output=True, text=True, timeout=60,
+                )
+                if read.returncode != 0:
+                    return read.returncode, read.stdout.strip(), read.stderr.strip()
+                unresolved = subprocess.run(
+                    ["git", "ls-files", "-u"], cwd=cwd, env=env,
+                    capture_output=True, text=True, timeout=60,
+                )
+                if unresolved.stdout.strip():
+                    return 1, unresolved.stdout.strip(), "merge conflict"
+                written = subprocess.run(
+                    ["git", "write-tree"], cwd=cwd, env=env,
+                    capture_output=True, text=True, timeout=60,
+                )
+                return written.returncode, written.stdout.strip(), written.stderr.strip()
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                return 1, "", str(exc)
+            finally:
+                try:
+                    os.unlink(index_path)
+                except FileNotFoundError:
+                    pass
+
         if self._task_svc is None:
             return _res("error", "no TaskService attached")
         task = self._task_svc.get(task_id)
@@ -3381,8 +3427,7 @@ class ConductorService:
         # NO change to the repo at all, which is how a park leaves main
         # provably byte-identical (likely_misfire: resolving a conflict by
         # force/reset/rewriting main is exactly what must never happen).
-        rc, mt_out, mt_err = _git(repo_root, "merge-tree", "--write-tree",
-                                  before_main, tip_sha)
+        rc, mt_out, mt_err = _merge_tree(repo_root, before_main, tip_sha)
         if rc != 0:
             detail = (mt_out or mt_err or "").strip().splitlines()
             detail = detail[0] if detail else "conflict"
