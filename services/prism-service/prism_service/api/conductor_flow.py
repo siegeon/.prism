@@ -114,6 +114,13 @@ class Ident(BaseModel):
     session_id: Optional[str] = None
     outcome: object = ""
     model: Optional[str] = None
+    # The run's OWN usage, as claude_cli._usage_from_result read it off the
+    # single stream `result` event (ClaudeCliResult.usage). Rides the exact
+    # rail `model` already rides so a bot-driven step persists its real token
+    # and cost figures instead of a transcript lookup that cannot resolve a
+    # seat name. Optional and defaulted: human reports omit it and keep the
+    # transcript attribution they have today (task 9a51e670).
+    usage: Optional[dict] = None
     # expected_step names the step this report is FOR. flow_report REQUIRES
     # it (see there) so a stale/duplicate report cannot advance whatever
     # step is now current; flow_start ignores it.
@@ -529,7 +536,7 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
             except Exception:
                 pass
         res = svc.advance_task(body.task_id, session_id=body.session_id,
-                              model=body.model)
+                              model=body.model, usage=body.usage)
 
     # If the advance parked the task on a rubric gate that already scores
     # green, clear it now — no human click for a machine-verified pass.
