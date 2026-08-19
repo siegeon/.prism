@@ -17,6 +17,11 @@ type GateReadiness = {
   receipt_ok: boolean;
   receipt_refusal?: string;
   manual_review?: boolean;
+  // Task 5b6aefc1 / e4e6cd44: this task's [task:id] commits are not on
+  // origin/main yet, and whether an Approve will land them (the ship seat is
+  // opt-in, so the same unshipped state reads as an advisory or a refusal).
+  unshipped?: boolean;
+  ship_on_approve?: boolean;
   receipt?: {
     adapter?: string; passed?: boolean; status?: string;
     ended_at?: string; reason?: string;
@@ -153,6 +158,26 @@ export default function LiveGatePanel({ taskId, project = "default", onClose }: 
       <div className="rounded-md px-3 py-2 text-[12px]" style={toneStyle}>
         receipt_ok: {String(readiness?.receipt_ok ?? "…")} — {verdict.text}
       </div>
+
+      {/* Task 5b6aefc1 / e4e6cd44: this gate's commits are not on origin/main
+          yet. Say so BEFORE the click -- the card used to promise "Approve to
+          release" and the approve path then refused it 73 times on f506ece4.
+          With the ship seat on, Approve is what LANDS the branch, so the
+          disclosure is an advisory on an ENABLED button, never a refusal. */}
+      {readiness?.unshipped && readiness?.ship_on_approve && (
+        <div
+          className="rounded-md px-3 py-2 text-[12px] border-l-2"
+          style={{
+            background: "var(--accent-amber-bg)",
+            color: "var(--accent-amber-fg)",
+            borderColor: "var(--accent-amber-ring)",
+          }}
+        >
+          <span className="font-semibold">Not shipped yet.</span>{" "}
+          Approving will push the branch, open a PR, wait for CI and merge it —
+          then release the gate.
+        </div>
+      )}
 
       {/* AC-4/mx-d0ed12: Plan is ONE section holding the real DesignPacket
           (hideApproval -- this panel's own footer below is the single

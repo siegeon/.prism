@@ -1,0 +1,363 @@
+"""The ship seat — the owner's Approve is what LANDS the branch (task 5b6aefc1).
+
+Owner directive 2026-08-18: "I can approve it with visual evidence when I am
+working it — not when I approve it you ship it. Make sure that approve SHIPS
+it using the bot workflows, since it's always up to date locally."
+
+The behavior this replaces inverted that: the shipped-ness tooth
+(conductor_service `_unshipped_gate_reason`) refused the owner's approve until
+the task's `[task:<id8>]` commits were already reachable from origin/main,
+forcing a manual push/PR/merge BEFORE the click. Measured on the live board:
+73 recorded refusals on task f506ece4, 16 on b835f639 — and both understate
+the clicks, because the park helper only writes a row when the reason CHANGES.
+
+REFINEMENT (owner, same day): "the merge is handled programmatically by the
+bot workflows, not with tokens, unless there is an error, then that." So
+everything below is plain Python + git + gh. This module imports no model
+runner and spends no tokens; the LLM's job begins only after a stage has
+failed and a human or a driving agent reads the parked reason.
+
+SHIPS OFF BY DEFAULT, mirroring the two existing opt-in seats
+(task_runner.py, gate_adjudicator.py): an environment opts in with
+PRISM_SHIP_ON_APPROVE=1, and PRISM_SHIP_ON_APPROVE_INTERVAL=<seconds>
+overrides the sweep cadence. With the var unset this module allocates no
+thread and costs nothing.
+
+WHAT THE SEAT MAY AND MAY NOT DO. It lands code; it never decides a gate.
+The gate that finally passes is re-decided under the OWNER'S OWN actor
+identity (the approval this seat recovers from history), so the conductor's
+distinct-actor rule is untouched and `conductor-shipper` can never approve
+its own work. Its own history rows are ship-stage audit rows only.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+from typing import Callable, Optional
+
+SEAT_ID = "conductor-shipper"  # registered in actor_service.MACHINE_SEATS
+
+SHIP_ENV = "PRISM_SHIP_ON_APPROVE"
+INTERVAL_ENV = "PRISM_SHIP_ON_APPROVE_INTERVAL"
+DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
+OPTED_IN_INTERVAL_S = 30  # cadence once opted in, unless INTERVAL_ENV overrides
+
+# CI can legitimately take minutes; the wait is bounded so a stuck check parks
+# with a reason instead of pinning a thread forever.
+CI_TIMEOUT_S = 900.0
+CI_POLL_S = 15.0
+
+# (argv, cwd) -> (returncode, stdout, stderr). The ONE boundary tests stub;
+# shaped after github_cli_auth.Runner, which already proved the seam.
+Runner = Callable[..., tuple]
+
+# `gh pr checks` exits 8 while checks are still pending, 0 when they all
+# passed, and non-zero otherwise. Documented gh behavior, relied on here so
+# the poll needs no JSON parsing.
+GH_CHECKS_PENDING_RC = 8
+
+_PR_NUM_RE = re.compile(r"/pull/(\d+)")
+
+
+def _default_runner(argv: list, cwd: Optional[str] = None) -> tuple:
+    proc = subprocess.run([str(a) for a in argv],
+                          cwd=str(cwd) if cwd else None,
+                          capture_output=True, text=True, timeout=120)
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def _log(msg: str) -> None:
+    print(f"[ship-worker] {msg}", file=sys.stderr, flush=True)
+
+
+def _interval_s() -> int:
+    """Cadence in seconds; 0 (the default) means this environment is OUT."""
+    raw = os.environ.get(INTERVAL_ENV, "")
+    if raw.strip():
+        try:
+            return int(raw)
+        except ValueError:
+            return DEFAULT_INTERVAL_S
+    opt = os.environ.get(SHIP_ENV, "").strip().lower()
+    if opt in ("1", "true", "yes", "on"):
+        return OPTED_IN_INTERVAL_S
+    return DEFAULT_INTERVAL_S
+
+
+def is_enabled() -> bool:
+    """True when this environment opted into the seat. Consulted by the
+    gate_decide trigger and the readiness disclosure too, so OFF means OFF:
+    neither the sweep nor the approve-time hand-off runs."""
+    return _interval_s() > 0
+
+
+def _fail(stage: str, error: str, pr: Optional[int] = None) -> dict:
+    return {"ok": False, "stage": stage, "error": str(error).strip(), "pr": pr}
+
+
+def _run(runner: Runner, argv: list, cwd: Optional[str] = None) -> tuple:
+    """Invoke the boundary, turning a MISSING BINARY into a readable reason.
+
+    A daemon environment without `gh` is a real deployment state (the plan's
+    explicit requirement): it must park the gate with an actionable line, not
+    surface a FileNotFoundError traceback out of a background thread."""
+    try:
+        return runner(argv, cwd)
+    except (FileNotFoundError, OSError) as exc:
+        name = str(argv[0]) if argv else "?"
+        return 127, "", (
+            f"{name} is not available to the PRISM daemon ({exc}). Install it "
+            f"and authenticate (`{name} auth login`) on the machine running "
+            "the daemon, then approve again to retry.")
+    except subprocess.SubprocessError as exc:
+        return 1, "", f"{argv[0]} failed to run: {exc}"
+
+
+def _workspace(task_id: str) -> tuple:
+    from prism_service.services import task_workspace
+    rec = task_workspace.workspace_for(task_id) or {}
+    path = str(rec.get("path") or "")
+    branch = str(rec.get("branch") or f"prism/ws/{task_id}")
+    return path, branch
+
+
+def _services(project: str, task_svc, cond):
+    """Resolve the task/conductor services, tolerating their absence.
+
+    ship_task is unit-testable against a bare git fixture with no task row at
+    all, so a missing project context degrades to "pipeline only, no record
+    and no replay" rather than raising."""
+    if task_svc is not None and cond is not None:
+        return task_svc, cond
+    try:
+        from prism_service.project_context import get_project
+        ctx = get_project(project)
+        return (task_svc or ctx.task_svc,
+                cond or getattr(ctx, "conductor_svc", None))
+    except Exception:
+        return task_svc, cond
+
+
+def _park(task_svc, task_id: str, stage: str, error: str) -> None:
+    """Surface the EXACT stage error on the task and audit it under this seat.
+
+    Parks PENDING, never `failed`: "evidence not ready" is a verdict on the
+    ship, not on the work, and writing `failed` would force the owner's next
+    honest approve through override=true (task 97d92854). The recorded
+    approval is deliberately left in place so the next sweep retries.
+    A computed-then-dropped refusal is the e0149f1f defect class this repo
+    already named — the reason goes on the row, always."""
+    if task_svc is None:
+        return
+    reason = (f"green_gate: ship failed at {stage} — {error} "
+              "(your approval is recorded and will be retried; "
+              f"seat={SEAT_ID})")
+    try:
+        task_svc.update(task_id, gate_state="pending", gate_reason=reason,
+                        blocked_reason=reason)
+    except Exception:
+        pass
+    try:
+        task_svc.record_history(
+            task_id, action="ship",
+            details=f"stage={stage}; result=failed; error={error}",
+            actor=SEAT_ID)
+    except Exception:
+        pass
+
+
+def _audit(task_svc, task_id: str, stage: str, detail: str = "") -> None:
+    if task_svc is None:
+        return
+    try:
+        task_svc.record_history(
+            task_id, action="ship",
+            details=f"stage={stage}; result=ok{('; ' + detail) if detail else ''}",
+            actor=SEAT_ID)
+    except Exception:
+        pass
+
+
+def ship_task(task_id: str, project: str = "default", *,
+              runner: Optional[Runner] = None,
+              task_svc=None, cond=None,
+              poll_interval_s: float = CI_POLL_S,
+              ci_timeout_s: float = CI_TIMEOUT_S) -> dict:
+    """Land this task's workspace branch. DETERMINISTIC — no model calls.
+
+    push -> gh pr create (body carries the `[task:<id8>]` trailer, which is
+    what `api/tasks.py::_is_shipped_on_main` greps for on origin/main) ->
+    gh pr checks polled to completion -> gh pr merge -> fetch, so the local
+    origin/main ref reflects the landing the shipped-ness tooth is about to
+    re-read.
+
+    Returns {"ok", "stage", "error", "pr"}. On failure the gate is parked with
+    the verbatim stage error and the owner's recorded approval is preserved.
+    """
+    run = runner or _default_runner
+    task_svc, cond = _services(project, task_svc, cond)
+    short = task_id[:8]
+
+    path, branch = _workspace(task_id)
+    if not path or not os.path.isdir(path):
+        res = _fail("resolve_workspace",
+                    f"no workspace checkout resolves for task {short} "
+                    f"(looked for {path or '<unrecorded>'})")
+        _park(task_svc, task_id, res["stage"], res["error"])
+        return res
+
+    # ---- push --------------------------------------------------------------
+    rc, out, err = _run(run, ["git", "push", "origin", branch], path)
+    if rc != 0:
+        res = _fail("push", err or out or f"git push exited {rc}")
+        _park(task_svc, task_id, res["stage"], res["error"])
+        return res
+    _audit(task_svc, task_id, "push", f"branch={branch}")
+
+    # ---- open the PR -------------------------------------------------------
+    title = f"ship: {short} — landed from the green_gate approve"
+    body = (f"Landed by the {SEAT_ID} seat on the owner's green_gate approve.\n"
+            f"\n[task:{short}]\n")
+    rc, out, err = _run(run, [
+        "gh", "pr", "create", "--head", branch, "--base", "main",
+        "--title", title, "--body", body], path)
+    if rc != 0:
+        res = _fail("pr_create", err or out or f"gh pr create exited {rc}")
+        _park(task_svc, task_id, res["stage"], res["error"])
+        return res
+    m = _PR_NUM_RE.search(out or "")
+    pr = int(m.group(1)) if m else 0
+    _audit(task_svc, task_id, "pr_create", f"pr={pr}")
+
+    # ---- wait for CI -------------------------------------------------------
+    deadline = time.monotonic() + float(ci_timeout_s)
+    while True:
+        rc, out, err = _run(run, ["gh", "pr", "checks", str(pr)], path)
+        if rc == 0:
+            break
+        if rc != GH_CHECKS_PENDING_RC:
+            res = _fail("ci_wait", err or out or f"gh pr checks exited {rc}", pr)
+            _park(task_svc, task_id, res["stage"], res["error"])
+            return res
+        if time.monotonic() >= deadline:
+            res = _fail("ci_wait",
+                        f"CI was still pending after {int(ci_timeout_s)}s", pr)
+            _park(task_svc, task_id, res["stage"], res["error"])
+            return res
+        if poll_interval_s:
+            time.sleep(float(poll_interval_s))
+    _audit(task_svc, task_id, "ci_wait", f"pr={pr}")
+
+    # ---- merge -------------------------------------------------------------
+    rc, out, err = _run(run, [
+        "gh", "pr", "merge", str(pr), "--squash", "--delete-branch"], path)
+    if rc != 0:
+        res = _fail("merge", err or out or f"gh pr merge exited {rc}", pr)
+        _park(task_svc, task_id, res["stage"], res["error"])
+        return res
+    _audit(task_svc, task_id, "merge", f"pr={pr}")
+
+    # Refresh origin/main locally: the shipped-ness tooth reads THIS checkout's
+    # origin/main ref, so without the fetch it would re-refuse what just landed.
+    _run(run, ["git", "fetch", "origin"], path)
+
+    replayed = _replay_owner_approval(task_svc, cond, task_id)
+    return {"ok": True, "stage": "merged", "error": "", "pr": pr,
+            "replayed": replayed}
+
+
+def _replay_owner_approval(task_svc, cond, task_id: str) -> bool:
+    """Re-present the OWNER'S OWN preserved decision now that it can succeed.
+
+    This is the line the seat must not cross: it re-decides the gate as the
+    HUMAN who approved, never as itself. `conductor-shipper` landing code and
+    then approving its own landing would be exactly the self-approval the
+    distinct-actor rule exists to prevent."""
+    if cond is None or task_svc is None:
+        return False
+    try:
+        approval = cond._recorded_ship_approval(task_id)
+    except Exception:
+        approval = None
+    if not approval:
+        return False
+    try:
+        cond.gate_decide(task_id, "approve",
+                         reason=str(approval.get("reason") or ""),
+                         actor=str(approval.get("actor") or ""),
+                         session_id=SEAT_ID)
+        return True
+    except Exception as exc:
+        _park(task_svc, task_id, "replay", f"{type(exc).__name__}: {exc}")
+        return False
+
+
+def _awaiting_ship(project: str) -> list:
+    """Task ids whose green_gate carries a recorded, unshipped approval."""
+    from prism_service.project_context import get_project
+    ctx = get_project(project)
+    cond = getattr(ctx, "conductor_svc", None)
+    if cond is None:
+        return []
+    out = []
+    for task in ctx.task_svc.list(status="in_progress"):
+        tid = str(getattr(task, "id", "") or "")
+        if str(getattr(task, "workflow_step", "")) != "green_gate":
+            continue
+        try:
+            if not cond._recorded_ship_approval(tid):
+                continue
+            if not cond._unshipped_gate_reason(task):
+                continue
+        except Exception:
+            continue
+        out.append(tid)
+    return out
+
+
+def sweep_once() -> Optional[dict]:
+    """One pass over every project: ship AT MOST one task, bounding blast
+    radius exactly as task_runner.sweep_once does."""
+    from prism_service.project_context import get_all_projects
+
+    for pid in get_all_projects():
+        try:
+            pending = _awaiting_ship(pid)
+        except Exception as exc:
+            _log(f"{pid}: eligibility check failed: {exc}")
+            continue
+        for tid in pending:
+            res = ship_task(tid, pid)
+            _log(f"{pid}/{tid[:8]}: {res}")
+            return res
+    return None
+
+
+def _loop(interval_s: int) -> None:
+    _log(f"started; interval={interval_s}s")
+    while True:
+        try:
+            sweep_once()
+        except Exception as exc:
+            _log(f"sweep error: {exc}")
+        time.sleep(interval_s)
+
+
+def start_ship_worker() -> Optional[threading.Thread]:
+    """Spawn the ship daemon thread, unless this environment did not opt in
+    (the default). Mirrors start_task_runner / start_gate_adjudicator: same
+    shape, same off-by-default posture."""
+    interval = _interval_s()
+    if interval <= 0:
+        _log(f"disabled (default OFF; set {SHIP_ENV}=1 to opt this "
+             "environment in)")
+        return None
+    t = threading.Thread(target=_loop, args=(interval,),
+                         name="prism-ship-worker", daemon=True)
+    t.start()
+    return t

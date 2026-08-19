@@ -600,6 +600,15 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.task_runner import start_task_runner
         start_task_runner()
 
+        # Task 5b6aefc1 (owner 2026-08-18) — the ship seat: an owner's
+        # green_gate approve LANDS the branch (push -> PR -> CI -> merge)
+        # instead of being refused for not having landed yet. Deterministic
+        # code, no model calls. Own thread (a CI wait takes minutes and must
+        # never block a request); default OFF — PRISM_SHIP_ON_APPROVE=1 opts
+        # an environment in.
+        from prism_service.services.ship_worker import start_ship_worker
+        start_ship_worker()
+
         # Task dd1e8871 — the server-side, observed-activity heartbeat
         # producer: a SECOND, harness-guaranteed source onto the SAME
         # drive_heartbeats store the implement.js prompt text already

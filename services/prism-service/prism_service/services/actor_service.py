@@ -22,8 +22,17 @@ try:
 except Exception:  # pragma: no cover - defensive; see MACHINE_SEATS fallback
     ADJUDICATOR_SEAT = "conductor-adjudicator"
 
+try:
+    # Task 5b6aefc1: the ship seat. Imported (not retyped) for the same
+    # reason as ADJUDICATOR_SEAT above — an unregistered actor writing
+    # history resolves to ActorKind.UNKNOWN, which is the audited defect
+    # this registration exists to prevent.
+    from prism_service.services.ship_worker import SEAT_ID as SHIPPER_SEAT
+except Exception:  # pragma: no cover - defensive; see MACHINE_SEATS fallback
+    SHIPPER_SEAT = "conductor-shipper"
+
 MACHINE_SEATS = frozenset({ADJUDICATOR_SEAT, "conductor-autoclear",
-                            "gate-card-rerun"})
+                            "gate-card-rerun", SHIPPER_SEAT})
 
 
 class ActorService:

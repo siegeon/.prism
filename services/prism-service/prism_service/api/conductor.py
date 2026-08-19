@@ -553,6 +553,44 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                         "receipt": {"adapter": "human", "passed": False,
                                     "status": "needs_visual_evidence",
                                     "ended_at": "", "reason": art}}
+            # SHIPPED-NESS DISCLOSURE (task e4e6cd44). This branch used to
+            # promise "Approve to release" for tasks whose [task:<id8>]
+            # commits are not on origin/main — and the approve path then
+            # refused that very click (73 consecutive times on f506ece4).
+            # The tooth lives on the service; ask it BEFORE the click.
+            ship_reason = ""
+            try:
+                ship_reason = s._unshipped_gate_reason(task)
+            except Exception:
+                ship_reason = ""
+            if ship_reason:
+                from prism_service.services import ship_worker
+                if ship_worker.is_enabled():
+                    # ON: the click now WORKS — it triggers the landing. Keep
+                    # receipt_ok TRUE: LiveGatePanel disables Approve on
+                    # `receipt_ok !== true`, so a false receipt here would
+                    # disable the very button this feature adds. The unshipped
+                    # state is disclosed as an advisory, not a refusal.
+                    return {"receipt_ok": True, "receipt_refusal": "",
+                            "manual_review": True, "unshipped": True,
+                            "ship_on_approve": True,
+                            "receipt": {"adapter": "human", "passed": True,
+                                        "status": "your_review_then_ship",
+                                        "ended_at": "",
+                                        "reason": (
+                                            "visual/demo gate — your review is "
+                                            "the sign-off. Not shipped yet: "
+                                            "approving will push the branch, "
+                                            "open a PR, wait for CI and merge "
+                                            "it, then release the gate.")}}
+                # OFF (default): the click genuinely cannot succeed, so say so
+                # BEFORE it is spent, and let the button disable honestly.
+                return {"receipt_ok": False, "manual_review": True,
+                        "unshipped": True, "ship_on_approve": False,
+                        "receipt_refusal": ship_reason,
+                        "receipt": {"adapter": "human", "passed": False,
+                                    "status": "not_shipped", "ended_at": "",
+                                    "reason": ship_reason}}
             return {"receipt_ok": True, "receipt_refusal": "",
                     "manual_review": True,
                     "receipt": {"adapter": "human", "passed": True,

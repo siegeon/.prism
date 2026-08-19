@@ -2332,14 +2332,19 @@ class ConductorService:
         into 'failed'), just pending WITH the reason, plus an audit row.
 
         Re-sweeps every ~20s, so the history row is written only when the
-        reason CHANGES — otherwise the audit trail fills with duplicates."""
+        reason CHANGES — otherwise the audit trail fills with duplicates.
+
+        Also mirrors the reason onto blocked_reason (task e4e6cd44): the
+        actionable half ("land the [task:...] commits") was reaching the owner
+        ONLY through gate_reason, which oscillates as the teeth re-sweep, so
+        the one line telling them what to DO kept disappearing."""
         if self._task_svc is None:
             return
         try:
             task = self._task_svc.get(task_id)
             prior = str(_task_attr(task, "gate_reason", "") or "")
             self._task_svc.update(task_id, gate_state="pending",
-                                  gate_reason=reason)
+                                  gate_reason=reason, blocked_reason=reason)
             if prior.strip() != reason.strip():
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
@@ -2347,6 +2352,85 @@ class ConductorService:
                              f"machine=refused; reason={reason}"))
         except Exception:
             return
+
+    def _recorded_ship_approval(self, task_id: str) -> Optional[dict]:
+        """The owner's approve, recovered from history — task 5b6aefc1.
+
+        The recorded `ship=queued` gate_decide row IS the queue and the
+        receipt: no new table, and the decision survives a ship failure, a
+        daemon restart and a retry because it was written before anything
+        was attempted. Reads the LATEST such row, exactly the way
+        `_failed_gate_is_refused_approve` already recovers a prior decision
+        from history.
+
+        Returns {"actor", "reason"} or None. A row whose ship has since
+        SUCCEEDED is not cleared — the shipped-ness tooth stops objecting on
+        its own, which is what ends the retry loop."""
+        if self._task_svc is None:
+            return None
+        try:
+            rows = list(self._task_svc.history(task_id))
+        except Exception:
+            return None
+        for row in reversed(rows):
+            if str(_task_attr(row, "action", "")) != "gate_decide":
+                continue
+            details = str(_task_attr(row, "details", "") or "")
+            if "ship=queued" not in details:
+                continue
+            actor = ""
+            reason = ""
+            for part in details.split(";"):
+                part = part.strip()
+                if part.startswith("actor="):
+                    actor = part[len("actor="):].strip()
+                elif part.startswith("reason="):
+                    reason = part[len("reason="):].strip()
+            return {"actor": actor or str(_task_attr(row, "actor", "") or ""),
+                    "reason": reason}
+        return None
+
+    def _ship_on_approve_reason(self, task, action: str, override: bool,
+                                actor: object) -> str:
+        """Should this approve TRIGGER the ship bot instead of being refused?
+
+        Returns the gate_reason to park with when yes, else "". Three
+        conditions, each narrowing deliberately:
+
+        1. the environment opted in (PRISM_SHIP_ON_APPROVE) — OFF by default,
+           so nothing changes for anyone who did not ask for it;
+        2. the gate's proof burden is a PERSON'S judgment (demo/review). A
+           proof_type=test task is machine-graded and the adjudicator seat
+           already owns its green — sweeping it into the ship path is the
+           task's own pre-declared likely_misfire;
+        3. the approver RESOLVES TO A REAL HUMAN. The ship bot exists to
+           carry out an owner's decision; a machine seat's approve must not
+           be able to trigger a push/merge. Resolution failure fails CLOSED
+           (no ship), mirroring same_actor_override_reason.
+        """
+        if action != "approve" or override:
+            return ""
+        try:
+            from prism_service.services import ship_worker
+            if not ship_worker.is_enabled():
+                return ""
+        except Exception:
+            return ""
+        pt = str(_task_attr(task, "proof_type", "") or "").strip().lower()
+        if pt not in ("demo", "review"):
+            return ""
+        try:
+            from prism_service.models.actor import ActorKind
+            ident = _resolve_actor_identity(str(actor or "").strip())
+            if getattr(ident, "kind", None) is not ActorKind.HUMAN:
+                return ""
+        except Exception:
+            return ""
+        return (
+            f"approved by {actor} — shipping: push → PR → CI → merge in "
+            "progress (conductor-shipper). Your decision is recorded; the "
+            "gate releases as soon as the branch lands on origin/main."
+        )
 
     def _unshipped_gate_reason(self, task) -> str:
         """HOLE 2 (task 8a737f2f): DONE means SHIPPED (mx:
@@ -3677,6 +3761,43 @@ class ConductorService:
         if gate_step_id == "green_gate":
             _ship_reason = self._unshipped_gate_reason(task)
             if _ship_reason:
+                # APPROVE SHIPS IT (task 5b6aefc1, owner 2026-08-18). When
+                # this environment opted in and a real person is approving a
+                # demo/review gate, the click is no longer refused — it is
+                # the TRIGGER. RECORD THE DECISION FIRST, before anything is
+                # attempted: "shipping before recording the human decision (a
+                # ship failure then eats the approval)" is this task's own
+                # pre-declared likely_misfire, and the row written here is
+                # what the ship seat later recovers and replays under this
+                # same actor. The gate still parks pending — the pipeline can
+                # take minutes and must never block the owner's request.
+                _queue_reason = self._ship_on_approve_reason(
+                    task, action, override, actor)
+                if _queue_reason:
+                    self._task_svc.record_history(
+                        task_id, action="gate_decide",
+                        details=(f"gate={gate_step_id}; action=approve; "
+                                 f"human=recorded; ship=queued; "
+                                 f"actor={actor}; reason={reason}"),
+                        actor=str(actor or ""),
+                    )
+                    self._task_svc.update(task_id, gate_state="pending",
+                                          gate_reason=_queue_reason,
+                                          blocked_reason="")
+                    self._record_agent_run(
+                        task_id, gate_step_id, session_id, model=model,
+                        gate_state="pending", ok=True,
+                        verdict_summary=("ship-on-approve: decision recorded, "
+                                         "branch queued for landing")[:200],
+                    )
+                    return {
+                        "ok": False,
+                        "task_id": task_id,
+                        "gate_step": gate_step_id,
+                        "gate_state": "pending",
+                        "reason": _queue_reason,
+                        "ship_queued": True,
+                    }
                 self._park_green_refusal(task_id, _ship_reason)
                 self._task_svc.record_history(
                     task_id, action="gate_decide",
