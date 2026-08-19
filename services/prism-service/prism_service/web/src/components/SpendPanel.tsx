@@ -6,6 +6,7 @@
 // BURN-RATE graph): this is a cumulative dollar TOTAL, not a rate, so the
 // two never duplicate each other.
 import { Card, Empty, SectionLabel, Kpi } from "@/components/ui";
+import { fmtUsd } from "@/lib/format";
 
 export interface SpendSection {
   tokens: number;
@@ -28,12 +29,6 @@ const FIELD_LABELS: Array<[string, string]> = [
   ["cache_read_input_tokens", "cache read"],
   ["cache_creation_input_tokens", "cache write"],
 ];
-
-function fmtUsd(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "$0.00";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toFixed(2)}`;
-}
 
 function fmtTok(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
