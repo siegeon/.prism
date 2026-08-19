@@ -20,7 +20,7 @@ _COLS = (
     "run_id", "workflow_name", "task_id", "session_id", "agent_id",
     "parent_agent_id", "role", "step", "model", "started_at", "ended_at",
     "duration_ms", "tokens", "tool_uses", "ok", "gate_state",
-    "verdict_summary", "evidence_ref",
+    "verdict_summary", "evidence_ref", "cost_usd",
 )
 
 # Filterable GET params -> agent_runs columns.
@@ -63,6 +63,11 @@ AGENT_RUNS_SCHEMA = """
         ended_at TEXT,
         duration_ms INTEGER,
         tokens INTEGER,
+        -- Authoritative per-run dollar cost (claude -p total_cost_usd off the
+        -- RESULT event). One column on THIS table: the spine already owns
+        -- per-run accounting, and a separate cost store would be a second
+        -- source of truth for the same run (task 9a51e670).
+        cost_usd REAL,
         tool_uses INTEGER,
         ok INTEGER,
         gate_state TEXT,
@@ -170,9 +175,30 @@ def _connect(scores_db: str) -> sqlite3.Connection:
     key = str(scores_db)
     if key not in _SCHEMA_READY:
         conn.executescript(AGENT_RUNS_SCHEMA)
+        _add_missing_columns(conn)
         with _SCHEMA_LOCK:
             _SCHEMA_READY.add(key)
     return conn
+
+
+# Columns added to agent_runs after the table first shipped. CREATE TABLE IF
+# NOT EXISTS is a no-op on an existing table, so a database written at an
+# older schema needs them added in place -- data preserved, no new table
+# (task 9a51e670's stop_if), and a no-op once present.
+_ADDED_COLUMNS = (("cost_usd", "REAL"),)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    have = {r[1] for r in conn.execute("PRAGMA table_info(agent_runs)")}
+    for name, decl in _ADDED_COLUMNS:
+        if name in have:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {decl}")
+        except sqlite3.OperationalError:
+            # Lost a race with another connection that just added it.
+            pass
+    conn.commit()
 
 
 def upsert_agent_run(scores_db: str, row: dict) -> None:
@@ -233,6 +259,33 @@ def get_agent_runs(scores_db: str, limit: int = 500, **filters) -> list[dict]:
         d["gate_source"] = gate_source_for_row(d)
         out.append(d)
     return out
+
+
+def session_tokens_total(scores_db: str, task_id: str,
+                         session_id: str) -> int:
+    """Running token total for one (task, session) across the spine.
+
+    The `tokens.turn` contract is CUMULATIVE: graphState.ts:1057 discards any
+    update whose total is below what the session node already holds, so a
+    publisher must send the running total, not the step's own count. Reads the
+    spine rather than keeping counters in memory, so the figure stays right
+    across a daemon restart. Never raises -- a telemetry read must not break a
+    conductor transition."""
+    if not Path(scores_db).exists():
+        return 0
+    try:
+        conn = _connect(scores_db)
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(tokens), 0) FROM agent_runs "
+                "WHERE task_id = ? AND session_id = ?",
+                (task_id, session_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        return int(row[0] or 0)
+    except Exception:
+        return 0
 
 
 def get_task_agent_rollup(scores_db: str, task_id: str) -> dict:
@@ -395,14 +448,16 @@ def build_task_trace(
     whose rows all read 0 tokens is re-attributed from its live transcript
     (see _backfill_session_tokens) and totals are recomputed AFTER backfill —
     the sum-of-sessions == totals.tokens invariant always holds."""
-    empty = {"sessions": [], "totals": {"tokens": 0, "steps": 0, "sessions": 0}}
+    empty = {"sessions": [],
+             "totals": {"tokens": 0, "cost_usd": 0.0, "steps": 0,
+                        "sessions": 0}}
     if not Path(scores_db).exists():
         return empty
     conn = _connect(scores_db)
     try:
         rows = conn.execute(
             "SELECT run_id, agent_id, session_id, step, role, model, tokens, "
-            "       gate_state, duration_ms, started_at, ended_at, "
+            "       cost_usd, gate_state, duration_ms, started_at, ended_at, "
             "       recorded_at "
             "FROM agent_runs WHERE task_id = ? "
             "ORDER BY started_at ASC, recorded_at ASC",
@@ -419,15 +474,19 @@ def build_task_trace(
         tok = int(r["tokens"] or 0)
         sess = by_sid.get(sid)
         if sess is None:
-            sess = {"session_id": sid, "tokens_total": 0, "steps": []}
+            sess = {"session_id": sid, "tokens_total": 0,
+                    "cost_total": 0.0, "steps": []}
             by_sid[sid] = sess
             sessions.append(sess)
+        cost = float(r["cost_usd"] or 0.0)
         sess["tokens_total"] += tok
+        sess["cost_total"] += cost
         sess["steps"].append({
             "step": r["step"],
             "role": r["role"],
             "model": r["model"],
             "tokens": tok,
+            "cost_usd": cost,
             "gate_state": r["gate_state"],
             "gate_source": gate_source_for_row(dict(r)),
             "ts": r["started_at"] or r["recorded_at"],
@@ -454,6 +513,7 @@ def build_task_trace(
         "sessions": sessions,
         "totals": {
             "tokens": sum(s["tokens_total"] for s in sessions),
+            "cost_usd": sum(s["cost_total"] for s in sessions),
             "steps": len(rows),
             "sessions": len(sessions),
         },

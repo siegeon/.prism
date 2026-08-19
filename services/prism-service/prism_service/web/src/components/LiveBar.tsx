@@ -63,7 +63,7 @@ export default function LiveBar() {
   // guard, the heartbeat clock, the SSE push refresh, and the staleness
   // sweep all live in the shared hook now — ConductorPage reads the
   // identical state.
-  const { managed, polled, heartbeat: baseHeartbeat, refresh } = useConductorState(project);
+  const { managed, polled, heartbeat: baseHeartbeat } = useConductorState(project);
   const [version, setVersion] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false);
   // Task 25a25d84: the "awaiting gate" chip expands (click) into the gate's
@@ -103,16 +103,12 @@ export default function LiveBar() {
 
   useEffect(() => { api.get<{ version: string }>(`/api/version`).then((d) => setVersion(d.version)).catch(() => {}); }, []);
 
-  // D-6 (task 2d480b08): a supplementary push trigger local to the bar
-  // itself, on top of the hook's own subscription — nudges the SAME shared
-  // refresh() rather than re-fetching or re-parsing anything independently,
-  // so this can never drift from what the hook (and ConductorPage) already
-  // resolved for the identical payload.
-  useEffect(() => {
-    const es = new EventSource(`/sse/sessions?project=${project}`);
-    es.onmessage = () => { refresh(); };
-    return () => es.close();
-  }, [project, refresh]);
+  // The "supplementary push trigger" that used to live here (D-6, task
+  // 2d480b08) is GONE (task b835f639). It opened /sse/sessions for the exact
+  // URL useConductorState already opens for this component, and its handler
+  // only called the same refresh() the hook drives — so it bought nothing and
+  // cost a held connection in EVERY tab, against the browser's ~6-per-origin
+  // cap. The hook's own subscription is the push path now.
 
   // ROOTS ONLY on this bar. A driven CHILD is the driver's own decomposition;
   // it rolls up into its epic's row as a slice count instead of claiming a row

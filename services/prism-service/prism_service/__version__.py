@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.32"
+PRISM_VERSION = "7.11.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.33: ONE SHARED SSE STREAM PER BROWSER [task b835f639]. The Live tab "
+    "could hang for tens of seconds on a fresh click while the server answered "
+    "in single-digit ms: PRISM was starving its own browser connection pool. "
+    "Global chrome opened THREE long-lived streams on every page (version.ts's "
+    "/sse/live watchdog, useConductorState's /sse/sessions, and a SECOND "
+    "/sse/sessions LiveBar opened for the identical URL), plus /sse/work on "
+    "Live — so two tabs hit the ~6-per-origin HTTP/1.1 cap and a third tab "
+    "could not fetch even its own HTML (measured: >60s to load /sessions with "
+    "three tabs open, 62ms with them closed, while curl served that same "
+    "document in 2.9ms). lib/sharedStream.ts now owns every EventSource: "
+    "ref-counted per URL so subscribers share one socket, and a Web Locks "
+    "leader tab holds the connections and rebroadcasts frames over a "
+    "BroadcastChannel so follower tabs hold ZERO and stay live. LiveBar's "
+    "duplicate subscription is deleted outright. No server change. "
     "7.11.29: A PER-PROJECT WORKFLOWS SECTION ON THE CANVAS [task f506ece4]. "
     "/workflows draws the conductor FSM as a wired chain with the four bots "
     "(Steward/Verifier/Builder/Architect) wired to the steps they own, a "
@@ -4935,4 +4949,21 @@ PRISM_VERSION_NOTES += (
     " verdict, the offered control repairs the actual refusal, a refused"
     " approve parks pending instead of stranding to failed, override says"
     " truthfully what it cannot bypass, and no gate check waits silently."
+)
+PRISM_VERSION_NOTES += (
+    "v7.11.33: THE LIVE BOARD'S WIRES EDIT LIKE THE WORKFLOWS ONES "
+    "[task be7a5d2d]. Click a wire on /live and it selects, orange end to "
+    "end with its endpoint dots and bend handles in the same hue; drag any "
+    "run of its body and the run slides, minting the anchors it needs and "
+    "retiring the ones it makes redundant; double-click to add or drop a "
+    "bend; edits persist per surface per project and reload as drawn. "
+    "These gestures already existed on /workflows, and the owner read the "
+    "two boards as one component that had drifted, so the interaction "
+    "layer was PROMOTED rather than copied: live/workflowWires.ts is now "
+    "live/wireEditing.ts, a canvas-agnostic module both canvases consume, "
+    "and neither carries a line of editor logic. graphState.ts is "
+    "integrated, not rewritten -- every port name it exposed survives and "
+    "wireEndpointsFor is still the one geometry source. An untouched live "
+    "wire renders exactly as before: the simplify pass is gated so it can "
+    "never flatten the obstacle-avoidance jogs that board depends on."
 )

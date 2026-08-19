@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import { subscribeStream } from "@/lib/sharedStream";
 import { useVersion } from "@/lib/version";
 import { Page, ErrorBanner } from "@/components/ui";
 import { GraphState } from "@/live/graphState";
+import type { SegmentGrab } from "@/live/wireEditing";
 import { draw } from "@/live/draw";
 import { actionStripHitTest, exploreHrefFor } from "@/live/cards";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
@@ -28,12 +30,21 @@ function portsKey(project: string): string {
   return `prism.live.ports.${project}`;
 }
 
+/** localStorage key for a project's manual wire BENDS (task be7a5d2d) --
+ * the same per-surface, per-project convention, and the reason a live
+ * edit can never move a workflows wire: the surface name is part of the
+ * key, so prism.live.waypoints.* and prism.workflows.waypoints.* are
+ * different storage by construction, never by discipline. */
+function waypointsKey(project: string): string {
+  return `prism.live.waypoints.${project}`;
+}
+
 /** Screen-space px a pointer must travel past pointerdown before a press
  * converts into an actual pan or card drag — keeps a plain click/select
  * from being swallowed by 1px of jitter. */
 const DRAG_THRESHOLD_PX = 5;
 
-type DragMode = "none" | "pan" | "node" | "port";
+type DragMode = "none" | "pan" | "node" | "port" | "waypoint" | "segment";
 type DragState = {
   mode: DragMode;
   moved: boolean;
@@ -50,11 +61,16 @@ type DragState = {
    * is being re-docked. */
   portKey: string | null;
   portEnd: "from" | "to" | null;
+  /** mode==="waypoint": which wire is being bent, and which of its bends. */
+  waypointKey: string | null;
+  waypointIndex: number;
+  /** mode==="segment": the grabbed run and the anchors bounding it. */
+  segment: SegmentGrab | null;
 };
 
 const IDLE_DRAG: DragState = {
   mode: "none", moved: false, lastX: 0, lastY: 0, nodeId: null, offsetX: 0, offsetY: 0,
-  portKey: null, portEnd: null,
+  portKey: null, portEnd: null, waypointKey: null, waypointIndex: -1, segment: null,
 };
 
 /** /live — "PRISM shows its work": every running task is a live card-node
@@ -134,24 +150,29 @@ export default function LivePage() {
         } catch {
           // corrupt/unavailable storage — boot with auto-placed ports
         }
+        try {
+          const rawBends = localStorage.getItem(waypointsKey(project));
+          if (rawBends) stateRef.current.hydrateWireWaypoints(JSON.parse(rawBends));
+        } catch {
+          // corrupt/unavailable storage — boot with unbent wires
+        }
       })
       .catch((e) => { if (!cancel) setError(e instanceof Error ? e.message : String(e)); });
     return () => { cancel = true; };
   }, [project]);
 
   // Incremental push.
-  useEffect(() => {
-    const es = new EventSource(`/sse/work?project=${encodeURIComponent(project)}`);
-    es.onmessage = (m) => {
+  useEffect(() => subscribeStream(
+    `/sse/work?project=${encodeURIComponent(project)}`,
+    (data) => {
       try {
-        const event = JSON.parse(m.data) as WorkEvent;
+        const event = JSON.parse(data) as WorkEvent;
         stateRef.current.applyEvent(event);
       } catch {
         // malformed frame — drop it, keep the stream alive
       }
-    };
-    return () => es.close();
-  }, [project]);
+    },
+  ), [project]);
 
   // Canvas sizing — crisp at devicePixelRatio, backing store scaled, CSS
   // size unscaled, so lines/text stay sharp on hi-DPI displays.
@@ -192,6 +213,16 @@ export default function LivePage() {
 
   useEffect(() => () => stateRef.current.destroy(), []);
 
+  // Escape lets go of the selected wire — the keyboard half of "click
+  // empty space to deselect", same as the /workflows canvas.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") stateRef.current.wireEdits.selected = null;
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Persists the current override map for `project` to localStorage —
   // called on every card-drag release (the live position is already in
   // GraphState.overrides by then; this just survives a reload).
@@ -204,11 +235,14 @@ export default function LivePage() {
     }
   }, [project]);
 
-  // Mirrors persistOverrides — called on every port-drag release (AC-9);
-  // the live placement is already in GraphState.portOverrides by then.
+  // Mirrors persistOverrides — called on every wire-edit release (AC-9);
+  // the live placement is already in the shared editor by then. Ports and
+  // bends are written together because one gesture can move both (a
+  // segment drag mints anchors, a settle can retire them).
   const persistPortOverrides = useCallback(() => {
     try {
       localStorage.setItem(portsKey(project), JSON.stringify(stateRef.current.serializePortOverrides()));
+      localStorage.setItem(waypointsKey(project), JSON.stringify(stateRef.current.serializeWireWaypoints()));
     } catch {
       // storage full/unavailable — the drag still holds for this session
     }
@@ -221,10 +255,12 @@ export default function LivePage() {
     stateRef.current.clearAllOverrides();
     try {
       localStorage.removeItem(positionsKey(project));
-      // AC-9: "reset layout" clears BOTH position overrides and any
-      // manually-docked ports (portsKey), same as clearAllOverrides()
-      // clears both maps in GraphState.
+      // AC-9: "reset layout" clears positions AND every manual wire edit
+      // — docked ports and bends alike, matching clearAllOverrides()'s
+      // sweep of the shared editor. A reset that left wires bent would
+      // only half-work.
       localStorage.removeItem(portsKey(project));
+      localStorage.removeItem(waypointsKey(project));
     } catch {
       // ignore — nothing left to clean up if storage isn't available
     }
@@ -249,31 +285,69 @@ export default function LivePage() {
       return;
     }
 
-    // AC-7 / stop_if: a port dot sits ON the card edge that nodeAtWorld's
-    // AABB already claims, so this check must run BEFORE nodeAtWorld (and
-    // after the action-strip check, which floats outside the slot bounds
-    // and already owns that region) -- this exact ordering is the whole
-    // disambiguation between the new port gesture and card-drag/pan.
+    const base = { moved: false, lastX: ev.clientX, lastY: ev.clientY };
+
+    // AC-7 / stop_if: the ordering IS the disambiguation, and it runs
+    // handles-first because each one sits ON TOP of something that would
+    // otherwise claim the press. A bend handle floats over the wire; a
+    // port dot sits on the card edge that nodeAtWorld's AABB already
+    // claims; a wire body crosses open canvas that would otherwise pan.
+    // Same order as the /workflows canvas, because it is now the same
+    // code deciding (task be7a5d2d).
+    const waypointHit = state.wireEdits.waypointAtWorld(world.x, world.y);
+    if (waypointHit) {
+      dragRef.current = {
+        ...IDLE_DRAG, ...base, mode: "waypoint",
+        waypointKey: waypointHit.key, waypointIndex: waypointHit.index,
+      };
+      return;
+    }
+
     const portHit = state.portAtWorld(world.x, world.y);
     if (portHit) {
       dragRef.current = {
-        mode: "port", moved: false, lastX: ev.clientX, lastY: ev.clientY,
-        nodeId: portHit.nodeId, offsetX: 0, offsetY: 0,
-        portKey: portHit.key, portEnd: portHit.end,
+        ...IDLE_DRAG, ...base, mode: "port",
+        nodeId: portHit.nodeId, portKey: portHit.key, portEnd: portHit.end,
       };
       return;
+    }
+
+    // A body drag beats the card hit, but only on the wire already
+    // selected — so it is always a deliberate second gesture, never a
+    // wire stealing a press meant for the card underneath it.
+    const selectedWire = state.wireEdits.selected;
+    if (selectedWire) {
+      const grab = state.wireEdits.beginSegmentDrag(selectedWire, world.x, world.y);
+      if (grab) {
+        dragRef.current = {
+          ...IDLE_DRAG, ...base, mode: "segment",
+          waypointKey: selectedWire, segment: grab,
+        };
+        return;
+      }
     }
 
     const node = state.nodeAtWorld(world.x, world.y);
     if (node) {
       dragRef.current = {
-        mode: "node", moved: false, lastX: ev.clientX, lastY: ev.clientY,
+        ...IDLE_DRAG, ...base, mode: "node",
         nodeId: node.id, offsetX: world.x - node.x, offsetY: world.y - node.y,
-        portKey: null, portEnd: null,
       };
       return;
     }
-    dragRef.current = { ...IDLE_DRAG, mode: "pan", lastX: ev.clientX, lastY: ev.clientY };
+
+    // A press on a wire selects it outright — no drag threshold, because
+    // selecting is what makes its handles appear to aim at next. Card and
+    // wire selection are exclusive: one selected thing on the board.
+    const wireKeyHit = state.wireEdits.wireAtWorld(world.x, world.y);
+    if (wireKeyHit) {
+      state.wireEdits.selected = wireKeyHit;
+      state.select(null);
+      dragRef.current = { ...IDLE_DRAG, ...base };
+      return;
+    }
+    state.wireEdits.selected = null;
+    dragRef.current = { ...IDLE_DRAG, ...base, mode: "pan" };
   }, []);
 
   const onPointerMove = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
@@ -308,9 +382,29 @@ export default function LivePage() {
       return;
     }
     const canvas = canvasRef.current;
-    if (!canvas || !d.nodeId) return;
+    if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const world = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+
+    if (d.mode === "waypoint" && d.waypointKey) {
+      state.wireEdits.editor.moveWaypoint(d.waypointKey, d.waypointIndex, world.x, world.y);
+      state.noteUserCameraInput(now);
+      d.lastX = ev.clientX;
+      d.lastY = ev.clientY;
+      return;
+    }
+
+    if (d.mode === "segment" && d.segment) {
+      // Perpendicular only — the run keeps its own axis, which is what
+      // keeps the path orthogonal while it moves.
+      state.wireEdits.editor.moveSegment(d.segment, d.segment.axis === "x" ? world.x : world.y);
+      state.noteUserCameraInput(now);
+      d.lastX = ev.clientX;
+      d.lastY = ev.clientY;
+      return;
+    }
+
+    if (!d.nodeId) return;
 
     if (d.mode === "port" && d.portKey && d.portEnd) {
       // The wire re-routes live during the drag (AC-6): setPortFromWorld
@@ -349,6 +443,34 @@ export default function LivePage() {
       // pointermove wrote it) — release just commits it to localStorage
       // and suppresses the click/select/navigate path below.
       persistOverrides();
+      return;
+    }
+    if (mode === "waypoint" && d.waypointKey) {
+      if (wasDrag) {
+        // Dropped back onto the straight run between its neighbours, a
+        // bend isn't bending anything — it removes itself rather than
+        // lingering as an invisible handle. That IS the remove gesture.
+        const state = stateRef.current;
+        const pts = state.wireEdits.route(d.waypointKey);
+        if (pts.length >= 2) {
+          state.wireEdits.editor.pruneIfStraightened(
+            d.waypointKey, d.waypointIndex, pts[0], pts[pts.length - 1]);
+        }
+        // Settle the survivors onto clean rails before they are saved, so
+        // a refresh reloads the path as drawn rather than the raw drag
+        // coordinates behind it.
+        state.wireEdits.settle(d.waypointKey);
+        persistPortOverrides();
+      }
+      return;
+    }
+    if (mode === "segment" && d.waypointKey) {
+      // A segment drag settles the same way: anchors it made redundant
+      // retire themselves instead of lingering for a manual double-click.
+      if (wasDrag) {
+        stateRef.current.wireEdits.settle(d.waypointKey);
+        persistPortOverrides();
+      }
       return;
     }
     if (mode === "port") {
@@ -394,6 +516,34 @@ export default function LivePage() {
     }
   }, [navigate, grabbing, persistOverrides, persistPortOverrides]);
 
+  /** Double-click is the bend gesture: on a placed waypoint it removes
+   * it, anywhere else along a wire it inserts one at the hop that was
+   * clicked. A double-click that lands on neither falls through
+   * untouched, so the existing select-then-open behaviour on a CARD is
+   * exactly as it was. */
+  const onDoubleClick = useCallback((ev: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const state = stateRef.current;
+    const world = state.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+
+    const waypoint = state.wireEdits.waypointAtWorld(world.x, world.y);
+    if (waypoint) {
+      state.wireEdits.editor.removeWaypoint(waypoint.key, waypoint.index);
+      persistPortOverrides();
+      return;
+    }
+    const key = state.wireEdits.wireAtWorld(world.x, world.y);
+    if (!key) return;
+    state.wireEdits.selected = key;
+    const leg = state.wireEdits.legAtWorld(key, world.x, world.y);
+    if (!leg) return;
+    state.wireEdits.editor.insertWaypoint(key, leg.leg, leg.point);
+    state.wireEdits.settle(key);
+    persistPortOverrides();
+  }, [persistPortOverrides]);
+
   const onWheel = useCallback((ev: React.WheelEvent<HTMLCanvasElement>) => {
     ev.preventDefault();
     const canvas = canvasRef.current;
@@ -418,6 +568,7 @@ export default function LivePage() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onDoubleClick={onDoubleClick}
           onWheel={onWheel}
           className={`w-full h-full touch-none ${grabbing ? "cursor-grabbing" : hoverPort ? "cursor-grab" : "cursor-pointer"}`}
         />

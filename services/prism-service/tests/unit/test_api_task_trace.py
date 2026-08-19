@@ -18,6 +18,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
@@ -102,8 +104,8 @@ def test_trace_groups_by_session_then_step(tmp_path, monkeypatch):
     body = got.json()
 
     # Totals sum every row across both sessions.
-    assert body["totals"] == {"tokens": 1400 + 6300 + 900, "steps": 3,
-                              "sessions": 2}, body["totals"]
+    assert body["totals"] == {"tokens": 1400 + 6300 + 900, "cost_usd": 0.0,
+                              "steps": 3, "sessions": 2}, body["totals"]
 
     sessions = {s["session_id"]: s for s in body["sessions"]}
     assert set(sessions) == {"S-1", "S-2"}
@@ -115,7 +117,8 @@ def test_trace_groups_by_session_then_step(tmp_path, monkeypatch):
     assert s1_steps == ["write_failing_tests", "implement"], s1_steps
     # Each step row carries role/model/tokens/gate_state/ts.
     first = sessions["S-1"]["steps"][0]
-    for f in ("step", "role", "model", "tokens", "gate_state", "ts"):
+    for f in ("step", "role", "model", "tokens", "cost_usd", "gate_state",
+              "ts"):
         assert f in first, f"step row missing {f!r}: {first}"
     assert first["role"] == "qa" and first["tokens"] == 1400
     assert sessions["S-2"]["steps"][0]["gate_state"] == "passed"
@@ -129,7 +132,8 @@ def test_trace_empty_for_task_with_no_runs(tmp_path, monkeypatch):
     assert got.status_code == 200, got.text
     body = got.json()
     assert body["sessions"] == []
-    assert body["totals"] == {"tokens": 0, "steps": 0, "sessions": 0}
+    assert body["totals"] == {"tokens": 0, "cost_usd": 0.0, "steps": 0,
+                              "sessions": 0}
 
 
 def test_trace_scoped_to_one_task(tmp_path, monkeypatch):
@@ -253,3 +257,25 @@ def test_trace_never_fabricates_for_synthetic_or_absent(tmp_path, monkeypatch):
     assert sess[_SID]["tokens_total"] == 0  # no transcript on disk → honest 0
     assert sess["S-real"]["tokens_total"] == 400
     assert body["totals"]["tokens"] == 400
+
+
+def test_trace_returns_per_step_and_total_cost(tmp_path, monkeypatch):
+    """Per-run dollar cost reaches the endpoint (task 9a51e670): each step row
+    carries its own cost_usd and totals.cost_usd sums them, so the owner can
+    read cost per step per bot off the Trace tab's own payload."""
+    client, scores_db = _client(tmp_path, monkeypatch)
+    _seed(scores_db, [
+        _run(session_id="prism-task-runner", agent_id="a1", step="implement",
+             tokens=8915, cost_usd=1.670074,
+             started_at="2026-08-18T12:00:00+00:00"),
+        _run(session_id="prism-task-runner", agent_id="a2", step="verify",
+             tokens=4000, cost_usd=0.75,
+             started_at="2026-08-18T12:05:00+00:00"),
+    ])
+    body = client.get("/api/tasks/T-trace/trace",
+                      params={"project": "prism"}).json()
+
+    steps = body["sessions"][0]["steps"]
+    assert [s["cost_usd"] for s in steps] == [1.670074, 0.75], steps
+    assert body["totals"]["cost_usd"] == pytest.approx(1.670074 + 0.75)
+    assert body["totals"]["tokens"] == 8915 + 4000
