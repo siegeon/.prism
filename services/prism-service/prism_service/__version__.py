@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.33"
+PRISM_VERSION = "7.11.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -4966,4 +4966,29 @@ PRISM_VERSION_NOTES += (
     "wireEndpointsFor is still the one geometry source. An untouched live "
     "wire renders exactly as before: the simplify pass is gated so it can "
     "never flatten the obstacle-avoidance jogs that board depends on."
+)
+
+PRISM_VERSION_NOTES += (
+    "v7.11.37: APPROVE SHIPS IT [task 5b6aefc1]. The owner's Approve at a "
+    "green_gate used to be refused for the one thing it was supposed to "
+    "cause: the shipped-ness tooth demanded the [task:id] commits already "
+    "be on origin/main, so the click told them to go land the branch by "
+    "hand (73 recorded refusals on f506ece4, 16 on b835f639). Approve is "
+    "now the TRIGGER. The human decision is recorded before any subprocess "
+    "runs -- that row is the queue AND the receipt, so no ship failure and "
+    "no restart can eat it -- and a registered machine seat, "
+    "conductor-shipper, pushes the workspace branch, opens a PR carrying "
+    "the [task:id] trailer, waits for CI and merges. Deterministic code "
+    "throughout: plain git and gh, no model call on the happy path, the "
+    "LLM reserved for diagnosing a failure. Any stage that fails parks the "
+    "gate with that stage's VERBATIM error and keeps the approval for "
+    "retry, never writing `failed`; a daemon without gh reports that as a "
+    "reason rather than a traceback. The seat lands code and never decides "
+    "a gate -- the owner's own preserved decision is what passes it. Ships "
+    "OFF by default; PRISM_SHIP_ON_APPROVE=1 opts an environment in. "
+    "Paired with task e4e6cd44: the gate card now consults the same tooth "
+    "BEFORE the click, so it stops promising 'Approve to release' for a "
+    "click the approve path would refuse -- and it discloses without "
+    "disabling, because the Approve button is disabled on receipt_ok, and "
+    "a false receipt would have disabled the very button this adds."
 )
