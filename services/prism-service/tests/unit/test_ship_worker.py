@@ -215,22 +215,34 @@ def test_pipeline_pushes_opens_pr_waits_for_ci_then_merges(
 
 
 def test_pipeline_completes_with_claude_unavailable(tmp_path, monkeypatch):
-    """The owner's refinement: the merge is handled programmatically, 'not
-    with tokens'. Strip PATH to an empty dir so no `claude` binary can be
-    resolved, and refuse any argv that names one."""
+    """The owner's refinement: the merge is handled programmatically, "not
+    with tokens".
+
+    Plant a BOOBY-TRAPPED `claude` first on PATH — invoking it writes a
+    marker file. That is a stronger oracle than stripping PATH (which would
+    only prove the pipeline dies without a shell), because it proves the
+    happy path never reached for the model even when the model was there for
+    the taking."""
     from prism_service.services import ship_worker
 
     origin, work, branch = _unshipped_workspace(tmp_path)
     _wire_ws(monkeypatch, work, branch)
 
-    empty = tmp_path / "empty_path"
-    empty.mkdir()
-    monkeypatch.setenv("PATH", str(empty))
+    bindir = tmp_path / "trap_bin"
+    bindir.mkdir()
+    marker = tmp_path / "claude_was_invoked"
+    trap = bindir / "claude"
+    trap.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 0\n', encoding="utf-8")
+    trap.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH','')}")
 
     gh = FakeGh(origin, branch)
     res = ship_worker.ship_task(TASK_ID, runner=gh, poll_interval_s=0)
 
     assert res["ok"] is True, res
+    assert not marker.exists(), (
+        "the happy path invoked `claude` — the ship pipeline must be "
+        "deterministic code; the model enters only to diagnose a FAILURE")
     for call in gh.calls:
         assert "claude" not in str(call[0]).lower(), (
             f"the happy path spent LLM tokens: {call}")

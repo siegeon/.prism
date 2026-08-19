@@ -47,9 +47,21 @@ DEMO_PROOF = "pytest tests/unit/test_ship_worker.py -q -> 12 passed"
 
 
 def _human_actor(raw):
+    """Resolve identities the way production does: the owner's user identity
+    is a HUMAN, and a bare session id is NOT that person.
+
+    Resolving everything to one human would be a fiction that makes the
+    distinct-actor tooth fire on the replay — the real ActorService only
+    promotes a string to HUMAN when it matches a row in the user store
+    (actor_service.py `_resolve_user`), and a session UUID never does.
+    """
     from prism_service.models.actor import Actor, ActorKind
-    return Actor(id=f"user:{OWNER}", kind=ActorKind.HUMAN,
-                 display_name=OWNER, user_id=OWNER)
+    text = str(raw or "").strip()
+    if text == OWNER:
+        return Actor(id=f"user:{OWNER}", kind=ActorKind.HUMAN,
+                     display_name=OWNER, user_id=OWNER)
+    return Actor(id=f"unknown:{text or 'unknown'}", kind=ActorKind.UNKNOWN,
+                 display_name=text or "unknown")
 
 
 def _clean_daemon_repo(tmp: Path) -> Path:
