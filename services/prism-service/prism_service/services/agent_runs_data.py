@@ -163,26 +163,6 @@ def _has_llm_turn_signature(row: dict) -> bool:
         return False
 
 
-def sanitize_untrusted_tokens(row: dict) -> dict:
-    """Zero a claimed ``tokens`` value on a row with no LLM-turn signature
-    (task c740443e). A non-LLM bookkeeping event (gate transition, etc.)
-    has no tokens of its own to report, so a client-claimed number on such
-    a row is never trustworthy. Returns a new dict; does not mutate the
-    caller's row.
-    """
-    if _has_llm_turn_signature(row):
-        return row
-    try:
-        claimed = int((row or {}).get("tokens") or 0)
-    except (TypeError, ValueError):
-        claimed = 0
-    if claimed <= 0:
-        return row
-    row = dict(row)
-    row["tokens"] = 0
-    return row
-
-
 def gate_source_for_row(row) -> str | None:
     """How a PASSING verdict got into the spine, so a reader can tell a
     genuine machine decision from a producer-written one without squinting
@@ -247,8 +227,21 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
 
 def upsert_agent_run(scores_db: str, row: dict) -> None:
     """Insert or update one telemetry row, idempotent on
-    (run_id, agent_id, step). Booleans are coerced to 0/1 for sqlite."""
-    row = sanitize_untrusted_tokens(row)
+    (run_id, agent_id, step). Booleans are coerced to 0/1 for sqlite.
+
+    A ``tokens`` value on a row with no LLM-turn signature (task c740443e)
+    is zeroed here, before it ever reaches disk -- a non-LLM bookkeeping
+    event (gate transition, etc.) has no tokens of its own to report, so a
+    client-claimed number on such a row is never trustworthy.
+    """
+    if not _has_llm_turn_signature(row):
+        try:
+            claimed = int((row or {}).get("tokens") or 0)
+        except (TypeError, ValueError):
+            claimed = 0
+        if claimed > 0:
+            row = dict(row)
+            row["tokens"] = 0
     vals = []
     for c in _COLS:
         v = row.get(c)
