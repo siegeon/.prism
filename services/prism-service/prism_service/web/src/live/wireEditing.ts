@@ -1,12 +1,25 @@
-/** Direct manipulation of a wire on the /workflows canvas — select it,
- * re-dock either endpoint, bend the middle (owner at green_gate review:
- * "I should be able to click on them like draw.io / mxGraph so that I can
- * move this and help ensure their path is the way I want it to be").
+/** Direct manipulation of a wire on EITHER canvas — select it, re-dock
+ * either endpoint, bend the middle (owner at green_gate review: "I should
+ * be able to click on them like draw.io / mxGraph so that I can move this
+ * and help ensure their path is the way I want it to be").
  *
- * State + geometry only; workflowGraph.ts owns the nodes and wires and
- * drives the hit-tests, WorkflowsPage.tsx owns the gestures. Split out so
- * workflowGraph.ts does not grow into the god-module /live's graphState.ts
- * already is.
+ * This grammar grew on /workflows (task f506ece4) and the /live board had
+ * none of it, which the owner read as one component that had drifted:
+ * "we modified the wire behavior on the workflows screen, but that is a
+ * shared component with the live screen — or should be". So the layer
+ * lives HERE, canvas-agnostic, and both boards consume it (task
+ * be7a5d2d). It was called workflowWires.ts; a module named for one
+ * canvas but imported by both is exactly the name that invites the drift
+ * back.
+ *
+ * A canvas plugs in by implementing WireSurface below — which slots a
+ * wire spans, what it should avoid, and two policy answers. Everything
+ * else (selection, waypoints, segment grabs, hit-test ordering, the
+ * simplify pass, the selected-wire paint) is owned here, once.
+ *
+ * State + geometry only; each canvas owns its nodes and wires, and its
+ * page owns the gestures. Split out so workflowGraph.ts does not grow
+ * into the god-module /live's graphState.ts already is.
  *
  * Two things this module deliberately does NOT own:
  *  - the router. Every hop — node->waypoint, waypoint->waypoint,
@@ -23,7 +36,11 @@
  * stay readable as one scheme.
  */
 
-import { portFromWorld, routeOrthogonal, type Point, type WirePort } from "./wires";
+import {
+  autoPort, drawPort, drawWire, laneFor, portFromWorld, routeOrthogonal, wireColor,
+  type Point, type WireKind, type WirePort,
+} from "./wires";
+import { PALETTE } from "./palette";
 import type { Slot } from "./layout";
 
 export type WireEnd = "from" | "to";
@@ -348,6 +365,21 @@ export class WireEditor {
     this.waypoints.clear();
   }
 
+  /** The port store itself. Exposed ONLY so a consumer that already had
+   * a public port map of its own — graphState.ts's `portOverrides`, which
+   * LivePage and the /live suites both name — can keep that name pointing
+   * at THIS one store instead of keeping a second map beside it. Two
+   * stores is how the boards drifted the first time. */
+  get portMap(): Map<string, WirePort> {
+    return this.ports;
+  }
+
+  /** True once this wire carries ANY manual edit — a re-docked end or a
+   * placed bend. The signal that it has left automatic routing. */
+  hasEdits(key: string): boolean {
+    return this.hasPort(key) || this.waypointsFor(key).length > 0;
+  }
+
   serializePorts(): Record<string, WirePort> {
     return Object.fromEntries(this.ports);
   }
@@ -378,4 +410,285 @@ export class WireEditor {
       if (clean.length) this.waypoints.set(key, clean.map((p) => ({ x: p.x, y: p.y })));
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The canvas-agnostic interaction layer (task be7a5d2d). Everything above
+// is per-wire STATE; everything below binds that state to a board without
+// knowing which board it is.
+// ---------------------------------------------------------------------------
+
+/** What a canvas must answer about its own wires for the shared layer to
+ * route and hit-test them. Deliberately tiny: four questions, none of
+ * them about editing. If a surface ever needs a fifth, check first that
+ * it is really a fact about the board and not a behaviour that belongs
+ * here — a behaviour answered per surface is a dialect, and two dialects
+ * is what this module exists to end. */
+export interface WireSurface {
+  /** Every wire key on the board right now. */
+  keys(): string[];
+  /** The two node slots a wire spans, in world space, with the ids of
+   * the nodes those ends are docked to. null when either end is gone. */
+  ends(key: string): { from: Slot; to: Slot; fromId: string; toId: string } | null;
+  /** Rectangles this wire's route should try to clear. */
+  obstacles(key: string): Slot[];
+  /** True while this wire should keep the plain edge-midpoint elbow it
+   * has always drawn rather than the port-aware path. /workflows says
+   * yes for its untouched FSM chain; /live is always port-aware. Only
+   * consulted while the wire is unedited. */
+  prefersPlainElbow(key: string): boolean;
+  /** Whether an UNBENT route gets the simplify pass.
+   *
+   * /workflows: true — that is its behaviour today.
+   *
+   * /live: FALSE, and this is the whole anti-misfire. SIMPLIFY_EPS is 12
+   * and wires.ts's LANE_STEP is 10, so snapRails would pull a one-lane
+   * obstacle-avoidance jog flat — on a board that feeds every other card
+   * in as an obstacle. An unbent live wire must come back from the
+   * router untouched. Once a wire HAS bends the question is moot: the
+   * owner has said where it goes, so obstacle avoidance is already
+   * dropped and there is nothing left to flatten. */
+  readonly simplifyUnbentRoutes: boolean;
+}
+
+/** One canvas's wire editing: the shared WireEditor state plus every
+ * hit-test and geometry call a page needs to drive it. A board holds one
+ * of these and delegates; it never re-implements a method. */
+export class WireInteraction {
+  readonly editor = new WireEditor();
+
+  constructor(private readonly surface: WireSurface) {}
+
+  get selected(): string | null {
+    return this.editor.selected;
+  }
+
+  set selected(key: string | null) {
+    this.editor.selected = key;
+  }
+
+  /** One routed polyline per anchor-to-anchor hop. Drawing joins them;
+   * hit-testing needs them apart, because WHICH hop a click landed on is
+   * where a new waypoint gets inserted. */
+  legs(key: string): Point[][] {
+    const ends = this.surface.ends(key);
+    if (!ends) return [];
+    const waypoints = this.editor.waypointsFor(key);
+    if (this.surface.prefersPlainElbow(key) && !this.editor.hasEdits(key)) {
+      return routeLegs(ends.from, ends.to, [], {});
+    }
+    const lane = laneFor(key);
+    return routeLegs(ends.from, ends.to, waypoints, {
+      fromPort: this.editor.portFor(key, "from", autoPort(ends.from, ends.to, lane)),
+      toPort: this.editor.portFor(key, "to", autoPort(ends.to, ends.from, lane)),
+      // Obstacle avoidance is dropped once waypoints exist: the owner has
+      // said where the path goes, and re-routing around a node would be
+      // overriding them.
+      obstacles: waypoints.length ? undefined : this.surface.obstacles(key),
+      lane,
+    });
+  }
+
+  /** The wire's current polyline, re-derived every frame so a dragged
+   * node drags its wires along for free.
+   *
+   * An UNBENT wire on a surface that has opted out of simplification is
+   * handed back exactly as routeOrthogonal built it — not joined, not
+   * simplified. joinLegs would drop degenerate duplicate points and
+   * simplifyPath would snap sub-eps jogs onto one rail, and on /live
+   * those jogs are the lane offsets carrying a wire around a card. This
+   * one branch is why promoting the editor does not change a single
+   * pixel of the live board until somebody bends something. */
+  route(key: string): Point[] {
+    const legs = this.legs(key);
+    if (!legs.length) return [];
+    if (!this.editor.waypointsFor(key).length && !this.surface.simplifyUnbentRoutes) {
+      return legs[0];
+    }
+    // Simplify AFTER joining: chaining a route per hop is what produces
+    // the staircases, so the cleanup has to see the whole path at once.
+    return simplifyPath(joinLegs(legs));
+  }
+
+  /** Settles a wire's stored bends onto clean rails. Called when a drag
+   * ends and before persisting, so a saved path never reloads as the
+   * staircase the renderer had already smoothed over. */
+  settle(key: string): void {
+    const pts = this.route(key);
+    if (pts.length >= 2) this.editor.simplifyWaypoints(key, pts[0], pts[pts.length - 1]);
+  }
+
+  /** The wire whose stroke passes nearest a world point — a real
+   * distance-to-segment test, so anywhere along a long run is grabbable,
+   * not just near an endpoint. */
+  wireAtWorld(wx: number, wy: number): string | null {
+    let best: string | null = null;
+    let bestDist = WIRE_HIT_R;
+    for (const key of this.surface.keys()) {
+      const pts = this.route(key);
+      if (pts.length < 2) continue;
+      const hit = nearestOnPolyline(pts, wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = key; }
+    }
+    return best;
+  }
+
+  /** Which hop of a wire a point lands on, and exactly where — the
+   * insertion index and position for a new waypoint. */
+  legAtWorld(key: string, wx: number, wy: number): { leg: number; point: Point } | null {
+    let best: { leg: number; point: Point } | null = null;
+    let bestDist = WIRE_HIT_R * 2;
+    this.legs(key).forEach((pts, i) => {
+      if (pts.length < 2) return;
+      const hit = nearestOnPolyline(pts, wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = { leg: i, point: hit.point }; }
+    });
+    return best;
+  }
+
+  /** Endpoint dots, hit-tested against the polyline the RENDERER
+   * strokes rather than re-derived from side/offset math (mx-0a0bf4: the
+   * hit-test must MIRROR the draw). Reading route() is what makes this
+   * correct for a plain-elbow wire too, whose drawn ends are edge
+   * midpoints and not ports at all.
+   *
+   * Every drawn dot is grabbable, on both boards. Both canvases paint a
+   * dot on EVERY wire, so scoping the grab to the selected one would
+   * mean drawing a handle that does nothing — the same mirror rule,
+   * pointed the other way. */
+  portAtWorld(wx: number, wy: number): PortHit | null {
+    let best: PortHit | null = null;
+    let bestDist = PORT_HIT_R;
+    for (const key of this.surface.keys()) {
+      const ends = this.surface.ends(key);
+      const pts = this.route(key);
+      if (!ends || pts.length < 2) continue;
+      const candidates: { end: WireEnd; at: Point; nodeId: string }[] = [
+        { end: "from", at: pts[0], nodeId: ends.fromId },
+        { end: "to", at: pts[pts.length - 1], nodeId: ends.toId },
+      ];
+      for (const c of candidates) {
+        const d = Math.hypot(wx - c.at.x, wy - c.at.y);
+        if (d < bestDist) { bestDist = d; best = { key, end: c.end, nodeId: c.nodeId }; }
+      }
+    }
+    return best;
+  }
+
+  /** Placed waypoints of the SELECTED wire only — handles are drawn for
+   * the selected wire alone, so those are the only ones to hit-test. */
+  waypointAtWorld(wx: number, wy: number): WaypointHit | null {
+    const key = this.editor.selected;
+    if (!key) return null;
+    let best: WaypointHit | null = null;
+    let bestDist = WAYPOINT_HIT_R;
+    this.editor.waypointsFor(key).forEach((p, index) => {
+      const d = Math.hypot(wx - p.x, wy - p.y);
+      if (d < bestDist) { bestDist = d; best = { key, index }; }
+    });
+    return best;
+  }
+
+  /** Index of the polyline run under a world point — which segment a
+   * body drag has grabbed. */
+  segmentAtWorld(key: string, wx: number, wy: number): number | null {
+    const pts = this.route(key);
+    let best: number | null = null;
+    let bestDist = WIRE_HIT_R;
+    for (let i = 1; i < pts.length; i++) {
+      const hit = nearestOnPolyline([pts[i - 1], pts[i]], wx, wy);
+      if (hit.dist < bestDist) { bestDist = hit.dist; best = i - 1; }
+    }
+    return best;
+  }
+
+  /** Starts a body drag: resolves the run under the cursor and
+   * materializes the anchors it needs. Null when the point isn't on the
+   * wire. */
+  beginSegmentDrag(key: string, wx: number, wy: number): SegmentGrab | null {
+    const seg = this.segmentAtWorld(key, wx, wy);
+    if (seg === null) return null;
+    return this.editor.grabSegment(key, this.route(key), seg);
+  }
+
+  /** World-space slot a wire end is docked to — what a port drag
+   * re-docks against. */
+  slotForEnd(key: string, end: WireEnd): Slot | undefined {
+    const ends = this.surface.ends(key);
+    if (!ends) return undefined;
+    return end === "from" ? ends.from : ends.to;
+  }
+
+  /** "reset layout": drop selection, re-docked ends and every bend. */
+  clear(): void {
+    this.editor.clear();
+  }
+
+  serialize(): { ports: Record<string, WirePort>; waypoints: Record<string, Point[]> } {
+    return { ports: this.editor.serializePorts(), waypoints: this.editor.serializeWaypoints() };
+  }
+
+  /** Rehydrates saved edits, dropping anything belonging to a wire this
+   * board no longer has. */
+  hydrate(ports?: Record<string, WirePort>, waypoints?: Record<string, Point[]>): void {
+    const known = new Set(this.surface.keys());
+    if (ports) this.editor.hydratePorts(ports, known);
+    if (waypoints) this.editor.hydrateWaypoints(waypoints, known);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering. ONE function knows what an editable wire looks like, so the
+// two boards cannot drift into two oranges the way they drifted into two
+// gesture sets.
+// ---------------------------------------------------------------------------
+
+export type EditableWirePaint = {
+  pts: Point[];
+  kind: WireKind;
+  /** Carrying real flow right now — the wire's own live/idle tint. */
+  live: boolean;
+  selected: boolean;
+  /** Bend handles, drawn for the selected wire only. */
+  waypoints?: Point[];
+};
+
+/** Strokes one wire, its two endpoint dots and (when selected) its bend
+ * handles.
+ *
+ * A selected wire wears the LIVE stroke so it is unmistakable against the
+ * dim idle runs around it. Owner (ticket 53cc9bcc): an active wire is
+ * orange END TO END — body, ports and handles one color. Orange only at
+ * the handles was the half-signal that got rejected, and the colour is
+ * the single PALETTE.selection token, never a second literal. */
+export function drawEditableWire(ctx: CanvasRenderingContext2D, w: EditableWirePaint): void {
+  if (w.pts.length < 2) return;
+  const selColor = w.selected ? PALETTE.selection : undefined;
+  const hot = w.live || w.selected;
+  drawWire(ctx, w.pts, w.kind, hot, selColor);
+  // Each endpoint gets one port dot in the wire's own stroke color, drawn
+  // under the cards. A selected wire's handles switch to the selection
+  // hue, marking the two dots that are draggable right now.
+  const portColor = selColor ?? wireColor(w.kind, w.live);
+  drawPort(ctx, w.pts[0], portColor, hot);
+  drawPort(ctx, w.pts[w.pts.length - 1], portColor, hot);
+  if (w.selected) drawWaypointHandles(ctx, w.waypoints ?? []);
+}
+
+/** The draggable bend handles on the selected wire. Hollow squares in the
+ * selection hue so they read as grab targets, never as packets (which are
+ * near-white filled squares — one shape, one meaning). */
+function drawWaypointHandles(ctx: CanvasRenderingContext2D, waypoints: Point[]): void {
+  const r = 5;
+  ctx.save();
+  ctx.strokeStyle = PALETTE.selection;
+  ctx.fillStyle = PALETTE.ground;
+  ctx.lineWidth = 2;
+  for (const p of waypoints) {
+    ctx.beginPath();
+    ctx.rect(p.x - r, p.y - r, r * 2, r * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }

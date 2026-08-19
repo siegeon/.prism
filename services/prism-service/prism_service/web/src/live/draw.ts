@@ -8,7 +8,8 @@
 import type { GraphState, LiveNode } from "./graphState";
 import { HEARTBEAT_DECAY_MS, deriveCardState } from "./graphState";
 import { drawCard, drawActionStrip, type CardMetrics } from "./cards";
-import { drawWire, drawPort, wireColor, type WireKind } from "./wires";
+import { wireKey, type WireKind } from "./wires";
+import { drawEditableWire } from "./wireEditing";
 import { drawPackets } from "./packets";
 import { drawHud, drawLegend } from "./hud";
 import { drawLoading, drawQuietLine, isGraphQuiet } from "./idle";
@@ -198,12 +199,21 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
     // state.wireEndpointsFor, so they can never diverge.
     const pts = state.wireEndpointsFor(e);
     if (!pts || pts.length < 2) continue;
-    drawWire(ctx, pts, kind, live);
     // AC-1: each endpoint gets exactly one port dot, drawn under the
-    // cards in the wire's own stroke color.
-    const portColor = wireColor(kind, live);
-    drawPort(ctx, pts[0], portColor, live);
-    drawPort(ctx, pts[pts.length - 1], portColor, live);
+    // cards in the wire's own stroke color -- and a SELECTED wire is
+    // orange end to end with its bend handles showing. All of that lives
+    // in the shared renderer, the same one the /workflows canvas paints
+    // through, so the two boards cannot drift into two oranges (task
+    // be7a5d2d).
+    const key = wireKey(e.source, e.target);
+    const selected = state.wireEdits.selected === key;
+    drawEditableWire(ctx, {
+      pts,
+      kind,
+      live,
+      selected,
+      waypoints: selected ? state.wireEdits.editor.waypointsFor(key) : undefined,
+    });
   }
   drawPackets(ctx, state.packets, now);
 
