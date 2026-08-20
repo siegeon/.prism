@@ -181,6 +181,9 @@ def test_conductor_behaviors_folds_the_bot_ontology_into_the_catalog(tmp_path, m
 
     assert catalog is not None
     assert catalog["id"] == "conductor-behaviors"
+    assert catalog["parent_id"] == "conductor", (
+        "must nest under the conductor bot's directory entry, not sit as a "
+        "flat sibling of it")
     assert [step["id"] for step in catalog["steps"]] == ["land", "ci-local-dev"]
     assert catalog["steps"][0]["action"] == "POST /workflows/bots/prism/conductor/pipeline/land"
     assert catalog["occupancy"] == {"land": 0, "ci-local-dev": 0}

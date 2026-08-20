@@ -21,7 +21,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { getProject } from "@/lib/project";
 
-export type WorkflowStepType = "agent" | "gate" | "intake";
+export type WorkflowStepType = "agent" | "gate" | "intake" | "behavior";
 
 /** One conductor FSM step as the service describes it. `persona` resolves
  * through the backend's STEP_ROLES, so a GATE (whose `agent` is null —
@@ -68,6 +68,10 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
   id: string;
   name: string;
   description: string;
+  /** Directory nesting: absent/null for a top-level entry, otherwise the id
+   * of the catalog entry this one is disclosed under (e.g. a bot's own
+   * FSM/Behavior entries nest under that bot's top-level entry). */
+  parent_id?: string | null;
 };
 
 export type WorkflowStepResult = {

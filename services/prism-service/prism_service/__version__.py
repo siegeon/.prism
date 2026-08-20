@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.12.8"
+PRISM_VERSION = "7.12.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.9: Directory now shows real progressive disclosure -- a catalog entry can carry parent_id (conductor-behaviors nests under conductor) instead of every entry rendering as a flat sibling. WorkflowsPage.tsx directory nav groups by parent_id with a per-entry expand/collapse chevron (conductor starts expanded); WorkflowStepType gained \"behavior\"; web_dist rebuilt and verified the new chunk actually contains the nesting code. "
     "7.12.8: Fixed the Bot/Behavior ontology -- was a flat Bot->Behavior shape, corrected to Bot [1] uses FSM [1..*], FSM [1] has Behavior [0..*] (AosWorkflows Program.cs BotDefinition/FsmBehaviors/BehaviorDefinition, and this service's _conductor_behaviors_workflow reads the nested fsms[] shape). Behavior run URLs now name their owning fsm explicitly: POST /workflows/bots/{project}/{botId}/{fsmId}/{behaviorId}. "
     "7.12.7: GET /api/workflows now folds in the conductor bot's declared AosWorkflows behaviors (proxying GET /workflows/bots/conductor) as a new 'conductor-behaviors' catalog entry, alongside the existing conductor/validation entries -- so bot behaviors (land, ci-local-dev) show up on the /workflows page instead of only being reachable via raw curl to AosWorkflows. Fails soft (returns nothing extra) if AosWorkflows is unreachable or the bot isn't registered yet. See [[project_prism_workflow_engine_migration]]. "
     "7.12.6: PHASE 0 OF THE BOT/BEHAVIOR FSM MIGRATION. New POST /api/workflows/steps/context-enrich route wraps the existing ContextBuilder.build() behind a typed contract an AosWorkflows step can call directly -- read-only, no side effects. Verified end-to-end: a real AosWorkflows AgentStep call produced one connected OTel trace spanning both services and 109KB of genuine enrichment data. See [[project_prism_workflow_engine_migration]]. "

@@ -232,6 +232,13 @@ export default function WorkflowsPage() {
   const directoryResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("conductor");
+  // Progressive disclosure for the directory: a catalog entry with a
+  // parent_id (a bot's own FSM/Behavior entries, nested under that bot)
+  // stays collapsed under its parent until expanded -- "conductor" starts
+  // open since that's the one bot in the system today.
+  const [expandedDirectoryIds, setExpandedDirectoryIds] = useState<Set<string>>(
+    () => new Set(["conductor"]),
+  );
   const [workflowPath, setWorkflowPath] = useState<Array<{
     workflowId: string;
     stepId: string;
@@ -662,6 +669,14 @@ export default function WorkflowsPage() {
     return () => { cancelled = true; window.clearInterval(poll); };
   }, [project, selectedWorkflowId, workflowRun?.id, workflowRun?.status, refreshRunHistory]);
 
+  const toggleDirectoryExpanded = useCallback((id: string) => {
+    setExpandedDirectoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
   const setAndRememberDirectoryWidth = useCallback((width: number) => {
     const next = Math.max(DIRECTORY_MIN_PX, Math.min(DIRECTORY_MAX_PX, width));
     setDirectoryWidth(next);
@@ -1056,19 +1071,57 @@ export default function WorkflowsPage() {
           </div>
           {directoryOpen && (
             <nav className="py-3" aria-label="Available workflows">
-              {workflows.map((workflow) => {
+              {workflows.filter((workflow) => !workflow.parent_id).map((workflow) => {
+                const children = workflows.filter((candidate) => candidate.parent_id === workflow.id);
                 const selected = workflow.id === selectedWorkflowId;
+                const childSelected = children.some((child) => child.id === selectedWorkflowId);
+                const expanded = expandedDirectoryIds.has(workflow.id) || childSelected;
                 return (
-                  <button
-                    type="button"
-                    key={workflow.id}
-                    aria-current={selected ? "page" : undefined}
-                    onClick={() => selectWorkflow(workflow)}
-                    className={`w-full flex items-center gap-3 px-5 py-2 text-left text-[13px] uppercase tracking-wider transition-colors ${selected ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"}`}
-                  >
-                    <span className="flex-1">{workflow.name}</span>
-                    <span className="text-2xs font-mono opacity-70">{workflow.steps.length}</span>
-                  </button>
+                  <div key={workflow.id}>
+                    <button
+                      type="button"
+                      aria-current={selected ? "page" : undefined}
+                      onClick={() => selectWorkflow(workflow)}
+                      className={`w-full flex items-center gap-2 px-5 py-2 text-left text-[13px] uppercase tracking-wider transition-colors ${selected ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"}`}
+                    >
+                      {children.length > 0 ? (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          aria-label={expanded ? `Collapse ${workflow.name}` : `Expand ${workflow.name}`}
+                          onClick={(ev) => { ev.stopPropagation(); toggleDirectoryExpanded(workflow.id); }}
+                          onKeyDown={(ev) => {
+                            if (ev.key !== "Enter" && ev.key !== " ") return;
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            toggleDirectoryExpanded(workflow.id);
+                          }}
+                          className="w-4 shrink-0 text-center text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)]"
+                        >
+                          {expanded ? "⌄" : "›"}
+                        </span>
+                      ) : (
+                        <span className="w-4 shrink-0" aria-hidden="true" />
+                      )}
+                      <span className="flex-1">{workflow.name}</span>
+                      <span className="text-2xs font-mono opacity-70">{workflow.steps.length}</span>
+                    </button>
+                    {expanded && children.map((child) => {
+                      const childSel = child.id === selectedWorkflowId;
+                      return (
+                        <button
+                          type="button"
+                          key={child.id}
+                          aria-current={childSel ? "page" : undefined}
+                          onClick={() => selectWorkflow(child)}
+                          className={`w-full flex items-center gap-3 py-2 pl-11 pr-5 text-left text-2xs uppercase tracking-wider transition-colors ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"}`}
+                        >
+                          <span className="flex-1">{child.name}</span>
+                          <span className="font-mono opacity-70">{child.steps.length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </nav>

@@ -522,6 +522,7 @@ def _conductor_behaviors_workflow(project: str) -> dict | None:
     ]
     return {
         "id": "conductor-behaviors",
+        "parent_id": "conductor",
         "name": bot.get("name", "Conductor") + " behaviors",
         "description": "Capabilities the conductor bot can perform, executed by AosWorkflows",
         "steps": steps,

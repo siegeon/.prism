@@ -636,7 +636,10 @@ def test_workflow_directory_selects_the_definition_drawn_on_the_right():
     assert 'aria-label="Available workflows"' in page
     assert "Collapse workflow directory" in page
     assert "Expand workflow directory" in page
-    assert re.search(r'workflows\.map\(\(workflow\)', page)
+    # The directory nests a bot's own FSM/Behavior entries under their
+    # parent (progressive disclosure) -- top level is every catalog entry
+    # WITHOUT a parent_id, filtered before mapping.
+    assert re.search(r'workflows\.filter\(\(workflow\) => !workflow\.parent_id\)\.map\(\(workflow\)', page)
     assert re.search(r'onClick=\{\(\) => selectWorkflow\(workflow\)\}', page)
     assert re.search(
         r'graphRef\.current\.setDef\(workflowForGraph\(workflow\)\)', page
