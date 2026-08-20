@@ -152,6 +152,10 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
         "conductor", "validation"]
     validation = body["workflows"][1]
     assert validation["name"] == "Build and test"
+    assert validation["parent_id"] == "conductor", (
+        "validation is the conductor's own capability -- what its own "
+        "verify_green_state step links to -- so it nests under conductor "
+        "like every other bot capability, not as a flat sibling")
     assert [step["id"] for step in validation["steps"]] == ["test", "build"]
     assert [step["persona_label"] for step in validation["steps"]] == [
         "Verifier", "Builder"]

@@ -596,6 +596,11 @@ def get_workflows(project: str = Query("default")) -> dict:
         "occupancy": occupancy,
     }
     validation = _project_validation_workflow(project)
+    # Nested, not a flat sibling of conductor: this IS the conductor's own
+    # capability -- the FSM its own verify_green_state step links to
+    # (linked_workflow_id below) -- same category as land/ci-local-dev, it
+    # simply predates the Bot/Behavior registry and is sourced differently.
+    validation["parent_id"] = "conductor"
     conductor_behaviors = _conductor_behavior_workflows(project)
 
     catalog = [conductor, validation, *conductor_behaviors]
