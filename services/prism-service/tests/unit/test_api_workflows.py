@@ -1086,3 +1086,107 @@ def test_red_gate_status_never_calls_the_real_adjudicator(monkeypatch):
     resp = workflows_api.workflow_step_red_gate_status(
         workflows_api.RedGateStatusRequest(task_id="t-x"), project="prism")
     assert resp.has_fresh_red_receipt is False
+
+
+def test_green_gate_status_reports_a_fresh_passing_receipt(monkeypatch):
+    """Read-only visibility for green_gate: calls the EXACT same
+    _oracle_receipt_refusal consultation gate_adjudicator.py's
+    _pending_decline_reason already makes for reporting, never
+    adjudicate_green_gate or any write."""
+    from prism_service.api import workflows as workflows_api
+    from prism_service.services import oracle_spec as osp
+
+    class _FakeReceipt:
+        status = osp.ST_PASS if hasattr(osp, "ST_PASS") else "passed"
+        reason = "all pinned tests green"
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return object()
+
+    class _FakeConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "", _FakeReceipt()
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.latest_receipt",
+        lambda project, tid: _FakeReceipt())
+
+    resp = workflows_api.workflow_step_green_gate_status(
+        workflows_api.GreenGateStatusRequest(task_id="t-green-1"), project="prism")
+
+    assert resp.has_fresh_passing_receipt is True
+    assert "all pinned tests green" in resp.reason
+
+
+def test_green_gate_status_reports_refusal_honestly(monkeypatch):
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return object()
+
+    class _FakeConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "no EvidenceReceipt on file — the oracle was never exercised", None
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.latest_receipt",
+        lambda project, tid: None)
+
+    resp = workflows_api.workflow_step_green_gate_status(
+        workflows_api.GreenGateStatusRequest(task_id="t-green-2"), project="prism")
+
+    assert resp.has_fresh_passing_receipt is False
+    assert "never exercised" in resp.reason
+
+
+def test_green_gate_status_never_calls_the_real_adjudicator(monkeypatch):
+    """The whole point: must never touch adjudicate_green_gate. Assert
+    it's absent from the fake conductor_svc -- if the endpoint tried to
+    call it, this would raise AttributeError, not silently pass."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return object()
+
+    class _NoAdjudicateConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "not evidenced", None
+        # deliberately no adjudicate_green_gate
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_NoAdjudicateConductorSvc()))
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.latest_receipt",
+        lambda project, tid: None)
+
+    resp = workflows_api.workflow_step_green_gate_status(
+        workflows_api.GreenGateStatusRequest(task_id="t-x"), project="prism")
+    assert resp.has_fresh_passing_receipt is False
+
+
+def test_green_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_path, monkeypatch):
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=_Svc([])))
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+
+    def _fake_conductor_behaviors(project):
+        return [{"id": "green-gate-status", "name": "Green gate evidence status",
+                 "steps": [], "bots": [], "occupancy": {}}]
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows", _fake_conductor_behaviors)
+
+    body = workflows_api.get_workflows("prism")
+    green_gate_step = next(s for s in body["steps"] if s["id"] == "green_gate")
+    assert green_gate_step["linked_workflow_id"] == "green-gate-status"
+
+    by_id = {w["id"]: w for w in body["workflows"]}
+    assert by_id["green-gate-status"].get("parent_id") == "conductor"

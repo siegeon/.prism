@@ -14,7 +14,8 @@
         "verify-plan-loop",
         "write-failing-tests-loop",
         "implement-tasks-loop",
-        "red-gate-status"
+        "red-gate-status",
+        "green-gate-status"
       ]
     }
   ]

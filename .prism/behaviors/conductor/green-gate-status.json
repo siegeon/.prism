@@ -1,0 +1,16 @@
+{
+  "id": "green-gate-status",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Green gate evidence status",
+  "version": 1,
+  "steps": [
+    {
+      "id": "status",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-status?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    }
+  ]
+}

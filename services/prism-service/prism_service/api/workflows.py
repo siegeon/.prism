@@ -595,6 +595,7 @@ def get_workflows(project: str = Query("default")) -> dict:
                 else "write-failing-tests-loop" if step["id"] == "write_failing_tests"
                 else "implement-tasks-loop" if step["id"] == "implement_tasks"
                 else "red-gate-status" if step["id"] == "red_gate"
+                else "green-gate-status" if step["id"] == "green_gate"
                 else None
             ),
         })
@@ -628,7 +629,7 @@ def get_workflows(project: str = Query("default")) -> dict:
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
         "write-failing-tests-loop", "implement-tasks-loop",
-        "red-gate-status",
+        "red-gate-status", "green-gate-status",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
@@ -1012,6 +1013,55 @@ def workflow_step_red_gate_status(
             has_fresh_red_receipt=fresh is not None,
             red_sha=red_sha,
             reason=reason,
+            latest_receipt_status=(getattr(latest, "status", "") or "") if latest else "",
+            latest_receipt_reason=(getattr(latest, "reason", "") or "") if latest else "",
+        )
+
+
+class GreenGateStatusRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+class GreenGateStatusResponse(BaseModel):
+    has_fresh_passing_receipt: bool
+    reason: str
+    latest_receipt_status: str
+    latest_receipt_reason: str
+
+
+@router.post("/steps/green-gate-status")
+def workflow_step_green_gate_status(
+    body: GreenGateStatusRequest, project: str = Query(...),
+) -> GreenGateStatusResponse:
+    """GOVERNANCE VISIBILITY for green_gate -- read-only, same pattern as
+    /steps/red-gate-status. Reuses ConductorService._oracle_receipt_refusal
+    directly -- the EXACT same read-only call gate_adjudicator.py's
+    _pending_decline_reason already makes for green_gate reporting, not a
+    reimplementation. Never calls adjudicate_green_gate or any of its
+    writes. green_gate itself is untouched: still a real WORKFLOW_STEPS
+    state, still decided the same way it always was."""
+    from prism_service.services import oracle_spec as osp
+
+    with _tracer.start_as_current_span("workflow.step.green_gate_status") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return GreenGateStatusResponse(
+                has_fresh_passing_receipt=False,
+                reason=f"no such task: {body.task_id}",
+                latest_receipt_status="", latest_receipt_reason="",
+            )
+
+        refusal, fresh = ctx.conductor_svc._oracle_receipt_refusal(
+            task, override=False, reason="")
+        latest = osp.latest_receipt(project, body.task_id)
+
+        return GreenGateStatusResponse(
+            has_fresh_passing_receipt=fresh is not None,
+            reason=(refusal or (f"fresh passing receipt on file: {fresh.reason}" if fresh else "")),
             latest_receipt_status=(getattr(latest, "status", "") or "") if latest else "",
             latest_receipt_reason=(getattr(latest, "reason", "") or "") if latest else "",
         )
