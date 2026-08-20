@@ -1,5 +1,6 @@
 {
   "id": "land",
+  "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Land a task branch",
   "version": 1,

@@ -1,8 +1,13 @@
 {
   "id": "conductor",
   "name": "Conductor",
-  "behaviorIds": [
-    "land",
-    "ci-local-dev"
+  "fsms": [
+    {
+      "fsmId": "pipeline",
+      "behaviorIds": [
+        "land",
+        "ci-local-dev"
+      ]
+    }
   ]
 }

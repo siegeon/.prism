@@ -499,7 +499,10 @@ def _conductor_behaviors_workflow(project: str) -> dict | None:
     except HTTPException:
         return None
 
-    behavior_ids = bot.get("behaviorIds") or bot.get("BehaviorIds") or []
+    # Bot [1] uses FSM [1..*], FSM [1] has Behavior [0..*] -- see the same
+    # ontology comment in AosWorkflows' Program.cs. Flatten across every FSM
+    # this bot uses; each still carries its own fsm_id in the action URL, so
+    # a step here is unambiguous about which engine actually runs it.
     steps = [
         {
             "id": behavior_id,
@@ -510,11 +513,12 @@ def _conductor_behaviors_workflow(project: str) -> dict | None:
             "persona_label": "Conductor",
             "purpose": behavior_id.replace("-", " ").capitalize(),
             "input": "The conductor bot's own repo checkout",
-            "action": f"POST /workflows/bots/{project}/conductor/{behavior_id}",
+            "action": f"POST /workflows/bots/{project}/conductor/{fsm.get('fsmId') or fsm.get('FsmId')}/{behavior_id}",
             "output": "Step-by-step results, tracked as a durable AosWorkflows run",
             "execution": "connected",
         }
-        for behavior_id in behavior_ids
+        for fsm in (bot.get("fsms") or bot.get("Fsms") or [])
+        for behavior_id in (fsm.get("behaviorIds") or fsm.get("BehaviorIds") or [])
     ]
     return {
         "id": "conductor-behaviors",

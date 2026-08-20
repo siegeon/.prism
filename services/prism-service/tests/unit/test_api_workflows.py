@@ -83,6 +83,8 @@ def _client(svc, monkeypatch, data_dir):
                         lambda p: types.SimpleNamespace(task_svc=svc))
     monkeypatch.setattr(workflows_api, "_project_validation_workflow",
                         _scripted_validation)
+    monkeypatch.setattr(workflows_api, "_conductor_behaviors_workflow",
+                        lambda project: None)
     app = FastAPI()
     app.include_router(workflows_api.router, prefix="/api/workflows")
     return TestClient(app)
@@ -142,6 +144,8 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
                         lambda p: types.SimpleNamespace(task_svc=_Svc([])))
     monkeypatch.setattr(workflows_api, "_project_validation_workflow",
                         _scripted_validation)
+    monkeypatch.setattr(workflows_api, "_conductor_behaviors_workflow",
+                        lambda project: None)
     body = workflows_api.get_workflows("prism")
 
     assert [workflow["id"] for workflow in body["workflows"]] == [
@@ -157,6 +161,48 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
     assert [step["command"] for step in validation["steps"]] == [
         "uv run pytest -q", "npm run build"]
     assert validation["steps"][1]["depends_on"] == ["test"]
+
+
+def test_conductor_behaviors_folds_the_bot_ontology_into_the_catalog(tmp_path, monkeypatch):
+    """Bot [1] uses FSM [1..*], FSM [1] has Behavior [0..*] -- the nested
+    shape AosWorkflows' GET /workflows/bots/conductor returns must flatten
+    into catalog steps carrying the owning fsm in their action URL."""
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+    monkeypatch.setattr(workflows_api, "_workflow_engine_json", lambda path, method="GET", body=None: {
+        "id": "conductor", "name": "Conductor",
+        "fsms": [{"fsmId": "pipeline", "behaviorIds": ["land", "ci-local-dev"]}],
+    })
+
+    catalog = workflows_api._conductor_behaviors_workflow("prism")
+
+    assert catalog is not None
+    assert catalog["id"] == "conductor-behaviors"
+    assert [step["id"] for step in catalog["steps"]] == ["land", "ci-local-dev"]
+    assert catalog["steps"][0]["action"] == "POST /workflows/bots/prism/conductor/pipeline/land"
+    assert catalog["occupancy"] == {"land": 0, "ci-local-dev": 0}
+
+
+def test_conductor_behaviors_is_none_when_the_engine_is_unreachable(tmp_path, monkeypatch):
+    """A workflows engine that's down, or a bot not yet registered, must not
+    break the whole /api/workflows response -- just omit this entry."""
+    from fastapi import HTTPException
+
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+
+    def _unreachable(path, method="GET", body=None):
+        raise HTTPException(503, "workflow engine unavailable")
+
+    monkeypatch.setattr(workflows_api, "_workflow_engine_json", _unreachable)
+
+    assert workflows_api._conductor_behaviors_workflow("prism") is None
 
 
 def test_scripted_workflow_is_validated_from_the_aos_engine(monkeypatch):

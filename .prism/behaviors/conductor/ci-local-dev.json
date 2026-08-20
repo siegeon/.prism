@@ -1,5 +1,6 @@
 {
   "id": "ci-local-dev",
+  "fsmId": "pipeline",
   "botId": "conductor",
   "name": "CI to local dev",
   "version": 1,
