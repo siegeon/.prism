@@ -83,8 +83,8 @@ def _client(svc, monkeypatch, data_dir):
                         lambda p: types.SimpleNamespace(task_svc=svc))
     monkeypatch.setattr(workflows_api, "_project_validation_workflow",
                         _scripted_validation)
-    monkeypatch.setattr(workflows_api, "_conductor_behaviors_workflow",
-                        lambda project: None)
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows",
+                        lambda project: [])
     app = FastAPI()
     app.include_router(workflows_api.router, prefix="/api/workflows")
     return TestClient(app)
@@ -144,8 +144,8 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
                         lambda p: types.SimpleNamespace(task_svc=_Svc([])))
     monkeypatch.setattr(workflows_api, "_project_validation_workflow",
                         _scripted_validation)
-    monkeypatch.setattr(workflows_api, "_conductor_behaviors_workflow",
-                        lambda project: None)
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows",
+                        lambda project: [])
     body = workflows_api.get_workflows("prism")
 
     assert [workflow["id"] for workflow in body["workflows"]] == [
@@ -163,35 +163,67 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
     assert validation["steps"][1]["depends_on"] == ["test"]
 
 
-def test_conductor_behaviors_folds_the_bot_ontology_into_the_catalog(tmp_path, monkeypatch):
-    """Bot [1] uses FSM [1..*], FSM [1] has Behavior [0..*] -- the nested
-    shape AosWorkflows' GET /workflows/bots/conductor returns must flatten
-    into catalog steps carrying the owning fsm in their action URL."""
+def test_conductor_behaviors_are_one_catalog_entry_each_with_real_steps(tmp_path, monkeypatch):
+    """Bot [1] uses FSM [1..*], FSM [1] has Behavior [0..*] -- and a Behavior
+    IS a flow, so each gets its OWN catalog entry nested under the bot,
+    disclosing its REAL steps (land's push/open-pr), not a synthetic
+    wrapper node whose fake "steps" were just the behavior ids."""
     from prism_service.api import workflows as workflows_api
 
     monkeypatch.setattr(
         "prism_service.services.claude_transcripts._project_source_path",
         lambda project: str(tmp_path))
-    monkeypatch.setattr(workflows_api, "_workflow_engine_json", lambda path, method="GET", body=None: {
-        "id": "conductor", "name": "Conductor",
-        "fsms": [{"fsmId": "pipeline", "behaviorIds": ["land", "ci-local-dev"]}],
-    })
 
-    catalog = workflows_api._conductor_behaviors_workflow("prism")
+    def _fake_engine(path, method="GET", body=None):
+        if path.startswith("/workflows/bots/conductor/behaviors/land"):
+            return {
+                "id": "land", "fsmId": "pipeline", "botId": "conductor",
+                "name": "Land a task branch", "version": 1,
+                "steps": [
+                    {"id": "push", "kind": "shell", "command": "git push -u origin ${branch}",
+                     "workingDirectory": "", "timeoutSeconds": 60},
+                    {"id": "open-pr", "kind": "shell", "command": "gh pr create --fill",
+                     "workingDirectory": "", "timeoutSeconds": 60},
+                ],
+            }
+        if path.startswith("/workflows/bots/conductor/behaviors/ci-local-dev"):
+            return {
+                "id": "ci-local-dev", "fsmId": "pipeline", "botId": "conductor",
+                "name": "CI to local dev", "version": 1,
+                "steps": [{"id": "test", "kind": "shell", "command": "uv run pytest -q -x",
+                           "workingDirectory": "/repo/service", "timeoutSeconds": 300}],
+            }
+        return {
+            "id": "conductor", "name": "Conductor",
+            "fsms": [{"fsmId": "pipeline", "behaviorIds": ["land", "ci-local-dev"]}],
+        }
 
-    assert catalog is not None
-    assert catalog["id"] == "conductor-behaviors"
-    assert catalog["parent_id"] == "conductor", (
-        "must nest under the conductor bot's directory entry, not sit as a "
-        "flat sibling of it")
-    assert [step["id"] for step in catalog["steps"]] == ["land", "ci-local-dev"]
-    assert catalog["steps"][0]["action"] == "POST /workflows/bots/prism/conductor/pipeline/land"
-    assert catalog["occupancy"] == {"land": 0, "ci-local-dev": 0}
+    monkeypatch.setattr(workflows_api, "_workflow_engine_json", _fake_engine)
+
+    entries = workflows_api._conductor_behavior_workflows("prism")
+
+    assert [entry["id"] for entry in entries] == ["land", "ci-local-dev"]
+    assert all(entry["parent_id"] == "conductor" for entry in entries), (
+        "each behavior must nest under the conductor bot's directory entry, "
+        "not sit as a flat sibling of it")
+
+    land = entries[0]
+    assert land["name"] == "Land a task branch"
+    assert [step["id"] for step in land["steps"]] == ["push", "open-pr"]
+    assert land["steps"][0]["command"] == "git push -u origin ${branch}"
+    assert land["steps"][1]["depends_on"] == ["push"], (
+        "a behavior's own steps must show their real sequence, not a flat "
+        "unordered list")
+    assert land["occupancy"] == {"push": 0, "open-pr": 0}
+
+    ci = entries[1]
+    assert ci["name"] == "CI to local dev"
+    assert ci["steps"][0]["working_directory"] == "/repo/service"
 
 
-def test_conductor_behaviors_is_none_when_the_engine_is_unreachable(tmp_path, monkeypatch):
+def test_conductor_behaviors_are_empty_when_the_engine_is_unreachable(tmp_path, monkeypatch):
     """A workflows engine that's down, or a bot not yet registered, must not
-    break the whole /api/workflows response -- just omit this entry."""
+    break the whole /api/workflows response -- just omit these entries."""
     from fastapi import HTTPException
 
     from prism_service.api import workflows as workflows_api
@@ -205,7 +237,7 @@ def test_conductor_behaviors_is_none_when_the_engine_is_unreachable(tmp_path, mo
 
     monkeypatch.setattr(workflows_api, "_workflow_engine_json", _unreachable)
 
-    assert workflows_api._conductor_behaviors_workflow("prism") is None
+    assert workflows_api._conductor_behavior_workflows("prism") == []
 
 
 def test_scripted_workflow_is_validated_from_the_aos_engine(monkeypatch):

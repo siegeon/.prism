@@ -476,10 +476,14 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
     return counts
 
 
-def _conductor_behaviors_workflow(project: str) -> dict | None:
-    """AosWorkflows' declared Bot/Behavior capabilities for the conductor,
-    folded into the same workflow-catalog shape as `conductor` and
-    `validation` above.
+def _conductor_behavior_workflows(project: str) -> list[dict]:
+    """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
+    catalog entry nested under `conductor` -- not one synthetic wrapper node
+    whose fake "steps" were just the behavior ids. Bot [1] uses FSM [1..*],
+    FSM [1] has Behavior [0..*] (see the same ontology comment in
+    AosWorkflows' Program.cs); a behavior IS a flow, so it gets a real
+    catalog entry disclosing its OWN real steps (e.g. land's push/open-pr),
+    not a fake single node standing in for the whole thing.
 
     These run OUTSIDE this process entirely -- AosWorkflows (WorkflowCore,
     separate service) owns their state, never prism-service. A missing bot
@@ -493,42 +497,65 @@ def _conductor_behaviors_workflow(project: str) -> dict | None:
     fallback = Path.home() / "projects" / project
     root = configured if configured.is_absolute() and configured.exists() else fallback
     if not root.exists():
-        return None
+        return []
+    encoded_root = quote(str(root))
     try:
-        bot = _workflow_engine_json(f"/workflows/bots/conductor?repoPath={quote(str(root))}")
+        bot = _workflow_engine_json(f"/workflows/bots/conductor?repoPath={encoded_root}")
     except HTTPException:
-        return None
+        return []
 
-    # Bot [1] uses FSM [1..*], FSM [1] has Behavior [0..*] -- see the same
-    # ontology comment in AosWorkflows' Program.cs. Flatten across every FSM
-    # this bot uses; each still carries its own fsm_id in the action URL, so
-    # a step here is unambiguous about which engine actually runs it.
-    steps = [
-        {
-            "id": behavior_id,
-            "agent": "conductor",
-            "type": "behavior",
-            "validation": "exit_code == 0",
-            "persona": "conductor",
-            "persona_label": "Conductor",
-            "purpose": behavior_id.replace("-", " ").capitalize(),
-            "input": "The conductor bot's own repo checkout",
-            "action": f"POST /workflows/bots/{project}/conductor/{fsm.get('fsmId') or fsm.get('FsmId')}/{behavior_id}",
-            "output": "Step-by-step results, tracked as a durable AosWorkflows run",
-            "execution": "connected",
-        }
-        for fsm in (bot.get("fsms") or bot.get("Fsms") or [])
-        for behavior_id in (fsm.get("behaviorIds") or fsm.get("BehaviorIds") or [])
-    ]
-    return {
-        "id": "conductor-behaviors",
-        "parent_id": "conductor",
-        "name": bot.get("name", "Conductor") + " behaviors",
-        "description": "Capabilities the conductor bot can perform, executed by AosWorkflows",
-        "steps": steps,
-        "bots": [],
-        "occupancy": {step["id"]: 0 for step in steps},
-    }
+    entries = []
+    for fsm in bot.get("fsms") or bot.get("Fsms") or []:
+        fsm_id = fsm.get("fsmId") or fsm.get("FsmId")
+        for behavior_id in fsm.get("behaviorIds") or fsm.get("BehaviorIds") or []:
+            try:
+                behavior = _workflow_engine_json(
+                    f"/workflows/bots/conductor/behaviors/{behavior_id}?repoPath={encoded_root}")
+            except HTTPException:
+                continue
+            raw_steps = behavior.get("steps") or behavior.get("Steps") or []
+            steps = []
+            for i, step in enumerate(raw_steps):
+                step_id = step.get("id") or step.get("Id")
+                kind = step.get("kind") or step.get("Kind") or "shell"
+                command = step.get("command") or step.get("Command") or ""
+                url = step.get("url") or step.get("Url") or ""
+                steps.append({
+                    "id": step_id,
+                    "agent": "conductor",
+                    "type": "behavior",
+                    "validation": "exit_code == 0",
+                    "persona": "conductor",
+                    "persona_label": "Conductor",
+                    "purpose": step_id.replace("-", " ").replace("_", " ").capitalize(),
+                    "input": "Previous step's result" if i else "The conductor bot's own repo checkout",
+                    "action": command or url,
+                    "output": "Captured stdout, stderr, and exit code" if kind == "shell"
+                        else "HTTP response body and status",
+                    # Deliberately "connected", not "scripted": "scripted"
+                    # arms the canvas's "Run workflow" button, which posts to
+                    # /{workflow_id}/runs -- a route hardcoded to the
+                    # validation workflow only. Wiring that dispatch through
+                    # to AosWorkflows' POST /workflows/bots/... is real,
+                    # separate follow-up work, not implied by fixing the
+                    # directory hierarchy.
+                    "execution": "connected",
+                    "runner": "process" if kind == "shell" else "http",
+                    "command": command,
+                    "working_directory": step.get("workingDirectory") or step.get("WorkingDirectory") or "",
+                    "timeout_seconds": step.get("timeoutSeconds") or step.get("TimeoutSeconds") or 300,
+                    "depends_on": [raw_steps[i - 1].get("id") or raw_steps[i - 1].get("Id")] if i else [],
+                })
+            entries.append({
+                "id": behavior_id,
+                "parent_id": "conductor",
+                "name": behavior.get("name") or behavior.get("Name") or behavior_id.replace("-", " ").title(),
+                "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows",
+                "steps": steps,
+                "bots": [],
+                "occupancy": {step["id"]: 0 for step in steps},
+            })
+    return entries
 
 
 @router.get("")
@@ -569,11 +596,9 @@ def get_workflows(project: str = Query("default")) -> dict:
         "occupancy": occupancy,
     }
     validation = _project_validation_workflow(project)
-    conductor_behaviors = _conductor_behaviors_workflow(project)
+    conductor_behaviors = _conductor_behavior_workflows(project)
 
-    catalog = [conductor, validation]
-    if conductor_behaviors:
-        catalog.append(conductor_behaviors)
+    catalog = [conductor, validation, *conductor_behaviors]
 
     return {
         "steps": steps,
