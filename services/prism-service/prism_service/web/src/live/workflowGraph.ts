@@ -171,16 +171,17 @@ export class WorkflowGraph {
     // wherever its INDEX among bots happened to land, with no relationship
     // to which columns its wires actually drop into -- a bot owning only
     // late steps floated over empty canvas with no visible column beneath
-    // it. A bot that owns no step (shouldn't happen, but data can drift)
-    // falls back to the old spread so it never overlaps another bot.
-    const chainW = Math.max(1, steps.length * (STEP_W + STEP_GAP) - STEP_GAP);
-    def.bots.forEach((b, i) => {
+    // it. A bot that owns zero steps (real today: "architect" is a defined
+    // bot with no conductor step carrying persona="architect") gets no
+    // node at all -- the wire loop below already draws it zero wires, so a
+    // label with nothing under it would just be a second unanchored float,
+    // the exact defect this fix removes for the other bots.
+    def.bots.forEach((b) => {
       const ownedIndices = steps
         .map((s, si) => (s.persona === b.id ? si : -1))
         .filter((si) => si >= 0);
-      const x = ownedIndices.length
-        ? (Math.min(...ownedIndices) + 1) * (STEP_W + STEP_GAP)
-        : (chainW / def.bots.length) * (i + 0.5) - BOT_W / 2;
+      if (!ownedIndices.length) return;
+      const x = (Math.min(...ownedIndices) + 1) * (STEP_W + STEP_GAP);
       this.nodes.push({
         id: `bot:${b.id}`,
         kind: "bot",
