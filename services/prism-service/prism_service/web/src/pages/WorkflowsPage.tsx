@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
+import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
@@ -21,6 +23,20 @@ import Editor from "@monaco-editor/react";
  * on the scale of a task transition, so a 10s poll is the honest refresh
  * here — an SSE subscription would be a stream with nothing to say.
  */
+
+/** One pill in the bottom rail, regardless of what it's actually backed by
+ * (a WorkflowCore run for a scripted workflow, a live task for conductor).
+ * Every workflow's rail renders this SAME shape through ONE component --
+ * only the code that PRODUCES the list differs. */
+type RailPill = {
+  key: string;
+  tone: string;
+  disabled: boolean;
+  ariaLabel?: string;
+  title?: string;
+  ringHighlighted: boolean;
+  onClick?: () => void;
+};
 
 function positionsKey(project: string): string {
   return `prism.workflows.positions.${project}`;
@@ -221,6 +237,14 @@ const IDLE_DRAG: DragState = {
 
 export default function WorkflowsPage() {
   const [project] = useProject();
+  const navigate = useNavigate();
+  // The conductor's rail shows tasks the conductor is actually engaged with
+  // RIGHT NOW -- not a WorkflowCore run. conductor drives real tasks through
+  // Python (advance_task/gate_decide), never through AosWorkflows, so there
+  // is no run instance to poll; useConductorState is the SAME live, SSE-
+  // pushed source LiveBar.tsx already reads for "who's working now", reused
+  // here rather than inventing a second one.
+  const { managed: conductorManaged } = useConductorState(project);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<WorkflowGraph>(new WorkflowGraph());
   const dragRef = useRef<DragState>({ ...IDLE_DRAG });
@@ -439,6 +463,56 @@ export default function WorkflowsPage() {
     if (run.data.passed) return "bg-emerald-400";
     return "bg-red-400";
   };
+  // The conductor's own rail: real tasks it is engaged with RIGHT NOW, per
+  // useConductorState (the same live, SSE-pushed source LiveBar.tsx already
+  // reads) -- never a WorkflowCore run, since conductor drives tasks through
+  // Python, not through AosWorkflows. Filtered to genuine FSM occupancy (a
+  // real step id on THIS canvas) so a legacy/orphaned workflow_step can't
+  // invent a pill. Oldest-updated first, most recent at the right edge --
+  // same convention as the validation rail above.
+  const conductorStepIds = new Set((selectedWorkflow?.steps ?? []).map((step) => step.id));
+  const conductorRailTasks = selectedWorkflowId === "conductor"
+    ? conductorManaged
+        .filter((task) => conductorStepIds.has(task.workflow_step ?? ""))
+        .sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""))
+        .slice(-RUN_RAIL_PILLS)
+    : [];
+  const conductorPillTone = (task: ManagedTask): string => {
+    if (task.gate_state === "pending" || task.gate_state === "failed") return "bg-fuchsia-400/70 animate-pulse";
+    if (task.activity?.state === "working" || task.activity?.state === "driving") return "bg-[color:var(--accent-solid)] animate-pulse";
+    return "bg-sky-400/50";
+  };
+  // ONE rail component for every workflow -- validation and conductor each
+  // just produce the same {tone, title, onClick} shape from whatever their
+  // real source of truth is (a WorkflowCore run vs. a live task), instead of
+  // each rendering their own copy of the pill strip.
+  const railPills: RailPill[] = selectedWorkflowId === "conductor"
+    ? Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
+        const task = conductorRailTasks[index - (RUN_RAIL_PILLS - conductorRailTasks.length)];
+        return {
+          key: String(index),
+          disabled: !task,
+          tone: task ? conductorPillTone(task) : "bg-[color:var(--border-default)]/20",
+          ariaLabel: task ? `Open task ${task.title}` : undefined,
+          title: task
+            ? `${task.title} · ${selectedWorkflow?.steps.find((step) => step.id === task.workflow_step)?.purpose ?? task.workflow_step}${task.gate_state === "pending" ? " · awaiting gate" : ""}`
+            : undefined,
+          ringHighlighted: false,
+          onClick: task ? () => navigate(`/tasks/${task.id}`) : undefined,
+        };
+      })
+    : Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
+        const run = visibleRunHistory[index - historyOffset];
+        return {
+          key: String(index),
+          disabled: !run,
+          tone: runPillTone(index),
+          ariaLabel: run ? `Replay workflow run from ${new Date(run.createTime).toLocaleString()}` : undefined,
+          title: pillIndexTitle(index, historyOffset, visibleRunHistory),
+          ringHighlighted: run?.id === selectedHistoryRunId,
+          onClick: run ? () => replayHistoricalRun(run) : undefined,
+        };
+      });
 
   const refreshRunHistory = useCallback(() => {
     if (!selectedWorkflow || selectedWorkflow.id !== "validation") {
@@ -1342,23 +1416,20 @@ export default function WorkflowsPage() {
             aria-label="Workflow run history"
             aria-valuemin={0}
             aria-valuemax={RUN_RAIL_PILLS}
-            aria-valuenow={visibleRunHistory.length}
+            aria-valuenow={railPills.filter((pill) => !pill.disabled).length}
             className="absolute bottom-0 left-0 right-[118px] top-0 flex items-center justify-between gap-[2px]"
           >
-            {Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
-              const run = visibleRunHistory[index - historyOffset];
-              return (
-                <button
-                  key={index}
-                  type="button"
-                  disabled={!run}
-                  aria-label={run ? `Replay workflow run from ${new Date(run.createTime).toLocaleString()}` : undefined}
-                  title={pillIndexTitle(index, historyOffset, visibleRunHistory)}
-                  onClick={() => { if (run) replayHistoricalRun(run); }}
-                  className={`h-9 min-w-1 max-w-[10px] flex-1 rounded-none transition-colors duration-500 ${run?.id === selectedHistoryRunId ? "ring-2 ring-inset ring-white" : ""} ${runPillTone(index)}`}
-                />
-              );
-            })}
+            {railPills.map((pill) => (
+              <button
+                key={pill.key}
+                type="button"
+                disabled={pill.disabled}
+                aria-label={pill.ariaLabel}
+                title={pill.title}
+                onClick={pill.onClick}
+                className={`h-9 min-w-1 max-w-[10px] flex-1 rounded-none transition-colors duration-500 ${pill.ringHighlighted ? "ring-2 ring-inset ring-white" : ""} ${pill.tone}`}
+              />
+            ))}
           </div>
           <button
             type="button"
