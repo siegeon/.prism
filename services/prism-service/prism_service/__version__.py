@@ -13,10 +13,12 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.12.13"
+PRISM_VERSION = "7.12.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.15: Reduced directory row left padding from px-5 (20px) to pl-2 (8px) on both the parent row's disclosure chevron and the child rows' drag handle, per owner ask for icons within 10px of the panel edge. Measured live with Playwright: icon left edge now sits ~10px from the panel's content edge. "
+    "7.12.14: Actually fixed the icon alignment this time -- pl-11 was force-indenting child rows an extra ~24px past the parent row's own icon column instead of sharing it. Child rows now use the same px-5/w-4/shrink-0/text-center icon column as the parent's disclosure chevron, so drag handles sit in one consistent left-aligned column across parent and child rows, not a deeper nested indent. Verified with Playwright against the live page, not just reasoned about from source. "
     "7.12.13: Fixed the directory's nested-child row alignment -- items-center was vertically centering the drag handle and count against a wrapped 2-line label (e.g. 'Land a task branch'), making it float away from the top-left instead of sitting flush with the first line. Switched to items-start with a 1px top nudge on the icon/count so they line up with the text's cap-height regardless of how many lines the label wraps to. "
     "7.12.12: Drag-to-reorder for a bot's nested directory children (drag land/build-and-test/ci-local-dev above or below each other under CONDUCTOR). Order is a client-side preference (localStorage, per project, keyed by parent id) -- same tier as node positions and wire edits, never sent to the service. Native HTML5 drag/drop on the directory list, drop position determined by cursor vs. target midpoint. "
     "7.12.11: Nested 'Build and test' (validation) under conductor too -- it's the conductor's own capability (what its verify_green_state step links to), same category as land/ci-local-dev; it just predates the Bot/Behavior registry and is sourced differently, which is not a reason to render it as a flat sibling. "

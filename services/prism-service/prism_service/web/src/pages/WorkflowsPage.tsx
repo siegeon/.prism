@@ -1138,7 +1138,7 @@ export default function WorkflowsPage() {
                       type="button"
                       aria-current={selected ? "page" : undefined}
                       onClick={() => selectWorkflow(workflow)}
-                      className={`w-full flex items-center gap-2 px-5 py-2 text-left text-[13px] uppercase tracking-wider transition-colors ${selected ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"}`}
+                      className={`w-full flex items-center gap-2 pl-2 pr-5 py-2 text-left text-[13px] uppercase tracking-wider transition-colors ${selected ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"}`}
                     >
                       {children.length > 0 ? (
                         <span
@@ -1197,9 +1197,12 @@ export default function WorkflowsPage() {
                             setDragOverChildId(null);
                           }}
                           title="Drag to reorder"
-                          className={`w-full flex cursor-grab items-start gap-3 py-2 pl-11 pr-5 text-left text-2xs uppercase tracking-wider transition-colors active:cursor-grabbing ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"} ${dragOver?.before ? "border-t-2 border-[color:var(--accent-solid)]" : ""} ${dragOver && !dragOver.before ? "border-b-2 border-[color:var(--accent-solid)]" : ""} ${draggedChildId === child.id ? "opacity-40" : ""}`}
+                          className={`w-full flex cursor-grab items-start gap-2 pl-2 pr-5 py-2 text-left text-2xs uppercase tracking-wider transition-colors active:cursor-grabbing ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"} ${dragOver?.before ? "border-t-2 border-[color:var(--accent-solid)]" : ""} ${dragOver && !dragOver.before ? "border-b-2 border-[color:var(--accent-solid)]" : ""} ${draggedChildId === child.id ? "opacity-40" : ""}`}
                         >
-                          <span aria-hidden="true" className="shrink-0 pt-px text-[color:var(--nav-text)] opacity-50">⠿</span>
+                          {/* Same w-4/shrink-0/text-center column as the parent row's own
+                              disclosure chevron above -- one shared icon column, not an
+                              extra forced indent past it. */}
+                          <span aria-hidden="true" className="w-4 shrink-0 pt-px text-center text-[color:var(--nav-text)] opacity-50">⠿</span>
                           <span className="flex-1">{child.name}</span>
                           <span className="shrink-0 pt-px font-mono opacity-70">{child.steps.length}</span>
                         </button>
