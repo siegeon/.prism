@@ -165,11 +165,22 @@ export class WorkflowGraph {
       slot: this.place("__complete__", (steps.length + 1) * (STEP_W + STEP_GAP), STEP_Y, STEP_W, STEP_H),
     });
 
-    // Bots ride above the chain, spread across its full width so each one's
-    // wires drop into roughly the region of the FSM it owns.
+    // Each bot's label left-aligns to the leftmost step it actually owns --
+    // the SAME x a step node gets from `this.place` below, not a guess at
+    // one. An even count-based spread (the previous approach) put a bot
+    // wherever its INDEX among bots happened to land, with no relationship
+    // to which columns its wires actually drop into -- a bot owning only
+    // late steps floated over empty canvas with no visible column beneath
+    // it. A bot that owns no step (shouldn't happen, but data can drift)
+    // falls back to the old spread so it never overlaps another bot.
     const chainW = Math.max(1, steps.length * (STEP_W + STEP_GAP) - STEP_GAP);
     def.bots.forEach((b, i) => {
-      const x = (chainW / def.bots.length) * (i + 0.5) - BOT_W / 2;
+      const ownedIndices = steps
+        .map((s, si) => (s.persona === b.id ? si : -1))
+        .filter((si) => si >= 0);
+      const x = ownedIndices.length
+        ? (Math.min(...ownedIndices) + 1) * (STEP_W + STEP_GAP)
+        : (chainW / def.bots.length) * (i + 0.5) - BOT_W / 2;
       this.nodes.push({
         id: `bot:${b.id}`,
         kind: "bot",
