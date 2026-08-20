@@ -1,0 +1,16 @@
+{
+  "id": "plan-gate-check",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Check plan coverage",
+  "version": 1,
+  "steps": [
+    {
+      "id": "evaluate",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check",
+      "body": "{\"plan_doc\": ${planDoc}, \"plan_diagram\": ${planDiagram}, \"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    }
+  ]
+}

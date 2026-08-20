@@ -594,3 +594,98 @@ def test_story_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_p
     assert by_id["story-gate-check"].get("parent_id") == "conductor"
     assert "parent_id" not in by_id["land"]
     assert "parent_id" not in by_id["ci-local-dev"]
+
+
+def test_plan_gate_check_fails_closed_with_no_seeded_principles(monkeypatch):
+    """Read-only wrap of the real plan_coverage scorer -- an unseeded
+    principle store must never pass (the misfire guard), same as
+    production. Mirrors conductor_service.py's exact evidence shape:
+    story_md gets the SAME value as plan_doc."""
+    from prism_service.api import workflows as workflows_api
+
+    class _EmptyMemory:
+        def list_entries(self, domain):
+            return []
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(memory_svc=_EmptyMemory()))
+
+    plan = (
+        "flowchart TD\nA-->B\n\n"
+        "Covers AC-1 fully."
+    )
+    result = workflows_api.workflow_step_plan_gate_check(
+        workflows_api.PlanGateCheckRequest(
+            plan_doc=plan, plan_diagram="flowchart TD\nA-->B\n", task_id="t1"),
+        project="prism",
+    )
+    assert result.ok is False
+    assert "no architecture principles seeded" in result.reason
+
+
+def test_plan_gate_check_fails_on_missing_diagram_and_ac_coverage(monkeypatch):
+    from prism_service.api import workflows as workflows_api
+
+    class _EmptyMemory:
+        def list_entries(self, domain):
+            return []
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(memory_svc=_EmptyMemory()))
+
+    result = workflows_api.workflow_step_plan_gate_check(
+        workflows_api.PlanGateCheckRequest(plan_doc="", plan_diagram="", task_id="t1"),
+        project="prism",
+    )
+    assert result.ok is False
+    assert "plan_diagram is missing" in result.reason
+
+
+def test_plan_gate_check_reads_memory_svc_from_the_named_project(monkeypatch):
+    """Confirms get_project(project).memory_svc is what's actually wired
+    in -- not a hardcoded or global lookup."""
+    from prism_service.api import workflows as workflows_api
+
+    seen_projects = []
+
+    class _EmptyMemory:
+        def list_entries(self, domain):
+            return []
+
+    def _get_project(p):
+        seen_projects.append(p)
+        return types.SimpleNamespace(memory_svc=_EmptyMemory())
+
+    monkeypatch.setattr(workflows_api, "get_project", _get_project)
+
+    workflows_api.workflow_step_plan_gate_check(
+        workflows_api.PlanGateCheckRequest(plan_doc="x", plan_diagram="x", task_id="t1"),
+        project="talentsync",
+    )
+    assert seen_projects == ["talentsync"]
+
+
+def test_plan_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_path, monkeypatch):
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=_Svc([])))
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+
+    def _fake_conductor_behaviors(project):
+        return [
+            {"id": "land", "name": "Land a task branch", "steps": [], "bots": [], "occupancy": {}},
+            {"id": "story-gate-check", "name": "Check story completeness", "steps": [], "bots": [], "occupancy": {}},
+            {"id": "plan-gate-check", "name": "Check plan coverage", "steps": [], "bots": [], "occupancy": {}},
+        ]
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows", _fake_conductor_behaviors)
+
+    body = workflows_api.get_workflows("prism")
+
+    plan_gate_step = next(s for s in body["steps"] if s["id"] == "plan_gate")
+    assert plan_gate_step["linked_workflow_id"] == "plan-gate-check"
+
+    by_id = {w["id"]: w for w in body["workflows"]}
+    assert by_id["plan-gate-check"].get("parent_id") == "conductor"
+    assert "parent_id" not in by_id["land"]

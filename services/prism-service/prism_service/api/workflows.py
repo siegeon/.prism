@@ -588,6 +588,7 @@ def get_workflows(project: str = Query("default")) -> dict:
             "linked_workflow_id": (
                 "validation" if step["id"] == "verify_green_state"
                 else "story-gate-check" if step["id"] == "story_gate"
+                else "plan-gate-check" if step["id"] == "plan_gate"
                 else None
             ),
         })
@@ -618,7 +619,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     # (linked_workflow_id above); land/ci-local-dev stay unparented since
     # no state calls them yet.
     for entry in conductor_behaviors:
-        if entry["id"] == "story-gate-check":
+        if entry["id"] in ("story-gate-check", "plan-gate-check"):
             entry["parent_id"] = "conductor"
 
     catalog = [conductor, validation, *conductor_behaviors]
@@ -769,6 +770,53 @@ def workflow_step_story_gate_check(
         evidence = {"story_md": body.story_doc}
         result = gov.score_story_complete(evidence, rubric)
         return StoryGateCheckResponse(
+            ok=result.get("ok", False),
+            reason=result.get("reason", ""),
+        )
+
+
+class PlanGateCheckRequest(BaseModel):
+    plan_doc: str
+    plan_diagram: str = ""
+    task_id: str = ""
+
+
+class PlanGateCheckResponse(BaseModel):
+    ok: bool
+    reason: str
+
+
+@router.post("/steps/plan-gate-check")
+def workflow_step_plan_gate_check(
+    body: PlanGateCheckRequest, project: str = Query(...),
+) -> PlanGateCheckResponse:
+    """Read-only, same shape and same non-authoritative status as
+    /steps/story-gate-check above -- wraps the EXISTING plan_coverage
+    rubric scorer (conductor_service.py's _verify_rubric_gate is the real
+    caller; this route mirrors its evidence/principles construction
+    exactly, but only reads, never writes). PRISM's own plan_gate still
+    autoclears via conductor_flow.py's _AUTOCLEAR_GATES, untouched."""
+    with _tracer.start_as_current_span("workflow.step.plan_gate_check") as span:
+        span.set_attribute("workflow.step.id", "plan-gate-check")
+        span.set_attribute("workflow.project", project)
+        if body.task_id:
+            span.set_attribute("workflow.task.id", body.task_id)
+        from prism_service.services import arc_governance as gov
+        rubric = gov.load_rubrics().get("plan_coverage") or {}
+        # Mirrors conductor_service.py's _verify_rubric_gate exactly: by
+        # plan_gate time task.plan_doc holds the consolidated story+plan
+        # document, so the SAME value is passed as both story_md (for the
+        # AC-id coverage diff) and plan_doc -- not an oversight, the real
+        # caller does this too.
+        evidence = {
+            "story_md": body.plan_doc,
+            "plan_doc": body.plan_doc,
+            "plan_diagram": body.plan_diagram,
+        }
+        ctx = get_project(project)
+        principles = gov.load_principles(ctx.memory_svc) if ctx.memory_svc is not None else []
+        result = gov.score_plan_coverage(evidence, rubric, principles)
+        return PlanGateCheckResponse(
             ok=result.get("ok", False),
             reason=result.get("reason", ""),
         )
