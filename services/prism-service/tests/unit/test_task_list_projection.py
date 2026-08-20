@@ -181,6 +181,14 @@ def test_version_explicit_opt_in_still_returns_full_notes():
     assert len(body["notes"]) > 1000, "the real changelog is long; a stub would fail this"
 
 
+def test_version_exposes_the_current_web_bundle_identity():
+    from prism_service.api import version as version_api
+
+    body = version_api.version(notes=False)
+    assert body["web_build"]
+    assert isinstance(body["web_build"], str)
+
+
 # ---------------------------------------------------------------------------
 # Frontend source contracts (AC-5, AC-6, AC-8) — no JS test runner, so the
 # ACTUAL TSX source is asserted, matching test_work_search_filter_ui.py's

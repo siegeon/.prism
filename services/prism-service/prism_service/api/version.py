@@ -1,12 +1,24 @@
 """Version API — single source of truth for the SPA's footer + Settings."""
 
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, Query
 
 from prism_service.__version__ import PRISM_VERSION, PRISM_VERSION_NOTES
 
 router = APIRouter()
+
+_WEB_INDEX = Path(__file__).resolve().parents[1] / "web_dist" / "index.html"
+
+
+def _web_build() -> str:
+    """Cheap dev-bundle identity; changes whenever Vite replaces index.html."""
+    try:
+        stat = _WEB_INDEX.stat()
+        return f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+    except OSError:
+        return "missing"
 
 
 def _dev_mode() -> bool:
@@ -32,4 +44,5 @@ def version(notes: bool = Query(
         "version": PRISM_VERSION,
         "notes": PRISM_VERSION_NOTES if notes else "",
         "dev_mode": _dev_mode(),
+        "web_build": _web_build(),
     }

@@ -13,10 +13,15 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.11.38"
+PRISM_VERSION = "7.11.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.11.39: ASPIRE-MANAGED PRISM WEB HOT RELOAD. The AppHost now owns a "
+    "continuous Vite production-bundle watcher, /api/version exposes the "
+    "emitted index fingerprint, and dev-mode browser tabs reload when that "
+    "fingerprint changes. Workflow navigation also uses the shared sidebar "
+    "menu grammar on a full-bleed graph surface. "
     "7.11.33: ONE SHARED SSE STREAM PER BROWSER [task b835f639]. The Live tab "
     "could hang for tens of seconds on a fresh click while the server answered "
     "in single-digit ms: PRISM was starving its own browser connection pool. "

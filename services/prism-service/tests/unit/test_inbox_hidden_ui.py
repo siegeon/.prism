@@ -145,9 +145,9 @@ def test_inbox_page_lazy_import_still_exists():
     source, untouched by the route guard."""
     src = _app()
     assert re.search(
-        r'const\s+InboxPage\s*=\s*lazy\(\(\)\s*=>\s*import\("@/pages/InboxPage"\)\);',
+        r'const\s+InboxPage\s*=\s*lazyRoute\("inbox",\s*\(\)\s*=>\s*import\("@/pages/InboxPage"\)\);',
         src,
-    ), "InboxPage's lazy import must remain in App.tsx"
+    ), "InboxPage's recoverable lazy import must remain in App.tsx"
 
 
 def test_app_imports_inbox_enabled_from_sidebar():

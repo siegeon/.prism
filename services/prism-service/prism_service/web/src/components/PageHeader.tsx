@@ -40,6 +40,7 @@ function IdentityChip() {
 export default function PageHeader() {
   const { pathname } = useLocation();
   const title = sectionTitleFor(pathname);
+  const [connection, setConnection] = useState({ interrupted: false, attempt: 0 });
   const [project, setProject] = useProject();
   const [projects, setProjects] = useState<string[]>([]);
   // Gated on projects.length > 0 with projects=[] , the selector rendered
@@ -58,11 +59,28 @@ export default function PageHeader() {
   // picker doesn't lag a page reload behind.
   useProjectsListChange(loadProjects);
 
+  useEffect(() => {
+    const onConnection = (event: Event) => {
+      const detail = (event as CustomEvent<{ scope?: string; interrupted?: boolean; attempt?: number }>).detail;
+      if (detail?.scope !== "workflows" || pathname !== "/workflows") return;
+      setConnection({ interrupted: Boolean(detail.interrupted), attempt: detail.attempt ?? 0 });
+    };
+    window.addEventListener("prism:connection-state", onConnection);
+    if (pathname !== "/workflows") setConnection({ interrupted: false, attempt: 0 });
+    return () => window.removeEventListener("prism:connection-state", onConnection);
+  }, [pathname]);
+
   return (
-    <header className="h-[80px] shrink-0 flex items-center justify-between px-8 border-b border-[color:var(--midground-base)]/10">
-      <h1 className="text-[20px] font-[650] leading-tight tracking-[-0.01em] text-[color:var(--text-primary)]">
-        {title}
-      </h1>
+    <header role={connection.interrupted ? "status" : undefined} aria-live={connection.interrupted ? "polite" : undefined} className={`h-[80px] shrink-0 flex items-center justify-between px-8 border-b transition-colors ${connection.interrupted ? "border-amber-400/70 bg-amber-400/10" : "border-[color:var(--midground-base)]/10"}`}>
+      <div className="flex items-center gap-3">
+        {connection.interrupted && <span className="relative flex h-3 w-3" aria-hidden="true"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-40" /><span className="relative inline-flex h-3 w-3 rounded-full bg-amber-400" /></span>}
+        <div>
+          <h1 className={`text-[20px] font-[650] leading-tight tracking-[-0.01em] ${connection.interrupted ? "text-amber-300" : "text-[color:var(--text-primary)]"}`}>
+            {connection.interrupted ? "Connection interrupted" : title}
+          </h1>
+          {connection.interrupted && <div className="mt-1 text-2xs uppercase tracking-wider text-amber-200/70">Workflows · reconnecting automatically · attempt {connection.attempt}</div>}
+        </div>
+      </div>
       <div className="flex items-center gap-4">
         <IdentityChip />
         {!projectsLoaded ? (

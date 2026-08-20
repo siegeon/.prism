@@ -285,3 +285,21 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+.workflow-script-error-glyph {
+  position: relative;
+  cursor: pointer;
+}
+
+.workflow-script-error-glyph::before {
+  content: "!";
+  position: absolute;
+  inset: 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font: 700 11px/1 ui-monospace, monospace;
+  box-shadow: 0 0 0 1px #fecaca;
+}

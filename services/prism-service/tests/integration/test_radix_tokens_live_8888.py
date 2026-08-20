@@ -11,10 +11,11 @@ is mandated always-on (feedback-dev-must-stay-current).
 """
 from __future__ import annotations
 
+import os
 import re
 import urllib.request
 
-_BASE = "http://127.0.0.1:8888"
+_BASE = os.environ.get("PRISM_LIVE_BASE", "http://127.0.0.1:7778").rstrip("/")
 
 
 def _get(path: str) -> str:
@@ -25,7 +26,7 @@ def _get(path: str) -> str:
 def _served_css() -> str:
     html = _get("/")
     hrefs = re.findall(r'href="([^"]+\.css)"', html)
-    assert hrefs, "SPA index.html served no CSS bundle at :8888"
+    assert hrefs, f"SPA index.html served no CSS bundle at {_BASE}"
     return "\n".join(
         _get(h if h.startswith("/") else "/" + h) for h in hrefs)
 
@@ -35,13 +36,13 @@ def test_live_css_carries_dual_theme_switching():
     assert "--accent-amber-fg" in css, \
         "served CSS lost the accent token family entirely"
     assert re.search(r"data-theme|prefers-color-scheme", css), (
-        "the CSS served at :8888 has no theme switching — the light-theme "
+        f"the CSS served at {_BASE} has no theme switching — the light-theme "
         "radix tokens were never built + bounced onto the live daemon"
     )
 
 
 def test_live_css_carries_et_categorical_ramp():
     assert "--et-" in _served_css(), (
-        "the CSS served at :8888 carries no --et-* categorical ramp — the "
+        f"the CSS served at {_BASE} carries no --et-* categorical ramp — the "
         "entity-type palette never reached the live build"
     )

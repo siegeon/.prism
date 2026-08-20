@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@nous-research/ui": "^0.16.0",
     "@observablehq/plot": "^0.6.17",
     "@radix-ui/colors": "^3.0.0",
@@ -26,6 +27,7 @@
     "leva": "^0.10.1",
     "lucide-react": "^0.577.0",
     "mermaid": "^11.16.0",
+    "monaco-editor": "^0.56.0",
     "motion": "^12.42.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

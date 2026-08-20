@@ -41,8 +41,30 @@ window.addEventListener("vite:preloadError", (e) => {
   recoverFromStaleChunk("Loading chunk failed (vite:preloadError)");
 });
 
-createRoot(document.getElementById("root")!).render(
+const rootElement = document.getElementById("root")!;
+createRoot(rootElement).render(
   <BrowserRouter>
     <App />
   </BrowserRouter>,
 );
+
+// BOOT WATCHDOG: the shell renders synchronously. If the root is still empty,
+// this browser generation is invalid (usually an open tab spanning a watched
+// bundle replacement). Reload once; a repeated empty boot renders an explicit
+// recovery surface instead of an unexplained white page or reload loop.
+window.setTimeout(() => {
+  if (rootElement.childElementCount > 0) {
+    sessionStorage.removeItem("prism:empty-root-reload");
+    return;
+  }
+  const key = "prism:empty-root-reload";
+  const attempted = sessionStorage.getItem(key) === "1";
+  if (!attempted) {
+    sessionStorage.setItem(key, "1");
+    window.location.reload();
+    return;
+  }
+  document.documentElement.className = "dark dark-theme";
+  document.documentElement.dataset.theme = "dark";
+  rootElement.innerHTML = '<main style="min-height:100vh;background:#0d0f12;color:#f3f4f6;display:grid;place-items:center;font:14px system-ui"><section style="border:1px solid #f59e0b;padding:24px;max-width:460px"><h1 style="margin:0 0 8px;font-size:20px">Application interrupted</h1><p style="margin:0;color:#aeb4bf">The client could not load a consistent bundle. Refresh after the current build completes.</p><button onclick="sessionStorage.removeItem(\'prism:empty-root-reload\');location.reload()" style="margin-top:18px;padding:8px 12px;background:#f59e0b;border:0;color:#111827;cursor:pointer">Retry now</button></section></main>';
+}, 4_000);

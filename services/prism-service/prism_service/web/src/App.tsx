@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense } from "react";
+import { useEffect, useState, lazy, Suspense, type ComponentType } from "react";
 import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { AnimatePresence } from "motion/react";
 import { resolveInitialProject } from "@/lib/project";
@@ -19,23 +19,46 @@ import { Skeleton } from "@/components/ui";
 // load is just the shell + the landing dashboard. DashboardPage stays eager
 // because it's the default route — lazy-loading it would only add a flash.
 import DashboardPage from "@/pages/DashboardPage";
-const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
-const InboxPage = lazy(() => import("@/pages/InboxPage"));
-const TasksPage = lazy(() => import("@/pages/TasksPage"));
-const CompletedTasksPage = lazy(() => import("@/pages/CompletedTasksPage"));
-const TaskDetailPage = lazy(() => import("@/pages/TaskDetailPage"));
-const TaskTextPage = lazy(() => import("@/pages/TaskTextPage"));
-const ConductorPage = lazy(() => import("@/pages/ConductorPage"));
-const LivePage = lazy(() => import("@/pages/LivePage"));
-const WorkflowsPage = lazy(() => import("@/pages/WorkflowsPage"));
-const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
-const SessionDetailPage = lazy(() => import("@/pages/SessionDetailPage"));
-const RetrievalsPage = lazy(() => import("@/pages/RetrievalsPage"));
-const LearningPage = lazy(() => import("@/pages/LearningPage"));
-const ConsolidationPage = lazy(() => import("@/pages/ConsolidationPage"));
-const UnderstandPage = lazy(() => import("@/pages/UnderstandPage"));
-const ArtifactPage = lazy(() => import("@/pages/ArtifactPage"));
-const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
+
+/** A watched production build replaces hashed route chunks. An already-open
+ * tab may request yesterday's hash before the version poll can reload it;
+ * recover once instead of leaving the root Suspense boundary permanently
+ * blank. A second failure is real and is rethrown for diagnostics. */
+function lazyRoute<T extends { default: ComponentType }>(key: string, loader: () => Promise<T>) {
+  return lazy(async () => {
+    const reloadKey = `prism.chunk-reload.${key}`;
+    try {
+      const module = await loader();
+      sessionStorage.removeItem(reloadKey);
+      return module;
+    } catch (error) {
+      if (!sessionStorage.getItem(reloadKey)) {
+        sessionStorage.setItem(reloadKey, "1");
+        window.location.reload();
+        return new Promise<T>(() => { /* navigation continues after reload */ });
+      }
+      throw error;
+    }
+  });
+}
+
+const ExplorePage = lazyRoute("explore", () => import("@/pages/ExplorePage"));
+const InboxPage = lazyRoute("inbox", () => import("@/pages/InboxPage"));
+const TasksPage = lazyRoute("tasks", () => import("@/pages/TasksPage"));
+const CompletedTasksPage = lazyRoute("completed", () => import("@/pages/CompletedTasksPage"));
+const TaskDetailPage = lazyRoute("task-detail", () => import("@/pages/TaskDetailPage"));
+const TaskTextPage = lazyRoute("task-text", () => import("@/pages/TaskTextPage"));
+const ConductorPage = lazyRoute("conductor", () => import("@/pages/ConductorPage"));
+const LivePage = lazyRoute("live", () => import("@/pages/LivePage"));
+const WorkflowsPage = lazyRoute("workflows", () => import("@/pages/WorkflowsPage"));
+const SessionsPage = lazyRoute("sessions", () => import("@/pages/SessionsPage"));
+const SessionDetailPage = lazyRoute("session-detail", () => import("@/pages/SessionDetailPage"));
+const RetrievalsPage = lazyRoute("retrievals", () => import("@/pages/RetrievalsPage"));
+const LearningPage = lazyRoute("learning", () => import("@/pages/LearningPage"));
+const ConsolidationPage = lazyRoute("consolidation", () => import("@/pages/ConsolidationPage"));
+const UnderstandPage = lazyRoute("understand", () => import("@/pages/UnderstandPage"));
+const ArtifactPage = lazyRoute("artifact", () => import("@/pages/ArtifactPage"));
+const SettingsPage = lazyRoute("settings", () => import("@/pages/SettingsPage"));
 
 export default function App() {
   // Route-swap transition: AnimatePresence mode="wait" keyed on the pathname

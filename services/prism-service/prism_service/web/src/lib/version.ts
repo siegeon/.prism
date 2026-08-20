@@ -25,11 +25,32 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { subscribeStream } from "@/lib/sharedStream";
 
-export type ServiceVersion = { version: string; notes: string; dev_mode?: boolean };
+export type ServiceVersion = {
+  version: string;
+  notes: string;
+  dev_mode?: boolean;
+  web_build?: string;
+};
 
 let cached: ServiceVersion | null = null;
 let inflight: Promise<ServiceVersion> | null = null;
 let watchdogStarted = false;
+let devBundleWatchStarted = false;
+
+function startDevBundleWatch(initialBuild: string | undefined) {
+  if (devBundleWatchStarted || !initialBuild || typeof window === "undefined") return;
+  devBundleWatchStarted = true;
+  const poll = () => {
+    fetch("/api/version", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((r: ServiceVersion) => {
+        if (r.web_build && r.web_build !== initialBuild) window.location.reload();
+      })
+      .catch(() => {});
+  };
+  setInterval(poll, 2000);
+  window.addEventListener("focus", poll);
+}
 
 function startLiveWatchdog() {
   if (watchdogStarted || typeof window === "undefined") return;
@@ -81,7 +102,11 @@ export function useVersion(): ServiceVersion | null {
     if (cached) return;
     if (!inflight) {
       inflight = api.get<ServiceVersion>("/api/version")
-        .then((r) => { cached = r; return r; })
+        .then((r) => {
+          cached = r;
+          if (r.dev_mode) startDevBundleWatch(r.web_build);
+          return r;
+        })
         .finally(() => { inflight = null; });
     }
     inflight.then((r) => setV(r)).catch(() => {});

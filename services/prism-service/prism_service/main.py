@@ -35,7 +35,7 @@ apply_thread_limits()
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -48,6 +48,32 @@ from prism_service.config import (
 PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 _LOCK_FILE = DATA_DIR / ".mcp_started"
 WEB_DIST = Path(__file__).parent / "web_dist"
+_SPA_INDEX_CACHE: bytes | None = None
+
+
+def _spa_index_response() -> HTMLResponse:
+    """Serve the newest complete SPA entry point, never a build-race 500.
+
+    Vite replaces index.html while the source watcher is running. Starlette's
+    FileResponse defers its stat/open until after this handler returns, which
+    leaves a small race where the old file is gone and the new one is not yet
+    visible. Reading here makes the handoff atomic from the request's point of
+    view; a failed read falls back to the last complete document.
+    """
+    global _SPA_INDEX_CACHE
+    try:
+        latest = (WEB_DIST / "index.html").read_bytes()
+        if latest:
+            _SPA_INDEX_CACHE = latest
+    except OSError:
+        pass
+    if _SPA_INDEX_CACHE is None:
+        return HTMLResponse(
+            "Frontend is rebuilding; retry shortly.",
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
+    return HTMLResponse(_SPA_INDEX_CACHE)
 
 _log = logging.getLogger("prism")
 _logging_configured = False
@@ -756,10 +782,9 @@ if WEB_DIST.exists():
         candidate = WEB_DIST / full_path if full_path else WEB_DIST / "index.html"
         if full_path and candidate.exists() and candidate.is_file():
             return FileResponse(str(candidate))
-        return FileResponse(
-            str(WEB_DIST / "index.html"),
-            headers=_NO_CACHE_HEADERS,
-        )
+        response = _spa_index_response()
+        response.headers.update(_NO_CACHE_HEADERS)
+        return response
 else:
     @app.get("/", include_in_schema=False)
     def _no_spa():
