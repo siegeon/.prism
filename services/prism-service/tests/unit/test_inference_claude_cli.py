@@ -10,6 +10,7 @@ Mocks subprocess.run so no real `claude` CLI is invoked. Asserts:
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -152,3 +153,61 @@ def test_build_cmd_includes_required_flags():
     assert "stream-json" in cmd
     assert "--max-turns" in cmd and "3" in cmd
     assert "--plugin-dir" in cmd and "/plugin/dir" in cmd
+
+
+def test_build_cmd_adds_json_schema_flag_as_json_string():
+    cmd = claude_cli._build_cmd(
+        "draft a story", "/plugin/dir", model="haiku", max_budget_usd=0.5,
+        max_turns=4, json_schema={"type": "object", "properties": {"x": {"type": "string"}}},
+    )
+    assert "--json-schema" in cmd
+    flag_value = cmd[cmd.index("--json-schema") + 1]
+    assert json.loads(flag_value) == {"type": "object", "properties": {"x": {"type": "string"}}}
+
+
+def test_build_cmd_omits_json_schema_flag_when_not_given():
+    cmd = claude_cli._build_cmd(
+        "hi", "/plugin/dir", model="", max_budget_usd=0.0, max_turns=1,
+    )
+    assert "--json-schema" not in cmd
+
+
+def test_invoke_populates_structured_output_from_the_result_event(tmp_path):
+    """Verified live (2026-08-20): --json-schema + --output-format json
+    returns an already-parsed "structured_output" dict on the type=="result"
+    event -- this proves invoke() surfaces it without extra json.loads()
+    on the caller's part."""
+
+    def fake_run(cmd, cwd, env, stdout, **kwargs):
+        stdout.write(
+            '{"type":"result","subtype":"success","is_error":false,'
+            '"result":"{\\"story_md\\":\\"## Summary\\\\nx\\"}",'
+            '"structured_output":{"story_md":"## Summary\\nx"},'
+            '"total_cost_usd":0.05}\n'
+        )
+        stdout.flush()
+        return _completed(exit_code=0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        res = claude_cli.invoke(
+            "draft a story", tmp_path, tmp_path, max_turns=4, parse_events=True,
+            json_schema={"type": "object", "properties": {"story_md": {"type": "string"}}},
+        )
+
+    assert res.structured_output == {"story_md": "## Summary\nx"}
+
+
+def test_invoke_leaves_structured_output_none_without_a_schema(tmp_path):
+    """No json_schema passed -> never even LOOK for the field, even if a
+    result event happens to carry one (a plain call shouldn't silently
+    start returning structured data a caller didn't ask for)."""
+
+    def fake_run(cmd, cwd, env, stdout, **kwargs):
+        stdout.write('{"type":"result","subtype":"success","structured_output":{"x":1}}\n')
+        stdout.flush()
+        return _completed(exit_code=0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        res = claude_cli.invoke("hi", tmp_path, tmp_path, max_turns=1, parse_events=True)
+
+    assert res.structured_output is None

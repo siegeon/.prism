@@ -689,3 +689,138 @@ def test_plan_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_pa
     by_id = {w["id"]: w for w in body["workflows"]}
     assert by_id["plan-gate-check"].get("parent_id") == "conductor"
     assert "parent_id" not in by_id["land"]
+
+
+def test_reason_loop_chains_observe_reason_validate(tmp_path, monkeypatch):
+    """The generic loop: one endpoint, data-driven (persona/prompt/schema/
+    rubric), used the same way every conductor authoring state would use
+    it -- NOT a bespoke per-state Python function. Mocks claude_cli.invoke
+    so no real API cost is spent on every test run; the orchestration
+    wiring is what's under test here, not the model."""
+    from prism_service.api import workflows as workflows_api
+    from prism_service.inference import claude_cli
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        brain_svc=None, memory_svc=None, task_svc=None, workflow_svc=None, governance=None))
+
+    class _FakeContextBuilder:
+        def __init__(self, **kw):
+            pass
+        def build(self, persona, story_file):
+            return {"conventions": ["use uv, not pip"], "role_card": {"id": persona}}
+
+    monkeypatch.setattr(workflows_api, "ContextBuilder", _FakeContextBuilder)
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+
+    compliant_story = (
+        "## Summary\nx\n\n## Requirements\nx\n\n## Acceptance Criteria\n"
+        "- AC-1: x — oracle: check log\n"
+    )
+
+    def _fake_invoke(prompt, *, work_dir, plugin_dir, model, max_budget_usd,
+                     max_turns, project, purpose, json_schema, **kw):
+        assert json_schema == {"type": "object", "properties": {"story_md": {"type": "string"}}}
+        return claude_cli.ClaudeCliResult(
+            output_path=tmp_path / "run.jsonl", exit_code=0,
+            structured_output={"story_md": compliant_story},
+            usage={"cost_usd": 0.03}, run_id="run-1",
+        )
+
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
+
+    resp = workflows_api.workflow_step_reason_loop(
+        workflows_api.ReasonLoopRequest(
+            persona="sm",
+            prompt="Draft a story.",
+            json_schema={"type": "object", "properties": {"story_md": {"type": "string"}}},
+            rubric="story_complete",
+            task_id="t1",
+        ),
+        project="prism",
+    )
+
+    assert resp.observe["ok"] is True
+    assert resp.observe["conventions_count"] == 1
+    assert resp.reason["ok"] is True
+    assert resp.reason["fields"]["story_md"] == compliant_story
+    assert resp.reason["cost_usd"] == 0.03
+    assert resp.validation["ok"] is True
+
+
+def test_reason_loop_validate_fails_when_reason_output_fails_the_rubric(tmp_path, monkeypatch):
+    from prism_service.api import workflows as workflows_api
+    from prism_service.inference import claude_cli
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        brain_svc=None, memory_svc=None, task_svc=None, workflow_svc=None, governance=None))
+
+    class _FakeContextBuilder:
+        def __init__(self, **kw):
+            pass
+        def build(self, persona, story_file):
+            return {"conventions": []}
+
+    monkeypatch.setattr(workflows_api, "ContextBuilder", _FakeContextBuilder)
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+
+    def _fake_invoke(prompt, *, work_dir, plugin_dir, model, max_budget_usd,
+                     max_turns, project, purpose, json_schema, **kw):
+        return claude_cli.ClaudeCliResult(
+            output_path=tmp_path / "run.jsonl", exit_code=0,
+            structured_output={"story_md": "## Summary\nincomplete"},
+            usage={"cost_usd": 0.02}, run_id="run-2",
+        )
+
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
+
+    resp = workflows_api.workflow_step_reason_loop(
+        workflows_api.ReasonLoopRequest(
+            persona="sm", prompt="Draft a story.",
+            json_schema={"type": "object"}, rubric="story_complete",
+        ),
+        project="prism",
+    )
+
+    assert resp.validation["ok"] is False
+    assert "story_complete" in resp.validation["reason"]
+
+
+def test_reason_loop_skips_validate_with_no_rubric(tmp_path, monkeypatch):
+    from prism_service.api import workflows as workflows_api
+    from prism_service.inference import claude_cli
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        brain_svc=None, memory_svc=None, task_svc=None, workflow_svc=None, governance=None))
+
+    class _FakeContextBuilder:
+        def __init__(self, **kw):
+            pass
+        def build(self, persona, story_file):
+            return {"conventions": []}
+
+    monkeypatch.setattr(workflows_api, "ContextBuilder", _FakeContextBuilder)
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+
+    def _fake_invoke(prompt, *, work_dir, plugin_dir, model, max_budget_usd,
+                     max_turns, project, purpose, json_schema, **kw):
+        return claude_cli.ClaudeCliResult(
+            output_path=tmp_path / "run.jsonl", exit_code=0,
+            structured_output={"x": "y"}, usage={}, run_id="run-3",
+        )
+
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
+
+    resp = workflows_api.workflow_step_reason_loop(
+        workflows_api.ReasonLoopRequest(
+            persona="sm", prompt="Draft a story.", json_schema={"type": "object"},
+        ),
+        project="prism",
+    )
+
+    assert resp.validation == {"ok": None, "reason": "no rubric specified -- Validate skipped"}

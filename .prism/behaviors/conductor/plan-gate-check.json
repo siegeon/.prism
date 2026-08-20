@@ -8,7 +8,7 @@
     {
       "id": "evaluate",
       "kind": "http-callback",
-      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check?project=${project}",
       "body": "{\"plan_doc\": ${planDoc}, \"plan_diagram\": ${planDiagram}, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 30
     }

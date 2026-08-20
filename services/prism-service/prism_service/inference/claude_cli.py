@@ -56,6 +56,7 @@ class ClaudeCliResult:
     usage: dict = field(default_factory=dict)
     run_id: str = ""
     duration_s: float = 0.0
+    structured_output: dict | None = None
 
     def final_text(self) -> str:
         """Pull the last assistant text block out of the stream events.
@@ -80,6 +81,7 @@ def _build_cmd(
     max_budget_usd: float,
     max_turns: int,
     allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS,
+    json_schema: dict | None = None,
 ) -> list[str]:
     """Build the `claude -p` invocation.
 
@@ -111,6 +113,15 @@ def _build_cmd(
         cmd += ["--model", model]
     if max_budget_usd > 0:
         cmd += ["--max-budget-usd", str(max_budget_usd)]
+    if json_schema is not None:
+        # Verified live (2026-08-20): --json-schema + --output-format
+        # json/stream-json returns a "structured_output" field, already
+        # parsed, on the single type=="result" event -- no manual
+        # json.loads(result["result"]) needed. Also verified: schema-
+        # constrained output costs at least one retry turn beyond a plain
+        # call (num_turns==2 failed against max_turns=1 in testing) --
+        # callers passing json_schema should budget max_turns >= 3.
+        cmd += ["--json-schema", json.dumps(json_schema)]
     return cmd
 
 
@@ -187,6 +198,18 @@ def _usage_from_result(parsed: list[dict]) -> dict:
     return usage
 
 
+def _structured_output_from_result(parsed: list[dict]) -> dict | None:
+    """The schema-constrained payload off the same type=="result" event
+    _usage_from_result reads -- already parsed by the CLI, never a raw
+    string needing json.loads() here. None when the call wasn't made with
+    json_schema, or the run never reached a result event."""
+    result = next((e for e in reversed(parsed) if e.get("type") == "result"), None)
+    if result is None:
+        return None
+    out = result.get("structured_output")
+    return out if isinstance(out, dict) else None
+
+
 def _parse_jsonl(out_path: Path) -> tuple[list[dict], dict]:
     parsed: list[dict] = []
     try:
@@ -216,6 +239,7 @@ def invoke(
     project: str = "",
     purpose: str = "",
     allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS,
+    json_schema: dict | None = None,
 ) -> ClaudeCliResult:
     """Run `claude -p` headless and capture stream-json output.
 
@@ -245,7 +269,7 @@ def invoke(
 
     cmd = _build_cmd(
         prompt, plugin_dir, model, max_budget_usd, max_turns,
-        allowed_tools=allowed_tools,
+        allowed_tools=allowed_tools, json_schema=json_schema,
     )
     env = _strip_env()
 
@@ -292,6 +316,10 @@ def invoke(
         output_path=out_path, exit_code=result.returncode,
         parsed_events=parsed_events, usage=usage,
         run_id=run_id, duration_s=(ts_end - ts_start),
+        structured_output=(
+            _structured_output_from_result(parsed_events)
+            if json_schema is not None else None
+        ),
     )
 
 

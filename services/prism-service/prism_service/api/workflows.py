@@ -589,6 +589,7 @@ def get_workflows(project: str = Query("default")) -> dict:
                 "validation" if step["id"] == "verify_green_state"
                 else "story-gate-check" if step["id"] == "story_gate"
                 else "plan-gate-check" if step["id"] == "plan_gate"
+                else "draft-story-loop" if step["id"] == "draft_story"
                 else None
             ),
         })
@@ -619,7 +620,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     # (linked_workflow_id above); land/ci-local-dev stay unparented since
     # no state calls them yet.
     for entry in conductor_behaviors:
-        if entry["id"] in ("story-gate-check", "plan-gate-check"):
+        if entry["id"] in ("story-gate-check", "plan-gate-check", "draft-story-loop"):
             entry["parent_id"] = "conductor"
 
     catalog = [conductor, validation, *conductor_behaviors]
@@ -820,3 +821,114 @@ def workflow_step_plan_gate_check(
             ok=result.get("ok", False),
             reason=result.get("reason", ""),
         )
+
+
+def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
+    """Dispatch to the right existing PURE scorer by rubric name, mapping
+    the Reason stage's structured_output fields onto each scorer's own
+    evidence shape. One place that knows "which scorer, which fields" so
+    /steps/reason-loop stays generic instead of growing an if/elif per
+    conductor state."""
+    from prism_service.services import arc_governance as gov
+
+    rubric = gov.load_rubrics().get(rubric_name) or {}
+    if rubric_name == "story_complete":
+        return gov.score_story_complete({"story_md": fields.get("story_md", "")}, rubric)
+    if rubric_name == "premise_grounded":
+        return gov.score_premise_grounded({"notes_md": fields.get("notes_md", "")}, rubric)
+    if rubric_name == "plan_coverage":
+        ctx = get_project(project)
+        principles = gov.load_principles(ctx.memory_svc) if ctx.memory_svc is not None else []
+        evidence = {
+            "story_md": fields.get("story_md", ""),
+            "plan_doc": fields.get("plan_doc", ""),
+            "plan_diagram": fields.get("plan_diagram", ""),
+        }
+        return gov.score_plan_coverage(evidence, rubric, principles)
+    return {"ok": False, "reason": f"unknown rubric: {rubric_name!r}"}
+
+
+class ReasonLoopRequest(BaseModel):
+    persona: str = "sm"
+    prompt: str = Field(min_length=1)
+    json_schema: dict
+    rubric: str = ""
+    model: str = "haiku"
+    max_budget_usd: float = 0.5
+    max_turns: int = 4
+    task_id: str = ""
+
+
+class ReasonLoopResponse(BaseModel):
+    observe: dict
+    reason: dict
+    validation: dict
+
+
+@router.post("/steps/reason-loop")
+def workflow_step_reason_loop(
+    body: ReasonLoopRequest, project: str = Query(...),
+) -> ReasonLoopResponse:
+    """GENERIC Observe -> Reason -> Validate loop -- every conductor
+    authoring state (draft_story, verify_plan, write_failing_tests,
+    implement_tasks, review_previous_notes) reuses THIS ONE endpoint via
+    its own behavior JSON (persona/prompt/json_schema/rubric as data),
+    instead of a bespoke Python function duplicated per state. Matches
+    owner direction: the loop stages are generic and implicit; only Act
+    (a real, typed side-effect) is genuinely custom code per behavior.
+
+    Act is deliberately NOT here -- this is strictly Observe+Reason+
+    Validate, inert, no writes to any real task, no gate decided for
+    real. Authorize+Act require explicit owner sign-off before any real
+    state gets wired to this (agreed: inert proof only, this round)."""
+    with _tracer.start_as_current_span("workflow.loop.reason") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.loop.persona", body.persona)
+        span.set_attribute("workflow.loop.rubric", body.rubric)
+        if body.task_id:
+            span.set_attribute("workflow.task.id", body.task_id)
+
+        # --- Observe: same ContextBuilder call /steps/context-enrich uses ---
+        ctx = get_project(project)
+        bundle = ContextBuilder(
+            project_id=project, brain_svc=ctx.brain_svc, memory_svc=ctx.memory_svc,
+            task_svc=ctx.task_svc, workflow_svc=ctx.workflow_svc, governance=ctx.governance,
+            request_id=f"reason-loop:{body.task_id or 'adhoc'}",
+        ).build(persona=body.persona, story_file=None)
+        observe = {
+            "ok": True,
+            "conventions_count": len(bundle.get("conventions") or []),
+            "has_role_card": bool(bundle.get("role_card")),
+        }
+
+        # --- Reason: schema-constrained claude -p, isolated from task_runner ---
+        from pathlib import Path
+        from prism_service.services.claude_transcripts import _project_source_path
+        from prism_service.inference import claude_cli
+
+        configured = Path(_project_source_path(project))
+        fallback = Path.home() / "projects" / project
+        root = configured if configured.is_absolute() and configured.exists() else fallback
+        full_prompt = f"{body.prompt}\n\nProject conventions:\n{bundle.get('conventions')}"
+        result = claude_cli.invoke(
+            full_prompt, work_dir=root, plugin_dir=root,
+            model=body.model, max_budget_usd=body.max_budget_usd, max_turns=body.max_turns,
+            project=project, purpose="reason-loop",
+            json_schema=body.json_schema,
+        )
+        fields = result.structured_output or {}
+        reason = {
+            "ok": bool(fields),
+            "fields": fields,
+            "cost_usd": result.usage.get("cost_usd", 0.0),
+            "run_id": result.run_id,
+        }
+
+        # --- Validate: reuse the SAME pure rubric scorers story/plan-gate-check wrap ---
+        if body.rubric:
+            verdict = _score_rubric(body.rubric, fields, project)
+            validation = {"ok": verdict.get("ok", False), "reason": verdict.get("reason", "")}
+        else:
+            validation = {"ok": None, "reason": "no rubric specified -- Validate skipped"}
+
+        return ReasonLoopResponse(observe=observe, reason=reason, validation=validation)
