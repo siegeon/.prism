@@ -1,0 +1,16 @@
+{
+  "id": "story-gate-check",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Check story completeness",
+  "version": 1,
+  "steps": [
+    {
+      "id": "evaluate",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/story-gate-check",
+      "body": "{\"story_doc\": ${storyDoc}, \"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    }
+  ]
+}

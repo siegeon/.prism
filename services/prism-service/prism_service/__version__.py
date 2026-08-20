@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.12.16"
+PRISM_VERSION = "7.12.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.17: story_gate is the SECOND conductor state with a real linked behavior (verify_green_state->validation was the first). New POST /api/workflows/steps/story-gate-check wraps the existing, unmodified arc_governance.score_story_complete rubric scorer behind a typed contract -- read-only, does not touch conductor_flow.py's real story_gate autoclear logic. New AosWorkflows behavior 'story-gate-check' (http-callback kind), registered under the conductor bot. Implemented via a cheap Haiku subagent whose worktree had branched from a stale point missing this session's work -- verified its logic against the real, unchanged arc_governance.py, then manually ported only the new pieces onto the current dev branch rather than trusting its full diff. "
     "7.12.16: Un-nested land/ci-local-dev from conductor -- the conductor IS its 10-state FSM (WORKFLOW_STEPS), and progressive disclosure under it should only show what an actual state calls (verify_green_state -> validation, via linked_workflow_id, which is why 'Build and test' correctly stays nested). No conductor state calls land or ci-local-dev today, so nesting them there claimed a link that doesn't exist. They render as top-level entries now; owner decision, not mine, whether/which conductor state should eventually link to them. "
     "7.12.15: Reduced directory row left padding from px-5 (20px) to pl-2 (8px) on both the parent row's disclosure chevron and the child rows' drag handle, per owner ask for icons within 10px of the panel edge. Measured live with Playwright: icon left edge now sits ~10px from the panel's content edge. "
     "7.12.14: Actually fixed the icon alignment this time -- pl-11 was force-indenting child rows an extra ~24px past the parent row's own icon column instead of sharing it. Child rows now use the same px-5/w-4/shrink-0/text-center icon column as the parent's disclosure chevron, so drag handles sit in one consistent left-aligned column across parent and child rows, not a deeper nested indent. Verified with Playwright against the live page, not just reasoned about from source. "

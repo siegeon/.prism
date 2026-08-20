@@ -530,3 +530,67 @@ def test_provided_child_behavior_versions_parent_and_preserves_sibling(tmp_path,
         workflows_api.provide_workflow_behavior(
             "prism", "validation/test", 2, {"timeoutSeconds": 40})
     assert getattr(stale.value, "status_code", None) == 409
+
+
+def test_story_gate_check_wraps_the_real_rubric_scorer_compliant():
+    """Read-only: a compliant story returns ok=True from the SAME pure
+    scorer story_gate would eventually use -- not a reimplementation."""
+    from prism_service.api import workflows as workflows_api
+
+    story = (
+        "## Summary\nDoes a thing.\n\n"
+        "## Requirements\nMust do the thing.\n\n"
+        "## Acceptance Criteria\n"
+        "- AC-1: the thing happens — oracle: check the log\n"
+    )
+    result = workflows_api.workflow_step_story_gate_check(
+        workflows_api.StoryGateCheckRequest(story_doc=story, task_id="t1"),
+        project="prism",
+    )
+    assert result.ok is True
+
+
+def test_story_gate_check_wraps_the_real_rubric_scorer_noncompliant():
+    """A story missing a required section or an AC oracle must come back
+    ok=False with a real reason, not silently pass."""
+    from prism_service.api import workflows as workflows_api
+
+    story = "## Summary\nDoes a thing.\n"
+    result = workflows_api.workflow_step_story_gate_check(
+        workflows_api.StoryGateCheckRequest(story_doc=story, task_id="t1"),
+        project="prism",
+    )
+    assert result.ok is False
+    assert "story_complete" in result.reason
+
+
+def test_story_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_path, monkeypatch):
+    """story_gate must carry linked_workflow_id -> "story-gate-check", and
+    that catalog entry must nest under conductor (parent_id) -- the SAME
+    rule just established: only a behavior an actual state calls belongs
+    in conductor's view. land/ci-local-dev, which no state calls, must NOT
+    pick up a parent_id as a side effect of this change."""
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=_Svc([])))
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+
+    def _fake_conductor_behaviors(project):
+        return [
+            {"id": "land", "name": "Land a task branch", "steps": [], "bots": [], "occupancy": {}},
+            {"id": "ci-local-dev", "name": "CI to local dev", "steps": [], "bots": [], "occupancy": {}},
+            {"id": "story-gate-check", "name": "Check story completeness", "steps": [], "bots": [], "occupancy": {}},
+        ]
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows", _fake_conductor_behaviors)
+
+    body = workflows_api.get_workflows("prism")
+
+    story_gate_step = next(s for s in body["steps"] if s["id"] == "story_gate")
+    assert story_gate_step["linked_workflow_id"] == "story-gate-check"
+
+    by_id = {w["id"]: w for w in body["workflows"]}
+    assert by_id["story-gate-check"].get("parent_id") == "conductor"
+    assert "parent_id" not in by_id["land"]
+    assert "parent_id" not in by_id["ci-local-dev"]

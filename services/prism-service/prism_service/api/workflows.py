@@ -586,7 +586,9 @@ def get_workflows(project: str = Query("default")) -> dict:
             "output": STEP_ACTIONS[step["id"]][2],
             "execution": "connected",
             "linked_workflow_id": (
-                "validation" if step["id"] == "verify_green_state" else None
+                "validation" if step["id"] == "verify_green_state"
+                else "story-gate-check" if step["id"] == "story_gate"
+                else None
             ),
         })
 
@@ -611,6 +613,13 @@ def get_workflows(project: str = Query("default")) -> dict:
     # simply predates the Bot/Behavior registry and is sourced differently.
     validation["parent_id"] = "conductor"
     conductor_behaviors = _conductor_behavior_workflows(project)
+    # Same rule as validation above: nest only the behavior(s) an actual
+    # conductor state links to. story_gate now links to "story-gate-check"
+    # (linked_workflow_id above); land/ci-local-dev stay unparented since
+    # no state calls them yet.
+    for entry in conductor_behaviors:
+        if entry["id"] == "story-gate-check":
+            entry["parent_id"] = "conductor"
 
     catalog = [conductor, validation, *conductor_behaviors]
 
@@ -725,4 +734,41 @@ def workflow_step_context_enrich(
             conventions=bundle.get("conventions") or [],
             active_tasks=bundle.get("active_tasks") or {},
             workflow_state=bundle.get("workflow_state") or {},
+        )
+
+
+class StoryGateCheckRequest(BaseModel):
+    story_doc: str
+    task_id: str = ""
+
+
+class StoryGateCheckResponse(BaseModel):
+    ok: bool
+    reason: str
+
+
+@router.post("/steps/story-gate-check")
+def workflow_step_story_gate_check(
+    body: StoryGateCheckRequest, project: str = Query(...),
+) -> StoryGateCheckResponse:
+    """Read-only: wraps the EXISTING story_complete rubric scorer behind a
+    typed contract, same shape as /steps/context-enrich above. Does not
+    write to any task, does not decide story_gate for real -- PRISM's own
+    story_gate still autoclears via conductor_flow.py's _AUTOCLEAR_GATES,
+    untouched. This is purely an observational capability so the conductor
+    directory can show a real, callable behavior for story_gate instead of
+    nothing -- cutting it over to actually decide the gate is separate,
+    later work (owner call, not implied here)."""
+    with _tracer.start_as_current_span("workflow.step.story_gate_check") as span:
+        span.set_attribute("workflow.step.id", "story-gate-check")
+        span.set_attribute("workflow.project", project)
+        if body.task_id:
+            span.set_attribute("workflow.task.id", body.task_id)
+        from prism_service.services import arc_governance as gov
+        rubric = gov.load_rubrics().get("story_complete") or {}
+        evidence = {"story_md": body.story_doc}
+        result = gov.score_story_complete(evidence, rubric)
+        return StoryGateCheckResponse(
+            ok=result.get("ok", False),
+            reason=result.get("reason", ""),
         )

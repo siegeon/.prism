@@ -6,7 +6,8 @@
       "fsmId": "pipeline",
       "behaviorIds": [
         "land",
-        "ci-local-dev"
+        "ci-local-dev",
+        "story-gate-check"
       ]
     }
   ]
