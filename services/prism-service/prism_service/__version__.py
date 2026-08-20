@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.12.11"
+PRISM_VERSION = "7.12.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.12: Drag-to-reorder for a bot's nested directory children (drag land/build-and-test/ci-local-dev above or below each other under CONDUCTOR). Order is a client-side preference (localStorage, per project, keyed by parent id) -- same tier as node positions and wire edits, never sent to the service. Native HTML5 drag/drop on the directory list, drop position determined by cursor vs. target midpoint. "
     "7.12.11: Nested 'Build and test' (validation) under conductor too -- it's the conductor's own capability (what its verify_green_state step links to), same category as land/ci-local-dev; it just predates the Bot/Behavior registry and is sourced differently, which is not a reason to render it as a flat sibling. "
     "7.12.10: Replaced the single synthetic 'conductor-behaviors' wrapper node with one real catalog entry PER behavior (land, ci-local-dev), each nested under conductor and disclosing its OWN actual steps (land: push/open-pr; ci-local-dev: test/version-bump/restart-dev) via a new AosWorkflows GET /workflows/bots/{botId}/behaviors/{behaviorId} read endpoint -- not fake placeholder nodes standing in for the whole behavior. execution stays 'connected' (not 'scripted') since /{workflow_id}/runs isn't wired to dispatch to AosWorkflows' bot/behavior endpoint yet -- known follow-up, not silently implied. "
     "7.12.9: Directory now shows real progressive disclosure -- a catalog entry can carry parent_id (conductor-behaviors nests under conductor) instead of every entry rendering as a flat sibling. WorkflowsPage.tsx directory nav groups by parent_id with a per-entry expand/collapse chevron (conductor starts expanded); WorkflowStepType gained \"behavior\"; web_dist rebuilt and verified the new chunk actually contains the nesting code. "

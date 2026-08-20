@@ -38,6 +38,13 @@ function waypointsKey(project: string): string {
   return `prism.workflows.waypoints.${project}`;
 }
 
+/** Directory child order, keyed per project -- which order a bot's own
+ * nested FSM/Behavior entries display in. Purely a display preference
+ * (how the owner arranged their own folder), never sent to the service. */
+function childOrderKey(project: string): string {
+  return `prism.workflows.childOrder.${project}`;
+}
+
 /** Reads one saved blob, tolerating absent/corrupt/blocked storage — a bad
  * entry means "boot from the deterministic layout", never a broken page. */
 function readJson<T>(key: string, apply: (raw: T) => void): void {
@@ -239,6 +246,11 @@ export default function WorkflowsPage() {
   const [expandedDirectoryIds, setExpandedDirectoryIds] = useState<Set<string>>(
     () => new Set(["conductor"]),
   );
+  // Saved drag order of a parent's nested children, keyed by parent id.
+  // Ids not (yet) in a saved order fall back to the order the API sent.
+  const [childOrder, setChildOrder] = useState<Record<string, string[]>>({});
+  const [draggedChildId, setDraggedChildId] = useState<string | null>(null);
+  const [dragOverChildId, setDragOverChildId] = useState<{ id: string; before: boolean } | null>(null);
   const [workflowPath, setWorkflowPath] = useState<Array<{
     workflowId: string;
     stepId: string;
@@ -790,6 +802,50 @@ export default function WorkflowsPage() {
     return () => cancelAnimationFrame(raf);
   }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt]);
 
+  // Rehydrate the directory's own saved child order whenever the project
+  // changes -- a client-side arrangement preference, same tier as node
+  // positions and wire edits above.
+  useEffect(() => {
+    readJson<Record<string, string[]>>(childOrderKey(project), setChildOrder);
+  }, [project]);
+
+  /** A parent's children in the owner's saved drag order; anything not
+   * (yet) ordered keeps its place from the API response, appended after
+   * whatever IS ordered. An id from a stale saved order that no longer
+   * exists in the live catalog is simply dropped, never rendered as a gap. */
+  const orderedChildren = useCallback((parentId: string, children: WorkflowCatalogEntry[]) => {
+    const saved = childOrder[parentId];
+    if (!saved?.length) return children;
+    const byId = new Map(children.map((child) => [child.id, child]));
+    const ordered: WorkflowCatalogEntry[] = [];
+    for (const id of saved) {
+      const child = byId.get(id);
+      if (child) { ordered.push(child); byId.delete(id); }
+    }
+    // Anything unordered (new since the save, or never dragged) keeps its
+    // original relative order from the still-live `children` array.
+    for (const child of children) if (byId.has(child.id)) ordered.push(child);
+    return ordered;
+  }, [childOrder]);
+
+  const reorderChild = useCallback((
+    parentId: string, allChildren: WorkflowCatalogEntry[], draggedId: string, targetId: string, before: boolean,
+  ) => {
+    if (draggedId === targetId) return;
+    const current = orderedChildren(parentId, allChildren).map((child) => child.id);
+    const from = current.indexOf(draggedId);
+    if (from < 0) return;
+    current.splice(from, 1);
+    const to = current.indexOf(targetId);
+    if (to < 0) return;
+    current.splice(before ? to : to + 1, 0, draggedId);
+    setChildOrder((prev) => {
+      const next = { ...prev, [parentId]: current };
+      writeJson(childOrderKey(project), next);
+      return next;
+    });
+  }, [orderedChildren, project]);
+
   const persist = useCallback(() => {
     writeJson(positionsKey(project), graphRef.current.serializeOverrides());
   }, [project]);
@@ -1106,16 +1162,44 @@ export default function WorkflowsPage() {
                       <span className="flex-1">{workflow.name}</span>
                       <span className="text-2xs font-mono opacity-70">{workflow.steps.length}</span>
                     </button>
-                    {expanded && children.map((child) => {
+                    {expanded && orderedChildren(workflow.id, children).map((child) => {
                       const childSel = child.id === selectedWorkflowId;
+                      const dragOver = dragOverChildId?.id === child.id ? dragOverChildId : null;
                       return (
                         <button
                           type="button"
                           key={child.id}
+                          draggable
                           aria-current={childSel ? "page" : undefined}
+                          aria-grabbed={draggedChildId === child.id}
                           onClick={() => selectWorkflow(child)}
-                          className={`w-full flex items-center gap-3 py-2 pl-11 pr-5 text-left text-2xs uppercase tracking-wider transition-colors ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"}`}
+                          onDragStart={(ev) => {
+                            ev.dataTransfer.effectAllowed = "move";
+                            setDraggedChildId(child.id);
+                          }}
+                          onDragEnd={() => { setDraggedChildId(null); setDragOverChildId(null); }}
+                          onDragOver={(ev) => {
+                            if (!draggedChildId || draggedChildId === child.id) return;
+                            ev.preventDefault();
+                            const rect = ev.currentTarget.getBoundingClientRect();
+                            const before = ev.clientY - rect.top < rect.height / 2;
+                            setDragOverChildId((prev) =>
+                              prev?.id === child.id && prev.before === before ? prev : { id: child.id, before });
+                          }}
+                          onDragLeave={() => setDragOverChildId((prev) => (prev?.id === child.id ? null : prev))}
+                          onDrop={(ev) => {
+                            ev.preventDefault();
+                            if (draggedChildId) {
+                              reorderChild(workflow.id, children, draggedChildId,
+                                child.id, dragOverChildId?.before ?? true);
+                            }
+                            setDraggedChildId(null);
+                            setDragOverChildId(null);
+                          }}
+                          title="Drag to reorder"
+                          className={`w-full flex cursor-grab items-center gap-3 py-2 pl-11 pr-5 text-left text-2xs uppercase tracking-wider transition-colors active:cursor-grabbing ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"} ${dragOver?.before ? "border-t-2 border-[color:var(--accent-solid)]" : ""} ${dragOver && !dragOver.before ? "border-b-2 border-[color:var(--accent-solid)]" : ""} ${draggedChildId === child.id ? "opacity-40" : ""}`}
                         >
+                          <span aria-hidden="true" className="text-[color:var(--nav-text)] opacity-50">⠿</span>
                           <span className="flex-1">{child.name}</span>
                           <span className="font-mono opacity-70">{child.steps.length}</span>
                         </button>
