@@ -599,6 +599,25 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                            "the sign-off; Approve to release")}}
     except Exception:
         pass
+    # UNSHIPPED DISCLOSURE, MACHINE-GRADED LANE (task 8a06e121): the
+    # human-judgment branch above already asks _unshipped_gate_reason before
+    # every Approve click; this generic EvidenceReceipt branch (proof_type=
+    # test with a real pytest oracle) fell straight through to the oracle
+    # tooth without ever asking it, so a genuinely-passing receipt read
+    # 'ready' here while gate_decide's own green_gate pre-flight refused the
+    # very next Approve. The adjudicator owns proof_type=test, so unlike the
+    # human-judgment branch this stays a FLAT refusal — no ship_on_approve
+    # escape, PRISM_SHIP_ON_APPROVE or not (task stop_if).
+    try:
+        _ship_reason = s._unshipped_gate_reason(task)
+    except Exception:
+        _ship_reason = ""
+    if _ship_reason:
+        return {"receipt_ok": False, "receipt_refusal": _ship_reason,
+                "unshipped": True, "ship_on_approve": False,
+                "receipt": {"adapter": "human", "passed": False,
+                            "status": "not_shipped", "ended_at": "",
+                            "reason": _ship_reason}}
     refusal, receipt = s._oracle_receipt_refusal(
         task, override=False, reason="")
     out: dict = {

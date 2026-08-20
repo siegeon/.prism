@@ -127,6 +127,12 @@ type GateReadiness = {
   // machine tooth ran at all); an epic roll-up sets this too but over REAL
   // aggregated child evidence (adapter="epic-rollup"), so it is NOT this case.
   manual_review?: boolean;
+  // A passing-but-unshipped receipt (task 8a06e121): the oracle genuinely
+  // passed, but this task's own [task:<id8>] commit has not reached
+  // origin/main yet — not stale, not failed, not missing. ship_on_approve
+  // distinguishes an enabled ship-on-click card from a flat refusal.
+  unshipped?: boolean;
+  ship_on_approve?: boolean;
   receipt?: {
     adapter?: string;
     passed?: boolean;
@@ -1983,6 +1989,15 @@ export default function TaskDetailPage() {
                       <td className="py-1.5 pr-3">
                         {gateReadiness?.receipt_ok
                           ? <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-sage-fg)", boxShadow: "inset 0 0 0 1px var(--accent-sage-ring)" }}>passing</span>
+                          : gateReadiness?.unshipped
+                            // A genuinely PASSING receipt that is merely unshipped is not
+                            // stale, not failed, and not missing — re-running the oracle
+                            // mints another passing receipt and cannot fix a shipped-ness
+                            // problem (task 8a06e121), so no re-run action is offered here.
+                            ? <span className="inline-flex items-center gap-2">
+                                <span className="rounded-full px-2.5 py-0.5 font-mono text-2xs" style={{ color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }} title={gateReadiness?.receipt?.reason || ""}>passing · not shipped</span>
+                                <span className="text-2xs" style={{ color: "var(--text-muted)" }}>{gateReadiness?.ship_on_approve ? "approving will ship it" : "merge the branch to origin/main"}</span>
+                              </span>
                           : isAwaitingDesignApproval
                             // A design-packet receipt awaiting your review is not a failure and
                             // has nothing to re-run — the Approve click below IS the runner
