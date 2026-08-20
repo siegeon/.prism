@@ -224,7 +224,12 @@ def _run_tool(
         )
         return out.returncode, out.stdout or "", out.stderr or ""
     except subprocess.TimeoutExpired as e:
-        return 124, e.stdout or "", (e.stderr or "") + f"\n[verifier] timeout after {timeout_s}s"
+        # TimeoutExpired.stdout/stderr are raw bytes even when the original
+        # subprocess.run() call passed text=True -- the text-decode step only
+        # runs on the success path, never on this exception path.
+        def _dec(v: str | bytes | None) -> str:
+            return v.decode("utf-8", errors="replace") if isinstance(v, bytes) else (v or "")
+        return 124, _dec(e.stdout), _dec(e.stderr) + f"\n[verifier] timeout after {timeout_s}s"
     except (FileNotFoundError, OSError) as e:
         return 127, "", f"[verifier] could not run {cmd[0]}: {e}"
 

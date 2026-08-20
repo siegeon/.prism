@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.12.2"
+PRISM_VERSION = "7.12.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.3: RED_GATE VERIFIER NO LONGER CRASHES ON A TOOL TIMEOUT. _run_tool passed text=True to subprocess.run, but TimeoutExpired.stdout/stderr carry raw bytes regardless -- the text-decode step only runs on the success path. That bytes value flowed into a Claim.evidence dict and blew up json.dumps() at persist time (task 8a06e121). Decode at the source in the except clause instead. "
     "7.12.2: GIT REF-COUNTING COMPAT WITH GIT 2.34. Stranded-branch "
     "ahead/behind counts now fall back to a per-branch rev-list path when "
     "the single-pass %(ahead-behind) for-each-ref format (Git 2.41+) isn't "

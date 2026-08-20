@@ -26,6 +26,7 @@ from prism_service.services.verifier_service import (    # noqa: E402
     _git_changed_files,
     _iso_to_epoch,
     _overall_status,
+    _run_tool,
     _tier_status,
     _verifier_schema,
     run_tier0,
@@ -87,6 +88,31 @@ def test_filter_files_by_suffix():
     files = ["a.py", "b.js", "c.py", "d.txt"]
     assert _filter_files(files, (".py",)) == ["a.py", "c.py"]
     assert _filter_files(files, (".js", ".ts")) == ["b.js"]
+
+
+def test_run_tool_decodes_bytes_on_timeout(tmp_path):
+    # subprocess.run(..., text=True, timeout=...) only decodes stdout/stderr
+    # on the success path; TimeoutExpired's .stdout/.stderr are raw bytes
+    # even with text=True set. A tool that writes output then hangs must
+    # still come back as str, not bytes, or downstream json.dumps(evidence)
+    # raises TypeError (task 8a06e121's red_gate failure).
+    script = tmp_path / "hang.py"
+    script.write_text(
+        "import sys, time\n"
+        "sys.stdout.write('partial output before hang')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(5)\n"
+    )
+    code, out, err = _run_tool(
+        [sys.executable, str(script)], tmp_path, timeout_s=0.2,
+    )
+    assert code == 124
+    assert isinstance(out, str)
+    assert isinstance(err, str)
+    assert "partial output before hang" in out
+    assert "timeout after 0.2s" in err
+    # The actual bug: this must not raise TypeError.
+    json.dumps({"exit_code": code, "stdout": out, "stderr": err})
 
 
 def test_run_tier0_returns_empty_when_not_a_repo(tmp_path):
