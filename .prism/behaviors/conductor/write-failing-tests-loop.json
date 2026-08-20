@@ -1,0 +1,16 @@
+{
+  "id": "write-failing-tests-loop",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Write failing tests (Observe-Reason)",
+  "version": 1,
+  "steps": [
+    {
+      "id": "loop",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
+      "body": "{\"persona\": \"qa\", \"prompt\": \"Draft a failing test (do NOT write it to disk, this is a DRAFT only) for this task: ${taskHint}\\n\\nThe test must exercise the story's acceptance criteria and currently fail because the behavior doesn't exist yet. Return the test code, the file path it would live at, and why it's expected to fail.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"test_code\": {\"type\": \"string\"}, \"test_file_path\": {\"type\": \"string\"}, \"expected_failure_reason\": {\"type\": \"string\"}}, \"required\": [\"test_code\", \"test_file_path\", \"expected_failure_reason\"]}, \"rubric\": \"\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 120
+    }
+  ]
+}

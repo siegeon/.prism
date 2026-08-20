@@ -911,3 +911,72 @@ def test_reason_loop_plan_coverage_diffs_ac_ids_against_the_plan_itself(tmp_path
     # blocker -- the OLD bug failed with "story carries no AC-<n> ids",
     # a different reason entirely.
     assert "story carries no AC-<n> ids" not in resp.validation["reason"]
+
+
+def test_write_failing_tests_and_implement_tasks_link_but_validate_is_honest(tmp_path, monkeypatch):
+    """These two have no YAML rubric -- red_with_trace/green need real
+    test execution, not text scoring. They still get real linked
+    behaviors (Observe+Reason drafts text, no writes), but rubric="" so
+    Validate is explicitly reported as skipped -- never faked as passing."""
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=_Svc([])))
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+
+    def _fake_conductor_behaviors(project):
+        ids = ["land", "write-failing-tests-loop", "implement-tasks-loop"]
+        return [{"id": i, "name": i, "steps": [], "bots": [], "occupancy": {}} for i in ids]
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows", _fake_conductor_behaviors)
+
+    body = workflows_api.get_workflows("prism")
+    step_by_id = {s["id"]: s for s in body["steps"]}
+    assert step_by_id["write_failing_tests"]["linked_workflow_id"] == "write-failing-tests-loop"
+    assert step_by_id["implement_tasks"]["linked_workflow_id"] == "implement-tasks-loop"
+
+    by_id = {w["id"]: w for w in body["workflows"]}
+    assert by_id["write-failing-tests-loop"].get("parent_id") == "conductor"
+    assert by_id["implement-tasks-loop"].get("parent_id") == "conductor"
+
+
+def test_reason_loop_never_fakes_a_pass_for_unscored_states(tmp_path, monkeypatch):
+    """write_failing_tests/implement_tasks pass rubric="" -- confirm the
+    endpoint's existing "no rubric" path is what they get, not a silent
+    ok=True."""
+    from prism_service.api import workflows as workflows_api
+    from prism_service.inference import claude_cli
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        brain_svc=None, memory_svc=None, task_svc=None, workflow_svc=None, governance=None))
+
+    class _FakeContextBuilder:
+        def __init__(self, **kw):
+            pass
+        def build(self, persona, story_file):
+            return {"conventions": []}
+
+    monkeypatch.setattr(workflows_api, "ContextBuilder", _FakeContextBuilder)
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+
+    def _fake_invoke(prompt, *, work_dir, plugin_dir, model, max_budget_usd,
+                     max_turns, project, purpose, json_schema, **kw):
+        return claude_cli.ClaudeCliResult(
+            output_path=tmp_path / "run.jsonl", exit_code=0,
+            structured_output={"test_code": "def test_x(): assert False"},
+            usage={"cost_usd": 0.02}, run_id="run-wft",
+        )
+
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
+
+    resp = workflows_api.workflow_step_reason_loop(
+        workflows_api.ReasonLoopRequest(
+            persona="qa", prompt="Draft a failing test.",
+            json_schema={"type": "object"}, rubric="",
+        ),
+        project="prism",
+    )
+
+    assert resp.validation == {"ok": None, "reason": "no rubric specified -- Validate skipped"}

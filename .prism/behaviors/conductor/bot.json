@@ -11,7 +11,9 @@
         "plan-gate-check",
         "draft-story-loop",
         "review-previous-notes-loop",
-        "verify-plan-loop"
+        "verify-plan-loop",
+        "write-failing-tests-loop",
+        "implement-tasks-loop"
       ]
     }
   ]

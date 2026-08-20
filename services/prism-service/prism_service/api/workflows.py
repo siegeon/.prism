@@ -592,6 +592,8 @@ def get_workflows(project: str = Query("default")) -> dict:
                 else "draft-story-loop" if step["id"] == "draft_story"
                 else "review-previous-notes-loop" if step["id"] == "review_previous_notes"
                 else "verify-plan-loop" if step["id"] == "verify_plan"
+                else "write-failing-tests-loop" if step["id"] == "write_failing_tests"
+                else "implement-tasks-loop" if step["id"] == "implement_tasks"
                 else None
             ),
         })
@@ -624,6 +626,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     _CONDUCTOR_LINKED_BEHAVIOR_IDS = (
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
+        "write-failing-tests-loop", "implement-tasks-loop",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
