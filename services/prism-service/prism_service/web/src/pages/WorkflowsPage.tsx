@@ -468,14 +468,15 @@ export default function WorkflowsPage() {
   // reads) -- never a WorkflowCore run, since conductor drives tasks through
   // Python, not through AosWorkflows. Filtered to genuine FSM occupancy (a
   // real step id on THIS canvas) so a legacy/orphaned workflow_step can't
-  // invent a pill. Oldest-updated first, most recent at the right edge --
-  // same convention as the validation rail above.
+  // invent a pill. Oldest-updated first: the rail GROWS FROM THE LEFT, same
+  // as validation's (visibleRunHistory[index] above, no offset subtracted)
+  // -- filled pills start at index 0, empty capacity trails on the right.
   const conductorStepIds = new Set((selectedWorkflow?.steps ?? []).map((step) => step.id));
   const conductorRailTasks = selectedWorkflowId === "conductor"
     ? conductorManaged
         .filter((task) => conductorStepIds.has(task.workflow_step ?? ""))
         .sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""))
-        .slice(-RUN_RAIL_PILLS)
+        .slice(0, RUN_RAIL_PILLS)
     : [];
   const conductorPillTone = (task: ManagedTask): string => {
     if (task.gate_state === "pending" || task.gate_state === "failed") return "bg-fuchsia-400/70 animate-pulse";
@@ -488,7 +489,7 @@ export default function WorkflowsPage() {
   // each rendering their own copy of the pill strip.
   const railPills: RailPill[] = selectedWorkflowId === "conductor"
     ? Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
-        const task = conductorRailTasks[index - (RUN_RAIL_PILLS - conductorRailTasks.length)];
+        const task = conductorRailTasks[index];
         return {
           key: String(index),
           disabled: !task,
