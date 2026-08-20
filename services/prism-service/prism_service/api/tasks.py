@@ -480,9 +480,15 @@ def _compute_stranded(svc, repo: str) -> dict:
     # ONE ref listing (with ahead counts, git >= 2.41) instead of a rev-parse
     # AND a rev-list subprocess per row — the per-row spawns measured ~70s
     # cold at 193 stranded rows on Windows.
-    _, refs_out = _git(repo, "for-each-ref",
-                       "--format=%(refname:short) %(ahead-behind:origin/main)",
-                       "refs/heads", "refs/remotes/origin")
+    refs_rc, refs_out = _git(repo, "for-each-ref",
+                            "--format=%(refname:short) %(ahead-behind:origin/main)",
+                            "refs/heads", "refs/remotes/origin")
+    # %(ahead-behind) arrived after Git 2.34 (still the stock Ubuntu 22.04
+    # version). Keep the one-pass ref discovery there; counts fall through
+    # to the existing per-branch rev-list compatibility path below.
+    if refs_rc != 0:
+        _, refs_out = _git(repo, "for-each-ref", "--format=%(refname:short)",
+                           "refs/heads", "refs/remotes/origin")
     refs: set[str] = set()
     ahead_of_main: dict[str, int] = {}
     for ln in refs_out.splitlines():

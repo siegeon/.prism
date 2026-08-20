@@ -17,6 +17,10 @@ PRISM_VERSION = "7.11.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.2: GIT REF-COUNTING COMPAT WITH GIT 2.34. Stranded-branch "
+    "ahead/behind counts now fall back to a per-branch rev-list path when "
+    "the single-pass %(ahead-behind) for-each-ref format (Git 2.41+) isn't "
+    "available, instead of failing outright on older Git. "
     "7.12.1: LIVE CLAUDE SUBSCRIPTION USAGE IN SETTINGS. The Claude connector "
     "card now shows real usage via a new /api/claude-auth/usage endpoint (api.anthropic.com/api/oauth/usage) as a progress bar with reset time, "
     "polling every 60s. Usage polling mounts only once the card's detail "
