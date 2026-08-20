@@ -542,6 +542,7 @@ const STEP_EXTRA = {
   ].join('\n'),
   verify_green_state: [
     'Run the FULL relevant suite in the worktree, not just the new tests - INCLUDING every neighbouring suite the plan\'s call-chain rung named. Report anything red as outcome="fail"; a red test is always yours, never "pre-existing".',
+    'CLASSIFY every task.verify entry into a TEST lane (pytest/vitest/etc.) or a BUILD/TYPECHECK lane (build/tsc/lint commands) by command shape, and run every declared entry in both lanes. Capture SEPARATE evidence per lane (exit code + output) - never one undifferentiated "tests passed" line. Block success and report outcome="fail" if EITHER lane fails. Never invent an undeclared build/typecheck step - only classify and run what task.verify actually declares.',
     'TESTS-PASS IS NOT FEATURE-WORKS. If the ticket names a user-reachable surface, exercise it for real (curl the running daemon / drive the page) and LOOK at the result before claiming it.',
     'EVIDENCE GOES INTO PRISM, never an external host: write screenshots/artifacts to <data_dir>/evidence/<task_id>/ and cite them in the proof as `![](/api/tasks/<task_id>/evidence/<file>)`. Read <data_dir> from prism_status.',
     'Reporting SUCCESS here is what MINTS the green EvidenceReceipt (svc.mint_green_evidence runs on this report, from the task worktree). That receipt is what the green_gate seat decides on - so the quality of this step is the quality of the whole gate.',
