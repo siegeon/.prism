@@ -1134,6 +1134,50 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="workflow_fix_request",
+        description=(
+            "Queue a governed repair for an authoritative failed scripted workflow step. "
+            "PRISM re-reads the run evidence and Pydantic-validates the intent; it does "
+            "not trust output, commands, or paths supplied by the caller. Returns a task "
+            "that an agent works through conductor_work and the normal independent gates."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string", "default": "validation"},
+                "instance_id": {"type": "string"},
+                "step_id": {"type": "string"},
+            },
+            "required": ["instance_id", "step_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="workflow_behavior_get",
+        description="Request the current versioned workflow behavior or hierarchical child.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "default": "validation", "description": "Workflow or child path, for example validation/test."},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="workflow_behavior_provide",
+        description="Provide a revised child behavior. PRISM atomically versions the child and its parent; sibling history is preserved and no restart is needed.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Hierarchical child path, for example validation/test."},
+                "expected_version": {"type": "integer", "minimum": 1},
+                "behavior": {"type": "object", "description": "Revised behavior fields."},
+            },
+            "required": ["path", "expected_version", "behavior"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
         name="task_list",
         description="List tasks with optional filters",
         inputSchema={
@@ -1648,6 +1692,9 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "principles_seed",
     "prism_onboard",
     "task_create",
+    "workflow_fix_request",
+    "workflow_behavior_get",
+    "workflow_behavior_provide",
     "task_list",
     "task_next",
     "task_update",
@@ -4308,6 +4355,31 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json({
                 "ok": ok, "task_id": tid, "session_id": str(sid),
             }))]
+
+        if name == "workflow_fix_request":
+            from prism_service.api.workflows import (
+                WorkflowFixRequest, queue_workflow_fix,
+            )
+            intent = WorkflowFixRequest.model_validate(arguments)
+            result = queue_workflow_fix(
+                project_id,
+                str(arguments.get("workflow_id") or "validation"),
+                intent,
+            )
+            return [TextContent(type="text", text=_json(result))]
+
+        if name == "workflow_behavior_get":
+            from prism_service.api.workflows import get_workflow_behavior
+            result = get_workflow_behavior(
+                project_id, str(arguments.get("path") or "validation"))
+            return [TextContent(type="text", text=_json(result))]
+
+        if name == "workflow_behavior_provide":
+            from prism_service.api.workflows import provide_workflow_behavior
+            result = provide_workflow_behavior(
+                project_id, str(arguments["path"]),
+                int(arguments["expected_version"]), dict(arguments["behavior"]))
+            return [TextContent(type="text", text=_json(result))]
 
         # ------------------------------------------------------------------
         # Workflow tools

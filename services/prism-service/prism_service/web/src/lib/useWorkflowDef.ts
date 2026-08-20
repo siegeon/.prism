@@ -33,6 +33,23 @@ export type WorkflowStepDef = {
   validation: string | null;
   persona: string;
   persona_label: string;
+  purpose: string;
+  input: string;
+  action: string;
+  output: string;
+  execution: "connected" | "scripted" | "definition_only";
+  linked_workflow_id?: string | null;
+  linked_workflow_step_count?: number;
+  runner?: string;
+  command?: string;
+  working_directory?: string;
+  timeout_seconds?: number;
+  average_duration_seconds?: number | null;
+  duration_sample_count?: number;
+  depends_on?: string[];
+  script_path?: string;
+  script_language?: string;
+  script_source?: string;
 };
 
 /** A bot: a role card that drives the conductor's FSM. */
@@ -43,6 +60,49 @@ export type WorkflowDef = {
   bots: WorkflowBot[];
   /** step id -> count of non-done tasks standing there right now. */
   occupancy: Record<string, number>;
+  /** Selectable project workflows. Absent only for an older service. */
+  workflows?: WorkflowCatalogEntry[];
+};
+
+export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
+  id: string;
+  name: string;
+  description: string;
+};
+
+export type WorkflowStepResult = {
+  step: string;
+  exitCode: number;
+  output: string;
+  status: "pending" | "passed" | "failed" | "skipped" | "timed_out";
+};
+
+export type WorkflowRun = {
+  id: string;
+  status: string;
+  createTime: string;
+  completeTime?: string | null;
+  runtime?: {
+    currentStep: string;
+    status: string;
+    exitCode?: number | null;
+    startedAt?: string | null;
+  } | null;
+  timeline?: Array<{
+    step: string;
+    startedAt: string;
+    endedAt?: string | null;
+    status: string;
+  }>;
+  data: {
+    project: string;
+    definition?: {
+      steps?: Array<{ id: string }>;
+    };
+    tests: WorkflowStepResult;
+    build: WorkflowStepResult;
+    passed: boolean;
+  };
 };
 
 /** The shape the conductor rail renders. Deliberately the same {id, persona,
@@ -60,6 +120,38 @@ const INTAKE: RailStep = { id: "intake", persona: "", type: "intake" };
 export function fetchWorkflowDef(project: string): Promise<WorkflowDef> {
   return api.get<WorkflowDef>(
     `/api/workflows?project=${encodeURIComponent(project)}`,
+  );
+}
+
+export function startWorkflowRun(project: string, workflowId: string): Promise<{ instanceId: string; reused?: boolean }> {
+  return api.post(
+    `/api/workflows/${encodeURIComponent(workflowId)}/runs?project=${encodeURIComponent(project)}`,
+    {},
+  );
+}
+
+export function fetchWorkflowRun(instanceId: string): Promise<WorkflowRun> {
+  return api.get(`/api/workflows/runs/${encodeURIComponent(instanceId)}`);
+}
+
+export function fetchActiveWorkflowRun(project: string, workflowId: string): Promise<{ instanceId: string }> {
+  return api.get(
+    `/api/workflows/${encodeURIComponent(workflowId)}/runs/active?project=${encodeURIComponent(project)}`,
+  );
+}
+
+export function fetchWorkflowRunHistory(project: string, workflowId: string, limit = 72): Promise<{ runs: WorkflowRun[] }> {
+  return api.get(
+    `/api/workflows/${encodeURIComponent(workflowId)}/runs/history?project=${encodeURIComponent(project)}&limit=${limit}`,
+  );
+}
+
+export function requestWorkflowFix(
+  project: string, workflowId: string, instanceId: string, stepId: string,
+): Promise<{ queued: boolean; task_id: string; status: string; next: string }> {
+  return api.post(
+    `/api/workflows/${encodeURIComponent(workflowId)}/fixes?project=${encodeURIComponent(project)}`,
+    { instance_id: instanceId, step_id: stepId },
   );
 }
 

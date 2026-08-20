@@ -43,11 +43,15 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # inverted-flow #6 (8b7993f): the SDLC is driven by the ONE loop verb
     # conductor_work, so the 4 driver verbs (workflow_state / workflow_advance
     # / conductor_advance / conductor_gate) were DEMOTED to tool_profile=all.
-    # Net: 31 - 4 demoted + 1 conductor_work = 28.
-    assert len(names) == 28
+    # workflow_fix_request adds one governed, typed path from a failed run
+    # into that same conductor loop.
+    # The request/provide pair adds hot hierarchical behavior revisions.
+    assert len(names) == 31
     # Pin the INTENT, not just the number: the loop verb is served and the
     # legacy drivers stay off the default surface (tool-surface reduction).
     assert "conductor_work" in names
+    assert "workflow_fix_request" in names
+    assert {"workflow_behavior_get", "workflow_behavior_provide"} <= names
     for demoted in ("workflow_state", "workflow_advance",
                     "conductor_advance", "conductor_gate"):
         assert demoted not in names, (

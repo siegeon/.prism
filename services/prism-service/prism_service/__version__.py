@@ -17,6 +17,13 @@ PRISM_VERSION = "7.11.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.0: VALIDATION RUNS OWN THEIR REPAIR SOURCE. PRISM captures an "
+    "immutable Git snapshot before starting scripted validation; AOS persists "
+    "that provenance with the run, and workflow_fix_request reconstructs the "
+    "conductor workspace from the same commit instead of ambient HEAD. The "
+    "caller now receives a typed conductor.step_validation result while raw "
+    "process output remains supporting evidence. Legacy runs without a "
+    "reconstructable snapshot fail closed. "
     "7.11.39: ASPIRE-MANAGED PRISM WEB HOT RELOAD. The AppHost now owns a "
     "continuous Vite production-bundle watcher, /api/version exposes the "
     "emitted index fingerprint, and dev-mode browser tabs reload when that "

@@ -131,18 +131,22 @@ def test_the_route_mounts_the_workflows_page():
     assert "WorkflowsPage" in route.group(1), (
         f"the /workflows route must mount WorkflowsPage: {route.group(1)!r}")
     assert re.search(
-        r'const\s+WorkflowsPage\s*=\s*lazy\(\(\)\s*=>\s*import\("@/pages/WorkflowsPage"\)\);',
+        r'const\s+WorkflowsPage\s*=\s*lazyRoute\("workflows",\s*\(\)\s*=>\s*import\("@/pages/WorkflowsPage"\)\);',
         app,
-    ), "WorkflowsPage must be a lazy route chunk, like every other page"
+    ), "WorkflowsPage must be a self-healing lazy route chunk"
+    assert "window.location.reload()" in app
 
 
 def test_the_page_is_a_real_project_scoped_page():
-    """Wrapped in the shared <Page> chrome and scoped to the selected
+    """Full-bleed in the shared route chrome and scoped to the selected
     project — a per-project section that ignores the selector is a lie."""
     page = _read("pages", "WorkflowsPage.tsx")
     assert re.search(r'export\s+default\s+function\s+WorkflowsPage', page), (
         "WorkflowsPage.tsx must default-export the page component")
-    assert "<Page>" in page, "the page must render inside the shared <Page> chrome"
+    assert "<Page>" not in page, (
+        "the graph owns the complete route content area; Page padding would "
+        "reintroduce the gutter around the canvas")
+    assert re.search(r'<div className="relative flex h-full[^\"]*w-full', page)
     assert "useProject()" in page, "the page must read the selected project"
     # SUPERSEDED (this slice): this used to require the raw
     # `/api/workflows?project=${encodeURIComponent(project)}` literal in the
@@ -623,3 +627,330 @@ def test_the_workflows_page_no_longer_repeats_its_own_title():
         "band the owner called out, now that the global header names the "
         "section")
     assert "<canvas" in page, "the canvas must survive the title removal"
+
+
+def test_workflow_directory_selects_the_definition_drawn_on_the_right():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'aria-label="Workflow directory"' in page
+    assert 'aria-label="Available workflows"' in page
+    assert "Collapse workflow directory" in page
+    assert "Expand workflow directory" in page
+    assert re.search(r'workflows\.map\(\(workflow\)', page)
+    assert re.search(r'onClick=\{\(\) => selectWorkflow\(workflow\)\}', page)
+    assert re.search(
+        r'graphRef\.current\.setDef\(workflowForGraph\(workflow\)\)', page
+    ), (
+        "selection must replace the graph definition, not only style a row")
+
+
+def test_conductor_validation_node_opens_build_and_test_workflow():
+    page = _read("pages", "WorkflowsPage.tsx")
+    data = _read("lib", "useWorkflowDef.ts")
+    api = (_SERVICE_ROOT / "prism_service" / "api" / "workflows.py").read_text(
+        encoding="utf-8",
+    )
+
+    assert "linked_workflow_id?: string | null" in data
+    assert '"validation" if step["id"] == "verify_green_state"' in api
+    assert "const linkedStep = selectedWorkflow?.steps.find(" in page
+    assert "const linkedWorkflowId = linkedStep?.linked_workflow_id" in page
+    assert "workflow.id === linkedWorkflowId" in page
+    assert "selectWorkflow(linkedWorkflow, [...workflowPath, {" in page
+    assert 'linked_workflow_id: step.linked_workflow_id ?? "validation"' in page
+    graph = _read("live", "workflowGraph.ts")
+    assert 'linkedWorkflowLabel ? "⌄" : "↗"' in graph
+    assert '`${linkedWorkflowLabel} workflow`' in graph
+    assert "label: linkedWorkflowLabel ?? title(s.id)" in graph
+    assert "setWorkflowPath(path)" in page
+    assert "returnToWorkflowOrigin" in page
+    assert 'aria-label="Workflow breadcrumb"' in page
+    assert "workflowPath.map((entry, index)" in page
+    assert "linked_workflow_step_count: linked.steps.length" in page
+
+
+def test_workflow_directory_uses_sidebar_menu_grammar_and_graph_is_full_bleed():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "DIRECTORY_DEFAULT_PX = 240" in page, (
+        "open directory must initially align to Sidebar width")
+    for token in ("--nav-bg", "--nav-line", "--nav-text",
+                  "--nav-active-bg", "--nav-active-text", "--nav-hover"):
+        assert token in page, f"workflow menu must use Sidebar token {token}"
+    assert 'className="py-3" aria-label="Available workflows"' in page
+    assert "rounded-md border" not in page, (
+        "the graph split must not be presented as a padded card")
+    assert "<Page>" not in page and "</Page>" not in page, (
+        "the shared Page adds a 32px gutter; workflows is a full-bleed surface")
+    assert 'relative flex h-full min-h-[420px] w-full overflow-hidden' in page
+
+
+def test_workflow_directory_divider_is_resizable_and_accessible():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'role="separator"' in page
+    assert 'aria-label="Resize workflow directory"' in page
+    assert 'aria-orientation="vertical"' in page
+    assert "cursor-col-resize" in page
+    assert "setPointerCapture" in page and "releasePointerCapture" in page
+    assert "onPointerMove={onDirectoryResizeMove}" in page
+    assert "onKeyDown={onDirectoryResizeKey}" in page
+    assert 'ev.key === "ArrowLeft"' in page
+    assert 'ev.key === "ArrowRight"' in page
+    assert "DIRECTORY_MIN_PX = 180" in page
+    assert "DIRECTORY_MAX_PX = 480" in page
+    assert "prism.workflows.directory.width" in page
+
+
+def test_workflow_graph_is_an_operational_state_machine_with_drill_in():
+    page = _read("pages", "WorkflowsPage.tsx")
+    graph = _read("live", "workflowGraph.ts")
+
+    assert 'id: "__start__"' in graph and 'id: "__complete__"' in graph
+    assert 'linkedWorkflowLabel' in graph and 'i + 1 < steps.length' in graph
+    assert "setSelectedNodeId(node.id)" in page
+    assert "setStateDetailsOrigin" in page
+    assert "onClick={onCanvasClick}" in page
+    assert 'aria-label="State details"' in page
+    assert 'n.actionLabel ?? "↗"' in graph
+    assert 'aria-label="Close state details"' in page
+    assert "Child transition" not in page and "Technical metadata" in page
+    assert 'aria-label="Step behavior"' in page
+    assert '<div className="text-sm">' in page
+    assert 'space-y-3 py-3 text-sm' not in page
+    assert 'space-y-3 px-4 py-3 text-sm' not in page
+    assert '>Behavior</div>' not in page
+    assert "Avg duration" in page and "Step behavior" in page
+    assert 'aria-label="Step script"' in page
+    assert 'import Editor from "@monaco-editor/react"' in page
+    assert 'h-[max(420px,calc(100vh-470px))]' in page
+    assert 'Read only' in page
+    assert 'className="absolute bottom-5 left-5 right-5 top-5' not in page
+    assert 'value={selectedStep.script_source}' in page
+    assert '>Behavior</span>' in page
+    assert '<header className="border-b border-[color:var(--border-default)] px-4 py-4">' in page
+    assert '["Script", selectedStep.script_path || "Embedded"]' in page
+    assert "grid max-h-64 grid-cols-2" in page
+    assert "overflow-auto" in page
+    assert "xl:grid-cols-3" in page
+    for label in ("Input", "Success", "Output"):
+        assert f'["{label}",' in page
+    assert 'selectedStep?.purpose' in page
+    assert 'selectedStep.command' in page
+    assert '"Definition only"' in page
+    assert '"Run workflow"' in page
+    assert "Execute this project's typed scripted workflow" in page
+    assert "startWorkflowRun(project, selectedWorkflow.id)" in page
+    assert "requestWorkflowFix" in page
+    assert "Ask PRISM agent to fix" in page
+    assert "fetchWorkflowRun(started.instanceId)" in page
+    assert "selectedScriptFrame" in page
+    assert 'border-emerald-500/70' in page
+    assert 'border-red-500/70' in page
+    for field in ("command", "working_directory", "runner", "timeout_seconds", "depends_on"):
+        assert f"selectedStep.{field}" in page
+    assert "setTestStep(-1)" in page
+    assert "Testing ·" in page and "Flow complete" in page
+    assert 'graphWorkflow.id === "validation" ? { ...graphWorkflow, bots: [] }' in page
+    assert "sendTransition(from, to)" in page
+    assert "elapsedSeconds / average" in page
+    assert "Math.min(0.98" in page
+    assert "activeProgress" in graph
+    assert "ctx.fillRect(x + 1, y + 1, w - 2, 3)" in graph
+    assert "ctx.fillRect(x + 1, y + 1, fillWidth, 3)" in graph
+    assert "fillWidth, h - 21" not in graph
+    assert "drawTransitionLabel(ctx, wire.label" in graph
+    assert "sub: gate ?" in graph and "sub: s.validation" not in graph
+    assert "elapsedSeconds <= active.averageSeconds" in graph
+    assert "if (n.childCount)" in graph
+    assert "shortDuration(active.elapsedSeconds)" in graph
+    assert "shortDuration(active.averageSeconds)" in graph
+    assert "fetchActiveWorkflowRun(project, selectedWorkflow.id)" in page
+    assert re.search(r'sendTransition\(source: string, target: string\)', graph)
+    assert "spawnPacket(source, target, false, pts)" in graph
+
+
+def test_dev_bundle_changes_reload_an_open_prism_tab():
+    version = _read("lib", "version.ts")
+
+    assert "web_build?: string" in version
+    assert "function startDevBundleWatch(" in version
+    assert "setInterval(poll, 2000)" in version
+    assert re.search(r'r\.web_build\s*!==\s*initialBuild', version)
+    assert "window.location.reload()" in version
+
+
+def test_workflow_connection_interrupt_is_friendly_and_self_healing():
+    page = _read("pages", "WorkflowsPage.tsx")
+    header = _read("components", "PageHeader.tsx")
+
+    assert 'new CustomEvent("prism:connection-state"' in page
+    assert 'window.addEventListener("prism:connection-state"' in header
+    assert '"Connection interrupted"' in header
+    assert "reconnecting automatically · attempt" in header
+    assert 'role={connection.interrupted ? "status"' in header
+    assert "setConnectionInterrupted(false)" in page
+    assert "setWorkflowRunError(null)" in page
+    assert "RECONNECT_MIN_MS * 2 ** (failures - 1)" in page
+    assert "window.setTimeout(load, delay)" in page
+    assert "setWorkflows([])" not in page
+    assert "e instanceof Error ? e.message" not in page
+
+
+def test_finished_validation_reports_truth_and_exposes_step_output():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'truth.runtime?.status === "running"' in page
+    assert '${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"}' in page
+    assert "select a step for results" in page
+    assert "Last run  •  Exit" in page
+    assert "execution failed" in page
+    assert "Recorded failure" in page
+    assert "failureEvidence(selectedStepResult.output)" in page
+    assert "View full output" not in page
+    assert "Open step script" not in page
+    assert "selectedStepResult.output" in page
+
+
+def test_failed_step_exposes_copyable_run_and_step_identity():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'instance_id: workflowRun.id' in page
+    assert 'step_id: selectedStep.id' in page
+    assert "navigator.clipboard.writeText(JSON.stringify" in page
+    assert '"Copy failure IDs"' in page
+    assert "instance_id: {workflowRun?.id}" in page
+    assert "step_id: {selectedStep.id}" in page
+
+
+def test_state_details_zooms_from_the_clicked_node_into_the_full_graph_view():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "setStateDetailsOrigin" in page
+    assert 'transform: stateDetailsOpen ? "scale(1)" : "scale(0.04)"' in page
+    assert "window.requestAnimationFrame(() => window.requestAnimationFrame" in page
+    assert "transition-[transform,opacity]" in page
+    assert "duration-[650ms]" in page
+    assert "will-change-transform" in page
+    assert 'className="absolute inset-x-0 bottom-10 top-0 z-30' in page
+    assert 'if (event.propertyName !== "transform") return' in page
+    assert 'selectedStep.execution === "scripted" && selectedStep.script_source' in page
+    assert "setScriptOpen" not in page
+
+
+def test_validation_discloses_async_brain_and_learning_state():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "/api/staleness?project=" in page
+    assert "/api/consolidation/workers?project=" in page
+    assert 'worker.id === "memory_learning_pipeline"' in page
+    assert "After validation · Brain" in page
+    assert 'href="/consolidation"' in page
+    assert "Validation emits deterministic evidence" in page
+
+
+def test_workflow_run_has_a_segmented_page_level_progress_rail():
+    page = _read("pages", "WorkflowsPage.tsx")
+    data = _read("lib", "useWorkflowDef.ts")
+
+    assert "RUN_RAIL_PILLS = 72" in page
+    assert 'role="progressbar"' in page
+    assert 'aria-label="Workflow run history"' in page
+    assert "max-w-[10px]" in page
+    assert "runPillTone(index)" in page
+    assert "fetchWorkflowRunHistory(project, selectedWorkflow.id" in page
+    assert "visibleRunHistory[pillIndex - historyOffset]" in page
+    assert "const historyOffset = 0" in page
+    assert '.filter((run) => ["Complete", "Terminated"].includes(run.status))' in page
+    assert ".slice(0, RUN_RAIL_PILLS)" in page
+    assert 'runs/history?project=' in data
+    assert "bg-emerald-400" in page
+    assert "bg-red-400" in page
+    assert "bg-amber-300/60" in page
+    assert 'h-10 border-t border-white/10 bg-[#08090b]' in page
+    assert 'left-0 right-[118px] top-0' in page
+    assert 'gap-[2px]' in page
+    assert 'h-9 min-w-1 max-w-[10px] flex-1 rounded-none' in page
+    assert 'absolute bottom-2 right-4' in page
+
+
+def test_historical_run_can_be_replayed_on_the_graph_at_animation_frame_rate():
+    page = _read("pages", "WorkflowsPage.tsx")
+    graph = _read("live", "workflowGraph.ts")
+
+    assert "replayHistoricalRun(run)" in page
+    assert 'testModeRef.current = "replay"' in page
+    assert "requestAnimationFrame(frame)" in page
+    assert "elapsedMs / replayStepDurationRef.current" in page
+    assert 'type ReplayEvent = NonNullable<WorkflowRun["timeline"]>[number]' in page
+    assert "replayStepMs(event)" in page
+    assert "replayGapMs(event" in page
+    assert "replaySpanMs(event" in page
+    assert "Replay ${REPLAY_SPEED}×" in page
+    assert "run.data.definition?.steps" in page
+    assert 'event.status !== "skipped"' in page
+    assert 'result.status.replace("_", " ").toUpperCase()' in page
+    assert 'workflowRun?.data.passed ? "PASSED" : "FAILED"' in page
+    assert 'tone?: "active" | "success" | "failure" | "warning"' in graph
+    assert 'active.tone === "failure"' in graph
+    assert "graphRef.current.sendTransition(from, to)" in page
+    assert "Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}" in page
+    assert "leaveHistoricalReplay" in page
+    assert "active.label ??" in graph
+    assert 'aria-label="Historical workflow overlay"' in page
+    assert 'event.propertyName !== "bottom"' in page
+    assert '"calc(100% - 32px)" : "0px"' in page
+    assert "duration-[1500ms]" in page
+    assert page.count('className="h-px flex-1 bg-white"') == 2
+    assert 'style={{ bottom: historyOverlayOpen ? "100%" : "32px" }}' in page
+    assert 'bg-[#111722]/95 transition-[bottom]' in page
+    assert "beginHistoricalReplay(run)" in page
+    assert "window.requestAnimationFrame(()" in page
+    assert '"border-red-400"' in page
+    assert "historyOverlayReady" in page
+
+
+def test_failed_historical_replay_stops_on_the_failed_step():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    failure_guard = page.index('if (last.status !== "passed")')
+    complete_transition = page.index('graphRef.current.sendTransition(last.step, "__complete__")')
+    assert failure_guard < complete_transition
+    assert "setReplayStoppedAt(last)" in page
+    assert "__complete__: 0" in page[failure_guard:complete_transition]
+    assert "setTestStep(failedStepIndex >= 0 ? failedStepIndex : null)" in page
+    assert "Replay stopped ·" in page
+    assert "replayFinishedAtFailure ? 1" in page
+    assert 'replayFinishedAtFailure\n          ? "failure"' in page
+
+
+def test_failed_script_marks_the_responsible_editor_line():
+    page = _read("pages", "WorkflowsPage.tsx")
+    css = _read("index.css")
+
+    assert "failureMarkerLine(" in page
+    assert "findLastIndex" in page
+    assert 'glyphMarginClassName: "workflow-script-error-glyph"' in page
+    assert "glyphMarginHoverMessage" not in page
+    assert "MouseTargetType.GUTTER_GLYPH_MARGIN" in page
+    assert "setScriptDiagnosticOpen((open) => !open)" in page
+    assert 'role="alert"' in page
+    assert "revealLineInCenterIfOutsideViewport" in page
+    assert "glyphMargin: true" in page
+    assert '.workflow-script-error-glyph::before' in css
+    assert 'content: "!"' in css
+
+
+def test_active_workflow_node_does_not_duplicate_progress_with_an_occupancy_badge():
+    graph = _read("live", "workflowGraph.ts")
+
+    assert "if (n.count > 0 && !active) drawOccupancy(ctx, n)" in graph
+
+
+def test_replay_step_fill_spans_execution_and_inter_step_wait_without_a_pause():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert "REPLAY_MIN_STEP_MS = 1500" in page
+    assert "REPLAY_MAX_STEP_MS = 5000" in page
+    assert "replayStepMs(event) + replayGapMs(event, next)" in page
+    assert "setReplayEventIndex((index) => (index ?? 0) + 1), duration" in page

@@ -21,7 +21,7 @@ import {
 import type { Slot } from "./layout";
 import type { WorkflowDef } from "@/lib/useWorkflowDef";
 
-const STEP_W = 152, STEP_H = 66, STEP_GAP = 58;
+const STEP_W = 184, STEP_H = 88, STEP_GAP = 58;
 const BOT_W = 148, BOT_H = 58;
 const STEP_Y = 300, BOT_Y = 40;
 
@@ -32,12 +32,37 @@ export type WfNode = {
   label: string;
   /** Second line: who owns a step, or the role id for a bot. */
   sub: string;
+  /** Progressive-disclosure preview: the child/transition below this state. */
+  summary: string;
+  /** Linked workflows are behavior handoffs, not ordinary detail drill-ins. */
+  actionLabel?: string;
+  childCount?: number;
   glyph: string;
   gate: boolean;
   /** Steps only: how many non-done tasks are standing here right now. */
   count: number;
   slot: Slot;
 };
+
+export type ActiveNodeProgress = {
+  nodeId: string;
+  /** 0..0.98 while running; completion is represented by leaving the node. */
+  progress: number;
+  indeterminate: boolean;
+  elapsedSeconds: number;
+  averageSeconds: number | null;
+  /** Historical playback names itself instead of pretending to execute. */
+  label?: string;
+  /** Recorded outcome color for historical playback. */
+  tone?: "active" | "success" | "failure" | "warning";
+};
+
+function shortDuration(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(whole / 60);
+  const remainder = whole % 60;
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
 
 type Wire = {
   key: string;
@@ -47,6 +72,8 @@ type Wire = {
    * the token path work actually travels. */
   kind: "token" | "structure";
   live: boolean;
+  /** A step's exit condition belongs to its outgoing transition. */
+  label?: string | null;
 };
 
 function title(id: string): string {
@@ -100,18 +127,42 @@ export class WorkflowGraph {
     const steps = def.steps;
     this.nodes = [];
 
+    this.nodes.push({
+      id: "__start__", kind: "step", label: "Start", sub: "Entry state",
+      summary: steps[0] ? `Next · ${title(steps[0].id)}` : "No child state",
+      glyph: "▶", gate: false, count: def.occupancy.__start__ ?? 0,
+      slot: this.place("__start__", 0, STEP_Y, STEP_W, STEP_H),
+    });
+
     steps.forEach((s, i) => {
       const gate = s.type === "gate";
+      const linkedWorkflowLabel = s.linked_workflow_id === "validation"
+        ? "Build and test"
+        : s.linked_workflow_id ? title(s.linked_workflow_id) : null;
       this.nodes.push({
         id: s.id,
         kind: "step",
-        label: title(s.id),
-        sub: gate ? `${s.persona_label} decides` : s.persona_label,
+        label: linkedWorkflowLabel ?? title(s.id),
+        sub: gate ? `${s.persona_label} decides` : s.action || s.persona_label,
+        summary: linkedWorkflowLabel
+          ? `${linkedWorkflowLabel} workflow`
+          : i + 1 < steps.length
+            ? `Next · ${title(steps[i + 1].id)}`
+            : "Next · Complete",
+        actionLabel: linkedWorkflowLabel ? "⌄" : "↗",
+        childCount: s.linked_workflow_step_count,
         glyph: gate ? "◆" : glyphFor("session", s.persona),
         gate,
         count: def.occupancy[s.id] ?? 0,
-        slot: this.place(s.id, i * (STEP_W + STEP_GAP), STEP_Y, STEP_W, STEP_H),
+        slot: this.place(s.id, (i + 1) * (STEP_W + STEP_GAP), STEP_Y, STEP_W, STEP_H),
       });
+    });
+
+    this.nodes.push({
+      id: "__complete__", kind: "step", label: "Complete", sub: "Terminal state",
+      summary: "Workflow finished", glyph: "■", gate: false,
+      count: def.occupancy.__complete__ ?? 0,
+      slot: this.place("__complete__", (steps.length + 1) * (STEP_W + STEP_GAP), STEP_Y, STEP_W, STEP_H),
     });
 
     // Bots ride above the chain, spread across its full width so each one's
@@ -124,6 +175,7 @@ export class WorkflowGraph {
         kind: "bot",
         label: b.persona_label,
         sub: b.id,
+        summary: "Owns workflow states",
         glyph: glyphFor("session", b.id),
         gate: false,
         count: 0,
@@ -132,13 +184,15 @@ export class WorkflowGraph {
     });
 
     this.wires = [];
+    const stateIds = ["__start__", ...steps.map((s) => s.id), "__complete__"];
     // The FSM chain, left to right. A segment reads live while work stands
     // at either end of it — that is the stretch of pipeline in use.
-    for (let i = 1; i < steps.length; i++) {
-      const a = steps[i - 1].id, b = steps[i].id;
+    for (let i = 1; i < stateIds.length; i++) {
+      const a = stateIds[i - 1], b = stateIds[i];
       this.wires.push({
         key: wireKey(a, b), from: a, to: b, kind: "token",
         live: (def.occupancy[a] ?? 0) > 0 || (def.occupancy[b] ?? 0) > 0,
+        label: i > 1 ? steps[i - 2]?.validation : null,
       });
     }
     // Each bot to the steps it owns. `persona` (not `agent`) is what carries
@@ -262,6 +316,25 @@ export class WorkflowGraph {
     }
   }
 
+  /** Inject one visible work item onto an FSM transition. Unlike ambient
+   * occupancy motion, this is called deliberately by the workflow simulator
+   * and therefore applies only to the left-to-right token chain. */
+  sendTransition(source: string, target: string): boolean {
+    const wire = this.wires.find((candidate) => (
+      candidate.kind === "token"
+      && candidate.from === source
+      && candidate.to === target
+    ));
+    if (!wire) return false;
+    const pts = this.route(wire);
+    if (pts.length < 2) return false;
+    this.packets = this.packets.filter((packet) => !(
+      packet.source === source && packet.target === target
+    ));
+    this.packets.push(spawnPacket(source, target, false, pts));
+    return true;
+  }
+
   // ---- camera + input -----------------------------------------------------
 
   toWorld(sx: number, sy: number): Point {
@@ -337,6 +410,8 @@ export function drawWorkflows(
   w: number,
   h: number,
   now: number,
+  selectedNodeId: string | null = null,
+  activeProgress: ActiveNodeProgress | null = null,
 ): void {
   drawGrid(ctx, w, h, g.pan, g.zoom);
   ctx.save();
@@ -355,28 +430,79 @@ export function drawWorkflows(
       selected,
       waypoints: selected ? g.editor.waypointsFor(wire.key) : undefined,
     });
+    if (wire.kind === "token" && wire.label) {
+      const route = g.route(wire);
+      const from = route[0], to = route[route.length - 1];
+      if (from && to) drawTransitionLabel(ctx, wire.label, {
+        x: (from.x + to.x) / 2,
+        y: (from.y + to.y) / 2,
+      });
+    }
   }
   drawPackets(ctx, g.packets, now);
-  for (const n of g.nodes) drawNode(ctx, n);
+  for (const n of g.nodes) drawNode(
+    ctx, n, n.id === selectedNodeId,
+    activeProgress?.nodeId === n.id ? activeProgress : null,
+  );
 
   ctx.restore();
 }
 
-function drawNode(ctx: CanvasRenderingContext2D, n: WfNode): void {
+function drawTransitionLabel(ctx: CanvasRenderingContext2D, label: string, at: Point): void {
+  ctx.font = "9px ui-monospace, SFMono-Regular, monospace";
+  const text = clip(ctx, label, 116);
+  const width = ctx.measureText(text).width + 10;
+  ctx.fillStyle = PALETTE.ground;
+  ctx.fillRect(at.x - width / 2, at.y - 8, width, 16);
+  ctx.fillStyle = PALETTE.textLabel;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, at.x, at.y);
+  ctx.textAlign = "left";
+}
+
+function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null): void {
   const { x, y, w, h } = n.slot;
 
+  if (n.childCount) {
+    ctx.fillStyle = PALETTE.cardTitle;
+    ctx.fillRect(x + 4, y + 4, w, h);
+    ctx.strokeStyle = PALETTE.border;
+    ctx.strokeRect(x + 4.5, y + 4.5, w - 1, h - 1);
+  }
   ctx.fillStyle = PALETTE.card;
   ctx.fillRect(x, y, w, h);
+
+  // Establish stable card chrome. Progress gets its own rail and never
+  // paints beneath content.
+  ctx.fillStyle = n.gate ? "#3a2f45" : n.kind === "bot" ? "#2c3550" : PALETTE.cardTitle;
+  ctx.fillRect(x, y, w, 20);
+
+  if (active) {
+    const fillWidth = Math.max(3, (w - 2) * active.progress);
+    const rgb = active.tone === "failure" ? "248, 113, 113"
+      : active.tone === "success" ? "52, 211, 153"
+        : active.tone === "warning" ? "252, 211, 77" : "39, 201, 180";
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.fillRect(x + 1, y + 1, w - 2, 3);
+    ctx.fillStyle = `rgba(${rgb}, 0.95)`;
+    ctx.fillRect(x + 1, y + 1, fillWidth, 3);
+  }
 
   // A gate is a DECISION, not a unit of work — magenta is the locked hue for
   // "needs a distinct actor" (palette.ts), so gates never read as just
   // another agent step.
-  ctx.fillStyle = n.gate ? "#3a2f45" : n.kind === "bot" ? "#2c3550" : PALETTE.cardTitle;
-  ctx.fillRect(x, y, w, 20);
-
-  ctx.strokeStyle = n.gate ? PALETTE.magenta : PALETTE.border;
-  ctx.lineWidth = n.gate ? 1.5 : 1;
+  const activeStroke = active?.tone === "failure" ? "#f87171"
+    : active?.tone === "success" ? "#34d399"
+      : active?.tone === "warning" ? "#fcd34d" : PALETTE.teal;
+  ctx.strokeStyle = active ? activeStroke : n.gate ? PALETTE.magenta : PALETTE.border;
+  ctx.lineWidth = active || n.gate ? 1.5 : 1;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  if (selected) {
+    ctx.strokeStyle = PALETTE.teal;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - 2, y - 2, w + 4, h + 4);
+  }
 
   ctx.font = "12px ui-monospace, SFMono-Regular, monospace";
   ctx.textBaseline = "middle";
@@ -385,13 +511,32 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode): void {
 
   ctx.font = "600 12px ui-sans-serif, system-ui, sans-serif";
   ctx.fillStyle = PALETTE.textPrimary;
-  ctx.fillText(clip(ctx, n.label, w - 34), x + 24, y + 10);
+  ctx.fillText(clip(ctx, n.label, w - 104), x + 24, y + 10);
+  ctx.textAlign = "right";
+  ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+  ctx.fillStyle = active ? activeStroke : selected ? PALETTE.teal : PALETTE.textLabel;
+  const runLabel = active
+    ? active.label ?? (active.averageSeconds
+      ? active.elapsedSeconds <= active.averageSeconds
+        ? `RUN ${shortDuration(active.elapsedSeconds)} / ~${shortDuration(active.averageSeconds)}`
+        : `RUN ${shortDuration(active.elapsedSeconds)}`
+      : `RUN ${shortDuration(active.elapsedSeconds)}`)
+    : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
+  ctx.fillText(runLabel, x + w - 8, y + 10);
+  ctx.textAlign = "left";
 
   ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
   ctx.fillStyle = PALETTE.textDim;
   ctx.fillText(clip(ctx, n.sub, w - 20), x + 10, y + h / 2 + 12);
 
-  if (n.count > 0) drawOccupancy(ctx, n);
+  ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+  ctx.fillStyle = PALETTE.textLabel;
+  ctx.fillText(clip(ctx, n.summary, w - 20), x + 10, y + h - 12);
+
+  // Active progress already visualizes the one token occupying this state.
+  // Showing the numeric badge at the same time duplicates that signal and,
+  // during replay, looks like an error count rather than occupancy.
+  if (n.count > 0 && !active) drawOccupancy(ctx, n);
 }
 
 /** The count badge: how many tasks are standing on this step right now.
