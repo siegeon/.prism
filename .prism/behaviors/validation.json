@@ -1,0 +1,46 @@
+{
+  "id": "validation",
+  "name": "Build and test",
+  "description": "PRISM project validation executed by the AOS workflow engine",
+  "project": "prism",
+  "projectType": "python+react",
+  "steps": [
+    {
+      "id": "build",
+      "title": "Build web",
+      "purpose": "Compile and bundle PRISM's React application",
+      "runner": "process",
+      "command": "bash /home/siegeon/projects/prism/scripts/workflows/build-web.sh",
+      "workingDirectory": "/home/siegeon/projects/prism/services/prism-service/prism_service/web",
+      "timeoutSeconds": 300,
+      "dependsOn": [],
+      "success": "exit_code == 0",
+      "scriptPath": "/home/siegeon/projects/prism/scripts/workflows/build-web.sh",
+      "scriptLanguage": "shell",
+      "scriptSource": "#!/usr/bin/env bash\nset -euo pipefail\n\n# Compile the exact React bundle served by the PRISM Python service.\ncd \"$(dirname \"$0\")/../../services/prism-service/prism_service/web\"\nexec npm run build\n",
+      "averageDurationSeconds": 14.70901295542717,
+      "durationSampleCount": 2,
+      "behaviorVersion": 1
+    },
+    {
+      "id": "test",
+      "title": "Test",
+      "purpose": "Run PRISM full validation against the Aspire-served application",
+      "runner": "process",
+      "command": "bash /home/siegeon/projects/prism/scripts/workflows/test.sh",
+      "workingDirectory": "/home/siegeon/projects/prism/services/prism-service",
+      "timeoutSeconds": 900,
+      "dependsOn": [
+        "build"
+      ],
+      "success": "exit_code == 0",
+      "scriptPath": "/home/siegeon/projects/prism/scripts/workflows/test.sh",
+      "scriptLanguage": "shell",
+      "scriptSource": "#!/usr/bin/env bash\nset -euo pipefail\n\n# Project validation: exercise PRISM's Python behavior from its service root.\ncd \"$(dirname \"$0\")/../../services/prism-service\"\nexec uv run pytest -q\n",
+      "averageDurationSeconds": null,
+      "durationSampleCount": 0,
+      "behaviorVersion": 4
+    }
+  ],
+  "behaviorVersion": 4
+}
