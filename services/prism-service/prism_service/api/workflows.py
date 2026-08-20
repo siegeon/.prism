@@ -594,6 +594,7 @@ def get_workflows(project: str = Query("default")) -> dict:
                 else "verify-plan-loop" if step["id"] == "verify_plan"
                 else "write-failing-tests-loop" if step["id"] == "write_failing_tests"
                 else "implement-tasks-loop" if step["id"] == "implement_tasks"
+                else "red-gate-status" if step["id"] == "red_gate"
                 else None
             ),
         })
@@ -627,6 +628,7 @@ def get_workflows(project: str = Query("default")) -> dict:
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
         "write-failing-tests-loop", "implement-tasks-loop",
+        "red-gate-status",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
@@ -949,3 +951,67 @@ def workflow_step_reason_loop(
             validation = {"ok": None, "reason": "no rubric specified -- Validate skipped"}
 
         return ReasonLoopResponse(observe=observe, reason=reason, validation=validation)
+
+
+class RedGateStatusRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+class RedGateStatusResponse(BaseModel):
+    has_fresh_red_receipt: bool
+    red_sha: str
+    reason: str
+    latest_receipt_status: str
+    latest_receipt_reason: str
+
+
+@router.post("/steps/red-gate-status")
+def workflow_step_red_gate_status(
+    body: RedGateStatusRequest, project: str = Query(...),
+) -> RedGateStatusResponse:
+    """GOVERNANCE VISIBILITY for red_gate -- read-only, reuses the exact
+    pure-read functions the real adjudicator (ConductorService.
+    adjudicate_test_red_gate) consults, without calling that method or any
+    of its embedded writes (record_history, park_red_gate). red_gate
+    itself is untouched: still a real WORKFLOW_STEPS state, still decided
+    the same way it always was. This just makes what's ALREADY on file
+    observable as a typed, programmatic behavior instead of invisible
+    inside conductor_service.py -- the owner's actual ask: "we could not
+    see with governance what was happening on the step."""
+    from prism_service.services import oracle_spec as osp
+
+    with _tracer.start_as_current_span("workflow.step.red_gate_status") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return RedGateStatusResponse(
+                has_fresh_red_receipt=False, red_sha="",
+                reason=f"no such task: {body.task_id}",
+                latest_receipt_status="", latest_receipt_reason="",
+            )
+
+        red_sha = ctx.conductor_svc._red_step_sha(body.task_id)
+        spec = osp.OracleSpec.from_task(task)
+        fresh = (
+            osp.fresh_red_receipt(project, body.task_id, red_sha, spec.spec_hash())
+            if red_sha else None
+        )
+        latest = osp.latest_receipt(project, body.task_id)
+
+        if fresh is not None:
+            reason = f"fresh red receipt on file at {red_sha[:12]}: {fresh.reason}"
+        elif not red_sha:
+            reason = "no red-step commit resolved yet -- write_failing_tests hasn't landed a tests-only commit"
+        else:
+            reason = f"no fresh red receipt for the current red-step commit ({red_sha[:12]})"
+
+        return RedGateStatusResponse(
+            has_fresh_red_receipt=fresh is not None,
+            red_sha=red_sha,
+            reason=reason,
+            latest_receipt_status=(getattr(latest, "status", "") or "") if latest else "",
+            latest_receipt_reason=(getattr(latest, "reason", "") or "") if latest else "",
+        )

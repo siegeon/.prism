@@ -980,3 +980,109 @@ def test_reason_loop_never_fakes_a_pass_for_unscored_states(tmp_path, monkeypatc
     )
 
     assert resp.validation == {"ok": None, "reason": "no rubric specified -- Validate skipped"}
+
+
+def test_red_gate_status_reports_a_fresh_receipt_without_deciding_anything(tmp_path, monkeypatch):
+    """Read-only visibility for red_gate: reuses the exact pure-read
+    functions the real adjudicator consults (oracle_spec.fresh_red_receipt/
+    latest_receipt), never calls adjudicate_test_red_gate or any of its
+    embedded writes. red_gate itself stays untouched -- this only makes
+    what's already on file observable."""
+    from prism_service.api import workflows as workflows_api
+    from prism_service.services import oracle_spec as osp
+
+    monkeypatch.setattr(
+        "prism_service.config.project_data_dir", lambda project: tmp_path)
+
+    task_id = "t-red-1"
+    red_sha = "a" * 40
+    receipt = osp.EvidenceReceipt(
+        task_id=task_id, job_id="job-1", spec_hash="spec-1", tree_sha=red_sha,
+        adapter="pytest_ids", passed=False, status=osp.ST_RED,
+        reason="2 pinned tests failed as expected",
+    )
+    osp.append_receipt("prism", receipt)
+
+    class _FakeTask:
+        oracle = "check /healthz returns 200"
+        likely_misfire = ""
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask() if tid == task_id else None
+
+    class _FakeConductorSvc:
+        def _red_step_sha(self, tid):
+            return red_sha
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+    # OracleSpec.from_task derives a spec_hash from the task's oracle text --
+    # pin it to match the seeded receipt's spec_hash so "fresh" resolves true.
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.OracleSpec.spec_hash",
+        lambda self: "spec-1")
+
+    resp = workflows_api.workflow_step_red_gate_status(
+        workflows_api.RedGateStatusRequest(task_id=task_id), project="prism")
+
+    assert resp.has_fresh_red_receipt is True
+    assert resp.red_sha == red_sha
+    assert "2 pinned tests failed as expected" in resp.reason
+    assert resp.latest_receipt_status == osp.ST_RED
+
+
+def test_red_gate_status_reports_no_receipt_honestly(tmp_path, monkeypatch):
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(
+        "prism_service.config.project_data_dir", lambda project: tmp_path)
+
+    class _FakeTask:
+        oracle = "check /healthz returns 200"
+        likely_misfire = ""
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _FakeConductorSvc:
+        def _red_step_sha(self, tid):
+            return ""
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+
+    resp = workflows_api.workflow_step_red_gate_status(
+        workflows_api.RedGateStatusRequest(task_id="t-nothing"), project="prism")
+
+    assert resp.has_fresh_red_receipt is False
+    assert "no red-step commit resolved yet" in resp.reason
+
+
+def test_red_gate_status_never_calls_the_real_adjudicator(monkeypatch):
+    """The whole point: this must never touch adjudicate_test_red_gate or
+    any write path, no matter what. Assert the method isn't even present
+    on the fake conductor_svc this test wires in -- if the endpoint tried
+    to call it, this would raise AttributeError, not silently pass."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        oracle = ""
+        likely_misfire = ""
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _NoAdjudicateConductorSvc:
+        def _red_step_sha(self, tid):
+            return ""
+        # deliberately no adjudicate_test_red_gate / adjudicate_demo_red_gate
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_NoAdjudicateConductorSvc()))
+
+    resp = workflows_api.workflow_step_red_gate_status(
+        workflows_api.RedGateStatusRequest(task_id="t-x"), project="prism")
+    assert resp.has_fresh_red_receipt is False

@@ -1,0 +1,16 @@
+{
+  "id": "red-gate-status",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Red gate evidence status",
+  "version": 1,
+  "steps": [
+    {
+      "id": "status",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/red-gate-status?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    }
+  ]
+}

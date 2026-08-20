@@ -13,7 +13,8 @@
         "review-previous-notes-loop",
         "verify-plan-loop",
         "write-failing-tests-loop",
-        "implement-tasks-loop"
+        "implement-tasks-loop",
+        "red-gate-status"
       ]
     }
   ]
