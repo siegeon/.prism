@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.12.6"
+PRISM_VERSION = "7.12.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.7: GET /api/workflows now folds in the conductor bot's declared AosWorkflows behaviors (proxying GET /workflows/bots/conductor) as a new 'conductor-behaviors' catalog entry, alongside the existing conductor/validation entries -- so bot behaviors (land, ci-local-dev) show up on the /workflows page instead of only being reachable via raw curl to AosWorkflows. Fails soft (returns nothing extra) if AosWorkflows is unreachable or the bot isn't registered yet. See [[project_prism_workflow_engine_migration]]. "
     "7.12.6: PHASE 0 OF THE BOT/BEHAVIOR FSM MIGRATION. New POST /api/workflows/steps/context-enrich route wraps the existing ContextBuilder.build() behind a typed contract an AosWorkflows step can call directly -- read-only, no side effects. Verified end-to-end: a real AosWorkflows AgentStep call produced one connected OTel trace spanning both services and 109KB of genuine enrichment data. See [[project_prism_workflow_engine_migration]]. "
     "7.12.5: NO MORE GRATUITOUS WIRE ZIGZAGS ON /live AND /workflows. channelElbow tried its lane-offset candidate FIRST and kept it whenever it happened not to cross an obstacle -- true for nearly every wire, obstacle or not -- so with /live simplify off (an earlier fix for a different flattening bug) an unneeded lane jog rendered as a permanent staircase instead of a clean line. Now tries the centered path first, falling back to the lane offset only when something real is in the way. Both boards share this router (wireEditing.ts), so one fix covers both. "
     "7.12.4: NO MORE DEAD-END APPROVE FOR MACHINE-GRADED GATES. gate/readiness only asked the shipped-ness question inside the demo/review branch -- a proof_type=test task with a passing oracle but an unshipped commit read receipt_ok:true and a live clickable Approve that then dead-ended, because gate_decide checks shipped-ness unconditionally and readiness never did. Same tooth, now asked in both places; flat refusal, no ship-on-approve escape for machine-graded gates (task 8a06e121). "

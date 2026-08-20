@@ -31,6 +31,7 @@ import sqlite3
 from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, HTTPException, Query
@@ -475,6 +476,56 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
     return counts
 
 
+def _conductor_behaviors_workflow(project: str) -> dict | None:
+    """AosWorkflows' declared Bot/Behavior capabilities for the conductor,
+    folded into the same workflow-catalog shape as `conductor` and
+    `validation` above.
+
+    These run OUTSIDE this process entirely -- AosWorkflows (WorkflowCore,
+    separate service) owns their state, never prism-service. A missing bot
+    definition, an unreachable engine, or a stale build without the /bots
+    route are all the same case here: nothing to show yet, not an error the
+    whole page should break on.
+    """
+    from prism_service.services.claude_transcripts import _project_source_path
+
+    configured = Path(_project_source_path(project))
+    fallback = Path.home() / "projects" / project
+    root = configured if configured.is_absolute() and configured.exists() else fallback
+    if not root.exists():
+        return None
+    try:
+        bot = _workflow_engine_json(f"/workflows/bots/conductor?repoPath={quote(str(root))}")
+    except HTTPException:
+        return None
+
+    behavior_ids = bot.get("behaviorIds") or bot.get("BehaviorIds") or []
+    steps = [
+        {
+            "id": behavior_id,
+            "agent": "conductor",
+            "type": "behavior",
+            "validation": "exit_code == 0",
+            "persona": "conductor",
+            "persona_label": "Conductor",
+            "purpose": behavior_id.replace("-", " ").capitalize(),
+            "input": "The conductor bot's own repo checkout",
+            "action": f"POST /workflows/bots/{project}/conductor/{behavior_id}",
+            "output": "Step-by-step results, tracked as a durable AosWorkflows run",
+            "execution": "connected",
+        }
+        for behavior_id in behavior_ids
+    ]
+    return {
+        "id": "conductor-behaviors",
+        "name": bot.get("name", "Conductor") + " behaviors",
+        "description": "Capabilities the conductor bot can perform, executed by AosWorkflows",
+        "steps": steps,
+        "bots": [],
+        "occupancy": {step["id"]: 0 for step in steps},
+    }
+
+
 @router.get("")
 def get_workflows(project: str = Query("default")) -> dict:
     """The conductor FSM, the bots that drive it, and who is standing where."""
@@ -513,12 +564,17 @@ def get_workflows(project: str = Query("default")) -> dict:
         "occupancy": occupancy,
     }
     validation = _project_validation_workflow(project)
+    conductor_behaviors = _conductor_behaviors_workflow(project)
+
+    catalog = [conductor, validation]
+    if conductor_behaviors:
+        catalog.append(conductor_behaviors)
 
     return {
         "steps": steps,
         "bots": bots,
         "occupancy": occupancy,
-        "workflows": [conductor, validation],
+        "workflows": catalog,
     }
 
 

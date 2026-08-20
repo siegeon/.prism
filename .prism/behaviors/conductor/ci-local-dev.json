@@ -1,0 +1,29 @@
+{
+  "id": "ci-local-dev",
+  "botId": "conductor",
+  "name": "CI to local dev",
+  "version": 1,
+  "steps": [
+    {
+      "id": "test",
+      "kind": "shell",
+      "workingDirectory": "/home/siegeon/projects/prism/services/prism-service",
+      "command": "uv run pytest -q -x",
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "version-bump",
+      "kind": "shell",
+      "workingDirectory": "/home/siegeon/projects/prism",
+      "command": "python .claude/scripts/version_bump.py patch --no-push",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "restart-dev",
+      "kind": "shell",
+      "workingDirectory": "/home/siegeon/projects/aos",
+      "command": "aspire resource prism restart",
+      "timeoutSeconds": 120
+    }
+  ]
+}

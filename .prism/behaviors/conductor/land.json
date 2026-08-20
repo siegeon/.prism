@@ -1,0 +1,20 @@
+{
+  "id": "land",
+  "botId": "conductor",
+  "name": "Land a task branch",
+  "version": 1,
+  "steps": [
+    {
+      "id": "push",
+      "kind": "shell",
+      "command": "git push -u origin ${branch}",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "open-pr",
+      "kind": "shell",
+      "command": "gh pr create --fill --head ${branch} --title 'Land [task:${taskId}]'",
+      "timeoutSeconds": 60
+    }
+  ]
+}

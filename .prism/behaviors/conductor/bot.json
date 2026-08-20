@@ -1,0 +1,8 @@
+{
+  "id": "conductor",
+  "name": "Conductor",
+  "behaviorIds": [
+    "land",
+    "ci-local-dev"
+  ]
+}
