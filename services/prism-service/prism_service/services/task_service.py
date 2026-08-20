@@ -787,6 +787,19 @@ class TaskService:
         except Exception:
             logging.getLogger(__name__).warning(
                 "task.changed publish failed for %s", task.id, exc_info=True)
+        # Wake task_runner's background loop on the SAME event, so a task
+        # that just became eligible (status -> in_progress, or a step/gate
+        # transition) gets swept immediately instead of waiting out
+        # PRISM_TASK_RUNNER_INTERVAL -- observed live sitting idle ~16min
+        # as the ONLY eligible task in the project before this existed.
+        # wake() is a no-op-safe flag set; never raises, never blocks.
+        try:
+            from prism_service.services import task_runner
+
+            task_runner.wake()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task_runner.wake() failed for %s", task.id, exc_info=True)
         # LL-03: re-embed only when the title or description changed.
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:

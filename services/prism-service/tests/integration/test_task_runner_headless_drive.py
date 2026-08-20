@@ -216,3 +216,68 @@ def test_wired_into_the_lifespan():
     assert "start_task_runner" in src, (
         "start_task_runner() must be called from the real lifespan, or "
         "PRISM_TASK_RUNNER_INTERVAL has nothing constructing it")
+
+
+# ---------------------------------------------------------------------------
+# Event-driven wake: a task becoming eligible must not sit out the full
+# PRISM_TASK_RUNNER_INTERVAL when nothing else is fighting it for the slot.
+# Observed live: a single, uncontested task waited ~16 real minutes for its
+# retry because _loop only ever woke on a fixed clock. wake() lets the SAME
+# task.changed write that already pushes to /sse/tasks also cut the wait
+# short; the interval survives only as a fallback for changes this module
+# never learns about.
+# ---------------------------------------------------------------------------
+
+def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
+    import threading
+    import time as time_mod
+    from prism_service.services import task_runner as tr
+
+    sweeps = []
+    swept = threading.Event()
+
+    def _fake_sweep_once():
+        sweeps.append(time_mod.monotonic())
+        swept.set()
+        return None
+
+    orig_sweep = tr.sweep_once
+    tr.sweep_once = _fake_sweep_once
+    # _wake_event is a module-level singleton shared with every real
+    # task_svc.update() call in this process -- another test earlier in
+    # this session may have already set it. Start from a known-clear state
+    # so this test's own wake() is what's actually being observed.
+    tr._wake_event.clear()
+    try:
+        # A deliberately huge interval -- if wake() didn't work, the second
+        # sweep would never arrive within this test's timeout.
+        t = threading.Thread(target=tr._loop, args=(999,), daemon=True)
+        t.start()
+        assert swept.wait(timeout=2), "first sweep (loop entry) never ran"
+        swept.clear()
+
+        tr.wake()
+
+        assert swept.wait(timeout=2), (
+            "wake() did not cut the 999s wait short -- the loop is still "
+            "pure fixed-interval polling")
+        assert len(sweeps) == 2
+        assert sweeps[1] - sweeps[0] < 2, (
+            "second sweep took nearly as long as the interval, not a wake")
+    finally:
+        tr.sweep_once = orig_sweep
+
+
+def test_task_service_update_wakes_the_runner(make_task, monkeypatch):
+    from prism_service.services import task_runner as tr
+
+    woken = []
+    monkeypatch.setattr(tr, "wake", lambda: woken.append(True))
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    assert woken, (
+        "task_service.update() must call task_runner.wake() so a task "
+        "becoming eligible is swept immediately, not on the next fixed-"
+        "interval tick")

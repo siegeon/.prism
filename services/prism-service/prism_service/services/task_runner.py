@@ -236,14 +236,36 @@ def sweep_once() -> Optional[dict]:
     return None
 
 
+# A task becoming eligible (status -> in_progress, or a step/gate transition)
+# is a REAL event -- task_service.update() already publishes it as
+# "task.changed" for /sse/tasks. Until this existed, this runner's only
+# way to notice was to wake up on a bare interval() and poll, so a task
+# that became the ONLY eligible thing in the whole project could still
+# sit untouched for the full interval (observed live: 900s/~16min wait for
+# a single, uncontested task). `wake()` is called from that same publish
+# path (task_service.py) so the loop below reacts to the real event instead
+# of a fixed clock; the interval survives ONLY as a safety-net upper bound
+# for events this module never learns about (a direct DB write, a crash
+# recovery, etc.) -- never the primary trigger anymore.
+_wake_event = threading.Event()
+
+
+def wake() -> None:
+    """Nudge the runner loop to sweep now instead of waiting out its
+    interval. Safe to call even when the runner was never started
+    (PRISM_TASK_RUNNER_INTERVAL unset) -- just sets a flag nobody reads."""
+    _wake_event.set()
+
+
 def _loop(interval_s: int) -> None:
-    _log(f"started; interval={interval_s}s")
+    _log(f"started; interval={interval_s}s (event-driven, interval is a fallback)")
     while True:
         try:
             sweep_once()
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        time.sleep(interval_s)
+        if _wake_event.wait(timeout=interval_s):
+            _wake_event.clear()
 
 
 def start_task_runner() -> Optional[threading.Thread]:
