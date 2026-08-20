@@ -39,8 +39,30 @@ from pydantic import BaseModel, ConfigDict, Field
 from prism_service.models import roles
 from prism_service.models.workflow import WORKFLOW_STEPS
 from prism_service.project_context import get_project
-from prism_service.services.context_builder import ROLE_CARDS
+from prism_service.services.context_builder import ROLE_CARDS, ContextBuilder
 from prism_service.services import sqlite_db
+
+try:
+    # Only available when the process is launched under
+    # `opentelemetry-instrument` (the AOS AppHost's `uv run --with
+    # opentelemetry-distro ...` invocation) -- not a formal project
+    # dependency, so plain test/dev runs must still import this module
+    # cleanly. A no-op tracer's spans are simply never exported.
+    from opentelemetry import trace
+    _tracer = trace.get_tracer(__name__)
+except ImportError:
+    from contextlib import contextmanager
+
+    class _NoOpSpan:
+        def set_attribute(self, *a, **kw):
+            pass
+
+    class _NoOpTracer:
+        @contextmanager
+        def start_as_current_span(self, *a, **kw):
+            yield _NoOpSpan()
+
+    _tracer = _NoOpTracer()
 
 router = APIRouter()
 
@@ -546,3 +568,61 @@ def request_workflow_fix(
     workflow_id: str, body: WorkflowFixRequest, project: str = Query(...),
 ) -> dict:
     return queue_workflow_fix(project, workflow_id, body)
+
+
+# ---------------------------------------------------------------------------
+# Phase 0 of the Bot/Behavior FSM migration (see [[project_prism_workflow_engine_migration]]):
+# the FIRST typed callback an AosWorkflows step can make into prism-service
+# for real work. Wraps ContextBuilder.build() — already real, already used
+# by the interactive MCP path (mcp/tools.py's context_bundle tool) — behind
+# a Pydantic contract an AosWorkflows AgentStep can call directly. Read-only,
+# no side effects: the safest possible first slice to prove the callback
+# shape, typed both ways, traced end-to-end.
+# ---------------------------------------------------------------------------
+
+
+class StepEnrichRequest(BaseModel):
+    workflow_id: str
+    instance_id: str
+    step_id: str
+    persona: str = ""
+    story_file: str = ""
+
+
+class StepEnrichResponse(BaseModel):
+    role_card: dict = {}
+    rules: list = []
+    brain_context: str = ""
+    relevant_memory: list = []
+    conventions: list = []
+    active_tasks: dict = {}
+    workflow_state: dict = {}
+
+
+@router.post("/steps/context-enrich")
+def workflow_step_context_enrich(
+    body: StepEnrichRequest, project: str = Query(...),
+) -> StepEnrichResponse:
+    with _tracer.start_as_current_span("workflow.step.enrich") as span:
+        span.set_attribute("workflow.instance.id", body.instance_id)
+        span.set_attribute("workflow.step.id", body.step_id)
+        span.set_attribute("workflow.project", project)
+        ctx = get_project(project)
+        bundle = ContextBuilder(
+            project_id=project,
+            brain_svc=ctx.brain_svc,
+            memory_svc=ctx.memory_svc,
+            task_svc=ctx.task_svc,
+            workflow_svc=ctx.workflow_svc,
+            governance=ctx.governance,
+            request_id=body.instance_id,
+        ).build(persona=body.persona or None, story_file=body.story_file or None)
+        return StepEnrichResponse(
+            role_card=bundle.get("role_card") or {},
+            rules=bundle.get("rules") or [],
+            brain_context=bundle.get("brain_context") or "",
+            relevant_memory=bundle.get("relevant_memory") or [],
+            conventions=bundle.get("conventions") or [],
+            active_tasks=bundle.get("active_tasks") or {},
+            workflow_state=bundle.get("workflow_state") or {},
+        )
