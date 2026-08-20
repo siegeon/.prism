@@ -792,6 +792,82 @@ function ClaudeAuthCard() {
   );
 }
 
+type ClaudeUsageWindow = { utilization: number; resets_at: string };
+type ClaudeUsageStatus = {
+  available: boolean;
+  reason: "" | "not_authenticated" | "upstream_unavailable" | "no_usage_data";
+  windows: Record<string, ClaudeUsageWindow>;
+};
+
+const CLAUDE_USAGE_LABELS: Record<string, string> = {
+  five_hour: "Current session",
+  seven_day: "Current week · all models",
+  seven_day_opus: "Current week · Opus",
+  seven_day_sonnet: "Current week · Sonnet",
+  seven_day_fable: "Current week · Fable",
+};
+
+function ClaudeUsageCard() {
+  const [usage, setUsage] = useState<ClaudeUsageStatus | null>(null);
+
+  const load = useCallback(() => {
+    api.get<ClaudeUsageStatus>("/api/claude-auth/usage")
+      .then(setUsage)
+      .catch(() => setUsage({ available: false, reason: "upstream_unavailable", windows: {} }));
+  }, []);
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  if (!usage) return <div className="text-sm opacity-60">Loading live usage…</div>;
+  if (!usage.available) {
+    const message = usage.reason === "not_authenticated"
+      ? "Sign in to Claude above to see subscription usage."
+      : "Live Claude usage is temporarily unavailable.";
+    return <div className="text-sm opacity-60">{message}</div>;
+  }
+
+  const rank = (key: string) => key === "five_hour" ? 0 : key === "seven_day" ? 1 : 2;
+  const windows = Object.entries(usage.windows)
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {windows.map(([key, window]) => {
+        const pct = Math.max(0, Math.min(100, window.utilization));
+        const model = key.replace(/^seven_day_/, "").replaceAll("_", " ");
+        const label = CLAUDE_USAGE_LABELS[key]
+          ?? (key.startsWith("seven_day_") ? `Current week · ${model}` : key.replaceAll("_", " "));
+        const reset = window.resets_at
+          ? new Date(window.resets_at).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })
+          : "Reset time unavailable";
+        return (
+          <div key={key} className="rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--surface-2)]/40 p-3">
+            <div className="flex items-baseline justify-between gap-3 mb-2">
+              <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{label}</span>
+              <span className="font-mono text-sm tabular-nums" style={{ color: pct >= 90 ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)" }}>
+                {Math.round(pct)}%
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-[color:var(--surface-3)]" role="progressbar"
+              aria-label={`${label} usage`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
+              <div className="h-full rounded-full transition-[width] duration-500"
+                style={{ width: `${pct}%`, background: pct >= 90 ? "var(--accent-amber-fg)" : "var(--accent-teal-fg)" }} />
+            </div>
+            <div className="mt-2 text-2xs" style={{ color: "var(--text-muted)" }}>Resets {reset}</div>
+          </div>
+        );
+      })}
+      <p className="md:col-span-2 text-2xs" style={{ color: "var(--text-muted)" }}>
+        Live subscription limits from Claude. Refreshes every minute while this panel is open.
+      </p>
+    </div>
+  );
+}
+
 
 type GithubAuthStatus = {
   authenticated: boolean;
@@ -3719,6 +3795,10 @@ function ConnectorsSection({ project }: { project: string }) {
           )}
           {c.provider === "claude" && openDetail === c.provider && (
             <div className="px-5 pb-5 pt-4 space-y-4">
+              <div>
+                <SectionLabel>Claude usage</SectionLabel>
+                <ClaudeUsageCard />
+              </div>
               <div>
                 <SectionLabel>Claude auth</SectionLabel>
                 <ClaudeAuthCard />

@@ -20,7 +20,10 @@ flip to "authenticated" on the next poll.
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter
 
@@ -29,6 +32,9 @@ from prism_service.config import DATA_DIR
 from prism_service.data_dir import resolve_claude_home
 
 router = APIRouter()
+
+_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_USAGE_BETA = "oauth-2025-04-20"
 
 
 def _config_dir() -> Path:
@@ -85,3 +91,60 @@ def status() -> dict:
     # route (security._AUTH_ONLY_PREFIXES), so it must not hand out the
     # host's filesystem layout or (via Path.home()) the host OS account name.
     return redact_host_paths(body) if team_mode_active() else body
+
+
+def _oauth_access_token(cred: Path) -> str:
+    """Read the Claude CLI token without ever returning or logging it."""
+    try:
+        body = json.loads(cred.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return ""
+    oauth = body.get("claudeAiOauth") if isinstance(body, dict) else None
+    return str(oauth.get("accessToken") or "") if isinstance(oauth, dict) else ""
+
+
+def _fetch_usage(token: str) -> dict:
+    request = Request(
+        _USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": _USAGE_BETA,
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=8) as response:  # noqa: S310 - fixed HTTPS URL
+        return json.loads(response.read().decode("utf-8"))
+
+
+@router.get("/usage")
+def usage() -> dict:
+    """Live Claude.ai subscription windows, using the CLI's OAuth session.
+
+    This intentionally returns only utilization and reset timestamps. The
+    bearer token stays in ``.credentials.json`` and upstream response details
+    cannot accidentally widen this API's public shape.
+    """
+    token = _oauth_access_token(_config_dir() / ".credentials.json")
+    if not token:
+        return {"available": False, "reason": "not_authenticated", "windows": {}}
+    try:
+        raw = _fetch_usage(token)
+    except (HTTPError, URLError, OSError, ValueError, TypeError):
+        return {"available": False, "reason": "upstream_unavailable", "windows": {}}
+
+    windows = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not (key == "five_hour" or key.startswith("seven_day")):
+                continue
+            if not isinstance(value, dict) or value.get("utilization") is None:
+                continue
+            try:
+                utilization = max(0.0, min(100.0, float(value["utilization"])))
+            except (TypeError, ValueError):
+                continue
+            windows[key] = {
+                "utilization": utilization,
+                "resets_at": str(value.get("resets_at") or ""),
+            }
+    return {"available": bool(windows), "reason": "" if windows else "no_usage_data", "windows": windows}

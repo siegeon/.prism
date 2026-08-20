@@ -17,6 +17,10 @@ PRISM_VERSION = "7.11.39"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.12.1: LIVE CLAUDE SUBSCRIPTION USAGE IN SETTINGS. The Claude connector "
+    "card now shows real usage via a new /api/claude-auth/usage endpoint (api.anthropic.com/api/oauth/usage) as a progress bar with reset time, "
+    "polling every 60s. Usage polling mounts only once the card's detail "
+    "panel is opened, not on every page load. "
     "7.12.0: VALIDATION RUNS OWN THEIR REPAIR SOURCE. PRISM captures an "
     "immutable Git snapshot before starting scripted validation; AOS persists "
     "that provenance with the run, and workflow_fix_request reconstructs the "

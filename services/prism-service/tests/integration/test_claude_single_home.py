@@ -63,7 +63,7 @@ def test_the_claude_card_owns_the_auth_and_source_detail():
     body = _connectors_body()
     # The RENDERED tag, not the bare name — a mention in a comment is not a
     # panel anybody can see.
-    for component in ("<ClaudeAuthCard", "<ClaudeSourceCard"):
+    for component in ("<ClaudeUsageCard", "<ClaudeAuthCard", "<ClaudeSourceCard"):
         assert component in body, (
             f"{component} must render from inside ConnectorsSection — removing "
             f"the nav entry without this orphans the panel entirely")
@@ -110,6 +110,21 @@ def test_the_detail_does_not_mount_until_it_is_opened():
     assert init, "expected an open-state hook for the connector detail"
     assert re.search(r'useState<[^>]*>\(\s*(""|\'\'|false|null)\s*\)', init.group(0)), (
         f"the detail must default to CLOSED; got {init.group(0)}")
+
+
+def test_live_usage_is_visual_and_stays_inside_the_lazy_detail():
+    src = _read(_SETTINGS)
+    usage = src[src.index("function ClaudeUsageCard"):src.index("type GithubAuthStatus")]
+    assert 'api.get<ClaudeUsageStatus>("/api/claude-auth/usage")' in usage
+    assert 'role="progressbar"' in usage and "aria-valuenow" in usage
+    assert "resets_at" in usage and "setInterval(load, 60_000)" in usage
+
+    body = _connectors_body()
+    usage_tag = body.index("<ClaudeUsageCard")
+    opener = body.rindex("&& (", 0, usage_tag)
+    condition = body[body.rindex("{", 0, opener):opener]
+    assert "openDetail" in condition, (
+        "usage polling must mount only after the Claude card is expanded")
 
 
 # ── AC-4: the old URL still lands somewhere real ──────────────────────
