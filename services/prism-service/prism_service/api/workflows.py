@@ -478,12 +478,22 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
 
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
-    catalog entry nested under `conductor` -- not one synthetic wrapper node
-    whose fake "steps" were just the behavior ids. Bot [1] uses FSM [1..*],
-    FSM [1] has Behavior [0..*] (see the same ontology comment in
-    AosWorkflows' Program.cs); a behavior IS a flow, so it gets a real
-    catalog entry disclosing its OWN real steps (e.g. land's push/open-pr),
-    not a fake single node standing in for the whole thing.
+    catalog entry -- not one synthetic wrapper node whose fake "steps" were
+    just the behavior ids. Bot [1] uses FSM [1..*], FSM [1] has Behavior
+    [0..*] (see the same ontology comment in AosWorkflows' Program.cs); a
+    behavior IS a flow, so it gets a real catalog entry disclosing its OWN
+    real steps (e.g. land's push/open-pr), not a fake single node standing
+    in for the whole thing.
+
+    Deliberately NOT nested under "conductor": the conductor IS its 10-state
+    FSM (WORKFLOW_STEPS) -- something belongs in ITS view only when an
+    actual state calls it, the same way verify_green_state already links to
+    `validation` via linked_workflow_id. No conductor state currently calls
+    land or ci-local-dev, so nesting them under conductor claimed a
+    relationship that doesn't exist yet. They render as their own top-level
+    entries until a real state->behavior link is built (owner call, not
+    mine to invent -- e.g. does green_gate approval trigger `land`, or stay
+    a manual action?).
 
     These run OUTSIDE this process entirely -- AosWorkflows (WorkflowCore,
     separate service) owns their state, never prism-service. A missing bot
@@ -548,7 +558,6 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                 })
             entries.append({
                 "id": behavior_id,
-                "parent_id": "conductor",
                 "name": behavior.get("name") or behavior.get("Name") or behavior_id.replace("-", " ").title(),
                 "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows",
                 "steps": steps,

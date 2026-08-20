@@ -207,9 +207,15 @@ def test_conductor_behaviors_are_one_catalog_entry_each_with_real_steps(tmp_path
     entries = workflows_api._conductor_behavior_workflows("prism")
 
     assert [entry["id"] for entry in entries] == ["land", "ci-local-dev"]
-    assert all(entry["parent_id"] == "conductor" for entry in entries), (
-        "each behavior must nest under the conductor bot's directory entry, "
-        "not sit as a flat sibling of it")
+    # Deliberately NOT nested under "conductor" -- the conductor IS its
+    # 10-state FSM, and something belongs in its view only when an actual
+    # state calls it (verify_green_state -> validation). No conductor state
+    # calls land or ci-local-dev, so claiming that relationship in the
+    # directory would be a category error, same one already fixed once for
+    # the "conductor-behaviors" wrapper node.
+    assert all("parent_id" not in entry for entry in entries), (
+        "a behavior with no real state->behavior link must not claim to "
+        "nest under conductor's FSM view")
 
     land = entries[0]
     assert land["name"] == "Land a task branch"
