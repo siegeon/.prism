@@ -1,0 +1,16 @@
+{
+  "id": "verify-plan-loop",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Verify plan (Observe-Reason-Validate)",
+  "version": 1,
+  "steps": [
+    {
+      "id": "loop",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
+      "body": "{\"persona\": \"sm\", \"prompt\": \"Write an implementation plan in markdown for this task: ${taskHint}\\n\\nThe plan_doc MUST reference every AC-<n> id from the story so coverage can be diffed automatically. Separately, produce a plan_diagram: a mermaid flowchart (starting with 'flowchart TD' or similar) showing the plan's architectural layers/edges.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"plan_doc\": {\"type\": \"string\"}, \"plan_diagram\": {\"type\": \"string\"}}, \"required\": [\"plan_doc\", \"plan_diagram\"]}, \"rubric\": \"plan_coverage\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 120
+    }
+  ]
+}

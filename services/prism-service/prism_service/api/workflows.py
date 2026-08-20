@@ -590,6 +590,8 @@ def get_workflows(project: str = Query("default")) -> dict:
                 else "story-gate-check" if step["id"] == "story_gate"
                 else "plan-gate-check" if step["id"] == "plan_gate"
                 else "draft-story-loop" if step["id"] == "draft_story"
+                else "review-previous-notes-loop" if step["id"] == "review_previous_notes"
+                else "verify-plan-loop" if step["id"] == "verify_plan"
                 else None
             ),
         })
@@ -619,8 +621,12 @@ def get_workflows(project: str = Query("default")) -> dict:
     # conductor state links to. story_gate now links to "story-gate-check"
     # (linked_workflow_id above); land/ci-local-dev stay unparented since
     # no state calls them yet.
+    _CONDUCTOR_LINKED_BEHAVIOR_IDS = (
+        "story-gate-check", "plan-gate-check", "draft-story-loop",
+        "review-previous-notes-loop", "verify-plan-loop",
+    )
     for entry in conductor_behaviors:
-        if entry["id"] in ("story-gate-check", "plan-gate-check", "draft-story-loop"):
+        if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
             entry["parent_id"] = "conductor"
 
     catalog = [conductor, validation, *conductor_behaviors]
@@ -839,9 +845,17 @@ def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
     if rubric_name == "plan_coverage":
         ctx = get_project(project)
         principles = gov.load_principles(ctx.memory_svc) if ctx.memory_svc is not None else []
+        # Mirrors conductor_service.py's _verify_rubric_gate AND
+        # /steps/plan-gate-check exactly: story_md gets the SAME value as
+        # plan_doc (by plan_gate time task.plan_doc already embeds the
+        # story's AC ids). A prior version read a "story_md" key here that
+        # no reason-loop schema ever asks the model to produce -- caught
+        # live: verify-plan-loop's real call always failed AC-coverage
+        # with an empty story to diff against.
+        plan_doc = fields.get("plan_doc", "")
         evidence = {
-            "story_md": fields.get("story_md", ""),
-            "plan_doc": fields.get("plan_doc", ""),
+            "story_md": plan_doc,
+            "plan_doc": plan_doc,
             "plan_diagram": fields.get("plan_diagram", ""),
         }
         return gov.score_plan_coverage(evidence, rubric, principles)

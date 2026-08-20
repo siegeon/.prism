@@ -9,7 +9,9 @@
         "ci-local-dev",
         "story-gate-check",
         "plan-gate-check",
-        "draft-story-loop"
+        "draft-story-loop",
+        "review-previous-notes-loop",
+        "verify-plan-loop"
       ]
     }
   ]

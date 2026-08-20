@@ -824,3 +824,90 @@ def test_reason_loop_skips_validate_with_no_rubric(tmp_path, monkeypatch):
     )
 
     assert resp.validation == {"ok": None, "reason": "no rubric specified -- Validate skipped"}
+
+
+def test_review_notes_and_verify_plan_link_to_their_loops_and_nest_under_conductor(tmp_path, monkeypatch):
+    """Same rule, extended to the next two authoring states: a real
+    linked_workflow_id -> parent_id="conductor" for review_previous_notes
+    and verify_plan; land/ci-local-dev still unparented."""
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=_Svc([])))
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+
+    def _fake_conductor_behaviors(project):
+        ids = ["land", "story-gate-check", "plan-gate-check", "draft-story-loop",
+               "review-previous-notes-loop", "verify-plan-loop"]
+        return [{"id": i, "name": i, "steps": [], "bots": [], "occupancy": {}} for i in ids]
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows", _fake_conductor_behaviors)
+
+    body = workflows_api.get_workflows("prism")
+    step_by_id = {s["id"]: s for s in body["steps"]}
+    assert step_by_id["review_previous_notes"]["linked_workflow_id"] == "review-previous-notes-loop"
+    assert step_by_id["verify_plan"]["linked_workflow_id"] == "verify-plan-loop"
+
+    by_id = {w["id"]: w for w in body["workflows"]}
+    assert by_id["review-previous-notes-loop"].get("parent_id") == "conductor"
+    assert by_id["verify-plan-loop"].get("parent_id") == "conductor"
+    assert "parent_id" not in by_id["land"]
+
+
+def test_reason_loop_plan_coverage_diffs_ac_ids_against_the_plan_itself(tmp_path, monkeypatch):
+    """Regression: a live run of verify-plan-loop always failed AC-coverage
+    because _score_rubric read a "story_md" field no reason-loop schema
+    ever produces. Fixed to mirror plan-gate-check/conductor_service.py:
+    the SAME plan_doc value is diffed against itself for AC ids -- so a
+    plan_doc that inline-references its own AC ids must pass."""
+    from prism_service.api import workflows as workflows_api
+    from prism_service.inference import claude_cli
+
+    class _EmptyMemory:
+        def list_entries(self, domain):
+            return [
+                {"id": "p1", "status": "active", "source": "A", "target": "B"},
+            ]
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        brain_svc=None, memory_svc=_EmptyMemory(), task_svc=None, workflow_svc=None, governance=None))
+
+    class _FakeContextBuilder:
+        def __init__(self, **kw):
+            pass
+        def build(self, persona, story_file):
+            return {"conventions": []}
+
+    monkeypatch.setattr(workflows_api, "ContextBuilder", _FakeContextBuilder)
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(tmp_path))
+    monkeypatch.setattr(
+        "prism_service.services.arc_governance.load_principles", lambda memory_svc: [])
+
+    plan_doc = "## Plan\nCovers AC-1 fully.\n"
+    diagram = "flowchart TD\nA-->B\n"
+
+    def _fake_invoke(prompt, *, work_dir, plugin_dir, model, max_budget_usd,
+                     max_turns, project, purpose, json_schema, **kw):
+        return claude_cli.ClaudeCliResult(
+            output_path=tmp_path / "run.jsonl", exit_code=0,
+            structured_output={"plan_doc": plan_doc, "plan_diagram": diagram},
+            usage={"cost_usd": 0.05}, run_id="run-plan",
+        )
+
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
+
+    resp = workflows_api.workflow_step_reason_loop(
+        workflows_api.ReasonLoopRequest(
+            persona="sm", prompt="Write a plan.",
+            json_schema={"type": "object"}, rubric="plan_coverage",
+        ),
+        project="prism",
+    )
+
+    # Empty principles -> the misfire guard still refuses ("no ... "
+    # principles seeded"), proving the AC-coverage half is no longer the
+    # blocker -- the OLD bug failed with "story carries no AC-<n> ids",
+    # a different reason entirely.
+    assert "story carries no AC-<n> ids" not in resp.validation["reason"]
