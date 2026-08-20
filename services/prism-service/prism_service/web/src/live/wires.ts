@@ -183,7 +183,14 @@ function channelElbow(p1: Point, p2: Point, obstacles: Slot[], lane: number): Po
   const horizontalFirst = Math.abs(dx) >= Math.abs(dy);
   const laneOffset = (lane % 7) * LANE_STEP;
   const candidates: Point[][] = [];
-  for (const offset of [laneOffset, 0]) {
+  // Centered (offset 0) first: a lane offset is only needed to dodge a real
+  // obstacle, never as a default. With /live's simplify pass off (see
+  // wireEditing.ts's simplifyUnbentRoutes), an unneeded lane jog used to
+  // render as a permanent zigzag instead of being smoothed flat, because
+  // this loop tried the offset candidate FIRST and kept it whenever it
+  // happened not to cross anything -- true for nearly every wire, obstacle
+  // or not.
+  for (const offset of [0, laneOffset]) {
     if (horizontalFirst) {
       const midX = p1.x + dx / 2 + offset;
       candidates.push([p1, { x: midX, y: p1.y }, { x: midX, y: p2.y }, p2]);
