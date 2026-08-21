@@ -35,6 +35,43 @@ def _assignees(fields: dict) -> tuple[str, ...]:
     return (name,) if name else ()
 
 
+def _adf_node_text(node) -> str:
+    """Flatten a node's own inline text plus everything nested under it,
+    depth-first. This is also the degrade path for a node type the walker
+    below does not special-case (e.g. an unrecognized panel): its nested
+    text still surfaces instead of being silently dropped."""
+    if not isinstance(node, dict):
+        return ""
+    if node.get("type") == "text":
+        return node.get("text", "") or ""
+    return "".join(_adf_node_text(child) for child in node.get("content") or [])
+
+
+def _adf_block_to_text(node) -> str:
+    """Render one top-level ADF block as a single text block (no blank
+    lines inside it); blocks are joined with blank lines by the caller."""
+    node_type = node.get("type")
+    if node_type in ("bulletList", "orderedList"):
+        lines = [f"- {_adf_node_text(item)}" for item in node.get("content") or []]
+        return "\n".join(lines)
+    return _adf_node_text(node)
+
+
+def _adf_to_text(doc) -> str:
+    """Convert a Jira ADF description document to readable plain text.
+    Unrecognized node types degrade to their nested text (never dropped,
+    never raw JSON)."""
+    if not isinstance(doc, dict):
+        return ""
+    blocks = [_adf_block_to_text(node) for node in doc.get("content") or []]
+    return "\n\n".join(block for block in blocks if block)
+
+
+def _description_text(fields: dict) -> str:
+    doc = fields.get("description")
+    return _adf_to_text(doc) if doc else ""
+
+
 def _issue_input(issue: dict, site_url: str = "") -> ExternalEntityInput:
     """``site_url`` is the connection's own stored site (task 64ba4755,
     FR-6) — the browse URL is built from it, never hardcoded empty; with no
@@ -48,6 +85,7 @@ def _issue_input(issue: dict, site_url: str = "") -> ExternalEntityInput:
         remote_id=str(issue["id"]),                 # stable identity
         display_key=key,                             # mutable, display-only
         title=fields.get("summary", "") or "",
+        body=_description_text(fields),
         url=url,
         remote_status=status,
         status_category=normalize_status_category(status),
