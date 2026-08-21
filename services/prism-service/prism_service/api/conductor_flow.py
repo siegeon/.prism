@@ -45,8 +45,27 @@ _GUIDE = {
         "the explicit marker UNVERIFIED or REFUTED. A missing section, an "
         "empty one, or any ungrounded claim is refused and the step does "
         "not advance.",
-    "draft_story": "Author the story: Summary/Requirements/Acceptance "
-                   "Criteria with AC ids + oracles.",
+    # story_gate is scored by the story_complete rubric
+    # (services/arc_governance.py:110-143 / governance_rubrics.yaml:9-22),
+    # so the instruction states that contract precisely instead of the
+    # generic "Summary/Requirements/Acceptance Criteria with AC ids +
+    # oracles" this replaced -- that phrasing named the right concepts but
+    # never stated the MECHANICAL format the parser checks (exact heading
+    # text, the literal 'AC-<n>' token, the literal 'oracle:' marker), so a
+    # reasonable-looking story kept failing story_gate on the first pass
+    # (observed live, twice, on two separately-driven tasks: "no acceptance
+    # criteria with AC-<n> ids found", then "missing required section(s)").
+    "draft_story":
+        "Author the story as markdown with exactly these three headings "
+        "(any '#' level, e.g. '## Summary'): Summary, Requirements, "
+        "Acceptance Criteria. Under Acceptance Criteria, list each "
+        "criterion as its own bullet or line starting 'AC-<n>: <what>', "
+        "numbered AC-1, AC-2, ... — and on that same bullet, or an "
+        "indented line right under it, include the literal word "
+        "'oracle:' followed by the observable check that proves it (a "
+        "command, a file path, a UI action). A section whose heading "
+        "text doesn't match, or an AC missing its id or its oracle "
+        "marker, is refused and the step does not advance.",
     "verify_plan": "Verify the plan covers the story (plan_coverage).",
     "write_failing_tests": "Author failing tests carrying a trace.",
     "implement_tasks": "Smallest change that turns the failing tests green.",
