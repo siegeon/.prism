@@ -25,6 +25,16 @@ bridge session, which is the correct behavior (the tab re-enables remote
 assist and gets a fresh token), not a bug. The token is compared with
 `secrets.compare_digest` to avoid a timing side-channel identical in shape to
 the general access-key comparison in services/auth_service.py.
+
+SUPERSEDED 2026-08-21 (owner, live correction against a real dropped session):
+the plan's original call was a short (20-minute) clock-based TTL. The owner's
+actual model is "tied to the machine and good until it's not — e.g. I turn
+the feature off": a session must stay valid for as long as it was never
+explicitly ended (disable(), tab-close via beforeunload) or the process
+restarted, NOT expire on a fixed wall-clock timer while the tab is still
+sitting there with the feature on. `SESSION_TTL_SECONDS` below is now a long
+hygiene backstop against a truly-abandoned session (tab killed hard enough
+that beforeunload never fired) rather than a real "support session" duration.
 """
 
 from __future__ import annotations
@@ -38,10 +48,11 @@ from typing import Optional
 
 from prism_service.events import bus
 
-# Short-lived like this repo's other single-purpose tokens (security posture:
-# "it should expire ... rather than persist"). 20 minutes is enough for a
-# support session without leaving a stale credential live for hours.
-SESSION_TTL_SECONDS = 20 * 60
+# A hygiene backstop only, NOT the session's real lifetime (see SUPERSEDED
+# note above) -- a session ends via explicit revoke (disable / tab close) or
+# a daemon restart; this just bounds a session whose tab vanished without
+# ever signaling that (crash, force-quit) so it doesn't linger forever.
+SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 
 # How long the MCP tool call (agent_bridge_command) blocks waiting for the
 # browser's result before giving up and reporting a timeout. Short enough

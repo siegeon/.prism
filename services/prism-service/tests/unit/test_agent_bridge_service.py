@@ -53,6 +53,30 @@ def test_expired_session_is_rejected():
     assert svc.session_owned_by(s.id, "alice") is None
 
 
+def test_session_outlives_the_old_20_minute_ttl_while_never_revoked():
+    """Owner correction, 2026-08-21: a bridge session is 'tied to the
+    machine and good until it's not -- e.g. I turn the feature off', NOT a
+    fixed 20-minute clock. This reproduces the live regression (session
+    7ecf377a...) where a real, still-open, never-disabled remote-assist
+    session was rejected mid-use because the old 20-minute TTL had lapsed --
+    a freshly minted session's expiry must sit far beyond that window, and a
+    session simulated to be 20+ minutes old (but never revoked) must still
+    validate."""
+    svc = _fresh_service()
+    s = svc.mint_session(user_id="alice", project_id="prism")
+
+    # A fresh session must not be anywhere near the old 20-minute cliff.
+    assert s.expires_at - time.time() > 24 * 60 * 60
+
+    with svc._lock:
+        # Simulate "20+ minutes have passed, tab never closed, feature
+        # never disabled" -- the exact live scenario that regressed.
+        svc._sessions[s.id].created_at = time.time() - (25 * 60)
+
+    assert svc.validate_token(s.id, s.token) is not None
+    assert svc.session_owned_by(s.id, "alice") is not None
+
+
 def test_revoke_ends_the_session_immediately():
     svc = _fresh_service()
     s = svc.mint_session(user_id="alice", project_id="prism")

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.0"
+PRISM_VERSION = "7.13.1"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5133,4 +5133,19 @@ PRISM_VERSION_NOTES += (
     "click the approve path would refuse -- and it discloses without "
     "disabling, because the Approve button is disabled on receipt_ok, and "
     "a false receipt would have disabled the very button this adds."
+    "\n\n"
+    "7.13.1: agent-bridge sessions were dying under a real, still-open, "
+    "never-disabled remote-assist tab -- owner, live, after a genuine "
+    "navigate command round-tripped fine then a second one failed with "
+    "'no active bridge session': 'we did not leave that session ... this "
+    "is tied to the machine and good until its not .... e.g. i turn the "
+    "feature off'. Root cause: agent_bridge.py's SESSION_TTL_SECONDS was a "
+    "hard 20-minute wall-clock cliff (services/agent_bridge.py), the "
+    "plan's original short-TTL call, superseded here -- the owner's actual "
+    "model is explicit-revoke-only (disable() / tab-close beforeunload) or "
+    "a daemon restart, never a fixed clock while the feature stays on. "
+    "SESSION_TTL_SECONDS is now a 30-day hygiene backstop against a tab "
+    "that vanished hard enough beforeunload never fired, not the session's "
+    "real lifetime. New regression test pins a session simulated 25 "
+    "minutes old (well past the old cliff, never revoked) still validates."
 )
