@@ -203,6 +203,34 @@ def test_jql_is_scoped_to_in_flow_work_and_the_project_key_is_validated(tmp_path
         "an invalid project key must never reach JQL interpolation")
 
 
+def test_search_jql_requests_description_field(tmp_path):
+    """AC-1 (task 2ed7186a): the enhanced-JQL request must widen its
+    ``fields`` param to include ``description`` alongside the four fields
+    already requested, so ``_issue_input`` has an ADF doc to convert."""
+    from urllib.parse import parse_qs, urlparse
+
+    from prism_service.services.jira_client import JiraClient
+
+    class _CapturingTransport:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, headers):
+            self.urls.append(url)
+            return {"issues": [], "nextPageToken": None}
+
+    transport = _CapturingTransport()
+    client = JiraClient(transport=transport)
+    client.search_jql("cloud-1", "tok", 'project = "PROJ"')
+
+    assert len(transport.urls) == 1
+    params = parse_qs(urlparse(transport.urls[0]).query)
+    assert "description" in params["fields"][0].split(","), (
+        "search_jql must request the description field so an imported "
+        "issue's real content is available to convert"
+    )
+
+
 def test_issue_url_is_built_from_the_connections_site_url(tmp_path):
     """FR-6: `_issue_input` must build a real browse URL from the connection's
     stored site_url, replacing the hardcoded url=''."""

@@ -1,0 +1,61 @@
+{
+  "issues": [
+    {
+      "id": "20001",
+      "key": "PRIS-9",
+      "fields": {
+        "summary": "Search results paginate incorrectly",
+        "status": {"name": "In Progress"},
+        "assignee": {"displayName": "Grace Hopper", "accountId": "acc-9"},
+        "updated": "2026-08-01T10:00:00.000+0000",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {"type": "text", "text": "Paging past page 3 repeats the first result set instead of advancing."}
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {"type": "text", "text": "Repro steps:"}
+              ]
+            },
+            {
+              "type": "bulletList",
+              "content": [
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {"type": "text", "text": "Open the search page and run any query."}
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "listItem",
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {"type": "text", "text": "Click next until page 4."}
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "nextPageToken": null,
+  "isLast": true
+}
