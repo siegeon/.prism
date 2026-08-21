@@ -485,16 +485,37 @@ export default function WorkflowsPage() {
   // conductor rail needs the same, sourced from real completed tasks since
   // there is no WorkflowCore run to read it from.
   const [doneConductorTasks, setDoneConductorTasks] = useState<ManagedTask[]>([]);
+  // "done" (green_gate passed, status flipped) is a claim about the SDLC,
+  // never about whether the code actually reached anyone -- GET /api/tasks/
+  // stranded is the real, already-existing, git-backed signal for that
+  // (does a [task:<id8>] trailer resolve on origin/main). Without this a
+  // done-but-uncommitted-or-unmerged task painted the SAME solid green as a
+  // genuinely shipped one (owner 2026-08-21, real task 4f74dafc: drove green
+  // clean, the actual button removal never left an uncommitted diff in its
+  // own workspace) -- indistinguishable from success. Cross-referenced here
+  // so the pill can tell the two apart instead of asserting only the nicer
+  // half of the truth.
+  const [strandedTaskIds, setStrandedTaskIds] = useState<Set<string>>(new Set());
   useEffect(() => {
-    if (selectedWorkflowId !== "conductor") { setDoneConductorTasks([]); return; }
+    if (selectedWorkflowId !== "conductor") {
+      setDoneConductorTasks([]);
+      setStrandedTaskIds(new Set());
+      return;
+    }
     let cancelled = false;
     type DoneTaskRow = ManagedTask & { parent_id?: string };
-    const load = () => api.get<{ tasks: DoneTaskRow[] }>(
-      `/api/tasks?project=${encodeURIComponent(project)}&fields=id,title,status,workflow_step,gate_state,updated_at,parent_id`,
-    ).then(({ tasks }) => {
+    const load = () => Promise.all([
+      api.get<{ tasks: DoneTaskRow[] }>(
+        `/api/tasks?project=${encodeURIComponent(project)}&fields=id,title,status,workflow_step,gate_state,updated_at,parent_id`,
+      ),
+      api.get<{ stranded: Array<{ task_id: string }> }>(
+        `/api/tasks/stranded?project=${encodeURIComponent(project)}`,
+      ),
+    ]).then(([{ tasks }, { stranded }]) => {
       if (cancelled) return;
       setDoneConductorTasks(tasks.filter((t) =>
         t.status === "done" && !t.parent_id && conductorStepIds.has(t.workflow_step ?? "")));
+      setStrandedTaskIds(new Set(stranded.map((s) => s.task_id)));
     }).catch(() => { /* transient fetch failure; next poll retries */ });
     load();
     const id = window.setInterval(load, 10_000);
@@ -507,7 +528,12 @@ export default function WorkflowsPage() {
         .slice(-RUN_RAIL_PILLS)
     : [];
   const conductorPillTone = (task: ManagedTask): string => {
-    if (task.status === "done") return "bg-emerald-400";
+    if (task.status === "done") {
+      // Stranded: the SDLC passed but the code never reached origin/main --
+      // amber, the SAME tone validation's own rail already uses for
+      // "Terminated" (a run that finished without a clean pass/fail verdict).
+      return strandedTaskIds.has(task.id) ? "bg-amber-300/60" : "bg-emerald-400";
+    }
     if (task.gate_state === "pending" || task.gate_state === "failed") return "bg-fuchsia-400/70 animate-pulse";
     if (task.activity?.state === "working" || task.activity?.state === "driving") return "bg-[color:var(--accent-solid)] animate-pulse";
     return "bg-sky-400/50";
