@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
@@ -257,6 +257,12 @@ const IDLE_DRAG: DragState = {
 export default function WorkflowsPage() {
   const [project] = useProject();
   const navigate = useNavigate();
+  // ?workflow=<id> deep-links directly to a behavior (e.g. "plan-gate-check",
+  // "land", "story-gate-check") without a manual sidebar click -- same
+  // convention as Understand's `?concept=`: seed initial state from the URL,
+  // keep the URL in sync on every selection via `replace` (a workflow click
+  // is a view change, not a new history stop), same tier as `?project=`.
+  const [searchParams, setSearchParams] = useSearchParams();
   const reduced = useReducedMotion();
   // The conductor's rail shows tasks the conductor is actually engaged with
   // RIGHT NOW -- not a WorkflowCore run. conductor drives real tasks through
@@ -282,7 +288,9 @@ export default function WorkflowsPage() {
   });
   const directoryResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>([]);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("conductor");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState(
+    () => searchParams.get("workflow") || "conductor",
+  );
   // Progressive disclosure for the directory: a catalog entry with a
   // parent_id (a bot's own FSM/Behavior entries, nested under that bot)
   // stays collapsed under its parent until expanded -- "conductor" starts
@@ -336,7 +344,7 @@ export default function WorkflowsPage() {
   const [brainActivity, setBrainActivity] = useState<{
     stale: boolean; running: boolean; queueDepth: number; inFlight: number;
   } | null>(null);
-  const selectedWorkflowRef = useRef("conductor");
+  const selectedWorkflowRef = useRef(searchParams.get("workflow") || "conductor");
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("prism:connection-state", {
@@ -440,6 +448,15 @@ export default function WorkflowsPage() {
   ) => {
     selectedWorkflowRef.current = workflow.id;
     setSelectedWorkflowId(workflow.id);
+    // Keep the address bar a valid link to THIS behavior -- copying it and
+    // loading it fresh must land back here, never on the default conductor
+    // view. `replace: true` so clicking through several behaviors doesn't
+    // pile up back-button stops for what is really one page's view state.
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("workflow", workflow.id);
+      return next;
+    }, { replace: true });
     setWorkflowPath(path);
     setSelectedNodeId(null);
     setTestStep(null);
@@ -474,7 +491,7 @@ export default function WorkflowsPage() {
       (raw) => graphRef.current.wireEdits.hydrate(undefined, raw));
     const canvas = canvasRef.current;
     graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600, true);
-  }, [project]);
+  }, [project, setSearchParams]);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);

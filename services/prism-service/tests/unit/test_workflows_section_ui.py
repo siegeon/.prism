@@ -267,10 +267,14 @@ def test_switching_workflows_rehydrates_the_owners_saved_layout():
         "positions from localStorage BEFORE setDef, then rehydrate saved "
         "wire ports/waypoints AFTER setDef")
 
-    fn_body_end = page.index("}, [project]);", setdef_idx)
+    # Task <workflow-deep-link>: selectWorkflow also keeps ?workflow=<id> in
+    # sync (every call site — directory click, drill-in, breadcrumb back —
+    # routes through here), so its dependency array grew setSearchParams.
+    fn_body_end = page.index("}, [project, setSearchParams]);", setdef_idx)
     assert fn_body_end < page.index("const selectedWorkflow = workflows.find", fn_start), (
-        "selectWorkflow's useCallback must depend on `project` now that it "
-        "reads project-scoped localStorage keys directly"
+        "selectWorkflow's useCallback must depend on `project` and "
+        "`setSearchParams` now that it reads project-scoped localStorage "
+        "keys directly and writes the URL's ?workflow= param"
     )
 
 
@@ -1366,3 +1370,63 @@ def test_version_bumped_for_the_conductor_live_instance_legibility_fix():
     assert current > (7, 12, 44), (
         "PRISM_VERSION must be patch-bumped past 7.12.44 in the "
         "implementation commit for this third follow-up fix")
+
+
+# ---------------------------------------------------------------------------
+# Owner-found gap: /workflows had exactly one route and selectedWorkflowId
+# lived only in useState, so NO link could ever point at a specific behavior
+# (e.g. "plan-gate-check") -- every link landed on whatever was last
+# selected. Fixed by syncing selectedWorkflowId to ?workflow=<id> (the same
+# useSearchParams convention Understand's ?concept= already uses), read once
+# at mount and written back on every selectWorkflow() call so the address
+# bar always names the behavior actually on screen.
+# ---------------------------------------------------------------------------
+
+def test_selected_workflow_seeds_from_the_url_query_param():
+    page = _read("pages", "WorkflowsPage.tsx")
+    assert 'import { useNavigate, useSearchParams } from "react-router-dom";' in page
+    assert "const [searchParams, setSearchParams] = useSearchParams();" in page
+    assert (
+        'const [selectedWorkflowId, setSelectedWorkflowId] = useState(\n'
+        '    () => searchParams.get("workflow") || "conductor",\n'
+        '  );'
+    ) in page, (
+        "selectedWorkflowId must seed from ?workflow=<id> so a fresh page "
+        "load with the param pre-selects that behavior, falling back to "
+        "conductor when the param is absent")
+    assert (
+        'const selectedWorkflowRef = useRef(searchParams.get("workflow") || "conductor");'
+    ) in page, (
+        "selectedWorkflowRef (read by the catalog-load effect to pick the "
+        "initially-selected entry once /api/workflows resolves) must start "
+        "from the SAME url-seeded id as the state, not a hardcoded "
+        '"conductor"')
+
+
+def test_selecting_a_workflow_writes_the_url_so_the_link_is_shareable():
+    """Every selectWorkflow() call site -- directory click, drill-in via a
+    linked node, breadcrumb back -- routes through this ONE function, so
+    writing the url param here (rather than at each call site) is what makes
+    the address bar always match the canvas, no matter how the owner got
+    there."""
+    page = _read("pages", "WorkflowsPage.tsx")
+    fn_start = page.index("const selectWorkflow = useCallback(")
+    fn_body_end = page.index("}, [project, setSearchParams]);", fn_start)
+    body = page[fn_start:fn_body_end]
+
+    assert "selectedWorkflowRef.current = workflow.id;" in body
+    assert "setSelectedWorkflowId(workflow.id);" in body
+    set_params_idx = body.index("setSearchParams((prev) => {")
+    assert set_params_idx > body.index("setSelectedWorkflowId(workflow.id);"), (
+        "the url write should follow the state write, not race ahead of it")
+    call_body = _function_body(body, "setSearchParams((prev) => {")
+    assert "new URLSearchParams(prev)" in call_body, (
+        "must build off the CURRENT params (preserving ?project= and any "
+        "other existing query state), never a bare new URLSearchParams()")
+    assert 'next.set("workflow", workflow.id);' in call_body
+    assert "return next;" in call_body
+    tail = body[body.index(call_body) + len(call_body):]
+    assert re.match(r"\s*,\s*\{\s*replace:\s*true\s*\}\s*\)\s*;", tail), (
+        "setSearchParams must be called with { replace: true } -- clicking "
+        "through several behaviors is one page's view state changing, not "
+        "a new back-button stop each time")
