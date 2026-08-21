@@ -46,7 +46,7 @@ class JiraClient:
         kind='api_token' (task 64ba4755, FR-3), which targets the SITE
         directly with HTTP Basic auth instead."""
         params = {"jql": jql, "maxResults": max_results,
-                  "fields": "summary,status,assignee,updated"}
+                  "fields": "summary,status,assignee,updated,description"}
         if page_token:
             params["nextPageToken"] = page_token
 
