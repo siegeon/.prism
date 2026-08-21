@@ -345,6 +345,72 @@ def test_ac8_mirror_status_reports_the_chain_link_by_link(quiet_boot):
     assert "github" in body["adapters"]
 
 
+# ── task ccc395b8: CI-only leak into the mirror's guard singletons ────────
+_ORPHANED_TEARDOWN_MARKER = "leaked-from-ccc395b8"
+
+
+def test_zz1_simulates_a_teardown_that_never_resets_the_mirror_singletons(tmp_path):
+    """Reproduces the precondition, does not itself assert anything.
+
+    tests/unit/test_switch_on_pushes_backlog.py's `rig` fixture and
+    tests/unit/test_jira_backlog_push.py's `app` fixture each point
+    integration_store/integration_outbox/sync_prefs' process-global
+    singletons at a tmp_path-scoped instance, then reset all three back to
+    None with plain statements placed AFTER their
+    `with TestClient(api) as client: yield ...` block -- not in a
+    try/finally. If that `with` block's __exit__ ever raises (real lifespan
+    shutdown starts background threads, per conftest.py's quiet_boot
+    docstring), those reset lines never run and the singletons stay pinned
+    to that test's now-deleted tmp_path dbs for the rest of the pytest
+    process. This test stands in for that interrupted teardown: it pins the
+    same three singletons and deliberately performs no cleanup.
+    """
+    from prism_service.services import integration_outbox, integration_store, sync_prefs
+
+    orphan_dir = tmp_path / _ORPHANED_TEARDOWN_MARKER
+    orphan_dir.mkdir()
+    integration_store.set_integration_store(
+        integration_store.IntegrationStore(str(orphan_dir / "integrations.db")))
+    integration_outbox.set_outbox(
+        integration_outbox.IntegrationOutbox(str(orphan_dir / "outbox.db")))
+    sync_prefs.set_sync_preferences(
+        sync_prefs.SyncPreferences(str(orphan_dir / "sync_prefs.db")))
+
+
+def test_zz2_a_later_test_must_not_inherit_the_leaked_mirror_singletons():
+    """Task ccc395b8: proves the leak the previous test simulated is NOT
+    contained by any existing conftest isolation fixture.
+
+    tests/conftest.py already protects three other module-global registries
+    this exact way (_integration_adapter_registry_isolation,
+    _task_observer_registry_isolation, _collaboration_registry_isolation),
+    but none of them cover integration_store._integration_store,
+    integration_outbox._outbox, or sync_prefs._preferences. Once a fourth
+    autouse fixture snapshots/restores those three around every test, this
+    test observes a clean environment no matter what the previous test left
+    behind, and passes. Today it fails, because nothing resets them between
+    tests -- exactly the guard-refusal CI saw on PR #609's Linux run
+    (test_ac7b_mirroring_the_same_task_twice_creates_one_issue observing
+    first.created is False).
+    """
+    from prism_service.services import integration_outbox, integration_store, sync_prefs
+
+    store_path = str(getattr(integration_store.get_integration_store(), "_db_path", ""))
+    outbox_path = str(getattr(integration_outbox.get_outbox(), "_db_path", ""))
+    prefs_path = str(getattr(sync_prefs.get_sync_preferences(), "_path", ""))
+
+    assert _ORPHANED_TEARDOWN_MARKER not in store_path, (
+        "integration_store._integration_store still points at the previous "
+        f"test's orphaned tmp_path db ({store_path}) -- no conftest fixture "
+        "resets it between tests (task ccc395b8)")
+    assert _ORPHANED_TEARDOWN_MARKER not in outbox_path, (
+        "integration_outbox._outbox leaked the same way "
+        f"({outbox_path}) -- task ccc395b8")
+    assert _ORPHANED_TEARDOWN_MARKER not in prefs_path, (
+        "sync_prefs._preferences leaked the same way "
+        f"({prefs_path}) -- task ccc395b8")
+
+
 # ── AC-9: a broken mirror never breaks task creation ──────────────────────
 def test_ac9_a_failing_observer_does_not_fail_the_task(tmp_path):
     from prism_service.services import task_service
