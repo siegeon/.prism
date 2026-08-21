@@ -1072,7 +1072,7 @@ def test_conductor_instance_badge_shows_task_state_never_build_test_language():
     # The top run badge renders the conductor summary instead of the
     # build/test sentence when the conductor workflow is selected.
     badge = page[page.index('{(workflowRun || workflowRunError) && ('):page.index('{selectedHistoryRun && (')]
-    assert 'selectedWorkflowId === "conductor" && workflowRun\n              ? conductorRunSummary(workflowRun)' in badge
+    assert 'selectedWorkflowId === "conductor" && workflowRun\n                ? conductorRunSummary(workflowRun)' in badge
     assert 'selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)' in badge
     # The validation sentence (build X / test Y) still renders unchanged for
     # every other workflow -- this is an ADDED branch, not a rewrite.
@@ -1282,3 +1282,87 @@ def test_version_bumped_for_the_retry_visibility_and_poll_stomping_fixes():
     assert current > (7, 12, 42), (
         "PRISM_VERSION must be patch-bumped past 7.12.42 in the "
         "implementation commit for these two follow-up fixes")
+
+
+# ---------------------------------------------------------------------------
+# Third follow-up (owner, live on this exact instance, task a205eb7a mid-
+# drive): "it is not clear what [behavior] is currently running... remember
+# we have the logic to fill up the panel of the task while that workflow is
+# active." Confirmed live via Playwright: fetchConductorRunFromTask's
+# runtime.currentStep (derived from FRESH history) and data.conductorTask.
+# workflowStep (the caller's STALE rail-poll field) could name two DIFFERENT
+# steps on screen at once for a task advancing quickly -- and the only
+# on-canvas "currently running" signal was a tiny ~85px node's 3px fill bar
+# and a 10px "RUN Xs" corner label, nothing like the large, legible
+# SdlcProgress panel TaskDetailPage/PlanView already use for this.
+# ---------------------------------------------------------------------------
+
+def test_fetch_conductor_run_prefers_the_fresh_task_over_the_callers_stale_copy():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    builder = _function_body(
+        data,
+        "export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {\n  return api.get<{ task?: ConductorFreshTask; history: ConductorHistoryRow[] }>(",
+    )
+    assert "const title = fresh?.title ?? task.title;" in builder
+    assert "const status = fresh?.status ?? task.status;" in builder
+    assert "const workflowStep = fresh?.workflow_step ?? task.workflow_step;" in builder
+    assert "const gateState = fresh?.gate_state ?? task.gate_state;" in builder
+    # runtime.currentStep and conductorTask.workflowStep must derive from the
+    # SAME freshly-read values -- never one fresh (history-derived) and one
+    # stale (the caller's rail-poll snapshot), which is what let two
+    # different step names appear on screen at once.
+    assert "currentStep: last?.step ?? workflowStep ?? \"\"," in builder
+    assert "workflowStep, gateState, stranded," in builder
+
+
+def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";' in page
+    # Synthesized from data this page already holds (the step's own
+    # average_duration_seconds, the run's own runtime.startedAt) -- not a
+    # second, slower phase_progress fetch (scope=full costs ~30s cold).
+    phase_memo = _function_body(
+        page,
+        'const conductorLivePhase = useMemo<PhaseProgress | null>(() => {',
+    )
+    assert 'selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable"' in phase_memo
+    assert "step?.average_duration_seconds" in phase_memo
+
+    activity_memo = _function_body(page, "const conductorLiveActivity = useMemo<Activity | null>(() => {")
+    # Reuses ACTIVITY_META's existing vocabulary (awaiting_gate/blocked/
+    # working) -- the SAME states LiveBar/ConductorPage/PlanView already
+    # render, never a new label invented for this one view.
+    assert '"awaiting_gate"' in activity_memo
+    assert '"blocked"' in activity_memo
+    assert '"working"' in activity_memo
+
+    render_block = page[page.index("{(workflowRun || workflowRunError) && ("):page.index("{selectedHistoryRun && (")]
+    assert "conductorLivePhase && (" in render_block
+    assert "<SdlcProgress" in render_block
+    assert "phase={conductorLivePhase}" in render_block
+    assert "activity={conductorLiveActivity}" in render_block
+
+
+def test_sdlc_progress_reuse_never_touches_validation_or_a_finished_replay():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Null for anything but a LIVE (Runnable, i.e. not yet done) conductor
+    # instance -- validation's own live-run badge and a finished conductor
+    # replay must render exactly as before.
+    phase_memo = _function_body(page, "const conductorLivePhase = useMemo<PhaseProgress | null>(() => {")
+    guard = phase_memo.index('if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;')
+    assert guard == phase_memo.index("if (")
+
+
+def test_version_bumped_for_the_conductor_live_instance_legibility_fix():
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must be plain release semver; got "
+        f"{ver_src.splitlines()[:1]!r}")
+    current = tuple(int(x) for x in m.groups())
+    assert current > (7, 12, 44), (
+        "PRISM_VERSION must be patch-bumped past 7.12.44 in the "
+        "implementation commit for this third follow-up fix")

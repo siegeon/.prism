@@ -274,16 +274,39 @@ function conductorTimelineFromHistory(
  * replay yet) so the canvas shows its live current-step progress the same
  * way a running scripted workflow's step does; a done task gets a full
  * `timeline` so it replays start to finish like a completed validation run. */
+/** The fields of a fresh task row the conductor run cares about --
+ * intentionally the same names the REST task shape uses (workflow_step,
+ * gate_state), so no remapping is needed between this and ConductorRunTask. */
+type ConductorFreshTask = {
+  title?: string;
+  status?: string;
+  workflow_step?: string | null;
+  gate_state?: string | null;
+};
+
 export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {
-  return api.get<{ history: ConductorHistoryRow[] }>(
+  return api.get<{ task?: ConductorFreshTask; history: ConductorHistoryRow[] }>(
     `/api/tasks/${encodeURIComponent(task.id)}?project=${encodeURIComponent(project)}&scope=core`,
-  ).then(({ history }) => {
+  ).then(({ task: fresh, history }) => {
+    // The caller's `task` comes off the rail's own last poll/SSE push, which
+    // can be a step or two behind a task that is genuinely advancing right
+    // now -- this SAME request already returns the current row, so read the
+    // step/status/gate off IT instead of the caller's possibly-stale copy.
+    // Before this fix, `runtime.currentStep` below (derived from `history`,
+    // always fresh) and `conductorTask.workflowStep` (the caller's stale
+    // field) could name two DIFFERENT steps on the same screen at once --
+    // exactly the "not clear what is currently running" the owner reported,
+    // confirmed live against task a205eb7a mid-drive.
+    const title = fresh?.title ?? task.title;
+    const status = fresh?.status ?? task.status;
+    const workflowStep = fresh?.workflow_step ?? task.workflow_step;
+    const gateState = fresh?.gate_state ?? task.gate_state;
     const timeline = conductorTimelineFromHistory(history ?? []);
     const last = timeline.at(-1);
-    const done = task.status === "done";
+    const done = status === "done";
     const stranded = Boolean(task.stranded);
     const runtime = done ? null : {
-      currentStep: last?.step ?? task.workflow_step ?? "",
+      currentStep: last?.step ?? workflowStep ?? "",
       status: "running",
       startedAt: last?.startedAt ?? new Date().toISOString(),
     };
@@ -297,8 +320,8 @@ export function fetchConductorRunFromTask(project: string, task: ConductorRunTas
         project,
         passed: done && !stranded,
         conductorTask: {
-          id: task.id, title: task.title, status: task.status ?? "",
-          workflowStep: task.workflow_step, gateState: task.gate_state, stranded,
+          id: task.id, title: title ?? task.title, status: status ?? "",
+          workflowStep, gateState, stranded,
         },
       },
     };

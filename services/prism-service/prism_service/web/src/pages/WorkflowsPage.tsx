@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
+import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
@@ -255,6 +257,7 @@ const IDLE_DRAG: DragState = {
 export default function WorkflowsPage() {
   const [project] = useProject();
   const navigate = useNavigate();
+  const reduced = useReducedMotion();
   // The conductor's rail shows tasks the conductor is actually engaged with
   // RIGHT NOW -- not a WorkflowCore run. conductor drives real tasks through
   // Python (advance_task/gate_decide), never through AosWorkflows, so there
@@ -475,6 +478,37 @@ export default function WorkflowsPage() {
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);
+  // The conductor's live instance view (a task still in flight, not a
+  // replay) reuses SdlcProgress -- the SAME segmented, legibly-labeled
+  // "fill up the panel while it's active" bar TaskDetailPage/PlanView
+  // already render for exactly this -- instead of relying on the small
+  // canvas node's own tiny progress fill (owner: "it is not clear what is
+  // currently running... we have the logic to fill up the panel of the
+  // task while that workflow is active"). `phase`/`activity` are
+  // synthesized client-side from data this page already has (the current
+  // step's average_duration_seconds, the run's own startedAt) rather than
+  // a second, slower phase_progress fetch (scope=full, ~30s cold) -- the
+  // same tradeoff the canvas's own activeProgress already makes.
+  const conductorLivePhase = useMemo<PhaseProgress | null>(() => {
+    if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
+    const step = selectedWorkflow?.steps.find((candidate) => candidate.id === workflowRun.runtime?.currentStep);
+    const typical = step?.average_duration_seconds ?? undefined;
+    const startedAt = workflowRun.runtime.startedAt;
+    const inStepS = startedAt ? Math.max(0, (Date.now() - Date.parse(startedAt)) / 1000) : 0;
+    return {
+      pct: typical && typical > 0 ? Math.min(0.97, inStepS / typical) : undefined,
+      basis: "time",
+      in_step_s: inStepS,
+      typical_s: typical,
+    };
+  }, [selectedWorkflowId, workflowRun, selectedWorkflow]);
+  const conductorLiveActivity = useMemo<Activity | null>(() => {
+    const t = conductorLivePhase && workflowRun?.data.conductorTask;
+    if (!t) return null;
+    return {
+      state: t.gateState === "pending" ? "awaiting_gate" : t.gateState === "failed" ? "blocked" : "working",
+    };
+  }, [conductorLivePhase, workflowRun]);
   const selectedStepResult = selectedStep?.id === "test"
     ? workflowRun?.data.tests
     : selectedStep?.id === "build" ? workflowRun?.data.build : undefined;
@@ -1552,17 +1586,31 @@ export default function WorkflowsPage() {
           )}
         </div>
         {(workflowRun || workflowRunError) && (
-          <div className={`absolute left-4 top-4 z-20 max-w-[620px] border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
+          <div className={`absolute left-4 top-4 z-20 ${conductorLivePhase ? "w-[420px]" : "max-w-[620px]"} border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
             workflowRunError ? "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
             : selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)
             : workflowRun?.status === "Complete" ? (workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300")
             : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
           }`}>
-            {workflowRunError || (selectedWorkflowId === "conductor" && workflowRun
-              ? conductorRunSummary(workflowRun)
-              : workflowRun?.status === "Complete"
-                ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
-                : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
+            <div>
+              {workflowRunError || (selectedWorkflowId === "conductor" && workflowRun
+                ? conductorRunSummary(workflowRun)
+                : workflowRun?.status === "Complete"
+                  ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
+                  : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
+            </div>
+            {conductorLivePhase && (
+              <div className="mt-2">
+                <SdlcProgress
+                  step={workflowRun?.data.conductorTask?.workflowStep ?? undefined}
+                  phase={conductorLivePhase}
+                  status={workflowRun?.data.conductorTask?.status}
+                  activity={conductorLiveActivity}
+                  reduced={reduced}
+                  hideTokens
+                />
+              </div>
+            )}
           </div>
         )}
         {selectedHistoryRun && (
