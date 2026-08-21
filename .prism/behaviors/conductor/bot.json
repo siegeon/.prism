@@ -5,7 +5,6 @@
     {
       "fsmId": "pipeline",
       "behaviorIds": [
-        "land",
         "ci-local-dev",
         "story-gate-check",
         "plan-gate-check",
@@ -15,7 +14,8 @@
         "write-failing-tests-loop",
         "implement-tasks-loop",
         "red-gate-status",
-        "green-gate-status"
+        "green-gate-status",
+        "land"
       ]
     }
   ]

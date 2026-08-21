@@ -1276,3 +1276,26 @@ def test_land_json_completes_the_real_ship_pipeline_shape():
     assert "${branch}" in by_id["merge"]["command"]
     assert "--squash" in by_id["merge"]["command"]
     assert "--delete-branch" in by_id["merge"]["command"]
+
+
+def test_land_is_ordered_last_in_bot_json_so_it_renders_as_the_terminal_step():
+    """First cut of the nesting fix put "land" wherever bot.json's own
+    behaviorIds happened to list it -- FIRST, right after "ci-local-dev" --
+    so it rendered as the 2nd item under CONDUCTOR (right after "Build and
+    test"), not as the visible FINAL step the owner asked for. Display
+    order follows bot.json's behaviorIds order (_conductor_behavior_
+    workflows iterates it verbatim, confirmed live by a teammate's
+    Playwright screenshot after the first cut shipped). Pins the checked-in
+    bot.json directly, same discipline as the land.json shape test above."""
+    import json
+
+    path = (Path(__file__).resolve().parent.parent.parent.parent.parent
+           / ".prism" / "behaviors" / "conductor" / "bot.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    fsm = next(f for f in data["fsms"] if f["fsmId"] == "pipeline")
+    ids = fsm["behaviorIds"]
+    assert ids[-1] == "land", (
+        f"'land' must be the LAST entry so it renders as conductor's "
+        f"terminal step, not wherever it happened to be listed: {ids}")
+    assert ids.count("land") == 1
