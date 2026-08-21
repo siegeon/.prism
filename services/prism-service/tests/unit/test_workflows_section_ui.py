@@ -1430,3 +1430,38 @@ def test_selecting_a_workflow_writes_the_url_so_the_link_is_shareable():
         "setSearchParams must be called with { replace: true } -- clicking "
         "through several behaviors is one page's view state changing, not "
         "a new back-button stop each time")
+# --------------------------------------------------------------------------
+# Task a205eb7a: the top-right toolbar's "Simulate flow" button (rendered
+# whenever the selected workflow's steps are not all execution="scripted")
+# was a mock step-through animation nobody asked for. Remove the button and
+# every bit of code that only existed to drive it, without touching the
+# sibling "Run workflow" (scripted) path or the historical-run/replay
+# affordances, which share the same toolbar and some of the same state.
+# --------------------------------------------------------------------------
+
+def test_simulate_flow_button_is_removed_from_the_toolbar():
+    """No rendered "Simulate flow" affordance, and none of the dead code
+    that only existed to drive it: the startFlowSimulation handler, the
+    "simulation" arm of the testModeRef union type, and the effect tail
+    gated on it. A single case-insensitive sweep for "simulat" across the
+    comment-stripped source is the right invariant here (not a fixed
+    character window) -- every one of those symbols contains that
+    substring, and the premise notes confirm (via a targeted grep this
+    session) that no OTHER, unrelated code in this file does. The sibling
+    "Run workflow" (scripted) button must survive untouched."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    leaked = re.findall(r"[A-Za-z][\w\"' ]*simulat[\w\"' ]*", page, re.IGNORECASE)
+    assert not leaked, (
+        f"WorkflowsPage.tsx still references simulation-only code: {leaked!r} "
+        "-- the Simulate flow button, startFlowSimulation, the "
+        "testModeRef \"simulation\" union arm, and its guarded effect tail "
+        "must all be deleted together")
+
+    assert "onClick={runScriptedWorkflow}" in page, (
+        "the sibling \"Run workflow\" button must still call "
+        "runScriptedWorkflow directly, not through the removed ternary")
+    assert 'disabled={startingWorkflow}' in page, (
+        "the Run workflow button's disabled state must survive the removal")
+    assert "Run workflow" in page and "Starting…" in page, (
+        "the Run workflow button's labels must survive the removal")
