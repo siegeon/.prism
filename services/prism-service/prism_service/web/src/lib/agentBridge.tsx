@@ -11,9 +11,15 @@
  * Consent lives entirely on this side: nothing here is reachable by an agent
  * until the signed-in user calls `enable()` (wired to the Settings toggle,
  * next to the existing access-key panel — same trust model). The session
- * token this mints is held ONLY in React state (never localStorage — it
- * must not outlive the tab) and is a distinct, narrow credential from the
- * user's general access key.
+ * token this mints is a distinct, narrow credential from the user's general
+ * access key, and is mirrored into `sessionStorage` (never `localStorage` —
+ * that would let it outlive the tab entirely, which is a real security
+ * regression, not just a UX one). `sessionStorage` is the correct middle
+ * ground: it survives a same-tab reload (React state alone does not — a
+ * plain F5 wiped `session` back to null even though the user never touched
+ * the toggle, which the owner read as "the feature turned itself off"), but
+ * it IS cleared automatically the moment the tab/window actually closes, so
+ * "must not outlive the tab" still holds. See v7.13.4's changelog entry.
  *
  * Command channel: reuses this app's existing live-push infrastructure
  * (lib/sharedStream.ts's subscribeStream — the ref-counted single-
@@ -59,6 +65,40 @@ type AgentBridgeState = {
 
 const AgentBridgeContext = createContext<AgentBridgeState | null>(null);
 
+// sessionStorage (NOT localStorage, see this file's header docstring) is the
+// only durable copy of a bridge session — it lets a same-tab reload resume
+// transparently instead of silently forgetting a session the user never
+// asked to end, while still dying with the tab itself.
+const STORAGE_KEY = "prism.agentBridgeSession";
+
+function loadPersistedSession(): BridgeSession | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BridgeSession>;
+    if (typeof parsed?.id !== "string" || typeof parsed?.token !== "string") {
+      return null; // malformed/stale entry — never hydrate a half session
+    }
+    return parsed as BridgeSession;
+  } catch {
+    return null;
+  }
+}
+
+function persistSession(s: BridgeSession | null): void {
+  try {
+    if (s) {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    } else {
+      sessionStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {
+    // sessionStorage can throw (private-mode quirks, storage disabled) —
+    // persistence is a convenience for the NEXT reload, never a hard
+    // requirement for the bridge to work this tab-load.
+  }
+}
+
 /** Read from any component (e.g. the Settings toggle) to show/drive state. */
 export function useAgentBridge(): AgentBridgeState {
   const ctx = useContext(AgentBridgeContext);
@@ -92,7 +132,13 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
 }
 
 export function AgentBridgeProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<BridgeSession | null>(null);
+  // Lazy initializer: runs once on mount, so a reload of the SAME tab
+  // transparently resumes whatever session was live before the reload
+  // instead of starting `null` and looking like the feature turned itself
+  // off. The SSE subscribe effect below already depends on `[session, ...]`
+  // and re-subscribes whenever `session` changes, so hydrating here is all
+  // that's needed — no new SSE plumbing.
+  const [session, setSession] = useState<BridgeSession | null>(loadPersistedSession);
   const [enabling, setEnabling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -111,6 +157,7 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
         project: getProject(),
       });
       setSession(s);
+      persistSession(s);
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {
@@ -121,6 +168,8 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
   const disable = useCallback(async () => {
     const s = sessionRef.current;
     setSession(null);
+    persistSession(null); // explicit end must actually end, not leave a
+    // resurrectable stale entry for the next reload to hydrate from.
     if (!s) return;
     try {
       await api.delete(
@@ -138,6 +187,7 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
     const onUnload = () => {
       const s = sessionRef.current;
       if (!s) return;
+      persistSession(null); // explicit end must actually end.
       try {
         void fetch(
           `/api/agent-bridge/sessions/${s.id}?token=${encodeURIComponent(s.token)}`,

@@ -479,3 +479,59 @@ def test_read_action_returns_html_not_just_text_content():
     read_branch = src.split('cmd.action === "read"', 1)[1].split("} else {", 1)[0]
     assert "outerHTML" in read_branch
     assert "html:" in read_branch
+
+
+def test_bridge_session_persists_to_session_storage_not_local_storage():
+    """Source-reading pin (this SPA has no JS test runner -- see
+    tests/unit/test_conductor_page_animated_cleanup_ui.py for the repo's
+    established convention). Real regression, owner live tonight: "for some
+    reason the remote assist just turned itself off" -- because the session
+    token lived ONLY in a React useState, a plain page reload (same tab,
+    user never touched the toggle) reset it to null. The server already
+    treats an untouched session as good for 30 days (v7.13.1); the client
+    just had nowhere durable to remember it across ITS OWN reloads.
+    `sessionStorage` is the fix -- it dies with the tab (unlike
+    `localStorage`, which would be a real security regression) but survives
+    a same-tab reload. This pins that the actual read/write call sites use
+    `sessionStorage`, not just that the string appears somewhere in the
+    file, and that `localStorage` is never used to persist the session."""
+    src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
+
+    assert "sessionStorage" in src
+    # localStorage must never be used to persist the bridge session — the
+    # docstring explaining why it's avoided is fine, an actual call is not.
+    assert "localStorage.setItem" not in src
+    assert "localStorage.getItem" not in src
+
+    # loadPersistedSession(): the mount-time hydration path must actually
+    # read from sessionStorage, not merely mention it in a comment.
+    load_fn = src.split("function loadPersistedSession()", 1)[1].split(
+        "\nfunction ", 1)[0]
+    assert "sessionStorage.getItem(STORAGE_KEY)" in load_fn
+
+    # The lazy useState initializer must actually be wired to that loader —
+    # this is what makes a reload transparently resume the same session.
+    assert "useState<BridgeSession | null>(loadPersistedSession)" in src
+
+    # persistSession(): the shared write/clear path.
+    persist_fn = src.split("function persistSession(", 1)[1].split(
+        "\n/**", 1)[0]
+    assert "sessionStorage.setItem(STORAGE_KEY" in persist_fn
+    assert "sessionStorage.removeItem(STORAGE_KEY)" in persist_fn
+
+    # enable(): a newly-minted session must be written through.
+    enable_fn = src.split("const enable = useCallback(", 1)[1].split(
+        "const disable = useCallback(", 1)[0]
+    assert "persistSession(s)" in enable_fn
+
+    # disable(): an explicit end must actually clear the durable copy, not
+    # just the in-memory one, or a later reload would resurrect it.
+    disable_fn = src.split("const disable = useCallback(", 1)[1].split(
+        "// Tab-close revocation", 1)[0]
+    assert "persistSession(null)" in disable_fn
+
+    # The existing beforeunload-triggered explicit DELETE must also clear
+    # the durable copy for the same reason.
+    onunload_fn = src.split("const onUnload = () => {", 1)[1].split(
+        "window.addEventListener", 1)[0]
+    assert "persistSession(null)" in onunload_fn

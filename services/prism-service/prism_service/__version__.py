@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.3"
+PRISM_VERSION = "7.13.4"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5172,4 +5172,25 @@ PRISM_VERSION_NOTES += (
     "(data_dir.agent_bridge_screenshot_dir), never inline through the MCP "
     "tool's text response, and returns image_path for the calling agent "
     "to open directly with its own file-reading tool."
+    "\n\n"
+    "7.13.4: fixed agent-bridge sessions turning themselves off on a plain "
+    "page reload -- owner, live, hitting it twice in one night: 'for some "
+    "reason the remote assist just turned itself off', then 'create a sub "
+    "agent to stop turning that feature off'. Root cause: the session "
+    "token lived ONLY in a React useState (agentBridge.tsx), never anything "
+    "durable in the tab itself, so ANY reload (F5/Ctrl+R) reset `session` "
+    "to null even though the SAME tab was still open and the user never "
+    "touched the toggle -- 7.13.1 already made the server hold an untouched "
+    "session good for 30 days, so the client had nowhere to keep "
+    "remembering it across its own reloads. Fixed by mirroring the session "
+    "into `sessionStorage` (never `localStorage` -- that would let it "
+    "outlive the tab entirely, a real security regression): written on "
+    "enable(), read back via a lazy useState initializer on mount so the "
+    "existing SSE-subscribe effect (already keyed on `[session, ...]`) just "
+    "resumes, and cleared on disable() and on the existing "
+    "beforeunload-triggered explicit DELETE so an explicit end actually "
+    "ends. A daemon restart is UNCHANGED and still drops every live "
+    "session -- that's server memory genuinely gone, documented as correct "
+    "in agent_bridge.py's module docstring, and this fix does not and "
+    "should not touch it (sessions are still never written to sqlite)."
 )
