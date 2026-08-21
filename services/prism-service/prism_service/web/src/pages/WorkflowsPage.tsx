@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
-import { fetchActiveWorkflowRun, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
+import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
@@ -135,6 +135,23 @@ function formatDuration(seconds?: number | null): string {
   const minutes = Math.floor(whole / 60);
   const remainder = whole % 60;
   return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+/** Summary text for the top run badge when the instance is a conductor
+ * task, not a scripted validation run -- the task's own title/step/gate
+ * state, never the build/test phrasing that badge otherwise renders. */
+function conductorRunSummary(run: WorkflowRun): string {
+  const t = run.data.conductorTask;
+  if (!t) return "";
+  if (t.status === "done") return `${t.title} · ${t.stranded ? "done · not yet on origin/main" : "shipped"}`;
+  const gate = t.gateState === "pending" ? " · awaiting gate" : t.gateState === "failed" ? " · gate failed" : "";
+  return `${t.title} · ${(t.workflowStep ?? "").replace(/_/g, " ") || "in progress"}${gate}`;
+}
+
+function conductorRunTone(run: WorkflowRun): string {
+  if (run.status === "Terminated") return "border-amber-300/60 text-amber-200";
+  if (run.status === "Complete") return run.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300";
+  return "border-[color:var(--accent-solid)]/60 text-[color:var(--text-secondary)]";
 }
 
 type FailureEvidence = { location: string | null; lines: string[] };
@@ -467,10 +484,18 @@ export default function WorkflowsPage() {
   // Grow from the left; reversing the engine's newest-first response leaves
   // the most recent run at the right edge of the filled span.
   const historyOffset = 0;
-  const selectedHistoryRun = workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null;
+  // Conductor keeps no separate run-history array (workflowRunHistory stays
+  // validation-only, see refreshRunHistory below) -- the synthesized run
+  // openConductorInstance just fetched IS the selected instance, sitting in
+  // workflowRun itself rather than a list this page polls.
+  const selectedHistoryRun = selectedWorkflowId === "conductor"
+    ? (workflowRun && workflowRun.id === selectedHistoryRunId ? workflowRun : null)
+    : workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null;
   const selectedHistoryFrameTone = selectedHistoryRun?.status === "Terminated"
     ? "border-amber-300"
-    : selectedHistoryRun?.data.passed ? "border-emerald-400" : "border-red-400";
+    : selectedHistoryRun?.status === "Runnable"
+      ? "border-[color:var(--accent-solid)]"
+      : selectedHistoryRun?.data.passed ? "border-emerald-400" : "border-red-400";
   const runPillTone = (pillIndex: number): string => {
     const run = visibleRunHistory[pillIndex - historyOffset];
     if (!run) return "bg-[color:var(--border-default)]/20";
@@ -573,8 +598,8 @@ export default function WorkflowsPage() {
               ? `${task.title} · done`
               : `${task.title} · ${selectedWorkflow?.steps.find((step) => step.id === task.workflow_step)?.purpose ?? task.workflow_step}${task.gate_state === "pending" ? " · awaiting gate" : ""}`
             : undefined,
-          ringHighlighted: false,
-          onClick: task ? () => navigate(`/tasks/${task.id}`) : undefined,
+          ringHighlighted: task?.id === selectedHistoryRunId,
+          onClick: task ? () => openConductorInstance(task) : undefined,
         };
       })
     : Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
@@ -762,6 +787,20 @@ export default function WorkflowsPage() {
     const historicalWorkflow = historicalWorkflowForRun(selectedWorkflow, run);
     testWorkflowRef.current = historicalWorkflow;
     graphRef.current.setDef(historicalWorkflow);
+    if (run.runtime?.status === "running") {
+      // A conductor task still in flight has no closed timeline to replay --
+      // show where it stands right now, the same way a live scripted run's
+      // current step gets a progress bar (the rAF loop below reads
+      // workflowRun.runtime for exactly this, off the SAME `run` this just
+      // set into state).
+      testModeRef.current = null;
+      replayTimelineRef.current = [];
+      setReplayStoppedAt(null);
+      setReplayEventIndex(null);
+      const index = historicalWorkflow.steps.findIndex((step) => step.id === run.runtime?.currentStep);
+      setTestStep(index >= 0 ? index : null);
+      return;
+    }
     const historicalStepIds = new Set(historicalWorkflow.steps.map((step) => step.id));
     replayTimelineRef.current = (run.timeline ?? []).filter((event) =>
       event.status !== "skipped" && historicalStepIds.has(event.step));
@@ -790,6 +829,23 @@ export default function WorkflowsPage() {
     });
   }, [selectedWorkflow]);
 
+  // The conductor rail's own version of clicking a validation pill: open
+  // the SAME animated instance view (replayHistoricalRun/beginHistoricalReplay
+  // above), fed from a WorkflowRun synthesized off the task's own history
+  // instead of a WorkflowCore run (owner 2026-08-21: the conductor rail
+  // must use the same click-to-open logic "Build and test"'s rail already
+  // has, not a plain navigate-away). Falls back to the task page if the
+  // synth fetch fails, so a pill is never a dead click.
+  const openConductorInstance = useCallback((task: ManagedTask) => {
+    fetchConductorRunFromTask(project, {
+      id: task.id, title: task.title, status: task.status,
+      workflow_step: task.workflow_step, gate_state: task.gate_state,
+      stranded: strandedTaskIds.has(task.id),
+    })
+      .then((run) => replayHistoricalRun(run))
+      .catch(() => navigate(`/tasks/${task.id}`));
+  }, [project, strandedTaskIds, replayHistoricalRun, navigate]);
+
   const leaveHistoricalReplay = useCallback(() => {
     setSelectedHistoryRunId(null);
     setWorkflowRun(null);
@@ -802,6 +858,12 @@ export default function WorkflowsPage() {
   }, [selectedWorkflow]);
 
   useEffect(() => {
+    // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
+    // instance route that does not exist for a conductor task id. The
+    // conductor's live state already comes from useConductorState's own SSE
+    // push (conductorManaged above) -- reusing that here would be the
+    // duplicate-source mistake this hook exists to prevent.
+    if (selectedWorkflowId === "conductor") return;
     if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;
     let cancelled = false;
     const poll = window.setInterval(() => {
@@ -1442,10 +1504,17 @@ export default function WorkflowsPage() {
           )}
         </div>
         {(workflowRun || workflowRunError) && (
-          <div className={`absolute left-4 top-4 z-20 max-w-[620px] border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${workflowRun?.status === "Complete" ? workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300" : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"}`}>
-            {workflowRunError || (workflowRun?.status === "Complete"
-              ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build.status} · test ${workflowRun.data.tests.status} · select a step for results`
-              : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
+          <div className={`absolute left-4 top-4 z-20 max-w-[620px] border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
+            workflowRunError ? "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
+            : selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)
+            : workflowRun?.status === "Complete" ? (workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300")
+            : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
+          }`}>
+            {workflowRunError || (selectedWorkflowId === "conductor" && workflowRun
+              ? conductorRunSummary(workflowRun)
+              : workflowRun?.status === "Complete"
+                ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
+                : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
           </div>
         )}
         {selectedHistoryRun && (

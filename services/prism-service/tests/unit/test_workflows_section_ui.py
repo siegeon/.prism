@@ -1001,3 +1001,130 @@ def test_replay_step_fill_spans_execution_and_inter_step_wait_without_a_pause():
     assert "REPLAY_MAX_STEP_MS = 5000" in page
     assert "replayStepMs(event) + replayGapMs(event, next)" in page
     assert "setReplayEventIndex((index) => (index ?? 0) + 1), duration" in page
+
+
+# ---------------------------------------------------------------------------
+# The conductor rail's pill click opens the SAME animated instance view
+# "Build and test"'s rail already has (owner 2026-08-21: "when i click on
+# that bar it opens the INSTANCE of the workflow its describing, theres a
+# whole animation and everything, please make sure the conductor view is
+# using that same logic"). Before this, a conductor pill's onClick was
+# `navigate('/tasks/${task.id}')` -- a plain page redirect with no overlay,
+# no replay, no reused machinery at all.
+# ---------------------------------------------------------------------------
+
+def test_conductor_pill_reuses_replay_history_run_instead_of_navigating_away():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # The click handler feeds the SAME replayHistoricalRun/beginHistoricalReplay
+    # pipeline validation's rail already drives -- no second, parallel
+    # "instance view" implementation for conductor.
+    handler = _function_body(page, "const openConductorInstance = useCallback((task: ManagedTask) => {")
+    assert "fetchConductorRunFromTask(project" in handler
+    assert "replayHistoricalRun(run)" in handler
+    # A synth fetch failure still lands the owner somewhere real, never a
+    # dead pill.
+    assert "navigate(`/tasks/${task.id}`)" in handler
+
+    # The rail's onClick calls the new handler, not navigate directly.
+    conductor_pills = page.index('const railPills: RailPill[] = selectedWorkflowId === "conductor"')
+    validation_branch = page.index(": Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {\n        const run = visibleRunHistory")
+    conductor_branch = page[conductor_pills:validation_branch]
+    assert "onClick: task ? () => openConductorInstance(task) : undefined" in conductor_branch
+    assert "navigate(`/tasks/${task.id}`)" not in conductor_branch
+
+
+def test_conductor_run_is_synthesized_from_the_tasks_own_history_not_a_workflowcore_run():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    assert 'export function fetchConductorRunFromTask' in data
+    assert '/api/tasks/${encodeURIComponent(task.id)}?project=' in data
+    assert 'scope=core' in data
+    # conductor_service.advance_task writes exactly this shape (details=
+    # "from=X; to=Y...") -- the timeline is built off the task's OWN audit
+    # history, there is no separate run-history endpoint for it.
+    assert 'row.action !== "advance_task"' in data
+    assert '/to=([^;]+)/' in data
+    # tests/build are optional -- a conductor run has neither, and nothing
+    # should have to fake them to satisfy the WorkflowRun type.
+    assert "tests?: WorkflowStepResult;" in data
+    assert "build?: WorkflowStepResult;" in data
+    assert "conductorTask?: {" in data
+
+
+def test_conductor_instance_badge_shows_task_state_never_build_test_language():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    summary = _function_body(page, "function conductorRunSummary(run: WorkflowRun): string {")
+    assert "run.data.conductorTask" in summary
+    assert "t.title" in summary
+    assert "shipped" in summary
+    assert "awaiting gate" in summary
+    assert "build" not in summary.lower()
+    # (gateState/workflowStep legitimately contain "test" as a substring
+    # artifact -- "gaTeSTate" -- so assert the absence of the actual
+    # validation phrasing instead of a bare "test" substring.)
+    assert "build ${" not in summary and "· test" not in summary
+
+    # The top run badge renders the conductor summary instead of the
+    # build/test sentence when the conductor workflow is selected.
+    badge = page[page.index('{(workflowRun || workflowRunError) && ('):page.index('{selectedHistoryRun && (')]
+    assert 'selectedWorkflowId === "conductor" && workflowRun\n              ? conductorRunSummary(workflowRun)' in badge
+    assert 'selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)' in badge
+    # The validation sentence (build X / test Y) still renders unchanged for
+    # every other workflow -- this is an ADDED branch, not a rewrite.
+    assert "build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status}" in badge
+
+
+def test_a_conductor_task_still_in_flight_shows_live_progress_not_a_stale_replay():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    begin = _function_body(page, "const beginHistoricalReplay = useCallback((run: WorkflowRun) => {")
+    live_branch_start = begin.index('if (run.runtime?.status === "running") {')
+    replay_branch_start = begin.index("const historicalStepIds = new Set(historicalWorkflow.steps.map((step) => step.id));")
+    assert live_branch_start < replay_branch_start
+    live_branch = begin[live_branch_start:replay_branch_start]
+    # No timeline replay for a task that hasn't finished -- just occupy its
+    # current step, the same way a running scripted workflow's step gets a
+    # live progress bar (activeProgress reads workflowRun.runtime for this).
+    assert "testModeRef.current = null" in live_branch
+    assert "replayTimelineRef.current = []" in live_branch
+    assert "run.runtime?.currentStep" in live_branch
+
+
+def test_conductor_run_poll_effect_never_hits_the_validation_only_run_endpoint():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    poll_effect = page[
+        page.index('if (selectedWorkflowId === "conductor") return;'):
+        page.index("fetchWorkflowRun(workflowRun.id).then((next) => {")
+    ]
+    # GET /api/workflows/runs/:id is a WorkflowCore-instance route; a
+    # conductor task id would 404 against it. The guard must precede the
+    # fetch, not follow it.
+    assert 'if (selectedWorkflowId === "conductor") return;' in poll_effect
+    assert poll_effect.index('if (selectedWorkflowId === "conductor") return;') < \
+        poll_effect.index('if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;')
+
+
+def test_selected_history_run_resolves_off_the_live_run_for_conductor():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # workflowRunHistory stays validation-only (refreshRunHistory), so
+    # conductor's "selected instance" must resolve off workflowRun itself,
+    # never off that array (which would always be empty for it).
+    block = page[page.index("const selectedHistoryRun = selectedWorkflowId"):page.index("const selectedHistoryFrameTone")]
+    assert 'workflowRun && workflowRun.id === selectedHistoryRunId ? workflowRun : null' in block
+    assert 'workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null' in block
+
+
+def test_version_bumped_for_the_conductor_instance_view_reuse():
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must be plain release semver; got "
+        f"{ver_src.splitlines()[:1]!r}")
+    current = tuple(int(x) for x in m.groups())
+    assert current > (7, 12, 41), (
+        "PRISM_VERSION must be patch-bumped past 7.12.41 in the "
+        "implementation commit for this user-visible /workflows change")

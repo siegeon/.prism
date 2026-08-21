@@ -103,9 +103,24 @@ export type WorkflowRun = {
     definition?: {
       steps?: Array<{ id: string }>;
     };
-    tests: WorkflowStepResult;
-    build: WorkflowStepResult;
+    // Optional: a run synthesized from a conductor task (see
+    // fetchConductorRunFromTask below) has neither -- there is no
+    // WorkflowCore build/test result behind a conductor step.
+    tests?: WorkflowStepResult;
+    build?: WorkflowStepResult;
     passed: boolean;
+    /** Present only on a run synthesized from a conductor task. The
+     * conductor's own summary rides here instead of forcing task state
+     * (workflow_step/gate_state) into the build/test fields above, which
+     * mean something else entirely for a scripted validation run. */
+    conductorTask?: {
+      id: string;
+      title: string;
+      status: string;
+      workflowStep?: string | null;
+      gateState?: string | null;
+      stranded: boolean;
+    };
   };
 };
 
@@ -157,6 +172,84 @@ export function requestWorkflowFix(
     `/api/workflows/${encodeURIComponent(workflowId)}/fixes?project=${encodeURIComponent(project)}`,
     { instance_id: instanceId, step_id: stepId },
   );
+}
+
+/** The subset of a conductor task's own fields the rail already has on hand
+ * (from useConductorState/GET /api/tasks) -- enough to synthesize a run
+ * without a second round trip for anything the rail already fetched. */
+export type ConductorRunTask = {
+  id: string;
+  title: string;
+  status?: string;
+  workflow_step?: string | null;
+  gate_state?: string | null;
+  stranded?: boolean;
+};
+
+type ConductorHistoryRow = { action?: string; details?: string; timestamp?: string };
+
+/** Reconstructs a replay timeline from a task's own audit history.
+ * conductor_service.advance_task (conductor_service.py:1653) writes one
+ * `action="advance_task"` row per transition with `details="from=X; to=Y..."`
+ * -- there is no separate run-history endpoint for the conductor because
+ * there is no WorkflowCore instance; this history IS the instance record. */
+function conductorTimelineFromHistory(
+  history: ConductorHistoryRow[],
+): NonNullable<WorkflowRun["timeline"]> {
+  const events: NonNullable<WorkflowRun["timeline"]> = [];
+  let open: { step: string; startedAt: string } | null = null;
+  for (const row of history) {
+    if (row.action !== "advance_task" || !row.timestamp) continue;
+    const to = /to=([^;]+)/.exec(row.details ?? "")?.[1]?.trim();
+    if (!to) continue;
+    if (open) {
+      events.push({ step: open.step, startedAt: open.startedAt, endedAt: row.timestamp, status: "passed" });
+    }
+    open = { step: to, startedAt: row.timestamp };
+  }
+  if (open) events.push({ step: open.step, startedAt: open.startedAt, status: "passed" });
+  return events;
+}
+
+/** Builds the SAME WorkflowRun shape validation's historical replay already
+ * consumes, so the shared replayHistoricalRun/beginHistoricalReplay machinery
+ * needs no conductor-specific branch of its own -- only the DATA a conductor
+ * task actually has (step transitions off its own history, gate_state) fills
+ * it in, never a build/test result that does not exist for it.
+ *
+ * A task still in flight gets a `runtime` block (no closed timeline to
+ * replay yet) so the canvas shows its live current-step progress the same
+ * way a running scripted workflow's step does; a done task gets a full
+ * `timeline` so it replays start to finish like a completed validation run. */
+export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {
+  return api.get<{ history: ConductorHistoryRow[] }>(
+    `/api/tasks/${encodeURIComponent(task.id)}?project=${encodeURIComponent(project)}&scope=core`,
+  ).then(({ history }) => {
+    const timeline = conductorTimelineFromHistory(history ?? []);
+    const last = timeline.at(-1);
+    const done = task.status === "done";
+    const stranded = Boolean(task.stranded);
+    const runtime = done ? null : {
+      currentStep: last?.step ?? task.workflow_step ?? "",
+      status: "running",
+      startedAt: last?.startedAt ?? new Date().toISOString(),
+    };
+    return {
+      id: task.id,
+      status: done ? (stranded ? "Terminated" : "Complete") : "Runnable",
+      createTime: timeline[0]?.startedAt ?? new Date().toISOString(),
+      runtime,
+      timeline: done ? timeline : undefined,
+      data: {
+        project,
+        passed: done && !stranded,
+        conductorTask: {
+          id: task.id, title: task.title, status: task.status ?? "",
+          workflowStep: task.workflow_step, gateState: task.gate_state, stranded,
+        },
+      },
+    };
+  });
 }
 
 function railFrom(steps: WorkflowStepDef[]): RailStep[] {
