@@ -66,7 +66,28 @@ _GUIDE = {
         "command, a file path, a UI action). A section whose heading "
         "text doesn't match, or an AC missing its id or its oracle "
         "marker, is refused and the step does not advance.",
-    "verify_plan": "Verify the plan covers the story (plan_coverage).",
+    # plan_gate is scored by the plan_coverage rubric
+    # (services/arc_governance.py:179-... / governance_rubrics.yaml:24-28).
+    # _verify_rubric_gate (conductor_service.py:3049-3051) reads BOTH its
+    # story_md AND plan_doc evidence off the SAME task.plan_doc field --
+    # deliberately, since verify_plan's own report OVERWRITES plan_doc (the
+    # same field draft_story just wrote the story into). The old
+    # instruction ("Verify the plan covers the story") never said that, so
+    # a driver wrote a short standalone coverage note, which replaced the
+    # story wholesale and destroyed its AC-<n> ids -- observed live: task
+    # 90ad4c39 passed story_gate cleanly, then failed plan_gate with "story
+    # carries no AC-<n> ids to diff coverage against" for exactly this
+    # reason. The report must therefore BE the full story, verbatim
+    # AC-<n> lines and all, with the plan's own coverage content added.
+    "verify_plan":
+        "Verify the plan covers the story, then report the FULL updated "
+        "document as your output -- your report REPLACES the current "
+        "plan_doc (which holds the story you just read), so it must "
+        "include every 'AC-<n>' line from that story verbatim, plus, for "
+        "each one, where the plan covers it. Also ensure a parsing "
+        "mermaid plan_diagram is on file for this task. Dropping the "
+        "story's AC ids from your report is the single most common way "
+        "this step fails plan_gate.",
     "write_failing_tests": "Author failing tests carrying a trace.",
     "implement_tasks": "Smallest change that turns the failing tests green.",
     "verify_green_state": "Verify full green against a real run.",
