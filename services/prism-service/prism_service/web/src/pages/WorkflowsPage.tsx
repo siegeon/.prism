@@ -92,7 +92,6 @@ const DIRECTORY_MIN_PX = 180;
 const DIRECTORY_MAX_PX = 480;
 const DIRECTORY_DEFAULT_PX = 240;
 const DIRECTORY_WIDTH_KEY = "prism.workflows.directory.width";
-const TEST_TRANSITION_MS = 1900;
 const REPLAY_SPEED = 120;
 const REPLAY_MIN_STEP_MS = 1500;
 const REPLAY_MAX_STEP_MS = 5000;
@@ -313,7 +312,7 @@ export default function WorkflowsPage() {
   const [scriptDiagnosticOpen, setScriptDiagnosticOpen] = useState(false);
   const [testStep, setTestStep] = useState<number | null>(null);
   const testWorkflowRef = useRef<WorkflowCatalogEntry | null>(null);
-  const testModeRef = useRef<"simulation" | "runtime" | "replay" | null>(null);
+  const testModeRef = useRef<"runtime" | "replay" | null>(null);
   const replayStepStartedRef = useRef(0);
   const replayStepDurationRef = useRef(REPLAY_MIN_STEP_MS);
   const replayTimelineRef = useRef<ReplayEvent[]>([]);
@@ -763,12 +762,6 @@ export default function WorkflowsPage() {
       ? workflow.steps[testStep + 1].id
       : "__complete__";
     graphRef.current.sendTransition(from, to);
-    if (testModeRef.current !== "simulation") return;
-    const timer = window.setTimeout(
-      () => setTestStep((step) => (step ?? 0) + 1),
-      TEST_TRANSITION_MS,
-    );
-    return () => window.clearTimeout(timer);
   }, [testStep]);
 
   useEffect(() => {
@@ -833,13 +826,6 @@ export default function WorkflowsPage() {
     const timer = window.setTimeout(() => setReplayEventIndex((index) => (index ?? 0) + 1), duration);
     return () => window.clearTimeout(timer);
   }, [replayEventIndex]);
-
-  const startFlowSimulation = useCallback(() => {
-    if (!selectedWorkflow) return;
-    testWorkflowRef.current = selectedWorkflow;
-    testModeRef.current = "simulation";
-    setTestStep(-1);
-  }, [selectedWorkflow]);
 
   const runScriptedWorkflow = useCallback(async () => {
     if (!selectedWorkflow) return;
@@ -1591,14 +1577,12 @@ export default function WorkflowsPage() {
           ) : (
             <button
               type="button"
-              onClick={selectedWorkflow?.steps.some((step) => step.execution === "scripted") ? runScriptedWorkflow : startFlowSimulation}
+              onClick={runScriptedWorkflow}
               disabled={startingWorkflow}
-              title={selectedWorkflow?.steps.some((step) => step.execution === "scripted") ? "Execute this project's typed scripted workflow" : "Visual simulation only"}
+              title="Execute this project's typed scripted workflow"
               className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
             >
-              {selectedWorkflow?.steps.some((step) => step.execution === "scripted")
-                ? startingWorkflow ? "Starting…" : "Run workflow"
-                : "Simulate flow"}
+              {startingWorkflow ? "Starting…" : "Run workflow"}
             </button>
           )}
         </div>
