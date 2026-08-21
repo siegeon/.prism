@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
@@ -471,14 +471,43 @@ export default function WorkflowsPage() {
   // invent a pill. Oldest-updated first: the rail GROWS FROM THE LEFT, same
   // as validation's (visibleRunHistory[index] above, no offset subtracted)
   // -- filled pills start at index 0, empty capacity trails on the right.
-  const conductorStepIds = new Set((selectedWorkflow?.steps ?? []).map((step) => step.id));
+  const conductorStepIds = useMemo(
+    () => new Set((selectedWorkflow?.steps ?? []).map((step) => step.id)),
+    [selectedWorkflow],
+  );
+  // managed_tasks() (useConductorState's own source) deliberately EXCLUDES
+  // status=="done" -- the same doctrine that drops a finished task off the
+  // /conductor board. That's correct for "who's currently engaged", but it
+  // meant a task that finished its ENTIRE drive had no pill here at all: no
+  // green, no trace, nothing -- indistinguishable from never having run
+  // (owner 2026-08-21, real task 4f74dafc). Validation's own rail shows
+  // exactly this history (completed runs, colored by outcome); the
+  // conductor rail needs the same, sourced from real completed tasks since
+  // there is no WorkflowCore run to read it from.
+  const [doneConductorTasks, setDoneConductorTasks] = useState<ManagedTask[]>([]);
+  useEffect(() => {
+    if (selectedWorkflowId !== "conductor") { setDoneConductorTasks([]); return; }
+    let cancelled = false;
+    type DoneTaskRow = ManagedTask & { parent_id?: string };
+    const load = () => api.get<{ tasks: DoneTaskRow[] }>(
+      `/api/tasks?project=${encodeURIComponent(project)}&fields=id,title,status,workflow_step,gate_state,updated_at,parent_id`,
+    ).then(({ tasks }) => {
+      if (cancelled) return;
+      setDoneConductorTasks(tasks.filter((t) =>
+        t.status === "done" && !t.parent_id && conductorStepIds.has(t.workflow_step ?? "")));
+    }).catch(() => { /* transient fetch failure; next poll retries */ });
+    load();
+    const id = window.setInterval(load, 10_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [project, selectedWorkflowId, conductorStepIds]);
   const conductorRailTasks = selectedWorkflowId === "conductor"
-    ? conductorManaged
-        .filter((task) => conductorStepIds.has(task.workflow_step ?? ""))
+    ? [...doneConductorTasks, ...conductorManaged.filter(
+        (task) => conductorStepIds.has(task.workflow_step ?? ""))]
         .sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""))
-        .slice(0, RUN_RAIL_PILLS)
+        .slice(-RUN_RAIL_PILLS)
     : [];
   const conductorPillTone = (task: ManagedTask): string => {
+    if (task.status === "done") return "bg-emerald-400";
     if (task.gate_state === "pending" || task.gate_state === "failed") return "bg-fuchsia-400/70 animate-pulse";
     if (task.activity?.state === "working" || task.activity?.state === "driving") return "bg-[color:var(--accent-solid)] animate-pulse";
     return "bg-sky-400/50";
@@ -496,7 +525,9 @@ export default function WorkflowsPage() {
           tone: task ? conductorPillTone(task) : "bg-[color:var(--border-default)]/20",
           ariaLabel: task ? `Open task ${task.title}` : undefined,
           title: task
-            ? `${task.title} · ${selectedWorkflow?.steps.find((step) => step.id === task.workflow_step)?.purpose ?? task.workflow_step}${task.gate_state === "pending" ? " · awaiting gate" : ""}`
+            ? task.status === "done"
+              ? `${task.title} · done`
+              : `${task.title} · ${selectedWorkflow?.steps.find((step) => step.id === task.workflow_step)?.purpose ?? task.workflow_step}${task.gate_state === "pending" ? " · awaiting gate" : ""}`
             : undefined,
           ringHighlighted: false,
           onClick: task ? () => navigate(`/tasks/${task.id}`) : undefined,
