@@ -120,6 +120,26 @@ def _job(task) -> Optional[dict]:
     if doctrine:
         instructions = base + "\n\nRules for this role (" + (role or "-") \
             + "):\n" + "\n".join(f"- {d}" for d in doctrine)
+    # FINAL-MESSAGE CAVEAT (observed live, task 88d79ca9): task_runner's
+    # claude_cli.invoke() runs a driver's session to `max_turns`, and its
+    # LAST message -- whatever that happens to be -- is what _route_proof
+    # writes as this step's report, verbatim, replacing plan_doc/premise_
+    # notes/completion_proof wholesale. A driver that writes a compliant
+    # report early, then keeps reasoning and ends on a conversational
+    # sign-off ("Want me to approve this on your behalf?"), silently
+    # clobbers its OWN correct earlier content with that sign-off -- exactly
+    # what happened to verify_plan's real output after the plan_coverage
+    # instruction fix (7.12.31) was already working. Gates never reach
+    # here (kind == "gate" skips doctrine above too), since they're never
+    # driven by claude_cli at all.
+    if kind != "gate":
+        instructions += (
+            "\n\nYour LAST message becomes this step's official report, "
+            "verbatim -- it must BE the required content itself (the "
+            "story, the plan, the premises), never a status update, a "
+            "question, or a sign-off to a human. Ending on commentary "
+            "silently replaces whatever compliant content you already "
+            "wrote earlier in this session.")
     return {
         "task_id": task.id,
         "step": step["id"],
