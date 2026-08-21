@@ -118,7 +118,26 @@ _GUIDE = {
         "story's AC ids from your report is the single most common way "
         "this step fails plan_gate.",
     "write_failing_tests": "Author failing tests carrying a trace.",
-    "implement_tasks": "Smallest change that turns the failing tests green.",
+    # Observed live on task 4f74dafc: the drive reached green_gate and
+    # status=done with the ACTUAL implementation sitting as an UNCOMMITTED
+    # working-tree diff in the task's own workspace -- never committed,
+    # never merged, never shippable. write_failing_tests correctly commits
+    # its tests-only [task:<id>] commit (CLAUDE.md already documents that
+    # convention clearly), but CLAUDE.md's only mention of an
+    # IMPLEMENTATION commit is a passing "before any implementation
+    # commit" clause inside the RED lesson -- never its own clear
+    # directive -- and neither ROLE_RULES["dev"] nor this instruction said
+    # anything about committing at all. verify_green_state's tests can
+    # pass against an uncommitted worktree just fine, so nothing downstream
+    # catches this before green_gate.
+    "implement_tasks":
+        "Smallest change that turns the failing tests green. Before you "
+        "report, COMMIT it on the current branch with a `[task:<task_id>]` "
+        "trailer in the message (same convention as the red-step tests "
+        "commit, this task's own id from this job's task_id field) -- an "
+        "implementation that only exists as an uncommitted working-tree "
+        "diff is not shippable, and nothing downstream of this step "
+        "checks for one.",
     "verify_green_state": "Verify full green against a real run.",
 }
 
