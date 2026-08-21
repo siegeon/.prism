@@ -230,6 +230,50 @@ def test_positions_are_remembered_per_project():
     assert "localStorage" in page
 
 
+def test_switching_workflows_rehydrates_the_owners_saved_layout():
+    """Owner-reported bug: manually positioned nodes reset on re-navigation.
+    Root cause was NOT a missing persistence layer (positions/ports/waypoints
+    were already written to localStorage on drag-end) -- it was
+    selectWorkflow() (fired by every directory click, drilling into a linked
+    workflow, and the breadcrumb back button) calling clearOverrides() and
+    never refilling the maps from localStorage afterward. The very next drag
+    anywhere then called persist(), writing that now-EMPTY map back to
+    localStorage and permanently destroying whatever the owner had arranged.
+    The fix mirrors the initial-mount effect's own ordering: node positions
+    rehydrate BEFORE setDef (so nodes don't visibly snap from default to
+    saved), wire ports/waypoints rehydrate AFTER setDef (they validate
+    against the freshly built wire list, which only exists post-setDef)."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    fn_start = page.index("const selectWorkflow = useCallback(")
+    clear_idx = page.index("graphRef.current.clearOverrides();", fn_start)
+    hydrate_positions_idx = page.index(
+        "readJson<Record<string, Point>>(positionsKey(project),", clear_idx)
+    hydrate_positions_call = page.index(
+        "(raw) => graphRef.current.hydrateOverrides(raw));", hydrate_positions_idx)
+    setdef_idx = page.index(
+        "graphRef.current.setDef(workflowForGraph(workflow));", hydrate_positions_call)
+    hydrate_ports_idx = page.index(
+        "readJson<Record<string, WirePort>>(portsKey(project),", setdef_idx)
+    hydrate_ports_call = page.index(
+        "(raw) => graphRef.current.wireEdits.hydrate(raw, undefined));", hydrate_ports_idx)
+    hydrate_waypoints_idx = page.index(
+        "readJson<Record<string, Point[]>>(waypointsKey(project),", hydrate_ports_call)
+    page.index(
+        "(raw) => graphRef.current.wireEdits.hydrate(undefined, raw));", hydrate_waypoints_idx)
+
+    assert clear_idx < hydrate_positions_idx < setdef_idx < hydrate_ports_idx < hydrate_waypoints_idx, (
+        "selectWorkflow must clear overrides, rehydrate saved node "
+        "positions from localStorage BEFORE setDef, then rehydrate saved "
+        "wire ports/waypoints AFTER setDef")
+
+    fn_body_end = page.index("}, [project]);", setdef_idx)
+    assert fn_body_end < page.index("const selectedWorkflow = workflows.find", fn_start), (
+        "selectWorkflow's useCallback must depend on `project` now that it "
+        "reads project-scoped localStorage keys directly"
+    )
+
+
 # --------------------------------------------------------------------------
 # Simplification rider: ONE source of the step ordering.
 # --------------------------------------------------------------------------

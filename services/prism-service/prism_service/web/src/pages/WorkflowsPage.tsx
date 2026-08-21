@@ -407,11 +407,29 @@ export default function WorkflowsPage() {
     testWorkflowRef.current = null;
     testModeRef.current = null;
     setWorkflowRun(null);
-    graphRef.current.setDef(workflowForGraph(workflow));
     graphRef.current.clearOverrides();
+    // Re-navigating within the app (directory click, drill into a linked
+    // workflow, breadcrumb back) must not silently discard the owner's
+    // saved layout. clearOverrides() drops the in-memory maps so a stale
+    // drag from a DIFFERENT workflow's node ids can't bleed in, but
+    // without refilling them from localStorage here, this workflow's
+    // nodes place at their auto-layout defaults, and the very next drag's
+    // persist() overwrites localStorage with that now-empty map --
+    // permanently losing every position the owner had set. Node positions
+    // rehydrate BEFORE setDef (so nodes never visibly snap from default to
+    // saved, same as the initial-mount effect above); wire ports/waypoints
+    // rehydrate AFTER setDef, because they validate against the freshly
+    // built wire list.
+    readJson<Record<string, Point>>(positionsKey(project),
+      (raw) => graphRef.current.hydrateOverrides(raw));
+    graphRef.current.setDef(workflowForGraph(workflow));
+    readJson<Record<string, WirePort>>(portsKey(project),
+      (raw) => graphRef.current.wireEdits.hydrate(raw, undefined));
+    readJson<Record<string, Point[]>>(waypointsKey(project),
+      (raw) => graphRef.current.wireEdits.hydrate(undefined, raw));
     const canvas = canvasRef.current;
     graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600, true);
-  }, []);
+  }, [project]);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);
