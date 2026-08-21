@@ -1994,6 +1994,58 @@ class ConductorService:
         except Exception:
             return empty
 
+    def _uncommitted_changes_refusal(self, task) -> str:
+        """green_gate MECHANICAL tooth: the task's own workspace must have
+        ZERO uncommitted changes (scoped to allowed_files when set, the
+        whole tree otherwise) before a fresh passing EvidenceReceipt is
+        trusted. Deterministic, never an LLM call -- multiple requirements
+        belong as separate CHECKS, not stacked into one inference prompt
+        and trusted to be followed (owner 2026-08-21).
+
+        Observed live on task 4f74dafc: a fully compliant EvidenceReceipt
+        existed (osp.current_tree_sha hashes the WORKING TREE's content, so
+        it's genuinely "fresh" for whatever is on disk, committed or not) --
+        verify_green_state's tests ran clean against an uncommitted
+        working-tree diff, the drive reached green_gate/status=done, and
+        the actual implementation was never reachable from any commit at
+        all. The 7.12.34 instruction fix (implement_tasks must commit)
+        reduces how often this happens; it does not GUARANTEE it, since
+        nothing stops a driver from ignoring an instruction. This is the
+        guarantee. Returns "" (clear) or a refusal reason; never raises
+        (fail closed on any git/subprocess error, same discipline as the
+        oracle-receipt check this augments)."""
+        import subprocess
+        from prism_service.services import task_workspace
+        task_id = getattr(task, "id", "")
+        try:
+            ws = task_workspace.workspace_for(task_id)
+            path = (ws or {}).get("path") if ws else None
+            if not path:
+                return ""  # no workspace at all; the oracle-receipt tooth already refuses
+            allowed = list(getattr(task, "allowed_files", None) or [])
+            args = ["git", "status", "--porcelain"]
+            if allowed:
+                args += ["--"] + allowed
+            result = subprocess.run(args, cwd=path, capture_output=True,
+                                    text=True, timeout=10)
+            if result.returncode != 0:
+                return (f"green_gate: could not verify the workspace has no "
+                        f"uncommitted changes (git status exit "
+                        f"{result.returncode}: {result.stderr.strip()[:200]}) "
+                        "— refusing (fail closed)")
+            dirty = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        except Exception as exc:
+            return (f"green_gate: could not verify the workspace has no "
+                    f"uncommitted changes ({type(exc).__name__}: {exc}) — "
+                    "refusing (fail closed)")
+        if dirty:
+            return (f"green_gate: {len(dirty)} uncommitted change(s) remain "
+                    "in the task's own workspace — the implementation was "
+                    "never committed, so it cannot be shipped even though "
+                    "the pinned tests passed against it. Commit with a "
+                    "[task:<id8>] trailer before this gate can clear.")
+        return ""
+
     def _oracle_receipt_refusal(self, task, *, override: bool,
                                 reason: str):
         """Decide the green_gate ORACLE tooth by a REAL run, not prose shape
@@ -2029,6 +2081,9 @@ class ConductorService:
                 project, getattr(task, "id", ""), tree_sha, spec.spec_hash(),
                 policy_hash=_policy_hash)
             if fresh is not None:
+                dirty_reason = self._uncommitted_changes_refusal(task)
+                if dirty_reason:
+                    return dirty_reason, None
                 return "", fresh
             # Override may accept a logged manual acknowledgement, but only
             # when a manual-status receipt for THIS spec/tree is actually on
