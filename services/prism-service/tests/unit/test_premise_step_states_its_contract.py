@@ -80,8 +80,17 @@ def _instructions(premise_job) -> str:
 
 
 def _base(premise_job) -> str:
-    """The step's OWN instruction, with the role-doctrine splice removed."""
-    return _instructions(premise_job).split(_DOCTRINE_MARKER)[0]
+    """The step's OWN instruction, with the role-doctrine splice removed
+    and the universal final-message-caveat prefix (_job() prepends it to
+    every non-gate step, added after this test was first written)
+    stripped off the start."""
+    from prism_service.api import conductor_flow as cf
+
+    text = _instructions(premise_job)
+    prefix = cf._FINAL_MESSAGE_CAVEAT + "\n\n"
+    if text.startswith(prefix):
+        text = text[len(prefix):]
+    return text.split(_DOCTRINE_MARKER)[0]
 
 
 # ----------------------------------------------------------------------

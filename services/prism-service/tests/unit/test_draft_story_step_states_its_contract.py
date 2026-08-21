@@ -79,7 +79,16 @@ def _instructions(draft_story_job) -> str:
 
 
 def _base(draft_story_job) -> str:
-    return _instructions(draft_story_job).split(_DOCTRINE_MARKER)[0]
+    """The step's OWN instruction: the doctrine splice stripped off the
+    end, and the universal final-message-caveat prefix (_job() prepends
+    it to every non-gate step) stripped off the start."""
+    from prism_service.api import conductor_flow as cf
+
+    text = _instructions(draft_story_job)
+    prefix = cf._FINAL_MESSAGE_CAVEAT + "\n\n"
+    if text.startswith(prefix):
+        text = text[len(prefix):]
+    return text.split(_DOCTRINE_MARKER)[0]
 
 
 # ----------------------------------------------------------------------

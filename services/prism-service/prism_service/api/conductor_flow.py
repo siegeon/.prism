@@ -31,6 +31,35 @@ router = APIRouter()
 
 _ROLE = {"sm": "Steward", "qa": "Verifier", "dev": "Builder"}
 
+# FINAL-MESSAGE CAVEAT (observed live, task 88d79ca9, then AGAIN on
+# 7477be2d after this caveat first shipped appended at the END of the
+# instruction at 7.12.32): task_runner's claude_cli.invoke() runs a
+# driver's session to `max_turns`, and its LAST message -- whatever that
+# happens to be -- is what _route_proof writes as the step's report,
+# verbatim, replacing plan_doc/premise_notes/completion_proof wholesale.
+# A driver that writes a compliant report early, then keeps reasoning and
+# ends on a conversational wrap-up ("What I did: ... Reported the full
+# plan... Next: this needs the owner to approve..."), has that wrap-up
+# silently clobber its OWN correct earlier content -- and this SURVIVED
+# the first version of this caveat when it was buried at the end of a
+# long, doctrine-laden prompt, where an LLM's habitual "here's a summary
+# of what I did" close easily overrides one trailing sentence. Now PREPENDED
+# (primacy: the first thing read, not the last thing skimmed) with a
+# concrete negative example instead of a soft caveat. _job() prepends this
+# for every non-gate step; gates never receive it (never driven by
+# claude_cli at all).
+_FINAL_MESSAGE_CAVEAT = (
+    "RULE, before anything else: your LAST message IS this step's "
+    "official report, captured verbatim, replacing whatever is on file "
+    "now. It must END on the required content itself (the story, the "
+    "plan, the premises) -- never on a summary of what you did, a status "
+    "update, a question, or a sign-off. WRONG: \"...Reported the full "
+    "plan. Next: this needs the owner to approve.\" RIGHT: the response "
+    "ends on the plan's own last line. If you already wrote the "
+    "compliant content earlier in this session, your final message must "
+    "REPEAT it in full -- do not describe having written it."
+)
+
 _GUIDE = {
     # The premise step is scored by the premise_grounded rubric
     # (services/arc_governance.py:286-337), so the instruction STATES that
@@ -120,26 +149,11 @@ def _job(task) -> Optional[dict]:
     if doctrine:
         instructions = base + "\n\nRules for this role (" + (role or "-") \
             + "):\n" + "\n".join(f"- {d}" for d in doctrine)
-    # FINAL-MESSAGE CAVEAT (observed live, task 88d79ca9): task_runner's
-    # claude_cli.invoke() runs a driver's session to `max_turns`, and its
-    # LAST message -- whatever that happens to be -- is what _route_proof
-    # writes as this step's report, verbatim, replacing plan_doc/premise_
-    # notes/completion_proof wholesale. A driver that writes a compliant
-    # report early, then keeps reasoning and ends on a conversational
-    # sign-off ("Want me to approve this on your behalf?"), silently
-    # clobbers its OWN correct earlier content with that sign-off -- exactly
-    # what happened to verify_plan's real output after the plan_coverage
-    # instruction fix (7.12.31) was already working. Gates never reach
-    # here (kind == "gate" skips doctrine above too), since they're never
-    # driven by claude_cli at all.
+    # See _FINAL_MESSAGE_CAVEAT above for why this is prepended, not
+    # appended. Gates never reach here (kind == "gate" skips doctrine
+    # above too), since they're never driven by claude_cli at all.
     if kind != "gate":
-        instructions += (
-            "\n\nYour LAST message becomes this step's official report, "
-            "verbatim -- it must BE the required content itself (the "
-            "story, the plan, the premises), never a status update, a "
-            "question, or a sign-off to a human. Ending on commentary "
-            "silently replaces whatever compliant content you already "
-            "wrote earlier in this session.")
+        instructions = _FINAL_MESSAGE_CAVEAT + "\n\n" + instructions
     return {
         "task_id": task.id,
         "step": step["id"],

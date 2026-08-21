@@ -31,7 +31,7 @@ _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
-_CAVEAT_NEEDLE = "your last message becomes this step's official report"
+_CAVEAT_NEEDLE = "your last message is this step's official report"
 
 
 def _fake_task(workflow_step: str):
