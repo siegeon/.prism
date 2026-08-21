@@ -746,11 +746,12 @@ def push_backlog(provider: str, body: PushBacklogBody,
     by_id = {t.id: t for t in tasks}
     rows, skipped_imported = [], []
     for t in tasks:
-        # An IMPORTED task never exports to ANY provider (the observer path
-        # refuses IMPORTED_TAGS; this route must agree). The first live jira
-        # preview offered 48 github-imported tasks because this exclusion
-        # was missing (task 56074410, 2026-08-11).
-        if set(t.tags or []) & IMPORTED_TAGS:
+        # ORIGIN-SCOPED (owner 2026-08-12, task f66fc383): an imported task
+        # must never export back to the provider it came FROM, but must
+        # still preview/push to the OTHER provider. The origin is recorded
+        # as its own tag alongside "external" (e.g. ["external", "github"]).
+        task_tags = set(t.tags or [])
+        if task_tags & IMPORTED_TAGS and provider in task_tags:
             skipped_imported.append(t.id)
             continue
         # PROVIDER-SCOPED, matching push_task_creation's own eligibility
