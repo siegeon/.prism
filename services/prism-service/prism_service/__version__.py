@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.4"
+PRISM_VERSION = "7.13.5"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5193,4 +5193,17 @@ PRISM_VERSION_NOTES += (
     "session -- that's server memory genuinely gone, documented as correct "
     "in agent_bridge.py's module docstring, and this fix does not and "
     "should not touch it (sessions are still never written to sqlite)."
+    "\n\n"
+    "7.13.5: swapped html2canvas for html2canvas-pro in agentBridge.tsx's "
+    "screenshot action -- live-verified failure: a screenshot scoped to the "
+    "Workflows page's bottom pill rail threw 'Attempting to parse an "
+    "unsupported color function \"oklab\"' in 0.35s, and an unscoped "
+    "whole-page capture on the same page (which also renders a big "
+    "interactive canvas graph) instead HUNG the full 20s command timeout "
+    "with no result at all. Root cause: this app's design system (Tailwind "
+    "v4 + CSS custom properties) resolves colors through oklch()/oklab() "
+    "essentially everywhere, and upstream html2canvas cannot parse those at "
+    "all -- it was going to fail on nearly any real element in this app, "
+    "not just this one. html2canvas-pro is the maintained fork adding "
+    "oklch/oklab/lab/lch support; same import shape, drop-in swap."
 )

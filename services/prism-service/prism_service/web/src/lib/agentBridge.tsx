@@ -245,7 +245,14 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
           ? resolveSelector(cmd.selector)
           : document.body;
         if (!target) throw new Error(`no element matches selector: ${cmd.selector}`);
-        const html2canvas = (await import("html2canvas")).default;
+        // html2canvas-pro, not plain html2canvas -- this app's design system
+        // (Tailwind v4 + CSS custom properties) resolves colors through
+        // oklch()/oklab(), which upstream html2canvas cannot parse at all
+        // (throws "unsupported color function" the instant it hits one,
+        // and nearly every element here has one somewhere in its computed
+        // style chain). html2canvas-pro is the maintained fork that adds
+        // oklch/oklab/lab/lch support; same API, drop-in replacement.
+        const html2canvas = (await import("html2canvas-pro")).default;
         const canvas = await html2canvas(target as HTMLElement, { scale: 1 });
         data = { image: canvas.toDataURL("image/png") };
       } else {
