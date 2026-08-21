@@ -485,15 +485,25 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
     real steps (e.g. land's push/open-pr), not a fake single node standing
     in for the whole thing.
 
-    Deliberately NOT nested under "conductor": the conductor IS its 10-state
-    FSM (WORKFLOW_STEPS) -- something belongs in ITS view only when an
-    actual state calls it, the same way verify_green_state already links to
-    `validation` via linked_workflow_id. No conductor state currently calls
-    land or ci-local-dev, so nesting them under conductor claimed a
-    relationship that doesn't exist yet. They render as their own top-level
-    entries until a real state->behavior link is built (owner call, not
-    mine to invent -- e.g. does green_gate approval trigger `land`, or stay
-    a manual action?).
+    Nested under "conductor" only when a real state->behavior link exists --
+    the same rule verify_green_state already follows via linked_workflow_id.
+    RESOLVED (owner, 2026-08-21): "make the conductor's workflow have a
+    final ship step when it's all done" -- green_gate approval DOES now
+    trigger shipping, automatically, on BOTH tracks: the human-approved path
+    (proof_type=demo/review, PRISM_SHIP_ON_APPROVE ship-on-approve queue,
+    task 5b6aefc1) and the machine-adjudicated path (proof_type=test, added
+    this session -- ship_worker._awaiting_ship_machine/_adjudicate_after_ship,
+    closing the gap where a fully-autonomous task cleared every OTHER
+    green_gate tooth and then parked forever on shipped-ness alone, because
+    nothing ever landed its branch). `land` is `ship_worker.py`'s real
+    counterpart in THIS registry, so it now nests under conductor as the
+    FSM's terminal step (see _CONDUCTOR_LINKED_BEHAVIOR_IDS below) -- it is
+    what a person reads to understand "what ships the code", even though
+    the seat that actually executes it today is ship_worker.py's Python
+    pipeline, not (yet) this JSON behavior fired by the AosWorkflows engine
+    itself; wiring THAT dispatch through is the larger FSM-migration
+    follow-up this docstring is not scoping. `ci-local-dev` has no
+    corresponding conductor-state trigger and stays unparented.
 
     These run OUTSIDE this process entirely -- AosWorkflows (WorkflowCore,
     separate service) owns their state, never prism-service. A missing bot
@@ -623,13 +633,21 @@ def get_workflows(project: str = Query("default")) -> dict:
     conductor_behaviors = _conductor_behavior_workflows(project)
     # Same rule as validation above: nest only the behavior(s) an actual
     # conductor state links to. story_gate now links to "story-gate-check"
-    # (linked_workflow_id above); land/ci-local-dev stay unparented since
-    # no state calls them yet.
+    # (linked_workflow_id above). "land" nests too (owner, 2026-08-21): it
+    # is the conductor's real final step -- green_gate approval ships the
+    # branch automatically via ship_worker.py on both the human and machine
+    # tracks, see _conductor_behavior_workflows' docstring. It has no
+    # WORKFLOW_STEPS entry of its own to carry a linked_workflow_id (green_gate
+    # is the FSM's structurally-terminal state, audited this session as too
+    # risky to insert a new step after -- 14+ call sites treat "green_gate"
+    # as literally the last one), so it nests via this set directly instead
+    # of via a step link, same mechanism validation predates. "ci-local-dev"
+    # stays unparented: no conductor state triggers it.
     _CONDUCTOR_LINKED_BEHAVIOR_IDS = (
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
         "write-failing-tests-loop", "implement-tasks-loop",
-        "red-gate-status", "green-gate-status",
+        "red-gate-status", "green-gate-status", "land",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:

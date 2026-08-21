@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Land a task branch",
-  "version": 1,
+  "version": 2,
   "steps": [
     {
       "id": "push",
@@ -15,6 +15,18 @@
       "id": "open-pr",
       "kind": "shell",
       "command": "gh pr create --fill --head ${branch} --title 'Land [task:${taskId}]'",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "wait-for-ci",
+      "kind": "shell",
+      "command": "gh pr checks ${branch} --watch",
+      "timeoutSeconds": 900
+    },
+    {
+      "id": "merge",
+      "kind": "shell",
+      "command": "gh pr merge ${branch} --squash --delete-branch",
       "timeoutSeconds": 60
     }
   ]

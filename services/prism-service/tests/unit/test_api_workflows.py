@@ -568,8 +568,10 @@ def test_story_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_p
     """story_gate must carry linked_workflow_id -> "story-gate-check", and
     that catalog entry must nest under conductor (parent_id) -- the SAME
     rule just established: only a behavior an actual state calls belongs
-    in conductor's view. land/ci-local-dev, which no state calls, must NOT
-    pick up a parent_id as a side effect of this change."""
+    in conductor's view. "land" nests too now (owner, 2026-08-21: green_gate
+    approval ships the branch via ship_worker.py on both tracks), so it is
+    NOT a useful negative control here anymore -- "ci-local-dev", which
+    still has no conductor-state trigger, is the negative control instead."""
     from prism_service.api import workflows as workflows_api
 
     monkeypatch.setattr(workflows_api, "get_project",
@@ -592,7 +594,7 @@ def test_story_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_p
 
     by_id = {w["id"]: w for w in body["workflows"]}
     assert by_id["story-gate-check"].get("parent_id") == "conductor"
-    assert "parent_id" not in by_id["land"]
+    assert by_id["land"].get("parent_id") == "conductor"
     assert "parent_id" not in by_id["ci-local-dev"]
 
 
@@ -688,7 +690,9 @@ def test_plan_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_pa
 
     by_id = {w["id"]: w for w in body["workflows"]}
     assert by_id["plan-gate-check"].get("parent_id") == "conductor"
-    assert "parent_id" not in by_id["land"]
+    assert by_id["land"].get("parent_id") == "conductor", (
+        "land nests under conductor now (owner, 2026-08-21) -- it is the "
+        "FSM's real terminal step, no longer a useful negative control")
 
 
 def test_reason_loop_chains_observe_reason_validate(tmp_path, monkeypatch):
@@ -829,7 +833,8 @@ def test_reason_loop_skips_validate_with_no_rubric(tmp_path, monkeypatch):
 def test_review_notes_and_verify_plan_link_to_their_loops_and_nest_under_conductor(tmp_path, monkeypatch):
     """Same rule, extended to the next two authoring states: a real
     linked_workflow_id -> parent_id="conductor" for review_previous_notes
-    and verify_plan; land/ci-local-dev still unparented."""
+    and verify_plan; land also nests (it's the FSM's real terminal step,
+    owner 2026-08-21) -- only ci-local-dev stays unparented."""
     from prism_service.api import workflows as workflows_api
 
     monkeypatch.setattr(workflows_api, "get_project",
@@ -851,7 +856,7 @@ def test_review_notes_and_verify_plan_link_to_their_loops_and_nest_under_conduct
     by_id = {w["id"]: w for w in body["workflows"]}
     assert by_id["review-previous-notes-loop"].get("parent_id") == "conductor"
     assert by_id["verify-plan-loop"].get("parent_id") == "conductor"
-    assert "parent_id" not in by_id["land"]
+    assert by_id["land"].get("parent_id") == "conductor"
 
 
 def test_reason_loop_plan_coverage_diffs_ac_ids_against_the_plan_itself(tmp_path, monkeypatch):
@@ -938,6 +943,7 @@ def test_write_failing_tests_and_implement_tasks_link_but_validate_is_honest(tmp
     by_id = {w["id"]: w for w in body["workflows"]}
     assert by_id["write-failing-tests-loop"].get("parent_id") == "conductor"
     assert by_id["implement-tasks-loop"].get("parent_id") == "conductor"
+    assert by_id["land"].get("parent_id") == "conductor"
 
 
 def test_reason_loop_never_fakes_a_pass_for_unscored_states(tmp_path, monkeypatch):
@@ -1190,3 +1196,83 @@ def test_green_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_p
 
     by_id = {w["id"]: w for w in body["workflows"]}
     assert by_id["green-gate-status"].get("parent_id") == "conductor"
+
+
+def test_land_is_the_conductors_visible_final_ship_step(tmp_path, monkeypatch):
+    """Owner (2026-08-21): "make the conductor's workflow have a final ship
+    step when it's all done" -- prior to this, GREEN GATE EVIDENCE STATUS
+    was the last item under CONDUCTOR in the Workflows page sidebar, and
+    "Land a task branch" rendered as a disconnected top-level sibling, even
+    though green_gate approval already ships the branch automatically (both
+    the human-approved and machine-adjudicated tracks route through
+    ship_worker.py). "land" has no WORKFLOW_STEPS entry of its own -- unlike
+    every other linked behavior here, it nests via _CONDUCTOR_LINKED_
+    BEHAVIOR_IDS directly, not via a step's linked_workflow_id -- because
+    green_gate is the FSM's structurally-terminal state and inserting a new
+    step after it is a real, separately-scoped, higher-risk change (14+
+    `== "green_gate"` call sites in conductor_service.py treat it as last).
+    "ci-local-dev" is the negative control: no conductor state triggers it,
+    so it must stay unparented."""
+    from prism_service.api import workflows as workflows_api
+
+    monkeypatch.setattr(workflows_api, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=_Svc([])))
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+
+    def _fake_conductor_behaviors(project):
+        return [
+            {"id": "land", "name": "Land a task branch", "steps": [],
+             "bots": [], "occupancy": {}},
+            {"id": "ci-local-dev", "name": "CI to local dev", "steps": [],
+             "bots": [], "occupancy": {}},
+            {"id": "green-gate-status", "name": "Green gate evidence status",
+             "steps": [], "bots": [], "occupancy": {}},
+        ]
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows",
+                        _fake_conductor_behaviors)
+
+    body = workflows_api.get_workflows("prism")
+
+    by_id = {w["id"]: w for w in body["workflows"]}
+    assert by_id["land"].get("parent_id") == "conductor", (
+        "\"land\" must nest under conductor -- it is the visible final "
+        "ship step, not a disconnected sibling workflow")
+    assert "parent_id" not in by_id["ci-local-dev"], (
+        "ci-local-dev has no conductor-state trigger and must stay "
+        "unparented -- this change must not sweep in every behavior")
+
+
+def test_land_json_completes_the_real_ship_pipeline_shape():
+    """land.json used to define only push + open-pr -- half of what
+    ship_worker.py's real, tested pipeline does (push -> pr create -> pr
+    checks -> pr merge -> fetch). Nesting it under conductor as THE visible
+    final step (see test_land_is_the_conductors_visible_final_ship_step)
+    while it still looked half-finished would mislead a reader clicking
+    into it. Pins the checked-in behavior file itself, not the API
+    (_conductor_behavior_workflows fetches this content from the live
+    AosWorkflows engine, not from disk, in production)."""
+    import json
+
+    path = (Path(__file__).resolve().parent.parent.parent.parent.parent
+           / ".prism" / "behaviors" / "conductor" / "land.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert data["id"] == "land"
+    step_ids = [s["id"] for s in data["steps"]]
+    assert step_ids == ["push", "open-pr", "wait-for-ci", "merge"], step_ids
+
+    by_id = {s["id"]: s for s in data["steps"]}
+    assert "${branch}" in by_id["push"]["command"]
+    assert "${branch}" in by_id["open-pr"]["command"]
+    assert "${taskId}" in by_id["open-pr"]["command"]
+    # Each step resolves what it needs from ${branch}/${taskId} alone --
+    # deliberately NOT dependent on capturing a PR number from a prior
+    # step's stdout (unconfirmed whether this engine supports that), same
+    # discipline `gh pr checks`/`gh pr merge` support natively (both accept
+    # a branch name in place of a PR number).
+    assert "${branch}" in by_id["wait-for-ci"]["command"]
+    assert "--watch" in by_id["wait-for-ci"]["command"]
+    assert "${branch}" in by_id["merge"]["command"]
+    assert "--squash" in by_id["merge"]["command"]
+    assert "--delete-branch" in by_id["merge"]["command"]
