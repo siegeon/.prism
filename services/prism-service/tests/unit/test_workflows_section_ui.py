@@ -968,7 +968,10 @@ def test_failed_historical_replay_stops_on_the_failed_step():
     assert "setTestStep(failedStepIndex >= 0 ? failedStepIndex : null)" in page
     assert "Replay stopped ·" in page
     assert "replayFinishedAtFailure ? 1" in page
-    assert 'replayFinishedAtFailure\n          ? "failure"' in page
+    # midWalkFailure (a retried step that failed mid-replay) shares the SAME
+    # "failure" tone as the run's own terminal failure -- one vocabulary,
+    # not two competing ones.
+    assert 'replayFinishedAtFailure || midWalkFailure\n          ? "failure"' in page
 
 
 def test_failed_script_marks_the_responsible_editor_line():
@@ -1043,7 +1046,7 @@ def test_conductor_run_is_synthesized_from_the_tasks_own_history_not_a_workflowc
     # conductor_service.advance_task writes exactly this shape (details=
     # "from=X; to=Y...") -- the timeline is built off the task's OWN audit
     # history, there is no separate run-history endpoint for it.
-    assert 'row.action !== "advance_task"' in data
+    assert 'row.action === "advance_task"' in data
     assert '/to=([^;]+)/' in data
     # tests/build are optional -- a conductor run has neither, and nothing
     # should have to fake them to satisfy the WorkflowRun type.
@@ -1128,3 +1131,154 @@ def test_version_bumped_for_the_conductor_instance_view_reuse():
     assert current > (7, 12, 41), (
         "PRISM_VERSION must be patch-bumped past 7.12.41 in the "
         "implementation commit for this user-visible /workflows change")
+
+
+# ---------------------------------------------------------------------------
+# Follow-up (owner, live on this exact instance): "the animation on that
+# playback appears to be made up" -- conductorTimelineFromHistory only ever
+# read advance_task rows and stamped every closed segment "passed",
+# silently discarding flow_report_failure (a step that failed and retried)
+# and a rejected/control-plane-failed gate_decide. Verified live against
+# task 93d6c6f3 (real history: 3 flow_report_failure rows at
+# verify_green_state) and 1bc0b316 (2 flow_report_failure rows at
+# write_failing_tests, plus a red_gate that ended gate_state=failed).
+# ---------------------------------------------------------------------------
+
+def test_conductor_failed_step_reader_recognizes_all_three_real_setback_shapes():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    reader = _function_body(
+        data, "function conductorFailedStepFromDetails(action: string | undefined, details: string): string | null {",
+    )
+    # flow_report_failure / advance_refused: conductor_service.py writes
+    # `step=<id>; ...` -- the action NAME alone already says it failed, no
+    # need to parse `outcome` (which varies shape: bare `fail`, or a
+    # `{'ok': False, ...}` dict repr).
+    assert 'action === "flow_report_failure" || action === "advance_refused"' in reader
+    assert "/step=([^;]+)/" in reader
+    # gate_decide: only a REAL rejection counts -- a verifier=fail row that
+    # was immediately overridden (override=True) is a genuine pass, per
+    # api/tasks.py _build_timeline's own documented ambiguity.
+    assert 'action === "gate_decide"' in reader
+    assert "/gate=(\\w+_gate)/" in reader
+    assert "action=reject" in reader
+    assert "control-plane=fail" in reader
+    assert "verifier=fail" in reader and "override=True" in reader
+
+
+def test_conductor_timeline_closes_a_failed_attempt_and_reopens_the_same_step():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    builder = _function_body(
+        data, "function conductorTimelineFromHistory(\n  history: ConductorHistoryRow[],\n): NonNullable<WorkflowRun[\"timeline\"]> {",
+    )
+    assert "conductorFailedStepFromDetails(row.action, row.details" in builder
+    retry_guard = builder.index("if (failedStep && open?.step === failedStep) {")
+    reopen = builder.index("open = { step: failedStep, startedAt: row.timestamp }")
+    status_failed = builder.index('status: "failed"')
+    # A failed attempt closes with status "failed" (the SAME vocabulary a
+    # failed validation step already uses -- WorkflowStepResult["status"]),
+    # never a new invented word, and a fresh dwell reopens at the SAME step
+    # so the next attempt (pass or another failure) gets its own segment.
+    assert retry_guard < status_failed < reopen
+
+
+def test_conductor_replay_tints_a_mid_walk_retry_the_same_as_a_terminal_failure():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    walk_effect = _function_body(page, "useEffect(() => {\n    if (testModeRef.current !== \"replay\" || replayEventIndex === null) return;")
+    # The per-event walker stamps the CURRENT event's own status into a ref
+    # the rAF loop reads -- distinct from replayStoppedAt, which only ever
+    # names the run's FINAL event.
+    assert "replayEventStatusRef.current = event.status" in walk_effect
+    assert "replayEventStatusRef.current = null" in walk_effect
+
+    raf_replay = page[page.index('} else if (testModeRef.current === "replay"'):page.index("activeProgress = {\n          nodeId,")]
+    assert 'replayEventStatusRef.current === "failed"' in raf_replay
+    # Reuses the SAME tone/label vocabulary the terminal-failure branch
+    # already renders (workflowGraph.ts's tone: "failure" -> red fill,
+    # matching what a failed build/test step already looks like) -- no
+    # separate "retry" visual invented for this.
+    assert "const midWalkFailure = !replayFinishedAtFailure" in raf_replay
+    assert 'replayFinishedAtFailure || midWalkFailure\n          ? "failure"' in raf_replay
+    assert 'midWalkFailure\n          ? "FAILED"' in raf_replay
+
+
+# ---------------------------------------------------------------------------
+# Follow-up (owner, live on this exact instance): "This playback of the
+# animation is not moving from step to step, its still just doing the
+# random animations." Investigated empirically (Playwright label/screenshot
+# traces at ~150-200ms resolution, before touching any code) rather than
+# assumed: sendTransition/the replay walk DOES fire once per real event, in
+# real order, with a genuine 1.5-5s visible dwell -- the stepping mechanism
+# itself was never broken. What WAS broken: the def+occupancy poll
+# (POLL_MS=10s, a `[project]`-only useEffect closure) unconditionally
+# re-applied the LIVE BOARD's real occupancy over a replay's own synthetic
+# single-node occupancy on every tick -- confirmed live via GET
+# /api/workflows?project=prism: conductor's real occupancy is heavily
+# nonzero ({green_gate: 25, plan_gate: 13, ...}) while every OTHER
+# workflow's (validation included) is always {}, which is exactly why
+# Build and test's own replay never showed this and conductor's did.
+# ---------------------------------------------------------------------------
+
+def test_live_occupancy_poll_skips_reapplying_def_while_an_instance_is_open():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    poll_load = _function_body(page, "const load = () => {\n      fetchWorkflowDef(project)")
+    guard = poll_load.index("if (selected && !viewingInstanceRef.current) {")
+    set_def = poll_load.index("graphRef.current.setDef(workflowForGraph(selected));")
+    fit_call = poll_load.index('graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);')
+    # The guard must wrap BOTH the occupancy reapply and the camera refit --
+    # re-fitting the camera while the owner is watching a replay would be
+    # its own jarring interruption, same root cause.
+    assert guard < set_def < fit_call
+
+
+def test_viewing_instance_ref_is_a_ref_not_state_and_is_set_and_cleared():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Must be a ref: the poll's closure is created once per project (deps
+    # are `[project]` only) and would otherwise read a stale, always-false
+    # `selectedHistoryRunId`/state snapshot from whenever the effect last
+    # ran, never seeing a later click's state update.
+    assert "const viewingInstanceRef = useRef(false);" in page
+
+    replay_start = _function_body(page, "const replayHistoricalRun = useCallback((run: WorkflowRun) => {")
+    assert "viewingInstanceRef.current = true" in replay_start
+
+    leave = _function_body(page, "const leaveHistoricalReplay = useCallback(() => {")
+    assert "viewingInstanceRef.current = false" in leave
+
+    # Switching to a different workflow entirely (sidebar click) must also
+    # clear it, or an instance left open elsewhere would freeze the live
+    # board poll forever afterward.
+    select_workflow_start = page.index("const selectWorkflow = useCallback((")
+    select_workflow_end = page.index("const selectedWorkflow = workflows.find(")
+    assert select_workflow_start < select_workflow_end
+    select_workflow = page[select_workflow_start:select_workflow_end]
+    assert "viewingInstanceRef.current = false" in select_workflow
+
+
+def test_replay_walk_genuinely_steps_one_real_event_at_a_time():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Pin the mechanics that make this a deliberate walk rather than an
+    # instant jump: each event gets its own visible-duration timer before
+    # advancing to the NEXT index, and REPLAY_MIN_STEP_MS floors every
+    # segment (even a near-zero real duration) at a genuinely visible dwell.
+    assert "REPLAY_MIN_STEP_MS = 1500" in page
+    walk_effect = _function_body(page, "useEffect(() => {\n    if (testModeRef.current !== \"replay\" || replayEventIndex === null) return;")
+    assert "window.setTimeout(() => setReplayEventIndex((index) => (index ?? 0) + 1), duration)" in walk_effect
+    assert "graphRef.current.sendTransition(replayEventIndex === 0 ? \"__start__\" : timeline[replayEventIndex - 1].step, event.step)" in walk_effect
+
+
+def test_version_bumped_for_the_retry_visibility_and_poll_stomping_fixes():
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must be plain release semver; got "
+        f"{ver_src.splitlines()[:1]!r}")
+    current = tuple(int(x) for x in m.groups())
+    assert current > (7, 12, 42), (
+        "PRISM_VERSION must be patch-bumped past 7.12.42 in the "
+        "implementation commit for these two follow-up fixes")

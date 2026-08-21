@@ -188,24 +188,77 @@ export type ConductorRunTask = {
 
 type ConductorHistoryRow = { action?: string; details?: string; timestamp?: string };
 
+/** Which step a mid-dwell history row is a genuine SETBACK for, or null if
+ * this row isn't one. conductor_service.py writes three distinct shapes
+ * DURING a step's dwell (between the advance_task rows that open and close
+ * it), and the original version of this function only ever read
+ * advance_task -- silently discarding all three, which is why a task that
+ * actually struggled (failed a step twice, or got rejected at a gate
+ * before eventually passing) replayed as one smooth, unbroken "passed"
+ * segment (owner: "the animation on that playback appears to be made up",
+ * confirmed live against task 93d6c6f3's real 3 flow_report_failure rows
+ * at verify_green_state):
+ *   - `action="flow_report_failure"`, `details="step=<id>; outcome=..."` --
+ *     a step attempt that failed and had to retry. `outcome` varies shape
+ *     (a bare `fail`, or a `{'ok': False, ...}` dict repr) but the action
+ *     name alone already says it failed; no need to parse `outcome`.
+ *   - `action="advance_refused"`, `details="step=<id>; validation=...; ..."`
+ *     -- a review step's own validation refused to let it advance (same
+ *     class of setback, same shape).
+ *   - `action="gate_decide"`, `details="gate=<id>_gate; ..."` where the
+ *     outcome was a rejection or control-plane failure, not an approval --
+ *     `_build_timeline` (api/tasks.py) documents this exact ambiguity: a
+ *     `verifier=fail` row can still be immediately overridden (`override=
+ *     True`) into a genuine pass, so only a fail WITHOUT an override, an
+ *     explicit `action=reject`, or a `control-plane=fail` counts. */
+function conductorFailedStepFromDetails(action: string | undefined, details: string): string | null {
+  if (action === "flow_report_failure" || action === "advance_refused") {
+    return /step=([^;]+)/.exec(details)?.[1]?.trim() ?? null;
+  }
+  if (action === "gate_decide") {
+    const gateMatch = /gate=(\w+_gate)/.exec(details);
+    if (!gateMatch) return null;
+    const rejected = /action=reject/.test(details)
+      || /control-plane=fail/.test(details)
+      || (/verifier=fail/.test(details) && !/override=True/.test(details));
+    return rejected ? gateMatch[1] : null;
+  }
+  return null;
+}
+
 /** Reconstructs a replay timeline from a task's own audit history.
  * conductor_service.advance_task (conductor_service.py:1653) writes one
  * `action="advance_task"` row per transition with `details="from=X; to=Y..."`
  * -- there is no separate run-history endpoint for the conductor because
- * there is no WorkflowCore instance; this history IS the instance record. */
+ * there is no WorkflowCore instance; this history IS the instance record.
+ *
+ * A real setback (see conductorFailedStepFromDetails) closes the attempt
+ * that just failed with `status: "failed"` and reopens a fresh dwell at the
+ * SAME step, so a step tried three times before passing produces three
+ * "failed" segments followed by the "passed" one the eventual advance_task
+ * row closes -- the replay walks through the retries instead of absorbing
+ * them into one clean success. */
 function conductorTimelineFromHistory(
   history: ConductorHistoryRow[],
 ): NonNullable<WorkflowRun["timeline"]> {
   const events: NonNullable<WorkflowRun["timeline"]> = [];
   let open: { step: string; startedAt: string } | null = null;
   for (const row of history) {
-    if (row.action !== "advance_task" || !row.timestamp) continue;
-    const to = /to=([^;]+)/.exec(row.details ?? "")?.[1]?.trim();
-    if (!to) continue;
-    if (open) {
-      events.push({ step: open.step, startedAt: open.startedAt, endedAt: row.timestamp, status: "passed" });
+    if (!row.timestamp) continue;
+    if (row.action === "advance_task") {
+      const to = /to=([^;]+)/.exec(row.details ?? "")?.[1]?.trim();
+      if (!to) continue;
+      if (open) {
+        events.push({ step: open.step, startedAt: open.startedAt, endedAt: row.timestamp, status: "passed" });
+      }
+      open = { step: to, startedAt: row.timestamp };
+      continue;
     }
-    open = { step: to, startedAt: row.timestamp };
+    const failedStep = conductorFailedStepFromDetails(row.action, row.details ?? "");
+    if (failedStep && open?.step === failedStep) {
+      events.push({ step: open.step, startedAt: open.startedAt, endedAt: row.timestamp, status: "failed" });
+      open = { step: failedStep, startedAt: row.timestamp };
+    }
   }
   if (open) events.push({ step: open.step, startedAt: open.startedAt, status: "passed" });
   return events;

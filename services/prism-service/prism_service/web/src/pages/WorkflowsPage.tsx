@@ -306,6 +306,16 @@ export default function WorkflowsPage() {
   const replayStepStartedRef = useRef(0);
   const replayStepDurationRef = useRef(REPLAY_MIN_STEP_MS);
   const replayTimelineRef = useRef<ReplayEvent[]>([]);
+  // The CURRENTLY-ANIMATING event's own status, read by the rAF loop below
+  // to tint a mid-replay step that genuinely failed and retried -- distinct
+  // from replayStoppedAt, which only ever names the FINAL event.
+  const replayEventStatusRef = useRef<string | null>(null);
+  // Ref mirror of "an instance overlay is open" -- the def+occupancy poll
+  // below is a STABLE closure (effect deps are just [project], so it never
+  // sees a fresh `selectedHistoryRunId`/testModeRef read from state) that
+  // must still know, on its own next tick, whether to skip re-asserting the
+  // board's live occupancy over a deliberately-chosen instance's own.
+  const viewingInstanceRef = useRef(false);
   const [replayEventIndex, setReplayEventIndex] = useState<number | null>(null);
   const [replayStoppedAt, setReplayStoppedAt] = useState<ReplayEvent | null>(null);
   const pendingReplayRef = useRef<WorkflowRun | null>(null);
@@ -378,16 +388,30 @@ export default function WorkflowsPage() {
           setWorkflows(catalog);
           const selected = catalog.find((workflow) => workflow.id === selectedWorkflowRef.current)
             ?? catalog[0];
-          if (selected) graphRef.current.setDef(workflowForGraph(selected));
-          // Wire edits rehydrate AFTER setDef: both maps are keyed by wire,
-          // and the wire list only exists once a definition has landed.
-          // Unknown keys are dropped inside the editor.
-          readJson<Record<string, WirePort>>(portsKey(project), (raw) =>
-            graphRef.current.wireEdits.hydrate(raw, undefined));
-          readJson<Record<string, Point[]>>(waypointsKey(project), (raw) =>
-            graphRef.current.wireEdits.hydrate(undefined, raw));
-          const canvas = canvasRef.current;
-          graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
+          // Live occupancy IS the correct default view of the conductor's
+          // own canvas -- but while an instance overlay is open (a replay,
+          // or a conductor task's live current-step progress),
+          // re-applying the board's real, constantly-changing occupancy
+          // here on every POLL_MS tick stomps the deliberately-chosen
+          // instance's own synthetic occupancy, which is what read as
+          // "random animations" instead of a deliberate step-through
+          // (owner, live evidence: conductor's real occupancy right now is
+          // {green_gate: 25, plan_gate: 13, story_gate: 5, ...} while every
+          // OTHER workflow's -- validation included -- is always {}, which
+          // is exactly why "Build and test"'s own replay never showed this
+          // and conductor's did).
+          if (selected && !viewingInstanceRef.current) {
+            graphRef.current.setDef(workflowForGraph(selected));
+            // Wire edits rehydrate AFTER setDef: both maps are keyed by wire,
+            // and the wire list only exists once a definition has landed.
+            // Unknown keys are dropped inside the editor.
+            readJson<Record<string, WirePort>>(portsKey(project), (raw) =>
+              graphRef.current.wireEdits.hydrate(raw, undefined));
+            readJson<Record<string, Point[]>>(waypointsKey(project), (raw) =>
+              graphRef.current.wireEdits.hydrate(undefined, raw));
+            const canvas = canvasRef.current;
+            graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
+          }
           timer = window.setTimeout(load, POLL_MS);
         })
         .catch(() => {
@@ -423,6 +447,7 @@ export default function WorkflowsPage() {
     pendingReplayRef.current = null;
     testWorkflowRef.current = null;
     testModeRef.current = null;
+    viewingInstanceRef.current = false;
     setWorkflowRun(null);
     graphRef.current.clearOverrides();
     // Re-navigating within the app (directory click, drill into a linked
@@ -707,6 +732,7 @@ export default function WorkflowsPage() {
       setTestStep(-1);
       replayStepStartedRef.current = performance.now();
       replayStepDurationRef.current = 350;
+      replayEventStatusRef.current = null;
       const timer = window.setTimeout(() => setReplayEventIndex(0), 350);
       return () => window.clearTimeout(timer);
     }
@@ -729,6 +755,7 @@ export default function WorkflowsPage() {
       setTestStep(workflow.steps.length);
       replayStepStartedRef.current = performance.now();
       replayStepDurationRef.current = 500;
+      replayEventStatusRef.current = null;
       return;
     }
 
@@ -745,6 +772,13 @@ export default function WorkflowsPage() {
     const duration = replaySpanMs(event, timeline[replayEventIndex + 1]);
     replayStepStartedRef.current = performance.now();
     replayStepDurationRef.current = duration;
+    // A retried step (flow_report_failure/advance_refused/a rejected gate
+    // decision, see conductorTimelineFromHistory) shows up here as its own
+    // event with status "failed" -- tint it while it animates, not just the
+    // run's terminal outcome, so a task that genuinely struggled doesn't
+    // replay as one smooth all-green climb (owner: "the animation on that
+    // playback appears to be made up").
+    replayEventStatusRef.current = event.status;
     const timer = window.setTimeout(() => setReplayEventIndex((index) => (index ?? 0) + 1), duration);
     return () => window.clearTimeout(timer);
   }, [replayEventIndex]);
@@ -822,6 +856,10 @@ export default function WorkflowsPage() {
     setReplayEventIndex(null);
     setReplayStoppedAt(null);
     testModeRef.current = null;
+    // Read by the def+occupancy poll's own next tick (a stable [project]-only
+    // closure that can't see this render's state) so it stops re-asserting
+    // the board's live occupancy over this instance's synthetic occupancy.
+    viewingInstanceRef.current = true;
     setHistoryOverlayReady(false);
     setHistoryOverlayOpen(false);
     window.requestAnimationFrame(() => {
@@ -851,6 +889,7 @@ export default function WorkflowsPage() {
     setWorkflowRun(null);
     setTestStep(null);
     testModeRef.current = null;
+    viewingInstanceRef.current = false;
     pendingReplayRef.current = null;
     setHistoryOverlayOpen(false);
     setHistoryOverlayReady(false);
@@ -987,13 +1026,22 @@ export default function WorkflowsPage() {
         const result = nodeId === "build" ? workflowRun?.data.build
           : nodeId === "test" ? workflowRun?.data.tests : null;
         const replayFinishedAtFailure = replayStoppedAt?.step === nodeId;
-        const tone = replayFinishedAtFailure
+        // A step that failed and retried mid-replay (not the run's final
+        // outcome) gets the SAME "failure" tone/label as a terminal failure
+        // -- reusing the existing vocabulary rather than inventing a
+        // separate "retry" visual, per the owner's ask that this stop
+        // looking like a made-up, always-smooth climb.
+        const midWalkFailure = !replayFinishedAtFailure && nodeId !== "__complete__"
+          && replayEventStatusRef.current === "failed";
+        const tone = replayFinishedAtFailure || midWalkFailure
           ? "failure"
           : nodeId === "__complete__"
           ? workflowRun?.data.passed ? "success" : "failure"
           : "active";
         const replayLabel = replayFinishedAtFailure
           ? result ? result.status.replace("_", " ").toUpperCase() : "FAILED"
+          : midWalkFailure
+          ? "FAILED"
           : nodeId === "__complete__"
           ? workflowRun?.data.passed ? "PASSED" : "FAILED"
           : "RUN";
