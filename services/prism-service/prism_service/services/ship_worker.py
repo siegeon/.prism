@@ -187,7 +187,8 @@ def ship_task(task_id: str, project: str = "default", *,
               runner: Optional[Runner] = None,
               task_svc=None, cond=None,
               poll_interval_s: float = CI_POLL_S,
-              ci_timeout_s: float = CI_TIMEOUT_S) -> dict:
+              ci_timeout_s: float = CI_TIMEOUT_S,
+              on_landed: Optional[Callable[..., bool]] = None) -> dict:
     """Land this task's workspace branch. DETERMINISTIC — no model calls.
 
     push -> gh pr create (body carries the `[task:<id8>]` trailer, which is
@@ -195,6 +196,14 @@ def ship_task(task_id: str, project: str = "default", *,
     gh pr checks polled to completion -> gh pr merge -> fetch, so the local
     origin/main ref reflects the landing the shipped-ness tooth is about to
     re-read.
+
+    ``on_landed(task_svc, cond, task_id) -> bool`` runs once the branch is
+    on origin/main — the pluggable "what does landing mean for this task"
+    step. Defaults to ``_replay_owner_approval`` (the human-approved,
+    ship-on-approve track); ``sweep_once`` passes ``_adjudicate_after_ship``
+    for the machine-adjudicated track instead. Neither seat approves
+    anything beyond what its OWN authority already grants — this only
+    removes the one objection (unshipped-ness) that shipping just cleared.
 
     Returns {"ok", "stage", "error", "pr"}. On failure the gate is parked with
     the verbatim stage error and the owner's recorded approval is preserved.
@@ -266,7 +275,8 @@ def ship_task(task_id: str, project: str = "default", *,
     # origin/main ref, so without the fetch it would re-refuse what just landed.
     _run(run, ["git", "fetch", "origin"], path)
 
-    replayed = _replay_owner_approval(task_svc, cond, task_id)
+    land = on_landed or _replay_owner_approval
+    replayed = land(task_svc, cond, task_id)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
             "replayed": replayed}
 
@@ -297,8 +307,34 @@ def _replay_owner_approval(task_svc, cond, task_id: str) -> bool:
         return False
 
 
+def _adjudicate_after_ship(task_svc, cond, task_id: str) -> bool:
+    """The MACHINE-TRACK twin of _replay_owner_approval, for a proof_type=
+    test task whose green_gate was blocked SOLELY on shipped-ness — no
+    human approval was ever recorded because none is required for this
+    track (the adjudicator seat, task eaafdf75, already owns its green).
+
+    Missing final step this closes (owner 2026-08-21): a fully-autonomous
+    task could clear every OTHER green_gate tooth and then park forever,
+    because nothing ever pushed/PR'd/merged its branch — `_awaiting_ship`
+    only ever found tasks carrying a recorded HUMAN 'ship=queued' approval,
+    which a machine-adjudicated task never has. Re-running
+    `adjudicate_green_gate` here grants NO new authority: it re-checks every
+    pre-flight tooth (candidate-controls-judge, reachability, screen-claim,
+    the fresh-receipt requirement) from scratch and only approves if all of
+    them — now including shipped-ness — are clean."""
+    if cond is None or task_svc is None:
+        return False
+    try:
+        res = cond.adjudicate_green_gate(task_id)
+        return bool(res and res.get("ok"))
+    except Exception as exc:
+        _park(task_svc, task_id, "replay", f"{type(exc).__name__}: {exc}")
+        return False
+
+
 def _awaiting_ship(project: str) -> list:
-    """Task ids whose green_gate carries a recorded, unshipped approval."""
+    """Task ids whose green_gate carries a recorded, unshipped HUMAN
+    approval (the ship-on-approve, proof_type=demo/review track)."""
     from prism_service.project_context import get_project
     ctx = get_project(project)
     cond = getattr(ctx, "conductor_svc", None)
@@ -320,9 +356,42 @@ def _awaiting_ship(project: str) -> list:
     return out
 
 
+def _awaiting_ship_machine(project: str) -> list:
+    """Task ids on the MACHINE-adjudicated track (proof_type NOT demo/review)
+    parked at a pending green_gate for shipped-ness — no human approval
+    involved or required, so `_awaiting_ship`'s recorded-approval filter
+    never finds them. This is the gap: a fully-autonomous task can clear
+    every other green_gate tooth and then park forever, since nothing else
+    ever pushes/PRs/merges its branch."""
+    from prism_service.project_context import get_project
+    ctx = get_project(project)
+    cond = getattr(ctx, "conductor_svc", None)
+    if cond is None:
+        return []
+    out = []
+    for task in ctx.task_svc.list(status="in_progress"):
+        tid = str(getattr(task, "id", "") or "")
+        if str(getattr(task, "workflow_step", "")) != "green_gate":
+            continue
+        if str(getattr(task, "gate_state", "")) != "pending":
+            continue
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt in ("demo", "review"):
+            continue  # human-only track (owner rule eaafdf75); _awaiting_ship owns it
+        try:
+            if not cond._unshipped_gate_reason(task):
+                continue
+        except Exception:
+            continue
+        out.append(tid)
+    return out
+
+
 def sweep_once() -> Optional[dict]:
     """One pass over every project: ship AT MOST one task, bounding blast
-    radius exactly as task_runner.sweep_once does."""
+    radius exactly as task_runner.sweep_once does. Checks the human-approved
+    track first (an explicit owner decision waiting to land), then the
+    machine track (nothing is waiting on a person)."""
     from prism_service.project_context import get_all_projects
 
     for pid in get_all_projects():
@@ -333,6 +402,15 @@ def sweep_once() -> Optional[dict]:
             continue
         for tid in pending:
             res = ship_task(tid, pid)
+            _log(f"{pid}/{tid[:8]}: {res}")
+            return res
+        try:
+            pending_machine = _awaiting_ship_machine(pid)
+        except Exception as exc:
+            _log(f"{pid}: machine-track eligibility check failed: {exc}")
+            continue
+        for tid in pending_machine:
+            res = ship_task(tid, pid, on_landed=_adjudicate_after_ship)
             _log(f"{pid}/{tid[:8]}: {res}")
             return res
     return None
