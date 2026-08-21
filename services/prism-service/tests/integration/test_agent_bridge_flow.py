@@ -386,3 +386,96 @@ def test_agent_bridge_command_tool_is_registered_and_advertised():
     names = {t.name for t in TOOLS}
     assert "agent_bridge_command" in names
     assert "agent_bridge_command" in INTERACTIVE_TOOL_NAMES
+
+
+_TINY_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+    "AScY42YAAAAASUVORK5CYII="
+)
+
+
+def test_screenshot_result_persists_the_image_and_returns_a_path(tmp_path, monkeypatch):
+    """A `screenshot` command's browser-side result carries a full PNG as a
+    base64 data URL (agentBridge.tsx's html2canvas capture) -- this must be
+    written to disk (never round-tripped as a giant string through the MCP
+    tool's text response) and the caller gets a real, readable file path
+    back instead."""
+    import prism_service.data_dir as data_dir_module
+    from prism_service.api.agent_bridge import create_session, submit_result, CreateSessionBody, ResultBody
+    from prism_service.services.agent_bridge import get_agent_bridge_service
+
+    monkeypatch.setattr(data_dir_module, "resolve_data_dir", lambda: tmp_path)
+
+    alice = _principal("alice")
+    session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    svc = get_agent_bridge_service()
+    command_id = svc.publish_command(svc._get_live(session["id"]), "screenshot", {})
+
+    submit_result(session["id"], ResultBody(
+        token=session["token"], command_id=command_id, ok=True,
+        data={"image": f"data:image/png;base64,{_TINY_PNG_B64}"},
+    ))
+
+    result = svc.wait_for_result(command_id, timeout=2.0)
+    assert result["ok"] is True
+    assert "image" not in result["data"], "raw base64 must not survive into the MCP result"
+    image_path = result["data"]["image_path"]
+    from pathlib import Path
+    p = Path(image_path)
+    assert p.is_file()
+    assert p.read_bytes() == __import__("base64").b64decode(_TINY_PNG_B64)
+    assert str(tmp_path) in str(p), "must land under the (test-overridden) PRISM data dir"
+
+
+def test_screenshot_action_is_forwarded_with_an_optional_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.tools import handle_tool
+    from prism_service.events import bus
+    import json as _json
+
+    alice = _principal("alice")
+    session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    subscribed = threading.Event()
+    seen = {}
+
+    def _browser():
+        async def _inner():
+            q = bus.subscribe()
+            subscribed.set()
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=5.0)
+                seen.update(event)
+            finally:
+                bus.unsubscribe(q)
+        asyncio.run(_inner())
+
+    t = threading.Thread(target=_browser, daemon=True)
+    t.start()
+    assert subscribed.wait(timeout=2.0)
+
+    with use_request_context(PrismRequestContext(project_id="prism", principal=alice)):
+        asyncio.run(handle_tool(
+            "agent_bridge_command",
+            {"session_id": session["id"], "action": "screenshot",
+             "selector": "#workflow-rail", "timeout_s": 0.3},
+            project_id="prism",
+        ))
+    t.join(timeout=2.0)
+    assert seen["action"] == "screenshot"
+    assert seen["selector"] == "#workflow-rail"
+
+
+def test_read_action_returns_html_not_just_text_content():
+    """Source-reading pin (this SPA has no JS test runner -- see
+    tests/unit/test_conductor_page_animated_cleanup_ui.py for the repo's
+    established convention). Real regression: asked to answer "what does the
+    workflow rail actually look like right now", the read action only ever
+    returned textContent/value -- empty for the rail, whose real state lives
+    in button count/disabled/class (color), not text. `html` must be present
+    so an agent driving the bridge can actually answer a visual question
+    about the user's own screen, not just click/navigate blind."""
+    src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
+    read_branch = src.split('cmd.action === "read"', 1)[1].split("} else {", 1)[0]
+    assert "outerHTML" in read_branch
+    assert "html:" in read_branch

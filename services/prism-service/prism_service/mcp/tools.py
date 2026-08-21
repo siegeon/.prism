@@ -1684,10 +1684,14 @@ TOOLS: list[Tool] = [
             "normal synchronous call: navigate changes the SPA's route via "
             "its own router (no hard reload); click/fill dispatch real DOM "
             "events so the app's own handlers run exactly as they would for "
-            "the person themselves; read serializes text/attribute content "
-            "back to you. A closed/expired/revoked session, or a session "
-            "owned by a different user, is rejected — never silently a "
-            "no-op."
+            "the person themselves; read serializes text/html content back "
+            "to you; screenshot renders the live page (or one element, via "
+            "selector) into a PNG from inside the tab itself — no separate "
+            "browser, no OS screen-capture permission prompt — and returns "
+            "an `image_path` on disk (never the raw image inline) for you "
+            "to open with your own file-reading tool. A closed/expired/"
+            "revoked session, or a session owned by a different user, is "
+            "rejected — never silently a no-op."
         ),
         inputSchema={
             "type": "object",
@@ -1695,12 +1699,13 @@ TOOLS: list[Tool] = [
                 "session_id": {"type": "string",
                     "description": "The bridge session id the user's tab is showing."},
                 "action": {"type": "string",
-                    "enum": ["navigate", "click", "fill", "read"],
+                    "enum": ["navigate", "click", "fill", "read", "screenshot"],
                     "description": "What to do in the tab."},
                 "path": {"type": "string",
                     "description": "navigate: the in-app route to go to, e.g. '/tasks'."},
                 "selector": {"type": "string",
-                    "description": "click/fill/read: a CSS selector for the target element."},
+                    "description": "click/fill/read/screenshot: a CSS selector for the "
+                        "target element (screenshot defaults to the whole page)."},
                 "value": {"type": "string",
                     "description": "fill: the text to set on the matched input/textarea."},
                 "timeout_s": {"type": "number", "default": 20,
@@ -4716,10 +4721,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             request_ctx = get_request_context()
             session_id = str(arguments.get("session_id") or "").strip()
             action = str(arguments.get("action") or "").strip()
-            if not session_id or action not in {"navigate", "click", "fill", "read"}:
+            if not session_id or action not in {
+                "navigate", "click", "fill", "read", "screenshot",
+            }:
                 return [TextContent(type="text", text=_json({
                     "ok": False,
-                    "error": "session_id and action (navigate|click|fill|read) are required",
+                    "error": "session_id and action (navigate|click|fill|read|"
+                             "screenshot) are required",
                 }))]
 
             service = get_agent_bridge_service()
@@ -4739,7 +4747,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             fields: dict = {}
             if action == "navigate":
                 fields["path"] = str(arguments.get("path") or "")
-            elif action in ("click", "read"):
+            elif action in ("click", "read", "screenshot"):
+                # screenshot's selector is OPTIONAL -- an empty string is
+                # falsy client-side (agentBridge.tsx) and defaults the
+                # capture to the whole page, not a click/read failure.
                 fields["selector"] = str(arguments.get("selector") or "")
             elif action == "fill":
                 fields["selector"] = str(arguments.get("selector") or "")

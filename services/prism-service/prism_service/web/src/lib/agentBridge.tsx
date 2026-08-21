@@ -43,7 +43,7 @@ type BridgeCommand = {
   type: "agent_bridge.command";
   session_id: string;
   command_id: string;
-  action: "navigate" | "click" | "fill" | "read";
+  action: "navigate" | "click" | "fill" | "read" | "screenshot";
   path?: string;
   selector?: string;
   value?: string;
@@ -176,7 +176,28 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
         data = {
           text: el.textContent?.trim() ?? "",
           value: (el as HTMLInputElement).value ?? null,
+          // Most of this app's state lives in attributes/classes, not text
+          // (a pill rail is a strip of empty <button>s colored by class,
+          // aria-valuenow carrying the real count) -- textContent alone
+          // answers almost no real "what does the screen look like" question
+          // an agent asks on the user's behalf. Truncated to stay a small,
+          // synchronous SSE payload, not a DOM dump.
+          html: (el as HTMLElement).outerHTML?.slice(0, 4000) ?? "",
         };
+      } else if (cmd.action === "screenshot") {
+        // Renders the REAL live DOM (whatever the user is actually looking
+        // at right now) into a canvas from inside this same tab -- no
+        // separate/headless browser, no native screen-capture permission
+        // prompt. Defaults to the whole page; a selector scopes it to one
+        // element (e.g. just the workflow rail) so the payload stays small
+        // and the answer stays about the thing that was actually asked.
+        const target = cmd.selector
+          ? resolveSelector(cmd.selector)
+          : document.body;
+        if (!target) throw new Error(`no element matches selector: ${cmd.selector}`);
+        const html2canvas = (await import("html2canvas")).default;
+        const canvas = await html2canvas(target as HTMLElement, { scale: 1 });
+        data = { image: canvas.toDataURL("image/png") };
       } else {
         throw new Error(`unknown action: ${cmd.action}`);
       }

@@ -15,14 +15,45 @@ channel would be broader than the bridge session's intended scope).
 
 from __future__ import annotations
 
+import base64
+import re
+import uuid
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from prism_service.api.auth import coerce_principal, current_principal
+from prism_service.data_dir import agent_bridge_screenshot_dir
 from prism_service.models.workspace import Principal
 from prism_service.services.agent_bridge import get_agent_bridge_service
 
 router = APIRouter()
+
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_DATA_URL_RE = re.compile(r"^data:image/(png|jpeg);base64,(.+)$", re.DOTALL)
+
+
+def _persist_screenshot_if_present(session_id: str, data: dict) -> dict:
+    """A `screenshot` command's result carries a full PNG as a base64 data
+    URL — round-tripping that through the MCP tool's text response would
+    dump the whole image into an agent's context as a giant string. Persist
+    it to disk (mirrors evidence_dir's existing "screenshots live in PRISM's
+    own data dir, never inline" pattern) and hand back a path instead."""
+    image = data.get("image")
+    if not isinstance(image, str) or not _SESSION_ID_RE.match(session_id):
+        return data
+    match = _DATA_URL_RE.match(image)
+    if not match:
+        return data
+    ext = "png" if match.group(1) == "png" else "jpg"
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except Exception:
+        return data
+    path = agent_bridge_screenshot_dir(session_id) / f"{uuid.uuid4().hex}.{ext}"
+    path.write_bytes(raw)
+    rest = {k: v for k, v in data.items() if k != "image"}
+    return {**rest, "image_path": str(path)}
 
 
 class CreateSessionBody(BaseModel):
@@ -66,8 +97,9 @@ def submit_result(session_id: str, body: ResultBody) -> dict:
     session = service.validate_token(session_id, body.token)
     if session is None:
         raise HTTPException(401, "invalid, expired, or revoked bridge session")
+    data = _persist_screenshot_if_present(session_id, body.data)
     accepted = service.submit_result(session_id, body.command_id, {
-        "ok": body.ok, "error": body.error, "data": body.data,
+        "ok": body.ok, "error": body.error, "data": data,
     })
     if not accepted:
         raise HTTPException(404, "no command is waiting on that command_id")

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.1"
+PRISM_VERSION = "7.13.3"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5148,4 +5148,28 @@ PRISM_VERSION_NOTES += (
     "that vanished hard enough beforeunload never fired, not the session's "
     "real lifetime. New regression test pins a session simulated 25 "
     "minutes old (well past the old cliff, never revoked) still validates."
+    "\n\n"
+    "7.13.2: agent_bridge's 'read' action returned only textContent/value, "
+    "which answers almost no real question about the user's own screen -- "
+    "most of this app's state lives in classes/attributes (a pill rail is a "
+    "strip of empty <button>s colored by class, count carried on "
+    "aria-valuenow), so asking the bridge what the bottom rail actually "
+    "looked like came back empty. Read now also returns a truncated "
+    "outerHTML (agentBridge.tsx) so an agent driving the bridge can answer "
+    "a visual question, not just click/navigate blind."
+    "\n\n"
+    "7.13.3: added a `screenshot` action to agent_bridge_command -- owner, "
+    "live, after asking a purely visual question about the bottom rail and "
+    "getting told to pull it back through the bridge instead of curl: "
+    "'you have access to the agent sse etc, you should be able to pull "
+    "back the visual as i see state of the system'. The tab renders "
+    "itself (or one selector-scoped element) into a PNG via html2canvas "
+    "from inside its own page -- no separate/headless browser, no OS "
+    "screen-capture permission prompt -- then the browser POSTs the "
+    "base64 PNG back; the results route "
+    "(api/agent_bridge.py's _persist_screenshot_if_present) decodes and "
+    "writes it under PRISM_DATA_DIR/agent-bridge/<session_id>/ "
+    "(data_dir.agent_bridge_screenshot_dir), never inline through the MCP "
+    "tool's text response, and returns image_path for the calling agent "
+    "to open directly with its own file-reading tool."
 )

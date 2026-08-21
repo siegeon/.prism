@@ -98,6 +98,18 @@ def evidence_dir(task_id: str) -> Path:
     return p
 
 
+def agent_bridge_screenshot_dir(session_id: str) -> Path:
+    """Directory holding one agent-bridge session's `screenshot` command
+    results — a PNG captured from the user's OWN live tab (via html2canvas,
+    never a separate browser) and persisted here rather than round-tripped
+    as a giant base64 blob through the MCP tool's text response. Callers
+    MUST pass an already-validated session id (agent_bridge.py mints these
+    as uuid4 hex) so a crafted id can't traverse out of the data dir."""
+    p = resolve_data_dir() / "agent-bridge" / session_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 5
 
