@@ -70,6 +70,30 @@ class _FakeJira:
             remote_updated_at="2026-08-11T00:00:00Z")
 
 
+class _FakeGitHub:
+    """Network boundary only, for the AC-4 cross-provider case below --
+    importing api.integrations registers the REAL github adapter at module
+    scope, so a would-create push that is never faked here would otherwise
+    reach the live GitHub API (NFR-5)."""
+
+    provider = "github"
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def create(self, connection, container, title, body="", assignee=""):
+        from prism_service.models.integration import ExternalEntityInput
+
+        n = 4242 + len(self.calls)
+        self.calls.append((title, assignee))
+        return ExternalEntityInput(
+            entity_kind="issue", remote_id=f"I_{n}",
+            display_key=f"#{n}", title=title, body=body,
+            url=f"https://github.com/siegeon/.prism/issues/{n}",
+            remote_status="open", status_category="open",
+            remote_updated_at="2026-08-11T00:00:00Z")
+
+
 def _scope():
     """The exact scope every route derives -- never a guessed constant."""
     from prism_service.api import integrations_connect as connect
@@ -326,33 +350,126 @@ def test_ac7_jira_origin_imported_task_never_reexports_its_own_issue(app):
     assert ids["jira_linked"] in body["skipped"]["already_linked"]
 
 
-# ── Regression (live preview 2026-08-11): a GITHUB-IMPORTED task must
-# never preview as jira-eligible. On the owner's real board the first live
-# jira preview offered would_create=48, ALL of them external-tagged tasks
-# imported FROM GitHub - the observer path refuses IMPORTED_TAGS, but the
-# backlog route consulted only status + this-provider links. Imported
-# tasks belong in their own skip bucket, and a confirm naming one
-# explicitly must still create nothing.
-def test_imported_tasks_never_preview_or_push_cross_provider(app):
+# ── AC-1 / AC-2 / AC-3 / AC-4 (task f66fc383): ORIGIN-SCOPED, not a blanket
+# refusal. SUPERSEDES test_imported_tasks_never_preview_or_push_cross_provider,
+# which asserted the old blanket rule ("an imported task never previews or
+# pushes to ANY provider"). The owner's current, actual directive
+# (2026-08-12, superseding mx-7dfd84 clause 5) is origin-scoped: an imported
+# task must never export back to the provider it came FROM, but MUST mirror
+# to the OTHER provider. The github-origin-refused-by-github half of the old
+# assertion still holds (AC-2 below); the cross-provider half is new
+# (AC-1/AC-3/AC-4).
+def _track_github(app):
+    """Turn github sync on WITHOUT the PUT .../github/sync route: that route
+    edge-triggers _fire_backlog_sweep on False->True (AC-2/AC-4 of task
+    02672417, already covered by test_backlog_push_from_switch.py), which
+    consults get_cli_credentials().status() on the request thread -- exactly
+    the call this file's _ExplodingCliRunner exists to catch on a JIRA push.
+    Flipping the preference directly gets sync on as a precondition for the
+    push-backlog ACs below without dragging in that unrelated sweep."""
+    from prism_service.services import sync_prefs
+
+    sync_prefs.get_sync_preferences().set_enabled(_scope(), "github", True)
+    scope = _scope()
+    conn = app.store.ensure_connection(scope, "github", "install-x")
+    app.store.ensure_container(scope, conn.id, "repository", "siegeon/.prism",
+                               display_key="siegeon/.prism")
+    return conn
+
+
+def test_ac1_ac3_github_imported_task_previews_and_pushes_to_jira(app):
     ids = _seed_board(app)
     svc = app.task_svc
-    imported = svc.create(title="Imported from GitHub, do not re-export",
+    imported = svc.create(title="Imported from GitHub, mirror to Jira",
                           tags=["external", "github"])
 
-    resp = app.post("/api/integrations/connect/jira/push-backlog",
-                    params={"project": PROJECT}, json={"dry_run": True})
-    body = resp.json()
-    assert imported.id not in body["would_create"], (
-        "an external-tagged task previewed as jira-eligible - the exact "
-        "48-task offer the live preview made on 2026-08-11")
-    assert imported.id in body["skipped"].get("imported", []), (
-        "imported tasks need their OWN skip bucket so the preview says "
-        "what happened to them")
+    preview = app.post("/api/integrations/connect/jira/push-backlog",
+                       params={"project": PROJECT}, json={"dry_run": True}).json()
+    assert imported.id in preview["would_create"], (
+        "a github-imported task must preview as jira-eligible -- jira is "
+        "not its origin (task f66fc383-db9c-42c4-9eab-accbb0cc80c4)")
+    assert imported.id not in preview["skipped"].get("imported", [])
 
     resp = app.post(
         "/api/integrations/connect/jira/push-backlog",
         params={"project": PROJECT},
         json={"dry_run": False, "task_ids": [imported.id]})
     body = resp.json()
+    created_ids = {c["task_id"] for c in body["created"]}
+    assert imported.id in created_ids, (
+        f"confirming the jira preview for a github-imported task must "
+        f"create its jira issue: {body}")
+
+    scope = _scope()
+    links = [l for l in app.store.list_links(scope, task_id=imported.id)
+            if l.state == "active"]
+    jira_links = [l for l in links
+                 if app.store.get_connection(
+                     scope, app.store.get_entity(scope, l.entity_id).connection_id
+                 ).provider == "jira"]
+    assert jira_links, "no active jira link recorded for the pushed task"
+
+
+def test_ac2_github_imported_task_never_previews_or_pushes_back_to_github(app):
+    _track_github(app)
+    svc = app.task_svc
+    imported = svc.create(title="Imported from GitHub, do not re-export",
+                          tags=["external", "github"])
+
+    preview = app.post("/api/integrations/connect/github/push-backlog",
+                       params={"project": PROJECT}, json={"dry_run": True}).json()
+    assert imported.id not in preview["would_create"], (
+        "an imported task must never preview as eligible for its OWN "
+        "origin provider - the exact 48-task offer the live jira preview "
+        "made on 2026-08-11, mirrored for github")
+    assert imported.id in preview["skipped"].get("imported", []), (
+        "imported tasks need their OWN skip bucket so the preview says "
+        "what happened to them")
+
+    resp = app.post(
+        "/api/integrations/connect/github/push-backlog",
+        params={"project": PROJECT},
+        json={"dry_run": False, "task_ids": [imported.id], "assignee": "someone"})
+    body = resp.json()
     assert body["created"] == [], (
-        "a confirm explicitly naming an imported task must refuse it")
+        "a confirm explicitly naming an imported task must refuse it for "
+        "its own origin provider")
+
+
+def test_ac4_jira_imported_task_previews_and_pushes_to_github_never_back_to_jira(
+    app, monkeypatch,
+):
+    _track_github(app)
+    _track_jira(app)
+    from prism_service.api import integrations as integrations_api
+
+    fake_github = _FakeGitHub()
+    monkeypatch.setitem(integrations_api._adapters, "github", fake_github)
+
+    svc = app.task_svc
+    imported = svc.create(title="Imported from Jira, mirror to GitHub",
+                          tags=["external", "jira"])
+
+    gh_preview = app.post("/api/integrations/connect/github/push-backlog",
+                          params={"project": PROJECT}, json={"dry_run": True}).json()
+    assert imported.id in gh_preview["would_create"], (
+        "a jira-imported task must preview as github-eligible -- github is "
+        "not its origin")
+    assert imported.id not in gh_preview["skipped"].get("imported", [])
+
+    jira_preview = app.post("/api/integrations/connect/jira/push-backlog",
+                            params={"project": PROJECT}, json={"dry_run": True}).json()
+    assert imported.id not in jira_preview["would_create"], (
+        "a jira-imported task must never preview as eligible for its own "
+        "origin (jira)")
+    assert imported.id in jira_preview["skipped"].get("imported", [])
+
+    resp = app.post(
+        "/api/integrations/connect/github/push-backlog",
+        params={"project": PROJECT},
+        json={"dry_run": False, "task_ids": [imported.id], "assignee": "someone"})
+    body = resp.json()
+    created_ids = {c["task_id"] for c in body["created"]}
+    assert imported.id in created_ids, (
+        f"confirming the github preview for a jira-imported task must "
+        f"create its github issue: {body}")
