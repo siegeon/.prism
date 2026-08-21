@@ -84,3 +84,16 @@ def test_usage_does_not_invent_values_on_upstream_failure(tmp_path, monkeypatch)
     monkeypatch.setattr(claude_auth, "_fetch_usage", lambda _token: (_ for _ in ()).throw(OSError("offline")))
     assert claude_auth.usage() == {
         "available": False, "reason": "upstream_unavailable", "windows": {}}
+
+
+def test_usage_reports_no_usage_data_without_inventing_a_value(tmp_path, monkeypatch):
+    from prism_service.api import claude_auth
+
+    home = tmp_path / "claude"
+    _credential(home)
+    monkeypatch.setattr(claude_auth, "_config_dir", lambda: home)
+    monkeypatch.setattr(claude_auth, "urlopen", lambda *_a, **_kw: _Response({
+        "some_other_window": {"utilization": 55, "resets_at": "2026-08-19T23:00:00Z"},
+    }))
+    assert claude_auth.usage() == {
+        "available": False, "reason": "no_usage_data", "windows": {}}
