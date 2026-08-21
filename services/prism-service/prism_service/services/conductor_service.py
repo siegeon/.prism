@@ -2499,6 +2499,16 @@ class ConductorService:
         squash merges, task 499ba9c9) and never the daemon's own checkout
         HEAD — this reads the TASK'S OWN worktree.
 
+        Matches the trailer as a PREFIX (`[task:a205eb7a`, no closing
+        bracket required in the grep pattern) — task a205eb7a itself is the
+        live regression that forced this: its real driver wrote the FULL
+        UUID trailer (`[task:a205eb7a-d46b-4d1c-a2a0-809a0c1e3ff0]`) instead
+        of the documented 8-char short form, so the old exact-bracket
+        pattern found no local commit at all and silently fail-opened this
+        tooth on a task that was genuinely unshipped. `_is_shipped_on_main`
+        and `_compute_stranded` (api/tasks.py) carried the identical
+        assumption and are fixed the same way.
+
         FAIL-OPEN (returns ""), never a refusal, when: no workspace is
         resolvable for the task, that workspace has no `origin/main` ref at
         all (e.g. a synthetic/local-only repo with no remote — an
@@ -2532,7 +2542,7 @@ class ConductorService:
             # real unpushed commit as "never committed at all" (test C2/C3).
             local_trailer = subprocess.run(
                 ["git", "-C", repo, "log", "--all", "--fixed-strings",
-                 "--grep", f"[task:{task_id[:8]}]", "-n", "1",
+                 "--grep", f"[task:{task_id[:8]}", "-n", "1",
                  "--format=%H"],
                 capture_output=True, text=True, timeout=10)
         except Exception:
