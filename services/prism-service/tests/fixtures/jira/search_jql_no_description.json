@@ -1,0 +1,17 @@
+{
+  "issues": [
+    {
+      "id": "20003",
+      "key": "PRIS-11",
+      "fields": {
+        "summary": "Investigate flaky webhook retries",
+        "status": {"name": "To Do"},
+        "assignee": null,
+        "updated": "2026-08-03T10:00:00.000+0000",
+        "description": null
+      }
+    }
+  ],
+  "nextPageToken": null,
+  "isLast": true
+}
