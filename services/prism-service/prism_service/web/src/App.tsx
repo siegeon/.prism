@@ -11,6 +11,7 @@ import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
 import LiveBar from "@/components/LiveBar";
 import { Skeleton } from "@/components/ui";
+import { AgentBridgeProvider } from "@/lib/agentBridge";
 
 // Route-level code splitting (v6.3.40). Every page used to be a static import,
 // so the graph/Sigma, conductor animation, settings, and mermaid-adjacent code
@@ -120,6 +121,7 @@ export default function App() {
     return <ClaimPage onClaimed={() => setClaimed(true)} />;
   }
   return (
+    <AgentBridgeProvider>
     <div className="h-full w-full flex bg-[color:var(--background-base)] text-[color:var(--midground-base)] relative">
       <Backdrop />
       <Sidebar />
@@ -198,6 +200,7 @@ export default function App() {
         </div>
       </main>
     </div>
+    </AgentBridgeProvider>
   );
 }
 

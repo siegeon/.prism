@@ -157,6 +157,59 @@ async def sse_work(request: Request, project: str = "default"):
     )
 
 
+@router.get("/agent-bridge/{session_id}")
+async def sse_agent_bridge(request: Request, session_id: str, token: str = ""):
+    """Command stream for ONE agent-bridge session (live remote-assist —
+    see services/agent_bridge.py). Mirrors sse_tasks's per-id filter shape.
+
+    Auth gap this exists for: EventSource cannot send an Authorization
+    header, so unlike every other route here this one is NOT gated by
+    enforce_team_boundary's bearer/access-key path (api/security.py carves
+    this path shape out explicitly). Instead the bridge session's own
+    short-lived token — passed as a query param, the only option EventSource
+    has — is the credential, checked right here against the session record.
+    An invalid/expired/revoked token gets a real 401, never a silent stream
+    that simply never delivers anything.
+    """
+    from prism_service.services.agent_bridge import get_agent_bridge_service
+
+    service = get_agent_bridge_service()
+    if service.validate_token(session_id, token) is None:
+        from fastapi import HTTPException
+        raise HTTPException(401, "invalid, expired, or revoked bridge session")
+
+    async def gen():
+        q = bus.subscribe()
+        try:
+            yield b": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield b": keepalive\n\n"
+                    continue
+                if event.get("type") != "agent_bridge.command":
+                    continue
+                if event.get("session_id") != session_id:
+                    continue
+                payload = json.dumps(event, separators=(",", ":"))
+                yield f"data: {payload}\n\n".encode("utf-8")
+        finally:
+            bus.unsubscribe(q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/live")
 async def sse_live(request: Request):
     """Emit the running build's version so the SPA can detect a

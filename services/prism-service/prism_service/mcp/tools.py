@@ -1667,6 +1667,48 @@ TOOLS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="agent_bridge_command",
+        description=(
+            "Drive a SPECIFIC user's own already-open PRISM browser tab, live "
+            "— no separate/headless browser, no screen mirror. The person "
+            "watches it happen on their own screen because it genuinely is "
+            "their tab reacting. Motivating case: a customer hands over a "
+            "session_id from their Settings > Access key 'remote assist' "
+            "toggle so an agent can diagnose/fix something live. Requires "
+            "the SAME access key that identifies you to this MCP server to "
+            "belong to the session's owner (task 6cef97ec: holding a user's "
+            "key already means full authority to act as them; this is one "
+            "more thing that authority covers — no new auth concept). "
+            "Blocks briefly for the browser's real result, so this is a "
+            "normal synchronous call: navigate changes the SPA's route via "
+            "its own router (no hard reload); click/fill dispatch real DOM "
+            "events so the app's own handlers run exactly as they would for "
+            "the person themselves; read serializes text/attribute content "
+            "back to you. A closed/expired/revoked session, or a session "
+            "owned by a different user, is rejected — never silently a "
+            "no-op."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string",
+                    "description": "The bridge session id the user's tab is showing."},
+                "action": {"type": "string",
+                    "enum": ["navigate", "click", "fill", "read"],
+                    "description": "What to do in the tab."},
+                "path": {"type": "string",
+                    "description": "navigate: the in-app route to go to, e.g. '/tasks'."},
+                "selector": {"type": "string",
+                    "description": "click/fill/read: a CSS selector for the target element."},
+                "value": {"type": "string",
+                    "description": "fill: the text to set on the matched input/textarea."},
+                "timeout_s": {"type": "number", "default": 20,
+                    "description": "How long to wait for the tab's result before giving up."},
+            },
+            "required": ["session_id", "action"],
+        },
+    ),
 ]
 
 
@@ -1715,6 +1757,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "janitor_submit",
     "janitor_abandon",
     "memory_invalidate",
+    "agent_bridge_command",
 }
 # NOTE: the legacy understand_* tools are intentionally NOT in the default
 # interactive surface — they're superseded by the okf_* Understand wiki and
@@ -4657,6 +4700,62 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 story_file=arguments.get("story_file"),
             )
             return [TextContent(type="text", text=_json(bundle))]
+
+        # ------------------------------------------------------------------
+        # Agent bridge — drive a specific user's own open browser tab live
+        # (see services/agent_bridge.py, api/agent_bridge.py, routes/sse.py's
+        # sse_agent_bridge). Authorization is task 6cef97ec's existing model:
+        # the MCP caller's own resolved principal (the access key presented
+        # to THIS MCP connection) must be the session's owning user — no new
+        # auth concept, just the existing "holding the key = acting as them".
+        # ------------------------------------------------------------------
+        if name == "agent_bridge_command":
+            from prism_service.mcp.request_context import get_request_context
+            from prism_service.services.agent_bridge import get_agent_bridge_service
+
+            request_ctx = get_request_context()
+            session_id = str(arguments.get("session_id") or "").strip()
+            action = str(arguments.get("action") or "").strip()
+            if not session_id or action not in {"navigate", "click", "fill", "read"}:
+                return [TextContent(type="text", text=_json({
+                    "ok": False,
+                    "error": "session_id and action (navigate|click|fill|read) are required",
+                }))]
+
+            service = get_agent_bridge_service()
+            session = service.session_owned_by(
+                session_id, request_ctx.principal.user_id)
+            if session is None:
+                # Deliberately ONE undifferentiated refusal for "doesn't
+                # exist" / "expired" / "revoked" / "belongs to someone
+                # else" — a real security boundary, so it must not leak
+                # WHICH of those is true to a caller who might not own it.
+                return [TextContent(type="text", text=_json({
+                    "ok": False,
+                    "error": "no active bridge session with that id owned by "
+                             "this caller",
+                }))]
+
+            fields: dict = {}
+            if action == "navigate":
+                fields["path"] = str(arguments.get("path") or "")
+            elif action in ("click", "read"):
+                fields["selector"] = str(arguments.get("selector") or "")
+            elif action == "fill":
+                fields["selector"] = str(arguments.get("selector") or "")
+                fields["value"] = str(arguments.get("value") or "")
+
+            command_id = service.publish_command(session, action, fields)
+            try:
+                timeout_s = float(arguments.get("timeout_s") or 20.0)
+            except (TypeError, ValueError):
+                timeout_s = 20.0
+            result = service.wait_for_result(command_id, timeout=timeout_s)
+            return [TextContent(type="text", text=_json({
+                "session_id": session_id,
+                "command_id": command_id,
+                **result,
+            }))]
 
         # ------------------------------------------------------------------
         # v5.1 understand-anything surface (sidecar dispatcher)
