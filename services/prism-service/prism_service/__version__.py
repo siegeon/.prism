@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.13"
+PRISM_VERSION = "7.13.14"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.14: lands task ccc395b8's own real work (CI-only test ordering "
+    "poisons the mirror guards, green_gate already passed) -- adds "
+    "test_task_mirror_production_wiring.py::test_zz1/test_zz2, pinning the "
+    "conftest gap where an interrupted teardown (with-block __exit__ raising "
+    "before reset statements run) leaks integration_store/integration_outbox/ "
+    "sync_prefs process-global singletons onto a deleted tmp_path with no "
+    "isolation fixture resetting them for the next test -- reproducing the "
+    "guard-refusal CI saw on PR #609's Linux run. Its own gate had already "
+    "verified this against a fresh EvidenceReceipt; this commit only closes "
+    "the DONE-means-SHIPPED gap (mx-97c51e) by landing it on main. "
     "7.13.13: lands task 990ff893's own real work (driven end-to-end through "
     "the conductor: red_gate -> distinct-actor override -> implement_tasks "
     "-> verify_green_state -> green_gate, machine-adjudicated on a fresh "
