@@ -271,3 +271,17 @@ def test_conductor_doctrine_ties_subtask_decomposition_to_the_depth_tree_princip
     assert "depth tree" in s
     assert "subdivide" in s
     assert "allowed_files" in s
+
+
+def test_conductor_doctrine_distinguishes_the_two_delivery_paths():
+    """Owner, live: 'if i tell you to work the ticket in prism as a user
+    would you need to move it through the system, if you need to fix the
+    system from without you can direct work it without using prism (still
+    use the brain) just not the tasks.' A formal gated task for
+    direct-commit work can never earn a gate_state, which reads as
+    unfinished when it isn't -- the doctrine must say so explicitly."""
+    s = _conductor_section()
+    assert "conductor_work" in s
+    assert "gate_state" in s
+    assert "memory_store" in s
+    assert "direct commit" in s

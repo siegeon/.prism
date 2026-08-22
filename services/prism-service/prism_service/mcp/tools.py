@@ -2460,6 +2460,30 @@ leaf is a real, demonstrable unit of work with its own oracle, disjoint
 degrades into a vibe. If a task is stalling, don't push harder on it as
 one unit — decompose it, the same call a lazy single-turn agent should
 make when a leaf is too big to actually finish.
+
+## Two valid delivery paths — know which one you're on
+
+"Work this ticket in PRISM as a user would" means actually DRIVE it
+through `conductor_work`'s real gate sequence — a formal task with
+`oracle`/`proof_type`/`verify` is a promise that a gate will decide it,
+and only `conductor_work` can make that promise true.
+
+"Fix the system from without" — PRISM-on-PRISM self-development (this
+very doctrine file, the agent bridge, a build script) — is legitimately
+delivered via direct commit, per this repo's own owner-authorized
+carve-out. That path is fine, but it does NOT go through `conductor_work`,
+so it can NEVER legitimately earn a `gate_state`. Two consequences:
+- Do NOT create a formal gated task (oracle/proof_type/verify) for work
+  you already know will be delivered by direct commit — `status=done`
+  with `gate_state=none` is an honest but confusing combination that
+  reads as "did you actually finish this?" when the real answer is "yes,
+  just not through this door." Track it in commit messages and
+  `memory_store` instead (still use the brain — just not the task/gate
+  system).
+- If you're mid-session and realize a task was mis-scoped this way,
+  reclassify it (cancel with a clear reason) rather than leave a
+  status=done/gate_state=none row sitting there implying a gate that
+  never ran.
 """,
 }
 

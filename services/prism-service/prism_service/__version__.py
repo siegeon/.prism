@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.10"
+PRISM_VERSION = "7.13.11"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5266,4 +5266,19 @@ PRISM_VERSION_NOTES += (
     "small enough to be reasonably done.' A stalling task should be split "
     "at natural joints, not pushed harder on as one unit, exactly the same "
     "call a lazy single-turn agent should make when a leaf is too big."
+    "\n\n"
+    "7.13.11: added the two-delivery-paths distinction to conductor "
+    "doctrine, caught live after a task I created (6d1c90fa) sat "
+    "status=done/gate_state=none because I delivered it via direct commit "
+    "instead of driving it through conductor_work -- owner: 'if i tell "
+    "you to work the ticket in prism as a user would you need to move it "
+    "through the system, if you need to fix the system from without you "
+    "can direct work it without using prism (still use the brain) just "
+    "not the tasks.' A formal gated task (oracle/proof_type/verify) is a "
+    "promise a gate will decide it; direct-commit self-dev work never "
+    "makes that promise true, so creating one for work already known to "
+    "ship by direct commit produces exactly this confusing done/none "
+    "combination. Reclassified 6d1c90fa (cancelled with a clear reason) "
+    "and recorded the underlying decision in memory_store (mx-d5d028) "
+    "instead of a task row."
 )
