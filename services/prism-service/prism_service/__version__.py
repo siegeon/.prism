@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.5"
+PRISM_VERSION = "7.13.6"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5206,4 +5206,21 @@ PRISM_VERSION_NOTES += (
     "all -- it was going to fail on nearly any real element in this app, "
     "not just this one. html2canvas-pro is the maintained fork adding "
     "oklch/oklab/lab/lch support; same import shape, drop-in swap."
+    "\n\n"
+    "7.13.6: task a205eb7a's 'Remove Simulate Flow button' had shown "
+    "status=done/green_gate=passed for hours, and I (Claude) initially "
+    "misreported it as genuinely shipped by running `git log origin/main "
+    "--all --grep=...` -- the --all flag searches EVERY ref, silently "
+    "ignoring the origin/main argument, so it found the commit on the "
+    "task's own orphaned workspace branch (prism/ws/a205eb7a-...), never "
+    "merged or even pushed anywhere. Owner, live, after still seeing the "
+    "button: 'well then you did not fix the remote issues'. Verified for "
+    "real with `git merge-base --is-ancestor <sha> origin/main` (false), "
+    "then cherry-picked the fix (WorkflowsPage.tsx: deletes "
+    "startFlowSimulation, the testModeRef 'simulation' union arm, the "
+    "gated effect tail, and the button's ternary) and its pinning test "
+    "(a whole-file case-insensitive sweep for any leaked 'simulat' "
+    "reference) onto current main -- the orphaned branch itself was stale "
+    "(predated all of tonight's agent-bridge work) so a wholesale merge "
+    "would have reverted that; cherry-pick only the 2 relevant commits."
 )
