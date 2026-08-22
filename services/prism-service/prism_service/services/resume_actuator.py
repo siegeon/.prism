@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 from typing import Optional
 
 DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
@@ -260,3 +262,33 @@ def sweep_once() -> Optional[dict]:
             _log(f"{pid}: {res}")
             return res
     return None
+
+
+def _loop(interval_s: int) -> None:
+    _log(f"started; interval={interval_s}s")
+    while True:
+        try:
+            sweep_once()
+        except Exception as exc:
+            _log(f"sweep error: {exc}")
+        time.sleep(interval_s)
+
+
+def start_resume_actuator() -> threading.Thread | None:
+    """Spawn the actuator daemon thread, unless disabled via
+    PRISM_RESUME_ACTUATOR_INTERVAL<=0 (the default). Mirrors
+    gate_adjudicator.start_gate_adjudicator / task_runner.start_task_runner
+    -- until this is called from main.py's startup, `sweep_once` is only
+    ever invoked by its own tests, so the eligibility/dispatch/retry-budget
+    logic they pin never actually runs against a live task (found auditing
+    task 7a72ebcb's own green_gate: no caller of sweep_once/sweep_once_for
+    existed anywhere outside tests/unit/test_resume_actuator_stall_dispatch.py)."""
+    interval = _interval_s()
+    if interval <= 0:
+        _log("disabled (default OFF; set PRISM_RESUME_ACTUATOR_INTERVAL="
+             "<seconds> to opt this environment in)")
+        return None
+    t = threading.Thread(target=_loop, args=(interval,),
+                         name="prism-resume-actuator", daemon=True)
+    t.start()
+    return t

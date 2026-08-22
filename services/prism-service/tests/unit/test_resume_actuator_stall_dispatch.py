@@ -394,3 +394,43 @@ def test_advancing_dispatch_resets_the_budget(make_task, monkeypatch):
 def get_project_scores_db(project):
     from prism_service.project_context import get_project
     return get_project(project)._data_dir / "scores.db"
+
+
+# ---------------------------------------------------------------------------
+# AC-7 -- the seat is useless unwired. Found live auditing this task's own
+# green_gate (2026-08-22): sweep_once/sweep_once_for had no caller anywhere
+# outside this test file, so none of AC-1..AC-6 above ever ran against a
+# real task -- same failure class as epic 0784729f ("a slice whose tests
+# inject the collaborator it depends on can go green while the assembled
+# product is dead"). Mirrors test_ship_worker.py's identical AC-7 trio.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_is_off_by_default(monkeypatch):
+    from prism_service.services import resume_actuator as ra
+
+    monkeypatch.delenv("PRISM_RESUME_ACTUATOR_INTERVAL", raising=False)
+    assert ra.is_enabled() is False
+    assert ra.start_resume_actuator() is None, (
+        "mirrors start_task_runner/start_gate_adjudicator: no opt-in, no "
+        "thread, no cost")
+
+
+def test_env_opts_the_environment_in(monkeypatch):
+    from prism_service.services import resume_actuator as ra
+
+    monkeypatch.setenv("PRISM_RESUME_ACTUATOR_INTERVAL", "30")
+    assert ra.is_enabled() is True
+
+
+def test_lifespan_wires_the_worker():
+    """The seat is useless unwired -- same guard the ship_worker/task_runner
+    suites keep."""
+    from pathlib import Path
+
+    import prism_service.main as m
+
+    src = Path(m.__file__).read_text(encoding="utf-8")
+    assert "start_resume_actuator" in src, (
+        "start_resume_actuator() must be called from the real lifespan, or "
+        "sweep_once/sweep_once_for never run against a live task")
