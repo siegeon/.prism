@@ -1707,7 +1707,7 @@ TOOLS: list[Tool] = [
                     "description": "click/fill/read/screenshot: a CSS selector for the "
                         "target element (screenshot defaults to the whole page)."},
                 "value": {"type": "string",
-                    "description": "fill: the text to set on the matched input/textarea."},
+                    "description": "fill: the value to set on the matched input/textarea, or the option value to select on a <select>."},
                 "timeout_s": {"type": "number", "default": 20,
                     "description": "How long to wait for the tab's result before giving up."},
             },

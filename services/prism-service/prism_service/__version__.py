@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.11"
+PRISM_VERSION = "7.13.12"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5281,4 +5281,14 @@ PRISM_VERSION_NOTES += (
     "combination. Reclassified 6d1c90fa (cancelled with a clear reason) "
     "and recorded the underlying decision in memory_store (mx-d5d028) "
     "instead of a task row."
+    "\n\n"
+    "7.13.12: agent_bridge's fill action only accepted "
+    "input/textarea, not <select> -- live regression driving the actual "
+    "project picker (a native <select>) with the bridge: 'no input/"
+    "textarea matches selector' even though the element and selector were "
+    "both correct. A native <select> has no OS-dropdown DOM node to click "
+    "through; setNativeValue now also accepts HTMLSelectElement, setting "
+    ".value via the same tracked-setter + change-event mechanism already "
+    "used for input/textarea -- the correct way to drive one "
+    "programmatically, not a workaround."
 )

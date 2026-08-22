@@ -535,3 +535,25 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     onunload_fn = src.split("const onUnload = () => {", 1)[1].split(
         "window.addEventListener", 1)[0]
     assert "persistSession(null)" in onunload_fn
+
+
+def test_fill_action_supports_select_elements_not_just_input_textarea():
+    """Live regression: driving a real page (the project picker, a native
+    <select>) with `fill` failed with 'no input/textarea matches selector'
+    even though the element and selector were both correct -- `fill` only
+    ever checked for HTMLInputElement/HTMLTextAreaElement. A native
+    <select> has no OS dropdown DOM node to click through; setting .value
+    via the tracked React setter + firing 'change' (the same mechanism
+    already used for input/textarea) is the correct, non-simulated way to
+    drive one, not a workaround."""
+    src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
+
+    setter_sig = src.split("function setNativeValue(", 1)[1].split(")", 1)[0]
+    assert "HTMLSelectElement" in setter_sig, (
+        "setNativeValue must accept a <select> element, not just input/textarea")
+
+    fill_branch = src.split('cmd.action === "fill"', 1)[1].split(
+        '} else if (cmd.action === "read"', 1)[0]
+    assert "HTMLSelectElement" in fill_branch, (
+        "the fill action's element-type guard must accept <select>, or a "
+        "correct selector still throws 'no input/textarea matches selector'")

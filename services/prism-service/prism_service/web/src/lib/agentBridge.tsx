@@ -116,14 +116,22 @@ function resolveSelector(selector: string): Element | null {
   }
 }
 
-/** Set an <input>/<textarea>'s value through React's OWN tracked setter,
- * not the plain DOM property — a plain assignment is invisible to a
+/** Set an <input>/<textarea>/<select>'s value through React's OWN tracked
+ * setter, not the plain DOM property — a plain assignment is invisible to a
  * controlled component's onChange, because React wraps the native setter
  * to notice writes. Dispatching real 'input'/'change' events afterward is
- * what makes this indistinguishable from the person typing. */
-function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+ * what makes this indistinguishable from the person typing/choosing. A
+ * <select> has no native OS dropdown to click through here (that's a
+ * browser-chrome popup, not a DOM node) — setting .value + firing 'change'
+ * is the standard, correct way to drive one programmatically; it is NOT a
+ * fallback or a simulation, it's what onChange actually listens for. */
+function setNativeValue(
+  el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string,
+): void {
   const proto = el instanceof HTMLTextAreaElement
     ? HTMLTextAreaElement.prototype
+    : el instanceof HTMLSelectElement
+    ? HTMLSelectElement.prototype
     : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
   setter?.call(el, value);
@@ -216,8 +224,9 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
         (el as HTMLElement).click();
       } else if (cmd.action === "fill") {
         const el = resolveSelector(cmd.selector || "");
-        if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
-          throw new Error(`no input/textarea matches selector: ${cmd.selector}`);
+        if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+                     || el instanceof HTMLSelectElement)) {
+          throw new Error(`no input/textarea/select matches selector: ${cmd.selector}`);
         }
         setNativeValue(el, cmd.value || "");
       } else if (cmd.action === "read") {
