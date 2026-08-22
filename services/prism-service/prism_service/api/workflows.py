@@ -437,9 +437,17 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
     """How many tasks are standing at each step RIGHT NOW, per project.
 
     Keyed by the FSM's own steps only, and seeded to 0 so the renderer can
-    read a count directly instead of branching on presence. A done task is
-    not standing anywhere, and a legacy row parked at a step id the FSM no
-    longer contains must not invent a node the canvas cannot draw.
+    read a count directly instead of branching on presence. A done,
+    cancelled, or deleted task is not standing anywhere -- a cancelled task
+    keeps its last workflow_step on the row forever (task_update never
+    clears it), so excluding only 'done' let every cancelled task parked at
+    a step (a real, common case: this project alone has cancel/redo cycles
+    that left several tasks sitting at story_gate/plan_gate) inflate that
+    step's occupancy count and kept the canvas showing a path as "running"
+    long after the task was cancelled (owner, live: "the newest workflow
+    is still running from the conductor?" -- for a task already
+    cancelled). A legacy row parked at a step id the FSM no longer
+    contains must not invent a node the canvas cannot draw either.
     """
     try:
         svc = get_project(project).task_svc
@@ -458,7 +466,8 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
             ) as conn:
                 rows = conn.execute(
                     "SELECT workflow_step, COUNT(*) FROM tasks "
-                    "WHERE status <> 'done' GROUP BY workflow_step"
+                    "WHERE status NOT IN ('done', 'cancelled', 'deleted') "
+                    "GROUP BY workflow_step"
                 ).fetchall()
             for step, count in rows:
                 if step in counts:
@@ -468,7 +477,7 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
             return counts
 
     for task in svc.list():
-        if getattr(task, "status", "") == "done":
+        if getattr(task, "status", "") in ("done", "cancelled", "deleted"):
             continue
         step = getattr(task, "workflow_step", "") or ""
         if step in counts:

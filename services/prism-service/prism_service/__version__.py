@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.6"
+PRISM_VERSION = "7.13.7"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5223,4 +5223,16 @@ PRISM_VERSION_NOTES += (
     "reference) onto current main -- the orphaned branch itself was stale "
     "(predated all of tonight's agent-bridge work) so a wholesale merge "
     "would have reverted that; cherry-pick only the 2 relevant commits."
+    "\n\n"
+    "7.13.7: api/workflows.py's _occupancy() only excluded status='done' "
+    "from a step's live-occupancy count, never 'cancelled' or 'deleted' -- "
+    "a cancelled task keeps its last workflow_step on the row forever "
+    "(task_update never clears it), so a cancelled task went on occupying "
+    "its last step's node on the conductor canvas indefinitely. Caught "
+    "live, owner: 'the newest workflow is still running from the "
+    "conductor?' for a smoke-test task cancelled minutes earlier -- this "
+    "project's own cancel/redo cycles (several Simulate-Flow-fix attempts "
+    "cancelled at story_gate/plan_gate earlier tonight) are the exact "
+    "real-world shape this bug hit. Fixed both the raw-SQL fast path and "
+    "the Python fallback loop to exclude done/cancelled/deleted alike."
 )

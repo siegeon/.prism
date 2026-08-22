@@ -351,6 +351,29 @@ def test_occupancy_excludes_done_work_and_unknown_steps(tmp_path, monkeypatch):
     assert "" not in occ, f"the empty step is not a node: {occ}"
 
 
+def test_occupancy_excludes_cancelled_and_deleted_work(tmp_path, monkeypatch):
+    """A cancelled task keeps its last workflow_step on the row forever
+    (task_update never clears it) -- excluding only 'done' let a cancelled
+    task go on occupying its last step indefinitely, showing the canvas
+    path as "running" long after the task was cancelled (owner, live,
+    for a task cancelled minutes earlier: "the newest workflow is still
+    running from the conductor?"). This project's own cancel/redo cycles
+    (several tasks cancelled at story_gate/plan_gate while iterating on a
+    fix) are the exact real-world shape this reproduces."""
+    svc = _Svc([
+        _mk_task(id="t-1", workflow_step="draft_story", status="cancelled"),
+        _mk_task(id="t-2", workflow_step="story_gate", status="deleted"),
+        _mk_task(id="t-3", workflow_step="draft_story", status="in_progress"),
+    ])
+    client = _client(svc, monkeypatch, tmp_path / "data")
+    occ = client.get("/api/workflows?project=prism").json()["occupancy"]
+
+    assert occ["draft_story"] == 1, (
+        f"only the genuinely in_progress task may occupy draft_story: {occ}")
+    assert occ["story_gate"] == 0, (
+        f"a deleted task must not occupy its last step: {occ}")
+
+
 def test_occupancy_covers_every_step_so_the_canvas_can_key_off_it(
         tmp_path, monkeypatch):
     """Every FSM step gets a key (0 when idle) so the renderer reads a
