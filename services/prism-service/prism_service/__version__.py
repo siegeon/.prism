@@ -13,10 +13,18 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.14"
+PRISM_VERSION = "7.13.15"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.15: lands task c740443e's own real work (Stop step agents "
+    "inventing bogus telemetry token counts, green_gate already passed) -- "
+    "agent_runs_data.py's upsert_agent_run now sanitizes untrusted token "
+    "counts on non-LLM rows inline (no separate sanitizer call site), pinned "
+    "by test_api_agent_runs.py and test_implement_workflow_telemetry_tokens.py. "
+    "Its own gate had already verified this against a fresh EvidenceReceipt; "
+    "this commit only closes the DONE-means-SHIPPED gap (mx-97c51e) by "
+    "landing it on main. "
     "7.13.14: lands task ccc395b8's own real work (CI-only test ordering "
     "poisons the mirror guards, green_gate already passed) -- adds "
     "test_task_mirror_production_wiring.py::test_zz1/test_zz2, pinning the "
