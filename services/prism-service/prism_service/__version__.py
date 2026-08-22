@@ -13,10 +13,25 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.15"
+PRISM_VERSION = "7.13.16"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.16: lands task 7a72ebcb's own real work (A stalled drive resumes "
+    "without a human nudge) -- but ALSO closes a real gap found evaluating "
+    "its green_gate against this dev instance: resume_actuator.sweep_once/ "
+    "sweep_once_for had no caller anywhere outside their own test file, "
+    "unlike gate_adjudicator/task_runner/ship_worker, each of which gets a "
+    "_loop()+start_*() pair registered from main.py's lifespan. The "
+    "eligibility/dispatch/retry-budget logic was correctly unit-tested "
+    "(11/11 + 64/64 blast-radius) but could never run against a live task "
+    "-- same failure class as epic 0784729f (tests inject the collaborator, "
+    "the assembled product is dead). Added resume_actuator._loop/"
+    "start_resume_actuator mirroring gate_adjudicator.py exactly "
+    "(PRISM_RESUME_ACTUATOR_INTERVAL<=0 disables, own daemon thread "
+    "otherwise), wired it into main.py next to start_ship_worker(), and "
+    "added the same off-by-default/env-opts-in/lifespan-wires-the-worker "
+    "AC-7 trio test_ship_worker.py already carries. "
     "7.13.15: lands task c740443e's own real work (Stop step agents "
     "inventing bogus telemetry token counts, green_gate already passed) -- "
     "agent_runs_data.py's upsert_agent_run now sanitizes untrusted token "
