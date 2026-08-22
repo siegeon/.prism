@@ -13,10 +13,24 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.12"
+PRISM_VERSION = "7.13.13"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.13: lands task 990ff893's own real work (driven end-to-end through "
+    "the conductor: red_gate -> distinct-actor override -> implement_tasks "
+    "-> verify_green_state -> green_gate, machine-adjudicated on a fresh "
+    "passing EvidenceReceipt). Adds "
+    "test_usage_reports_no_usage_data_without_inventing_a_value to "
+    "test_claude_usage.py, closing the one AC-adjacent path the existing "
+    "19-test suite left uncovered: an upstream response carrying no "
+    "five_hour/seven_day* window still resolves to available=False, "
+    "reason=no_usage_data, windows={} rather than inventing a value. No "
+    "other code changed -- the feature itself (claude_auth.py usage(), "
+    "SettingsPage.tsx's ClaudeUsageCard) was already fully implemented and "
+    "merged via 2fe77851 before this drive ever started, which is exactly "
+    "why red_gate could not demonstrate a red state and was cleared by an "
+    "audited override rather than a fabricated failure. "
     "7.13.8: remove 'Run workflow' button from Conductor page (not meaningful "
     "for task-driven conductor). "
     "7.13.0: agent-drivable browser bridge (plan peaceful-seeking-octopus). "
