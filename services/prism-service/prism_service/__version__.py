@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.16"
+PRISM_VERSION = "7.13.17"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.17: found live evaluating this dev instance's own Connectors "
+    "card while reviewing task f66fc383's green_gate -- Jira's "
+    "not_configured detail told the owner ONLY to register an OAuth app "
+    "(PRISM_JIRA_CLIENT_ID/SECRET), even though task 64ba4755's simpler "
+    "site_url+email+Atlassian-API-token path (JiraApiTokenForm) needs no "
+    "app registration at all. Split the shared not_configured fallback in "
+    "integrations_connect.py into a jira-specific detail (mentions the "
+    "api_token path) and an unchanged github one; separately confirmed "
+    "the GitHub connector's live 'CONNECTION ISSUE' state that prompted "
+    "this audit was transient (gh auth status reproduces fine under the "
+    "daemon's exact env; a fresh /api/integrations/connect/status call "
+    "now reports state=connected) -- no code fix needed there. "
     "7.13.16: lands task 7a72ebcb's own real work (A stalled drive resumes "
     "without a human nudge) -- but ALSO closes a real gap found evaluating "
     "its green_gate against this dev instance: resume_actuator.sweep_once/ "
