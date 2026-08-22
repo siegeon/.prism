@@ -265,3 +265,39 @@ def test_mirror_status_tracking_is_left_as_bare_strings():
     assert re.search(r"tracking:\s*string\[\]", mirror), (
         f"MirrorStatus.tracking is a DIFFERENT endpoint/consumer and must "
         f"stay string[]: {mirror!r}")
+
+
+# Found live evaluating this instance's own Connectors card: with no OAuth
+# app registered and no api_token connection on file, Jira's not_configured
+# detail told the owner ONLY to register an OAuth app (PRISM_JIRA_CLIENT_ID/
+# SECRET) even though task 64ba4755's simpler site_url+email+API-token path
+# (JiraApiTokenForm, POST .../jira/api-token) needs no app registration at
+# all -- misleading a single-user instance into thinking OAuth is the only
+# door in.
+def test_jira_not_configured_detail_mentions_the_api_token_path(app):
+    row = _status(app)["jira"]
+    assert row["state"] == "not_configured"
+    assert "api token" in row["detail"].lower(), (
+        f"the not_configured message must mention the simpler api_token "
+        f"path (no OAuth app registration needed), not just the env vars: "
+        f"{row['detail']!r}")
+
+
+def test_github_not_configured_detail_is_unchanged_oauth_only_message(app, monkeypatch):
+    """GitHub's own not_configured branch (no CLI, no OAuth app) has no
+    equivalent api_token shortcut -- must not pick up jira's wording."""
+    from prism_service.services import github_cli_auth
+
+    class _NoCli:
+        def status(self):
+            return {"state": "not_configured",
+                    "detail": "The GitHub CLI (gh) is not installed on "
+                              "this machine. Install it and run "
+                              "`gh auth login`, or register an OAuth app "
+                              "instead.",
+                    "account": ""}
+
+    github_cli_auth.set_cli_credentials(_NoCli())
+    row = _status(app)["github"]
+    assert row["state"] == "not_configured"
+    assert "api token" not in row["detail"].lower()
