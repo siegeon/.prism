@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.9"
+PRISM_VERSION = "7.13.10"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5258,4 +5258,12 @@ PRISM_VERSION_NOTES += (
     "confident wrong numbers in self-reports are the most reproducible "
     "agent failure mode. Added to prism_guide's default 'order' list so it "
     "reaches every session, not just explicit section= callers."
+    "\n\n"
+    "7.13.10: added the missing link the owner named live: task/subtask "
+    "decomposition via parent_id is THE SAME PRINCIPLE as unlazy's Depth "
+    "Tree, not just bookkeeping -- 'the whole point of TASKS and Sub-TASKS "
+    "is the same point as the dont be lazy skill to subdivide until its "
+    "small enough to be reasonably done.' A stalling task should be split "
+    "at natural joints, not pushed harder on as one unit, exactly the same "
+    "call a lazy single-turn agent should make when a leaf is too big."
 )

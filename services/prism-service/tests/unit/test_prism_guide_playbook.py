@@ -260,3 +260,14 @@ def test_conductor_doctrine_teaches_done_means_shipped():
     s = _conductor_section()
     assert "ship_worker" in s
     assert "stranded" in s or "unmerged" in s or "unpushed" in s
+
+
+def test_conductor_doctrine_ties_subtask_decomposition_to_the_depth_tree_principle():
+    """Owner, live: "the whole point of TASKS and Sub-TASKS is the same
+    point as the dont be lazy skill to subdivide until its small enough to
+    be reasonably done." """
+    s = _conductor_section()
+    assert "parent_id" in s
+    assert "depth tree" in s
+    assert "subdivide" in s
+    assert "allowed_files" in s

@@ -2444,6 +2444,22 @@ step 4 above in `## Roll child proofs up`) UNLESS the epic's own oracle has
 actually been exercised end-to-end at least once — walking-skeleton first,
 substrate slices never standing in for the whole feature. Thirteen green
 leaves are still zero proof of an epic whose oracle nobody ran.
+
+## Why tasks decompose into subtasks: it's the SAME principle as not being lazy
+
+An epic broken into subtasks via `parent_id` is not bookkeeping — it's
+this conductor's version of the same discipline an anti-laziness
+discipline like unlazy's Depth Tree encodes for a single agent turn:
+SUBDIVIDE UNTIL EACH PIECE IS SMALL ENOUGH TO BE ACTUALLY, VERIFIABLY
+DONE. A task too big to finish in one focused drive is exactly the
+failure mode the whole gate structure above exists to catch (a proposal
+that never gets checked at every stage because it never finishes) — the
+fix is the SAME fix in both places: split at natural joints until each
+leaf is a real, demonstrable unit of work with its own oracle, disjoint
+`allowed_files`, and its own gates, never a task so large its own proof
+degrades into a vibe. If a task is stalling, don't push harder on it as
+one unit — decompose it, the same call a lazy single-turn agent should
+make when a leaf is too big to actually finish.
 """,
 }
 
