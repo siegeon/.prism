@@ -13,10 +13,12 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.7"
+PRISM_VERSION = "7.13.8"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.8: remove 'Run workflow' button from Conductor page (not meaningful "
+    "for task-driven conductor). "
     "7.13.0: agent-drivable browser bridge (plan peaceful-seeking-octopus). "
     "Bespoke Labs support need: a customer hands over their own PRISM access "
     "key (task 4367c12f, GET /api/auth/my-key) so an agent can drive that "

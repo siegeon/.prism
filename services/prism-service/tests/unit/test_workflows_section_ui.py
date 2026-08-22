@@ -1465,3 +1465,30 @@ def test_simulate_flow_button_is_removed_from_the_toolbar():
         "the Run workflow button's disabled state must survive the removal")
     assert "Run workflow" in page and "Starting…" in page, (
         "the Run workflow button's labels must survive the removal")
+
+
+# --------------------------------------------------------------------------
+# Remove the "Run workflow" button when Conductor is selected. The button
+# is only meaningful for scripted workflows triggered via POST /api/workflows/runs.
+# Conductor is driven by PRISM tasks via conductor_work(), not manual runs.
+# --------------------------------------------------------------------------
+
+def test_run_workflow_button_is_hidden_for_conductor():
+    """The "Run workflow" button must NOT render when selectedWorkflowId === "conductor".
+    The "Ran {timestamp}" replay-return button must remain visible when a
+    selectedHistoryRun is active, regardless of which workflow is selected."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Verify the Run workflow button is gated on selectedWorkflowId !== "conductor"
+    assert "selectedWorkflowId !== \"conductor\"" in page, (
+        "the Run workflow button must be hidden when Conductor is selected")
+
+    # Verify the button calls runScriptedWorkflow
+    assert "onClick={runScriptedWorkflow}" in page, (
+        "the Run workflow button must call runScriptedWorkflow")
+
+    # Verify the "Ran {timestamp}" button condition is unchanged (always shows on selectedHistoryRun)
+    assert "{selectedHistoryRun ? (" in page, (
+        "the historical-run replay-return button must still be gated on selectedHistoryRun")
+    assert "leaveHistoricalReplay" in page, (
+        "the Ran button must still call leaveHistoricalReplay")

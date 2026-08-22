@@ -1574,7 +1574,7 @@ export default function WorkflowsPage() {
             >
               Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
             </button>
-          ) : (
+          ) : selectedWorkflowId !== "conductor" && (
             <button
               type="button"
               onClick={runScriptedWorkflow}
