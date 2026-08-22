@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.8"
+PRISM_VERSION = "7.13.9"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5237,4 +5237,25 @@ PRISM_VERSION_NOTES += (
     "cancelled at story_gate/plan_gate earlier tonight) are the exact "
     "real-world shape this bug hit. Fixed both the raw-SQL fast path and "
     "the Python fallback loop to exclude done/cancelled/deleted alike."
+    "\n\n"
+    "7.13.9: added a real 'conductor' section to _GUIDE_SECTIONS -- "
+    "CLAUDE.md has always pointed agents at "
+    "'prism_guide(section=\"conductor\")' for THE canonical doctrine, but "
+    "that key never actually existed (only a generic 'workflow' daily-loop "
+    "section did); a real doc/code gap, now closed. The new section states "
+    "the pre-existing loop/gate doctrine CLAUDE.md already described "
+    "(two human gates only -- plan_gate/green_gate; readiness is the "
+    "receipt shape, gate_state is the verdict; Override cannot skip the "
+    "oracle; done means shipped, not gate-passed) PLUS two things the "
+    "owner asked to bake in live: (1) a governed-agent 'trust pipeline' "
+    "framing (Proposal->Structure->Meaning->Consistency->Authority->Effect) "
+    "mapping each stage to the specific existing mechanism that already "
+    "enforces it -- owner: 'I want you to bake that into the core "
+    "principles of how we build our conductor here'; (2) a report-audit "
+    "rule (re-measure every number before stating it, treat oracle/"
+    "likely_misfire as a literal re-verification checklist), adapted from "
+    "the unlazy skill's (github.com/Leonxlnx/unlazy) core finding that "
+    "confident wrong numbers in self-reports are the most reproducible "
+    "agent failure mode. Added to prism_guide's default 'order' list so it "
+    "reaches every session, not just explicit section= callers."
 )

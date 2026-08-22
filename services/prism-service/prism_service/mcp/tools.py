@@ -2372,6 +2372,79 @@ Two projections, used by default, cut that:
 - `prototype` (workflow) PLANS one task (research -> PRD-style plan).
 Reach for them instead of hand-stepping every gate.
 """,
+    "conductor": """\
+# The conductor — core principles (canonical; nothing else supersedes this)
+
+The conductor is a governed-agent loop: a model PROPOSES, and the FSM makes
+that proposal real only after it survives a fixed sequence of increasingly
+deterministic checks. Every step, gate, and rubric in the FSM exists to
+enforce ONE of six stages -- when you add or change conductor behavior,
+name which stage it serves. A change that doesn't fit any stage is scope
+creep, not conductor work.
+
+1. **Proposal** — the agent's own step output: a plan, a test, a diff.
+   Nothing here is trusted yet.
+2. **Structure** — `task.oracle` / `task.expected_proof` / the per-step
+   Pydantic job contract `conductor_work` hands back (`instructions`,
+   `expected_proof`, `contract.allowed_files/verify/stop_if`). This is
+   where a proposal is required to take a checkable SHAPE before it's
+   judged on substance.
+3. **Meaning** — `principles_seed`'s machine-checkable architecture
+   PRINCIPLES (e.g. domain !-> infrastructure), consulted at plan_gate.
+   This is the closest thing the conductor has to a semantic/ontology
+   layer: a rule about what a proposed change is ALLOWED TO MEAN in this
+   codebase, independent of whether it happens to pass tests.
+4. **Consistency** — the red/green gate adjudication rubrics: a fresh,
+   passing `EvidenceReceipt` against the tree under review (never a stale
+   one — evidence must be RE-MINTED after any commit that moves the tree,
+   because a receipt is a claim about a specific tree, not a task).
+5. **Authority** — the distinct-actor rule: the producing session cannot
+   clear its own gate. Machine adjudication (`conductor-adjudicator`) is
+   OPT-IN per environment (`PRISM_GATE_ADJUDICATOR_INTERVAL`) and is
+   itself just a different DISTINCT actor, never a way to skip the rule.
+   `Override` is an AUDITED escape hatch for a gate with no machine-
+   runnable oracle — it can never skip the oracle itself, only the
+   requirement that a machine (rather than a human) confirm it.
+6. **Effect** — `ship_worker.py`'s actual merge to `main`. A green_gate
+   pass is "verified," never "shipped" — a task is DONE only once its
+   commit is genuinely reachable from `origin/main` (see `_is_shipped_on_main`
+   / `_unshipped_gate_reason`); a gate-passed task sitting on an unmerged
+   or unpushed branch is a stranded task, not a finished one.
+
+## Two things a human decides; nothing else
+
+The owner stops at exactly two gates: `plan_gate` (approve the direction)
+and `green_gate` (approve the final state). `red_gate` belongs to the
+machine seat and must never be routed to a human — a machine seat that
+abstains at red is a system defect to fix, never a click to request.
+`readiness` (`GET /api/conductor/gate/readiness`) describes the RECEIPT
+SHAPE a gate would accept, never the verdict; `task.gate_state` is the
+verdict. Read both before telling anyone a gate is or isn't waiting on
+them, and never quote a gate's state from a stored field
+(`task.gate_reason`, `task.workflow_step`) without re-deriving it live —
+those are snapshots that go stale the instant a drive rewrites the
+artifact they describe.
+
+## Report audit — before any step's final report
+
+The most reproducible failure in agent self-reports is a confident WRONG
+NUMBER: a test count, a file count, a line count stated from memory
+instead of measured at report time. Before a `draft_story` / `verify_plan`
+/ `write_failing_tests` / `implement_tasks` / `verify_green_state` report
+ends, RE-MEASURE every number you are about to state — re-run the count,
+re-read the file, re-check the receipt — rather than recall it. Treat your
+own `oracle` / `likely_misfire` as a literal checklist to re-verify against
+real evidence before you advance, not prose you already satisfied by
+having written it.
+
+## An epic's gate is its own oracle demonstrated
+
+A parent epic's green_gate is never a roll-up of green children alone (see
+step 4 above in `## Roll child proofs up`) UNLESS the epic's own oracle has
+actually been exercised end-to-end at least once — walking-skeleton first,
+substrate slices never standing in for the whole feature. Thirteen green
+leaves are still zero proof of an epic whose oracle nobody ran.
+""",
 }
 
 
@@ -2394,8 +2467,8 @@ _GUIDE_SECTIONS["roles"] = _roles_guide_section()
 
 
 def _prism_guide(section: str | None) -> str:
-    order = ["overview", "tools", "workflow", "orchestration", "memory",
-             "graph", "roles", "examples"]
+    order = ["overview", "tools", "workflow", "orchestration", "conductor",
+             "memory", "graph", "roles", "examples"]
     if section and section in _GUIDE_SECTIONS:
         return _GUIDE_SECTIONS[section]
     return "\n\n".join(_GUIDE_SECTIONS[s] for s in order)

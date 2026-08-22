@@ -192,3 +192,71 @@ def test_playbook_teaches_safe_fanout_method():
     assert "parent_id" in s and "fields" in s
     # explicit safe-fan-out framing
     assert "fan-out" in s or "fan out" in s
+
+
+# ----------------------------------------------------------------------
+# CLAUDE.md points agents at `prism_guide(section="conductor")` for "THE
+# CANONICAL DOCTRINE" -- that section did not actually exist (only a
+# generic "workflow" daily-loop section did), a real doc/code gap closed
+# here. Owner, live: "I want you to bake that into the core principles of
+# how we build our conductor here" (the governed-agent trust-pipeline
+# framing) on top of the pre-existing loop/gate doctrine CLAUDE.md already
+# described but the code never actually served.
+# ----------------------------------------------------------------------
+
+def _conductor_section():
+    from prism_service.mcp.tools import _GUIDE_SECTIONS
+    assert "conductor" in _GUIDE_SECTIONS, (
+        "prism_guide(section='conductor') must resolve to a real section -- "
+        "CLAUDE.md documents this as THE canonical doctrine location")
+    return _GUIDE_SECTIONS["conductor"].lower()
+
+
+def test_conductor_section_is_directly_addressable_and_in_the_full_guide():
+    from prism_service.mcp.tools import _GUIDE_SECTIONS
+
+    direct = _call("prism_guide", {"section": "conductor"})[0].text
+    assert direct == _GUIDE_SECTIONS["conductor"], (
+        "prism_guide(section='conductor') must return that section verbatim")
+    full = _guide_text()
+    assert "core principles" in full, (
+        "the conductor section must be included in the unscoped (full) guide")
+
+
+def test_conductor_doctrine_names_the_six_trust_pipeline_stages():
+    s = _conductor_section()
+    for stage in ("proposal", "structure", "meaning", "consistency",
+                  "authority", "effect"):
+        assert stage in s, f"missing trust-pipeline stage: {stage}"
+
+
+def test_conductor_doctrine_teaches_the_two_human_gates_and_why_readiness_isnt_the_verdict():
+    s = _conductor_section()
+    assert "plan_gate" in s and "green_gate" in s
+    assert "red_gate" in s and "never" in s  # red_gate never routed to a human
+    assert "readiness" in s and "gate_state" in s
+    assert "verdict" in s
+
+
+def test_conductor_doctrine_teaches_override_cannot_skip_the_oracle():
+    s = _conductor_section()
+    assert "override" in s
+    assert "oracle" in s
+    idx = s.index("override")
+    window = s[max(0, idx - 300):idx + 300]
+    assert "oracle" in window, (
+        "the override clause must sit near the oracle it cannot skip, not "
+        "just mention both words somewhere unrelated in the section")
+
+
+def test_conductor_doctrine_teaches_the_report_audit_rule():
+    s = _conductor_section()
+    assert "report audit" in s
+    assert "re-measure" in s or "remeasure" in s
+    assert "likely_misfire" in s
+
+
+def test_conductor_doctrine_teaches_done_means_shipped():
+    s = _conductor_section()
+    assert "ship_worker" in s
+    assert "stranded" in s or "unmerged" in s or "unpushed" in s
