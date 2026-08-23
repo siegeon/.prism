@@ -283,6 +283,38 @@ def test_stage_failure_parks_with_verbatim_error(
     assert not _shipped(work), "a failed pipeline must not have landed anything"
 
 
+# ---------------------------------------------------------------------------
+# AC-1 — a pr_create "already exists" failure recovers the PR number and
+# continues the pipeline instead of failing the stage (observed live on
+# tasks 356ffdd2 and b15e84b2/4fa13457).
+# ---------------------------------------------------------------------------
+
+
+def test_pr_create_already_exists_recovers_using_the_existing_pr(
+        tmp_path, monkeypatch):
+    from prism_service.services import ship_worker
+
+    origin, work, branch = _unshipped_workspace(tmp_path)
+    _wire_ws(monkeypatch, work, branch)
+    assert not _shipped(work), "fixture must start UNshipped"
+
+    already_exists_err = (
+        "GraphQL: A pull request already exists for siegeon/.prism:"
+        f"{branch}. https://github.com/siegeon/.prism/pull/99")
+    gh = FakeGh(origin, branch, fail_at="pr_create", fail_err=already_exists_err)
+    res = ship_worker.ship_task(TASK_ID, runner=gh, poll_interval_s=0)
+
+    assert res["ok"] is True, res
+    assert res.get("pr") == 99, (
+        "the PR number must be recovered from the already-exists error's "
+        f"/pull/<n> URL, not left at 0 or absent: {res!r}")
+    assert gh.stages() == ["push", "pr_create", "ci_wait", "merge"], gh.calls
+
+    assert _shipped(work), (
+        "after recovery the pipeline must still land the branch via "
+        "ci_wait -> merge, exactly as the normal success path does")
+
+
 def test_gh_missing_is_a_parked_reason_not_a_crash(tmp_path, monkeypatch):
     """The daemon environment may lack gh entirely. That is a REASON, not a
     stack trace (the plan's explicit requirement)."""
