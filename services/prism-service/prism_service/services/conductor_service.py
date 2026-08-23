@@ -4485,6 +4485,16 @@ class ConductorService:
             task_id,
             gate_state="passed",
             gate_reason=passed_gate_reason,
+            # A prior _park() (ship_worker.py) or resume_actuator failure can
+            # have stamped blocked_reason with a stage error that has since
+            # been superseded by this genuine approval -- e.g. a green_gate
+            # that failed once at ship's pr_create, then genuinely landed on
+            # retry, kept showing "not yet reachable from origin/main" next
+            # to a DONE/DELIVERED badge forever, because nothing on the
+            # success path ever cleared it (owner, live: task 1291cd64,
+            # 2026-08-23). This is the one place a gate legitimately passes,
+            # so it is the one place stale blocked_reason must clear.
+            blocked_reason="",
         )
         _delivery: Optional[dict] = None
         if gate_step_id == "green_gate":
