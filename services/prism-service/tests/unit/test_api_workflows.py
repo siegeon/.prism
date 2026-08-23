@@ -1322,3 +1322,30 @@ def test_land_is_ordered_last_in_bot_json_so_it_renders_as_the_terminal_step():
         f"'land' must be the LAST entry so it renders as conductor's "
         f"terminal step, not wherever it happened to be listed: {ids}")
     assert ids.count("land") == 1
+
+
+def test_write_failing_tests_loop_forbids_uncaught_exception_red():
+    """DEFECT this pins: the write-failing-tests-loop.json prompt told the
+    qa-persona drafter only that a test "must ... currently fail", never HOW
+    it must fail. Multiple tasks (bb388e9d, 4e6e7417, and likely dd2b87c8)
+    drafted tests using raw lookups (str.index() on a missing substring, an
+    import of a not-yet-existing module) that raise an UNCAUGHT exception at
+    collection time (pytest rc=2/4), not a genuine assertion failure
+    (rc==1) -- and oracle_spec.py's red-worktree runner explicitly refuses
+    to count anything but rc==1 as red demonstrated, so those tasks' red_gate
+    can never clear as authored. The prompt must say so explicitly."""
+    import json
+
+    path = (Path(__file__).resolve().parent.parent.parent.parent.parent
+           / ".prism" / "behaviors" / "conductor" / "write-failing-tests-loop.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    body = json.loads(data["steps"][0]["body"])
+    prompt = body["prompt"]
+
+    assert "genuine assertion failure" in prompt.lower() or "assertion failure" in prompt, (
+        "prompt must explicitly require a real assert, not just 'must fail'")
+    assert "rc==1" in prompt or "exit code 1" in prompt, (
+        "prompt must name the exact pytest rc the red-gate verifier requires")
+    assert ".index(" in prompt, (
+        "prompt must name the specific raw-lookup pitfall (str.index()) "
+        "that produced the uncaught-exception failures seen in production")
