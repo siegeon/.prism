@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.23"
+PRISM_VERSION = "7.13.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5449,4 +5449,17 @@ PRISM_VERSION_NOTES += (
     "must produce a genuine assert-based failure and must not import a "
     "not-yet-existing module directly. New test in test_api_workflows.py "
     "pins that the prompt names rc==1 and the .index() pitfall explicitly."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.24: gate_decide's approve success path never cleared "
+    "blocked_reason, so a task that once hit a transient ship_worker._park() "
+    "failure (e.g. green_gate: pr_create hit 'PR already exists') kept "
+    "showing that stale banner on its detail page FOREVER after genuinely "
+    "landing later -- a DONE/DELIVERED task showing a contradictory red "
+    "'BLOCKED BECAUSE ... not yet reachable from origin/main' message right "
+    "below it (owner, live, task 1291cd64, 2026-08-23, screenshotted). The "
+    "one place a gate legitimately passes is the one place a stale "
+    "blocked_reason must clear. New test in test_gate_decide_actor_"
+    "passthrough.py pins it."
 )
