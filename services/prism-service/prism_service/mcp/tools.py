@@ -3645,6 +3645,24 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             content = arguments["content"]
             domain = arguments.get("domain", "code")
             entities = arguments.get("entities") or []
+            # brain-bloat incident, 2026-08-22 follow-up: ingest_source_to_
+            # brain's automatic walker got a skip-list fix for build-output
+            # dirs (web_dist_next etc.), but THIS tool -- an agent calling
+            # brain_index_doc directly on any path it read -- had no
+            # equivalent guard, so an agent indexing a build artifact by
+            # hand re-introduced the exact bloat the walker fix was meant
+            # to stop, live, while that fix was still being validated.
+            from prism_service.services.source_service import is_ingest_excluded
+            if is_ingest_excluded(path):
+                return [TextContent(type="text", text=_json({
+                    "indexed": False,
+                    "path": path,
+                    "reason": "path falls under a build-output/vendor "
+                              "directory this project's ingest pipeline "
+                              "never indexes (see source_service."
+                              "_INGEST_SKIP_DIRS) -- index the real source "
+                              "file instead, not its build output",
+                }))]
             doc_id = brain_svc.index_doc(
                 path=path, content=content, domain=domain, entities=entities,
             )

@@ -374,6 +374,24 @@ _INGEST_SKIP_DIRS = {
 }
 
 
+def is_ingest_excluded(rel_path) -> bool:
+    """True when `rel_path` (any path-like: str, relative or absolute
+    Path) falls under a directory this project's ingest pipeline must
+    never walk into.
+
+    Extracted (brain-bloat incident, 2026-08-22 follow-up) so every
+    caller that can add a document to Brain shares ONE skip check instead
+    of each keeping its own copy -- the web_dist_next gap survived
+    exactly because _INGEST_SKIP_DIRS existed here but brain_index_doc
+    (the MCP tool an agent calls directly, `mcp/tools.py`) had no
+    equivalent guard at all, so an agent reading and indexing a build
+    artifact re-introduced the same bloat this list is supposed to
+    prevent, live, while the fix was being validated.
+    """
+    parts = Path(rel_path).parts
+    return any(part in _INGEST_SKIP_DIRS for part in parts)
+
+
 def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
     """Walk data/projects/<project>/source/ and push code files into
     Brain + Graph for this project. Reuses existing services — no new
