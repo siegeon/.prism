@@ -276,3 +276,35 @@ def _collaboration_registry_isolation():
         # assertions (test_lifespan_lock_recovery: assert 30 == 10).
         if before or not after:
             collaboration.restore_adapters(before)
+
+
+@pytest.fixture(autouse=True)
+def _mirror_singleton_isolation():
+    """Snapshot/restore the mirror's three process-global singletons
+    (task ccc395b8), the same class of leak as
+    _integration_adapter_registry_isolation above but for
+    integration_store._integration_store, integration_outbox._outbox, and
+    sync_prefs._preferences.
+
+    Two test fixtures (test_switch_on_pushes_backlog.py's `rig`,
+    test_jira_backlog_push.py's `app`) point all three at a tmp_path-scoped
+    instance inside a `with TestClient(app) as client: yield ...` block and
+    only reset them to None AFTER that block, not in a try/finally. If
+    __exit__ ever raises -- real lifespan shutdown starts background
+    threads, per quiet_boot's docstring above -- those reset lines never
+    run and the singletons stay pinned to that test's deleted tmp_path dbs
+    for the rest of the pytest process (the guard-refusal CI saw on PR
+    #609's Linux run). Living in the root conftest guarantees this runs
+    outside-in around every test, so no test can leave that pin behind for
+    the next one to inherit."""
+    from prism_service.services import integration_outbox, integration_store, sync_prefs
+
+    store = integration_store._integration_store
+    outbox = integration_outbox._outbox
+    prefs = sync_prefs._preferences
+    try:
+        yield
+    finally:
+        integration_store.set_integration_store(store)
+        integration_outbox.set_outbox(outbox)
+        sync_prefs.set_sync_preferences(prefs)
