@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.17"
+PRISM_VERSION = "7.13.18"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5350,4 +5350,36 @@ PRISM_VERSION_NOTES += (
     ".value via the same tracked-setter + change-event mechanism already "
     "used for input/textarea -- the correct way to drive one "
     "programmatically, not a workaround."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n"
+    "7.13.18: fixed the brain-bloat incident found while validating an "
+    "owner report of '~20GB of minified JS' in the PRISM database -- "
+    "owner: 'that is HORRIFIC... fix that and make sure it never never "
+    "happens again.' Root cause: web_dist was renamed web_dist_next for "
+    "the rebuilt frontend and _INGEST_SKIP_DIRS (source_service.py) was "
+    "never updated, so ingest_source_to_brain walked the Vite-built "
+    "vendor bundle (React, cytoscape, katex, mermaid -- hashed filenames "
+    "that change every build) straight into Brain as domain='code'. "
+    "~500MB indexed content per project x8+ projects, and because each "
+    "rebuild's new hash meant a brand new source_file path, index_doc's "
+    "own purge-by-source_file never matched the PREVIOUS build's rows, "
+    "so old chunks became permanent orphans on top of the ongoing churn "
+    "-- confirmed live: only 46-55% of docs rows per project had a "
+    "unique content_hash. Fix has two parts: (1) added web_dist_next to "
+    "_INGEST_SKIP_DIRS, matching the existing web_dist entry: (2) added "
+    "BrainService.prune_orphaned_code_docs(), called at the end of every "
+    "FULL (non-truncated) ingest_source_to_brain walk, which deletes any "
+    "domain='code' doc whose source_file no longer exists in the current "
+    "walk -- this is the actual 'never again' fix, since it self-heals "
+    "from ANY future skip-dir gap or renamed/deleted source file, not "
+    "just this one directory name. Regression tests: "
+    "test_ingest_skip_dirs.py (skip-list membership + predicate), "
+    "test_prune_orphaned_code_docs.py (delete correctness incl. FTS5 + "
+    "docs_vec shadow-table cleanup via the existing docs_fts_ad "
+    "trigger). Existing brain.db files still carry the accumulated "
+    "junk from before this fix landed -- that's a one-time data cleanup "
+    "(purge + VACUUM), separate from this code fix, tracked and run "
+    "against the live databases directly."
 )

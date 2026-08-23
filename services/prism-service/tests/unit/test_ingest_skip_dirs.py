@@ -25,8 +25,25 @@ if str(_SERVICE_ROOT) not in sys.path:
 def test_skip_set_includes_venvs_and_dev_data():
     from prism_service.services.source_service import _INGEST_SKIP_DIRS
     for name in (".venv", ".venvs", ".dev-data", ".claude", "worktrees",
-                 "node_modules", ".pytest_cache"):
+                 "node_modules", ".pytest_cache", "web_dist", "web_dist_next"):
         assert name in _INGEST_SKIP_DIRS, f"{name!r} missing from skip set"
+
+
+def test_skip_predicate_skips_web_dist_next(tmp_path):
+    """brain-bloat incident, 2026-08-22 — `web_dist` was renamed
+    `web_dist_next` and the skip list was never updated, so ingest walked
+    the built (hashed-filename) Vite bundle straight into Brain as code:
+    ~20GB across projects. Pin both build-output dirs as skipped."""
+    from prism_service.services.source_service import _INGEST_SKIP_DIRS
+
+    poisoned = [
+        Path("services/prism-service/prism_service/web_dist_next/"
+             "assets/index-BpjKQqBl.js"),
+        Path("services/prism-service/prism_service/web_dist/"
+             "assets/index-abc123.js"),
+    ]
+    for p in poisoned:
+        assert any(part in _INGEST_SKIP_DIRS for part in p.parts), p
 
 
 def test_skip_predicate_skips_dev_venv_paths(tmp_path):
