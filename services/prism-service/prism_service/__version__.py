@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.18"
+PRISM_VERSION = "7.13.19"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5382,4 +5382,20 @@ PRISM_VERSION_NOTES += (
     "junk from before this fix landed -- that's a one-time data cleanup "
     "(purge + VACUUM), separate from this code fix, tracked and run "
     "against the live databases directly."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n"
+    "7.13.19: fixed a bug in 7.13.18's own fix, caught by validating it "
+    "against live data before trusting it. prune_orphaned_code_docs() "
+    "filtered WHERE domain='code', but live brain.db rows are stamped "
+    "with domain = file extension (js/py/ts/md/...) by "
+    "_chunk_source_file, never the literal string 'code' that "
+    "index_doc()'s default parameter name suggested -- so the filter "
+    "matched zero rows in every project, and the auto-prune added in "
+    "7.13.18 would have silently done nothing on every future ingest "
+    "while looking like a real safeguard. Dropped the domain filter; "
+    "prune now matches on source_file alone, which is what actually "
+    "identifies an orphan. Confirmed against think-shift/brain.db "
+    "(7,738 web_dist_next rows, real deletion, not a 0-row no-op)."
 )
