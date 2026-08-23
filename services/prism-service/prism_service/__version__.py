@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.21"
+PRISM_VERSION = "7.13.22"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5424,4 +5424,20 @@ PRISM_VERSION_NOTES += (
     "pin the URL-parsing edge case (a repo name that itself starts with a "
     "dot, like .prism, tripped an earlier version of the regex) and that "
     "every gh call in a live pipeline run carries --repo."
+    "\n\n7.13.22: write-failing-tests-loop.json's qa-persona prompt only said a "
+    "drafted test 'must currently fail', never HOW -- tasks bb388e9d and "
+    "4e6e7417 (and likely dd2b87c8) drafted tests using raw lookups "
+    "(str.index() on a missing substring, importing a not-yet-existing "
+    "module) that raise an UNCAUGHT exception at collection time (pytest "
+    "rc=2/4), not a genuine assertion failure (rc==1). oracle_spec.py's "
+    "red-worktree runner explicitly refuses to count anything but rc==1 as "
+    "red demonstrated (by design, per its own docstring), so those tasks' "
+    "red_gate could never clear as authored -- confirmed live via "
+    "bb388e9d's stuck red_gate after 15 minutes of pure observation with "
+    "zero manual intervention showed no self-heal. Fixed the PROMPT, not "
+    "any in-flight task's own test file (hand-patching those would repeat "
+    "the exact hand-driving mistake recorded above) -- the qa persona now "
+    "must produce a genuine assert-based failure and must not import a "
+    "not-yet-existing module directly. New test in test_api_workflows.py "
+    "pins that the prompt names rc==1 and the .index() pitfall explicitly."
 )
