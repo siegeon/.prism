@@ -118,6 +118,12 @@ class IntakeProtocol(Protocol):
     def update(self, task_id: str, **kwargs: object) -> object:
         ...
 
+    # AC-1 (task 4fa13457): recognises an issue PRISM already mirrors
+    # OUTBOUND so inbound import updates that same task instead of minting
+    # a duplicate via the inbound-only deterministic id.
+    def find_by_mirror_url(self, url: str) -> object:
+        ...
+
 
 class WorkItemSyncService:
     """Deterministic pull orchestration over an injected adapter registry."""
@@ -204,6 +210,18 @@ class WorkItemSyncService:
             workspace_id, connection.id, container.id, entity_input)
         task_id = task_id_for(
             workspace_id, connection.id, entity_input.entity_kind, entity_input.remote_id)
+
+        # AC-1 (task 4fa13457): this exact issue URL may already be the
+        # OUTBOUND mirror backlink on a task PRISM itself created and pushed
+        # out (task_mirror._record_backlink). If so, resolve to that SAME
+        # task instead of the inbound-only deterministic id above, so
+        # re-importing an issue PRISM already mirrors never mints a
+        # duplicate row.
+        mirror_url = getattr(entity_input, "url", "") or ""
+        if mirror_url:
+            mirrored = self._intake.find_by_mirror_url(mirror_url)
+            if mirrored is not None:
+                task_id = mirrored.id
 
         if entity_input.entity_kind in NON_INTAKE_ENTITY_KINDS:
             # The entity is upserted above (so link_pull_request has data to

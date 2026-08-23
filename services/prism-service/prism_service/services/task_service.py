@@ -610,6 +610,22 @@ class TaskService:
         ).fetchone()
         return self._row_to_task(row) if row else None
 
+    def find_by_mirror_url(self, url: str) -> Optional[Task]:
+        """Find the local task that already backlinks to this exact provider
+        issue URL (task_mirror._record_backlink writes ``Mirrored to
+        <provider> <issue>.\\n<url>`` into the task's own description on
+        outbound push). Lets inbound import recognise an issue PRISM itself
+        already mirrors outbound, instead of minting a stranger via the
+        inbound-only deterministic id (task 4fa13457, AC-1)."""
+        if not url:
+            return None
+        row = self._db.execute(
+            "SELECT * FROM tasks WHERE description LIKE ? "
+            "ORDER BY created_at ASC LIMIT 1",
+            (f"%{url}%",),
+        ).fetchone()
+        return self._row_to_task(row) if row else None
+
     def list(
         self,
         status: Optional[str] = None,
