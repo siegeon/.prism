@@ -355,8 +355,24 @@ def _provider_state(provider: str, scope: str) -> dict:
                     "tracking": tracking, "last_sync": last_sync}
 
     if not _configured(provider):
-        env = ("PRISM_GITHUB_APP_SLUG" if provider == "github"
-               else "PRISM_JIRA_CLIENT_ID / PRISM_JIRA_CLIENT_SECRET")
+        if provider == "jira":
+            # No OAuth app AND no api_token connection on file (the
+            # api_token branch above already returned early otherwise).
+            # The env-var message alone reads as "you must register an
+            # OAuth app" -- untrue since task 64ba4755 added the simpler
+            # site_url+email+API-token path (JiraApiTokenForm), which
+            # needs only a personal token from
+            # id.atlassian.com/manage-profile/security/api-tokens, no app
+            # registration at all.
+            return {"provider": provider, "name": name,
+                    "state": "not_configured",
+                    "detail": "No OAuth app registered on this instance "
+                              "yet (set PRISM_JIRA_CLIENT_ID / "
+                              "PRISM_JIRA_CLIENT_SECRET) -- or connect "
+                              "with your own Atlassian API token below, "
+                              "no app registration required.",
+                    "account": "", "tracking": []}
+        env = "PRISM_GITHUB_APP_SLUG"
         return {"provider": provider, "name": name, "state": "not_configured",
                 "detail": f"No OAuth app registered on this instance yet. Set {env}.",
                 "account": "", "tracking": []}

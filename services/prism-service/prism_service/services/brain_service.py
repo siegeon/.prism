@@ -521,6 +521,67 @@ class BrainService:
 
         return first_doc_id or f"{path}::main"
 
+    def prune_orphaned_code_docs(self, live_source_files: set) -> int:
+        """Delete doc chunks whose source_file no longer exists on disk
+        (renamed, deleted, or newly excluded by a skip-dir).
+
+        index_doc() only purges stale rows for the exact path it is told
+        to re-index — a file that disappears or gets renamed (e.g. a
+        build tool that hashes output filenames) is never told about
+        again, so its old chunks live forever. Call this after a FULL
+        source walk with the complete current set of relative paths;
+        anything with a source_file outside that set is an orphan.
+
+        NOTE: this does NOT filter by domain='code' — live data shows
+        docs.domain is actually stamped per file extension (js/py/ts/...)
+        by _chunk_source_file, never the literal string "code" that
+        index_doc()'s default parameter suggests. A domain='code' filter
+        here would silently match nothing, which is exactly the bug
+        caught (before it shipped as a false "never happens again")
+        while validating this fix against live ~20GB of accumulated
+        web_dist_next junk on 2026-08-22.
+        Returns the number of rows deleted.
+        """
+        if not self._available or self._brain is None:
+            return 0
+        brain_conn = self._brain._brain
+        rows = brain_conn.execute(
+            "SELECT DISTINCT source_file FROM docs "
+            "WHERE source_file IS NOT NULL"
+        ).fetchall()
+        stale_files = [r[0] for r in rows if r[0] not in live_source_files]
+        if not stale_files:
+            return 0
+
+        vector_on = getattr(self._brain, "vector_enabled", False)
+        deleted = 0
+        for i in range(0, len(stale_files), 200):
+            batch = stale_files[i:i + 200]
+            ph = ",".join("?" * len(batch))
+            ids = [
+                r[0] for r in brain_conn.execute(
+                    f"SELECT id FROM docs WHERE source_file IN ({ph})",
+                    batch,
+                ).fetchall()
+            ]
+            if not ids:
+                continue
+            id_ph = ",".join("?" * len(ids))
+            if vector_on:
+                try:
+                    brain_conn.execute(
+                        f"DELETE FROM docs_vec WHERE doc_id IN ({id_ph})",
+                        ids,
+                    )
+                except Exception:
+                    pass
+            brain_conn.execute(
+                f"DELETE FROM docs WHERE id IN ({id_ph})", ids,
+            )
+            deleted += len(ids)
+        brain_conn.commit()
+        return deleted
+
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------

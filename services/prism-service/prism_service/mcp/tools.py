@@ -1667,6 +1667,53 @@ TOOLS: list[Tool] = [
             },
         },
     ),
+    Tool(
+        name="agent_bridge_command",
+        description=(
+            "Drive a SPECIFIC user's own already-open PRISM browser tab, live "
+            "— no separate/headless browser, no screen mirror. The person "
+            "watches it happen on their own screen because it genuinely is "
+            "their tab reacting. Motivating case: a customer hands over a "
+            "session_id from their Settings > Access key 'remote assist' "
+            "toggle so an agent can diagnose/fix something live. Requires "
+            "the SAME access key that identifies you to this MCP server to "
+            "belong to the session's owner (task 6cef97ec: holding a user's "
+            "key already means full authority to act as them; this is one "
+            "more thing that authority covers — no new auth concept). "
+            "Blocks briefly for the browser's real result, so this is a "
+            "normal synchronous call: navigate changes the SPA's route via "
+            "its own router (no hard reload); click/fill dispatch real DOM "
+            "events so the app's own handlers run exactly as they would for "
+            "the person themselves; read serializes text/html content back "
+            "to you; screenshot renders the live page (or one element, via "
+            "selector) into a PNG from inside the tab itself — no separate "
+            "browser, no OS screen-capture permission prompt — and returns "
+            "an `image_path` on disk (never the raw image inline) for you "
+            "to open with your own file-reading tool. A closed/expired/"
+            "revoked session, or a session owned by a different user, is "
+            "rejected — never silently a no-op."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string",
+                    "description": "The bridge session id the user's tab is showing."},
+                "action": {"type": "string",
+                    "enum": ["navigate", "click", "fill", "read", "screenshot"],
+                    "description": "What to do in the tab."},
+                "path": {"type": "string",
+                    "description": "navigate: the in-app route to go to, e.g. '/tasks'."},
+                "selector": {"type": "string",
+                    "description": "click/fill/read/screenshot: a CSS selector for the "
+                        "target element (screenshot defaults to the whole page)."},
+                "value": {"type": "string",
+                    "description": "fill: the value to set on the matched input/textarea, or the option value to select on a <select>."},
+                "timeout_s": {"type": "number", "default": 20,
+                    "description": "How long to wait for the tab's result before giving up."},
+            },
+            "required": ["session_id", "action"],
+        },
+    ),
 ]
 
 
@@ -1715,6 +1762,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "janitor_submit",
     "janitor_abandon",
     "memory_invalidate",
+    "agent_bridge_command",
 }
 # NOTE: the legacy understand_* tools are intentionally NOT in the default
 # interactive surface — they're superseded by the okf_* Understand wiki and
@@ -2324,6 +2372,119 @@ Two projections, used by default, cut that:
 - `prototype` (workflow) PLANS one task (research -> PRD-style plan).
 Reach for them instead of hand-stepping every gate.
 """,
+    "conductor": """\
+# The conductor — core principles (canonical; nothing else supersedes this)
+
+The conductor is a governed-agent loop: a model PROPOSES, and the FSM makes
+that proposal real only after it survives a fixed sequence of increasingly
+deterministic checks. Every step, gate, and rubric in the FSM exists to
+enforce ONE of six stages -- when you add or change conductor behavior,
+name which stage it serves. A change that doesn't fit any stage is scope
+creep, not conductor work.
+
+1. **Proposal** — the agent's own step output: a plan, a test, a diff.
+   Nothing here is trusted yet.
+2. **Structure** — `task.oracle` / `task.expected_proof` / the per-step
+   Pydantic job contract `conductor_work` hands back (`instructions`,
+   `expected_proof`, `contract.allowed_files/verify/stop_if`). This is
+   where a proposal is required to take a checkable SHAPE before it's
+   judged on substance.
+3. **Meaning** — `principles_seed`'s machine-checkable architecture
+   PRINCIPLES (e.g. domain !-> infrastructure), consulted at plan_gate.
+   This is the closest thing the conductor has to a semantic/ontology
+   layer: a rule about what a proposed change is ALLOWED TO MEAN in this
+   codebase, independent of whether it happens to pass tests.
+4. **Consistency** — the red/green gate adjudication rubrics: a fresh,
+   passing `EvidenceReceipt` against the tree under review (never a stale
+   one — evidence must be RE-MINTED after any commit that moves the tree,
+   because a receipt is a claim about a specific tree, not a task).
+5. **Authority** — the distinct-actor rule: the producing session cannot
+   clear its own gate. Machine adjudication (`conductor-adjudicator`) is
+   OPT-IN per environment (`PRISM_GATE_ADJUDICATOR_INTERVAL`) and is
+   itself just a different DISTINCT actor, never a way to skip the rule.
+   `Override` is an AUDITED escape hatch for a gate with no machine-
+   runnable oracle — it can never skip the oracle itself, only the
+   requirement that a machine (rather than a human) confirm it.
+6. **Effect** — `ship_worker.py`'s actual merge to `main`. A green_gate
+   pass is "verified," never "shipped" — a task is DONE only once its
+   commit is genuinely reachable from `origin/main` (see `_is_shipped_on_main`
+   / `_unshipped_gate_reason`); a gate-passed task sitting on an unmerged
+   or unpushed branch is a stranded task, not a finished one.
+
+## Two things a human decides; nothing else
+
+The owner stops at exactly two gates: `plan_gate` (approve the direction)
+and `green_gate` (approve the final state). `red_gate` belongs to the
+machine seat and must never be routed to a human — a machine seat that
+abstains at red is a system defect to fix, never a click to request.
+`readiness` (`GET /api/conductor/gate/readiness`) describes the RECEIPT
+SHAPE a gate would accept, never the verdict; `task.gate_state` is the
+verdict. Read both before telling anyone a gate is or isn't waiting on
+them, and never quote a gate's state from a stored field
+(`task.gate_reason`, `task.workflow_step`) without re-deriving it live —
+those are snapshots that go stale the instant a drive rewrites the
+artifact they describe.
+
+## Report audit — before any step's final report
+
+The most reproducible failure in agent self-reports is a confident WRONG
+NUMBER: a test count, a file count, a line count stated from memory
+instead of measured at report time. Before a `draft_story` / `verify_plan`
+/ `write_failing_tests` / `implement_tasks` / `verify_green_state` report
+ends, RE-MEASURE every number you are about to state — re-run the count,
+re-read the file, re-check the receipt — rather than recall it. Treat your
+own `oracle` / `likely_misfire` as a literal checklist to re-verify against
+real evidence before you advance, not prose you already satisfied by
+having written it.
+
+## An epic's gate is its own oracle demonstrated
+
+A parent epic's green_gate is never a roll-up of green children alone (see
+step 4 above in `## Roll child proofs up`) UNLESS the epic's own oracle has
+actually been exercised end-to-end at least once — walking-skeleton first,
+substrate slices never standing in for the whole feature. Thirteen green
+leaves are still zero proof of an epic whose oracle nobody ran.
+
+## Why tasks decompose into subtasks: it's the SAME principle as not being lazy
+
+An epic broken into subtasks via `parent_id` is not bookkeeping — it's
+this conductor's version of the same discipline an anti-laziness
+discipline like unlazy's Depth Tree encodes for a single agent turn:
+SUBDIVIDE UNTIL EACH PIECE IS SMALL ENOUGH TO BE ACTUALLY, VERIFIABLY
+DONE. A task too big to finish in one focused drive is exactly the
+failure mode the whole gate structure above exists to catch (a proposal
+that never gets checked at every stage because it never finishes) — the
+fix is the SAME fix in both places: split at natural joints until each
+leaf is a real, demonstrable unit of work with its own oracle, disjoint
+`allowed_files`, and its own gates, never a task so large its own proof
+degrades into a vibe. If a task is stalling, don't push harder on it as
+one unit — decompose it, the same call a lazy single-turn agent should
+make when a leaf is too big to actually finish.
+
+## Two valid delivery paths — know which one you're on
+
+"Work this ticket in PRISM as a user would" means actually DRIVE it
+through `conductor_work`'s real gate sequence — a formal task with
+`oracle`/`proof_type`/`verify` is a promise that a gate will decide it,
+and only `conductor_work` can make that promise true.
+
+"Fix the system from without" — PRISM-on-PRISM self-development (this
+very doctrine file, the agent bridge, a build script) — is legitimately
+delivered via direct commit, per this repo's own owner-authorized
+carve-out. That path is fine, but it does NOT go through `conductor_work`,
+so it can NEVER legitimately earn a `gate_state`. Two consequences:
+- Do NOT create a formal gated task (oracle/proof_type/verify) for work
+  you already know will be delivered by direct commit — `status=done`
+  with `gate_state=none` is an honest but confusing combination that
+  reads as "did you actually finish this?" when the real answer is "yes,
+  just not through this door." Track it in commit messages and
+  `memory_store` instead (still use the brain — just not the task/gate
+  system).
+- If you're mid-session and realize a task was mis-scoped this way,
+  reclassify it (cancel with a clear reason) rather than leave a
+  status=done/gate_state=none row sitting there implying a gate that
+  never ran.
+""",
 }
 
 
@@ -2346,8 +2507,8 @@ _GUIDE_SECTIONS["roles"] = _roles_guide_section()
 
 
 def _prism_guide(section: str | None) -> str:
-    order = ["overview", "tools", "workflow", "orchestration", "memory",
-             "graph", "roles", "examples"]
+    order = ["overview", "tools", "workflow", "orchestration", "conductor",
+             "memory", "graph", "roles", "examples"]
     if section and section in _GUIDE_SECTIONS:
         return _GUIDE_SECTIONS[section]
     return "\n\n".join(_GUIDE_SECTIONS[s] for s in order)
@@ -3484,6 +3645,24 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             content = arguments["content"]
             domain = arguments.get("domain", "code")
             entities = arguments.get("entities") or []
+            # brain-bloat incident, 2026-08-22 follow-up: ingest_source_to_
+            # brain's automatic walker got a skip-list fix for build-output
+            # dirs (web_dist_next etc.), but THIS tool -- an agent calling
+            # brain_index_doc directly on any path it read -- had no
+            # equivalent guard, so an agent indexing a build artifact by
+            # hand re-introduced the exact bloat the walker fix was meant
+            # to stop, live, while that fix was still being validated.
+            from prism_service.services.source_service import is_ingest_excluded
+            if is_ingest_excluded(path):
+                return [TextContent(type="text", text=_json({
+                    "indexed": False,
+                    "path": path,
+                    "reason": "path falls under a build-output/vendor "
+                              "directory this project's ingest pipeline "
+                              "never indexes (see source_service."
+                              "_INGEST_SKIP_DIRS) -- index the real source "
+                              "file instead, not its build output",
+                }))]
             doc_id = brain_svc.index_doc(
                 path=path, content=content, domain=domain, entities=entities,
             )
@@ -4657,6 +4836,68 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 story_file=arguments.get("story_file"),
             )
             return [TextContent(type="text", text=_json(bundle))]
+
+        # ------------------------------------------------------------------
+        # Agent bridge — drive a specific user's own open browser tab live
+        # (see services/agent_bridge.py, api/agent_bridge.py, routes/sse.py's
+        # sse_agent_bridge). Authorization is task 6cef97ec's existing model:
+        # the MCP caller's own resolved principal (the access key presented
+        # to THIS MCP connection) must be the session's owning user — no new
+        # auth concept, just the existing "holding the key = acting as them".
+        # ------------------------------------------------------------------
+        if name == "agent_bridge_command":
+            from prism_service.mcp.request_context import get_request_context
+            from prism_service.services.agent_bridge import get_agent_bridge_service
+
+            request_ctx = get_request_context()
+            session_id = str(arguments.get("session_id") or "").strip()
+            action = str(arguments.get("action") or "").strip()
+            if not session_id or action not in {
+                "navigate", "click", "fill", "read", "screenshot",
+            }:
+                return [TextContent(type="text", text=_json({
+                    "ok": False,
+                    "error": "session_id and action (navigate|click|fill|read|"
+                             "screenshot) are required",
+                }))]
+
+            service = get_agent_bridge_service()
+            session = service.session_owned_by(
+                session_id, request_ctx.principal.user_id)
+            if session is None:
+                # Deliberately ONE undifferentiated refusal for "doesn't
+                # exist" / "expired" / "revoked" / "belongs to someone
+                # else" — a real security boundary, so it must not leak
+                # WHICH of those is true to a caller who might not own it.
+                return [TextContent(type="text", text=_json({
+                    "ok": False,
+                    "error": "no active bridge session with that id owned by "
+                             "this caller",
+                }))]
+
+            fields: dict = {}
+            if action == "navigate":
+                fields["path"] = str(arguments.get("path") or "")
+            elif action in ("click", "read", "screenshot"):
+                # screenshot's selector is OPTIONAL -- an empty string is
+                # falsy client-side (agentBridge.tsx) and defaults the
+                # capture to the whole page, not a click/read failure.
+                fields["selector"] = str(arguments.get("selector") or "")
+            elif action == "fill":
+                fields["selector"] = str(arguments.get("selector") or "")
+                fields["value"] = str(arguments.get("value") or "")
+
+            command_id = service.publish_command(session, action, fields)
+            try:
+                timeout_s = float(arguments.get("timeout_s") or 20.0)
+            except (TypeError, ValueError):
+                timeout_s = 20.0
+            result = service.wait_for_result(command_id, timeout=timeout_s)
+            return [TextContent(type="text", text=_json({
+                "session_id": session_id,
+                "command_id": command_id,
+                **result,
+            }))]
 
         # ------------------------------------------------------------------
         # v5.1 understand-anything surface (sidecar dispatcher)

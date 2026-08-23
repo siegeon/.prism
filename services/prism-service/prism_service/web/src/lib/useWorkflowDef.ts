@@ -103,9 +103,24 @@ export type WorkflowRun = {
     definition?: {
       steps?: Array<{ id: string }>;
     };
-    tests: WorkflowStepResult;
-    build: WorkflowStepResult;
+    // Optional: a run synthesized from a conductor task (see
+    // fetchConductorRunFromTask below) has neither -- there is no
+    // WorkflowCore build/test result behind a conductor step.
+    tests?: WorkflowStepResult;
+    build?: WorkflowStepResult;
     passed: boolean;
+    /** Present only on a run synthesized from a conductor task. The
+     * conductor's own summary rides here instead of forcing task state
+     * (workflow_step/gate_state) into the build/test fields above, which
+     * mean something else entirely for a scripted validation run. */
+    conductorTask?: {
+      id: string;
+      title: string;
+      status: string;
+      workflowStep?: string | null;
+      gateState?: string | null;
+      stranded: boolean;
+    };
   };
 };
 
@@ -157,6 +172,160 @@ export function requestWorkflowFix(
     `/api/workflows/${encodeURIComponent(workflowId)}/fixes?project=${encodeURIComponent(project)}`,
     { instance_id: instanceId, step_id: stepId },
   );
+}
+
+/** The subset of a conductor task's own fields the rail already has on hand
+ * (from useConductorState/GET /api/tasks) -- enough to synthesize a run
+ * without a second round trip for anything the rail already fetched. */
+export type ConductorRunTask = {
+  id: string;
+  title: string;
+  status?: string;
+  workflow_step?: string | null;
+  gate_state?: string | null;
+  stranded?: boolean;
+};
+
+type ConductorHistoryRow = { action?: string; details?: string; timestamp?: string };
+
+/** Which step a mid-dwell history row is a genuine SETBACK for, or null if
+ * this row isn't one. conductor_service.py writes three distinct shapes
+ * DURING a step's dwell (between the advance_task rows that open and close
+ * it), and the original version of this function only ever read
+ * advance_task -- silently discarding all three, which is why a task that
+ * actually struggled (failed a step twice, or got rejected at a gate
+ * before eventually passing) replayed as one smooth, unbroken "passed"
+ * segment (owner: "the animation on that playback appears to be made up",
+ * confirmed live against task 93d6c6f3's real 3 flow_report_failure rows
+ * at verify_green_state):
+ *   - `action="flow_report_failure"`, `details="step=<id>; outcome=..."` --
+ *     a step attempt that failed and had to retry. `outcome` varies shape
+ *     (a bare `fail`, or a `{'ok': False, ...}` dict repr) but the action
+ *     name alone already says it failed; no need to parse `outcome`.
+ *   - `action="advance_refused"`, `details="step=<id>; validation=...; ..."`
+ *     -- a review step's own validation refused to let it advance (same
+ *     class of setback, same shape).
+ *   - `action="gate_decide"`, `details="gate=<id>_gate; ..."` where the
+ *     outcome was a rejection or control-plane failure, not an approval --
+ *     `_build_timeline` (api/tasks.py) documents this exact ambiguity: a
+ *     `verifier=fail` row can still be immediately overridden (`override=
+ *     True`) into a genuine pass, so only a fail WITHOUT an override, an
+ *     explicit `action=reject`, or a `control-plane=fail` counts. */
+function conductorFailedStepFromDetails(action: string | undefined, details: string): string | null {
+  if (action === "flow_report_failure" || action === "advance_refused") {
+    return /step=([^;]+)/.exec(details)?.[1]?.trim() ?? null;
+  }
+  if (action === "gate_decide") {
+    const gateMatch = /gate=(\w+_gate)/.exec(details);
+    if (!gateMatch) return null;
+    const rejected = /action=reject/.test(details)
+      || /control-plane=fail/.test(details)
+      || (/verifier=fail/.test(details) && !/override=True/.test(details));
+    return rejected ? gateMatch[1] : null;
+  }
+  return null;
+}
+
+/** Reconstructs a replay timeline from a task's own audit history.
+ * conductor_service.advance_task (conductor_service.py:1653) writes one
+ * `action="advance_task"` row per transition with `details="from=X; to=Y..."`
+ * -- there is no separate run-history endpoint for the conductor because
+ * there is no WorkflowCore instance; this history IS the instance record.
+ *
+ * A real setback (see conductorFailedStepFromDetails) closes the attempt
+ * that just failed with `status: "failed"` and reopens a fresh dwell at the
+ * SAME step, so a step tried three times before passing produces three
+ * "failed" segments followed by the "passed" one the eventual advance_task
+ * row closes -- the replay walks through the retries instead of absorbing
+ * them into one clean success. */
+function conductorTimelineFromHistory(
+  history: ConductorHistoryRow[],
+): NonNullable<WorkflowRun["timeline"]> {
+  const events: NonNullable<WorkflowRun["timeline"]> = [];
+  let open: { step: string; startedAt: string } | null = null;
+  for (const row of history) {
+    if (!row.timestamp) continue;
+    if (row.action === "advance_task") {
+      const to = /to=([^;]+)/.exec(row.details ?? "")?.[1]?.trim();
+      if (!to) continue;
+      if (open) {
+        events.push({ step: open.step, startedAt: open.startedAt, endedAt: row.timestamp, status: "passed" });
+      }
+      open = { step: to, startedAt: row.timestamp };
+      continue;
+    }
+    const failedStep = conductorFailedStepFromDetails(row.action, row.details ?? "");
+    if (failedStep && open?.step === failedStep) {
+      events.push({ step: open.step, startedAt: open.startedAt, endedAt: row.timestamp, status: "failed" });
+      open = { step: failedStep, startedAt: row.timestamp };
+    }
+  }
+  if (open) events.push({ step: open.step, startedAt: open.startedAt, status: "passed" });
+  return events;
+}
+
+/** Builds the SAME WorkflowRun shape validation's historical replay already
+ * consumes, so the shared replayHistoricalRun/beginHistoricalReplay machinery
+ * needs no conductor-specific branch of its own -- only the DATA a conductor
+ * task actually has (step transitions off its own history, gate_state) fills
+ * it in, never a build/test result that does not exist for it.
+ *
+ * A task still in flight gets a `runtime` block (no closed timeline to
+ * replay yet) so the canvas shows its live current-step progress the same
+ * way a running scripted workflow's step does; a done task gets a full
+ * `timeline` so it replays start to finish like a completed validation run. */
+/** The fields of a fresh task row the conductor run cares about --
+ * intentionally the same names the REST task shape uses (workflow_step,
+ * gate_state), so no remapping is needed between this and ConductorRunTask. */
+type ConductorFreshTask = {
+  title?: string;
+  status?: string;
+  workflow_step?: string | null;
+  gate_state?: string | null;
+};
+
+export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {
+  return api.get<{ task?: ConductorFreshTask; history: ConductorHistoryRow[] }>(
+    `/api/tasks/${encodeURIComponent(task.id)}?project=${encodeURIComponent(project)}&scope=core`,
+  ).then(({ task: fresh, history }) => {
+    // The caller's `task` comes off the rail's own last poll/SSE push, which
+    // can be a step or two behind a task that is genuinely advancing right
+    // now -- this SAME request already returns the current row, so read the
+    // step/status/gate off IT instead of the caller's possibly-stale copy.
+    // Before this fix, `runtime.currentStep` below (derived from `history`,
+    // always fresh) and `conductorTask.workflowStep` (the caller's stale
+    // field) could name two DIFFERENT steps on the same screen at once --
+    // exactly the "not clear what is currently running" the owner reported,
+    // confirmed live against task a205eb7a mid-drive.
+    const title = fresh?.title ?? task.title;
+    const status = fresh?.status ?? task.status;
+    const workflowStep = fresh?.workflow_step ?? task.workflow_step;
+    const gateState = fresh?.gate_state ?? task.gate_state;
+    const timeline = conductorTimelineFromHistory(history ?? []);
+    const last = timeline.at(-1);
+    const done = status === "done";
+    const stranded = Boolean(task.stranded);
+    const runtime = done ? null : {
+      currentStep: last?.step ?? workflowStep ?? "",
+      status: "running",
+      startedAt: last?.startedAt ?? new Date().toISOString(),
+    };
+    return {
+      id: task.id,
+      status: done ? (stranded ? "Terminated" : "Complete") : "Runnable",
+      createTime: timeline[0]?.startedAt ?? new Date().toISOString(),
+      runtime,
+      timeline: done ? timeline : undefined,
+      data: {
+        project,
+        passed: done && !stranded,
+        conductorTask: {
+          id: task.id, title: title ?? task.title, status: status ?? "",
+          workflowStep, gateState, stranded,
+        },
+      },
+    };
+  });
 }
 
 function railFrom(steps: WorkflowStepDef[]): RailStep[] {

@@ -25,6 +25,7 @@ import { notifyProjectsChanged, useProject } from "@/lib/project";
 import { useJobs, type ScanJob } from "@/lib/scan-activity";
 import { Card, Empty, ErrorBanner, Page, SectionLabel } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useAgentBridge } from "@/lib/agentBridge";
 
 /** True when the SPA is loaded inside a Tauri WebView (so the dialog
  * plugin and other Tauri APIs are available). Lets us gracefully degrade
@@ -194,10 +195,16 @@ export default function SettingsPage() {
       {error && <ErrorBanner>{error}</ErrorBanner>}
 
       {section === "access-key" && (
-        <Card>
-          <SectionLabel>Your access key</SectionLabel>
-          <AccessKeyPanel />
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <SectionLabel>Your access key</SectionLabel>
+            <AccessKeyPanel />
+          </Card>
+          <Card>
+            <SectionLabel>Remote assist</SectionLabel>
+            <AgentBridgePanel />
+          </Card>
+        </div>
       )}
 
       {section === "projects" && (
@@ -706,6 +713,82 @@ function AccessKeyPanel() {
           Rotating mints a new key and stops the old one. Anything still using the old key must be updated.
         </span>
       </div>
+    </div>
+  );
+}
+
+/** Toggle for the agent-bridge live remote-assist feature (task: an
+ * authorized agent, holding YOUR access key, drives THIS tab live so you
+ * can watch it happen — the motivating case is Bespoke Labs support: you
+ * hand over a session id explicitly so someone can diagnose/fix something
+ * on your own screen). Off by default; the session id/token only ever
+ * exist while this toggle is on, and never touch localStorage. */
+function AgentBridgePanel() {
+  const { session, enabling, error, enable, disable } = useAgentBridge();
+  const [copied, setCopied] = useState(false);
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the id is still visible to copy by hand */
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-[13px] text-[color:var(--text-secondary)]">
+        Turn this on to let an agent you've given your access key to drive
+        THIS tab, live — you watch it happen on your own screen, because it
+        genuinely is your tab. Off by default. The session id below is a
+        separate, short-lived credential from your access key; turning this
+        off (or closing the tab) ends it.
+      </p>
+
+      {error && <ErrorBanner>{error}</ErrorBanner>}
+
+      {!session ? (
+        <button
+          type="button"
+          onClick={() => void enable()}
+          disabled={enabling}
+          className="rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10 disabled:opacity-50"
+        >
+          {enabling ? "Enabling…" : "Enable remote assist"}
+        </button>
+      ) : (
+        <div className="space-y-3">
+          <div className="inline-flex items-center gap-2 text-sm">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[color:var(--accent-emerald-bg)] text-[color:var(--accent-emerald-fg)] text-2xs uppercase tracking-wider">
+              active
+            </span>
+            <span className="opacity-70">This tab can be driven live.</span>
+          </div>
+          <div>
+            <div className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)] mb-1">Session id</div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 min-w-0 truncate rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-3)]/40 px-3 py-2 font-mono text-[12.5px] text-[color:var(--accent-teal-fg)]">
+                {session.id}
+              </code>
+              <button
+                onClick={() => copy(session.id)}
+                className="shrink-0 rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void disable()}
+            className="rounded-md border border-[color:var(--border-default)] px-3 py-2 text-2xs uppercase tracking-wider hover:bg-[color:var(--midground-base)]/10"
+          >
+            Turn off
+          </button>
+        </div>
+      )}
     </div>
   );
 }

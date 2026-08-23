@@ -352,6 +352,16 @@ _INGEST_SKIP_DIRS = {
     ".claude", "worktrees", "target", ".next", ".nuxt", "out",
     "benchmarks", ".tmp", ".cache", ".idea", ".vscode",
     "coverage", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    # brain-bloat incident, 2026-08-22 — the built web bundle moved from
+    # `web_dist` to `web_dist_next` and this list was never updated, so
+    # ingest walked the Vite output straight into Brain as "code": hashed
+    # vendor bundle filenames that change every build, ~500MB of minified
+    # JS per project x8 projects (~20GB total). Each rebuild's new hash
+    # also orphaned the previous build's rows forever, since nothing ever
+    # re-names the old path to trigger index_doc's own purge-by-source_file.
+    # See prune_orphaned_code_docs() below for the belt-and-suspenders fix
+    # that catches this class of bug even if a build dir is renamed again.
+    "web_dist_next",
     # v6.0.19 — `.venv` (singular) was the only venv name on the list,
     # but the prism-dev skill creates `E:\.prism\.venvs\dev\…` (PLURAL,
     # at the repo root). Without `.venvs` here, ingest pulled ~1900
@@ -362,6 +372,24 @@ _INGEST_SKIP_DIRS = {
     # it carries `.venvs` and `projects/<p>/source/` from prior runs.
     ".venvs", ".dev-data",
 }
+
+
+def is_ingest_excluded(rel_path) -> bool:
+    """True when `rel_path` (any path-like: str, relative or absolute
+    Path) falls under a directory this project's ingest pipeline must
+    never walk into.
+
+    Extracted (brain-bloat incident, 2026-08-22 follow-up) so every
+    caller that can add a document to Brain shares ONE skip check instead
+    of each keeping its own copy -- the web_dist_next gap survived
+    exactly because _INGEST_SKIP_DIRS existed here but brain_index_doc
+    (the MCP tool an agent calls directly, `mcp/tools.py`) had no
+    equivalent guard at all, so an agent reading and indexing a build
+    artifact re-introduced the same bloat this list is supposed to
+    prevent, live, while the fix was being validated.
+    """
+    parts = Path(rel_path).parts
+    return any(part in _INGEST_SKIP_DIRS for part in parts)
 
 
 def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
@@ -389,6 +417,8 @@ def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
 
     ingested = 0
     skipped = 0
+    seen_rel: set[str] = set()
+    truncated = False
     for path in src.rglob("*"):
         if not path.is_file():
             continue
@@ -404,6 +434,7 @@ def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
             skipped += 1
             continue
         rel = str(path.relative_to(src)).replace("\\", "/")
+        seen_rel.add(rel)
         try:
             brain.index_doc(rel, content)
             if graph is not None:
@@ -412,7 +443,24 @@ def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
         except Exception:
             skipped += 1
         if ingested >= max_files:
+            truncated = True
             break
+
+    # Orphan prune (brain-bloat incident, 2026-08-22): only safe to run
+    # after a FULL walk (not cut short by max_files), since seen_rel is
+    # only authoritative for "everything that currently exists" in that
+    # case. This is what stops accumulation for good — a future skip-dir
+    # gap or a renamed/deleted source file self-heals on the next full
+    # ingest instead of leaving orphaned rows behind forever.
+    if not truncated:
+        try:
+            brain.prune_orphaned_code_docs(seen_rel)
+        except Exception as e:
+            import sys
+            print(
+                f"[ingest_source_to_brain] orphan prune failed: "
+                f"{type(e).__name__}: {e}", file=sys.stderr, flush=True,
+            )
 
     rebuilt = False
     rebuild_error = ""

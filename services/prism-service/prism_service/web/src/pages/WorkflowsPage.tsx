@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
-import { fetchActiveWorkflowRun, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
+import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
+import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
@@ -90,7 +92,6 @@ const DIRECTORY_MIN_PX = 180;
 const DIRECTORY_MAX_PX = 480;
 const DIRECTORY_DEFAULT_PX = 240;
 const DIRECTORY_WIDTH_KEY = "prism.workflows.directory.width";
-const TEST_TRANSITION_MS = 1900;
 const REPLAY_SPEED = 120;
 const REPLAY_MIN_STEP_MS = 1500;
 const REPLAY_MAX_STEP_MS = 5000;
@@ -135,6 +136,23 @@ function formatDuration(seconds?: number | null): string {
   const minutes = Math.floor(whole / 60);
   const remainder = whole % 60;
   return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+/** Summary text for the top run badge when the instance is a conductor
+ * task, not a scripted validation run -- the task's own title/step/gate
+ * state, never the build/test phrasing that badge otherwise renders. */
+function conductorRunSummary(run: WorkflowRun): string {
+  const t = run.data.conductorTask;
+  if (!t) return "";
+  if (t.status === "done") return `${t.title} · ${t.stranded ? "done · not yet on origin/main" : "shipped"}`;
+  const gate = t.gateState === "pending" ? " · awaiting gate" : t.gateState === "failed" ? " · gate failed" : "";
+  return `${t.title} · ${(t.workflowStep ?? "").replace(/_/g, " ") || "in progress"}${gate}`;
+}
+
+function conductorRunTone(run: WorkflowRun): string {
+  if (run.status === "Terminated") return "border-amber-300/60 text-amber-200";
+  if (run.status === "Complete") return run.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300";
+  return "border-[color:var(--accent-solid)]/60 text-[color:var(--text-secondary)]";
 }
 
 type FailureEvidence = { location: string | null; lines: string[] };
@@ -238,6 +256,13 @@ const IDLE_DRAG: DragState = {
 export default function WorkflowsPage() {
   const [project] = useProject();
   const navigate = useNavigate();
+  // ?workflow=<id> deep-links directly to a behavior (e.g. "plan-gate-check",
+  // "land", "story-gate-check") without a manual sidebar click -- same
+  // convention as Understand's `?concept=`: seed initial state from the URL,
+  // keep the URL in sync on every selection via `replace` (a workflow click
+  // is a view change, not a new history stop), same tier as `?project=`.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const reduced = useReducedMotion();
   // The conductor's rail shows tasks the conductor is actually engaged with
   // RIGHT NOW -- not a WorkflowCore run. conductor drives real tasks through
   // Python (advance_task/gate_decide), never through AosWorkflows, so there
@@ -262,7 +287,9 @@ export default function WorkflowsPage() {
   });
   const directoryResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>([]);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("conductor");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState(
+    () => searchParams.get("workflow") || "conductor",
+  );
   // Progressive disclosure for the directory: a catalog entry with a
   // parent_id (a bot's own FSM/Behavior entries, nested under that bot)
   // stays collapsed under its parent until expanded -- "conductor" starts
@@ -285,10 +312,20 @@ export default function WorkflowsPage() {
   const [scriptDiagnosticOpen, setScriptDiagnosticOpen] = useState(false);
   const [testStep, setTestStep] = useState<number | null>(null);
   const testWorkflowRef = useRef<WorkflowCatalogEntry | null>(null);
-  const testModeRef = useRef<"simulation" | "runtime" | "replay" | null>(null);
+  const testModeRef = useRef<"runtime" | "replay" | null>(null);
   const replayStepStartedRef = useRef(0);
   const replayStepDurationRef = useRef(REPLAY_MIN_STEP_MS);
   const replayTimelineRef = useRef<ReplayEvent[]>([]);
+  // The CURRENTLY-ANIMATING event's own status, read by the rAF loop below
+  // to tint a mid-replay step that genuinely failed and retried -- distinct
+  // from replayStoppedAt, which only ever names the FINAL event.
+  const replayEventStatusRef = useRef<string | null>(null);
+  // Ref mirror of "an instance overlay is open" -- the def+occupancy poll
+  // below is a STABLE closure (effect deps are just [project], so it never
+  // sees a fresh `selectedHistoryRunId`/testModeRef read from state) that
+  // must still know, on its own next tick, whether to skip re-asserting the
+  // board's live occupancy over a deliberately-chosen instance's own.
+  const viewingInstanceRef = useRef(false);
   const [replayEventIndex, setReplayEventIndex] = useState<number | null>(null);
   const [replayStoppedAt, setReplayStoppedAt] = useState<ReplayEvent | null>(null);
   const pendingReplayRef = useRef<WorkflowRun | null>(null);
@@ -306,7 +343,7 @@ export default function WorkflowsPage() {
   const [brainActivity, setBrainActivity] = useState<{
     stale: boolean; running: boolean; queueDepth: number; inFlight: number;
   } | null>(null);
-  const selectedWorkflowRef = useRef("conductor");
+  const selectedWorkflowRef = useRef(searchParams.get("workflow") || "conductor");
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("prism:connection-state", {
@@ -361,16 +398,30 @@ export default function WorkflowsPage() {
           setWorkflows(catalog);
           const selected = catalog.find((workflow) => workflow.id === selectedWorkflowRef.current)
             ?? catalog[0];
-          if (selected) graphRef.current.setDef(workflowForGraph(selected));
-          // Wire edits rehydrate AFTER setDef: both maps are keyed by wire,
-          // and the wire list only exists once a definition has landed.
-          // Unknown keys are dropped inside the editor.
-          readJson<Record<string, WirePort>>(portsKey(project), (raw) =>
-            graphRef.current.wireEdits.hydrate(raw, undefined));
-          readJson<Record<string, Point[]>>(waypointsKey(project), (raw) =>
-            graphRef.current.wireEdits.hydrate(undefined, raw));
-          const canvas = canvasRef.current;
-          graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
+          // Live occupancy IS the correct default view of the conductor's
+          // own canvas -- but while an instance overlay is open (a replay,
+          // or a conductor task's live current-step progress),
+          // re-applying the board's real, constantly-changing occupancy
+          // here on every POLL_MS tick stomps the deliberately-chosen
+          // instance's own synthetic occupancy, which is what read as
+          // "random animations" instead of a deliberate step-through
+          // (owner, live evidence: conductor's real occupancy right now is
+          // {green_gate: 25, plan_gate: 13, story_gate: 5, ...} while every
+          // OTHER workflow's -- validation included -- is always {}, which
+          // is exactly why "Build and test"'s own replay never showed this
+          // and conductor's did).
+          if (selected && !viewingInstanceRef.current) {
+            graphRef.current.setDef(workflowForGraph(selected));
+            // Wire edits rehydrate AFTER setDef: both maps are keyed by wire,
+            // and the wire list only exists once a definition has landed.
+            // Unknown keys are dropped inside the editor.
+            readJson<Record<string, WirePort>>(portsKey(project), (raw) =>
+              graphRef.current.wireEdits.hydrate(raw, undefined));
+            readJson<Record<string, Point[]>>(waypointsKey(project), (raw) =>
+              graphRef.current.wireEdits.hydrate(undefined, raw));
+            const canvas = canvasRef.current;
+            graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
+          }
           timer = window.setTimeout(load, POLL_MS);
         })
         .catch(() => {
@@ -396,6 +447,15 @@ export default function WorkflowsPage() {
   ) => {
     selectedWorkflowRef.current = workflow.id;
     setSelectedWorkflowId(workflow.id);
+    // Keep the address bar a valid link to THIS behavior -- copying it and
+    // loading it fresh must land back here, never on the default conductor
+    // view. `replace: true` so clicking through several behaviors doesn't
+    // pile up back-button stops for what is really one page's view state.
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("workflow", workflow.id);
+      return next;
+    }, { replace: true });
     setWorkflowPath(path);
     setSelectedNodeId(null);
     setTestStep(null);
@@ -406,15 +466,65 @@ export default function WorkflowsPage() {
     pendingReplayRef.current = null;
     testWorkflowRef.current = null;
     testModeRef.current = null;
+    viewingInstanceRef.current = false;
     setWorkflowRun(null);
-    graphRef.current.setDef(workflowForGraph(workflow));
     graphRef.current.clearOverrides();
+    // Re-navigating within the app (directory click, drill into a linked
+    // workflow, breadcrumb back) must not silently discard the owner's
+    // saved layout. clearOverrides() drops the in-memory maps so a stale
+    // drag from a DIFFERENT workflow's node ids can't bleed in, but
+    // without refilling them from localStorage here, this workflow's
+    // nodes place at their auto-layout defaults, and the very next drag's
+    // persist() overwrites localStorage with that now-empty map --
+    // permanently losing every position the owner had set. Node positions
+    // rehydrate BEFORE setDef (so nodes never visibly snap from default to
+    // saved, same as the initial-mount effect above); wire ports/waypoints
+    // rehydrate AFTER setDef, because they validate against the freshly
+    // built wire list.
+    readJson<Record<string, Point>>(positionsKey(project),
+      (raw) => graphRef.current.hydrateOverrides(raw));
+    graphRef.current.setDef(workflowForGraph(workflow));
+    readJson<Record<string, WirePort>>(portsKey(project),
+      (raw) => graphRef.current.wireEdits.hydrate(raw, undefined));
+    readJson<Record<string, Point[]>>(waypointsKey(project),
+      (raw) => graphRef.current.wireEdits.hydrate(undefined, raw));
     const canvas = canvasRef.current;
     graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600, true);
-  }, []);
+  }, [project, setSearchParams]);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);
+  // The conductor's live instance view (a task still in flight, not a
+  // replay) reuses SdlcProgress -- the SAME segmented, legibly-labeled
+  // "fill up the panel while it's active" bar TaskDetailPage/PlanView
+  // already render for exactly this -- instead of relying on the small
+  // canvas node's own tiny progress fill (owner: "it is not clear what is
+  // currently running... we have the logic to fill up the panel of the
+  // task while that workflow is active"). `phase`/`activity` are
+  // synthesized client-side from data this page already has (the current
+  // step's average_duration_seconds, the run's own startedAt) rather than
+  // a second, slower phase_progress fetch (scope=full, ~30s cold) -- the
+  // same tradeoff the canvas's own activeProgress already makes.
+  const conductorLivePhase = useMemo<PhaseProgress | null>(() => {
+    if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
+    const step = selectedWorkflow?.steps.find((candidate) => candidate.id === workflowRun.runtime?.currentStep);
+    const typical = step?.average_duration_seconds ?? undefined;
+    const startedAt = workflowRun.runtime.startedAt;
+    const inStepS = startedAt ? Math.max(0, (Date.now() - Date.parse(startedAt)) / 1000) : 0;
+    return {
+      pct: typical && typical > 0 ? Math.min(0.97, inStepS / typical) : undefined,
+      basis: "time",
+      in_step_s: inStepS,
+      typical_s: typical,
+    };
+  }, [selectedWorkflowId, workflowRun, selectedWorkflow]);
+  const conductorLiveActivity = useMemo<Activity | null>(() => {
+    const t = conductorLivePhase && workflowRun?.data.conductorTask;
+    if (!t) return null;
+    return {
+      state: t.gateState === "pending" ? "awaiting_gate" : t.gateState === "failed" ? "blocked" : "working",
+    };
+  }, [conductorLivePhase, workflowRun]);
   const selectedStepResult = selectedStep?.id === "test"
     ? workflowRun?.data.tests
     : selectedStep?.id === "build" ? workflowRun?.data.build : undefined;
@@ -449,10 +559,18 @@ export default function WorkflowsPage() {
   // Grow from the left; reversing the engine's newest-first response leaves
   // the most recent run at the right edge of the filled span.
   const historyOffset = 0;
-  const selectedHistoryRun = workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null;
+  // Conductor keeps no separate run-history array (workflowRunHistory stays
+  // validation-only, see refreshRunHistory below) -- the synthesized run
+  // openConductorInstance just fetched IS the selected instance, sitting in
+  // workflowRun itself rather than a list this page polls.
+  const selectedHistoryRun = selectedWorkflowId === "conductor"
+    ? (workflowRun && workflowRun.id === selectedHistoryRunId ? workflowRun : null)
+    : workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null;
   const selectedHistoryFrameTone = selectedHistoryRun?.status === "Terminated"
     ? "border-amber-300"
-    : selectedHistoryRun?.data.passed ? "border-emerald-400" : "border-red-400";
+    : selectedHistoryRun?.status === "Runnable"
+      ? "border-[color:var(--accent-solid)]"
+      : selectedHistoryRun?.data.passed ? "border-emerald-400" : "border-red-400";
   const runPillTone = (pillIndex: number): string => {
     const run = visibleRunHistory[pillIndex - historyOffset];
     if (!run) return "bg-[color:var(--border-default)]/20";
@@ -555,8 +673,8 @@ export default function WorkflowsPage() {
               ? `${task.title} · done`
               : `${task.title} · ${selectedWorkflow?.steps.find((step) => step.id === task.workflow_step)?.purpose ?? task.workflow_step}${task.gate_state === "pending" ? " · awaiting gate" : ""}`
             : undefined,
-          ringHighlighted: false,
-          onClick: task ? () => navigate(`/tasks/${task.id}`) : undefined,
+          ringHighlighted: task?.id === selectedHistoryRunId,
+          onClick: task ? () => openConductorInstance(task) : undefined,
         };
       })
     : Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
@@ -644,12 +762,6 @@ export default function WorkflowsPage() {
       ? workflow.steps[testStep + 1].id
       : "__complete__";
     graphRef.current.sendTransition(from, to);
-    if (testModeRef.current !== "simulation") return;
-    const timer = window.setTimeout(
-      () => setTestStep((step) => (step ?? 0) + 1),
-      TEST_TRANSITION_MS,
-    );
-    return () => window.clearTimeout(timer);
   }, [testStep]);
 
   useEffect(() => {
@@ -664,6 +776,7 @@ export default function WorkflowsPage() {
       setTestStep(-1);
       replayStepStartedRef.current = performance.now();
       replayStepDurationRef.current = 350;
+      replayEventStatusRef.current = null;
       const timer = window.setTimeout(() => setReplayEventIndex(0), 350);
       return () => window.clearTimeout(timer);
     }
@@ -686,6 +799,7 @@ export default function WorkflowsPage() {
       setTestStep(workflow.steps.length);
       replayStepStartedRef.current = performance.now();
       replayStepDurationRef.current = 500;
+      replayEventStatusRef.current = null;
       return;
     }
 
@@ -702,16 +816,16 @@ export default function WorkflowsPage() {
     const duration = replaySpanMs(event, timeline[replayEventIndex + 1]);
     replayStepStartedRef.current = performance.now();
     replayStepDurationRef.current = duration;
+    // A retried step (flow_report_failure/advance_refused/a rejected gate
+    // decision, see conductorTimelineFromHistory) shows up here as its own
+    // event with status "failed" -- tint it while it animates, not just the
+    // run's terminal outcome, so a task that genuinely struggled doesn't
+    // replay as one smooth all-green climb (owner: "the animation on that
+    // playback appears to be made up").
+    replayEventStatusRef.current = event.status;
     const timer = window.setTimeout(() => setReplayEventIndex((index) => (index ?? 0) + 1), duration);
     return () => window.clearTimeout(timer);
   }, [replayEventIndex]);
-
-  const startFlowSimulation = useCallback(() => {
-    if (!selectedWorkflow) return;
-    testWorkflowRef.current = selectedWorkflow;
-    testModeRef.current = "simulation";
-    setTestStep(-1);
-  }, [selectedWorkflow]);
 
   const runScriptedWorkflow = useCallback(async () => {
     if (!selectedWorkflow) return;
@@ -744,6 +858,20 @@ export default function WorkflowsPage() {
     const historicalWorkflow = historicalWorkflowForRun(selectedWorkflow, run);
     testWorkflowRef.current = historicalWorkflow;
     graphRef.current.setDef(historicalWorkflow);
+    if (run.runtime?.status === "running") {
+      // A conductor task still in flight has no closed timeline to replay --
+      // show where it stands right now, the same way a live scripted run's
+      // current step gets a progress bar (the rAF loop below reads
+      // workflowRun.runtime for exactly this, off the SAME `run` this just
+      // set into state).
+      testModeRef.current = null;
+      replayTimelineRef.current = [];
+      setReplayStoppedAt(null);
+      setReplayEventIndex(null);
+      const index = historicalWorkflow.steps.findIndex((step) => step.id === run.runtime?.currentStep);
+      setTestStep(index >= 0 ? index : null);
+      return;
+    }
     const historicalStepIds = new Set(historicalWorkflow.steps.map((step) => step.id));
     replayTimelineRef.current = (run.timeline ?? []).filter((event) =>
       event.status !== "skipped" && historicalStepIds.has(event.step));
@@ -765,6 +893,10 @@ export default function WorkflowsPage() {
     setReplayEventIndex(null);
     setReplayStoppedAt(null);
     testModeRef.current = null;
+    // Read by the def+occupancy poll's own next tick (a stable [project]-only
+    // closure that can't see this render's state) so it stops re-asserting
+    // the board's live occupancy over this instance's synthetic occupancy.
+    viewingInstanceRef.current = true;
     setHistoryOverlayReady(false);
     setHistoryOverlayOpen(false);
     window.requestAnimationFrame(() => {
@@ -772,11 +904,29 @@ export default function WorkflowsPage() {
     });
   }, [selectedWorkflow]);
 
+  // The conductor rail's own version of clicking a validation pill: open
+  // the SAME animated instance view (replayHistoricalRun/beginHistoricalReplay
+  // above), fed from a WorkflowRun synthesized off the task's own history
+  // instead of a WorkflowCore run (owner 2026-08-21: the conductor rail
+  // must use the same click-to-open logic "Build and test"'s rail already
+  // has, not a plain navigate-away). Falls back to the task page if the
+  // synth fetch fails, so a pill is never a dead click.
+  const openConductorInstance = useCallback((task: ManagedTask) => {
+    fetchConductorRunFromTask(project, {
+      id: task.id, title: task.title, status: task.status,
+      workflow_step: task.workflow_step, gate_state: task.gate_state,
+      stranded: strandedTaskIds.has(task.id),
+    })
+      .then((run) => replayHistoricalRun(run))
+      .catch(() => navigate(`/tasks/${task.id}`));
+  }, [project, strandedTaskIds, replayHistoricalRun, navigate]);
+
   const leaveHistoricalReplay = useCallback(() => {
     setSelectedHistoryRunId(null);
     setWorkflowRun(null);
     setTestStep(null);
     testModeRef.current = null;
+    viewingInstanceRef.current = false;
     pendingReplayRef.current = null;
     setHistoryOverlayOpen(false);
     setHistoryOverlayReady(false);
@@ -784,6 +934,12 @@ export default function WorkflowsPage() {
   }, [selectedWorkflow]);
 
   useEffect(() => {
+    // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
+    // instance route that does not exist for a conductor task id. The
+    // conductor's live state already comes from useConductorState's own SSE
+    // push (conductorManaged above) -- reusing that here would be the
+    // duplicate-source mistake this hook exists to prevent.
+    if (selectedWorkflowId === "conductor") return;
     if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;
     let cancelled = false;
     const poll = window.setInterval(() => {
@@ -907,13 +1063,22 @@ export default function WorkflowsPage() {
         const result = nodeId === "build" ? workflowRun?.data.build
           : nodeId === "test" ? workflowRun?.data.tests : null;
         const replayFinishedAtFailure = replayStoppedAt?.step === nodeId;
-        const tone = replayFinishedAtFailure
+        // A step that failed and retried mid-replay (not the run's final
+        // outcome) gets the SAME "failure" tone/label as a terminal failure
+        // -- reusing the existing vocabulary rather than inventing a
+        // separate "retry" visual, per the owner's ask that this stop
+        // looking like a made-up, always-smooth climb.
+        const midWalkFailure = !replayFinishedAtFailure && nodeId !== "__complete__"
+          && replayEventStatusRef.current === "failed";
+        const tone = replayFinishedAtFailure || midWalkFailure
           ? "failure"
           : nodeId === "__complete__"
           ? workflowRun?.data.passed ? "success" : "failure"
           : "active";
         const replayLabel = replayFinishedAtFailure
           ? result ? result.status.replace("_", " ").toUpperCase() : "FAILED"
+          : midWalkFailure
+          ? "FAILED"
           : nodeId === "__complete__"
           ? workflowRun?.data.passed ? "PASSED" : "FAILED"
           : "RUN";
@@ -1409,25 +1574,44 @@ export default function WorkflowsPage() {
             >
               Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
             </button>
-          ) : (
+          ) : selectedWorkflowId !== "conductor" && (
             <button
               type="button"
-              onClick={selectedWorkflow?.steps.some((step) => step.execution === "scripted") ? runScriptedWorkflow : startFlowSimulation}
+              onClick={runScriptedWorkflow}
               disabled={startingWorkflow}
-              title={selectedWorkflow?.steps.some((step) => step.execution === "scripted") ? "Execute this project's typed scripted workflow" : "Visual simulation only"}
+              title="Execute this project's typed scripted workflow"
               className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
             >
-              {selectedWorkflow?.steps.some((step) => step.execution === "scripted")
-                ? startingWorkflow ? "Starting…" : "Run workflow"
-                : "Simulate flow"}
+              {startingWorkflow ? "Starting…" : "Run workflow"}
             </button>
           )}
         </div>
         {(workflowRun || workflowRunError) && (
-          <div className={`absolute left-4 top-4 z-20 max-w-[620px] border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${workflowRun?.status === "Complete" ? workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300" : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"}`}>
-            {workflowRunError || (workflowRun?.status === "Complete"
-              ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build.status} · test ${workflowRun.data.tests.status} · select a step for results`
-              : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
+          <div className={`absolute left-4 top-4 z-20 ${conductorLivePhase ? "w-[420px]" : "max-w-[620px]"} border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
+            workflowRunError ? "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
+            : selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)
+            : workflowRun?.status === "Complete" ? (workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300")
+            : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
+          }`}>
+            <div>
+              {workflowRunError || (selectedWorkflowId === "conductor" && workflowRun
+                ? conductorRunSummary(workflowRun)
+                : workflowRun?.status === "Complete"
+                  ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
+                  : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
+            </div>
+            {conductorLivePhase && (
+              <div className="mt-2">
+                <SdlcProgress
+                  step={workflowRun?.data.conductorTask?.workflowStep ?? undefined}
+                  phase={conductorLivePhase}
+                  status={workflowRun?.data.conductorTask?.status}
+                  activity={conductorLiveActivity}
+                  reduced={reduced}
+                  hideTokens
+                />
+              </div>
+            )}
           </div>
         )}
         {selectedHistoryRun && (

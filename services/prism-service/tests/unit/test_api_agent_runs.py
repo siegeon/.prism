@@ -321,6 +321,76 @@ def test_learning_overview_surfaces_agent_runs(tmp_path, monkeypatch):
 # ----------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------
+# Non-LLM bookkeeping rows (no model / duration_ms==0) must never persist
+# a client-claimed tokens value (task c740443e). Real LLM-turn rows
+# (populated model + measured nonzero duration_ms) must be left untouched
+# even when the number is genuinely large.
+# ----------------------------------------------------------------------
+
+
+def test_ingest_zeroes_tokens_when_model_missing(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    post = client.post(
+        "/api/agent-runs/ingest",
+        params={"project": "prism"},
+        json=_row(
+            run_id="run-bogus-1", agent_id="agent-bogus-1",
+            model=None, duration_ms=0, tokens=1578614397,
+        ),
+    )
+    assert post.status_code == 200, post.text
+
+    got = client.get("/api/agent-runs", params={"project": "prism"})
+    rows = [r for r in got.json()["rows"] if r["run_id"] == "run-bogus-1"]
+    assert len(rows) == 1, rows
+    assert int(rows[0]["tokens"] or 0) == 0, (
+        f"row with no model must never persist a claimed tokens value: {rows[0]}"
+    )
+
+
+def test_ingest_zeroes_tokens_when_duration_ms_zero_even_with_model(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    post = client.post(
+        "/api/agent-runs/ingest",
+        params={"project": "prism"},
+        json=_row(
+            run_id="run-bogus-2", agent_id="agent-bogus-2",
+            model="claude-sonnet-5", duration_ms=0, tokens=999999999,
+        ),
+    )
+    assert post.status_code == 200, post.text
+
+    got = client.get("/api/agent-runs", params={"project": "prism"})
+    rows = [r for r in got.json()["rows"] if r["run_id"] == "run-bogus-2"]
+    assert len(rows) == 1, rows
+    assert int(rows[0]["tokens"] or 0) == 0, (
+        f"row with duration_ms==0 must never persist a claimed tokens "
+        f"value even when model is set: {rows[0]}"
+    )
+
+
+def test_ingest_preserves_plausible_tokens_on_real_llm_turn(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    post = client.post(
+        "/api/agent-runs/ingest",
+        params={"project": "prism"},
+        json=_row(
+            run_id="run-real-1", agent_id="agent-real-1",
+            model="claude-sonnet-5", duration_ms=345941, tokens=42898333,
+        ),
+    )
+    assert post.status_code == 200, post.text
+
+    got = client.get("/api/agent-runs", params={"project": "prism"})
+    rows = [r for r in got.json()["rows"] if r["run_id"] == "run-real-1"]
+    assert len(rows) == 1, rows
+    assert int(rows[0]["tokens"]) == 42898333, (
+        f"a real LLM turn (model set, duration_ms>0) must keep its "
+        f"reported tokens unchanged even when large: {rows[0]}"
+    )
+
+
 def test_ingest_succeeds_on_a_genuinely_fresh_data_dir_no_brain_warmup(
     tmp_path, monkeypatch,
 ):

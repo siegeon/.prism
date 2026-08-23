@@ -46,10 +46,14 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # workflow_fix_request adds one governed, typed path from a failed run
     # into that same conductor loop.
     # The request/provide pair adds hot hierarchical behavior revisions.
-    assert len(names) == 31
+    # + agent_bridge_command (agent-drivable browser bridge — an authorized
+    # agent, holding a user's own access key, drives that same user's own
+    # already-open browser tab live; plan peaceful-seeking-octopus).
+    assert len(names) == 32
     # Pin the INTENT, not just the number: the loop verb is served and the
     # legacy drivers stay off the default surface (tool-surface reduction).
     assert "conductor_work" in names
+    assert "agent_bridge_command" in names
     assert "workflow_fix_request" in names
     assert {"workflow_behavior_get", "workflow_behavior_provide"} <= names
     for demoted in ("workflow_state", "workflow_advance",

@@ -409,8 +409,14 @@ def _is_shipped_on_main(repo: str, task_id: str) -> bool:
     `get_task_delivery`'s existing "merged" stage uses (tasks.py:591) and it
     false-negatives on exactly this squash case. Fixing that endpoint is
     task 499ba9c9's job, not this helper's -- this helper must not inherit
-    that bug, and must not be mistaken for fixing it."""
-    needle = f"[task:{task_id[:8]}]"
+    that bug, and must not be mistaken for fixing it.
+
+    The needle is a PREFIX match (`[task:a205eb7a`, no closing bracket) --
+    task a205eb7a's real driver wrote the FULL UUID trailer instead of the
+    documented 8-char short form, and the old exact-bracket needle matched
+    neither, so this helper always reported "not shipped" for a task whose
+    real commit trailer merely had extra characters after the short id."""
+    needle = f"[task:{task_id[:8]}"
     rc, out = _git(repo, "log", "--fixed-strings", "--grep", needle,
                    "-n", "1", "--format=%H", "origin/main")
     return rc == 0 and bool(out)
@@ -472,11 +478,13 @@ def _compute_stranded(svc, repo: str) -> dict:
     # ONE pass over origin/main commit messages for every [task:<id8>] trailer
     # (squash-safe, same signal _is_shipped_on_main reads one task at a time).
     _, log_out = _git_utf8(repo, "log", "origin/main", "--format=%B")
-    # Exactly the needle _is_shipped_on_main greps one task at a time —
-    # `[task:<id8>]`, 8 id chars (not necessarily hex) then the bracket, so a
-    # bare unbracketed substring never counts.
+    # Same PREFIX match _is_shipped_on_main now uses (task a205eb7a: a real
+    # driver wrote the FULL UUID trailer, not the documented 8-char short
+    # form, so requiring the bracket to close right after 8 chars missed
+    # it) -- capture the first 8 non-bracket/non-space chars after
+    # `[task:`, whether the trailer then closes immediately or continues.
     shipped = {m.group(1).lower()
-               for m in re.finditer(r"\[task:([^\]\s]{8})\]", log_out)}
+               for m in re.finditer(r"\[task:([^\]\s]{8})", log_out)}
     # ONE ref listing (with ahead counts, git >= 2.41) instead of a rev-parse
     # AND a rev-list subprocess per row — the per-row spawns measured ~70s
     # cold at 193 stranded rows on Windows.

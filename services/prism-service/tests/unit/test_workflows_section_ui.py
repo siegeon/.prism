@@ -230,6 +230,54 @@ def test_positions_are_remembered_per_project():
     assert "localStorage" in page
 
 
+def test_switching_workflows_rehydrates_the_owners_saved_layout():
+    """Owner-reported bug: manually positioned nodes reset on re-navigation.
+    Root cause was NOT a missing persistence layer (positions/ports/waypoints
+    were already written to localStorage on drag-end) -- it was
+    selectWorkflow() (fired by every directory click, drilling into a linked
+    workflow, and the breadcrumb back button) calling clearOverrides() and
+    never refilling the maps from localStorage afterward. The very next drag
+    anywhere then called persist(), writing that now-EMPTY map back to
+    localStorage and permanently destroying whatever the owner had arranged.
+    The fix mirrors the initial-mount effect's own ordering: node positions
+    rehydrate BEFORE setDef (so nodes don't visibly snap from default to
+    saved), wire ports/waypoints rehydrate AFTER setDef (they validate
+    against the freshly built wire list, which only exists post-setDef)."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    fn_start = page.index("const selectWorkflow = useCallback(")
+    clear_idx = page.index("graphRef.current.clearOverrides();", fn_start)
+    hydrate_positions_idx = page.index(
+        "readJson<Record<string, Point>>(positionsKey(project),", clear_idx)
+    hydrate_positions_call = page.index(
+        "(raw) => graphRef.current.hydrateOverrides(raw));", hydrate_positions_idx)
+    setdef_idx = page.index(
+        "graphRef.current.setDef(workflowForGraph(workflow));", hydrate_positions_call)
+    hydrate_ports_idx = page.index(
+        "readJson<Record<string, WirePort>>(portsKey(project),", setdef_idx)
+    hydrate_ports_call = page.index(
+        "(raw) => graphRef.current.wireEdits.hydrate(raw, undefined));", hydrate_ports_idx)
+    hydrate_waypoints_idx = page.index(
+        "readJson<Record<string, Point[]>>(waypointsKey(project),", hydrate_ports_call)
+    page.index(
+        "(raw) => graphRef.current.wireEdits.hydrate(undefined, raw));", hydrate_waypoints_idx)
+
+    assert clear_idx < hydrate_positions_idx < setdef_idx < hydrate_ports_idx < hydrate_waypoints_idx, (
+        "selectWorkflow must clear overrides, rehydrate saved node "
+        "positions from localStorage BEFORE setDef, then rehydrate saved "
+        "wire ports/waypoints AFTER setDef")
+
+    # Task <workflow-deep-link>: selectWorkflow also keeps ?workflow=<id> in
+    # sync (every call site — directory click, drill-in, breadcrumb back —
+    # routes through here), so its dependency array grew setSearchParams.
+    fn_body_end = page.index("}, [project, setSearchParams]);", setdef_idx)
+    assert fn_body_end < page.index("const selectedWorkflow = workflows.find", fn_start), (
+        "selectWorkflow's useCallback must depend on `project` and "
+        "`setSearchParams` now that it reads project-scoped localStorage "
+        "keys directly and writes the URL's ?workflow= param"
+    )
+
+
 # --------------------------------------------------------------------------
 # Simplification rider: ONE source of the step ordering.
 # --------------------------------------------------------------------------
@@ -924,7 +972,10 @@ def test_failed_historical_replay_stops_on_the_failed_step():
     assert "setTestStep(failedStepIndex >= 0 ? failedStepIndex : null)" in page
     assert "Replay stopped ·" in page
     assert "replayFinishedAtFailure ? 1" in page
-    assert 'replayFinishedAtFailure\n          ? "failure"' in page
+    # midWalkFailure (a retried step that failed mid-replay) shares the SAME
+    # "failure" tone as the run's own terminal failure -- one vocabulary,
+    # not two competing ones.
+    assert 'replayFinishedAtFailure || midWalkFailure\n          ? "failure"' in page
 
 
 def test_failed_script_marks_the_responsible_editor_line():
@@ -957,3 +1008,487 @@ def test_replay_step_fill_spans_execution_and_inter_step_wait_without_a_pause():
     assert "REPLAY_MAX_STEP_MS = 5000" in page
     assert "replayStepMs(event) + replayGapMs(event, next)" in page
     assert "setReplayEventIndex((index) => (index ?? 0) + 1), duration" in page
+
+
+# ---------------------------------------------------------------------------
+# The conductor rail's pill click opens the SAME animated instance view
+# "Build and test"'s rail already has (owner 2026-08-21: "when i click on
+# that bar it opens the INSTANCE of the workflow its describing, theres a
+# whole animation and everything, please make sure the conductor view is
+# using that same logic"). Before this, a conductor pill's onClick was
+# `navigate('/tasks/${task.id}')` -- a plain page redirect with no overlay,
+# no replay, no reused machinery at all.
+# ---------------------------------------------------------------------------
+
+def test_conductor_pill_reuses_replay_history_run_instead_of_navigating_away():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # The click handler feeds the SAME replayHistoricalRun/beginHistoricalReplay
+    # pipeline validation's rail already drives -- no second, parallel
+    # "instance view" implementation for conductor.
+    handler = _function_body(page, "const openConductorInstance = useCallback((task: ManagedTask) => {")
+    assert "fetchConductorRunFromTask(project" in handler
+    assert "replayHistoricalRun(run)" in handler
+    # A synth fetch failure still lands the owner somewhere real, never a
+    # dead pill.
+    assert "navigate(`/tasks/${task.id}`)" in handler
+
+    # The rail's onClick calls the new handler, not navigate directly.
+    conductor_pills = page.index('const railPills: RailPill[] = selectedWorkflowId === "conductor"')
+    validation_branch = page.index(": Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {\n        const run = visibleRunHistory")
+    conductor_branch = page[conductor_pills:validation_branch]
+    assert "onClick: task ? () => openConductorInstance(task) : undefined" in conductor_branch
+    assert "navigate(`/tasks/${task.id}`)" not in conductor_branch
+
+
+def test_conductor_run_is_synthesized_from_the_tasks_own_history_not_a_workflowcore_run():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    assert 'export function fetchConductorRunFromTask' in data
+    assert '/api/tasks/${encodeURIComponent(task.id)}?project=' in data
+    assert 'scope=core' in data
+    # conductor_service.advance_task writes exactly this shape (details=
+    # "from=X; to=Y...") -- the timeline is built off the task's OWN audit
+    # history, there is no separate run-history endpoint for it.
+    assert 'row.action === "advance_task"' in data
+    assert '/to=([^;]+)/' in data
+    # tests/build are optional -- a conductor run has neither, and nothing
+    # should have to fake them to satisfy the WorkflowRun type.
+    assert "tests?: WorkflowStepResult;" in data
+    assert "build?: WorkflowStepResult;" in data
+    assert "conductorTask?: {" in data
+
+
+def test_conductor_instance_badge_shows_task_state_never_build_test_language():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    summary = _function_body(page, "function conductorRunSummary(run: WorkflowRun): string {")
+    assert "run.data.conductorTask" in summary
+    assert "t.title" in summary
+    assert "shipped" in summary
+    assert "awaiting gate" in summary
+    assert "build" not in summary.lower()
+    # (gateState/workflowStep legitimately contain "test" as a substring
+    # artifact -- "gaTeSTate" -- so assert the absence of the actual
+    # validation phrasing instead of a bare "test" substring.)
+    assert "build ${" not in summary and "· test" not in summary
+
+    # The top run badge renders the conductor summary instead of the
+    # build/test sentence when the conductor workflow is selected.
+    badge = page[page.index('{(workflowRun || workflowRunError) && ('):page.index('{selectedHistoryRun && (')]
+    assert 'selectedWorkflowId === "conductor" && workflowRun\n                ? conductorRunSummary(workflowRun)' in badge
+    assert 'selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)' in badge
+    # The validation sentence (build X / test Y) still renders unchanged for
+    # every other workflow -- this is an ADDED branch, not a rewrite.
+    assert "build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status}" in badge
+
+
+def test_a_conductor_task_still_in_flight_shows_live_progress_not_a_stale_replay():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    begin = _function_body(page, "const beginHistoricalReplay = useCallback((run: WorkflowRun) => {")
+    live_branch_start = begin.index('if (run.runtime?.status === "running") {')
+    replay_branch_start = begin.index("const historicalStepIds = new Set(historicalWorkflow.steps.map((step) => step.id));")
+    assert live_branch_start < replay_branch_start
+    live_branch = begin[live_branch_start:replay_branch_start]
+    # No timeline replay for a task that hasn't finished -- just occupy its
+    # current step, the same way a running scripted workflow's step gets a
+    # live progress bar (activeProgress reads workflowRun.runtime for this).
+    assert "testModeRef.current = null" in live_branch
+    assert "replayTimelineRef.current = []" in live_branch
+    assert "run.runtime?.currentStep" in live_branch
+
+
+def test_conductor_run_poll_effect_never_hits_the_validation_only_run_endpoint():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    poll_effect = page[
+        page.index('if (selectedWorkflowId === "conductor") return;'):
+        page.index("fetchWorkflowRun(workflowRun.id).then((next) => {")
+    ]
+    # GET /api/workflows/runs/:id is a WorkflowCore-instance route; a
+    # conductor task id would 404 against it. The guard must precede the
+    # fetch, not follow it.
+    assert 'if (selectedWorkflowId === "conductor") return;' in poll_effect
+    assert poll_effect.index('if (selectedWorkflowId === "conductor") return;') < \
+        poll_effect.index('if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;')
+
+
+def test_selected_history_run_resolves_off_the_live_run_for_conductor():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # workflowRunHistory stays validation-only (refreshRunHistory), so
+    # conductor's "selected instance" must resolve off workflowRun itself,
+    # never off that array (which would always be empty for it).
+    block = page[page.index("const selectedHistoryRun = selectedWorkflowId"):page.index("const selectedHistoryFrameTone")]
+    assert 'workflowRun && workflowRun.id === selectedHistoryRunId ? workflowRun : null' in block
+    assert 'workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null' in block
+
+
+def test_version_bumped_for_the_conductor_instance_view_reuse():
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must be plain release semver; got "
+        f"{ver_src.splitlines()[:1]!r}")
+    current = tuple(int(x) for x in m.groups())
+    assert current > (7, 12, 41), (
+        "PRISM_VERSION must be patch-bumped past 7.12.41 in the "
+        "implementation commit for this user-visible /workflows change")
+
+
+# ---------------------------------------------------------------------------
+# Follow-up (owner, live on this exact instance): "the animation on that
+# playback appears to be made up" -- conductorTimelineFromHistory only ever
+# read advance_task rows and stamped every closed segment "passed",
+# silently discarding flow_report_failure (a step that failed and retried)
+# and a rejected/control-plane-failed gate_decide. Verified live against
+# task 93d6c6f3 (real history: 3 flow_report_failure rows at
+# verify_green_state) and 1bc0b316 (2 flow_report_failure rows at
+# write_failing_tests, plus a red_gate that ended gate_state=failed).
+# ---------------------------------------------------------------------------
+
+def test_conductor_failed_step_reader_recognizes_all_three_real_setback_shapes():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    reader = _function_body(
+        data, "function conductorFailedStepFromDetails(action: string | undefined, details: string): string | null {",
+    )
+    # flow_report_failure / advance_refused: conductor_service.py writes
+    # `step=<id>; ...` -- the action NAME alone already says it failed, no
+    # need to parse `outcome` (which varies shape: bare `fail`, or a
+    # `{'ok': False, ...}` dict repr).
+    assert 'action === "flow_report_failure" || action === "advance_refused"' in reader
+    assert "/step=([^;]+)/" in reader
+    # gate_decide: only a REAL rejection counts -- a verifier=fail row that
+    # was immediately overridden (override=True) is a genuine pass, per
+    # api/tasks.py _build_timeline's own documented ambiguity.
+    assert 'action === "gate_decide"' in reader
+    assert "/gate=(\\w+_gate)/" in reader
+    assert "action=reject" in reader
+    assert "control-plane=fail" in reader
+    assert "verifier=fail" in reader and "override=True" in reader
+
+
+def test_conductor_timeline_closes_a_failed_attempt_and_reopens_the_same_step():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    builder = _function_body(
+        data, "function conductorTimelineFromHistory(\n  history: ConductorHistoryRow[],\n): NonNullable<WorkflowRun[\"timeline\"]> {",
+    )
+    assert "conductorFailedStepFromDetails(row.action, row.details" in builder
+    retry_guard = builder.index("if (failedStep && open?.step === failedStep) {")
+    reopen = builder.index("open = { step: failedStep, startedAt: row.timestamp }")
+    status_failed = builder.index('status: "failed"')
+    # A failed attempt closes with status "failed" (the SAME vocabulary a
+    # failed validation step already uses -- WorkflowStepResult["status"]),
+    # never a new invented word, and a fresh dwell reopens at the SAME step
+    # so the next attempt (pass or another failure) gets its own segment.
+    assert retry_guard < status_failed < reopen
+
+
+def test_conductor_replay_tints_a_mid_walk_retry_the_same_as_a_terminal_failure():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    walk_effect = _function_body(page, "useEffect(() => {\n    if (testModeRef.current !== \"replay\" || replayEventIndex === null) return;")
+    # The per-event walker stamps the CURRENT event's own status into a ref
+    # the rAF loop reads -- distinct from replayStoppedAt, which only ever
+    # names the run's FINAL event.
+    assert "replayEventStatusRef.current = event.status" in walk_effect
+    assert "replayEventStatusRef.current = null" in walk_effect
+
+    raf_replay = page[page.index('} else if (testModeRef.current === "replay"'):page.index("activeProgress = {\n          nodeId,")]
+    assert 'replayEventStatusRef.current === "failed"' in raf_replay
+    # Reuses the SAME tone/label vocabulary the terminal-failure branch
+    # already renders (workflowGraph.ts's tone: "failure" -> red fill,
+    # matching what a failed build/test step already looks like) -- no
+    # separate "retry" visual invented for this.
+    assert "const midWalkFailure = !replayFinishedAtFailure" in raf_replay
+    assert 'replayFinishedAtFailure || midWalkFailure\n          ? "failure"' in raf_replay
+    assert 'midWalkFailure\n          ? "FAILED"' in raf_replay
+
+
+# ---------------------------------------------------------------------------
+# Follow-up (owner, live on this exact instance): "This playback of the
+# animation is not moving from step to step, its still just doing the
+# random animations." Investigated empirically (Playwright label/screenshot
+# traces at ~150-200ms resolution, before touching any code) rather than
+# assumed: sendTransition/the replay walk DOES fire once per real event, in
+# real order, with a genuine 1.5-5s visible dwell -- the stepping mechanism
+# itself was never broken. What WAS broken: the def+occupancy poll
+# (POLL_MS=10s, a `[project]`-only useEffect closure) unconditionally
+# re-applied the LIVE BOARD's real occupancy over a replay's own synthetic
+# single-node occupancy on every tick -- confirmed live via GET
+# /api/workflows?project=prism: conductor's real occupancy is heavily
+# nonzero ({green_gate: 25, plan_gate: 13, ...}) while every OTHER
+# workflow's (validation included) is always {}, which is exactly why
+# Build and test's own replay never showed this and conductor's did.
+# ---------------------------------------------------------------------------
+
+def test_live_occupancy_poll_skips_reapplying_def_while_an_instance_is_open():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    poll_load = _function_body(page, "const load = () => {\n      fetchWorkflowDef(project)")
+    guard = poll_load.index("if (selected && !viewingInstanceRef.current) {")
+    set_def = poll_load.index("graphRef.current.setDef(workflowForGraph(selected));")
+    fit_call = poll_load.index('graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);')
+    # The guard must wrap BOTH the occupancy reapply and the camera refit --
+    # re-fitting the camera while the owner is watching a replay would be
+    # its own jarring interruption, same root cause.
+    assert guard < set_def < fit_call
+
+
+def test_viewing_instance_ref_is_a_ref_not_state_and_is_set_and_cleared():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Must be a ref: the poll's closure is created once per project (deps
+    # are `[project]` only) and would otherwise read a stale, always-false
+    # `selectedHistoryRunId`/state snapshot from whenever the effect last
+    # ran, never seeing a later click's state update.
+    assert "const viewingInstanceRef = useRef(false);" in page
+
+    replay_start = _function_body(page, "const replayHistoricalRun = useCallback((run: WorkflowRun) => {")
+    assert "viewingInstanceRef.current = true" in replay_start
+
+    leave = _function_body(page, "const leaveHistoricalReplay = useCallback(() => {")
+    assert "viewingInstanceRef.current = false" in leave
+
+    # Switching to a different workflow entirely (sidebar click) must also
+    # clear it, or an instance left open elsewhere would freeze the live
+    # board poll forever afterward.
+    select_workflow_start = page.index("const selectWorkflow = useCallback((")
+    select_workflow_end = page.index("const selectedWorkflow = workflows.find(")
+    assert select_workflow_start < select_workflow_end
+    select_workflow = page[select_workflow_start:select_workflow_end]
+    assert "viewingInstanceRef.current = false" in select_workflow
+
+
+def test_replay_walk_genuinely_steps_one_real_event_at_a_time():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Pin the mechanics that make this a deliberate walk rather than an
+    # instant jump: each event gets its own visible-duration timer before
+    # advancing to the NEXT index, and REPLAY_MIN_STEP_MS floors every
+    # segment (even a near-zero real duration) at a genuinely visible dwell.
+    assert "REPLAY_MIN_STEP_MS = 1500" in page
+    walk_effect = _function_body(page, "useEffect(() => {\n    if (testModeRef.current !== \"replay\" || replayEventIndex === null) return;")
+    assert "window.setTimeout(() => setReplayEventIndex((index) => (index ?? 0) + 1), duration)" in walk_effect
+    assert "graphRef.current.sendTransition(replayEventIndex === 0 ? \"__start__\" : timeline[replayEventIndex - 1].step, event.step)" in walk_effect
+
+
+def test_version_bumped_for_the_retry_visibility_and_poll_stomping_fixes():
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must be plain release semver; got "
+        f"{ver_src.splitlines()[:1]!r}")
+    current = tuple(int(x) for x in m.groups())
+    assert current > (7, 12, 42), (
+        "PRISM_VERSION must be patch-bumped past 7.12.42 in the "
+        "implementation commit for these two follow-up fixes")
+
+
+# ---------------------------------------------------------------------------
+# Third follow-up (owner, live on this exact instance, task a205eb7a mid-
+# drive): "it is not clear what [behavior] is currently running... remember
+# we have the logic to fill up the panel of the task while that workflow is
+# active." Confirmed live via Playwright: fetchConductorRunFromTask's
+# runtime.currentStep (derived from FRESH history) and data.conductorTask.
+# workflowStep (the caller's STALE rail-poll field) could name two DIFFERENT
+# steps on screen at once for a task advancing quickly -- and the only
+# on-canvas "currently running" signal was a tiny ~85px node's 3px fill bar
+# and a 10px "RUN Xs" corner label, nothing like the large, legible
+# SdlcProgress panel TaskDetailPage/PlanView already use for this.
+# ---------------------------------------------------------------------------
+
+def test_fetch_conductor_run_prefers_the_fresh_task_over_the_callers_stale_copy():
+    data = _read("lib", "useWorkflowDef.ts")
+
+    builder = _function_body(
+        data,
+        "export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {\n  return api.get<{ task?: ConductorFreshTask; history: ConductorHistoryRow[] }>(",
+    )
+    assert "const title = fresh?.title ?? task.title;" in builder
+    assert "const status = fresh?.status ?? task.status;" in builder
+    assert "const workflowStep = fresh?.workflow_step ?? task.workflow_step;" in builder
+    assert "const gateState = fresh?.gate_state ?? task.gate_state;" in builder
+    # runtime.currentStep and conductorTask.workflowStep must derive from the
+    # SAME freshly-read values -- never one fresh (history-derived) and one
+    # stale (the caller's rail-poll snapshot), which is what let two
+    # different step names appear on screen at once.
+    assert "currentStep: last?.step ?? workflowStep ?? \"\"," in builder
+    assert "workflowStep, gateState, stranded," in builder
+
+
+def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";' in page
+    # Synthesized from data this page already holds (the step's own
+    # average_duration_seconds, the run's own runtime.startedAt) -- not a
+    # second, slower phase_progress fetch (scope=full costs ~30s cold).
+    phase_memo = _function_body(
+        page,
+        'const conductorLivePhase = useMemo<PhaseProgress | null>(() => {',
+    )
+    assert 'selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable"' in phase_memo
+    assert "step?.average_duration_seconds" in phase_memo
+
+    activity_memo = _function_body(page, "const conductorLiveActivity = useMemo<Activity | null>(() => {")
+    # Reuses ACTIVITY_META's existing vocabulary (awaiting_gate/blocked/
+    # working) -- the SAME states LiveBar/ConductorPage/PlanView already
+    # render, never a new label invented for this one view.
+    assert '"awaiting_gate"' in activity_memo
+    assert '"blocked"' in activity_memo
+    assert '"working"' in activity_memo
+
+    render_block = page[page.index("{(workflowRun || workflowRunError) && ("):page.index("{selectedHistoryRun && (")]
+    assert "conductorLivePhase && (" in render_block
+    assert "<SdlcProgress" in render_block
+    assert "phase={conductorLivePhase}" in render_block
+    assert "activity={conductorLiveActivity}" in render_block
+
+
+def test_sdlc_progress_reuse_never_touches_validation_or_a_finished_replay():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Null for anything but a LIVE (Runnable, i.e. not yet done) conductor
+    # instance -- validation's own live-run badge and a finished conductor
+    # replay must render exactly as before.
+    phase_memo = _function_body(page, "const conductorLivePhase = useMemo<PhaseProgress | null>(() => {")
+    guard = phase_memo.index('if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;')
+    assert guard == phase_memo.index("if (")
+
+
+def test_version_bumped_for_the_conductor_live_instance_legibility_fix():
+    ver_src = _read(_HERE.parent.parent.parent / "prism_service" / "__version__.py")
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', ver_src)
+    assert m, (
+        "PRISM_VERSION must be plain release semver; got "
+        f"{ver_src.splitlines()[:1]!r}")
+    current = tuple(int(x) for x in m.groups())
+    assert current > (7, 12, 44), (
+        "PRISM_VERSION must be patch-bumped past 7.12.44 in the "
+        "implementation commit for this third follow-up fix")
+
+
+# ---------------------------------------------------------------------------
+# Owner-found gap: /workflows had exactly one route and selectedWorkflowId
+# lived only in useState, so NO link could ever point at a specific behavior
+# (e.g. "plan-gate-check") -- every link landed on whatever was last
+# selected. Fixed by syncing selectedWorkflowId to ?workflow=<id> (the same
+# useSearchParams convention Understand's ?concept= already uses), read once
+# at mount and written back on every selectWorkflow() call so the address
+# bar always names the behavior actually on screen.
+# ---------------------------------------------------------------------------
+
+def test_selected_workflow_seeds_from_the_url_query_param():
+    page = _read("pages", "WorkflowsPage.tsx")
+    assert 'import { useNavigate, useSearchParams } from "react-router-dom";' in page
+    assert "const [searchParams, setSearchParams] = useSearchParams();" in page
+    assert (
+        'const [selectedWorkflowId, setSelectedWorkflowId] = useState(\n'
+        '    () => searchParams.get("workflow") || "conductor",\n'
+        '  );'
+    ) in page, (
+        "selectedWorkflowId must seed from ?workflow=<id> so a fresh page "
+        "load with the param pre-selects that behavior, falling back to "
+        "conductor when the param is absent")
+    assert (
+        'const selectedWorkflowRef = useRef(searchParams.get("workflow") || "conductor");'
+    ) in page, (
+        "selectedWorkflowRef (read by the catalog-load effect to pick the "
+        "initially-selected entry once /api/workflows resolves) must start "
+        "from the SAME url-seeded id as the state, not a hardcoded "
+        '"conductor"')
+
+
+def test_selecting_a_workflow_writes_the_url_so_the_link_is_shareable():
+    """Every selectWorkflow() call site -- directory click, drill-in via a
+    linked node, breadcrumb back -- routes through this ONE function, so
+    writing the url param here (rather than at each call site) is what makes
+    the address bar always match the canvas, no matter how the owner got
+    there."""
+    page = _read("pages", "WorkflowsPage.tsx")
+    fn_start = page.index("const selectWorkflow = useCallback(")
+    fn_body_end = page.index("}, [project, setSearchParams]);", fn_start)
+    body = page[fn_start:fn_body_end]
+
+    assert "selectedWorkflowRef.current = workflow.id;" in body
+    assert "setSelectedWorkflowId(workflow.id);" in body
+    set_params_idx = body.index("setSearchParams((prev) => {")
+    assert set_params_idx > body.index("setSelectedWorkflowId(workflow.id);"), (
+        "the url write should follow the state write, not race ahead of it")
+    call_body = _function_body(body, "setSearchParams((prev) => {")
+    assert "new URLSearchParams(prev)" in call_body, (
+        "must build off the CURRENT params (preserving ?project= and any "
+        "other existing query state), never a bare new URLSearchParams()")
+    assert 'next.set("workflow", workflow.id);' in call_body
+    assert "return next;" in call_body
+    tail = body[body.index(call_body) + len(call_body):]
+    assert re.match(r"\s*,\s*\{\s*replace:\s*true\s*\}\s*\)\s*;", tail), (
+        "setSearchParams must be called with { replace: true } -- clicking "
+        "through several behaviors is one page's view state changing, not "
+        "a new back-button stop each time")
+# --------------------------------------------------------------------------
+# Task a205eb7a: the top-right toolbar's "Simulate flow" button (rendered
+# whenever the selected workflow's steps are not all execution="scripted")
+# was a mock step-through animation nobody asked for. Remove the button and
+# every bit of code that only existed to drive it, without touching the
+# sibling "Run workflow" (scripted) path or the historical-run/replay
+# affordances, which share the same toolbar and some of the same state.
+# --------------------------------------------------------------------------
+
+def test_simulate_flow_button_is_removed_from_the_toolbar():
+    """No rendered "Simulate flow" affordance, and none of the dead code
+    that only existed to drive it: the startFlowSimulation handler, the
+    "simulation" arm of the testModeRef union type, and the effect tail
+    gated on it. A single case-insensitive sweep for "simulat" across the
+    comment-stripped source is the right invariant here (not a fixed
+    character window) -- every one of those symbols contains that
+    substring, and the premise notes confirm (via a targeted grep this
+    session) that no OTHER, unrelated code in this file does. The sibling
+    "Run workflow" (scripted) button must survive untouched."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    leaked = re.findall(r"[A-Za-z][\w\"' ]*simulat[\w\"' ]*", page, re.IGNORECASE)
+    assert not leaked, (
+        f"WorkflowsPage.tsx still references simulation-only code: {leaked!r} "
+        "-- the Simulate flow button, startFlowSimulation, the "
+        "testModeRef \"simulation\" union arm, and its guarded effect tail "
+        "must all be deleted together")
+
+    assert "onClick={runScriptedWorkflow}" in page, (
+        "the sibling \"Run workflow\" button must still call "
+        "runScriptedWorkflow directly, not through the removed ternary")
+    assert 'disabled={startingWorkflow}' in page, (
+        "the Run workflow button's disabled state must survive the removal")
+    assert "Run workflow" in page and "Starting…" in page, (
+        "the Run workflow button's labels must survive the removal")
+
+
+# --------------------------------------------------------------------------
+# Remove the "Run workflow" button when Conductor is selected. The button
+# is only meaningful for scripted workflows triggered via POST /api/workflows/runs.
+# Conductor is driven by PRISM tasks via conductor_work(), not manual runs.
+# --------------------------------------------------------------------------
+
+def test_run_workflow_button_is_hidden_for_conductor():
+    """The "Run workflow" button must NOT render when selectedWorkflowId === "conductor".
+    The "Ran {timestamp}" replay-return button must remain visible when a
+    selectedHistoryRun is active, regardless of which workflow is selected."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    # Verify the Run workflow button is gated on selectedWorkflowId !== "conductor"
+    assert "selectedWorkflowId !== \"conductor\"" in page, (
+        "the Run workflow button must be hidden when Conductor is selected")
+
+    # Verify the button calls runScriptedWorkflow
+    assert "onClick={runScriptedWorkflow}" in page, (
+        "the Run workflow button must call runScriptedWorkflow")
+
+    # Verify the "Ran {timestamp}" button condition is unchanged (always shows on selectedHistoryRun)
+    assert "{selectedHistoryRun ? (" in page, (
+        "the historical-run replay-return button must still be gated on selectedHistoryRun")
+    assert "leaveHistoricalReplay" in page, (
+        "the Ran button must still call leaveHistoricalReplay")

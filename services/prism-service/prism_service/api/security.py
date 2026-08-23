@@ -147,6 +147,28 @@ def _under(path: str, prefix: str) -> bool:
     return path == prefix or path.startswith(prefix + "/")
 
 
+def _is_agent_bridge_session_path(path: str) -> bool:
+    """The agent-bridge SSE/results/delete routes carry their own narrow,
+    session-scoped token as their credential instead of the caller's general
+    bearer/access-key (EventSource cannot send an Authorization header, and
+    reusing the general key over this channel would be broader than the
+    bridge session's intended scope) — services/agent_bridge.py,
+    api/agent_bridge.py, routes/sse.py's sse_agent_bridge. Each such route
+    validates the token itself; this only lets the request THROUGH the
+    general gate.
+
+    Deliberately narrow: `POST /api/agent-bridge/sessions` (session
+    creation, no further path segment) is NOT included here — that call
+    uses the caller's REAL principal, because it is what decides whose
+    session this is in the first place.
+    """
+    if _under(path, "/sse/agent-bridge"):
+        return True
+    if path == "/api/agent-bridge/sessions":
+        return False
+    return _under(path, "/api/agent-bridge/sessions")
+
+
 def _protected_path(path: str) -> bool:
     return (
         _under(path, "/api")
@@ -276,6 +298,8 @@ async def enforce_team_boundary(request: Request):
             return None
         if path in _REMOTE_PUBLIC_PATHS:
             return None
+        if _is_agent_bridge_session_path(path):
+            return None
         client_host = request.client.host if request.client else None
         if AuthService.is_loopback(client_host):
             return None  # the machine running PRISM is unchanged
@@ -291,6 +315,8 @@ async def enforce_team_boundary(request: Request):
     if request.method == "OPTIONS" or not _protected_path(path):
         return None
     if path in _PUBLIC_PATHS:
+        return None
+    if _is_agent_bridge_session_path(path):
         return None
 
     try:

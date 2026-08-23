@@ -2499,6 +2499,16 @@ class ConductorService:
         squash merges, task 499ba9c9) and never the daemon's own checkout
         HEAD — this reads the TASK'S OWN worktree.
 
+        Matches the trailer as a PREFIX (`[task:a205eb7a`, no closing
+        bracket required in the grep pattern) — task a205eb7a itself is the
+        live regression that forced this: its real driver wrote the FULL
+        UUID trailer (`[task:a205eb7a-d46b-4d1c-a2a0-809a0c1e3ff0]`) instead
+        of the documented 8-char short form, so the old exact-bracket
+        pattern found no local commit at all and silently fail-opened this
+        tooth on a task that was genuinely unshipped. `_is_shipped_on_main`
+        and `_compute_stranded` (api/tasks.py) carried the identical
+        assumption and are fixed the same way.
+
         FAIL-OPEN (returns ""), never a refusal, when: no workspace is
         resolvable for the task, that workspace has no `origin/main` ref at
         all (e.g. a synthetic/local-only repo with no remote — an
@@ -2532,7 +2542,7 @@ class ConductorService:
             # real unpushed commit as "never committed at all" (test C2/C3).
             local_trailer = subprocess.run(
                 ["git", "-C", repo, "log", "--all", "--fixed-strings",
-                 "--grep", f"[task:{task_id[:8]}]", "-n", "1",
+                 "--grep", f"[task:{task_id[:8]}", "-n", "1",
                  "--format=%H"],
                 capture_output=True, text=True, timeout=10)
         except Exception:
@@ -5319,6 +5329,43 @@ class ConductorService:
         except Exception:
             return []
 
+    def _own_transition_run_start(self, task_id: str) -> Optional[float]:
+        """Timestamp of the start of the trailing run of this task's OWN
+        advance_task/gate_decide rows that share the newest row's `to=`
+        step -- i.e. how long the task has genuinely been sitting in its
+        present step, not merely when task_history was last WRITTEN TO. A
+        duplicate/re-recorded transition into the SAME step (e.g. a stale
+        detector re-affirming state) must never look fresher than the
+        run's true first entry."""
+        try:
+            rows = self._task_svc.history(task_id)
+        except Exception:
+            return None
+        parsed = []
+        for r in rows:
+            if getattr(r, "action", "") not in ("advance_task", "gate_decide"):
+                continue
+            ts = self._parse_iso(getattr(r, "timestamp", "") or "")
+            if ts is None:
+                continue
+            to_val = None
+            for bit in (getattr(r, "details", "") or "").split(";"):
+                bit = bit.strip()
+                if bit.startswith("to="):
+                    to_val = bit[3:]
+                    break
+            parsed.append((ts, to_val))
+        if not parsed:
+            return None
+        parsed.sort(key=lambda p: p[0], reverse=True)
+        newest_to = parsed[0][1]
+        run_start = parsed[0][0]
+        for ts, to_val in parsed:
+            if to_val != newest_to:
+                break
+            run_start = ts
+        return run_start
+
     def _task_motion_s(self, task) -> Optional[float]:
         """Seconds since the last CONDUCTOR TRANSITION on this task: the newest
         advance_task/gate_decide row in task_history (both written by
@@ -5327,20 +5374,21 @@ class ConductorService:
         neither resolves."""
         latest: Optional[float] = None
         tid = getattr(task, "id", "") or ""
+        if self._task_svc is not None and tid:
+            latest = self._own_transition_run_start(tid)
         # A transition on a CHILD is motion on the parent (see
         # _child_task_ids): the epic itself may not advance for hours while
         # its slices move constantly.
-        scan_ids = ([tid] + self._child_task_ids(tid)) if tid else []
         if self._task_svc is not None and tid:
             try:
-                for r in [row for i in scan_ids
-                          for row in self._task_svc.history(i)]:
+                for r in [row for cid in self._child_task_ids(tid)
+                          for row in self._task_svc.history(cid)]:
                     if getattr(r, "action", "") in ("advance_task", "gate_decide"):
                         ts = self._parse_iso(getattr(r, "timestamp", "") or "")
                         if ts is not None and (latest is None or ts > latest):
                             latest = ts
             except Exception:
-                latest = None
+                pass
         # A SUB-TASK completing/moving IS the parent moving, even though the
         # parent's own step didn't transition — otherwise an epic reads "stalled"
         # for hours while its slices are actively getting done underneath it.
