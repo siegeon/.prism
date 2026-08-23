@@ -126,6 +126,28 @@ def _workspace(task_id: str) -> tuple:
     return path, branch
 
 
+_REPO_SLUG_RE = re.compile(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
+
+
+def _repo_slug(run: Runner, path: str) -> Optional[str]:
+    """owner/repo for the ORIGIN remote, pinned explicitly on every `gh`
+    call. Without this, `gh` auto-detects the repo from ALL configured
+    remotes and prefers one named `upstream` when both `origin` and
+    `upstream` point at GitHub — a fork's read-only/archived parent silently
+    wins over the actually-pushable `origin`, and `gh pr create` fails with
+    'Repository was archived so is read-only' even though the push to
+    origin just succeeded. Pin it to origin's own remote, never let `gh`
+    guess (observed live: task 356ffdd2 parked here 2026-08-23)."""
+    try:
+        rc, out, _err = run(["git", "remote", "get-url", "origin"], path)
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return None
+    if rc != 0:
+        return None
+    m = _REPO_SLUG_RE.search((out or "").strip())
+    return m.group(1) if m else None
+
+
 def _services(project: str, task_svc, cond):
     """Resolve the task/conductor services, tolerating their absence.
 
@@ -228,13 +250,19 @@ def ship_task(task_id: str, project: str = "default", *,
         return res
     _audit(task_svc, task_id, "push", f"branch={branch}")
 
+    # Pin every `gh` call to origin's own repo — `gh` otherwise auto-detects
+    # from ALL configured remotes and can silently resolve to a read-only
+    # `upstream` fork instead of the `origin` this branch was just pushed to.
+    slug = _repo_slug(run, path)
+    repo_flag = ["--repo", slug] if slug else []
+
     # ---- open the PR -------------------------------------------------------
     title = f"ship: {short} — landed from the green_gate approve"
     body = (f"Landed by the {SEAT_ID} seat on the owner's green_gate approve.\n"
             f"\n[task:{short}]\n")
     rc, out, err = _run(run, [
         "gh", "pr", "create", "--head", branch, "--base", "main",
-        "--title", title, "--body", body], path)
+        "--title", title, "--body", body, *repo_flag], path)
     if rc != 0:
         res = _fail("pr_create", err or out or f"gh pr create exited {rc}")
         _park(task_svc, task_id, res["stage"], res["error"])
@@ -246,7 +274,7 @@ def ship_task(task_id: str, project: str = "default", *,
     # ---- wait for CI -------------------------------------------------------
     deadline = time.monotonic() + float(ci_timeout_s)
     while True:
-        rc, out, err = _run(run, ["gh", "pr", "checks", str(pr)], path)
+        rc, out, err = _run(run, ["gh", "pr", "checks", str(pr), *repo_flag], path)
         if rc == 0:
             break
         if rc != GH_CHECKS_PENDING_RC:
@@ -264,7 +292,8 @@ def ship_task(task_id: str, project: str = "default", *,
 
     # ---- merge -------------------------------------------------------------
     rc, out, err = _run(run, [
-        "gh", "pr", "merge", str(pr), "--squash", "--delete-branch"], path)
+        "gh", "pr", "merge", str(pr), "--squash", "--delete-branch",
+        *repo_flag], path)
     if rc != 0:
         res = _fail("merge", err or out or f"gh pr merge exited {rc}", pr)
         _park(task_svc, task_id, res["stage"], res["error"])

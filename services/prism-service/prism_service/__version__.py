@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.20"
+PRISM_VERSION = "7.13.21"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5408,4 +5408,20 @@ PRISM_VERSION_NOTES += (
     "prune now matches on source_file alone, which is what actually "
     "identifies an orphan. Confirmed against think-shift/brain.db "
     "(7,738 web_dist_next rows, real deletion, not a 0-row no-op)."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.21: ship_worker's gh calls (pr create/checks/merge) had no "
+    "--repo flag, so gh auto-detected the repo from ALL configured git "
+    "remotes -- with both origin (pushable) and upstream (an archived, "
+    "read-only fork parent) present, gh silently resolved to upstream. "
+    "Observed live: task 356ffdd2's green_gate parked at pr_create with "
+    "'Repository was archived so is read-only' even though `git push "
+    "origin` had just succeeded moments before. Added _repo_slug() (parses "
+    "owner/repo off origin's own remote URL) and threaded --repo through "
+    "all three gh call sites; falls back to no --repo (old behavior) when "
+    "origin isn't a github.com remote. Two new tests in test_ship_worker.py "
+    "pin the URL-parsing edge case (a repo name that itself starts with a "
+    "dot, like .prism, tripped an earlier version of the regex) and that "
+    "every gh call in a live pipeline run carries --repo."
 )
