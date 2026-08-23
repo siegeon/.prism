@@ -142,7 +142,11 @@ def test_packet_oracle_receipt_row_survives() -> None:
 
 
 def test_check_row_keeps_the_honest_missing_signal() -> None:
-    chunk = _window(_read(_TDP), "the gate's evidence tooth", before=1400, after=3200)
+    # after=3200 was stale: later UI additions (the design-packet / visual-
+    # evidence blocks above this row) pushed the literal "missing" string to
+    # 3835 chars past the anchor -- widened with margin, not shrunk to fit,
+    # so the next addition doesn't silently reopen the same gap.
+    chunk = _window(_read(_TDP), "the gate's evidence tooth", before=1400, after=4200)
     assert '"missing"' in chunk, (
         "hiding the honest 'missing' RED-receipt signal to stop the "
         "contradiction is the recorded likely_misfire")
