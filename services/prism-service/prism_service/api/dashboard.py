@@ -23,32 +23,50 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _count(db: Path, sql: str) -> int:
+def _conn(db: Path) -> "sqlite3.Connection | None":
+    """One connection per DB PER REQUEST (not per query) — dashboard.py used
+    to open+close a fresh connection for every _count/_rows call (~18 of
+    them across 3 DBs in a single /activity response), which is tolerable
+    on a fast disk but turns a slow one into death by a thousand cuts.
+    cache_size/temp_store=MEMORY are read-heavy-workload tuning on top of
+    sqlite_db.connect's existing WAL/busy_timeout/synchronous defaults."""
     if not db.exists():
+        return None
+    try:
+        c = sqlite_db.connect(str(db), timeout=5.0)
+        c.execute("PRAGMA cache_size = -20000")   # ~20MB of pages, negative = KB
+        c.execute("PRAGMA temp_store = MEMORY")
+        return c
+    except Exception as exc:
+        logger.warning("dashboard _conn fallback for %s: %s", db, exc)
+        return None
+
+
+def _count(conn: "sqlite3.Connection | None", sql: str) -> int:
+    if conn is None:
         return 0
     try:
-        c = sqlite_db.connect(str(db), timeout=5.0); v = c.execute(sql).fetchone(); c.close()
+        v = conn.execute(sql).fetchone()
         return int(v[0]) if v else 0
     except Exception as exc:
         # Graceful fallback stays (dashboard must render), but never
         # swallow silently — a locked/corrupt db is an operator signal.
-        logger.warning("dashboard _count fallback for %s: %s", db, exc)
+        logger.warning("dashboard _count fallback: %s", exc)
         return 0
 
 
-def _rows(db: Path, sql: str) -> list:
-    if not db.exists():
+def _rows(conn: "sqlite3.Connection | None", sql: str) -> list:
+    if conn is None:
         return []
     try:
-        c = sqlite_db.connect(str(db), timeout=5.0); v = c.execute(sql).fetchall(); c.close()
-        return v
+        return conn.execute(sql).fetchall()
     except Exception as exc:
-        logger.warning("dashboard _rows fallback for %s: %s", db, exc)
+        logger.warning("dashboard _rows fallback: %s", exc)
         return []
 
 
-def _float(db: Path, sql: str):
-    r = _rows(db, sql)
+def _float(conn: "sqlite3.Connection | None", sql: str):
+    r = _rows(conn, sql)
     return r[0][0] if r and r[0] and r[0][0] is not None else None
 
 
@@ -57,18 +75,18 @@ def _day_window(n: int) -> list:
     return [(today - timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
 
 
-def _bucket(db: Path, col: str, table: str, days: list, where: str = "") -> list:
+def _bucket(conn: "sqlite3.Connection | None", col: str, table: str, days: list, where: str = "") -> list:
     """Count rows per calendar day, aligned to the `days` window."""
     got = {str(d): int(n)
-           for d, n in _rows(db, f"SELECT date({col}) d, COUNT(*) FROM {table} {where} GROUP BY d")
+           for d, n in _rows(conn, f"SELECT date({col}) d, COUNT(*) FROM {table} {where} GROUP BY d")
            if d}
     return [got.get(d, 0) for d in days]
 
 
-def _sum_bucket(db: Path, valcol: str, tscol: str, table: str, days: list) -> list:
+def _sum_bucket(conn: "sqlite3.Connection | None", valcol: str, tscol: str, table: str, days: list) -> list:
     """Sum a value column per calendar day, aligned to the `days` window."""
     got = {str(d): int(v or 0)
-           for d, v in _rows(db, f"SELECT date({tscol}) d, SUM({valcol}) FROM {table} GROUP BY d")
+           for d, v in _rows(conn, f"SELECT date({tscol}) d, SUM({valcol}) FROM {table} GROUP BY d")
            if d}
     return [got.get(d, 0) for d in days]
 
@@ -84,14 +102,23 @@ def state(project: str = Query("default")) -> dict:
     # see real counts.
     from prism_service.config import project_data_dir
     root = project_data_dir(project)
-    kpis = {
-        "brain_docs": _count(root / "brain.db", "SELECT COUNT(*) FROM docs"),
-        "entities": _count(root / "graph.db", "SELECT COUNT(*) FROM entities"),
-        "relationships": _count(root / "graph.db", "SELECT COUNT(*) FROM relationships"),
-        "communities": _count(root / "graph.db", "SELECT COUNT(DISTINCT community) FROM entities WHERE community IS NOT NULL"),
-        "memories": _count(root / "mulch.db", "SELECT COUNT(*) FROM expertise"),
-        "tasks_active": _count(root / "tasks.db", "SELECT COUNT(*) FROM tasks WHERE status IN ('pending','in_progress')"),
-    }
+    brain_c = _conn(root / "brain.db")
+    graph_c = _conn(root / "graph.db")
+    mulch_c = _conn(root / "mulch.db")
+    tasks_c = _conn(root / "tasks.db")
+    try:
+        kpis = {
+            "brain_docs": _count(brain_c, "SELECT COUNT(*) FROM docs"),
+            "entities": _count(graph_c, "SELECT COUNT(*) FROM entities"),
+            "relationships": _count(graph_c, "SELECT COUNT(*) FROM relationships"),
+            "communities": _count(graph_c, "SELECT COUNT(DISTINCT community) FROM entities WHERE community IS NOT NULL"),
+            "memories": _count(mulch_c, "SELECT COUNT(*) FROM expertise"),
+            "tasks_active": _count(tasks_c, "SELECT COUNT(*) FROM tasks WHERE status IN ('pending','in_progress')"),
+        }
+    finally:
+        for c in (brain_c, graph_c, mulch_c, tasks_c):
+            if c is not None:
+                c.close()
     return {
         "workflow": {"active": bool(s and s.active), "current_step": getattr(s, "current_step", None), "model": getattr(s, "model", None), "total_tokens": getattr(s, "total_tokens", 0)},
         "steps": steps,
@@ -106,36 +133,50 @@ def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
     delivery-flow detail. All values are real per-project rollups."""
     from prism_service.config import project_data_dir
     root = project_data_dir(project)
-    brain, tasks, scores = root / "brain.db", root / "tasks.db", root / "scores.db"
     win = _day_window(max(1, min(days, 90)))
 
-    searches = _bucket(brain, "ts", "searches", win)
-    indexing = _bucket(brain, "indexed_at", "docs", win)
-    workflow = _bucket(tasks, "timestamp", "task_history", win)
-    created = _bucket(tasks, "created_at", "tasks", win)
-    completed = _bucket(tasks, "completed_at", "tasks", win, "WHERE completed_at != ''")
+    # ONE connection per DB for the whole request, not per query (18 opens
+    # -> 3). Tolerable on a fast disk; on a slow one each open/close pair is
+    # its own seek+fsync round trip, and this endpoint used to pay that 18
+    # times for what only needs 3 live connections.
+    brain = _conn(root / "brain.db")
+    tasks = _conn(root / "tasks.db")
+    scores = _conn(root / "scores.db")
+    try:
+        searches = _bucket(brain, "ts", "searches", win)
+        indexing = _bucket(brain, "indexed_at", "docs", win)
+        workflow = _bucket(tasks, "timestamp", "task_history", win)
+        created = _bucket(tasks, "created_at", "tasks", win)
+        completed = _bucket(tasks, "completed_at", "tasks", win, "WHERE completed_at != ''")
 
-    lat = {str(d): round(v) for d, v in
-           _rows(brain, "SELECT date(ts), AVG(latency_ms) FROM searches GROUP BY 1")
-           if d and v is not None}
-    recent = [{"q": q, "n_results": n, "latency_ms": ms, "ts": ts}
-              for ts, q, n, ms in _rows(brain,
-                  "SELECT ts, query, n_results, latency_ms FROM searches ORDER BY ts DESC LIMIT 6")]
-    q_total = _count(brain, "SELECT COUNT(*) FROM searches")
-    avg_results = _float(brain, "SELECT AVG(n_results) FROM searches")
-    avg_latency = _float(brain, "SELECT AVG(latency_ms) FROM searches")
+        lat = {str(d): round(v) for d, v in
+               _rows(brain, "SELECT date(ts), AVG(latency_ms) FROM searches GROUP BY 1")
+               if d and v is not None}
+        recent = [{"q": q, "n_results": n, "latency_ms": ms, "ts": ts}
+                  for ts, q, n, ms in _rows(brain,
+                      "SELECT ts, query, n_results, latency_ms FROM searches ORDER BY ts DESC LIMIT 6")]
+        q_total = _count(brain, "SELECT COUNT(*) FROM searches")
+        avg_results = _float(brain, "SELECT AVG(n_results) FROM searches")
+        avg_latency = _float(brain, "SELECT AVG(latency_ms) FROM searches")
+        zero_results = _count(brain, "SELECT COUNT(*) FROM searches WHERE n_results = 0")
 
-    # Token usage is recorded per work SESSION (scores.db), not per task —
-    # so we report it as usage-over-time, which is what's actually tracked.
-    tok_day = _sum_bucket(scores, "tokens_used", "timestamp", "session_outcomes", win)
-    tok_total = _count(scores, "SELECT COALESCE(SUM(tokens_used), 0) FROM session_outcomes")
-    tok_sessions = _count(scores, "SELECT COUNT(*) FROM session_outcomes WHERE tokens_used > 0")
+        # Token usage is recorded per work SESSION (scores.db), not per task —
+        # so we report it as usage-over-time, which is what's actually tracked.
+        tok_day = _sum_bucket(scores, "tokens_used", "timestamp", "session_outcomes", win)
+        tok_total = _count(scores, "SELECT COALESCE(SUM(tokens_used), 0) FROM session_outcomes")
+        tok_sessions = _count(scores, "SELECT COUNT(*) FROM session_outcomes WHERE tokens_used > 0")
 
-    events = {a: int(n) for a, n in
-              _rows(tasks, "SELECT action, COUNT(*) FROM task_history GROUP BY 1 ORDER BY 2 DESC")}
-    cycle = _float(tasks,
-        "SELECT AVG(julianday(completed_at)-julianday(created_at)) "
-        "FROM tasks WHERE completed_at != '' AND created_at != ''")
+        events = {a: int(n) for a, n in
+                  _rows(tasks, "SELECT action, COUNT(*) FROM task_history GROUP BY 1 ORDER BY 2 DESC")}
+        cycle = _float(tasks,
+            "SELECT AVG(julianday(completed_at)-julianday(created_at)) "
+            "FROM tasks WHERE completed_at != '' AND created_at != ''")
+        gate_passed = _count(tasks, "SELECT COUNT(*) FROM tasks WHERE gate_state='passed'")
+        gate_failed = _count(tasks, "SELECT COUNT(*) FROM tasks WHERE gate_state='failed'")
+    finally:
+        for c in (brain, tasks, scores):
+            if c is not None:
+                c.close()
 
     return {
         "days": win,
@@ -145,7 +186,7 @@ def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
             "latency": [lat.get(d) for d in win],
             "recent": recent,
             "total": q_total,
-            "zero": _count(brain, "SELECT COUNT(*) FROM searches WHERE n_results = 0"),
+            "zero": zero_results,
             "avg_results": round(avg_results, 2) if avg_results is not None else 0,
             "avg_latency": round(avg_latency) if avg_latency is not None else None,
         },
@@ -153,8 +194,8 @@ def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
             "created": created,
             "completed": completed,
             "events_by_action": events,
-            "gate_passed": _count(tasks, "SELECT COUNT(*) FROM tasks WHERE gate_state='passed'"),
-            "gate_failed": _count(tasks, "SELECT COUNT(*) FROM tasks WHERE gate_state='failed'"),
+            "gate_passed": gate_passed,
+            "gate_failed": gate_failed,
             "cycle_days": round(cycle, 1) if cycle is not None else None,
         },
         "tokens": {

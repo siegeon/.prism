@@ -635,6 +635,17 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.ship_worker import start_ship_worker
         start_ship_worker()
 
+        # Task 7a72ebcb — the stalled-drive actuator seat: activity_for
+        # already DETECTS a stalled task (task_motion_s stale, session_quiet_s
+        # stale/absent, no drive_heartbeat); this is what ACTS on it, dispatching
+        # a real driver instead of waiting for a human to notice in chat and
+        # relaunch `implement` by hand. NEVER decides a gate (eligibility
+        # itself excludes any task parked at a gate step). Own thread (same
+        # footprint as gate_adjudicator/task_runner); default OFF —
+        # PRISM_RESUME_ACTUATOR_INTERVAL=<seconds> opts an environment in.
+        from prism_service.services.resume_actuator import start_resume_actuator
+        start_resume_actuator()
+
         # Task dd1e8871 — the server-side, observed-activity heartbeat
         # producer: a SECOND, harness-guaranteed source onto the SAME
         # drive_heartbeats store the implement.js prompt text already

@@ -387,3 +387,54 @@ def test_lifespan_wires_the_worker():
     src = Path(m.__file__).read_text(encoding="utf-8")
     assert "start_ship_worker" in src, (
         "start_ship_worker() must be called from the real lifespan")
+
+
+# ---------------------------------------------------------------------------
+# Repo-slug pinning — `gh` must not be left to guess which remote is "the"
+# repo when both `origin` and an archived `upstream` are configured
+# (observed live: task 356ffdd2 parked at pr_create 2026-08-23, "Repository
+# was archived so is read-only", even though `git push origin` had just
+# succeeded — `gh pr create` had no `--repo` and picked the wrong remote).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://github.com/siegeon/.prism.git", "siegeon/.prism"),
+    ("https://github.com/siegeon/.prism", "siegeon/.prism"),
+    ("git@github.com:siegeon/.prism.git", "siegeon/.prism"),
+    ("/home/user/bare/origin.git", None),
+])
+def test_repo_slug_parses_github_remotes_only(url, expected):
+    from prism_service.services import ship_worker
+
+    def runner(argv, cwd=None):
+        assert argv == ["git", "remote", "get-url", "origin"]
+        return 0, url + "\n", ""
+
+    assert ship_worker._repo_slug(runner, "/whatever") == expected
+
+
+def test_ship_pipeline_pins_repo_flag_on_every_gh_call(tmp_path, monkeypatch):
+    """When origin resolves to a real github.com remote, every `gh` call in
+    the pipeline must carry `--repo <owner>/<repo>` — never left for `gh`
+    to auto-detect from all configured remotes."""
+    from prism_service.services import ship_worker
+
+    origin, work, branch = _unshipped_workspace(tmp_path)
+    _wire_ws(monkeypatch, work, branch)
+
+    gh = FakeGh(origin, branch)
+
+    def runner(argv, cwd=None):
+        if argv == ["git", "remote", "get-url", "origin"]:
+            return 0, "https://github.com/siegeon/.prism.git\n", ""
+        return gh(argv, cwd)
+
+    res = ship_worker.ship_task(TASK_ID, runner=runner, poll_interval_s=0)
+    assert res["ok"] is True, res
+
+    gh_calls = [c for c in gh.calls if c[0] == "gh"]
+    assert gh_calls, "expected at least one gh call"
+    for c in gh_calls:
+        assert "--repo" in c, f"gh call missing --repo: {c}"
+        assert c[c.index("--repo") + 1] == "siegeon/.prism", c
