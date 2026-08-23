@@ -91,6 +91,10 @@ def _drive_started_at(scores_db: str, task_id: str) -> float | None:
     time (mx-9f2018: no gauge renders from a value the server didn't
     send for THIS task).
 
+    Single-id form, pinned by test_drive_started_at_anchor.py -- the
+    /graph route itself uses the batched `_drive_started_at_bulk` below
+    instead of calling this once per node (task 356ffdd2 AC-3).
+
     Reads started_at/recorded_at directly for ALL of the task's rows
     (task 9c6401dc) rather than trusting only the first row of
     get_task_agent_rollup's ORDER BY started_at ASC, recorded_at ASC
@@ -129,6 +133,47 @@ def _drive_started_at(scores_db: str, task_id: str) -> float | None:
     return min(recorded) if recorded else None
 
 
+def _drive_started_at_bulk(scores_db: str, task_ids: list[str]) -> dict[str, float | None]:
+    """Batched form of `_drive_started_at` for GET /api/work/graph (task
+    356ffdd2 AC-3): one `WHERE task_id IN (...)` query across every node
+    in the graph instead of one query per node. Same anchor rule per
+    task as the single-id form above. The read is still done fresh on
+    every call (no caching), so a write to scores.db between two /graph
+    requests is visible on the very next fetch (AC-4)."""
+    from pathlib import Path
+    result: dict[str, float | None] = {tid: None for tid in task_ids}
+    if not task_ids or not scores_db or not Path(scores_db).exists():
+        return result
+    from prism_service.services import sqlite_db
+    from prism_service.services.agent_runs_data import _ts_epoch
+    try:
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
+        try:
+            placeholders = ",".join("?" for _ in task_ids)
+            rows = conn.execute(
+                "SELECT task_id, started_at, recorded_at FROM agent_runs "
+                f"WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return result
+    by_task: dict[str, list] = {}
+    for r in rows:
+        by_task.setdefault(r["task_id"], []).append(r)
+    for tid, trows in by_task.items():
+        started = [_ts_epoch(r["started_at"]) for r in trows]
+        started = [s for s in started if s is not None]
+        if started:
+            result[tid] = min(started)
+            continue
+        recorded = [_ts_epoch(r["recorded_at"]) for r in trows]
+        recorded = [x for x in recorded if x is not None]
+        result[tid] = min(recorded) if recorded else None
+    return result
+
+
 def _queue_depth(task_svc, task_id: str) -> int:
     """Count of `task_id`'s children that are pending AND have never
     entered the conductor (no workflow_step) -- the work queued up behind
@@ -145,22 +190,32 @@ def _queue_depth(task_svc, task_id: str) -> int:
 
 
 def _gate_actionability(project: str, task_id: str, workflow_step: str,
-                         is_root: bool) -> tuple[bool, str]:
+                         is_root: bool, dirty_reason: str = "") -> tuple[bool, str]:
     """owner_actionable/waiting_on for a gate_state=='pending' node, derived
     by CALLING api/conductor.py's gate_readiness -- never re-implementing
     its teeth client-side here (mx-d6c1df). A per-node readiness
     failure/exception degrades ONLY this node (False, ''), never the whole
-    /api/work/graph response (task edf38154 AC-3)."""
+    /api/work/graph response (task edf38154 AC-3).
+
+    `dirty_reason` is the graph request's ALREADY-COMPUTED
+    control_plane.dirty_judge_reason() result (task 356ffdd2 AC-3): when
+    truthy, this short-circuits to the exact (True, "you") result
+    gate_readiness's own dirty-judge branch produces (AC-5) without
+    calling gate_readiness at all, so the `git status --porcelain`
+    shell-out behind it runs once per /graph REQUEST -- hoisted by the
+    caller -- rather than once per pending-gate node."""
+    # red_gate is ALWAYS the machine seat's, whatever the refusal prose
+    # says about "no owner action needed" (AC-5) -- checked before any
+    # dirty-judge or receipt-shape branch below.
+    if workflow_step == "red_gate":
+        return False, "machine seat"
+    if dirty_reason:
+        return True, "you"
     try:
         from prism_service.api import conductor as conductor_api
         readiness = conductor_api.gate_readiness(task_id=task_id, project=project)
     except Exception:
         return False, ""
-    # red_gate is ALWAYS the machine seat's, whatever the refusal prose
-    # says about "no owner action needed" (AC-5) -- checked before any
-    # receipt-shape branch below.
-    if workflow_step == "red_gate":
-        return False, "machine seat"
     receipt = (readiness or {}).get("receipt") or {}
     adapter = str(receipt.get("adapter", "") or "")
     status = str(receipt.get("status", "") or "")
@@ -245,7 +300,32 @@ def work_graph(project: str = Query("default")) -> dict:
     except Exception:
         scores_db = ""
 
+    # Dirty-judge check hoisted to run AT MOST ONCE per /graph request
+    # (task 356ffdd2 AC-3), lazily -- computed the first time a
+    # gate_state=="pending" node needs it, memoized after that, so a
+    # request with no pending nodes never shells out at all.
+    _dirty_state: dict[str, str | bool] = {"checked": False, "reason": ""}
+
+    def _dirty_once() -> str:
+        if not _dirty_state["checked"]:
+            from prism_service.services import control_plane as _cp
+            _dirty_state["reason"] = _cp.dirty_judge_reason() or ""
+            _dirty_state["checked"] = True
+        return _dirty_state["reason"]  # type: ignore[return-value]
+
     roots = conductor.managed_tasks()
+
+    # Batched drive_started_at read (task 356ffdd2 AC-3): one
+    # `WHERE task_id IN (...)` query across every root + subtask id,
+    # rather than one query per node.
+    _all_task_ids: list[str] = []
+    for r in roots:
+        _all_task_ids.append(r["id"])
+        for c in r.get("subtasks") or []:
+            _all_task_ids.append(c["id"])
+    _drive_started_map = _drive_started_at_bulk(
+        scores_db, list(dict.fromkeys(_all_task_ids)))
+
     for r in roots:
         if r["id"] not in seen_node_ids:
             task_obj = task_svc.get(r["id"])
@@ -274,7 +354,7 @@ def work_graph(project: str = Query("default")) -> dict:
             if (r.get("gate_state") or "none") == "pending":
                 _oa, _wo = _gate_actionability(
                     project, r["id"], r.get("workflow_step") or "",
-                    is_root=not parent_id)
+                    is_root=not parent_id, dirty_reason=_dirty_once())
             node = _task_node(
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
@@ -284,7 +364,7 @@ def work_graph(project: str = Query("default")) -> dict:
                     conductor.gate_waiting_s(task_obj)
                     if task_obj is not None else None),
                 queue_depth=_queue_depth(task_svc, r["id"]),
-                drive_started_at=_drive_started_at(scores_db, r["id"]),
+                drive_started_at=_drive_started_map.get(r["id"]),
                 owner_actionable=_oa, waiting_on=_wo,
             )
             node["kind"] = "subtask" if parent_id else "task"
@@ -309,7 +389,7 @@ def work_graph(project: str = Query("default")) -> dict:
                 _c_oa, _c_wo = _gate_actionability(
                     project, child.id,
                     getattr(child, "workflow_step", "") or "",
-                    is_root=False)
+                    is_root=False, dirty_reason=_dirty_once())
             cnode = _task_node(
                 child.id, child.title, child.status,
                 getattr(child, "workflow_step", ""),
@@ -319,7 +399,7 @@ def work_graph(project: str = Query("default")) -> dict:
                     project, child.id, task_svc, source_path, override_dir),
                 gate_waiting_s=conductor.gate_waiting_s(child),
                 queue_depth=_queue_depth(task_svc, child.id),
-                drive_started_at=_drive_started_at(scores_db, child.id),
+                drive_started_at=_drive_started_map.get(child.id),
                 owner_actionable=_c_oa, waiting_on=_c_wo,
             )
             cnode["kind"] = "subtask"
