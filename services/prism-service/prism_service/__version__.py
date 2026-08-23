@@ -13,10 +13,19 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.22"
+PRISM_VERSION = "7.13.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.23: ship_worker parked a whole ship on `gh pr create` failing with "
+    "'a pull request already exists' -- the branch was pushed and the PR was "
+    "sitting right there open, but the pipeline returned ok:false at the "
+    "pr_create stage and the task stranded at green_gate (observed live on "
+    "356ffdd2 and b15e84b2/4fa13457). ship_task now recovers the PR number "
+    "from that error's /pull/<n> URL and continues into ci_wait -> merge. "
+    "Narrowly gated: only when the text actually says 'already exists', so a "
+    "genuinely different pr_create failure that happens to mention a URL "
+    "still parks verbatim. [task:1291cd64] "
     "7.13.20: two follow-ups landed alongside the brain-bloat fix above -- "
     "(1) dashboard.py's /activity and /state routes opened ~18 short-lived "
     "sqlite connections per request (one per _count/_rows call across 3-4 "
