@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.19"
+PRISM_VERSION = "7.13.20"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.20: two follow-ups landed alongside the brain-bloat fix above -- "
+    "(1) dashboard.py's /activity and /state routes opened ~18 short-lived "
+    "sqlite connections per request (one per _count/_rows call across 3-4 "
+    "DBs); now one connection per DB, reused for every query in the "
+    "request, plus cache_size/temp_store=MEMORY tuning. (2) brain_index_doc "
+    "-- the MCP tool an agent calls directly on any path it read -- had NO "
+    "skip-list guard at all, so an agent indexing a build artifact by hand "
+    "re-introduced the exact web_dist_next bloat live while that fix was "
+    "being validated; extracted source_service.is_ingest_excluded() as the "
+    "one shared check every doc-adding caller now uses. "
     "7.13.17: found live evaluating this dev instance's own Connectors "
     "card while reviewing task f66fc383's green_gate -- Jira's "
     "not_configured detail told the owner ONLY to register an OAuth app "
