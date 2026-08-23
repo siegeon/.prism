@@ -28,6 +28,11 @@ _STRIP_VARS = frozenset({
     "ANTHROPIC_API_KEY",
 })
 
+# Sentinel exit code for a `claude -p` child killed by subprocess.run's
+# own timeout= — distinct from any real CLI exit code so callers can
+# tell "wedged, we killed it" apart from "the model actually failed".
+TIMEOUT_EXIT_CODE = -9
+
 
 class ClaudeNotLoggedInError(RuntimeError):
     """Raised when the Claude CLI reports an unauthenticated state.
@@ -240,6 +245,7 @@ def invoke(
     purpose: str = "",
     allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS,
     json_schema: dict | None = None,
+    timeout_s: float | None = None,
 ) -> ClaudeCliResult:
     """Run `claude -p` headless and capture stream-json output.
 
@@ -273,12 +279,35 @@ def invoke(
     )
     env = _strip_env()
 
+    run_kwargs = {} if timeout_s is None else {"timeout": timeout_s}
+
     ts_start = time.time()
     with open(out_path, "w", encoding="utf-8") as fh:
-        result = subprocess.run(
-            cmd, cwd=str(work_dir), env=env,
-            stdout=fh, stderr=subprocess.PIPE,
-        )
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(work_dir), env=env,
+                stdout=fh, stderr=subprocess.PIPE,
+                **run_kwargs,
+            )
+        except subprocess.TimeoutExpired:
+            ts_end = time.time()
+            parsed_events, usage = _parse_jsonl(out_path)
+            if not parse_events:
+                parsed_events, usage = [], {"input_tokens": 0, "output_tokens": 0}
+            stderr_text = f"claude -p timed out after {timeout_s}s"
+            _safe_record_run(
+                run_id=run_id, stream_path=out_path,
+                ts_start=ts_start, ts_end=ts_end,
+                project=project, purpose=purpose,
+                exit_code=TIMEOUT_EXIT_CODE, usage=usage,
+                stderr_text=stderr_text,
+            )
+            return ClaudeCliResult(
+                output_path=out_path, exit_code=TIMEOUT_EXIT_CODE,
+                parsed_events=parsed_events, usage=usage,
+                run_id=run_id, duration_s=(ts_end - ts_start),
+                structured_output=None,
+            )
     ts_end = time.time()
 
     stderr_text = (result.stderr or b"").decode("utf-8", errors="replace")
