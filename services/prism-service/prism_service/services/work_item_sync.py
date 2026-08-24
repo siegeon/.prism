@@ -221,6 +221,15 @@ class WorkItemSyncService:
             return 0
 
         link = store.claim_import_link(workspace_id, entity.id, task_id)
+        # claim_import_link's id is keyed on entity_id alone (INSERT OR
+        # IGNORE), so when this entity already carries a link from an
+        # earlier outbound push (push_task_creation), the insert is a no-op
+        # and the returned link still points at that ORIGINAL task_id --
+        # never the freshly computed deterministic one. Every downstream
+        # write in this method must target THAT task, or an outbound-
+        # mirrored entity gets a second, duplicate local task on its next
+        # inbound pull (task 4fa13457).
+        task_id = link.task_id
         title = entity_input.title or entity_input.display_key or entity_input.remote_id
         # Create a LOCAL pending intake, and a later pull never clobbers a
         # user-edited local row. Remote status reconciles ONE way only, into
