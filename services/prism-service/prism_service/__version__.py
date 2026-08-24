@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.29"
+PRISM_VERSION = "7.13.30"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5553,4 +5553,28 @@ PRISM_VERSION_NOTES += (
     "pre-hydration idle-flash guard is retired outright (a two-state icon "
     "tint with no textual claim either way has nothing to walk back once "
     "the first poll resolves, unlike the retired 'queue is quiet' label)."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.30: owner, live, after 7.13.29: 'this evidence stuff should "
+    "not be a expanding panel, but rather a tab on the work screen'. Also "
+    "closes a real safety gap the same conversation surfaced: the old "
+    "click-to-expand banner sat one misclick away from the header's bare, "
+    "no-confirmation '-> done' status button -- a stray click there "
+    "silently closed task 3baadd19 while it was being reviewed live. "
+    "TaskDetailPage.tsx: the gate decision packet (what you're approving, "
+    "evidence table, verifier decision, your decision/Approve/Override) "
+    "moves out of the banner's `{gatePanelOpen && (...)}` expand-in-place "
+    "body into a dedicated Evidence tab, alongside Overview/Trace -- shown "
+    "only while there's a live gate to review (same `gatePanelOwnsOracle` "
+    "condition as before). The banner stays as a persistent notification "
+    "on Overview but now navigates to the tab on click "
+    "(`setDocTab(\"evidence\")`) instead of toggling a `gatePanelOpen` "
+    "boolean in place, which is removed entirely. Retargeted the tests "
+    "that pinned the old expand-in-place structure "
+    "(test_stale_gate_banner_inspect_vs_override.py, "
+    "test_cancelled_task_gate_card_inert.py) onto the new tab location; "
+    "one of them exposed a real fragility in the test suite's own naive "
+    "char-level paren-balance scanning (it was silently relying on a "
+    "redundant double-wrapper this refactor correctly removes) and now "
+    "anchors to the unambiguous sibling boundary instead."
 )

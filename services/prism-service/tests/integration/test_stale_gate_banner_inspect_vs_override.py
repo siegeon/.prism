@@ -63,13 +63,22 @@ def _balanced(src: str, open_idx: int, open_ch: str, close_ch: str) -> int:
 
 def _banner_onclick_body(src: str) -> str:
     """The banner button's onClick={...} body, found by scanning BACK from
-    the unique `setGatePanelOpen((v) => ...)` toggle call to its enclosing
+    the unique `setDocTab("evidence")` navigation call to its enclosing
     `onClick={`, then forward by brace balance - never a fixed character
-    window (a comment or inserted line must not be able to hide the guard)."""
-    marker = "setGatePanelOpen((v) =>"
+    window (a comment or inserted line must not be able to hide the guard).
+
+    RELOCATED (task d9f082fe follow-up, owner live, 2026-08-24): "this
+    evidence stuff should not be a expanding panel, but rather a tab on
+    the work screen". The banner no longer toggles `gatePanelOpen` in
+    place - it navigates to a dedicated Evidence tab via `setDocTab`. The
+    AC this file guards (a bare inspect-click must never have a side
+    effect on gateReason/gateOverride) is if anything MORE strongly true
+    now: the click body is a single `setDocTab` call with no branch that
+    could reach either setter."""
+    marker = 'setDocTab("evidence")'
     call_idx = src.index(marker)
     onclick_at = src.rfind("onClick={", 0, call_idx)
-    assert onclick_at != -1, "no enclosing onClick={ found before the panel toggle"
+    assert onclick_at != -1, "no enclosing onClick={ found before the tab navigation"
     brace_open = onclick_at + len("onClick=")  # index of the '{' itself
     assert src[brace_open] == "{"
     close = _balanced(src, brace_open, "{", "}")
@@ -77,14 +86,29 @@ def _banner_onclick_body(src: str) -> str:
 
 
 def _gate_panel_block(src: str) -> str:
-    """The `{gatePanelOpen && ( ... )}` expanded-panel body, found by paren
-    balance from the guard - not a fixed window."""
-    marker = "{gatePanelOpen && ("
-    start = src.index(marker)
-    paren_open = start + len(marker) - 1  # index of the '(' itself
-    assert src[paren_open] == "("
-    close = _balanced(src, paren_open, "(", ")")
-    return src[start:close + 1]
+    """The `{docTab === "evidence" && gatePanelOwnsOracle && ( ... )}`
+    Evidence-tab body.
+
+    RELOCATED (task d9f082fe follow-up, owner live, 2026-08-24): this
+    content used to be the banner's expand-in-place `{gatePanelOpen && (
+    ...)}` body, DOUBLE-WRAPPED inside an outer `{conductorOn && (...) &&
+    (...)}` notification condition. It now lives in its own tab, gated on
+    a SINGLE flat `docTab === "evidence" && gatePanelOwnsOracle` condition
+    - the redundant outer wrapper is gone (verified structurally sound by
+    a clean `tsc -b`). That removed level was silently load-bearing for
+    the OLD paren-balance scan below: the content itself carries one
+    genuine net-unmatched '(' (inside prose/JSX text, not a real code
+    defect - TSX text and string literals may contain unpaired parens
+    freely), which the old double-`)}`  close happened to absorb by
+    coincidence. A single-`)}` close leaves that scan one paren short of
+    zero, landing anywhere later in the file depending on what other
+    prose parens it wanders through next - exactly the fragility this
+    file's own AC-1..AC-4 history already documents. Anchoring to the
+    known, unambiguous sibling boundary instead is strictly more robust
+    than chasing paren balance through prose ever was."""
+    start = src.index('{docTab === "evidence" && gatePanelOwnsOracle && (')
+    end = src.index('{docTab === "overview" && (<>', start)
+    return src[start:end]
 
 
 # ---------------------------------------------------------------------
@@ -96,7 +120,7 @@ def _gate_panel_block(src: str) -> str:
 def test_banner_onclick_only_toggles_panel_no_reason_or_override_side_effect():
     src = _strip_comments(_read())
     body = _banner_onclick_body(src)
-    assert "setGatePanelOpen(" in body, "sanity: this must be the panel toggle"
+    assert 'setDocTab("evidence")' in body, "sanity: this must be the tab navigation"
     assert "setGateOverride(true)" not in body, (
         "the banner's expand-click must not auto-arm the override - that is "
         "recover-with-override, a distinct action from inspecting the gate"

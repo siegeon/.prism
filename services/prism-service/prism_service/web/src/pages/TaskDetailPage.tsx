@@ -918,9 +918,18 @@ export default function TaskDetailPage() {
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
   // Doc-column tab (artifact .itabs): Overview = the existing content, Trace =
-  // the drive-scoped token trace. The rail (Details + Connections) persists
-  // across both. Trace is fetched lazily the first time its tab is opened.
-  const [docTab, setDocTab] = useState<"overview" | "trace">("overview");
+  // the drive-scoped token trace, Evidence = the gate decision packet (task
+  // d9f082fe follow-up, owner live 2026-08-24: "this evidence stuff should
+  // not be a expanding panel, but rather a tab on the work screen" —
+  // SUPERSEDES the 2026-07-something decision at this file's old ~2296
+  // comment that put the gate decision inline on Overview "top-level and
+  // actionable in place"; that inline toggle turned out to be a real safety
+  // hazard too — a stray click on the wrong nearby control (the header's
+  // bare, no-confirmation "-> done" status button) silently closed a task
+  // while reviewing it, live, on the owner's own screen). The rail (Details
+  // + Connections) persists across all three. Trace is fetched lazily the
+  // first time its tab is opened.
+  const [docTab, setDocTab] = useState<"overview" | "trace" | "evidence">("overview");
   const [trace, setTrace] = useState<TaskTrace | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -977,9 +986,6 @@ export default function TaskDetailPage() {
     delivered: boolean;
   };
   const [delivery, setDelivery] = useState<Delivery | null>(null);
-  // The top-level gate ACTION panel — opened by the notification banner;
-  // holds everything needed to decide the gate in place.
-  const [gatePanelOpen, setGatePanelOpen] = useState(false);
   // In-panel decision feedback: 'checking' while the machine check runs
   // (minutes), then the persistent result — never just a transient toast.
   const [gateResult, setGateResult] = useState<{ kind: "checking" | "ok" | "refused"; text: string } | null>(null);
@@ -1076,21 +1082,21 @@ export default function TaskDetailPage() {
     return () => { cancel = true; };
   }, []);
   const approverIdentity = me?.email || me?.id || "";
-  // Pre-fill a truthful suggested reason INSIDE the expanded panel body
-  // (task c7ce0fc3) — a render-time effect of the panel being open, never a
-  // side effect of the banner's own expand-click. Approve stays one click
-  // in the ready case regardless (its disabled-check never requires a
-  // reason there); this only saves typing. Never claim a "passing receipt"
-  // for the bare-entitlement case. The owner edits or replaces it at will.
+  // Pre-fill a truthful suggested reason on the Evidence tab (task c7ce0fc3)
+  // — a render-time effect of the tab being open, never a side effect of
+  // the banner's own navigate-there click. Approve stays one click in the
+  // ready case regardless (its disabled-check never requires a reason
+  // there); this only saves typing. Never claim a "passing receipt" for
+  // the bare-entitlement case. The owner edits or replaces it at will.
   useEffect(() => {
-    if (!gatePanelOpen || gateReason.trim()) return;
+    if (docTab !== "evidence" || gateReason.trim()) return;
     setGateReason(isAwaitingReview
       ? "Approving on my own review — no machine evidence exists at this tree; my read of the artifacts is the sign-off."
       : gateReadiness?.receipt_ok
         ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
         : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gatePanelOpen]);
+  }, [docTab]);
   // Inline title rename (customer bug 11040b39): click the title to edit.
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -1756,10 +1762,16 @@ export default function TaskDetailPage() {
       <div className="grid grid-cols-1 gap-6 items-start">
       <div className="space-y-6 min-w-0">
 
-      {/* Doc-column tab strip (artifact .itabs): Overview / Trace. The Trace
-          label carries the drive-total once the trace has been fetched. */}
+      {/* Doc-column tab strip (artifact .itabs): Overview / Trace / Evidence.
+          The Trace label carries the drive-total once fetched; Evidence only
+          appears while there's a live gate decision to review (same
+          condition as gatePanelOwnsOracle) — nothing to show otherwise. */}
       <div className="flex gap-0.5 border-b border-[color:var(--border-default)]" role="tablist">
-        {([["overview", "Overview"], ["trace", `Trace${trace ? ` · ${fmtTokens(trace.totals.tokens)} tok` : ""}`]] as const).map(([val, label]) => (
+        {([
+          ["overview", "Overview"],
+          ["trace", `Trace${trace ? ` · ${fmtTokens(trace.totals.tokens)} tok` : ""}`],
+          ...(gatePanelOwnsOracle ? [["evidence", "Evidence"]] : []),
+        ] as [typeof docTab, string][]).map(([val, label]) => (
           <button
             key={val}
             role="tab"
@@ -1789,18 +1801,22 @@ export default function TaskDetailPage() {
         <div className="rounded-md border overflow-hidden" style={{ borderColor: `var(--accent-${bannerTone}-ring)` }}>
           <button
             type="button"
-            // INSPECT vs OVERRIDE (task c7ce0fc3): this bare expand-click is a
-            // pure toggle — no reason pre-fill, no override auto-arm. Looking
-            // at the gate must never itself arm a recovery decision; those
-            // live as separate controls inside the expanded panel below.
-            onClick={() => setGatePanelOpen((v) => !v)}
+            // INSPECT vs OVERRIDE (task c7ce0fc3): navigating to Evidence is a
+            // pure tab switch — no reason pre-fill, no override auto-arm.
+            // Looking at the gate must never itself arm a recovery decision;
+            // those live as separate controls on the Evidence tab itself.
+            // NAVIGATE, don't expand-in-place (task d9f082fe follow-up, owner
+            // live 2026-08-24): the old expand-in-place toggle sat one
+            // misclick away from the header's bare "-> done" status button —
+            // a stray click there silently closed this exact task while the
+            // owner was reviewing it live. A tab switch has no such neighbor.
+            onClick={() => setDocTab("evidence")}
             className="w-full text-left px-4 py-3 text-[13px] leading-relaxed flex items-center gap-3 flex-wrap"
             style={{
               background: `var(--accent-${bannerTone}-bg)`,
               color: `var(--accent-${bannerTone}-fg)`,
             }}
-            aria-expanded={gatePanelOpen}
-            title={gatePanelOpen ? "collapse the gate decision panel" : "open the gate decision panel"}
+            title="open the Evidence tab"
           >
             <span className="font-semibold">
               ● {(() => {
@@ -1833,13 +1849,17 @@ export default function TaskDetailPage() {
                 })()}
             </span>
             <span className="ml-auto text-[12.5px] opacity-80">
-              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence below"}
-              <span className="ml-2">{gatePanelOpen ? "▾" : "▸"}</span>
+              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence"}
+              <span className="ml-2">→</span>
             </span>
           </button>
+        </div>
+      )}
 
-          {gatePanelOpen && (
-            <div className="bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)] border-t" style={{ borderColor: "var(--border-subtle)" }}>
+      </>)}{/* end Overview tab */}
+
+      {docTab === "evidence" && gatePanelOwnsOracle && (
+            <div className="bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)] border rounded-md" style={{ borderColor: "var(--border-subtle)" }}>
               {/* BLOCKED-ON CHILDREN (task a646cbd1): name + link the
                   specific unfinished child(ren), not just roll-up prose —
                   same EntityChip -> /tasks/${id} pattern as the Children
@@ -2201,9 +2221,9 @@ export default function TaskDetailPage() {
                 </div>
               </div>
             </div>
-          )}
-        </div>
       )}
+
+      {docTab === "overview" && (<>
       {/* Dead-task gate card (task e948008a): a cancelled/archived/deleted
           task parked at a pending/failed gate renders INERT — the decision
           is moot, so no Approve/Override/re-run — while evidence and gate

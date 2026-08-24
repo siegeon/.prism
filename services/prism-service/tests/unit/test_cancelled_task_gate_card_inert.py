@@ -179,8 +179,30 @@ def test_live_gate_card_render_branch_excludes_dead_statuses():
 
 
 def test_live_gate_card_still_has_approve_override_rerun_unchanged():
+    # RELOCATED (task d9f082fe follow-up, owner live, 2026-08-24): "this
+    # evidence stuff should not be a expanding panel, but rather a tab on
+    # the work screen". The Approve/Override/re-run controls moved out of
+    # the banner's expand-in-place `{gatePanelOpen && (...)}` body into a
+    # dedicated `{docTab === "evidence" && gatePanelOwnsOracle && (...)}`
+    # tab body -- `_live_gate_block` (the banner's own guard) no longer
+    # contains this content, so this NFR-1 check re-anchors to the new
+    # location. The banner's own guard/notification behavior is still
+    # covered by _live_gate_block above (FR-1, FR-2 tests).
     src = _strip_comments(_read())
-    _, block = _live_gate_block(src)
+    marker = '{docTab === "evidence" && gatePanelOwnsOracle && ('
+    start = src.index(marker)
+    depth = 0
+    end = start
+    for i in range(start, len(src)):
+        c = src[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    block = src[start:end + 1]
     assert 'gateDecide("approve")' in block, (
         "NFR-1: the live gate card must still wire the Approve action"
     )
