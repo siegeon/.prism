@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.27"
+PRISM_VERSION = "7.13.28"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5514,4 +5514,25 @@ PRISM_VERSION_NOTES += (
     "into a single ordered queue, and external entities whose task_id "
     "matches an already-rendered native row are dropped before merge. New "
     "test_tasks_page_unified_queue.py pins both the sort and the dedupe."
+    "\n\n7.13.28: owner, live, after 7.13.27: 'that live panel is odd to "
+    "me... I should not need the queue[/]metadata on that panel any longer "
+    "it shows up elsewhere' plus 'when i click on a task in the work view, "
+    "it will navigate to the item'. Two changes: (1) LiveBar.tsx, which "
+    "rendered a full working/gated/inflow task-row list stacked above "
+    "TasksPage's own Work table -- on /tasks that read as a second, "
+    "competing work queue listing the SAME tasks -- is simplified to a "
+    "single live/idle status dot, green and pulsing only while a CLAIMED "
+    "task is genuinely being driven right now (same claim-gating as "
+    "before). Every row-level detail it used to render (per-task chrome, "
+    "gate evidence, slice counts) already lives on TasksPage.tsx and "
+    "ConductorPage.tsx, which read this exact same shared "
+    "useConductorState() data. (2) TasksPage.tsx's WorkRow: previously only "
+    "the title text was a <Link>, so clicking anywhere else in a row (the "
+    "status/who/prio/updated cells) did nothing -- now the whole <tr> "
+    "navigates to the task on click, with the provider mirror link and "
+    "Start button stopping propagation so they still act on themselves. "
+    "New tests: test_livebar_honors_claim_signal.py re-anchored to the "
+    "simplified isLive check (its prior working/roots-bucket assertions "
+    "retired in place), test_work_row_click_navigates.py pins the new "
+    "whole-row click contract."
 )

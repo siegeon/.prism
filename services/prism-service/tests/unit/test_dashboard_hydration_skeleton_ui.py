@@ -184,14 +184,15 @@ def test_ac6_idle_state_is_gated_behind_the_first_poll():
         "so the bar cannot resolve to 'idle' pre-hydration.")
 
 
-def test_ac6_queue_is_quiet_copy_is_gated():
-    src = _read(_LIVEBAR)
-    quiet = _block(src, "no task being driven", 400)
-    before = src[max(0, src.find("no task being driven") - 400):
-                 src.find("no task being driven")]
-    assert _FLAG_TOKEN.search(before + quiet), (
-        "AC-6: 'no task being driven — queue is quiet' (:248-252) must be "
-        "gated behind the first poll — this is the recorded likely_misfire.")
+# SUPERSEDED (task d9f082fe follow-up, owner live, 2026-08-24):
+# "no task being driven — queue is quiet" copy no longer exists — LiveBar
+# was simplified from a full row-listing panel to a bare live/idle status
+# dot (see LiveBar.tsx's own module docstring), so there is no idle-state
+# COPY left to gate on the first poll. The underlying AC-6 invariant this
+# guarded (never claim "idle" before the queue has actually been observed)
+# still holds and is still pinned above by
+# test_ac6_idle_state_is_gated_behind_the_first_poll, which asserts the
+# SAME `!polled` gating on the `const state:` union LiveBar still computes.
 
 
 # ---------------------------------------------------------------------------

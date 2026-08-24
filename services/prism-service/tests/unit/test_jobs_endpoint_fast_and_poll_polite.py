@@ -361,11 +361,17 @@ def test_cadence_and_hidden_tab_discipline_survive():
 
 
 def test_shell_surfaces_still_call_use_scan_activity_unchanged():
-    """AC-7 regression guard: LiveBar, LiveStatusStrip and Sidebar keep
-    calling useScanActivity() by name — only its internals move to a
-    shared poller, the call sites don't change."""
+    """AC-7 regression guard: LiveStatusStrip and Sidebar keep calling
+    useScanActivity() by name — only its internals move to a shared poller,
+    the call sites don't change.
+
+    SUPERSEDED for LiveBar.tsx (task d9f082fe follow-up, owner live,
+    2026-08-24): LiveBar no longer renders the "queue N" scan-pending
+    metadata it used useScanActivity() for — it was simplified to a bare
+    live/idle status dot (see LiveBar.tsx's own module docstring), so it
+    legitimately no longer calls the hook at all. Dropped from this guard;
+    LiveStatusStrip and Sidebar are unaffected and still assert below."""
     for rel in (
-        "components/LiveBar.tsx",
         "components/LiveStatusStrip.tsx",
         "components/Sidebar.tsx",
     ):

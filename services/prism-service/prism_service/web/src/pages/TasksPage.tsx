@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   api,
   listWorkspaces,
@@ -371,15 +371,26 @@ export default function TasksPage() {
 function WorkRow({ item, focused, started, onStart }: {
   item: WorkItem; focused: boolean; started: boolean; onStart: () => void;
 }) {
+  const navigate = useNavigate();
   const step = item.workflow_step ?? "";
   const gate = item.gate_state ?? "none";
   const gTone = gateTone(gate);
   const external = item.source !== "native";
+  // The WHOLE row is clickable through to the task (owner: "when i click on
+  // a task in the work view, it will navigate to the item"), not just the
+  // title text — same precedent LiveBar's own rows already set (owner
+  // 2026-07-16: "each one of the items on the line is a task and needs to
+  // be able to be clicked through"). Interactive sub-elements (the provider
+  // mirror link, the Start button) stop propagation so they act on
+  // themselves instead of also navigating.
+  const openable = !!item.id && !item.restricted;
+  const open = () => { if (openable) navigate(`/tasks/${item.id}`, { state: { from: "/tasks" } }); };
   return (
     <tr
       className="h-10 transition-colors border-b border-[color:var(--border-subtle)]"
-      style={{ background: focused ? "var(--surface-2)" : undefined }}
+      style={{ background: focused ? "var(--surface-2)" : undefined, cursor: openable ? "pointer" : undefined }}
       aria-selected={focused}
+      onClick={open}
     >
       <td className="px-3 py-1.5">
         <div className="flex items-center gap-2 min-w-0">
@@ -410,6 +421,7 @@ function WorkRow({ item, focused, started, onStart }: {
             <Link
               to={`/tasks/${item.id}`}
               state={{ from: "/tasks" }}
+              onClick={(e) => e.stopPropagation()}
               className="truncate min-w-0 font-medium hover:underline decoration-dotted underline-offset-2"
               style={{ color: "var(--text-primary)" }}
             >
@@ -445,7 +457,7 @@ function WorkRow({ item, focused, started, onStart }: {
           ) : (
             <button
               type="button"
-              onClick={onStart}
+              onClick={(e) => { e.stopPropagation(); onStart(); }}
               className="text-2xs font-semibold px-2 py-0.5 rounded border border-[color:var(--border-default)] hover:bg-[color:var(--surface-2)]"
               style={{ color: "var(--accent-teal-fg)" }}
             >
