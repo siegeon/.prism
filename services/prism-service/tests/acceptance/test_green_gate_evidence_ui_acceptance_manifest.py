@@ -1,17 +1,22 @@
 """Frozen acceptance manifest guard for the green_gate evidence-completeness
-feature (task 3baadd19), same pattern as
+feature (discovered during task 3baadd19's own QA pass), same pattern as
 test_conductor_tile_acceptance_manifest.py -- see that file's own docstring
 for the general rationale (a renamed/removed proof test is a manifest
-drift and must fail HERE, not silently pass).
+drift and must fail HERE, not silently pass). This file is test
+INFRASTRUCTURE (it asserts the manifest JSON's own well-formedness), not
+something that pins task 3baadd19's own oracle -- it must not show up as
+"3baadd19's own pinned tests" on that task's Evidence tab (the exact
+false-attribution class fixed in test_task_tests_attribution.py the same
+release this file shipped in).
 
 This manifest also carries a `live_walkthrough` section the conductor-tile
-one does not: task 3baadd19 was validated live via agent-bridge (remote
-assist) against the owner's own tab, not just via source-pinned unit
-tests. `live_walkthrough` codifies those exact steps (owner, 2026-08-24:
-"make sure you codify how to drive the application as a user to validate
-the feature you just checked on") so a future regression suspicion has a
-concrete, re-runnable script instead of needing to be re-derived from
-scratch every time.
+one does not: task 3baadd19's own drive was validated live via agent-
+bridge (remote assist) against the owner's own tab, not just via source-
+pinned unit tests. `live_walkthrough` codifies those exact steps (owner,
+2026-08-24: "make sure you codify how to drive the application as a user
+to validate the feature you just checked on") so a future regression
+suspicion has a concrete, re-runnable script instead of needing to be
+re-derived from scratch every time.
 """
 
 from __future__ import annotations

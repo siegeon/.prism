@@ -102,3 +102,19 @@ def test_demo_evidence_advance_fix_file_is_not_falsely_attributed_to_3baadd19():
         "this file pins a general advance_task fix, not 3baadd19's own "
         "oracle -- it must not show up as 'this task's pinned tests' on "
         "3baadd19's Evidence tab")
+
+
+def test_acceptance_manifest_guard_file_is_not_falsely_attributed_to_3baadd19():
+    """The SAME bug recurred in the very fix for it: the acceptance-
+    manifest guard file's own first docstring mention of "task 3baadd19"
+    was non-possessive too, so shipping the manifest immediately
+    re-inflated the Evidence tab's pinned-test count with test
+    INFRASTRUCTURE (assertions about the manifest JSON's own
+    well-formedness), not anything that pins 3baadd19's own oracle."""
+    path = (_service_root() / "tests" / "acceptance"
+            / "test_green_gate_evidence_ui_acceptance_manifest.py")
+    src = path.read_text(encoding="utf-8")
+    assert file_owns_task(src, _TASK_3BAADD19) is False, (
+        "this file is test infrastructure (manifest well-formedness "
+        "checks), not 3baadd19's own oracle pins -- it must not show up "
+        "as 'this task's pinned tests' on 3baadd19's Evidence tab")
