@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.33"
+PRISM_VERSION = "7.13.34"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5641,4 +5641,25 @@ PRISM_VERSION_NOTES += (
     "proven correct in DecisionPacket.tsx) instead of native <details>/"
     "<summary>. New test_evidence_disclosures_controlled_not_native.py "
     "pins that no native <details> remains in the file."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.34: landed task 3baadd19's own AC-1 branch "
+    "(prism/ws/3baadd19-78af-42b8-a78e-47a4b6f51fc0, commits 26a76b37/"
+    "af8ec904) to main -- those two commits carried this epic's own "
+    "[task:3baadd19...] trailer but were never merged, so the epic's "
+    "green_gate shipped-ness tooth (_unshipped_gate_reason, DONE means "
+    "SHIPPED, mx: feedback_done_means_shipped) correctly refused to let "
+    "status=done be set. Verified via git: the commits were reachable "
+    "on the task's own worktree branch but NOT an ancestor of "
+    "origin/main; merged clean (no conflicts), pinned suite "
+    "test_inference_claude_cli.py 13/13 green on top of current main. "
+    "This does not close the epic -- green_gate still needs live demo "
+    "evidence (proof_type=demo, human-only per eaafdf75) -- it only "
+    "clears the shipped-ness tooth so that review can proceed. Process "
+    "gap worth naming: the epic's own plan_doc called for AC-1 to land "
+    "as its own conductor-driven CHILD task, but no child task was ever "
+    "created (task_list(parent_id=3baadd19) returns empty) -- the work "
+    "was committed directly under the epic's task id instead, orphaning "
+    "it from child-task tracking and leaving it stranded on a branch "
+    "nobody was watching."
 )
