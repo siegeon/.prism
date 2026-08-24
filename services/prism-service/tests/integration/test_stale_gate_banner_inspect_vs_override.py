@@ -61,30 +61,6 @@ def _balanced(src: str, open_idx: int, open_ch: str, close_ch: str) -> int:
     raise AssertionError(f"unbalanced {open_ch}{close_ch} scanning from {open_idx}")
 
 
-def _banner_onclick_body(src: str) -> str:
-    """The banner button's onClick={...} body, found by scanning BACK from
-    the unique `setDocTab("evidence")` navigation call to its enclosing
-    `onClick={`, then forward by brace balance - never a fixed character
-    window (a comment or inserted line must not be able to hide the guard).
-
-    RELOCATED (task d9f082fe follow-up, owner live, 2026-08-24): "this
-    evidence stuff should not be a expanding panel, but rather a tab on
-    the work screen". The banner no longer toggles `gatePanelOpen` in
-    place - it navigates to a dedicated Evidence tab via `setDocTab`. The
-    AC this file guards (a bare inspect-click must never have a side
-    effect on gateReason/gateOverride) is if anything MORE strongly true
-    now: the click body is a single `setDocTab` call with no branch that
-    could reach either setter."""
-    marker = 'setDocTab("evidence")'
-    call_idx = src.index(marker)
-    onclick_at = src.rfind("onClick={", 0, call_idx)
-    assert onclick_at != -1, "no enclosing onClick={ found before the tab navigation"
-    brace_open = onclick_at + len("onClick=")  # index of the '{' itself
-    assert src[brace_open] == "{"
-    close = _balanced(src, brace_open, "{", "}")
-    return src[brace_open:close + 1]
-
-
 def _gate_panel_block(src: str) -> str:
     """The `{docTab === "evidence" && gatePanelOwnsOracle && ( ... )}`
     Evidence-tab body.
@@ -114,22 +90,21 @@ def _gate_panel_block(src: str) -> str:
 # ---------------------------------------------------------------------
 # AC - the banner's bare expand-click is a pure toggle: no side effect on
 # gateReason or gateOverride (that is what a person clicks to merely LOOK).
+#
+# RETIRED (task d9f082fe follow-up, owner live, 2026-08-24): "it looks
+# like you left the evidence stuff on the overview tab". The Overview
+# notification banner (and its onClick) is deleted outright, not merely
+# de-toggled - the gate status summary is now a plain, non-interactive
+# header at the top of the Evidence tab itself (nothing to click there
+# either; you're already on the one place this content lives). There is
+# no more banner onClick body to inspect for a reason/override side
+# effect, because there is no more banner. The underlying concern (merely
+# LOOKING at gate status must never arm a recovery decision) is trivially
+# true now: reaching the Evidence tab is a plain tab-strip click wired to
+# `setDocTab`, nothing else, and gateReason/gateOverride are set only by
+# their own explicit controls inside that tab (still pinned below by
+# test_expanded_panel_has_two_separate_recovery_controls).
 # ---------------------------------------------------------------------
-
-
-def test_banner_onclick_only_toggles_panel_no_reason_or_override_side_effect():
-    src = _strip_comments(_read())
-    body = _banner_onclick_body(src)
-    assert 'setDocTab("evidence")' in body, "sanity: this must be the tab navigation"
-    assert "setGateOverride(true)" not in body, (
-        "the banner's expand-click must not auto-arm the override - that is "
-        "recover-with-override, a distinct action from inspecting the gate"
-    )
-    assert "setGateReason(" not in body, (
-        "the banner's expand-click must not pre-fill the gate reason as a "
-        "side effect of merely expanding/inspecting the panel - the pre-fill "
-        "belongs inside the expanded panel body, not the click handler"
-    )
 
 
 def test_banner_summary_no_longer_names_click_as_override_recovery():

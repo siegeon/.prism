@@ -30,14 +30,13 @@ _TSX = _SERVICE_ROOT / "prism_service" / "web" / "src" / "pages" / "TaskDetailPa
 
 _DEAD_STATUSES = ("cancelled", "archived", "deleted")
 
-# The two branch-condition markers pin the EXACT boolean guards this slice
-# is expected to author. Both start identically (conductorOn + gate_state
-# in pending/failed) - the dead marker is the live marker's prefix plus the
-# dead-status disjunction, so `src.index()` on the live marker always finds
-# the FIRST (live) occurrence regardless of what follows later in the file.
-_LIVE_MARKER = (
-    '{conductorOn && (task.gate_state === "pending" || task.gate_state === "failed")'
-)
+# The dead-task branch-condition marker pins the EXACT boolean guard this
+# slice is expected to author.
+#
+# The former sibling _LIVE_MARKER (the notification banner's own guard,
+# `{conductorOn && (task.gate_state === "pending" || task.gate_state ===
+# "failed")`) is RETIRED (task d9f082fe follow-up, owner live, 2026-08-24)
+# along with the banner itself - see the FR-1/FR-2 retirement notes below.
 _DEAD_MARKER = (
     '{conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") '
     '&& (task.status === "cancelled" || task.status === "archived" || task.status === "deleted")'
@@ -95,16 +94,6 @@ def _const_stmt(src: str, name: str) -> str:
     raise AssertionError(f"no terminating ; found for {marker}")
 
 
-def _live_gate_block(src: str) -> tuple[int, str]:
-    """The whole live gate-card `{conductorOn && ... && ( ... )}` JSX
-    expression - start index and text - found by brace balance from its
-    unique opening marker (the FIRST occurrence in the file), never a
-    fixed window."""
-    start = src.index(_LIVE_MARKER)
-    close = _balanced(src, start, "{", "}")
-    return start, src[start:close + 1]
-
-
 def _dead_task_block(src: str) -> tuple[int, str]:
     """The inert dead-task gate card - start index and text - found the
     same way, by brace balance from its own unique (longer) opening
@@ -155,20 +144,22 @@ def test_at_gate_effect_guard_excludes_dead_statuses():
 # FR-1 - the gate-card render branch excludes cancelled/archived/deleted
 # inline (no hoisted const), so the live decision panel never renders for
 # a dead task.
+#
+# RETIRED (task d9f082fe follow-up, owner live, 2026-08-24): "it looks
+# like you left the evidence stuff on the overview tab". The Overview
+# notification banner this test's `_LIVE_MARKER` pinned is deleted
+# outright - the live decision panel is gated ONLY by the `docTab ===
+# "evidence" && gatePanelOwnsOracle` tab condition now, no separate
+# inline JSX branch exists to source-read. `_LIVE_MARKER`'s own comment
+# ("the dead marker is the live marker's prefix ... src.index() on the
+# live marker always finds the FIRST (live) occurrence") is no longer
+# true - with the live banner gone, the live marker's first (and only)
+# match IS the dead marker. The underlying FR-1 invariant (dead statuses
+# excluded from the live decision panel) is still enforced and still
+# pinned - by test_gate_panel_owns_oracle_excludes_dead_statuses (FR-6)
+# above, which checks `gatePanelOwnsOracle`'s own definition directly
+# rather than an inline render-branch condition that no longer exists.
 # ---------------------------------------------------------------------
-
-
-def test_live_gate_card_render_branch_excludes_dead_statuses():
-    src = _strip_comments(_read())
-    _, block = _live_gate_block(src)
-    # The condition prefix is everything before the first rendered element.
-    condition = block.split("<div", 1)[0]
-    for status in _DEAD_STATUSES:
-        assert f'task.status !== "{status}"' in condition, (
-            f"FR-1: the live gate-card render branch guard must exclude "
-            f"status={status!r} inline, so the live decision panel never "
-            "renders for a dead task"
-        )
 
 
 # ---------------------------------------------------------------------
@@ -184,25 +175,17 @@ def test_live_gate_card_still_has_approve_override_rerun_unchanged():
     # the work screen". The Approve/Override/re-run controls moved out of
     # the banner's expand-in-place `{gatePanelOpen && (...)}` body into a
     # dedicated `{docTab === "evidence" && gatePanelOwnsOracle && (...)}`
-    # tab body -- `_live_gate_block` (the banner's own guard) no longer
-    # contains this content, so this NFR-1 check re-anchors to the new
-    # location. The banner's own guard/notification behavior is still
-    # covered by _live_gate_block above (FR-1, FR-2 tests).
+    # tab body -- the notification banner itself (and its own guard) is
+    # deleted outright, see the FR-1/FR-2 retirement notes above.
     src = _strip_comments(_read())
-    marker = '{docTab === "evidence" && gatePanelOwnsOracle && ('
-    start = src.index(marker)
-    depth = 0
-    end = start
-    for i in range(start, len(src)):
-        c = src[i]
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    block = src[start:end + 1]
+    # String-anchored, not paren-balanced (this file's own naive char-level
+    # scan turned out to be fragile the moment a refactor's prose/JSX text
+    # carries an unpaired '(' character -- see
+    # test_stale_gate_banner_inspect_vs_override.py's _gate_panel_block for
+    # the full account). The known sibling boundary is unambiguous either way.
+    start = src.index('{docTab === "evidence" && gatePanelOwnsOracle && (')
+    end = src.index('{docTab === "overview" && (<>', start)
+    block = src[start:end]
     assert 'gateDecide("approve")' in block, (
         "NFR-1: the live gate card must still wire the Approve action"
     )
@@ -220,21 +203,22 @@ def test_live_gate_card_still_has_approve_override_rerun_unchanged():
 
 # ---------------------------------------------------------------------
 # FR-2 - a dead task parked at a pending/failed gate renders an INERT
-# banner, appended after the live branch (after TaskDetailPage.tsx:1856),
-# never hidden or unmounted (the ticket's own likely_misfire).
+# banner, never hidden or unmounted (the ticket's own likely_misfire).
+#
+# RETIRED (task d9f082fe follow-up, owner live, 2026-08-24): "it looks
+# like you left the evidence stuff on the overview tab". The "live vs
+# dead, never interleaved" ordering concern this test guarded doesn't
+# apply the same way anymore - the live decision panel and the dead-task
+# inert card are no longer two JSX branches competing for the SAME
+# surface (Overview) at all. The live panel now lives entirely on its own
+# Evidence tab (`docTab === "evidence"`); the dead-task card still lives
+# on Overview (`docTab === "overview"`), gated by `gatePanelOwnsOracle`'s
+# own dead-status exclusion (FR-6) on one side and the dead-status
+# INclusion on the other. They render on mutually exclusive tabs, which
+# is a STRONGER guarantee than "never interleaved" ever was - they
+# literally cannot both be mounted into the same view at once, so neither
+# can hide or shadow the other's DOM.
 # ---------------------------------------------------------------------
-
-
-def test_dead_task_banner_appears_after_the_live_branch():
-    src = _strip_comments(_read())
-    live_start, live_block = _live_gate_block(src)
-    dead_start, _dead_block = _dead_task_block(src)
-    live_end = live_start + len(live_block)
-    assert dead_start >= live_end, (
-        "FR-2: the dead-task inert banner must be appended AFTER the live "
-        "gate-card branch closes, never interleaved with or replacing it - "
-        "it must render (be mounted), not hide the live branch's DOM"
-    )
 
 
 def test_dead_task_banner_names_the_status_in_words():

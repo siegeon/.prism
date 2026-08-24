@@ -1765,7 +1765,11 @@ export default function TaskDetailPage() {
       {/* Doc-column tab strip (artifact .itabs): Overview / Trace / Evidence.
           The Trace label carries the drive-total once fetched; Evidence only
           appears while there's a live gate decision to review (same
-          condition as gatePanelOwnsOracle) — nothing to show otherwise. */}
+          condition as gatePanelOwnsOracle) — nothing to show otherwise.
+          Evidence carries the ONLY gate-review signal on this page now
+          (owner live, 2026-08-24: "it looks like you left the evidence
+          stuff on the overview tab" — the notification banner that used to
+          also live on Overview is gone; this dot is what replaces it). */}
       <div className="flex gap-0.5 border-b border-[color:var(--border-default)]" role="tablist">
         {([
           ["overview", "Overview"],
@@ -1777,12 +1781,19 @@ export default function TaskDetailPage() {
             role="tab"
             aria-selected={docTab === val}
             onClick={() => setDocTab(val)}
-            className={`-mb-px border-b-2 px-3.5 py-2 text-[13px] font-medium ${
+            className={`-mb-px border-b-2 px-3.5 py-2 text-[13px] font-medium inline-flex items-center gap-1.5 ${
               docTab === val
                 ? "border-[color:var(--accent-teal-fg)] text-[color:var(--accent-teal-fg)]"
                 : "border-transparent text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
             }`}
           >
+            {val === "evidence" && (
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{ background: `var(--accent-${bannerTone}-fg)` }}
+                aria-label="needs your review"
+              />
+            )}
             {label}
           </button>
         ))}
@@ -1790,75 +1801,57 @@ export default function TaskDetailPage() {
 
       {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
 
-      {docTab === "overview" && (<>
+      {docTab === "evidence" && gatePanelOwnsOracle && (<>
 
-      {/* TASK NOTIFICATIONS — things needing the owner's ACTION, at the very
-          top of Overview (owner 2026-07-14: "these are notifications of the
-          task, not just the implementation"). Each is clickable and jumps to
-          the view where the action lives (the gate form in Implementation). */}
-      {conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") &&
-        task.status !== "cancelled" && task.status !== "archived" && task.status !== "deleted" && (
-        <div className="rounded-md border overflow-hidden" style={{ borderColor: `var(--accent-${bannerTone}-ring)` }}>
-          <button
-            type="button"
-            // INSPECT vs OVERRIDE (task c7ce0fc3): navigating to Evidence is a
-            // pure tab switch — no reason pre-fill, no override auto-arm.
-            // Looking at the gate must never itself arm a recovery decision;
-            // those live as separate controls on the Evidence tab itself.
-            // NAVIGATE, don't expand-in-place (task d9f082fe follow-up, owner
-            // live 2026-08-24): the old expand-in-place toggle sat one
-            // misclick away from the header's bare "-> done" status button —
-            // a stray click there silently closed this exact task while the
-            // owner was reviewing it live. A tab switch has no such neighbor.
-            onClick={() => setDocTab("evidence")}
-            className="w-full text-left px-4 py-3 text-[13px] leading-relaxed flex items-center gap-3 flex-wrap"
-            style={{
-              background: `var(--accent-${bannerTone}-bg)`,
-              color: `var(--accent-${bannerTone}-fg)`,
-            }}
-            title="open the Evidence tab"
-          >
-            <span className="font-semibold">
-              ● {(() => {
-                  // ONE shared severity vocabulary (task 8e5aa63b, lib/gateSeverity)
-                  // so this banner, StepRail's gate row and the board tile cannot
-                  // legitimately disagree for the same gate at the same moment.
-                  const sev = gateSeverity({
-                    gate_state: task.gate_state,
-                    readiness: gateReadiness,
-                    verifier_refused: !!verifierRefusal,
-                    manual_review: !!gateReadiness?.manual_review,
-                  });
-                  return isAwaitingDesignApproval
-                    ? `AWAITING YOUR APPROVAL · packet ready (${packetParts})`
-                    // story-rubric (task a646cbd1, mx-a31a3d): quote the live reason.
-                    : isStoryRubricPending
-                    ? `PENDING · story rubric: ${gateReadiness?.receipt?.reason || "acceptance criteria not yet complete"}`
-                    : gateVerdict === "ready"
-                    ? (isAwaitingReview
-                        ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
-                        : "READY · evidence passing")
-                    : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
-                    ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
-                    : verifierRefusal ? "BLOCKED · verifier rejected current evidence"
-                    // The legacy generic literal (mx-a31a3d precedent) survives,
-                    // reachable ONLY behind the shared function's blocked verdict —
-                    // never a private re-derived ternary.
-                    : sev.key === "blocked" ? "BLOCKED · evidence not on file"
-                    : sev.label;
-                })()}
-            </span>
-            <span className="ml-auto text-[12.5px] opacity-80">
-              {stepLabel(task.workflow_step ?? "gate")} · {gateVerdict === "ready" ? "approve with a reason" : "inspect the evidence"}
-              <span className="ml-2">→</span>
-            </span>
-          </button>
-        </div>
-      )}
+      {/* GATE STATUS HEADER — the severity summary that used to be a
+          clickable notification banner on Overview (owner 2026-07-14).
+          RELOCATED off Overview entirely (owner live, 2026-08-24: "it
+          looks like you left the evidence stuff on the overview tab") —
+          it's a plain status line here, not a button: there's nothing to
+          navigate to, you're already on the one place this content lives. */}
+      <div
+        className="rounded-md border px-4 py-3 text-[13px] leading-relaxed flex items-center gap-3 flex-wrap"
+        style={{
+          borderColor: `var(--accent-${bannerTone}-ring)`,
+          background: `var(--accent-${bannerTone}-bg)`,
+          color: `var(--accent-${bannerTone}-fg)`,
+        }}
+      >
+        <span className="font-semibold">
+          ● {(() => {
+              // ONE shared severity vocabulary (task 8e5aa63b, lib/gateSeverity)
+              // so this banner, StepRail's gate row and the board tile cannot
+              // legitimately disagree for the same gate at the same moment.
+              const sev = gateSeverity({
+                gate_state: task.gate_state,
+                readiness: gateReadiness,
+                verifier_refused: !!verifierRefusal,
+                manual_review: !!gateReadiness?.manual_review,
+              });
+              return isAwaitingDesignApproval
+                ? `AWAITING YOUR APPROVAL · packet ready (${packetParts})`
+                // story-rubric (task a646cbd1, mx-a31a3d): quote the live reason.
+                : isStoryRubricPending
+                ? `PENDING · story rubric: ${gateReadiness?.receipt?.reason || "acceptance criteria not yet complete"}`
+                : gateVerdict === "ready"
+                ? (isAwaitingReview
+                    ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
+                    : "READY · evidence passing")
+                : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
+                ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
+                : verifierRefusal ? "BLOCKED · verifier rejected current evidence"
+                // The legacy generic literal (mx-a31a3d precedent) survives,
+                // reachable ONLY behind the shared function's blocked verdict —
+                // never a private re-derived ternary.
+                : sev.key === "blocked" ? "BLOCKED · evidence not on file"
+                : sev.label;
+            })()}
+        </span>
+        <span className="ml-auto text-[12.5px] opacity-80">
+          {stepLabel(task.workflow_step ?? "gate")}
+        </span>
+      </div>
 
-      </>)}{/* end Overview tab */}
-
-      {docTab === "evidence" && gatePanelOwnsOracle && (
             <div className="bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)] border rounded-md" style={{ borderColor: "var(--border-subtle)" }}>
               {/* BLOCKED-ON CHILDREN (task a646cbd1): name + link the
                   specific unfinished child(ren), not just roll-up prose —
@@ -2221,7 +2214,7 @@ export default function TaskDetailPage() {
                 </div>
               </div>
             </div>
-      )}
+      </>)}{/* end Evidence tab */}
 
       {docTab === "overview" && (<>
       {/* Dead-task gate card (task e948008a): a cancelled/archived/deleted

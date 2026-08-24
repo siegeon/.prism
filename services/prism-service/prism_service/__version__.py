@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.30"
+PRISM_VERSION = "7.13.31"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5577,4 +5577,24 @@ PRISM_VERSION_NOTES += (
     "char-level paren-balance scanning (it was silently relying on a "
     "redundant double-wrapper this refactor correctly removes) and now "
     "anchors to the unambiguous sibling boundary instead."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.31: owner, live, after 7.13.30: 'it looks like you left the "
+    "evidence stuff on the overview tab'. Correct -- the Evidence tab "
+    "existed, but the old notification banner (AWAITING YOUR REVIEW / "
+    "READY / BLOCKED etc, click-to-navigate) still rendered on Overview "
+    "too. TaskDetailPage.tsx: that banner is deleted outright, not merely "
+    "de-clicked. Its severity summary relocates to a plain, "
+    "non-interactive status header at the TOP of the Evidence tab itself "
+    "(nothing to click -- you're already on the one place this content "
+    "lives). Overview now carries zero gate/evidence content when a gate "
+    "is pending; the ONLY remaining signal is a small colored dot on the "
+    "Evidence tab label in the tab strip (green/amber/rose, same "
+    "bannerTone as before). Retargeted the two tests that pinned the "
+    "banner's own JSX guard as a proxy for the live decision panel's "
+    "dead-status exclusion (test_cancelled_task_gate_card_inert.py FR-1, "
+    "FR-2) onto the invariants that actually still hold post-deletion: "
+    "gatePanelOwnsOracle's own definition (FR-6, unchanged) and the fact "
+    "that Evidence/dead-task-card now render on mutually exclusive tabs "
+    "rather than needing an ordering guarantee on one shared surface."
 )
