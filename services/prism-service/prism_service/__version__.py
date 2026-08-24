@@ -13,11 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.24"
+PRISM_VERSION = "7.13.26"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    "7.13.23: agent-bridge remote-assist no longer needs a human to "
+    "7.13.25: agent-bridge remote-assist no longer needs a human to "
     "copy/paste a session id every reload or daemon restart. Added "
     "GET /api/agent-bridge/sessions (auth'd exactly like session creation) "
     "so an already-authenticated caller can discover their OWN active "
@@ -30,6 +30,15 @@ PRISM_VERSION_NOTES = (
     "enabled' is now a small localStorage boolean preference (never the "
     "token) that auto-reconnects the tab on load without a re-click, "
     "covering both a plain reload and a real daemon restart. "
+    "7.13.23: ship_worker parked a whole ship on `gh pr create` failing with "
+    "'a pull request already exists' -- the branch was pushed and the PR was "
+    "sitting right there open, but the pipeline returned ok:false at the "
+    "pr_create stage and the task stranded at green_gate (observed live on "
+    "356ffdd2 and b15e84b2/4fa13457). ship_task now recovers the PR number "
+    "from that error's /pull/<n> URL and continues into ci_wait -> merge. "
+    "Narrowly gated: only when the text actually says 'already exists', so a "
+    "genuinely different pr_create failure that happens to mention a URL "
+    "still parks verbatim. [task:1291cd64] "
     "7.13.20: two follow-ups landed alongside the brain-bloat fix above -- "
     "(1) dashboard.py's /activity and /state routes opened ~18 short-lived "
     "sqlite connections per request (one per _count/_rows call across 3-4 "
@@ -5456,7 +5465,7 @@ PRISM_VERSION_NOTES += (
 )
 
 PRISM_VERSION_NOTES += (
-    "\n\n7.13.24: agent_bridge_command had ZERO observability (no console/"
+    "\n\n7.13.26: agent_bridge_command had ZERO observability (no console/"
     "network visibility into the tab it's driving) and only 5 interaction "
     "verbs, well short of a real browser-automation toolset. Added console/"
     "network (a ring buffer installed at module load, so history exists "
@@ -5481,4 +5490,14 @@ PRISM_VERSION_NOTES += (
     "MCP-dispatch tests (test_agent_bridge_flow.py) proving each new field "
     "reaches the browser-side command and that large-payload persistence "
     "behaves like screenshot's."
+    "\n\n7.13.24: gate_decide's approve success path never cleared "
+    "blocked_reason, so a task that once hit a transient ship_worker._park() "
+    "failure (e.g. green_gate: pr_create hit 'PR already exists') kept "
+    "showing that stale banner on its detail page FOREVER after genuinely "
+    "landing later -- a DONE/DELIVERED task showing a contradictory red "
+    "'BLOCKED BECAUSE ... not yet reachable from origin/main' message right "
+    "below it (owner, live, task 1291cd64, 2026-08-23, screenshotted). The "
+    "one place a gate legitimately passes is the one place a stale "
+    "blocked_reason must clear. New test in test_gate_decide_actor_"
+    "passthrough.py pins it."
 )

@@ -278,6 +278,39 @@ def test_override_approve_without_actor_still_falls_back_to_manual_override(
 # ----------------------------------------------------------------------
 
 
+def test_approve_clears_a_stale_blocked_reason(tmp_path):
+    """DEFECT this pins (owner, live, task 1291cd64, 2026-08-23): a task
+    whose ship_worker._park() once stamped blocked_reason on a transient
+    failure (e.g. green_gate: pr_create hit 'PR already exists') kept
+    showing that stale banner on its detail page FOREVER after later
+    genuinely landing, sitting right next to a DONE/DELIVERED badge --
+    because nothing on gate_decide's approve success path ever cleared it.
+    A gate that legitimately passes must clear any inherited blocked_reason."""
+    verifier = FakeVerifier({"status": "fail", "tier0": "fail",
+                             "tier1": "not-run", "tier2": "skipped",
+                             "summary": "red as expected"})
+    task_svc, cond = _services(tmp_path, verifier)
+    t = task_svc.create(title="stale blocked_reason cleared on approve")
+    _walk_to_gate(cond, t.id, _gate_id("red_gate"))
+
+    task_svc.update(t.id, blocked_reason=(
+        "green_gate: ship failed at pr_create -- a pull request for this "
+        "branch already exists (your approval is recorded and will be "
+        "retried; seat=conductor-shipper)"))
+    assert task_svc.get(t.id).blocked_reason, "fixture must start non-empty"
+
+    result = cond.gate_decide(
+        t.id, action="approve",
+        reason="test: stale blocked_reason cleared; pytest -q -> 1 failed",
+        actor=ADJUDICATOR_SEAT,
+    )
+
+    assert result["ok"] is True, result
+    assert task_svc.get(t.id).blocked_reason == "", (
+        "a genuinely-passed gate must clear an inherited blocked_reason, "
+        "not leave a stale failure banner next to a DONE task")
+
+
 def test_epic_rollup_approve_persists_caller_actor_not_conductor(tmp_path):
     """A parent whose children all carry passing completion_proof
     satisfies its OWN green_gate via the roll-up path (issue #171). The
