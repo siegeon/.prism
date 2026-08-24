@@ -37,13 +37,57 @@ curl -s -m 20 -X POST \
 Swap `arguments` per action:
 - `navigate`: `{"session_id":"<id>","action":"navigate","path":"/tasks"}`
 - `click`/`read`: `{"session_id":"<id>","action":"click","selector":"<css selector>"}`
-- `fill`: `{"session_id":"<id>","action":"fill","selector":"<css>","value":"<text>"}`
+- `fill`/`select_option`: `{"session_id":"<id>","action":"fill","selector":"<css>","value":"<text>"}`
+  — `select_option` matches a native `<select>`'s option by its `value` OR
+  its visible label text, so you don't need to already know the option value.
 - `screenshot`: `{"session_id":"<id>","action":"screenshot","selector":"<css, optional>"}`
   — omit `selector` to capture the whole page, but PREFER scoping to the
   specific element you actually care about: it's faster, and this app's
   design system uses `oklch`/`oklab` colors extensively, which the
   rendering library (`html2canvas-pro`) mostly handles but a smaller,
   simpler DOM subtree is still safer and quicker to rasterize.
+
+### Observability (v7.14) — check these FIRST when something looks wrong
+
+- `console`: `{"session_id":"<id>","action":"console","limit":50}` — recent
+  console log/warn/error entries AND uncaught errors/unhandled rejections,
+  captured since the tab enabled Remote Assist (not just from when you
+  first call this), so a navigate that happened moments ago is still
+  visible. A large dump comes back as `data.entries_path` (a file on disk)
+  instead of inline, same convention as screenshots.
+- `network`: `{"session_id":"<id>","action":"network","limit":50}` — recent
+  fetch/XHR requests with method/url/status/duration; `data.failed_count`
+  flags 4xx/5xx.
+
+### Interaction parity with a real browser-automation toolset
+
+- `hover`: `{"action":"hover","selector":"<css>"}` — real pointer/mouse
+  events; only reveals state a JS handler (onMouseEnter/onPointerEnter)
+  drives. A pure-CSS `:hover` tooltip (no JS listener) can't be triggered
+  this way — that's a real gap, not a bug.
+- `drag`: `{"action":"drag","selector":"<source css>","target_selector":"<drop-target css>"}`
+  — a real HTML5 dragstart/dragenter/dragover/drop/dragend sequence with a
+  genuine `DataTransfer`.
+- `file_upload`: `{"action":"file_upload","selector":"<input[type=file] css>","files":[{"name":"a.png","type":"image/png","content_base64":"..."}]}`
+- `press_key`: `{"action":"press_key","selector":"<css, optional>","value":"Enter"}`
+  — defaults to the focused element if `selector` is omitted.
+- `handle_dialog`: `{"action":"handle_dialog","accept":true,"value":"<prompt answer, optional>"}`
+  — native `confirm()`/`alert()`/`prompt()` never actually block the tab (an
+  override always resolves them); call this to PRE-ARM the next one's
+  decision before the action that triggers it, or with no arguments to just
+  read back `data.last_dialog`.
+- `wait_for`: `{"action":"wait_for","selector":"<css>","text":"<optional substring>","timeout_ms":5000}`
+  — real polling with a real deadline, not a fixed sleep.
+- `tabs`: `{"action":"tabs","value":"list"}` or `{"action":"tabs","value":"switch","selector":"<tracked tab name>"}`
+  — only tracks child windows THIS tab opened via `window.open`; it can
+  bring one to the OS foreground, never route further commands into it (a
+  second tab needs its own Remote Assist session).
+- `navigate_back`: `{"action":"navigate_back"}` — browser back via the
+  SPA's own router (no hard reload).
+- `find`: `{"action":"find","role":"button","name":"Save"}` — locate
+  elements by ARIA role / accessible name / text instead of needing a
+  hand-written CSS selector first; returns candidate `selector`s you can
+  feed straight into click/fill/read.
 
 The response's `data.image_path` (screenshot only) is an ABSOLUTE LOCAL
 FILE PATH under `PRISM_DATA_DIR/agent-bridge/<session_id>/` — read it
