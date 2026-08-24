@@ -494,6 +494,33 @@ export default function WorkflowsPage() {
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);
+  // ONE rail mechanism for the whole state-machine family, not one per page
+  // (owner, task 3baadd19, 2026-08-24: "we should only have one, we have
+  // it the same in conductor, and in build and test, there should not be
+  // unique behavior these are all the same component calling flows" --
+  // then, catching a hardcoded "conductor" check: "the conductor family
+  // should not be hardcoded like that, these are all hierarchical,
+  // conductor is the only one now, but later we may have more state
+  // machine top level workflows"). So this is NEVER selectedWorkflowId ===
+  // "conductor" specifically -- a workflow is in the state-machine family
+  // when it IS a top-level bot canvas (something else nests under it) OR
+  // is nested UNDER one (parent_id set), full stop, whichever bot that
+  // turns out to be. "validation"/"Build and test" is the one deliberate
+  // exception: though nested for documentation (parent_id="conductor",
+  // api/workflows.py -- it predates the Bot/Behavior registry), it is a
+  // genuinely SCRIPTED workflow with its own real WorkflowCore run
+  // history, never an FSM behavior -- it already has a working, real rail
+  // (workflowRunHistory/refreshRunHistory below); this only covers every
+  // OTHER bot-family entry (green-gate-status, red-gate-status, land, the
+  // loop steps, and whatever a future bot adds), which showed an empty
+  // rail forever -- /runs/history 404s for anything but "validation" (no
+  // WorkflowCore run ever backs a declarative FSM-behavior diagram), so
+  // there was structurally nothing for them to fetch.
+  const hasChildWorkflows = workflows.some(
+    (workflow) => workflow.parent_id === selectedWorkflowId,
+  );
+  const isStateMachineWorkflow = selectedWorkflowId !== "validation"
+    && (hasChildWorkflows || !!selectedWorkflow?.parent_id);
   // The conductor's live instance view (a task still in flight, not a
   // replay) reuses SdlcProgress -- the SAME segmented, legibly-labeled
   // "fill up the panel while it's active" bar TaskDetailPage/PlanView
@@ -563,7 +590,7 @@ export default function WorkflowsPage() {
   // validation-only, see refreshRunHistory below) -- the synthesized run
   // openConductorInstance just fetched IS the selected instance, sitting in
   // workflowRun itself rather than a list this page polls.
-  const selectedHistoryRun = selectedWorkflowId === "conductor"
+  const selectedHistoryRun = isStateMachineWorkflow
     ? (workflowRun && workflowRun.id === selectedHistoryRunId ? workflowRun : null)
     : workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null;
   const selectedHistoryFrameTone = selectedHistoryRun?.status === "Terminated"
@@ -589,10 +616,43 @@ export default function WorkflowsPage() {
   // invent a pill. Oldest-updated first: the rail GROWS FROM THE LEFT, same
   // as validation's (visibleRunHistory[index] above, no offset subtracted)
   // -- filled pills start at index 0, empty capacity trails on the right.
-  const conductorStepIds = useMemo(
-    () => new Set((selectedWorkflow?.steps ?? []).map((step) => step.id)),
-    [selectedWorkflow],
-  );
+  //
+  // A CHILD behavior's own diagram uses SYNTHETIC step ids local to that
+  // diagram (green-gate-status: candidate_controls/reachability/.../status
+  // -- none of them ever equal a real task.workflow_step). So for a child,
+  // resolve the REAL WORKFLOW_STEPS id it services via the conductor
+  // canvas's own linked_workflow_id (the SAME field a click on the
+  // conductor canvas already reverses the other direction with, see
+  // handleCanvasClick below) -- "land" is the one child with no
+  // linked_workflow_id of its own (it nests via _CONDUCTOR_LINKED_
+  // BEHAVIOR_IDS directly, api/workflows.py, because green_gate is the
+  // FSM's structurally-terminal step), so it falls back to "green_gate"
+  // explicitly, same reasoning as that decision.
+  const conductorStepIds = useMemo(() => {
+    if (hasChildWorkflows) {
+      // A top-level bot canvas (this workflow, whichever bot it turns out
+      // to be) -- occupy every one of ITS OWN real step ids.
+      return new Set((selectedWorkflow?.steps ?? []).map((step) => step.id));
+    }
+    const parentId = selectedWorkflow?.parent_id;
+    if (!parentId || parentId === "validation") return new Set<string>();
+    // A child behavior: resolve the ONE real step id on ITS PARENT canvas
+    // that links to it, via the same linked_workflow_id field a click on
+    // the parent canvas already reverses the other direction with (see
+    // handleCanvasClick below) -- never assume the parent is "conductor".
+    const parentCanvas = workflows.find((workflow) => workflow.id === parentId);
+    const linkedStep = parentCanvas?.steps.find(
+      (step) => step.linked_workflow_id === selectedWorkflowId,
+    );
+    if (linkedStep) return new Set([linkedStep.id]);
+    // "land" is the one documented exception with no linked_workflow_id of
+    // its own (api/workflows.py: green_gate is the FSM's structurally-
+    // terminal step, so there is nowhere on the canvas to hang the link) --
+    // mirrors that exact same hardcoded exception on the backend, not a
+    // new one invented here.
+    if (selectedWorkflowId === "land") return new Set(["green_gate"]);
+    return new Set<string>();
+  }, [selectedWorkflow, selectedWorkflowId, workflows, hasChildWorkflows]);
   // managed_tasks() (useConductorState's own source) deliberately EXCLUDES
   // status=="done" -- the same doctrine that drops a finished task off the
   // /conductor board. That's correct for "who's currently engaged", but it
@@ -615,7 +675,7 @@ export default function WorkflowsPage() {
   // half of the truth.
   const [strandedTaskIds, setStrandedTaskIds] = useState<Set<string>>(new Set());
   useEffect(() => {
-    if (selectedWorkflowId !== "conductor") {
+    if (!isStateMachineWorkflow || conductorStepIds.size === 0) {
       setDoneConductorTasks([]);
       setStrandedTaskIds(new Set());
       return;
@@ -638,8 +698,8 @@ export default function WorkflowsPage() {
     load();
     const id = window.setInterval(load, 10_000);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, [project, selectedWorkflowId, conductorStepIds]);
-  const conductorRailTasks = selectedWorkflowId === "conductor"
+  }, [project, isStateMachineWorkflow, conductorStepIds]);
+  const conductorRailTasks = isStateMachineWorkflow
     ? [...doneConductorTasks, ...conductorManaged.filter(
         (task) => conductorStepIds.has(task.workflow_step ?? ""))]
         .sort((a, b) => (a.updated_at ?? "").localeCompare(b.updated_at ?? ""))
@@ -660,7 +720,7 @@ export default function WorkflowsPage() {
   // just produce the same {tone, title, onClick} shape from whatever their
   // real source of truth is (a WorkflowCore run vs. a live task), instead of
   // each rendering their own copy of the pill strip.
-  const railPills: RailPill[] = selectedWorkflowId === "conductor"
+  const railPills: RailPill[] = isStateMachineWorkflow
     ? Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {
         const task = conductorRailTasks[index];
         return {
@@ -935,11 +995,12 @@ export default function WorkflowsPage() {
 
   useEffect(() => {
     // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
-    // instance route that does not exist for a conductor task id. The
-    // conductor's live state already comes from useConductorState's own SSE
-    // push (conductorManaged above) -- reusing that here would be the
+    // instance route that does not exist for a conductor task id, nor for
+    // any conductor-linked child (they have no WorkflowCore run either).
+    // The conductor's live state already comes from useConductorState's own
+    // SSE push (conductorManaged above) -- reusing that here would be the
     // duplicate-source mistake this hook exists to prevent.
-    if (selectedWorkflowId === "conductor") return;
+    if (isStateMachineWorkflow) return;
     if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;
     let cancelled = false;
     const poll = window.setInterval(() => {
@@ -1589,12 +1650,12 @@ export default function WorkflowsPage() {
         {(workflowRun || workflowRunError) && (
           <div className={`absolute left-4 top-4 z-20 ${conductorLivePhase ? "w-[420px]" : "max-w-[620px]"} border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
             workflowRunError ? "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
-            : selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)
+            : isStateMachineWorkflow && workflowRun ? conductorRunTone(workflowRun)
             : workflowRun?.status === "Complete" ? (workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300")
             : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
           }`}>
             <div>
-              {workflowRunError || (selectedWorkflowId === "conductor" && workflowRun
+              {workflowRunError || (isStateMachineWorkflow && workflowRun
                 ? conductorRunSummary(workflowRun)
                 : workflowRun?.status === "Complete"
                   ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`

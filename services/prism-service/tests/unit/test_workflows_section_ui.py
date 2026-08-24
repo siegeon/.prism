@@ -1044,7 +1044,7 @@ def test_conductor_pill_reuses_replay_history_run_instead_of_navigating_away():
     assert "navigate(`/tasks/${task.id}`)" in handler
 
     # The rail's onClick calls the new handler, not navigate directly.
-    conductor_pills = page.index('const railPills: RailPill[] = selectedWorkflowId === "conductor"')
+    conductor_pills = page.index('const railPills: RailPill[] = isStateMachineWorkflow')
     validation_branch = page.index(": Array.from({ length: RUN_RAIL_PILLS }, (_, index) => {\n        const run = visibleRunHistory")
     conductor_branch = page[conductor_pills:validation_branch]
     assert "onClick: task ? () => openConductorInstance(task) : undefined" in conductor_branch
@@ -1086,8 +1086,8 @@ def test_conductor_instance_badge_shows_task_state_never_build_test_language():
     # The top run badge renders the conductor summary instead of the
     # build/test sentence when the conductor workflow is selected.
     badge = page[page.index('{(workflowRun || workflowRunError) && ('):page.index('{selectedHistoryRun && (')]
-    assert 'selectedWorkflowId === "conductor" && workflowRun\n                ? conductorRunSummary(workflowRun)' in badge
-    assert 'selectedWorkflowId === "conductor" && workflowRun ? conductorRunTone(workflowRun)' in badge
+    assert 'isStateMachineWorkflow && workflowRun\n                ? conductorRunSummary(workflowRun)' in badge
+    assert 'isStateMachineWorkflow && workflowRun ? conductorRunTone(workflowRun)' in badge
     # The validation sentence (build X / test Y) still renders unchanged for
     # every other workflow -- this is an ADDED branch, not a rewrite.
     assert "build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status}" in badge
@@ -1113,14 +1113,14 @@ def test_conductor_run_poll_effect_never_hits_the_validation_only_run_endpoint()
     page = _read("pages", "WorkflowsPage.tsx")
 
     poll_effect = page[
-        page.index('if (selectedWorkflowId === "conductor") return;'):
+        page.index('if (isStateMachineWorkflow) return;'):
         page.index("fetchWorkflowRun(workflowRun.id).then((next) => {")
     ]
     # GET /api/workflows/runs/:id is a WorkflowCore-instance route; a
     # conductor task id would 404 against it. The guard must precede the
     # fetch, not follow it.
-    assert 'if (selectedWorkflowId === "conductor") return;' in poll_effect
-    assert poll_effect.index('if (selectedWorkflowId === "conductor") return;') < \
+    assert 'if (isStateMachineWorkflow) return;' in poll_effect
+    assert poll_effect.index('if (isStateMachineWorkflow) return;') < \
         poll_effect.index('if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;')
 
 
@@ -1130,7 +1130,7 @@ def test_selected_history_run_resolves_off_the_live_run_for_conductor():
     # workflowRunHistory stays validation-only (refreshRunHistory), so
     # conductor's "selected instance" must resolve off workflowRun itself,
     # never off that array (which would always be empty for it).
-    block = page[page.index("const selectedHistoryRun = selectedWorkflowId"):page.index("const selectedHistoryFrameTone")]
+    block = page[page.index("const selectedHistoryRun = isStateMachineWorkflow"):page.index("const selectedHistoryFrameTone")]
     assert 'workflowRun && workflowRun.id === selectedHistoryRunId ? workflowRun : null' in block
     assert 'workflowRunHistory.find((run) => run.id === selectedHistoryRunId) ?? null' in block
 
@@ -1145,6 +1145,65 @@ def test_version_bumped_for_the_conductor_instance_view_reuse():
     assert current > (7, 12, 41), (
         "PRISM_VERSION must be patch-bumped past 7.12.41 in the "
         "implementation commit for this user-visible /workflows change")
+
+
+# ---------------------------------------------------------------------------
+# The pill rail must be a GENERIC state-machine-family mechanism, never a
+# literal "conductor" id check (task 3baadd19, 2026-08-24). First pass
+# hardcoded `selectedWorkflowId === "conductor"` / `parent_id === "conductor"`
+# -- owner, live, catching it directly: "the conductor family should not be
+# hardcoded like that, these are all hierarchical, conductor is the only one
+# now, but later we may have more state machine top level workflows." The
+# fix derives family membership structurally: a workflow IS the family when
+# something else nests under it (hasChildWorkflows), or it nests under one
+# (parent_id set) -- "validation" is the one named exception (a genuinely
+# scripted WorkflowCore workflow, nested for documentation only).
+# ---------------------------------------------------------------------------
+
+
+def test_state_machine_family_is_never_a_hardcoded_conductor_id_check():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    definition = _function_body_like(
+        page, 'const hasChildWorkflows = workflows.some(',
+        'const isStateMachineWorkflow = selectedWorkflowId !== "validation"',
+    )
+    assert 'workflow.parent_id === selectedWorkflowId' in definition, (
+        "family membership for a TOP-LEVEL entry must be derived from "
+        "whether anything nests under it, not a literal id")
+
+    ism_block = page[page.index('const isStateMachineWorkflow = selectedWorkflowId !== "validation"'):
+                     page.index('const conductorLivePhase')]
+    assert 'hasChildWorkflows || !!selectedWorkflow?.parent_id' in ism_block
+    # The literal string "conductor" must never appear as an equality
+    # check anywhere in the derivation itself (comments are fine; this
+    # scans the executable expression only).
+    assert '=== "conductor"' not in ism_block
+    assert '!== "conductor"' not in ism_block
+
+
+def test_conductor_step_ids_resolves_the_parent_generically_not_via_conductor_literal():
+    """The per-child step-id lookup must resolve its parent's OWN catalog
+    entry (workflows.find(w => w.id === parentId)), never assume the
+    parent is literally "conductor" -- a future second top-level bot must
+    work identically without touching this code."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    body = _function_body_like(
+        page, "const conductorStepIds = useMemo(() => {", "}, [selectedWorkflow,",
+    )
+    assert 'const parentId = selectedWorkflow?.parent_id' in body
+    assert 'workflows.find((workflow) => workflow.id === parentId)' in body
+    # "land" stays a named, documented exception (mirrors the identical
+    # hardcoded exception in api/workflows.py) -- but the GENERAL lookup
+    # path above it must not hardcode "conductor" as the parent.
+    assert 'workflow.id === "conductor"' not in body
+
+
+def _function_body_like(source: str, start_marker: str, end_marker: str) -> str:
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    return source[start:end]
 
 
 # ---------------------------------------------------------------------------
