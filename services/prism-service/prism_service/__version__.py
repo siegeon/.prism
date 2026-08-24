@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.36"
+PRISM_VERSION = "7.13.37"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5716,4 +5716,41 @@ PRISM_VERSION_NOTES += (
     "suite: 2576 passed (6 pre-existing unrelated failures in "
     "csharp-analyzer/wheel-packaging/sqlite-WAL tests, untouched by this "
     "change)."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.37: made the Workflows page's 'Green gate evidence status' "
+    "view REAL -- owner, live on task 3baadd19: 'make this real... make "
+    "sure that it is a part of the flows and enforces our rules', and "
+    "then, seeing the old single-node diagram: 'it feels like we are "
+    "missing a lot of what prism is doing here'. Before this, that page "
+    "was ONE opaque http-callback reporting ONLY the oracle-receipt "
+    "tooth -- five other real pre-flight teeth governed the same gate "
+    "(candidate-controls policy integrity, reachability, ui-artifact, "
+    "screen-claim, shipped-ness, plus the new 7.13.36 demo-evidence "
+    "check) completely invisibly. Extended GreenGateStatusResponse with "
+    "a `checks: GateCheckStatus[]` field (id/label/ok/reason per tooth); "
+    "the /api/workflows/steps/green-gate-status endpoint now computes "
+    "all six by calling the EXACT SAME functions the real enforcement "
+    "path calls (ui_artifact_gate_reason, _screen_claim_gate_reason, "
+    "conductor_svc._unshipped_gate_reason, candidate_controls_judge_"
+    "reason, reachability_check.unreachable_entry_point_reason, the new "
+    "demo_evidence_gate_reason) -- never a reimplementation, so this "
+    "view can never show a different answer than what is actually "
+    "enforced. Also extracted the 7.13.36 demo-evidence check out of "
+    "advance_task's inline body into a new public module-level "
+    "conductor_service.demo_evidence_gate_reason(task, project), so both "
+    "the enforcement path (advance_task) and this reporting path share "
+    "ONE function, not two independent judgments of the same question. "
+    "Kept the single-http-callback-step shape unchanged (matching this "
+    "system's own established convention for every other status/check "
+    "workflow -- red-gate-status, story-gate-check, plan-gate-check all "
+    "use exactly one step; only ACTION pipelines like land.json run "
+    "multiple sequential shell steps) -- the completeness lives in the "
+    "step's response payload, not in added diagram nodes. New tests in "
+    "test_api_workflows.py (3): checks enumerates all 6 teeth; a replay "
+    "of 3baadd19's own exact shape (demo, no 'ui' tag, admitted-"
+    "incomplete proof, no evidence) correctly flags demo_evidence while "
+    "leaving the ui-tag-gated teeth clean; a narrow fake conductor_svc "
+    "missing _unshipped_gate_reason degrades that one check to ok=True "
+    "instead of crashing the whole report."
 )
