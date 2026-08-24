@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.39"
+PRISM_VERSION = "7.13.40"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5838,4 +5838,38 @@ PRISM_VERSION_NOTES += (
     "(tsc + vite) passes clean. Full unit suite: 2585 passed (6 "
     "pre-existing unrelated failures in csharp-analyzer/wheel-packaging/"
     "sqlite-WAL tests, untouched by this change)."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.40: two things, both owner-caught live. (1) Codified the "
+    "green_gate evidence-completeness feature's own acceptance manifest -- "
+    "'make sure you codify how to drive the application as a user to "
+    "validate the feature you just checked on' -- new tests/acceptance/"
+    "green_gate_evidence_ui.acceptance.json + test_green_gate_evidence_ui_"
+    "acceptance_manifest.py, same frozen-proof-node-id pattern "
+    "conductor_tile.acceptance.json already uses, PLUS a `live_walkthrough` "
+    "section (a first for this pattern) codifying the exact agent-bridge "
+    "steps that validated this feature live -- URLs, click targets, curl "
+    "commands, and what each should show -- structurally pinned so a step "
+    "can't rot into vague unrunnable prose (test_live_walkthrough_step_"
+    "names_a_concrete_action_and_expectation). (2) Real bug, caught by the "
+    "owner re-reading the Evidence tab I'd just called healthy: 'i dont "
+    "think you tied the evidence to the run that computed the evidence... "
+    "soo you kinda messed up there.' Both new test files from 7.13.35/36 "
+    "opened with '(task 3baadd19 qa discovery, ...)' -- a NON-possessive "
+    "first mention of the task id in the module docstring, which is "
+    "exactly the ownership signal api/tasks.py's file_owns_task() reads "
+    "(HOLE closed by task e0149f1f: the first non-possessive id named in a "
+    "module docstring owns the file). Neither file pins task 3baadd19's "
+    "own oracle -- they pin general adjudicate_green_gate/advance_task "
+    "fixes discovered WHILE qa'ing 3baadd19 -- so both were falsely "
+    "showing up as '3baadd19's own pinned tests' on its Evidence tab, "
+    "inflating/polluting the real count (my own live QA screenshot minutes "
+    "earlier showed 'pinned tests: 3/9 passing' -- 6 of those 9 were this "
+    "exact false attribution). Fixed by rephrasing the credit possessively "
+    "('discovered during task 3baadd19's own QA pass'); verified via "
+    "file_owns_task() directly (False for both, post-fix) and pinned "
+    "against the REAL on-disk files (not synthetic fixtures) in 2 new "
+    "tests in test_task_tests_attribution.py. Full unit suite (incl. "
+    "tests/acceptance/): 2587 passed (6 pre-existing unrelated failures, "
+    "untouched by this change)."
 )
