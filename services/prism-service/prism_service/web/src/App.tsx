@@ -9,7 +9,6 @@ import Sidebar, { INBOX_ENABLED } from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
-import LiveBar from "@/components/LiveBar";
 import { Skeleton } from "@/components/ui";
 import { AgentBridgeProvider } from "@/lib/agentBridge";
 
@@ -128,9 +127,11 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0">
         <LiveStatusStrip />
         <PageHeader />
-        {/* Conductor pulse — persistent across navigation, honest idle state.
-            Distinct from LiveStatusStrip (the analyzer scan-queue strip). */}
-        <LiveBar />
+        {/* Conductor pulse now lives on Sidebar's own LIVE nav icon (owner
+            live, 2026-08-24: "remove the live pill and make the live icon
+            in the activity view green") — no shell-level pulse card here
+            anymore. Distinct from LiveStatusStrip (the analyzer scan-queue
+            strip), which stays. */}
         <div className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
           <Suspense

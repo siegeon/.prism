@@ -16,7 +16,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve()
 _SRC = _HERE.parent.parent.parent / "prism_service" / "web" / "src"
 _TASKS = _SRC / "pages" / "TasksPage.tsx"
-_LIVEBAR = _SRC / "components" / "LiveBar.tsx"
+_SIDEBAR = _SRC / "components" / "Sidebar.tsx"
 _APP = _SRC / "App.tsx"
 _CSS = _SRC / "index.css"
 
@@ -26,46 +26,53 @@ def _read(p: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LIVE bar — real conductor signal, honest idle, never a frozen fake pulse.
-# Lives in the app SHELL (components/LiveBar.tsx, mounted in App.tsx) so the
-# pulse is visible on EVERY page, not just the board (ws5 oracle).
+# LIVE signal — real conductor state, honest idle, never a frozen fake pulse.
+#
+# RETARGETED (task d9f082fe follow-up, owner live, 2026-08-24): LiveBar.tsx
+# (the app-shell PULSE CARD this section originally pinned) is deleted
+# outright -- owner: "that live panel is odd to me... remove the live pill
+# and make the live icon in the activity view green". The signal now lives
+# on Sidebar.tsx's own "/live" nav icon instead -- still visible on EVERY
+# page (Sidebar is the one component mounted on all of them, more so than
+# LiveBar's old ACTIVITY_ROUTES-only scoping ever was), just as an icon
+# tint rather than a separate card.
 # ---------------------------------------------------------------------------
 
 # SUPERSEDED 2026-08-12 (task 40c29b83): the /api/conductor/state fetch
-# moved OUT of LiveBar.tsx into the shared lib/useConductorState.ts hook
-# (FR-1/FR-3) -- LiveBar now reaches the endpoint only by IMPORTING the
-# hook, so the literal check moves to the hook file and this test instead
-# pins the import shape.
+# lives in the shared lib/useConductorState.ts hook (FR-1/FR-3) -- a
+# consumer reaches the endpoint only by IMPORTING the hook, so the literal
+# check lives in the hook file and this test instead pins the import shape.
 _HOOK = _SRC / "lib" / "useConductorState.ts"
 
 
-def test_live_bar_reads_real_conductor_state():
-    src = _read(_LIVEBAR)
+def test_sidebar_live_icon_reads_real_conductor_state():
+    src = _read(_SIDEBAR)
     assert re.search(
         r'import\s*\{[^}]*\buseConductorState\b[^}]*\}\s*from\s*'
         r'["\']@/lib/useConductorState["\']',
         src,
-    ), "LiveBar must import useConductorState (the shared conductor work-state hook)"
+    ), "Sidebar must import useConductorState (the shared conductor work-state hook)"
     assert _HOOK.exists(), f"expected {_HOOK} to own the endpoint fetch"
     hook_src = _read(_HOOK)
     assert "/api/conductor/state" in hook_src, \
         "useConductorState must read the conductor's real work-state endpoint"
 
 
-def test_live_bar_is_mounted_in_the_app_shell():
+def test_sidebar_is_mounted_in_the_app_shell():
     app = _read(_APP)
-    assert "LiveBar" in app, \
-        "LiveBar must mount in the shell so it persists on every page"
+    assert "Sidebar" in app, \
+        "Sidebar must mount in the shell so the live icon persists on every page"
 
 
-def test_live_bar_has_honest_idle_state():
-    src = _read(_LIVEBAR)
-    # The pulse may ONLY render when something is actually being driven;
-    # a quiet queue shows an explicit idle message instead.
-    assert "isLive" in src or "idle" in src.lower(), \
-        "LiveBar needs an explicit idle state, not an always-on pulse"
+def test_live_icon_has_honest_idle_state():
+    src = _read(_SIDEBAR)
+    # The green tint may ONLY render when something is actually being
+    # driven; a quiet queue leaves the icon in its default/muted color —
+    # never a claim of "idle" the icon has to walk back once observed.
+    assert "isLive" in src, \
+        "Sidebar needs an explicit isLive signal, not an always-on tint"
     assert "animate-pulse" in src and "isLive" in src, \
-        "the pulsing dot must be conditional on real liveness"
+        "the pulsing tint must be conditional on real liveness"
 
 
 def test_reduced_motion_global_reset_covers_the_pulse():

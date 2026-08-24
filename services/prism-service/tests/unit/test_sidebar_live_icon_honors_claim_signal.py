@@ -1,21 +1,16 @@
-"""LiveBar.tsx must never paint its live/driving indicator green for an
+"""The Sidebar's LIVE nav icon must never paint itself green for an
 UNCLAIMED task — originally task 2dfa94bd (PR #1305, commit 1136c3a), which
 made ConductorPage.tsx's TaskTile honest by gating drive chrome on
-`claimed` and flagged LiveBar.tsx as a second consumer that still needed
-wiring.
+`claimed`, then LiveBar.tsx as the second consumer that needed the same
+wiring (test_livebar_honors_claim_signal.py, since retired).
 
-SUPERSEDED SHAPE (task d9f082fe follow-up, owner live, 2026-08-24): the
-original bug site was the `working` bucket (`roots.filter(...)`) that fed a
-per-task row list — LiveBar rendered full DRIVING chrome (step Lozenge,
-ACTIVITY_META Lozenge, `assigned_agent` actor line) for any task landing in
-that bucket. LiveBar no longer renders ANY per-task chrome at all — it was
-simplified to a single live/idle status dot (see LiveBar.tsx's own module
-docstring: "that live panel is odd to me... I should not need the queue
-metadata on that panel any longer it shows up elsewhere"). The original
-CONCERN (an unclaimed in_progress task must never read as "being driven" on
-this surface) still applies to the one signal LiveBar has left — the dot's
-color — so this suite re-anchors there instead of to the retired
-`working`/`roots` buckets.
+RETARGETED AGAIN (task d9f082fe follow-up, owner live, 2026-08-24): LiveBar
+itself — the shell pulse CARD — is deleted outright. Owner: "remove the
+live pill and make the live icon in the activity view green". The live
+signal now lives on Sidebar.tsx's own "/live" nav icon (`isLive`, computed
+from the same useConductorState(project) data). The original CONCERN (an
+unclaimed in_progress task must never read as "being driven") still
+applies to this one remaining signal, so this suite re-anchors here.
 
 Convention (no JS test runner in this repo, tests/unit/test_conductor_page_
 animated_cleanup_ui.py:4-6): pytest parses the ACTUAL TSX source directly.
@@ -33,10 +28,10 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 _SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
-_LIVEBAR = _SRC / "components" / "LiveBar.tsx"
-# Task 40c29b83 (FR-1): ManagedTask's declaration moved out of LiveBar.tsx
-# into the shared hook LiveBar and ConductorPage now both consume.
-_LIVEBAR_STATE_HOOK = _SRC / "lib" / "useConductorState.ts"
+_SIDEBAR = _SRC / "components" / "Sidebar.tsx"
+# Task 40c29b83 (FR-1): ManagedTask's declaration moved out of the old
+# LiveBar.tsx into the shared hook — Sidebar and ConductorPage both consume it.
+_STATE_HOOK = _SRC / "lib" / "useConductorState.ts"
 
 
 def _read(p: Path) -> str:
@@ -72,9 +67,9 @@ def _balanced_statement(src: str, marker: str) -> str:
 
 
 def test_managed_task_type_carries_claimed_field():
-    # ManagedTask lives in the shared useConductorState hook that LiveBar
+    # ManagedTask lives in the shared useConductorState hook that Sidebar
     # and ConductorPage.tsx both consume — pinned against ITS declaration.
-    src = _read(_LIVEBAR_STATE_HOOK)
+    src = _read(_STATE_HOOK)
     idx = src.index("type ManagedTask")
     type_block = src[idx: idx + 900]
     assert "claimed" in type_block, (
@@ -84,28 +79,28 @@ def test_managed_task_type_carries_claimed_field():
 
 
 # ===========================================================================
-# LiveBar's live/idle dot — the one place the claim signal still matters
-# now that per-task chrome (rows, Lozenges, actor line) is gone entirely.
+# Sidebar's live icon — the one place the claim signal still matters now
+# that per-task chrome (rows, Lozenges, actor line) is gone entirely.
 # ===========================================================================
 
 
 def test_is_live_gated_on_claimed_field():
-    src = _read(_LIVEBAR)
-    stmt = _balanced_statement(src, "const isLive = managed.some(")
+    src = _read(_SIDEBAR)
+    stmt = _balanced_statement(src, "const isLive = liveManaged.some(")
     assert "claimed" in stmt, (
-        "the `isLive` check backing the status dot must reference m.claimed "
-        "— gating on activity.state alone paints the dot green (\"Live\") "
-        "for a task the /conductor tile is simultaneously showing NOT "
-        f"CLAIMED for:\n{stmt}"
+        "the `isLive` check backing the LIVE icon's green tint must "
+        "reference m.claimed — gating on activity.state alone paints the "
+        "icon green for a task the /conductor tile is simultaneously "
+        f"showing NOT CLAIMED for:\n{stmt}"
     )
 
 
 def test_is_live_not_gated_on_workflow_step_or_intake_literal():
-    src = _read(_LIVEBAR)
-    stmt = _balanced_statement(src, "const isLive = managed.some(")
+    src = _read(_SIDEBAR)
+    stmt = _balanced_statement(src, "const isLive = liveManaged.some(")
     assert "intake" not in stmt, (
         "must not key the claim gate off the synthesized 'intake' literal "
-        f"— would falsely paint the dot green for genuinely-unclaimed "
+        f"— would falsely paint the icon green for genuinely-unclaimed "
         f"intake-step tasks too:\n{stmt}"
     )
     assert "workflow_step" not in stmt, (
@@ -113,20 +108,19 @@ def test_is_live_not_gated_on_workflow_step_or_intake_literal():
     )
 
 
-def test_livebar_renders_no_per_task_chrome():
-    # The strongest form of the original invariant: with no row list at
-    # all, an unclaimed task cannot possibly render DRIVING chrome, because
-    # nothing task-specific renders anymore.
-    src = _read(_LIVEBAR)
-    assert "assigned_agent" not in src, (
-        "LiveBar must not render a per-task actor line — that chrome moved "
-        "to TasksPage.tsx/ConductorPage.tsx, which already read this same "
-        "shared state"
+def test_live_icon_tint_is_conditional_on_the_live_indicator_item_only():
+    # The green tint must be scoped to the "/live" nav item specifically —
+    # every other icon (Dashboard, Work, Conductor, ...) must stay unlit
+    # even while isLive is true, or the whole sidebar would read as "on".
+    src = _read(_SIDEBAR)
+    assert "isLiveIndicator?: boolean;" in src, (
+        "Sidebar's Item type must declare a one-off isLiveIndicator flag, "
+        "same precedent as the existing isNew flag"
     )
-    assert ".map(" not in src, (
-        "LiveBar must not render a per-task row list at all — simplified to "
-        "a single live/idle status dot"
+    assert 'icon: Radio, isLiveIndicator: true' in src, (
+        "only the '/live' nav item may opt into the green tint"
     )
+    assert "const isLiveNow = isLiveIndicator && isLive;" in src
 
 
 if __name__ == "__main__":

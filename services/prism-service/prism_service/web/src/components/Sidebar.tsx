@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { Lozenge } from "@/components/Lozenge";
 import { useProject } from "@/lib/project";
 import { useScanActivity } from "@/lib/scan-activity";
+import { useConductorState } from "@/lib/useConductorState";
 import { currentTheme, toggleTheme } from "@/lib/theme";
 import { useVersion, useVersionNotes } from "@/lib/version";
 import { cn } from "@/lib/utils";
@@ -24,6 +25,10 @@ type Item = {
   // Inbox launch only (task 0784729f) — a one-off "NEW" chip, not a
   // reusable mechanism; no other item sets this.
   isNew?: boolean;
+  // The Live nav item's icon only (owner live, 2026-08-24: "remove the
+  // live pill and make the live icon in the activity view green") — a
+  // one-off, not a reusable mechanism, same precedent as isNew above.
+  isLiveIndicator?: boolean;
 };
 
 type Section = { label?: string; items: Item[] };
@@ -80,7 +85,7 @@ const MAIN_SECTIONS: Section[] = [
       // The walking-skeleton screen for "PRISM shows its work": live
       // agent activity flowing onto a node graph (task.changed,
       // drive.heartbeat, agent.run, tokens.turn over /sse/work).
-      { to: "/live", label: "Live", icon: Radio },
+      { to: "/live", label: "Live", icon: Radio, isLiveIndicator: true },
       // A workflow IS a bot: the conductor's FSM plus the role-carded agents
       // that drive it, wired on a canvas. `Workflow` already belongs to
       // Conductor above, so this wears `Bot` — the thing it actually shows.
@@ -190,6 +195,16 @@ export default function Sidebar() {
   const stale = useStaleness(project);
   const scan = useScanActivity();
   const version = useVersion();
+  // The Live nav icon's green pulse (formerly LiveBar's own shell card,
+  // retired owner-live 2026-08-24). Single resolved source (task
+  // 40c29b83) — Sidebar is now a third consumer of the same shared hook
+  // ConductorPage already reads, so this can never contradict either
+  // surface. Gated on `claimed` (task 2dfa94bd's fix) — an unclaimed
+  // in_progress task must never paint this icon green.
+  const { managed: liveManaged } = useConductorState(project);
+  const isLive = liveManaged.some(
+    (m) => m.claimed && (m.activity?.state === "working" || m.activity?.state === "driving"),
+  );
   // The footer's hover tooltip is the one consumer of the full changelog —
   // fetched via the explicit `?notes=true` opt-in (task 842248bd), never
   // riding the lean default `useVersion()` response or its 15s poll. Task
@@ -230,7 +245,7 @@ export default function Sidebar() {
                 {section.label}
               </div>
             )}
-            {section.items.map(({ to, label, icon: Icon, staleKey, isNew }) => {
+            {section.items.map(({ to, label, icon: Icon, staleKey, isNew, isLiveIndicator }) => {
               const isStale = staleKey ? stale[staleKey] : false;
               // While the drainer has work in flight, the surfaces it
               // populates (Brain, Graph, Understand — every item with a
@@ -238,6 +253,7 @@ export default function Sidebar() {
               // amber stale dot because "actively scanning" implies
               // "stale is being addressed right now."
               const isScanning = staleKey ? scan.isActive : false;
+              const isLiveNow = isLiveIndicator && isLive;
               return (
                 <NavLink
                   key={to}
@@ -248,7 +264,9 @@ export default function Sidebar() {
                       ? `${label} is being updated — drainer is running analyzers`
                       : isStale
                         ? `${label} is stale for project '${project}' — re-index needed`
-                        : undefined
+                        : isLiveIndicator
+                          ? (isLive ? "A claimed task is being driven right now" : "No task is being driven right now")
+                          : undefined
                   }
                   className={({ isActive }) =>
                     cn(
@@ -263,7 +281,12 @@ export default function Sidebar() {
                     )
                   }
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon
+                    className={cn(
+                      "w-4 h-4",
+                      isLiveNow && "text-[color:var(--accent-sage-fg)] animate-pulse",
+                    )}
+                  />
                   <span className="flex-1">{label}</span>
                   {isNew && <Lozenge tone="new">New</Lozenge>}
                   {isScanning ? (

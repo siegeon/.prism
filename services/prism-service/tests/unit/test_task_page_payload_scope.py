@@ -266,33 +266,36 @@ def test_sse_handler_patches_state_and_never_refetches():
         f"patch state (D-1/D-4); got handler body: {handler_body!r}")
 
 
-def test_livebar_no_longer_polls_conductor_state_unconditionally():
-    src = _read("components/LiveBar.tsx")
-    assert "setInterval(tick, 5000)" not in src, (
-        "LiveBar must not re-pull GET /api/conductor/state on an "
-        "unconditional 5s setInterval at idle (it ran on every "
-        "activity-context tab, including /tasks/:id) — gate it on SSE "
-        "health instead, same treatment as lib/version.ts (D-6)")
+# RETARGETED (task d9f082fe follow-up, owner live, 2026-08-24): LiveBar.tsx
+# (the component these two guarded) is deleted outright — the live signal
+# moved to Sidebar.tsx's own "/live" nav icon. Sidebar computes `isLive`
+# straight from useConductorState(project)'s `managed` array with no
+# component-local interval or stream of its own, so both invariants below
+# re-anchor there.
+
+def test_sidebar_does_not_poll_conductor_state_unconditionally():
+    # Note: Sidebar.tsx has its OWN pre-existing setInterval(tick, 5000) for
+    # unrelated staleness polling (useStaleness) — that's fine and not what
+    # this guards. The invariant is that Sidebar never fetches
+    # /api/conductor/state directly at all; it must reach the live signal
+    # ONLY through useConductorState(project), same treatment as
+    # lib/version.ts (D-6).
+    src = _read("components/Sidebar.tsx")
+    assert "/api/conductor/state" not in src, (
+        "Sidebar must not fetch GET /api/conductor/state directly — the "
+        "live icon reads it only through useConductorState(project)")
 
 
-def test_livebar_subscribes_to_sse():
-    # RE-ANCHORED 2026-08-18 (task b835f639). D-6's intent was that LiveBar's
-    # refresh is driven by a real SSE push rather than an unconditional poll.
-    # LiveBar's OWN subscription turned out to be a duplicate of the one
-    # lib/useConductorState.ts already opens for it — same url, and both
-    # handlers only called the same refresh() — so it is now deleted outright
-    # rather than routed through the shared module. The push-driven invariant
-    # survives via the hook; what must NOT come back is a self-opened stream
-    # or an ungated poll.
-    src = _read("components/LiveBar.tsx")
+def test_sidebar_live_icon_subscribes_to_sse():
+    src = _read("components/Sidebar.tsx")
     assert "new EventSource(" not in src, (
-        "LiveBar must not re-open a stream of its own — it duplicated the "
+        "Sidebar must not open a stream of its own — it would duplicate the "
         "hook's /sse/sessions subscription and cost a connection in EVERY "
         "tab against the browser's ~6-per-origin cap (task b835f639)")
     assert re.search(r"useConductorState\(\s*project\s*\)", src), (
-        "LiveBar must still be push-refreshed through useConductorState(project), "
-        "whose subscription reaches load() — that is what keeps D-6 honest now "
-        "that the bar opens no stream itself")
+        "Sidebar's live icon must be push-refreshed through "
+        "useConductorState(project), whose subscription reaches load() — "
+        "that is what keeps D-6 honest, since Sidebar opens no stream itself")
 
 
 def test_version_poll_is_gated_on_sse_health():

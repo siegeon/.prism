@@ -35,7 +35,8 @@ _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 _WEB = _SERVICE_ROOT / "prism_service" / "web" / "src"
 _CONDUCTOR_PAGE = _WEB / "pages" / "ConductorPage.tsx"
-_LIVEBAR = _WEB / "components" / "LiveBar.tsx"
+_LIVEBAR = _WEB / "components" / "LiveBar.tsx"  # retired 2026-08-24, see below
+_SIDEBAR = _WEB / "components" / "Sidebar.tsx"
 _HOOK = _WEB / "lib" / "useConductorState.ts"
 
 
@@ -230,16 +231,22 @@ def test_conductor_page_no_longer_fetches_state_directly():
 
 
 # ---------------------------------------------------------------------------
-# FR-3 — LiveBar consumes the same hook.
+# FR-3 — the shell's live indicator consumes the same hook.
+#
+# RETARGETED (task d9f082fe follow-up, owner live, 2026-08-24): LiveBar.tsx
+# (the shell pulse CARD) is deleted outright -- "remove the live pill and
+# make the live icon in the activity view green". The live signal moved to
+# Sidebar.tsx's own "/live" nav icon, which is now the third consumer of
+# this same shared hook (alongside ConductorPage above).
 # ---------------------------------------------------------------------------
 
-def test_livebar_imports_the_shared_hook():
-    src = _strip_comments(_read(_LIVEBAR))
+def test_sidebar_live_icon_imports_the_shared_hook():
+    src = _strip_comments(_read(_SIDEBAR))
     assert re.search(
         r'import\s*\{[^}]*\buseConductorState\b[^}]*\}\s*from\s*'
         r'["\']@/lib/useConductorState["\']',
         src,
-    ), "LiveBar.tsx must import useConductorState from @/lib/useConductorState"
+    ), "Sidebar.tsx must import useConductorState from @/lib/useConductorState"
 
 
 # ---------------------------------------------------------------------------

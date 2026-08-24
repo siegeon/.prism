@@ -169,35 +169,37 @@ def test_the_shared_module_really_does_construct_the_stream():
 
 
 # ---------------------------------------------------------------------------
-# AC-2 — LiveBar's duplicate /sse/sessions subscription is gone outright.
+# AC-2 — the shell's live indicator opens no stream of its own.
+#
+# RETARGETED (task d9f082fe follow-up, owner live, 2026-08-24): LiveBar.tsx
+# (the component this section originally guarded) is deleted outright — the
+# live signal moved to Sidebar.tsx's own "/live" nav icon. The invariant
+# this section protects (no per-component duplicate EventSource) applies
+# just as much to Sidebar now that it's a direct useConductorState(project)
+# consumer, so it re-anchors there rather than being dropped.
 # ---------------------------------------------------------------------------
 
-def test_livebar_opens_no_stream_of_its_own():
-    src = _read("components/LiveBar.tsx")
+def test_sidebar_opens_no_stream_of_its_own():
+    src = _read("components/Sidebar.tsx")
     assert "new EventSource(" not in src, (
-        "components/LiveBar.tsx must not construct an EventSource — it opened "
-        "/sse/sessions for the IDENTICAL url lib/useConductorState.ts already "
-        "opens for it, and both handlers only called the same refresh()")
+        "components/Sidebar.tsx must not construct an EventSource — "
+        "lib/useConductorState.ts already opens /sse/sessions for it, and a "
+        "second subscription would reproduce the exact per-tab connection-"
+        "pool exhaustion this suite exists to prevent")
     assert "subscribeStream(" not in src, (
-        "LiveBar's duplicate subscription must be DELETED, not merely routed "
-        "through the shared module — the hook it already calls at "
-        "`useConductorState(project)` drives the same refresh(), so a second "
-        "subscription is redundant work no matter how cheap the transport is")
+        "Sidebar must not route its own subscription through the shared "
+        "module either — useConductorState(project) already drives its "
+        "refresh, so a second subscription is redundant work no matter how "
+        "cheap the transport is")
 
 
-def test_livebar_still_takes_its_refresh_from_the_shared_hook():
-    """Deleting the duplicate must not cost LiveBar its push-driven refresh —
-    the hook is now its only path, so the wiring to it must be real."""
-    src = _read("components/LiveBar.tsx")
+def test_sidebar_takes_its_live_refresh_from_the_shared_hook():
+    """The live icon's push-driven refresh must be real, not a static read."""
+    src = _read("components/Sidebar.tsx")
     assert re.search(r"useConductorState\(\s*project\s*\)", src), (
-        "LiveBar must still read its state from useConductorState(project) — "
-        "that hook's subscription is what refreshes the bar now that LiveBar "
+        "Sidebar must read its live signal from useConductorState(project) — "
+        "that hook's subscription is what refreshes the icon, and Sidebar "
         "opens no stream of its own")
-    # Deliberately NOT asserting LiveBar still holds the hook's `refresh`
-    # handle. It needed that handle only to drive its own duplicate
-    # subscription; with the duplicate deleted the hook refreshes itself on
-    # push, so pinning the handle would force a dead binding to be kept alive
-    # purely to satisfy a test (and `noUnusedLocals` would reject it anyway).
 
 
 # ---------------------------------------------------------------------------

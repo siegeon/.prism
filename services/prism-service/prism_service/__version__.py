@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.28"
+PRISM_VERSION = "7.13.29"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5535,4 +5535,22 @@ PRISM_VERSION_NOTES += (
     "simplified isLive check (its prior working/roots-bucket assertions "
     "retired in place), test_work_row_click_navigates.py pins the new "
     "whole-row click contract."
+    "\n\n7.13.29: owner, live, after 7.13.28: 'you got close, but remove "
+    "the live pill and make the live icon in the activity view green'. "
+    "LiveBar.tsx (the shell pulse CARD 7.13.28 simplified to a dot -- "
+    "still a second floating box on /tasks) is deleted outright. The live "
+    "signal moves to Sidebar.tsx's own '/live' nav icon instead: a new "
+    "isLive computed straight from useConductorState(project) (same "
+    "claim-gating as before -- an unclaimed in_progress task still never "
+    "paints it green) tints ONLY that one icon green + pulsing, scoped via "
+    "a one-off isLiveIndicator flag on the Item type (same precedent as "
+    "the existing isNew flag) so no other nav icon lights up. App.tsx no "
+    "longer mounts LiveBar at all. Retargeted the ~15 tests that pinned "
+    "LiveBar's architecture (single shared useConductorState source, no "
+    "duplicate EventSource, claim-gating) onto Sidebar.tsx as the new "
+    "consumer of the same invariants -- test_livebar_honors_claim_signal.py "
+    "renamed to test_sidebar_live_icon_honors_claim_signal.py; the AC-6 "
+    "pre-hydration idle-flash guard is retired outright (a two-state icon "
+    "tint with no textual claim either way has nothing to walk back once "
+    "the first poll resolves, unlike the retired 'queue is quiet' label)."
 )

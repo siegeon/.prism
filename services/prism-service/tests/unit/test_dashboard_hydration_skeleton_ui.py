@@ -26,7 +26,6 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _SRC = _ROOT / "prism_service" / "web" / "src"
 _DASH = _SRC / "pages" / "DashboardPage.tsx"
-_LIVEBAR = _SRC / "components" / "LiveBar.tsx"
 _HEADER = _SRC / "components" / "PageHeader.tsx"
 _UI = _SRC / "components" / "ui.tsx"
 _VERSION = _ROOT / "prism_service" / "__version__.py"
@@ -176,12 +175,17 @@ def test_ac6_livebar_declares_a_polled_flag():
         "first /api/conductor/state poll resolves.")
 
 
-def test_ac6_idle_state_is_gated_behind_the_first_poll():
-    src = _read(_LIVEBAR)
-    state = _block(src, "const state:", 500)
-    assert _FLAG_TOKEN.search(state), (
-        "AC-6: the state union (:109-119) must account for 'not yet polled' "
-        "so the bar cannot resolve to 'idle' pre-hydration.")
+# SUPERSEDED (task d9f082fe follow-up, owner live, 2026-08-24):
+# LiveBar.tsx (and its `const state: "loading" | "live" | ...` union this
+# test pinned) is deleted outright — "remove the live pill and make the
+# live icon in the activity view green". Sidebar.tsx's replacement signal
+# is a plain `isLive` boolean with no separate "loading"/"idle" union and
+# no TEXT LABEL claiming either state — the icon's default/muted color IS
+# its pre-hydration appearance, identical to its genuinely-idle appearance,
+# so there is no false claim to walk back once the first poll resolves.
+# The original AC-6 concern (a label lying about "idle" before the queue
+# was ever observed) does not transfer to a two-state icon tint with no
+# textual claim either way.
 
 
 # SUPERSEDED (task d9f082fe follow-up, owner live, 2026-08-24):
