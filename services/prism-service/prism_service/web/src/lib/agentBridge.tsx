@@ -49,10 +49,25 @@ type BridgeCommand = {
   type: "agent_bridge.command";
   session_id: string;
   command_id: string;
-  action: "navigate" | "click" | "fill" | "read" | "screenshot";
+  action:
+    | "navigate" | "click" | "fill" | "read" | "screenshot"
+    | "console" | "network" | "hover" | "drag" | "select_option"
+    | "file_upload" | "press_key" | "handle_dialog" | "wait_for"
+    | "tabs" | "navigate_back" | "find";
   path?: string;
   selector?: string;
   value?: string;
+  target_selector?: string;
+  key?: string;
+  text?: string;
+  role?: string;
+  name?: string;
+  accept?: boolean;
+  files?: Array<{ name: string; type: string; content_base64: string }>;
+  tab_action?: "list" | "switch";
+  tab_index?: number;
+  timeout_ms?: number;
+  limit?: number;
 };
 
 type AgentBridgeState = {
@@ -137,6 +152,203 @@ function setNativeValue(
   setter?.call(el, value);
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+// ---------------------------------------------------------------------------
+// Observability: console/error/network capture. Installed unconditionally at
+// MODULE LOAD (below, right after the function definitions) -- not gated on
+// a bridge session existing or `enable()` ever having run -- so a driver
+// that enables Remote Assist, navigates, THEN calls `console` still sees
+// what fired during the navigation, not just what fires after.
+// ---------------------------------------------------------------------------
+
+type ConsoleEntry = { level: string; message: string; ts: number };
+type NetworkEntry = { method: string; url: string; status: number; ok: boolean; ts: number };
+type DialogEntry = { kind: string; message: string; ts: number };
+
+const MAX_LOG_ENTRIES = 500;
+const consoleLog: ConsoleEntry[] = [];
+const networkLog: NetworkEntry[] = [];
+const dialogLog: DialogEntry[] = [];
+const openedTabs: Window[] = [];
+
+function pushCapped<T>(log: T[], entry: T): void {
+  log.push(entry);
+  if (log.length > MAX_LOG_ENTRIES) log.shift();
+}
+
+function installObservability(): void {
+  for (const level of ["log", "warn", "error"] as const) {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      pushCapped(consoleLog, {
+        level, message: args.map((a) => String(a)).join(" "), ts: Date.now(),
+      });
+      original(...args);
+    };
+  }
+  window.addEventListener("error", (e) => {
+    pushCapped(consoleLog, { level: "error", message: e.message, ts: Date.now() });
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    pushCapped(consoleLog, {
+      level: "error", message: `unhandled rejection: ${String(e.reason)}`, ts: Date.now(),
+    });
+  });
+
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (...args: Parameters<typeof window.fetch>) => {
+    const res = await originalFetch(...args);
+    pushCapped(networkLog, {
+      method: String((args[1] as RequestInit | undefined)?.method || "GET"),
+      url: String(args[0]),
+      status: res.status,
+      ok: res.status < 400,
+      ts: Date.now(),
+    });
+    return res;
+  };
+
+  const originalOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (
+    this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]
+  ) {
+    this.addEventListener("loadend", () => {
+      pushCapped(networkLog, {
+        method, url: String(url), status: this.status, ok: this.status < 400, ts: Date.now(),
+      });
+    });
+    // @ts-expect-error -- variadic forwarding to the native overload set
+    return originalOpen.call(this, method, url, ...rest);
+  };
+}
+installObservability();
+
+// ---------------------------------------------------------------------------
+// Dialog override: window.confirm/alert/prompt are hijacked unconditionally
+// at module load so a native dialog can NEVER actually block the tab (which
+// would hang a bridge session with nobody there to click it) -- each call
+// resolves immediately from an armed policy, or a safe default if none was
+// armed via the `handle_dialog` action.
+// ---------------------------------------------------------------------------
+
+let _dialogPolicy: { accept: boolean; text?: string } | null = null;
+
+function installDialogOverride(): void {
+  window.confirm = (message?: string) => {
+    pushCapped(dialogLog, { kind: "confirm", message: message ?? "", ts: Date.now() });
+    const policy = _dialogPolicy;
+    _dialogPolicy = null;
+    if (!policy) return true; // safe default -- never leave the caller hanging
+    return policy.accept;
+  };
+  window.alert = (message?: string) => {
+    pushCapped(dialogLog, { kind: "alert", message: message ?? "", ts: Date.now() });
+  };
+  window.prompt = (message?: string, defaultValue?: string) => {
+    pushCapped(dialogLog, { kind: "prompt", message: message ?? "", ts: Date.now() });
+    const policy = _dialogPolicy;
+    _dialogPolicy = null;
+    if (!policy) return defaultValue ?? null;
+    return policy.accept ? policy.text ?? defaultValue ?? "" : null;
+  };
+}
+installDialogOverride();
+
+// ---------------------------------------------------------------------------
+// Tab tracking. LIMITATION: window.open() gives this tab a handle to a new
+// tab/window it opened, but there is no bridge session or command channel in
+// that new tab/window -- we can only list/focus what THIS tab opened, we
+// cannot route commands into an arbitrary second tab the way `navigate` etc
+// drive this one.
+// ---------------------------------------------------------------------------
+
+function installTabTracking(): void {
+  const originalOpen = window.open.bind(window);
+  window.open = (...args: Parameters<typeof window.open>) => {
+    const w = originalOpen(...args);
+    if (w) openedTabs.push(w);
+    return w;
+  };
+}
+installTabTracking();
+
+// ---------------------------------------------------------------------------
+// find: role/name/text search over the live DOM, with a selector generator
+// good enough to feed straight back into click/fill/read/hover/etc.
+// ---------------------------------------------------------------------------
+
+function getRole(el: Element): string {
+  const explicit = el.getAttribute("role");
+  if (explicit) return explicit;
+  const implicitByTag: Record<string, string> = {
+    button: "button", a: "link", input: "textbox", textarea: "textbox",
+    select: "combobox", img: "img", h1: "heading", h2: "heading", h3: "heading",
+  };
+  return implicitByTag[el.tagName.toLowerCase()] || el.tagName.toLowerCase();
+}
+
+function getAccessibleName(el: Element): string {
+  const ariaLabel = el.getAttribute("aria-label");
+  if (ariaLabel) return ariaLabel;
+  const labelledBy = el.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const labelEl = document.getElementById(labelledBy);
+    if (labelEl?.textContent) return labelEl.textContent.trim();
+  }
+  const id = el.getAttribute("id");
+  if (id) {
+    const label = document.querySelector(`label[for="${id}"]`);
+    if (label?.textContent) return label.textContent.trim();
+  }
+  const placeholder = el.getAttribute("placeholder");
+  if (placeholder) return placeholder;
+  const title = el.getAttribute("title");
+  if (title) return title;
+  return el.textContent?.trim().slice(0, 100) ?? "";
+}
+
+function buildSelector(el: Element): string {
+  const testId = el.getAttribute("data-testid");
+  if (testId) return `[data-testid="${testId}"]`;
+  const id = el.getAttribute("id");
+  if (id) return `#${id}`;
+  const parts: string[] = [];
+  let node: Element | null = el;
+  while (node && node !== document.body && parts.length < 5) {
+    const parent: Element | null = node.parentElement;
+    const index = parent ? Array.from(parent.children).indexOf(node) : 0;
+    parts.unshift(`${node.tagName.toLowerCase()}:nth-child(${index + 1})`);
+    node = parent;
+  }
+  return parts.join(" > ");
+}
+
+type FoundElement = { selector: string; role: string; name: string; text: string };
+
+function findElements(opts: {
+  role?: string; name?: string; text?: string; limit: number;
+}): FoundElement[] {
+  const wantRole = opts.role;
+  const wantName = opts.name;
+  const wantText = opts.text;
+  const results: FoundElement[] = [];
+  for (const el of Array.from(document.body.querySelectorAll("*"))) {
+    if (!wantRole && !wantName && !wantText) continue;
+    const role = getRole(el);
+    if (wantRole && role !== wantRole) continue;
+    const name = getAccessibleName(el);
+    if (wantName && !name.toLowerCase().includes(wantName.toLowerCase())) continue;
+    const text = el.textContent?.trim().slice(0, 200) ?? "";
+    if (wantText && !text.toLowerCase().includes(wantText.toLowerCase())) continue;
+    results.push({ selector: buildSelector(el), role, name, text });
+    if (results.length >= opts.limit) break;
+  }
+  return results;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function AgentBridgeProvider({ children }: { children: ReactNode }) {
@@ -264,6 +476,110 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
         const html2canvas = (await import("html2canvas-pro")).default;
         const canvas = await html2canvas(target as HTMLElement, { scale: 1 });
         data = { image: canvas.toDataURL("image/png") };
+      } else if (cmd.action === "console") {
+        data = { entries: consoleLog.slice(-(cmd.limit ?? 100)) };
+      } else if (cmd.action === "network") {
+        const entries = networkLog.slice(-(cmd.limit ?? 100));
+        const failed_count = entries.filter((e) => e.status >= 400).length;
+        data = { entries, failed_count };
+      } else if (cmd.action === "hover") {
+        const el = resolveSelector(cmd.selector || "");
+        if (!el) throw new Error(`no element matches selector: ${cmd.selector}`);
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        const opts = {
+          bubbles: true, cancelable: true,
+          clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
+        };
+        el.dispatchEvent(new PointerEvent("pointerover", opts));
+        el.dispatchEvent(new PointerEvent("pointerenter", opts));
+        el.dispatchEvent(new MouseEvent("mouseover", opts));
+        el.dispatchEvent(new MouseEvent("mouseenter", opts));
+        // LIMITATION: a pure-CSS :hover pseudo-class is set by the browser's
+        // own hit-testing on real pointer input, not by dispatched events --
+        // this only reaches JS-driven hover handlers (onMouseEnter etc).
+      } else if (cmd.action === "drag") {
+        const source = resolveSelector(cmd.selector || "");
+        const target = resolveSelector(cmd.target_selector || "");
+        if (!source || !target) {
+          throw new Error(`drag needs both selector and target_selector to resolve`);
+        }
+        const dataTransfer = new DataTransfer();
+        const fire = (type: string, el: Element) => el.dispatchEvent(
+          new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer }),
+        );
+        fire("dragstart", source);
+        fire("dragenter", target);
+        fire("dragover", target);
+        fire("drop", target);
+        fire("dragend", source);
+      } else if (cmd.action === "select_option") {
+        const el = resolveSelector(cmd.selector || "");
+        if (!el || !(el instanceof HTMLSelectElement)) {
+          throw new Error(`no <select> matches selector: ${cmd.selector}`);
+        }
+        const wanted = cmd.value || "";
+        const opt = Array.from(el.options).find(
+          (o) => o.value === wanted || o.textContent?.trim() === wanted,
+        );
+        if (!opt) throw new Error(`no <option> matches value or label: ${wanted}`);
+        setNativeValue(el, opt.value);
+      } else if (cmd.action === "file_upload") {
+        const el = resolveSelector(cmd.selector || "");
+        if (!el || !(el instanceof HTMLInputElement) || el.type !== "file") {
+          throw new Error(`no <input type="file"> matches selector: ${cmd.selector}`);
+        }
+        const dataTransfer = new DataTransfer();
+        for (const f of cmd.files || []) {
+          const binary = atob(f.content_base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          dataTransfer.items.add(new File([bytes], f.name, { type: f.type }));
+        }
+        el.files = dataTransfer.files;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (cmd.action === "press_key") {
+        const el = (cmd.selector ? resolveSelector(cmd.selector) : null)
+          || document.activeElement || document.body;
+        const opts = { key: cmd.key || "", bubbles: true, cancelable: true };
+        el.dispatchEvent(new KeyboardEvent("keydown", opts));
+        el.dispatchEvent(new KeyboardEvent("keyup", opts));
+      } else if (cmd.action === "handle_dialog") {
+        _dialogPolicy = { accept: cmd.accept ?? true, text: cmd.text };
+        data = { last_dialog: dialogLog[dialogLog.length - 1] ?? null };
+      } else if (cmd.action === "wait_for") {
+        const timeoutMs = cmd.timeout_ms ?? 5000;
+        const deadline = Date.now() + timeoutMs;
+        let matched = false;
+        for (;;) {
+          const found = resolveSelector(cmd.selector || "");
+          if (found && (!cmd.text || found.textContent?.includes(cmd.text))) {
+            matched = true;
+            break;
+          }
+          if (Date.now() >= deadline) {
+            throw new Error(`wait_for timed out after ${timeoutMs}ms: ${cmd.selector}`);
+          }
+          await sleep(150);
+        }
+        data = { matched };
+      } else if (cmd.action === "tabs") {
+        if (cmd.tab_action === "switch") {
+          const idx = cmd.tab_index ?? 0;
+          const w = openedTabs[idx];
+          if (!w || w.closed) throw new Error(`no tracked tab at index ${idx}`);
+          w.focus();
+          data = { switched_to: idx };
+        } else {
+          data = { tabs: openedTabs.map((w, i) => ({ index: i, closed: w.closed })) };
+        }
+      } else if (cmd.action === "navigate_back") {
+        navigate(-1);
+      } else if (cmd.action === "find") {
+        const matches = findElements({
+          role: cmd.role, name: cmd.name, text: cmd.text, limit: cmd.limit ?? 20,
+        });
+        data = { matches };
       } else {
         throw new Error(`unknown action: ${cmd.action}`);
       }
