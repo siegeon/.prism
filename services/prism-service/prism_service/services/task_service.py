@@ -1001,14 +1001,34 @@ class TaskService:
         against session_outcomes so the UI gets per-session timing +
         token + file + skill metrics in one shape:
           [{session_id, started_at, ended_at, duration_s, tokens_used,
-            files_read, files_modified, skills_invoked}]
+            files_read, files_modified, skills_invoked, shared_across_tasks}]
         Empty list when nothing is linked (backs the UI empty state).
+
+        CROSS-TASK TOKEN BLEED (mx-7677c8, task 3baadd19 qa discovery,
+        2026-08-24): session_outcomes (brain_engine.py) is keyed ONLY by
+        session_id -- one GLOBAL lifetime-totals row per session, no
+        task_id column at all. A session that legitimately touches more
+        than one task (task_sessions IS correctly per-task) therefore
+        showed the exact same duration/tokens/files numbers on EVERY task
+        it ever linked to -- reproduced live: session 5a315ea3 showed
+        byte-identical duration_s=7821/tokens_used=6814662 on both task
+        3baadd19 (linked 2026-08-23) and an unrelated new epic (linked
+        2026-08-24). `shared_across_tasks` marks this honestly: True when
+        this session_id appears in task_sessions under more than one
+        task_id, in which case the metrics are ZEROED rather than
+        presenting the session's all-time totals as if they were this
+        task's own -- a session_outcomes row simply cannot answer "how
+        much of this session's activity happened on THIS task" (no
+        per-task attribution is recorded at write time), so the honest
+        move is to say nothing rather than repeat a number that is
+        provably wrong on at least one of the tasks it's shown on.
         """
         if not self._scores_db:
             return [
                 {"session_id": r["session_id"], "started_at": r["started_at"],
                  "ended_at": r["ended_at"], "duration_s": 0, "tokens_used": 0,
-                 "files_read": 0, "files_modified": 0, "skills_invoked": 0}
+                 "files_read": 0, "files_modified": 0, "skills_invoked": 0,
+                 "shared_across_tasks": False}
                 for r in self._session_links.get(task_id, {}).values()
             ]
         conn = self._scores_conn_cached()
@@ -1033,7 +1053,10 @@ class TaskService:
                     "ORDER BY started_at ASC",
                     (task_id,),
                 ).fetchall()
-                return [dict(r) for r in rows]
+                result = [dict(r) for r in rows]
+                for r in result:
+                    r["shared_across_tasks"] = False
+                return result
             rows = conn.execute(
                 "SELECT ts.session_id, ts.started_at, ts.ended_at, "
                 "COALESCE(so.duration_s, 0) AS duration_s, "
@@ -1048,9 +1071,29 @@ class TaskService:
                 "ORDER BY ts.started_at ASC",
                 (task_id,),
             ).fetchall()
+            result = [dict(r) for r in rows]
+            if result:
+                session_ids = [r["session_id"] for r in result]
+                placeholders = ",".join("?" * len(session_ids))
+                shared = {
+                    row[0] for row in conn.execute(
+                        "SELECT session_id FROM task_sessions "
+                        f"WHERE session_id IN ({placeholders}) "
+                        "GROUP BY session_id HAVING COUNT(DISTINCT task_id) > 1",
+                        session_ids,
+                    ).fetchall()
+                }
+                for r in result:
+                    r["shared_across_tasks"] = r["session_id"] in shared
+                    if r["shared_across_tasks"]:
+                        r["duration_s"] = 0
+                        r["tokens_used"] = 0
+                        r["files_read"] = 0
+                        r["files_modified"] = 0
+                        r["skills_invoked"] = 0
+            return result
         except sqlite3.OperationalError:
             return []
-        return [dict(r) for r in rows]
 
     def task_for_session(self, session_id: str) -> str:
         """Reverse lookup on task_sessions: the most recently started task

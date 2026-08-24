@@ -88,26 +88,43 @@ def _walk_to_green_gate(cond, task_id: str) -> None:
     cond._task_svc.update(task_id, premise_notes=(
         "## Premises\n- fixture walk exercising the green_gate UI-artifact "
         "rule, not a real premise claim - UNVERIFIED\n"))
-    target_idx = next(i for i, s in enumerate(WORKFLOW_STEPS)
-                      if s["id"] == _green_gate_id())
-    guard = (target_idx + 1) * 3
-    cleared = 0
-    while guard > 0:
-        guard -= 1
-        snap = cond._task_svc.get(task_id)
-        if snap.workflow_step == _green_gate_id() and snap.gate_state == "pending":
-            return
-        if snap.gate_state == "pending":
-            # DISTINCT actor per clear (task 8579d49e): story_gate/plan_gate
-            # precede green_gate; a reused actor self-overrides -> refused.
-            cleared += 1
-            cond.gate_decide(
-                task_id, action="approve",
-                reason="walk intermediate; independent re-run: pytest -> 1 failed",
-                override=True, actor=f"walk-bot-{cleared}",
-                session_id=f"walk-bot-{cleared}")
-            continue
-        cond.advance_task(task_id)
+    # demo_evidence_gate_reason (task 3baadd19 qa discovery, 2026-08-24):
+    # verify_green_state now refuses to advance a human-judgment task
+    # (proof_type=demo/review) into green_gate with an EMPTY evidence
+    # store. The walk itself is unrelated to that check's concern — seed
+    # one placeholder file JUST long enough to pass through it, then
+    # remove it (finally, every exit path) so this file's own real
+    # assertions (about completion_proof text / captured-evidence
+    # detection) see the same evidence-store state they did before this
+    # walk existed.
+    from prism_service.data_dir import evidence_dir
+    _seed_dir = evidence_dir(task_id)
+    _seed_dir.mkdir(parents=True, exist_ok=True)
+    _seed_path = _seed_dir / "walk-placeholder.png"
+    _seed_path.write_bytes(b"\x89PNG\r\n\x1a\n0000")
+    try:
+        target_idx = next(i for i, s in enumerate(WORKFLOW_STEPS)
+                          if s["id"] == _green_gate_id())
+        guard = (target_idx + 1) * 3
+        cleared = 0
+        while guard > 0:
+            guard -= 1
+            snap = cond._task_svc.get(task_id)
+            if snap.workflow_step == _green_gate_id() and snap.gate_state == "pending":
+                return
+            if snap.gate_state == "pending":
+                # DISTINCT actor per clear (task 8579d49e): story_gate/plan_gate
+                # precede green_gate; a reused actor self-overrides -> refused.
+                cleared += 1
+                cond.gate_decide(
+                    task_id, action="approve",
+                    reason="walk intermediate; independent re-run: pytest -> 1 failed",
+                    override=True, actor=f"walk-bot-{cleared}",
+                    session_id=f"walk-bot-{cleared}")
+                continue
+            cond.advance_task(task_id)
+    finally:
+        _seed_path.unlink(missing_ok=True)
 
 
 # ── C1: ui task — pytest-only proof is REJECTED at green_gate ────────────

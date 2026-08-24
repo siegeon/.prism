@@ -165,6 +165,82 @@ def test_sessions_for_task_empty_when_no_link(project):
 
 
 # ----------------------------------------------------------------------
+# CROSS-TASK TOKEN BLEED (mx-7677c8, task 3baadd19 qa discovery,
+# 2026-08-24). session_outcomes is keyed ONLY by session_id -- one
+# GLOBAL lifetime-totals row per session, no task_id column. Live
+# reproduction: session 5a315ea3 showed byte-identical
+# duration_s=7821/tokens_used=6814662 on both task 3baadd19 (linked
+# 2026-08-23) and an unrelated brand-new epic (linked 2026-08-24) --
+# the SAME session's all-time totals presented as if they belonged to
+# each task individually. Fix: sessions_for_task marks a row
+# shared_across_tasks=True (and zeroes its metrics) the moment that
+# session_id appears in task_sessions under more than one task_id --
+# honest silence instead of a number that is provably wrong on at
+# least one of the tasks it's shown on.
+# ----------------------------------------------------------------------
+
+
+def test_a_session_linked_to_two_tasks_zeroes_metrics_on_both(project):
+    from prism_service.project_context import get_project
+
+    t1 = json.loads(_text(_call("task_create", {"title": "shared task one"})))
+    t2 = json.loads(_text(_call("task_create", {"title": "shared task two"})))
+
+    _call("record_session_outcome", {
+        "session_id": "S-shared", "duration_s": 7821, "tokens_used": 6814662,
+        "files_read": 1, "files_modified": 2, "skills_invoked": 0,
+    })
+    _call("task_link_session", {"task_id": t1["id"], "session_id": "S-shared"})
+    _call("task_link_session", {"task_id": t2["id"], "session_id": "S-shared"})
+
+    ctx = get_project(project)
+    s1 = ctx.task_svc.sessions_for_task(t1["id"])
+    s2 = ctx.task_svc.sessions_for_task(t2["id"])
+    assert len(s1) == 1 and len(s2) == 1
+    row1, row2 = s1[0], s2[0]
+
+    assert row1["shared_across_tasks"] is True, (
+        "a session linked to 2 tasks must be flagged shared_across_tasks")
+    assert row2["shared_across_tasks"] is True
+
+    for row in (row1, row2):
+        assert row["duration_s"] == 0, (
+            f"shared session must zero duration_s, not repeat the "
+            f"session's global total on every task it touched: {row}")
+        assert row["tokens_used"] == 0, (
+            f"shared session must zero tokens_used, not repeat the "
+            f"session's global total on every task it touched: {row}")
+        assert row["files_read"] == 0
+        assert row["files_modified"] == 0
+        assert row["skills_invoked"] == 0
+
+
+def test_a_session_linked_to_only_one_task_still_shows_real_metrics(project):
+    """Anti-over-strictness: the fix must not zero every session's
+    metrics indiscriminately -- a session genuinely dedicated to ONE
+    task keeps its honest numbers, unflagged."""
+    from prism_service.project_context import get_project
+
+    t = json.loads(_text(_call("task_create", {"title": "dedicated task"})))
+    _call("record_session_outcome", {
+        "session_id": "S-solo", "duration_s": 42, "tokens_used": 999,
+        "files_read": 3, "files_modified": 1, "skills_invoked": 1,
+    })
+    _call("task_link_session", {"task_id": t["id"], "session_id": "S-solo"})
+
+    ctx = get_project(project)
+    rows = ctx.task_svc.sessions_for_task(t["id"])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["shared_across_tasks"] is False
+    assert row["duration_s"] == 42
+    assert row["tokens_used"] == 999
+    assert row["files_read"] == 3
+    assert row["files_modified"] == 1
+    assert row["skills_invoked"] == 1
+
+
+# ----------------------------------------------------------------------
 # CONDUCTOR WRITER — advance_task stamps task_sessions
 # ----------------------------------------------------------------------
 
