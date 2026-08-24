@@ -37,6 +37,22 @@ let inflight: Promise<ServiceVersion> | null = null;
 let watchdogStarted = false;
 let devBundleWatchStarted = false;
 
+// Same anti-loop shape as main.tsx's RELOAD_FLAG/COOLDOWN_MS guard around
+// recoverFromStaleChunk: a daemon that flaps between versions mid-bounce (the
+// old version briefly answering again before the new one settles) must not
+// reload-loop the tab. Both call sites below pass the SAME literal key so a
+// bounce that trips the SSE watchdog and the dev-mode poll in the same
+// window still only reloads once.
+function guardedReload(key: string): void {
+  const cooldownMs = 30_000;
+  try {
+    const last = Number(sessionStorage.getItem(key) || 0);
+    if (last && Date.now() - last < cooldownMs) return;
+    sessionStorage.setItem(key, String(Date.now()));
+  } catch { /* private mode: fall through to a single reload attempt */ }
+  window.location.reload();
+}
+
 function startDevBundleWatch(initialBuild: string | undefined) {
   if (devBundleWatchStarted || !initialBuild || typeof window === "undefined") return;
   devBundleWatchStarted = true;
@@ -44,7 +60,7 @@ function startDevBundleWatch(initialBuild: string | undefined) {
     fetch("/api/version", { cache: "no-store" })
       .then((r) => r.json())
       .then((r: ServiceVersion) => {
-        if (r.web_build && r.web_build !== initialBuild) window.location.reload();
+        if (r.web_build && r.web_build !== initialBuild) guardedReload("prism:version-reload");
       })
       .catch(() => {});
   };
@@ -62,7 +78,7 @@ function startLiveWatchdog() {
   const onVersion = (v: string | undefined) => {
     if (!v) return;
     if (initial === null) initial = v;
-    else if (v !== initial) window.location.reload();
+    else if (v !== initial) guardedReload("prism:version-reload");
   };
   // Fast path: SSE reconnect after a backend swap surfaces the new version.
   // Subscribes through lib/sharedStream (task b835f639) so this watchdog costs
