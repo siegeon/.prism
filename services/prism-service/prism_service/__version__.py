@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.40"
+PRISM_VERSION = "7.13.41"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5872,4 +5872,22 @@ PRISM_VERSION_NOTES += (
     "tests in test_task_tests_attribution.py. Full unit suite (incl. "
     "tests/acceptance/): 2587 passed (6 pre-existing unrelated failures, "
     "untouched by this change)."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.41: the SAME bug recurred in the very fix for it. "
+    "7.13.40's own new tests/acceptance/test_green_gate_evidence_ui_"
+    "acceptance_manifest.py opened '...feature (task 3baadd19), same "
+    "pattern as...' -- non-possessive, so shipping the false-attribution "
+    "fix immediately re-inflated 3baadd19's Evidence tab with test "
+    "INFRASTRUCTURE (assertions about the manifest JSON's own well-"
+    "formedness, not anything pinning 3baadd19's own oracle). Caught by "
+    "curling the live endpoint right after 7.13.40 shipped, as the "
+    "verification step this class of bug demands: "
+    "GET /api/tasks/3baadd19.../tests still showed 7 tests, all from "
+    "this one file. Fixed the same way (possessive rephrase); verified "
+    "via file_owns_task() directly; added a 3rd real-file regression "
+    "test. Also audited every OTHER .py file changed since origin/main "
+    "for the same pattern (git diff --name-only, one file, already "
+    "fixed) rather than trusting a single spot-fix again. 73 tests "
+    "green (test_task_tests_attribution.py + tests/acceptance/)."
 )
