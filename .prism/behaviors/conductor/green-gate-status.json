@@ -3,8 +3,57 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Green gate evidence status",
-  "version": 1,
+  "version": 2,
   "steps": [
+    {
+      "id": "candidate_controls",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=candidate_controls",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"candidate_controls\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "reachability",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=reachability",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"reachability\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "ui_artifact",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=ui_artifact",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"ui_artifact\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "screen_claim",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=screen_claim",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"screen_claim\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "shipped_ness",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=shipped_ness",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"shipped_ness\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "demo_evidence",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=demo_evidence",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"demo_evidence\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "oracle_receipt",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/green-gate-check?project=${project}&check=oracle_receipt",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"oracle_receipt\"}",
+      "timeoutSeconds": 30
+    },
     {
       "id": "status",
       "kind": "http-callback",

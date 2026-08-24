@@ -1064,71 +1064,99 @@ class GreenGateStatusResponse(BaseModel):
     checks: list[GateCheckStatus] = []
 
 
-# Every PRE-FLIGHT tooth that can refuse a green_gate approve or the
+# Every signal that can refuse a green_gate approve or the
 # verify_green_state advance into it (owner directive, task 3baadd19,
 # 2026-08-24: "make this real... make sure that it is a part of the flows
 # and enforces our rules" -- the Workflows page's green-gate-status view
-# was a single opaque oracle-receipt check while FIVE other real teeth
-# governed the same gate invisibly). Each entry calls the EXACT function
-# the real enforcement path calls -- never a reimplementation -- so this
-# list can never show a different answer than what actually happens.
-# try/except per-tooth (matching this module's existing pre-flight
-# convention, e.g. ConductorService.adjudicate_green_gate's own
-# reachability_check/candidate_controls_judge calls): a tooth that cannot
-# be evaluated for this task/environment reports ok=True with an empty
-# reason (not-yet-applicable), never crashes the whole status check.
-def _green_gate_checks(ctx, task, project: str) -> list["GateCheckStatus"]:
+# was a single opaque oracle-receipt check while SIX other real teeth
+# governed the same gate invisibly; then, seeing the old 1-step diagram:
+# "if there are 5 [sic; 7] steps in the green gate behavior than you
+# should show them, here so we can see"). ONE ordered registry, each
+# entry a (label, compute_fn) pair calling the EXACT function the real
+# enforcement path calls -- never a reimplementation, so neither the
+# aggregate endpoint nor a single-check lookup can ever show a different
+# answer than what actually happens. Both the aggregate
+# /steps/green-gate-status endpoint AND the per-check
+# /steps/green-gate-check endpoint (one JSON behavior step per entry, so
+# the Workflows page diagram shows a real node per check) read this same
+# registry -- one source of truth, not two.
+def _green_gate_check_registry(ctx, task, project: str) -> "dict[str, tuple[str, object]]":
     from prism_service.services import conductor_service as _cs
 
-    checks: list[GateCheckStatus] = []
-
-    def _add(check_id: str, label: str, reason: str) -> None:
-        checks.append(GateCheckStatus(id=check_id, label=label,
-                                      ok=not reason, reason=reason or ""))
-
-    try:
+    def _candidate_controls():
         from prism_service.services import control_plane as _cp
-        _add("candidate_controls", "Judge integrity (no dirty policy files)",
-             _cp.candidate_controls_judge_reason(task) or "")
-    except Exception:
-        _add("candidate_controls", "Judge integrity (no dirty policy files)", "")
+        return _cp.candidate_controls_judge_reason(task) or ""
 
-    try:
+    def _reachability():
         from prism_service.services import reachability_check as _rc
-        _add("reachability", "New entry points have a real production caller",
-             _rc.unreachable_entry_point_reason(task) or "")
-    except Exception:
-        _add("reachability", "New entry points have a real production caller", "")
+        return _rc.unreachable_entry_point_reason(task) or ""
 
+    def _ui_artifact():
+        return _cs.ui_artifact_gate_reason(
+            getattr(task, "tags", None), getattr(task, "proof_type", ""),
+            getattr(task, "completion_proof", "")) or ""
+
+    def _screen_claim():
+        return _cs._screen_claim_gate_reason(
+            getattr(task, "tags", None), getattr(task, "proof_type", ""),
+            getattr(task, "oracle", "")) or ""
+
+    def _shipped_ness():
+        return ctx.conductor_svc._unshipped_gate_reason(task) or ""
+
+    def _demo_evidence():
+        return _cs.demo_evidence_gate_reason(task, project) or ""
+
+    def _oracle_receipt():
+        refusal, _fresh = ctx.conductor_svc._oracle_receipt_refusal(
+            task, override=False, reason="")
+        return refusal or ""
+
+    return {
+        "candidate_controls": (
+            "Judge integrity (no dirty policy files)", _candidate_controls),
+        "reachability": (
+            "New entry points have a real production caller", _reachability),
+        "ui_artifact": (
+            "Demo/screenshot artifact cited (ui-tagged tasks)", _ui_artifact),
+        "screen_claim": (
+            "A test-proof ticket does not claim a screen", _screen_claim),
+        "shipped_ness": (
+            "This task's own commit trailer reached origin/main", _shipped_ness),
+        "demo_evidence": (
+            "A demo/review claim has captured evidence", _demo_evidence),
+        "oracle_receipt": (
+            "A fresh passing oracle receipt is on file", _oracle_receipt),
+    }
+
+
+def _run_one_check(ctx, task, project: str, check_id: str) -> "GateCheckStatus":
+    registry = _green_gate_check_registry(ctx, task, project)
+    entry = registry.get(check_id)
+    if entry is None:
+        return GateCheckStatus(id=check_id, label=f"unknown check {check_id!r}",
+                               ok=True, reason="")
+    label, fn = entry
     try:
-        _add("ui_artifact", "Demo/screenshot artifact cited (ui-tagged tasks)",
-             _cs.ui_artifact_gate_reason(
-                 getattr(task, "tags", None), getattr(task, "proof_type", ""),
-                 getattr(task, "completion_proof", "")) or "")
+        reason = fn() or ""
     except Exception:
-        _add("ui_artifact", "Demo/screenshot artifact cited (ui-tagged tasks)", "")
+        return GateCheckStatus(id=check_id, label=label, ok=True, reason="")
+    return GateCheckStatus(id=check_id, label=label, ok=not reason,
+                           reason=reason)
 
-    try:
-        _add("screen_claim", "A test-proof ticket does not claim a screen",
-             _cs._screen_claim_gate_reason(
-                 getattr(task, "tags", None), getattr(task, "proof_type", ""),
-                 getattr(task, "oracle", "")) or "")
-    except Exception:
-        _add("screen_claim", "A test-proof ticket does not claim a screen", "")
 
-    try:
-        _add("shipped_ness", "This task's own commit trailer reached origin/main",
-             ctx.conductor_svc._unshipped_gate_reason(task) or "")
-    except Exception:
-        _add("shipped_ness", "This task's own commit trailer reached origin/main", "")
-
-    try:
-        _add("demo_evidence", "A demo/review claim has captured evidence",
-             _cs.demo_evidence_gate_reason(task, project) or "")
-    except Exception:
-        _add("demo_evidence", "A demo/review claim has captured evidence", "")
-
-    return checks
+def _green_gate_checks(ctx, task, project: str) -> list["GateCheckStatus"]:
+    """The full ordered list, in registry order -- used by the aggregate
+    endpoint. try/except per-tooth (matching this module's existing
+    pre-flight convention, e.g. ConductorService.adjudicate_green_gate's
+    own reachability_check/candidate_controls_judge calls): a tooth that
+    cannot be evaluated for this task/environment reports ok=True with an
+    empty reason (not-yet-applicable), never crashes the whole report.
+    Excludes oracle_receipt -- the aggregate response already carries that
+    signal via its own has_fresh_passing_receipt/reason fields."""
+    registry = _green_gate_check_registry(ctx, task, project)
+    return [_run_one_check(ctx, task, project, check_id)
+            for check_id in registry if check_id != "oracle_receipt"]
 
 
 @router.post("/steps/green-gate-status")
@@ -1174,3 +1202,38 @@ def workflow_step_green_gate_status(
             latest_receipt_reason=(getattr(latest, "reason", "") or "") if latest else "",
             checks=_green_gate_checks(ctx, task, project),
         )
+
+
+class GreenGateCheckRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    check: str = Field(min_length=1)
+
+
+@router.post("/steps/green-gate-check")
+def workflow_step_green_gate_check(
+    body: GreenGateCheckRequest, project: str = Query(...),
+) -> GateCheckStatus:
+    """ONE named pre-flight tooth from _green_gate_check_registry, read-
+    only, same governance-visibility contract as /steps/green-gate-status
+    (never calls adjudicate_green_gate or any write). Exists so the
+    Workflows page's green-gate-status BEHAVIOR can chain one JSON step
+    per real check (owner, task 3baadd19, 2026-08-24, on seeing the old
+    1-step diagram: "if there are 5 [sic; 7] steps in the green gate
+    behavior than you should show them, here so we can see") -- a genuine
+    node per tooth, not a checklist buried inside one opaque callback's
+    response body. Always HTTP 200 regardless of ok=true/false (matching
+    /steps/green-gate-status's own existing exit_code==0-always contract):
+    a refused tooth is a REPORTED fact, not a callback FAILURE, so the
+    chain reaches every subsequent check and Complete regardless of any
+    single tooth's verdict."""
+    with _tracer.start_as_current_span("workflow.step.green_gate_check") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        span.set_attribute("workflow.check", body.check)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return GateCheckStatus(id=body.check, label=body.check,
+                                   ok=False, reason=f"no such task: {body.task_id}")
+        return _run_one_check(ctx, task, project, body.check)

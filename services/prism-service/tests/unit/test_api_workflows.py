@@ -1333,6 +1333,132 @@ def test_green_gate_status_checks_never_crash_on_a_narrow_fake_conductor_svc(
     assert len(resp.checks) == 6
 
 
+def test_green_gate_check_reports_one_named_tooth(monkeypatch):
+    """Owner (task 3baadd19, 2026-08-24), on seeing the old 1-step
+    diagram: 'if there are 5 [sic; 7] steps in the green gate behavior
+    than you should show them, here so we can see' -- the per-check
+    endpoint backs one JSON behavior step per real tooth, so the
+    Workflows page diagram can show a genuine node per check instead of a
+    checklist buried inside one callback's response body."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        id = "3baadd19-78af-42b8-a78e-47a4b6f51fc0"
+        tags = ["conductor", "architecture", "owner-directive",
+                "drive-worker", "github", "jira"]
+        proof_type = "demo"
+        oracle = "PRISM claims a task by itself"
+        completion_proof = "the epic's actual oracle is not yet met"
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _FakeConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "no EvidenceReceipt on file", None
+
+        def _unshipped_gate_reason(self, task):
+            return ""
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+
+    resp = workflows_api.workflow_step_green_gate_check(
+        workflows_api.GreenGateCheckRequest(
+            task_id="3baadd19-78af-42b8-a78e-47a4b6f51fc0",
+            check="demo_evidence"),
+        project="prism")
+
+    assert resp.id == "demo_evidence"
+    assert resp.ok is False
+    assert "evidence" in resp.reason.lower()
+
+
+def test_green_gate_check_every_registry_entry_is_individually_reachable(monkeypatch):
+    """All 7 checks the JSON behavior now chains as separate steps
+    (candidate_controls, reachability, ui_artifact, screen_claim,
+    shipped_ness, demo_evidence, oracle_receipt) must be individually
+    callable through this endpoint -- a step whose id doesn't resolve here
+    would be a silent 404 on the Workflows page."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        id = "t-all"
+        tags = ["backend"]
+        proof_type = "test"
+        oracle = ""
+        completion_proof = "tests/unit/test_x.py::test_y PASSED"
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _FakeConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "", None
+
+        def _unshipped_gate_reason(self, task):
+            return ""
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+
+    for check_id in ("candidate_controls", "reachability", "ui_artifact",
+                     "screen_claim", "shipped_ness", "demo_evidence",
+                     "oracle_receipt"):
+        resp = workflows_api.workflow_step_green_gate_check(
+            workflows_api.GreenGateCheckRequest(task_id="t-all", check=check_id),
+            project="prism")
+        assert resp.id == check_id
+        assert resp.ok is True, f"{check_id}: {resp.reason}"
+
+
+def test_green_gate_check_unknown_check_id_reports_rather_than_crashes(monkeypatch):
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        id = "t-x"
+        tags = []
+        proof_type = ""
+        oracle = ""
+        completion_proof = ""
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=object()))
+
+    resp = workflows_api.workflow_step_green_gate_check(
+        workflows_api.GreenGateCheckRequest(task_id="t-x", check="nonexistent"),
+        project="prism")
+
+    assert resp.id == "nonexistent"
+
+
+def test_green_gate_status_behavior_json_has_one_step_per_registry_check():
+    """Pin the actual on-disk JSON that renders the Workflows page diagram
+    -- this is the file the owner was looking at when they asked for the
+    steps to be shown. Must carry one step per real check, not the old
+    single opaque 'status' callback alone."""
+    import json
+    from pathlib import Path
+
+    behavior_path = (Path(__file__).resolve().parent.parent.parent.parent.parent
+                     / ".prism" / "behaviors" / "conductor" / "green-gate-status.json")
+    data = json.loads(behavior_path.read_text())
+    step_ids = {s["id"] for s in data["steps"]}
+    assert step_ids == {"candidate_controls", "reachability", "ui_artifact",
+                        "screen_claim", "shipped_ness", "demo_evidence",
+                        "oracle_receipt", "status"}, step_ids
+    for step in data["steps"]:
+        if step["id"] != "status":
+            assert "green-gate-check" in step["url"]
+            assert f'"check": "{step["id"]}"' in step["body"]
+
+
 def test_green_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_path, monkeypatch):
     from prism_service.api import workflows as workflows_api
 
