@@ -151,3 +151,74 @@ def test_submit_result_for_unknown_command_id_is_rejected():
     svc = _fresh_service()
     s = svc.mint_session(user_id="alice", project_id="prism")
     assert svc.submit_result(s.id, "not-a-real-command-id", {"ok": True}) is False
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-23: opt-in stable ids backed by a durable identity store (mirrors
+# services/agent_bridge_identity.py). Constructing AgentBridgeService()
+# without one (every test above) is untouched -- ids stay random per mint.
+# ---------------------------------------------------------------------------
+
+def _service_with_identity(tmp_path):
+    from prism_service.services.agent_bridge import AgentBridgeService
+    from prism_service.services.agent_bridge_identity import AgentBridgeIdentityStore
+    store = AgentBridgeIdentityStore(str(tmp_path / "agent_bridge_identity.db"))
+    return AgentBridgeService(identity_store=store)
+
+
+def test_mint_session_reuses_the_stable_id_when_an_identity_store_is_wired(tmp_path):
+    svc = _service_with_identity(tmp_path)
+    a = svc.mint_session(user_id="alice", project_id="prism")
+    b = svc.mint_session(user_id="alice", project_id="prism")
+    # The id is stable (discoverable/reconnectable)...
+    assert a.id == b.id
+    # ...but the token still rotates every mint -- the credential is never
+    # the durable part.
+    assert a.token != b.token
+    # And the SECOND mint's token is the one that's actually live now --
+    # re-minting the same stable id is what rotation means.
+    assert svc.validate_token(b.id, b.token) is not None
+    assert svc.validate_token(a.id, a.token) is None
+
+
+def test_mint_session_ids_still_differ_across_users_and_projects_with_identity(tmp_path):
+    svc = _service_with_identity(tmp_path)
+    alice = svc.mint_session(user_id="alice", project_id="prism")
+    mallory = svc.mint_session(user_id="mallory", project_id="prism")
+    alice_other_project = svc.mint_session(user_id="alice", project_id="other")
+    assert alice.id != mallory.id
+    assert alice.id != alice_other_project.id
+
+
+def test_sessions_for_user_returns_only_that_users_live_sessions():
+    svc = _fresh_service()
+    a = svc.mint_session(user_id="alice", project_id="prism")
+    svc.mint_session(user_id="mallory", project_id="prism")
+
+    alice_sessions = svc.sessions_for_user("alice")
+    assert {s.id for s in alice_sessions} == {a.id}
+
+
+def test_sessions_for_user_can_be_narrowed_to_one_project():
+    svc = _fresh_service()
+    a = svc.mint_session(user_id="alice", project_id="prism")
+    b = svc.mint_session(user_id="alice", project_id="other")
+
+    prism_only = svc.sessions_for_user("alice", project_id="prism")
+    assert {s.id for s in prism_only} == {a.id}
+    assert b.id not in {s.id for s in prism_only}
+
+
+def test_sessions_for_user_excludes_revoked_and_expired_sessions():
+    import time
+    svc = _fresh_service()
+    live = svc.mint_session(user_id="alice", project_id="prism")
+    revoked = svc.mint_session(user_id="alice", project_id="prism")
+    expired = svc.mint_session(user_id="alice", project_id="prism")
+
+    svc.revoke(revoked.id)
+    with svc._lock:
+        svc._sessions[expired.id].expires_at = time.time() - 1
+
+    ids = {s.id for s in svc.sessions_for_user("alice")}
+    assert ids == {live.id}

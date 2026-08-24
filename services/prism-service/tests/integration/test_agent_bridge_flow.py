@@ -380,6 +380,72 @@ def test_agent_bridge_command_requires_a_valid_action():
     assert payload["ok"] is False
 
 
+# ---------------------------------------------------------------------------
+# 4. Discovery endpoint (2026-08-23): "what is MY active session id",
+#    authenticated exactly like session creation -- never another user's.
+# ---------------------------------------------------------------------------
+
+def test_discovery_endpoint_returns_only_the_callers_own_sessions():
+    """The core auth-boundary requirement: principal A can never see
+    principal B's session id through this endpoint."""
+    from prism_service.api.agent_bridge import (
+        create_session, CreateSessionBody, list_my_sessions)
+
+    alice = _principal("alice")
+    mallory = _principal("mallory")
+    alice_session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    create_session(CreateSessionBody(project="prism"), principal=mallory)
+
+    result = list_my_sessions(project="", principal=alice)
+    ids = {s["id"] for s in result["sessions"]}
+    assert ids == {alice_session["id"]}, (
+        "the discovery endpoint must never surface another user's session")
+
+
+def test_discovery_endpoint_never_returns_a_token():
+    from prism_service.api.agent_bridge import (
+        create_session, CreateSessionBody, list_my_sessions)
+
+    alice = _principal("alice")
+    create_session(CreateSessionBody(project="prism"), principal=alice)
+
+    result = list_my_sessions(project="", principal=alice)
+    assert result["sessions"], "expected at least one session for alice"
+    for s in result["sessions"]:
+        assert "token" not in s, (
+            "discovery must hand back the id only -- the token is minted "
+            "once, by POST /sessions, and never re-exposed afterward")
+
+
+def test_discovery_endpoint_can_be_narrowed_by_project():
+    from prism_service.api.agent_bridge import (
+        create_session, CreateSessionBody, list_my_sessions)
+
+    alice = _principal("alice")
+    prism_session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    create_session(CreateSessionBody(project="other"), principal=alice)
+
+    result = list_my_sessions(project="prism", principal=alice)
+    ids = {s["id"] for s in result["sessions"]}
+    assert ids == {prism_session["id"]}
+
+
+def test_discovery_endpoint_returns_nothing_before_any_session_is_minted():
+    from prism_service.api.agent_bridge import list_my_sessions
+
+    alice = _principal("alice")
+    result = list_my_sessions(project="", principal=alice)
+    assert result["sessions"] == []
+
+
+def test_discovery_collection_path_is_not_exempted_from_the_general_gate():
+    # Same treatment as POST /sessions (test_agent_bridge_session_creation_
+    # is_not_exempted above) -- the bare collection path always requires the
+    # caller's real credential, GET included, never the item paths' narrow
+    # session-token bypass.
+    assert _guard("/api/agent-bridge/sessions", "10.1.10.42", method="GET") == 401
+
+
 def test_agent_bridge_command_tool_is_registered_and_advertised():
     from prism_service.mcp.tools import TOOLS, INTERACTIVE_TOOL_NAMES
 
@@ -494,32 +560,45 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     `localStorage`, which would be a real security regression) but survives
     a same-tab reload. This pins that the actual read/write call sites use
     `sessionStorage`, not just that the string appears somewhere in the
-    file, and that `localStorage` is never used to persist the session."""
+    file, and that `localStorage` is never used to persist the SESSION
+    itself (id + token).
+
+    SUPERSEDED IN PART 2026-08-23: the blanket "localStorage never appears
+    at all" assertion this test used to make is gone -- agentBridge.tsx now
+    also persists a plain boolean ENABLED PREFERENCE to localStorage (see
+    ENABLED_PREF_KEY/loadEnabledPreference/persistEnabledPreference), which
+    is what lets the tab auto-reconnect after a reload/daemon-restart
+    without a re-click (test_agent_bridge_enabled_preference_uses_local_
+    storage_not_the_session below pins that boundary). What still must
+    never happen -- checked here -- is the SESSION (id/token) itself being
+    written to localStorage anywhere, under any function name."""
     src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
 
     assert "sessionStorage" in src
-    # localStorage must never be used to persist the bridge session — the
-    # docstring explaining why it's avoided is fine, an actual call is not.
-    assert "localStorage.setItem" not in src
-    assert "localStorage.getItem" not in src
 
     # loadPersistedSession(): the mount-time hydration path must actually
-    # read from sessionStorage, not merely mention it in a comment.
+    # read from sessionStorage, not merely mention it in a comment, and
+    # must never fall back to localStorage for the SESSION itself.
     load_fn = src.split("function loadPersistedSession()", 1)[1].split(
         "\nfunction ", 1)[0]
     assert "sessionStorage.getItem(STORAGE_KEY)" in load_fn
+    assert "localStorage" not in load_fn
 
     # The lazy useState initializer must actually be wired to that loader —
     # this is what makes a reload transparently resume the same session.
     assert "useState<BridgeSession | null>(loadPersistedSession)" in src
 
-    # persistSession(): the shared write/clear path.
+    # persistSession(): the shared write/clear path for the SESSION itself
+    # (id + token) — must be sessionStorage only, never localStorage.
     persist_fn = src.split("function persistSession(", 1)[1].split(
-        "\n/**", 1)[0]
+        "\n// localStorage", 1)[0]
     assert "sessionStorage.setItem(STORAGE_KEY" in persist_fn
     assert "sessionStorage.removeItem(STORAGE_KEY)" in persist_fn
+    assert "localStorage" not in persist_fn
 
-    # enable(): a newly-minted session must be written through.
+    # enable(): a newly-minted session must be written through to
+    # sessionStorage (the credential), separately from the boolean
+    # preference (checked in the dedicated test below).
     enable_fn = src.split("const enable = useCallback(", 1)[1].split(
         "const disable = useCallback(", 1)[0]
     assert "persistSession(s)" in enable_fn
@@ -527,7 +606,7 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     # disable(): an explicit end must actually clear the durable copy, not
     # just the in-memory one, or a later reload would resurrect it.
     disable_fn = src.split("const disable = useCallback(", 1)[1].split(
-        "// Tab-close revocation", 1)[0]
+        "// Auto-reconnect", 1)[0]
     assert "persistSession(null)" in disable_fn
 
     # The existing beforeunload-triggered explicit DELETE must also clear
@@ -535,6 +614,57 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     onunload_fn = src.split("const onUnload = () => {", 1)[1].split(
         "window.addEventListener", 1)[0]
     assert "persistSession(null)" in onunload_fn
+
+
+def test_agent_bridge_enabled_preference_uses_local_storage_not_the_session():
+    """Source-reading pin for the 2026-08-23 persistent-preference feature:
+    a plain boolean ("did the user want remote assist on") is stored in
+    localStorage precisely because it must survive a brand-new tab, not
+    just a same-tab reload (sessionStorage would not survive that) -- and
+    it must be structurally impossible to confuse with the actual session
+    credential, which stays sessionStorage-only per the test above."""
+    src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
+
+    load_fn = src.split("function loadEnabledPreference()", 1)[1].split(
+        "\nfunction ", 1)[0]
+    assert "localStorage.getItem(ENABLED_PREF_KEY)" in load_fn
+
+    persist_fn = src.split("function persistEnabledPreference(", 1)[1].split(
+        "\nexport function AgentBridgeProvider", 1)[0]
+    assert "localStorage.setItem(ENABLED_PREF_KEY" in persist_fn
+    assert "localStorage.removeItem(ENABLED_PREF_KEY)" in persist_fn
+    # The preference writer must never be handed the session/token — it's
+    # a boolean-only function; this guards against a future edit silently
+    # widening it into a second place the credential could leak to disk.
+    assert "token" not in persist_fn.split(")", 1)[0]
+
+    # enable() must persist BOTH the session (sessionStorage, existing
+    # behavior) and flip the preference on (localStorage).
+    enable_fn = src.split("const enable = useCallback(", 1)[1].split(
+        "const disable = useCallback(", 1)[0]
+    assert "persistEnabledPreference(true)" in enable_fn
+
+    # disable() must turn the preference back off -- an explicit "Turn off"
+    # click must not be silently undone by the next reload's auto-reconnect.
+    disable_fn = src.split("const disable = useCallback(", 1)[1].split(
+        "// Auto-reconnect", 1)[0]
+    assert "persistEnabledPreference(false)" in disable_fn
+
+    # Tab-close (beforeunload) must NOT clear the preference -- only the
+    # session/credential. Closing the tab (or a reload, which also fires
+    # beforeunload) must still auto-reconnect on the NEXT open, which only
+    # works if the preference itself survives that unload.
+    onunload_fn = src.split("const onUnload = () => {", 1)[1].split(
+        "window.addEventListener", 1)[0]
+    assert "persistEnabledPreference" not in onunload_fn
+
+    # The mount-time auto-reconnect effect must gate strictly on the
+    # preference, and must call the real enable() rather than reimplementing
+    # session creation inline.
+    mount_fn = src.split("// Auto-reconnect", 1)[1].split(
+        "// Tab-close revocation", 1)[0]
+    assert "loadEnabledPreference()" in mount_fn
+    assert "void enable()" in mount_fn
 
 
 def test_fill_action_supports_select_elements_not_just_input_textarea():
@@ -557,3 +687,254 @@ def test_fill_action_supports_select_elements_not_just_input_textarea():
     assert "HTMLSelectElement" in fill_branch, (
         "the fill action's element-type guard must accept <select>, or a "
         "correct selector still throws 'no input/textarea matches selector'")
+
+
+# ---------------------------------------------------------------------------
+# New actions (v7.14): observability (console/network) + interaction parity
+# (hover/drag/select_option/file_upload/press_key/handle_dialog/wait_for/
+# tabs/navigate_back/find). These drive the REAL MCP dispatch path
+# end-to-end (handle_tool -> publish_command -> a stand-in "browser" reads
+# the real bus event), pinning that each new field the tool schema exposes
+# actually reaches the browser-side command, not just that the action name
+# is accepted.
+# ---------------------------------------------------------------------------
+
+def _capture_one_event(session, action: str, extra_arguments: dict) -> dict:
+    """Runs one agent_bridge_command call for real and returns the RAW bus
+    event a browser tab would receive -- the same "stand-in browser thread"
+    pattern as test_screenshot_action_is_forwarded_with_an_optional_selector."""
+    import json as _json
+
+    from prism_service.events import bus
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.tools import handle_tool
+
+    alice = _principal("alice")
+    subscribed = threading.Event()
+    seen: dict = {}
+
+    def _browser():
+        async def _inner():
+            q = bus.subscribe()
+            subscribed.set()
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=5.0)
+                seen.update(event)
+            finally:
+                bus.unsubscribe(q)
+        asyncio.run(_inner())
+
+    t = threading.Thread(target=_browser, daemon=True)
+    t.start()
+    assert subscribed.wait(timeout=2.0)
+
+    with use_request_context(PrismRequestContext(project_id="prism", principal=alice)):
+        result = asyncio.run(handle_tool(
+            "agent_bridge_command",
+            # timeout_s kept short -- this helper only proves the outbound
+            # event reached the bus with the right fields; nothing ever
+            # calls submit_result, so without a short timeout the MCP call
+            # would block for the full default 20s waiting on a result that
+            # never comes.
+            {"session_id": session["id"], "action": action, "timeout_s": 0.3,
+             **extra_arguments},
+            project_id="prism",
+        ))
+    t.join(timeout=2.0)
+    payload = _json.loads(result[0].text)
+    assert payload.get("session_id") == session["id"] or "error" not in payload
+    return seen
+
+
+def test_new_actions_are_all_advertised_in_the_tool_schema():
+    from prism_service.mcp.tools import TOOLS
+
+    tool = next(t for t in TOOLS if t.name == "agent_bridge_command")
+    enum = tool.inputSchema["properties"]["action"]["enum"]
+    for action in (
+        "console", "network", "hover", "drag", "select_option", "file_upload",
+        "press_key", "handle_dialog", "wait_for", "tabs", "navigate_back", "find",
+    ):
+        assert action in enum, f"{action} must be in the advertised action enum"
+
+
+def test_drag_action_forwards_selector_and_target_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "drag", {
+        "selector": "#src", "target_selector": "#dst",
+    })
+    assert seen["action"] == "drag"
+    assert seen["selector"] == "#src"
+    assert seen["target_selector"] == "#dst"
+
+
+def test_wait_for_action_forwards_text_and_timeout_ms_as_a_number():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "wait_for", {
+        "selector": "#toast", "text": "Saved", "timeout_ms": 2500,
+    })
+    assert seen["action"] == "wait_for"
+    assert seen["selector"] == "#toast"
+    assert seen["text"] == "Saved"
+    assert seen["timeout_ms"] == 2500.0
+
+
+def test_file_upload_action_forwards_the_files_list():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    files = [{"name": "a.txt", "type": "text/plain", "content_base64": "aGk="}]
+    seen = _capture_one_event(session, "file_upload", {
+        "selector": "#upload", "files": files,
+    })
+    assert seen["action"] == "file_upload"
+    assert seen["files"] == files
+
+
+def test_handle_dialog_action_forwards_accept_and_value():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "handle_dialog", {
+        "accept": False, "value": "custom answer",
+    })
+    assert seen["action"] == "handle_dialog"
+    assert seen["accept"] is False
+    assert seen["value"] == "custom answer"
+
+
+def test_console_and_network_actions_forward_limit_as_an_int():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "console", {"limit": "25"})
+    assert seen["action"] == "console"
+    assert seen["limit"] == 25
+
+    session2 = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen2 = _capture_one_event(session2, "network", {"limit": 10})
+    assert seen2["action"] == "network"
+    assert seen2["limit"] == 10
+
+
+def test_find_action_forwards_role_name_and_text_filters():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "find", {
+        "role": "button", "name": "Save", "text": "Save changes",
+    })
+    assert seen["action"] == "find"
+    assert seen["role"] == "button"
+    assert seen["name"] == "Save"
+    assert seen["text"] == "Save changes"
+
+
+def test_tabs_action_forwards_value_and_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "tabs", {"value": "switch", "selector": "tab-2"})
+    assert seen["action"] == "tabs"
+    assert seen["value"] == "switch"
+    assert seen["selector"] == "tab-2"
+
+
+def test_navigate_back_action_carries_no_extra_fields():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "navigate_back", {})
+    assert seen["action"] == "navigate_back"
+
+
+def test_hover_action_forwards_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "hover", {"selector": ".tooltip-target"})
+    assert seen["action"] == "hover"
+    assert seen["selector"] == ".tooltip-target"
+
+
+def test_select_option_action_forwards_selector_and_value():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "select_option", {"selector": "#kind", "value": "bug"})
+    assert seen["action"] == "select_option"
+    assert seen["selector"] == "#kind"
+    assert seen["value"] == "bug"
+
+
+def test_press_key_action_forwards_selector_and_key_value():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "press_key", {"selector": "#search", "value": "Enter"})
+    assert seen["action"] == "press_key"
+    assert seen["value"] == "Enter"
+
+
+# ---------------------------------------------------------------------------
+# Large console/network dumps persist to disk (same convention as
+# screenshots), small ones stay inline.
+# ---------------------------------------------------------------------------
+
+def test_large_console_dump_persists_to_disk_and_returns_a_path(tmp_path, monkeypatch):
+    import prism_service.data_dir as data_dir_module
+    from prism_service.api.agent_bridge import create_session, submit_result, CreateSessionBody, ResultBody
+    from prism_service.services.agent_bridge import get_agent_bridge_service
+
+    monkeypatch.setattr(data_dir_module, "resolve_data_dir", lambda: tmp_path)
+
+    alice = _principal("alice")
+    session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    svc = get_agent_bridge_service()
+    command_id = svc.publish_command(svc._get_live(session["id"]), "console", {})
+
+    big_entries = [{"level": "log", "message": "x" * 200, "ts": i} for i in range(200)]
+    submit_result(session["id"], ResultBody(
+        token=session["token"], command_id=command_id, ok=True,
+        data={"entries": big_entries, "total_captured": 200},
+    ))
+
+    result = svc.wait_for_result(command_id, timeout=2.0)
+    assert result["ok"] is True
+    assert "entries" not in result["data"], "a large entries list must not survive into the MCP result"
+    entries_path = result["data"]["entries_path"]
+    from pathlib import Path
+    p = Path(entries_path)
+    assert p.is_file()
+    assert str(tmp_path) in str(p)
+    import json as _json
+    assert _json.loads(p.read_text()) == big_entries
+    assert result["data"]["entries_count"] == 200
+
+
+def test_small_network_dump_stays_inline_not_persisted(tmp_path, monkeypatch):
+    import prism_service.data_dir as data_dir_module
+    from prism_service.api.agent_bridge import create_session, submit_result, CreateSessionBody, ResultBody
+    from prism_service.services.agent_bridge import get_agent_bridge_service
+
+    monkeypatch.setattr(data_dir_module, "resolve_data_dir", lambda: tmp_path)
+
+    alice = _principal("alice")
+    session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    svc = get_agent_bridge_service()
+    command_id = svc.publish_command(svc._get_live(session["id"]), "network", {})
+
+    small_entries = [{"method": "GET", "url": "/api/tasks", "status": 200, "ok": True}]
+    submit_result(session["id"], ResultBody(
+        token=session["token"], command_id=command_id, ok=True,
+        data={"entries": small_entries, "total_captured": 1, "failed_count": 0},
+    ))
+
+    result = svc.wait_for_result(command_id, timeout=2.0)
+    assert result["ok"] is True
+    assert result["data"]["entries"] == small_entries
+    assert "entries_path" not in result["data"]

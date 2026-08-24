@@ -3,19 +3,22 @@
 See services/agent_bridge.py's module docstring and
 /home/siegeon/.claude/plans/peaceful-seeking-octopus.md for the full design.
 
-Only `POST /sessions` (session creation) uses the caller's REAL principal
-(current_principal) — that call is what decides whose session this is. The
-other two routes here, plus `GET /sse/agent-bridge/{id}` (routes/sse.py),
-carry the session's own short-lived token as their credential instead, and
-each performs that check itself; api/security.py carves these item paths out
-of the general team-boundary gate for exactly that reason (EventSource can't
-send an Authorization header, and reusing the general access key over this
-channel would be broader than the bridge session's intended scope).
+`POST /sessions` (session creation) and `GET /sessions` (discovery — "what's
+my own active session id") both use the caller's REAL principal
+(current_principal) — those are the two calls that decide/reveal whose
+session this is. The other two routes here, plus `GET /sse/agent-bridge/{id}`
+(routes/sse.py), carry the session's own short-lived token as their
+credential instead, and each performs that check itself; api/security.py
+carves these item paths out of the general team-boundary gate for exactly
+that reason (EventSource can't send an Authorization header, and reusing the
+general access key over this channel would be broader than the bridge
+session's intended scope).
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import re
 import uuid
 
@@ -23,7 +26,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from prism_service.api.auth import coerce_principal, current_principal
-from prism_service.data_dir import agent_bridge_screenshot_dir
+from prism_service.data_dir import agent_bridge_dump_dir, agent_bridge_screenshot_dir
 from prism_service.models.workspace import Principal
 from prism_service.services.agent_bridge import get_agent_bridge_service
 
@@ -31,6 +34,13 @@ router = APIRouter()
 
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _DATA_URL_RE = re.compile(r"^data:image/(png|jpeg);base64,(.+)$", re.DOTALL)
+
+# Same "persist large payloads to disk, hand back a path" convention as
+# screenshots (see _persist_screenshot_if_present below) -- console/network
+# dumps are ordinarily small (a bounded ring buffer, capped by `limit`), but
+# a chatty page can still produce a big one, and this keeps the MCP tool's
+# text response from ballooning either way.
+_LARGE_PAYLOAD_THRESHOLD_BYTES = 8_000
 
 
 def _persist_screenshot_if_present(session_id: str, data: dict) -> dict:
@@ -54,6 +64,31 @@ def _persist_screenshot_if_present(session_id: str, data: dict) -> dict:
     path.write_bytes(raw)
     rest = {k: v for k, v in data.items() if k != "image"}
     return {**rest, "image_path": str(path)}
+
+
+def _persist_large_dump_if_present(session_id: str, data: dict) -> dict:
+    """A `console`/`network` command's result carries its `entries` list
+    inline — fine for a normal ring-buffer slice, but a large one (a chatty
+    page, a high `limit`) would otherwise dump straight into the MCP tool's
+    text response. Mirrors _persist_screenshot_if_present: write the full
+    payload to disk once it crosses a size threshold and hand back a path
+    instead, leaving small payloads inline (they're more useful read
+    directly by a caller than round-tripped through a file open)."""
+    if not _SESSION_ID_RE.match(session_id):
+        return data
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return data
+    try:
+        blob = json.dumps(entries)
+    except (TypeError, ValueError):
+        return data
+    if len(blob.encode("utf-8")) < _LARGE_PAYLOAD_THRESHOLD_BYTES:
+        return data
+    path = agent_bridge_dump_dir(session_id) / f"{uuid.uuid4().hex}.json"
+    path.write_text(blob, encoding="utf-8")
+    rest = {k: v for k, v in data.items() if k != "entries"}
+    return {**rest, "entries_path": str(path), "entries_count": len(entries)}
 
 
 class CreateSessionBody(BaseModel):
@@ -81,6 +116,39 @@ def create_session(
     }
 
 
+@router.get("/sessions")
+def list_my_sessions(
+    project: str = Query(""),
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Discovery: "what is my current active bridge session id" for a
+    caller who is ALREADY authenticated -- no human needs to copy it out of
+    Settings and paste it into chat. Authenticated exactly like
+    `POST /sessions` (the same `current_principal` dependency, never the
+    item routes' narrow session token), so this can only ever answer for
+    the CALLER's own sessions -- api/security.py's carve-out explicitly
+    excludes the bare "/sessions" path from the item-path bypass for
+    exactly this reason (see `_is_agent_bridge_session_path`).
+
+    Returns id/project/expires_at only -- the bearer TOKEN is never handed
+    back here (it's only ever returned once, by the POST that mints it).
+    That's sufficient: `agent_bridge_command` authorizes purely on the
+    caller's own access key resolving to the session's owning user
+    (`session_owned_by`, task 6cef97ec's model), never on the token, so an
+    id is everything an authorized agent needs to actually drive a session.
+    """
+    principal = coerce_principal(principal)
+    service = get_agent_bridge_service()
+    sessions = service.sessions_for_user(
+        principal.user_id, project_id=(project or None))
+    return {
+        "sessions": [
+            {"id": s.id, "project": s.project_id, "expires_at": s.expires_at}
+            for s in sessions
+        ],
+    }
+
+
 class ResultBody(BaseModel):
     token: str
     command_id: str
@@ -98,6 +166,7 @@ def submit_result(session_id: str, body: ResultBody) -> dict:
     if session is None:
         raise HTTPException(401, "invalid, expired, or revoked bridge session")
     data = _persist_screenshot_if_present(session_id, body.data)
+    data = _persist_large_dump_if_present(session_id, data)
     accepted = service.submit_result(session_id, body.command_id, {
         "ok": body.ok, "error": body.error, "data": data,
     })
