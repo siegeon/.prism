@@ -2255,6 +2255,26 @@ class ConductorService:
                 " | ".join(r for r in (_screen_reason, _ship_reason) if r),
             )
             return None
+        # UN-PARK (task 3baadd19 qa discovery, 2026-08-24): _park_green_refusal
+        # above WRITES blocked_reason when this sweep objects, but nothing
+        # symmetric ever CLEARED it once the objection stopped firing (e.g.
+        # the branch this tooth was complaining about got landed) --
+        # gate_reason self-heals every sweep via
+        # gate_adjudicator._write_pending_reason, but blocked_reason does not,
+        # so the "commit trailer not reachable" banner stayed on the task
+        # forever after the trailer WAS reachable, with no code path to clear
+        # it short of the owner clicking Approve (the ship-on-approve queue
+        # path, conductor_service.py ~3894, is the only other blocked_reason=""
+        # writer for this tooth). Scoped to status != "blocked" so this never
+        # touches resume_actuator's unrelated dependency-retry park (which
+        # always sets status="blocked" alongside its own blocked_reason,
+        # never leaves status untouched the way this tooth does).
+        if str(getattr(task, "blocked_reason", "") or "").strip() \
+                and str(getattr(task, "status", "") or "") != "blocked":
+            try:
+                self._task_svc.update(task_id, blocked_reason="")
+            except Exception:
+                pass
         # Owner rule (2026-07-18, task eaafdf75): the machine seat signs off
         # ONLY an OBJECTIVE-OBSERVABLE oracle — a test suite passes
         # (pytest_ids) or an http probe returns ok (http_probe). Anything
