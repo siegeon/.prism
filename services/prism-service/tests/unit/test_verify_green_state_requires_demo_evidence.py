@@ -1,9 +1,11 @@
 """verify_green_state must not advance a demo/review-proof task to
-green_gate with zero captured evidence (task 3baadd19 qa discovery,
-2026-08-24).
+green_gate with zero captured evidence (discovered during task 3baadd19's
+own QA pass, 2026-08-24) -- a general advance_task fix, not something that
+pins task 3baadd19's own oracle.
 
-LIVE REGRESSION this pins: task 3baadd19 ("PRISM drives its own tasks end
-to end", proof_type=demo) reported SUCCESS at verify_green_state with a
+LIVE REGRESSION this pins: task 3baadd19's own drive ("PRISM drives its
+own tasks end to end", proof_type=demo) reported SUCCESS at
+verify_green_state with a
 completion_proof that explicitly admitted the epic's own oracle was NOT
 met ("the epic's actual oracle... is NOT yet true in production because
 task_runner.py doesn't pass timeout_s") and with ZERO captured evidence in

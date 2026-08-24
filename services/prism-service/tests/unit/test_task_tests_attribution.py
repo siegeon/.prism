@@ -61,3 +61,44 @@ def test_an_unparseable_file_falls_back_to_mention():
 def test_a_file_with_no_docstring_falls_back_to_mention():
     src = "# task %s\ndef test_x():\n    assert True\n" % OWNER
     assert file_owns_task(src, OWNER) is True
+
+
+# ---------------------------------------------------------------------------
+# Live regression, real files (task 3baadd19, 2026-08-24): a docstring that
+# credits a task for MOTIVATING a general fix -- "(task <id> qa discovery)"
+# -- reads as a non-possessive FIRST mention, so file_owns_task attributed
+# these files to 3baadd19's own Evidence tab even though neither file pins
+# 3baadd19's own oracle (they pin general conductor_service.py/advance_task
+# fixes). Owner caught it live from the Evidence tab's own "pinned tests"
+# count: "i dont think you tied the evidence to the run that computed the
+# evidence... soo you kinda messed up there." Fixed by rephrasing the
+# credit possessively ("task <id>'s own QA pass"); pinned here against the
+# REAL on-disk files so the phrasing can't silently drift back.
+# ---------------------------------------------------------------------------
+
+_TASK_3BAADD19 = "3baadd19-78af-42b8-a78e-47a4b6f51fc0"
+
+
+def _service_root():
+    from pathlib import Path
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def test_blocked_reason_fix_file_is_not_falsely_attributed_to_3baadd19():
+    path = (_service_root() / "tests" / "unit"
+            / "test_stale_blocked_reason_clears_once_shipped.py")
+    src = path.read_text(encoding="utf-8")
+    assert file_owns_task(src, _TASK_3BAADD19) is False, (
+        "this file pins a general adjudicate_green_gate fix, not "
+        "3baadd19's own oracle -- it must not show up as 'this task's "
+        "pinned tests' on 3baadd19's Evidence tab")
+
+
+def test_demo_evidence_advance_fix_file_is_not_falsely_attributed_to_3baadd19():
+    path = (_service_root() / "tests" / "unit"
+            / "test_verify_green_state_requires_demo_evidence.py")
+    src = path.read_text(encoding="utf-8")
+    assert file_owns_task(src, _TASK_3BAADD19) is False, (
+        "this file pins a general advance_task fix, not 3baadd19's own "
+        "oracle -- it must not show up as 'this task's pinned tests' on "
+        "3baadd19's Evidence tab")

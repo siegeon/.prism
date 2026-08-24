@@ -1,0 +1,84 @@
+{
+  "contract": "green-gate-evidence-ui",
+  "note": "Frozen acceptance manifest for task 3baadd19's QA-discovered feature: the green_gate evidence-completeness fixes (blocked_reason self-heals, demo-evidence must be captured before verify_green_state can advance) and the Workflows page's per-check diagram + generic state-machine pill rail. Each 'delivered' AC names the REAL test node-id that would FAIL if the component regressed -- enforced by test_green_gate_evidence_ui_acceptance_manifest.py, same pattern as conductor_tile.acceptance.json. `live_walkthrough` codifies the REMOTE-ASSIST steps that validated this feature as a real user, per the qa-user-agent skill's own methodology (walk ACs one at a time, fresh screenshot/read after every action) -- re-run it verbatim on any future regression suspicion instead of re-deriving the steps from scratch.",
+  "acceptance_criteria": [
+    {
+      "id": "AC-BLOCKED-REASON-CLEARS",
+      "statement": "adjudicate_green_gate's blocked_reason self-heals (clears) once the shipped-ness/screen-claim objection that set it stops firing, scoped so it never touches an unrelated status=blocked park.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_stale_blocked_reason_clears_once_shipped.py::test_blocked_reason_is_set_while_unshipped_then_clears_once_landed",
+      "guard_node_id": null,
+      "note": "Companion scoping guard: test_blocked_reason_from_an_unrelated_dependency_block_is_left_alone."
+    },
+    {
+      "id": "AC-DEMO-EVIDENCE-BLOCKS-ADVANCE",
+      "statement": "advance_task refuses a verify_green_state -> green_gate advance for a human-judgment oracle (proof_type demo/review, or browser/manual per oracle_spec.is_human_judgment) when the evidence store has no captured artifact -- regardless of the 'ui' tag, closing the exact hole task 3baadd19 fell through.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_verify_green_state_requires_demo_evidence.py::test_A1_demo_task_with_no_ui_tag_and_no_evidence_cannot_advance",
+      "guard_node_id": null,
+      "note": "Anti-regression companions: test_B1 (captured evidence lets the same task through), test_B2 (proof_type=test unaffected), test_B3 (a ui-tagged demo task is still governed)."
+    },
+    {
+      "id": "AC-GATE-CHECKS-REGISTRY-COMPLETE",
+      "statement": "The green_gate evidence-status reporting endpoint enumerates ALL real pre-flight teeth (candidate_controls, reachability, ui_artifact, screen_claim, shipped_ness, demo_evidence, oracle_receipt), each computed by calling the exact function the real enforcement path calls -- never a reimplementation.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_api_workflows.py::test_green_gate_status_checks_report_every_pre_flight_tooth",
+      "guard_node_id": null,
+      "note": "Live-shape replay: test_green_gate_status_checks_replay_3baadd19s_exact_shape. Resilience: test_green_gate_status_checks_never_crash_on_a_narrow_fake_conductor_svc."
+    },
+    {
+      "id": "AC-PER-CHECK-ENDPOINT",
+      "statement": "Each of the 7 registry checks is individually reachable via POST /api/workflows/steps/green-gate-check (task_id, check), always HTTP 200 regardless of ok=true/false so a refused tooth never halts the JSON behavior's step chain.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_api_workflows.py::test_green_gate_check_every_registry_entry_is_individually_reachable",
+      "guard_node_id": null,
+      "note": "Single-tooth shape: test_green_gate_check_reports_one_named_tooth. Unknown-id resilience: test_green_gate_check_unknown_check_id_reports_rather_than_crashes."
+    },
+    {
+      "id": "AC-DIAGRAM-HAS-ONE-NODE-PER-CHECK",
+      "statement": "The on-disk .prism/behaviors/conductor/green-gate-status.json (the file that drives the Workflows page's OWN diagram/sidebar count) carries one step per real check plus the aggregate rollup, not the old single opaque 'status' callback.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_api_workflows.py::test_green_gate_status_behavior_json_has_one_step_per_registry_check",
+      "guard_node_id": null,
+      "note": "A DISK-READ test, not a mocked stand-in -- reads the exact file the owner was looking at live when this was requested."
+    },
+    {
+      "id": "AC-PILL-RAIL-IS-STRUCTURAL-NOT-HARDCODED",
+      "statement": "Pill-rail family membership (which pages get real task-activity pills instead of an empty rail) is derived structurally -- hasChildWorkflows (something nests under this entry) or parent_id set (this entry nests under something) -- never a literal selectedWorkflowId === \"conductor\" check, so a future second top-level state-machine workflow inherits the same rail for free.",
+      "status": "delivered",
+      "proof_node_id": "tests/unit/test_workflows_section_ui.py::test_state_machine_family_is_never_a_hardcoded_conductor_id_check",
+      "guard_node_id": null,
+      "note": "Companion: test_conductor_step_ids_resolves_the_parent_generically_not_via_conductor_literal (the per-child step-id lookup resolves ITS OWN parent, never assumes \"conductor\")."
+    }
+  ],
+  "live_walkthrough": {
+    "how_to_run": "Drive via agent-bridge (remote assist) against the owner's own live tab per the qa-user-agent skill -- fall back to a Playwright tab only if no bridge session exists. Confirm `GET /api/version`'s web_build reflects a build made AFTER the last relevant TSX change before starting (a stale bundle silently invalidates every step below).",
+    "steps": [
+      {
+        "step": 1,
+        "action": "navigate to /tasks, switch from 'My Work' to 'Team', click the first row's task title link.",
+        "expect": "Lands on /tasks/<id> for the top-priority in_progress task (task 3baadd19 at time of writing). Overview tab loads with no red 'BLOCKED BECAUSE' banner (AC-BLOCKED-REASON-CLEARS's live signal -- a stale unshipped-commit refusal would render one here)."
+      },
+      {
+        "step": 2,
+        "action": "click the 'Evidence' tab.",
+        "expect": "The CHECK / RESULT / FRESHNESS table renders 'oracle receipt', 'shell verifier', and 'pinned tests' rows with no console-visible error; 'pinned tests' shows N/M passing, never a raw exception in place of the table."
+      },
+      {
+        "step": 3,
+        "action": "navigate to /workflows?workflow=green-gate-status.",
+        "expect": "Sidebar shows 'GREEN GATE EVIDENCE STATUS 8' (not 1). The canvas renders 8 distinct nodes -- candidate_controls, reachability, ui_artifact, screen_claim, shipped_ness, demo_evidence, oracle_receipt, status -- chained by exit_code==0 edges into Complete (AC-DIAGRAM-HAS-ONE-NODE-PER-CHECK's live signal)."
+      },
+      {
+        "step": 4,
+        "action": "read the pill rail at the bottom of the SAME green-gate-status page.",
+        "expect": "The rail shows real colored pills (green/amber/magenta), not an empty/disabled gray strip -- confirms AC-PILL-RAIL-IS-STRUCTURAL-NOT-HARDCODED reached this specific child page, not just the top-level Conductor canvas."
+      },
+      {
+        "step": 5,
+        "action": "curl -X POST \"http://<host>/api/workflows/steps/green-gate-status?project=prism\" -d '{\"task_id\": \"<id>\"}' against the SAME task from step 1.",
+        "expect": "Response JSON's `checks` array has exactly 7 entries (ids: candidate_controls, reachability, ui_artifact, screen_claim, shipped_ness, demo_evidence, oracle_receipt); if the task genuinely has no captured evidence yet, `demo_evidence.ok` is false with a reason naming the missing artifact -- an honest, non-cosmetic verdict, not a laundered pass (AC-GATE-CHECKS-REGISTRY-COMPLETE's live signal)."
+      }
+    ]
+  }
+}

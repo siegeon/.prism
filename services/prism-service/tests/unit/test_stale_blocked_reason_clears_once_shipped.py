@@ -1,5 +1,7 @@
 """blocked_reason must self-heal once the condition that set it clears
-(task 3baadd19 qa discovery, 2026-08-24).
+(discovered during task 3baadd19's own QA pass, 2026-08-24) -- a general
+adjudicate_green_gate fix, not something that pins task 3baadd19's own
+oracle.
 
 LIVE REGRESSION this pins: _park_green_refusal (conductor_service.py) writes
 BOTH gate_reason and blocked_reason when adjudicate_green_gate's shipped-ness
