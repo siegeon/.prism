@@ -136,8 +136,15 @@ def test_query_state_defaults_to_empty_string():
 def test_filter_predicate_sits_in_the_same_merged_filter_as_existing_clauses():
     src = _read()
     memo = _items_memo_body(src)
-    assert "...tasks.filter(" in memo and "map(nativeToWork)" in memo
-    assert "...external.map(externalToWork)" in memo
+    # Superseded by task d9f082fe (unify the Work screen's two work queues
+    # into one): native and external rows are now each built into their own
+    # named array (nativeRows/externalRows), sorted together into one
+    # interleaved `merged` queue, rather than spread inline at the merge
+    # site. The AC-7 invariant this test guards — the match clause runs in
+    # the SAME filter over both sources — is unchanged and still asserted
+    # below via `body`/`assigneeFilter`.
+    assert "tasks.filter(" in memo and "map(nativeToWork)" in memo
+    assert "external" in memo and "map(externalToWork)" in memo
     body = _filter_callback_body(memo)
     assert "assigneeFilter" in body, (
         "the new match clause must sit inside the SAME merged .filter() as "

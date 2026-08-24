@@ -137,12 +137,21 @@ function externalToWork(e: ExternalEntity): WorkItem {
     title: e.title || e.display_key || e.id,
     assignee: (e.assignees && e.assignees[0]) || "",
     status: "pending",
+    updated_at: e.remote_updated_at || e.last_seen_at,
     remoteStatus: e.remote_status || e.status_category || "",
     url: e.url,
     displayKey: e.display_key,
     restricted: !!e.restricted,
     imported: !!e.task_id,
   };
+}
+
+// A single common key so native + external rows interleave into ONE ordered
+// queue instead of rendering as two stacked blocks (native-then-external).
+// Missing/unparseable timestamps sort last rather than first.
+function workItemTimestamp(it: WorkItem): number {
+  const t = it.updated_at ? Date.parse(it.updated_at) : NaN;
+  return Number.isNaN(t) ? -Infinity : t;
 }
 
 export default function TasksPage() {
@@ -199,15 +208,23 @@ export default function TasksPage() {
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
   }, [load]);
 
-  // The unified, filtered, viewer-scoped work list.
+  // The unified, filtered, viewer-scoped work list — ONE queue, not two.
   const items = useMemo(() => {
-    const merged: WorkItem[] = [
-      ...tasks.filter((t) => {
-        const s = (t.status ?? "").toLowerCase();
-        return !t.parent_id && s !== "done" && s !== "cancelled" && s !== "deleted" && s !== "archived";
-      }).map(nativeToWork),
-      ...external.map(externalToWork),
-    ];
+    const nativeRows = tasks.filter((t) => {
+      const s = (t.status ?? "").toLowerCase();
+      return !t.parent_id && s !== "done" && s !== "cancelled" && s !== "deleted" && s !== "archived";
+    }).map(nativeToWork);
+    // An external entity already imported into a rendered native task is the
+    // SAME piece of work as that native row — drop it here so it doesn't
+    // render a second time (owner report: "two separate work queues").
+    const renderedNativeIds = new Set(nativeRows.map((t) => t.id).filter(Boolean));
+    const externalRows = external
+      .filter((e) => !(e.task_id && renderedNativeIds.has(e.task_id)))
+      .map(externalToWork);
+    // Sort by a common key so native + external interleave into one ordered
+    // queue instead of two stacked blocks (native-then-external).
+    const merged: WorkItem[] = [...nativeRows, ...externalRows]
+      .sort((a, b) => workItemTimestamp(b) - workItemTimestamp(a));
     const q = query.trim().toLowerCase();
     return merged.filter((it) => {
       if (assigneeFilter && !it.assignee.toLowerCase().includes(assigneeFilter.toLowerCase())) return false;

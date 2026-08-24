@@ -100,6 +100,8 @@ export type ExternalEntity = {
   assignees?: string[];
   task_id?: string;           // linked local intake task, if any
   restricted?: boolean;
+  remote_updated_at?: string; // provider's own last-modified timestamp
+  last_seen_at?: string;      // fallback: last time our sync saw this entity
 };
 
 export type IntegrationConnection = {

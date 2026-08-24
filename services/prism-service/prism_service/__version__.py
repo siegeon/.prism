@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.26"
+PRISM_VERSION = "7.13.27"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5500,4 +5500,18 @@ PRISM_VERSION_NOTES += (
     "one place a gate legitimately passes is the one place a stale "
     "blocked_reason must clear. New test in test_gate_decide_actor_"
     "passthrough.py pins it."
+    "\n\n7.13.27: owner report -- 'the work screen has two separate work "
+    "queues rather than 1'. TasksPage.tsx's items useMemo built the merged "
+    "list by concatenating native PRISM tasks and external GitHub/Jira "
+    "entities with no shared sort key, so all native rows rendered first "
+    "and all external rows after -- one table that visually read as two "
+    "stacked queues. Worse, an external entity already imported into a "
+    "native task (task_id set) wasn't excluded from the external block, so "
+    "it rendered a second time. Fixed: external rows now carry "
+    "updated_at (from the backend's existing remote_updated_at/"
+    "last_seen_at, newly typed on ExternalEntity in api.ts), the merged "
+    "list sorts by that one common timestamp so native+external interleave "
+    "into a single ordered queue, and external entities whose task_id "
+    "matches an already-rendered native row are dropped before merge. New "
+    "test_tasks_page_unified_queue.py pins both the sort and the dedupe."
 )
