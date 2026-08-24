@@ -49,11 +49,100 @@ type BridgeCommand = {
   type: "agent_bridge.command";
   session_id: string;
   command_id: string;
-  action: "navigate" | "click" | "fill" | "read" | "screenshot";
+  action: "navigate" | "click" | "fill" | "read" | "screenshot" | "console" | "network";
   path?: string;
   selector?: string;
   value?: string;
 };
+
+type ConsoleLogEntry = { level: "log" | "warn" | "error"; message: string; time: number };
+type NetworkLogEntry = { method: string; url: string; status: number; time: number };
+
+const CONSOLE_LOG_LIMIT = 200;
+const NETWORK_LOG_LIMIT = 200;
+
+// Module-level ring buffers -- recording starts at `installObservability()`
+// below (module load), well before any bridge session or `console`/`network`
+// command can even be issued, so a driver that enables Remote Assist,
+// navigates, THEN asks for `console`/`network` still sees what fired during
+// the navigation.
+const consoleLog: ConsoleLogEntry[] = [];
+const networkLog: NetworkLogEntry[] = [];
+
+function pushConsoleEntry(level: ConsoleLogEntry["level"], message: string): void {
+  consoleLog.push({ level, message, time: Date.now() });
+  if (consoleLog.length > CONSOLE_LOG_LIMIT) consoleLog.shift();
+}
+
+function pushNetworkEntry(entry: NetworkLogEntry): void {
+  networkLog.push(entry);
+  if (networkLog.length > NETWORK_LOG_LIMIT) networkLog.shift();
+}
+
+/** Wraps console.{log,warn,error}, window error/unhandledrejection, and both
+ * fetch and XMLHttpRequest, so the `console`/`network` bridge actions have
+ * something real to read instead of a fresh/empty capture. Called once at
+ * module scope (see the call right after this definition). */
+function installObservability(): void {
+  (["log", "warn", "error"] as const).forEach((level) => {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      pushConsoleEntry(level, args.map((a) => (typeof a === "string" ? a : String(a))).join(" "));
+      original(...args);
+    };
+  });
+
+  window.addEventListener("error", (e: ErrorEvent) => {
+    pushConsoleEntry("error", e.message);
+  });
+  window.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
+    pushConsoleEntry("error", String(e.reason));
+  });
+
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (async (...args: Parameters<typeof fetch>) => {
+    const start = Date.now();
+    const input = args[0];
+    const url = typeof input === "string" ? input : (input as Request).url ?? String(input);
+    const method = (
+      args[1]?.method || (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
+    try {
+      const res = await originalFetch(...args);
+      pushNetworkEntry({ method, url, status: res.status, time: Date.now() - start });
+      return res;
+    } catch (e) {
+      pushNetworkEntry({ method, url, status: 0, time: Date.now() - start });
+      throw e;
+    }
+  }) as typeof fetch;
+
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSend = XMLHttpRequest.prototype.send;
+  type BridgeXHR = XMLHttpRequest & { _bridgeMethod?: string; _bridgeUrl?: string };
+  XMLHttpRequest.prototype.open = function (
+    this: BridgeXHR, method: string, url: string | URL, ...rest: unknown[]
+  ) {
+    this._bridgeMethod = method.toUpperCase();
+    this._bridgeUrl = String(url);
+    // @ts-expect-error - forwarding native open's variadic rest args
+    return originalOpen.call(this, method, url, ...rest);
+  };
+  XMLHttpRequest.prototype.send = function (this: BridgeXHR, ...args: unknown[]) {
+    this.addEventListener("loadend", () => {
+      pushNetworkEntry({
+        method: this._bridgeMethod || "GET",
+        url: this._bridgeUrl || "",
+        status: this.status,
+        time: 0,
+      });
+    });
+    // @ts-expect-error - forwarding native send's variadic rest args
+    return originalSend.call(this, ...args);
+  };
+}
+
+installObservability();
 
 type AgentBridgeState = {
   session: BridgeSession | null;
@@ -264,6 +353,12 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
         const html2canvas = (await import("html2canvas-pro")).default;
         const canvas = await html2canvas(target as HTMLElement, { scale: 1 });
         data = { image: canvas.toDataURL("image/png") };
+      } else if (cmd.action === "console") {
+        data = { entries: consoleLog.slice() };
+      } else if (cmd.action === "network") {
+        const entries = networkLog.slice();
+        const failed_count = entries.filter((n) => n.status === 0 || n.status >= 400).length;
+        data = { entries, failed_count };
       } else {
         throw new Error(`unknown action: ${cmd.action}`);
       }
