@@ -817,6 +817,8 @@ function childDriverPrompt(child, idx) {
     `ALLOWED FILES (hard scope, enforced server-side): ${(child.allowed_files || []).join(', ')}`,
     `CONSTRUCTED BY: ${child.constructed_by || '(unstated - if nothing constructs it yet, the wiring is in THIS slice)'}`,
     '',
+    `HEARTBEAT (drive liveness - REQUIRED, not optional; this slice runs its own multi-step conductor_work loop and is the longest-running agent in the whole flow, so without beats the board reads it dead for its entire drive). Post your FIRST beat immediately after your first tool call, then re-beat every 5-8 tool calls (at least every ~2 minutes): \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${child.task_id}","step":"<your own current job.step from the inner loop below, not a value fixed here>","elapsed_s":<seconds since you started>,"last_tool":"<the tool you just ran>","work_units":<counter that strictly increases>}'\` - key it to child.task_id (this slice's OWN id), never the parent/epic's id, and always report the LIVE current step since this prompt is generated once before your inner loop even starts. Best-effort; a failed beat is non-fatal but must not be skipped.`,
+    '',
     'Drive this child to a genuinely-evidenced green_gate with the SAME loop the parent uses:',
     `1. \`job = conductor_work(id="${child.task_id}")\` (no outcome) - this enters the flow AND creates the CHILD'S OWN git worktree. Use workspace.path for every edit/test/commit; the gate verifier reads that exact path.`,
     '2. While not done: do EXACTLY job["instructions"], produce job["expected_proof"], then `conductor_work(id=..., outcome="pass", proof=<the artifact>, model=<your model>)`. Never name a step yourself; never call conductor_advance/conductor_gate.',
@@ -825,6 +827,7 @@ function childDriverPrompt(child, idx) {
     GRAPH_BRIEF,
     '',
     'Report ok:false with the blocking tooth in halt_reason rather than forcing anything. A red test is yours, never "pre-existing".',
+    `\n\nHEARTBEAT (drive liveness - REQUIRED, not optional; you are the longest-running agent in this whole flow, and without beats your row reads adrift/stalled with heartbeat:null on the board for your ENTIRE drive). Post your FIRST beat immediately after your first tool call, then re-beat after roughly every 5-8 tool calls (at least every ~2 minutes of work), for every step of your OWN internal conductor_work loop: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${child.task_id}","step":"<your own job.step from the CURRENT iteration of your conductor_work loop - never a step name frozen at prompt-generation time>","elapsed_s":<seconds since you started that step>,"last_tool":"<the tool you just ran>","work_units":<a counter you increment each beat, e.g. total tool calls so far>}'\`. Always use ${child.task_id} (this CHILD's own id) - never the parent/epic's id, or the epic tile reads driving while this row still reads dead. work_units MUST strictly increase. A missed or failed beat is non-fatal, but skipping beats entirely makes the owner's board cry "stalled" over healthy work.`,
     telemetryInstr('child_drive', 'dev'),
   ].join('\n')
 }
