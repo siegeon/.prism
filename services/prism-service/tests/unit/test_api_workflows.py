@@ -1200,6 +1200,139 @@ def test_green_gate_status_never_calls_the_real_adjudicator(monkeypatch):
     assert resp.has_fresh_passing_receipt is False
 
 
+def test_green_gate_status_checks_report_every_pre_flight_tooth(monkeypatch):
+    """Owner directive (task 3baadd19, 2026-08-24): 'make this real...
+    make sure that it is a part of the flows and enforces our rules' --
+    the Workflows page's green-gate-status view was a single opaque
+    oracle-receipt check while five other real teeth governed the same
+    gate invisibly. `checks` must enumerate all of them."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        id = "t-checks-1"
+        tags = ["backend"]
+        proof_type = "test"
+        oracle = ""
+        completion_proof = "tests/unit/test_x.py::test_y PASSED"
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _FakeConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "", None
+
+        def _unshipped_gate_reason(self, task):
+            return ""
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.latest_receipt",
+        lambda project, tid: None)
+
+    resp = workflows_api.workflow_step_green_gate_status(
+        workflows_api.GreenGateStatusRequest(task_id="t-checks-1"), project="prism")
+
+    ids = {c.id for c in resp.checks}
+    assert ids == {"candidate_controls", "reachability", "ui_artifact",
+                   "screen_claim", "shipped_ness", "demo_evidence"}, ids
+    for c in resp.checks:
+        assert c.label, c.id
+        assert isinstance(c.ok, bool)
+
+
+def test_green_gate_status_checks_replay_3baadd19s_exact_shape(monkeypatch):
+    """LIVE REGRESSION replay: proof_type=demo, no 'ui' tag, no captured
+    evidence -- task 3baadd19's own shape when it wrongly reached
+    green_gate. The demo_evidence check must report ok=False here, and
+    everything else stays clean (this is a scoped tooth, not a blanket
+    block)."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        id = "3baadd19-78af-42b8-a78e-47a4b6f51fc0"
+        tags = ["conductor", "architecture", "owner-directive",
+                "drive-worker", "github", "jira"]
+        proof_type = "demo"
+        oracle = ("PRISM claims a task by itself; film/screenshots of the "
+                 "unattended drive in the PRISM evidence store")
+        completion_proof = ("the epic's actual oracle... is NOT yet true "
+                            "in production")
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _FakeConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "no EvidenceReceipt on file", None
+
+        def _unshipped_gate_reason(self, task):
+            return ""
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_FakeConductorSvc()))
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.latest_receipt",
+        lambda project, tid: None)
+
+    resp = workflows_api.workflow_step_green_gate_status(
+        workflows_api.GreenGateStatusRequest(
+            task_id="3baadd19-78af-42b8-a78e-47a4b6f51fc0"), project="prism")
+
+    by_id = {c.id: c for c in resp.checks}
+    assert by_id["demo_evidence"].ok is False, (
+        f"3baadd19's exact shape (demo, no ui tag, no captured evidence) "
+        f"must be flagged: {by_id['demo_evidence']}")
+    assert "evidence" in by_id["demo_evidence"].reason.lower()
+    # Scoped, not a blanket block: the ui_artifact/screen_claim teeth are
+    # "ui"-tag-gated and this task carries no "ui" tag, so they stay clean.
+    assert by_id["ui_artifact"].ok is True
+    assert by_id["screen_claim"].ok is True
+
+
+def test_green_gate_status_checks_never_crash_on_a_narrow_fake_conductor_svc(
+    monkeypatch,
+):
+    """A tooth this endpoint calls THROUGH conductor_svc
+    (_unshipped_gate_reason) must degrade to ok=True, never crash the
+    whole status report, when the wired conductor_svc doesn't implement
+    it -- mirrors this file's own test_green_gate_status_never_calls_the_
+    real_adjudicator precedent for resilience against narrow fakes."""
+    from prism_service.api import workflows as workflows_api
+
+    class _FakeTask:
+        id = "t-narrow"
+        tags = ["backend"]
+        proof_type = "test"
+        oracle = ""
+        completion_proof = ""
+
+    class _FakeTaskSvc:
+        def get(self, tid):
+            return _FakeTask()
+
+    class _NarrowConductorSvc:
+        def _oracle_receipt_refusal(self, task, *, override, reason):
+            return "", None
+        # deliberately no _unshipped_gate_reason
+
+    monkeypatch.setattr(workflows_api, "get_project", lambda p: types.SimpleNamespace(
+        task_svc=_FakeTaskSvc(), conductor_svc=_NarrowConductorSvc()))
+    monkeypatch.setattr(
+        "prism_service.services.oracle_spec.latest_receipt",
+        lambda project, tid: None)
+
+    resp = workflows_api.workflow_step_green_gate_status(
+        workflows_api.GreenGateStatusRequest(task_id="t-narrow"), project="prism")
+
+    by_id = {c.id: c for c in resp.checks}
+    assert by_id["shipped_ness"].ok is True
+    assert len(resp.checks) == 6
+
+
 def test_green_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_path, monkeypatch):
     from prism_service.api import workflows as workflows_api
 
