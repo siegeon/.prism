@@ -197,6 +197,47 @@ def test_invoke_populates_structured_output_from_the_result_event(tmp_path):
     assert res.structured_output == {"story_md": "## Summary\nx"}
 
 
+def test_invoke_passes_timeout_s_through_to_subprocess_run(tmp_path):
+    """AC-1 (epic 3baadd19, task_runner drive worker hardening): invoke()
+    must accept timeout_s and forward it to subprocess.run's own timeout=
+    kwarg, so a wedged `claude -p` child cannot hang the drive worker
+    forever (claude_cli.py:278-281 currently passes no timeout= at all)."""
+    captured = {}
+
+    def fake_run(cmd, cwd, env, stdout, stderr, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return _completed(exit_code=0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        claude_cli.invoke(
+            "hi", tmp_path, tmp_path, max_turns=1, parse_events=False,
+            timeout_s=5.0,
+        )
+
+    assert captured["timeout"] == 5.0
+
+
+def test_invoke_returns_timeout_marked_result_instead_of_raising(tmp_path):
+    """AC-1: a TimeoutExpired from subprocess.run must be caught inside
+    invoke() and turned into a ClaudeCliResult with a non-zero, timeout-
+    marked exit code -- never propagated as a raw exception, so
+    task_runner._run_one_step's existing try/except Exception isn't the
+    only backstop against a wedged child."""
+
+    def fake_run(cmd, cwd, env, stdout, stderr, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout") or 0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        res = claude_cli.invoke(
+            "hi", tmp_path, tmp_path, max_turns=1, parse_events=False,
+            timeout_s=0.01,
+        )
+
+    assert isinstance(res, claude_cli.ClaudeCliResult)
+    assert res.exit_code == claude_cli.TIMEOUT_EXIT_CODE
+    assert res.exit_code != 0
+
+
 def test_invoke_leaves_structured_output_none_without_a_schema(tmp_path):
     """No json_schema passed -> never even LOOK for the field, even if a
     result event happens to carry one (a plain call shouldn't silently
