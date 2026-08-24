@@ -11,6 +11,8 @@ import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
 import { Skeleton } from "@/components/ui";
 import { AgentBridgeProvider } from "@/lib/agentBridge";
+import ReconnectBanner from "@/components/ReconnectBanner";
+import { waitForServerThenReload } from "@/lib/reconnect";
 
 // Route-level code splitting (v6.3.40). Every page used to be a static import,
 // so the graph/Sigma, conductor animation, settings, and mermaid-adjacent code
@@ -23,7 +25,18 @@ import DashboardPage from "@/pages/DashboardPage";
 /** A watched production build replaces hashed route chunks. An already-open
  * tab may request yesterday's hash before the version poll can reload it;
  * recover once instead of leaving the root Suspense boundary permanently
- * blank. A second failure is real and is rethrown for diagnostics. */
+ * blank. A second failure is real and is rethrown for diagnostics.
+ *
+ * NEVER reload blind (owner live, 2026-08-24: "it should NEVER go white").
+ * A chunk import can fail for two very different reasons — a stale build
+ * hash (server IS up, just serving a newer manifest; reloading fixes it
+ * instantly) or the server being genuinely unreachable mid-restart
+ * (reloading immediately just fails the SAME way, and a failed top-level
+ * navigation shows the BROWSER's own blank error page, which nothing in
+ * this app can intercept). waitForServerThenReload() only ever reloads
+ * after a real probe succeeds, showing ReconnectBanner in the meantime —
+ * the current page's own JS keeps running throughout, so the tab never
+ * goes blank either way. */
 function lazyRoute<T extends { default: ComponentType }>(key: string, loader: () => Promise<T>) {
   return lazy(async () => {
     const reloadKey = `prism.chunk-reload.${key}`;
@@ -34,8 +47,8 @@ function lazyRoute<T extends { default: ComponentType }>(key: string, loader: ()
     } catch (error) {
       if (!sessionStorage.getItem(reloadKey)) {
         sessionStorage.setItem(reloadKey, "1");
-        window.location.reload();
-        return new Promise<T>(() => { /* navigation continues after reload */ });
+        waitForServerThenReload();
+        return new Promise<T>(() => { /* navigation continues once the server answers */ });
       }
       throw error;
     }
@@ -121,7 +134,13 @@ export default function App() {
   }
   return (
     <AgentBridgeProvider>
-    <div className="h-full w-full flex bg-[color:var(--background-base)] text-[color:var(--midground-base)] relative">
+    <div className="h-full w-full flex flex-col bg-[color:var(--background-base)] text-[color:var(--midground-base)] relative">
+      {/* Spans the FULL shell width, above Sidebar/main both — a system
+          notification, not something scoped to one panel (owner live,
+          2026-08-24: "it should NEVER go white... it should have the
+          banner letting the customer know it's updating"). */}
+      <ReconnectBanner />
+      <div className="flex-1 flex min-h-0">
       <Backdrop />
       <Sidebar />
       <main className="flex-1 flex flex-col min-w-0">
@@ -200,6 +219,7 @@ export default function App() {
           </AnimatePresence>
         </div>
       </main>
+      </div>
     </div>
     </AgentBridgeProvider>
   );

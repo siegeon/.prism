@@ -134,7 +134,17 @@ def test_the_route_mounts_the_workflows_page():
         r'const\s+WorkflowsPage\s*=\s*lazyRoute\("workflows",\s*\(\)\s*=>\s*import\("@/pages/WorkflowsPage"\)\);',
         app,
     ), "WorkflowsPage must be a self-healing lazy route chunk"
-    assert "window.location.reload()" in app
+    # RELOCATED (task d9f082fe follow-up, owner live, 2026-08-24): "it
+    # should NEVER go white -- it should have the banner letting the
+    # customer know it's updating". A blind window.location.reload() on a
+    # failed chunk import could fire while the server was still
+    # unreachable, and a failed reload navigation shows the BROWSER's own
+    # blank error page -- nothing React-level can intercept that. App.tsx
+    # now defers to lib/reconnect.ts's waitForServerThenReload(), which
+    # only reloads after a real probe succeeds, showing ReconnectBanner
+    # while it waits.
+    assert "waitForServerThenReload()" in app
+    assert 'import { waitForServerThenReload } from "@/lib/reconnect";' in app
 
 
 def test_the_page_is_a_real_project_scoped_page():

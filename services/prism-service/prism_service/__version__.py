@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.31"
+PRISM_VERSION = "7.13.32"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5597,4 +5597,27 @@ PRISM_VERSION_NOTES += (
     "gatePanelOwnsOracle's own definition (FR-6, unchanged) and the fact "
     "that Evidence/dead-task-card now render on mutually exclusive tabs "
     "rather than needing an ordering guarantee on one shared surface."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.32: owner, live, watching a dev daemon restart through "
+    "remote assist: 'this was a native app that can exist without the "
+    "server running it, and it should NEVER go white -- it should have "
+    "the banner letting the customer know it's updating'. Root cause: "
+    "App.tsx's lazyRoute() caught a failed chunk import (e.g. a route "
+    "navigated mid-restart) and called window.location.reload() "
+    "immediately, with no check that the server would actually answer. "
+    "If the restart was still in progress, that reload navigation itself "
+    "failed to connect -- the BROWSER's own blank error page for a failed "
+    "top-level navigation, which no React error boundary or Suspense "
+    "fallback can intercept because the SPA has already been torn down by "
+    "that point. New lib/reconnect.ts: waitForServerThenReload() never "
+    "calls reload() until a real /api/version probe succeeds (capped "
+    "backoff, bounded per-attempt timeout via AbortController); "
+    "components/ReconnectBanner.tsx renders a persistent 'PRISM is "
+    "updating -- reconnecting automatically' strip at the top of the app "
+    "shell while it waits, so the tab always shows something and the "
+    "current page's own JS keeps running the whole time -- only a "
+    "confirmed-safe reload replaces it. New test_reconnect_never_goes_"
+    "white.py pins that the reload call is unreachable outside the "
+    "probe's success branch."
 )
