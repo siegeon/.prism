@@ -380,6 +380,72 @@ def test_agent_bridge_command_requires_a_valid_action():
     assert payload["ok"] is False
 
 
+# ---------------------------------------------------------------------------
+# 4. Discovery endpoint (2026-08-23): "what is MY active session id",
+#    authenticated exactly like session creation -- never another user's.
+# ---------------------------------------------------------------------------
+
+def test_discovery_endpoint_returns_only_the_callers_own_sessions():
+    """The core auth-boundary requirement: principal A can never see
+    principal B's session id through this endpoint."""
+    from prism_service.api.agent_bridge import (
+        create_session, CreateSessionBody, list_my_sessions)
+
+    alice = _principal("alice")
+    mallory = _principal("mallory")
+    alice_session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    create_session(CreateSessionBody(project="prism"), principal=mallory)
+
+    result = list_my_sessions(project="", principal=alice)
+    ids = {s["id"] for s in result["sessions"]}
+    assert ids == {alice_session["id"]}, (
+        "the discovery endpoint must never surface another user's session")
+
+
+def test_discovery_endpoint_never_returns_a_token():
+    from prism_service.api.agent_bridge import (
+        create_session, CreateSessionBody, list_my_sessions)
+
+    alice = _principal("alice")
+    create_session(CreateSessionBody(project="prism"), principal=alice)
+
+    result = list_my_sessions(project="", principal=alice)
+    assert result["sessions"], "expected at least one session for alice"
+    for s in result["sessions"]:
+        assert "token" not in s, (
+            "discovery must hand back the id only -- the token is minted "
+            "once, by POST /sessions, and never re-exposed afterward")
+
+
+def test_discovery_endpoint_can_be_narrowed_by_project():
+    from prism_service.api.agent_bridge import (
+        create_session, CreateSessionBody, list_my_sessions)
+
+    alice = _principal("alice")
+    prism_session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    create_session(CreateSessionBody(project="other"), principal=alice)
+
+    result = list_my_sessions(project="prism", principal=alice)
+    ids = {s["id"] for s in result["sessions"]}
+    assert ids == {prism_session["id"]}
+
+
+def test_discovery_endpoint_returns_nothing_before_any_session_is_minted():
+    from prism_service.api.agent_bridge import list_my_sessions
+
+    alice = _principal("alice")
+    result = list_my_sessions(project="", principal=alice)
+    assert result["sessions"] == []
+
+
+def test_discovery_collection_path_is_not_exempted_from_the_general_gate():
+    # Same treatment as POST /sessions (test_agent_bridge_session_creation_
+    # is_not_exempted above) -- the bare collection path always requires the
+    # caller's real credential, GET included, never the item paths' narrow
+    # session-token bypass.
+    assert _guard("/api/agent-bridge/sessions", "10.1.10.42", method="GET") == 401
+
+
 def test_agent_bridge_command_tool_is_registered_and_advertised():
     from prism_service.mcp.tools import TOOLS, INTERACTIVE_TOOL_NAMES
 
@@ -494,32 +560,45 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     `localStorage`, which would be a real security regression) but survives
     a same-tab reload. This pins that the actual read/write call sites use
     `sessionStorage`, not just that the string appears somewhere in the
-    file, and that `localStorage` is never used to persist the session."""
+    file, and that `localStorage` is never used to persist the SESSION
+    itself (id + token).
+
+    SUPERSEDED IN PART 2026-08-23: the blanket "localStorage never appears
+    at all" assertion this test used to make is gone -- agentBridge.tsx now
+    also persists a plain boolean ENABLED PREFERENCE to localStorage (see
+    ENABLED_PREF_KEY/loadEnabledPreference/persistEnabledPreference), which
+    is what lets the tab auto-reconnect after a reload/daemon-restart
+    without a re-click (test_agent_bridge_enabled_preference_uses_local_
+    storage_not_the_session below pins that boundary). What still must
+    never happen -- checked here -- is the SESSION (id/token) itself being
+    written to localStorage anywhere, under any function name."""
     src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
 
     assert "sessionStorage" in src
-    # localStorage must never be used to persist the bridge session — the
-    # docstring explaining why it's avoided is fine, an actual call is not.
-    assert "localStorage.setItem" not in src
-    assert "localStorage.getItem" not in src
 
     # loadPersistedSession(): the mount-time hydration path must actually
-    # read from sessionStorage, not merely mention it in a comment.
+    # read from sessionStorage, not merely mention it in a comment, and
+    # must never fall back to localStorage for the SESSION itself.
     load_fn = src.split("function loadPersistedSession()", 1)[1].split(
         "\nfunction ", 1)[0]
     assert "sessionStorage.getItem(STORAGE_KEY)" in load_fn
+    assert "localStorage" not in load_fn
 
     # The lazy useState initializer must actually be wired to that loader —
     # this is what makes a reload transparently resume the same session.
     assert "useState<BridgeSession | null>(loadPersistedSession)" in src
 
-    # persistSession(): the shared write/clear path.
+    # persistSession(): the shared write/clear path for the SESSION itself
+    # (id + token) — must be sessionStorage only, never localStorage.
     persist_fn = src.split("function persistSession(", 1)[1].split(
-        "\n/**", 1)[0]
+        "\n// localStorage", 1)[0]
     assert "sessionStorage.setItem(STORAGE_KEY" in persist_fn
     assert "sessionStorage.removeItem(STORAGE_KEY)" in persist_fn
+    assert "localStorage" not in persist_fn
 
-    # enable(): a newly-minted session must be written through.
+    # enable(): a newly-minted session must be written through to
+    # sessionStorage (the credential), separately from the boolean
+    # preference (checked in the dedicated test below).
     enable_fn = src.split("const enable = useCallback(", 1)[1].split(
         "const disable = useCallback(", 1)[0]
     assert "persistSession(s)" in enable_fn
@@ -527,7 +606,7 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     # disable(): an explicit end must actually clear the durable copy, not
     # just the in-memory one, or a later reload would resurrect it.
     disable_fn = src.split("const disable = useCallback(", 1)[1].split(
-        "// Tab-close revocation", 1)[0]
+        "// Auto-reconnect", 1)[0]
     assert "persistSession(null)" in disable_fn
 
     # The existing beforeunload-triggered explicit DELETE must also clear
@@ -535,6 +614,57 @@ def test_bridge_session_persists_to_session_storage_not_local_storage():
     onunload_fn = src.split("const onUnload = () => {", 1)[1].split(
         "window.addEventListener", 1)[0]
     assert "persistSession(null)" in onunload_fn
+
+
+def test_agent_bridge_enabled_preference_uses_local_storage_not_the_session():
+    """Source-reading pin for the 2026-08-23 persistent-preference feature:
+    a plain boolean ("did the user want remote assist on") is stored in
+    localStorage precisely because it must survive a brand-new tab, not
+    just a same-tab reload (sessionStorage would not survive that) -- and
+    it must be structurally impossible to confuse with the actual session
+    credential, which stays sessionStorage-only per the test above."""
+    src = (_SERVICE_ROOT / "prism_service/web/src/lib/agentBridge.tsx").read_text()
+
+    load_fn = src.split("function loadEnabledPreference()", 1)[1].split(
+        "\nfunction ", 1)[0]
+    assert "localStorage.getItem(ENABLED_PREF_KEY)" in load_fn
+
+    persist_fn = src.split("function persistEnabledPreference(", 1)[1].split(
+        "\nexport function AgentBridgeProvider", 1)[0]
+    assert "localStorage.setItem(ENABLED_PREF_KEY" in persist_fn
+    assert "localStorage.removeItem(ENABLED_PREF_KEY)" in persist_fn
+    # The preference writer must never be handed the session/token — it's
+    # a boolean-only function; this guards against a future edit silently
+    # widening it into a second place the credential could leak to disk.
+    assert "token" not in persist_fn.split(")", 1)[0]
+
+    # enable() must persist BOTH the session (sessionStorage, existing
+    # behavior) and flip the preference on (localStorage).
+    enable_fn = src.split("const enable = useCallback(", 1)[1].split(
+        "const disable = useCallback(", 1)[0]
+    assert "persistEnabledPreference(true)" in enable_fn
+
+    # disable() must turn the preference back off -- an explicit "Turn off"
+    # click must not be silently undone by the next reload's auto-reconnect.
+    disable_fn = src.split("const disable = useCallback(", 1)[1].split(
+        "// Auto-reconnect", 1)[0]
+    assert "persistEnabledPreference(false)" in disable_fn
+
+    # Tab-close (beforeunload) must NOT clear the preference -- only the
+    # session/credential. Closing the tab (or a reload, which also fires
+    # beforeunload) must still auto-reconnect on the NEXT open, which only
+    # works if the preference itself survives that unload.
+    onunload_fn = src.split("const onUnload = () => {", 1)[1].split(
+        "window.addEventListener", 1)[0]
+    assert "persistEnabledPreference" not in onunload_fn
+
+    # The mount-time auto-reconnect effect must gate strictly on the
+    # preference, and must call the real enable() rather than reimplementing
+    # session creation inline.
+    mount_fn = src.split("// Auto-reconnect", 1)[1].split(
+        "// Tab-close revocation", 1)[0]
+    assert "loadEnabledPreference()" in mount_fn
+    assert "void enable()" in mount_fn
 
 
 def test_fill_action_supports_select_elements_not_just_input_textarea():

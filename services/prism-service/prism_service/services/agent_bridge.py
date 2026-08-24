@@ -35,6 +35,23 @@ restarted, NOT expire on a fixed wall-clock timer while the tab is still
 sitting there with the feature on. `SESSION_TTL_SECONDS` below is now a long
 hygiene backstop against a truly-abandoned session (tab killed hard enough
 that beforeunload never fired) rather than a real "support session" duration.
+
+EXTENDED 2026-08-23 (owner: no more manual copy/paste of a session id into
+chat, and the frontend toggle should survive a reload/restart): the id half
+of a session can now be STABLE per (user_id, project_id) — backed by
+services/agent_bridge_identity.py's small durable sqlite table — even though
+the TOKEN keeps rotating exactly as before (fresh every `mint_session` call,
+RAM only, never touches that table in any form). This is additive and
+opt-in: pass an `identity_store` to get stable ids (production wiring, via
+`get_agent_bridge_service()`, always does); omit it and `mint_session` falls
+back to the old random-uuid-per-mint behavior untouched (every existing
+direct `AgentBridgeService()` test keeps its original meaning). A stable id
+is what makes `GET /api/agent-bridge/sessions` (api/agent_bridge.py) useful:
+an already-authenticated caller can look up their OWN currently-live
+session id(s) — authenticated the exact same way as `POST /sessions` — with
+no id/token ever needing to be pasted by a human. See
+agent_bridge_identity.py's docstring for the full security reasoning on why
+the token itself still never reaches disk.
 """
 
 from __future__ import annotations
@@ -47,6 +64,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from prism_service.events import bus
+
+# Only imported for the type hint (constructor param) -- kept as a
+# `TYPE_CHECKING`-free plain import since it's a tiny, dependency-free module
+# and every existing caller already imports prism_service.services.* eagerly.
+from prism_service.services.agent_bridge_identity import AgentBridgeIdentityStore
 
 # A hygiene backstop only, NOT the session's real lifetime (see SUPERSEDED
 # note above) -- a session ends via explicit revoke (disable / tab close) or
@@ -86,27 +108,65 @@ class AgentBridgeService:
     the process, by design.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, identity_store: Optional[AgentBridgeIdentityStore] = None) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, BridgeSession] = {}
         self._pending: dict[str, _PendingCommand] = {}
+        # Opt-in: None (the default) preserves the original random-uuid id
+        # every mint -- every pre-existing test/caller that constructs this
+        # class directly keeps its exact old behavior. Only
+        # get_agent_bridge_service()'s production wiring passes the real
+        # store, which is what makes ids stable across restarts/reloads.
+        self._identity = identity_store
 
     # -- session lifecycle --------------------------------------------------
 
     def mint_session(self, *, user_id: str, project_id: str) -> BridgeSession:
         self._purge_expired_locked()
+        project_id = project_id or "default"
+        session_id = (
+            self._identity.stable_id(user_id, project_id)
+            if self._identity is not None
+            else uuid.uuid4().hex
+        )
         now = time.time()
         session = BridgeSession(
-            id=uuid.uuid4().hex,
+            id=session_id,
             token=secrets.token_urlsafe(32),
             user_id=user_id,
-            project_id=project_id or "default",
+            project_id=project_id,
             created_at=now,
             expires_at=now + SESSION_TTL_SECONDS,
         )
         with self._lock:
+            # Re-minting the SAME stable id (daemon restart, periodic
+            # rotation, a duplicate enable() call) intentionally OVERWRITES
+            # whatever token/expiry was there -- that IS the rotation: the
+            # prior token stops validating the instant this replaces it,
+            # even though the id a human/agent already has stays correct.
             self._sessions[session.id] = session
         return session
+
+    def sessions_for_user(
+        self, user_id: str, project_id: Optional[str] = None,
+    ) -> list[BridgeSession]:
+        """Every session currently LIVE in THIS process's memory for one
+        user -- the data source behind `GET /api/agent-bridge/sessions`
+        (api/agent_bridge.py), which lets an already-authenticated caller
+        discover their own active session id(s) with no human pasting
+        required. Deliberately reads live in-memory state only: there is
+        nothing durable to consult about "is this live right now" (a
+        restart correctly drops every session, per this module's SECURITY
+        POSTURE note above), so "live" can only ever mean "in this dict,
+        this process, right now" -- optionally narrowed to one project."""
+        self._purge_expired_locked()
+        with self._lock:
+            sessions = [
+                s for s in self._sessions.values()
+                if s.user_id == user_id and not s.revoked
+                and (project_id is None or s.project_id == project_id)
+            ]
+        return sessions
 
     def _get_live(self, session_id: str) -> Optional[BridgeSession]:
         with self._lock:
@@ -208,7 +268,15 @@ def get_agent_bridge_service() -> AgentBridgeService:
     global _service
     with _service_lock:
         if _service is None:
-            _service = AgentBridgeService()
+            from prism_service.services.agent_bridge_identity import (
+                get_agent_bridge_identity_store)
+            # PRODUCTION wiring only -- this is what makes a real user's
+            # session id stable across a daemon restart/reload (see the
+            # module docstring's 2026-08-23 note). Direct
+            # `AgentBridgeService()` construction (every existing unit test)
+            # deliberately does NOT go through this path.
+            _service = AgentBridgeService(
+                identity_store=get_agent_bridge_identity_store())
         return _service
 
 

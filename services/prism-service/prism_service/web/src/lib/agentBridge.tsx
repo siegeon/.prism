@@ -27,6 +27,19 @@
  * against the new `GET /sse/agent-bridge/{id}` route. Results flow back via
  * an ordinary POST, authenticated with the bridge token itself (not the
  * general access key — see api/agent_bridge.py).
+ *
+ * PERSISTENT PREFERENCE (2026-08-23): whether the user WANTS remote assist
+ * on is a separate, small boolean kept in `localStorage` (survives a reload
+ * AND a brand new tab, unlike sessionStorage) — see ENABLED_PREF_KEY below.
+ * This is a preference, never a credential: it is never the session id or
+ * token, just "the last thing the user clicked". On mount, if the
+ * preference says on and there's no already-live session to resume, this
+ * mints a fresh one automatically instead of making the user re-click the
+ * toggle after every reload/daemon-restart — see the mount effect below for
+ * why re-minting (rather than trusting a stale sessionStorage entry) is
+ * the right move even across a real daemon restart. The bearer token
+ * itself still NEVER touches localStorage — only sessionStorage (see
+ * below), and only for the same-tab fast-resume path.
  */
 
 import {
@@ -99,6 +112,32 @@ function persistSession(s: BridgeSession | null): void {
   }
 }
 
+// localStorage (NOT sessionStorage) precisely because this must survive a
+// brand-new tab/window, not just a reload of the same one — it is a
+// preference ("do I want this on"), never a credential. Only ever a
+// boolean; the session id/token are NEVER written here.
+const ENABLED_PREF_KEY = "prism.agentBridgeEnabledPref";
+
+function loadEnabledPreference(): boolean {
+  try {
+    return localStorage.getItem(ENABLED_PREF_KEY) === "1";
+  } catch {
+    return false; // storage blocked/unavailable -- default to off, same as today
+  }
+}
+
+function persistEnabledPreference(enabled: boolean): void {
+  try {
+    if (enabled) {
+      localStorage.setItem(ENABLED_PREF_KEY, "1");
+    } else {
+      localStorage.removeItem(ENABLED_PREF_KEY);
+    }
+  } catch {
+    // Best-effort, same rationale as persistSession above.
+  }
+}
+
 /** Read from any component (e.g. the Settings toggle) to show/drive state. */
 export function useAgentBridge(): AgentBridgeState {
   const ctx = useContext(AgentBridgeContext);
@@ -166,6 +205,8 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
       });
       setSession(s);
       persistSession(s);
+      persistEnabledPreference(true); // remember "the user wants this on"
+      // across reloads/new tabs — a boolean only, never the id/token above.
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {
@@ -178,6 +219,8 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
     setSession(null);
     persistSession(null); // explicit end must actually end, not leave a
     // resurrectable stale entry for the next reload to hydrate from.
+    persistEnabledPreference(false); // an explicit Turn off must stick — the
+    // next reload must NOT auto-reconnect just because it once was on.
     if (!s) return;
     try {
       await api.delete(
@@ -186,6 +229,27 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
     } catch {
       // Best-effort — the session's TTL is the backstop if this fails.
     }
+  }, []);
+
+  // Auto-reconnect (owner 2026-08-23: no manual re-enable/re-paste after a
+  // reload or a daemon restart). Runs once on mount — which, for an
+  // always-mounted provider like this one, only really happens on a hard
+  // reload or a brand-new tab, never on in-app navigation. Gated entirely
+  // on the LOCALSTORAGE preference (never on whether a stale sessionStorage
+  // session happens to still be present): tab-close revocation below
+  // clears sessionStorage's session on every unload including a reload, so
+  // by the time this runs after a normal reload there is usually nothing
+  // left to resume anyway — re-minting is what actually restores the
+  // feature, and it also transparently covers "the daemon restarted while
+  // the tab was closed/crashed", which a stale sessionStorage entry could
+  // never detect on its own.
+  useEffect(() => {
+    if (!loadEnabledPreference()) return;
+    if (sessionRef.current) return; // already resumed a live session above
+    void enable();
+    // Intentionally run only once on mount — `enable` is a stable
+    // useCallback identity ([] deps), so this is not a missing-dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Tab-close revocation (security posture: "the user can always revoke").

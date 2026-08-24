@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.22"
+PRISM_VERSION = "7.13.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.23: agent-bridge remote-assist no longer needs a human to "
+    "copy/paste a session id every reload or daemon restart. Added "
+    "GET /api/agent-bridge/sessions (auth'd exactly like session creation) "
+    "so an already-authenticated caller can discover their OWN active "
+    "session id(s) -- never another user's. Session ids are now STABLE "
+    "per (user_id, project_id), backed by a small new durable sqlite table "
+    "(agent_bridge_identity.py, mirrors sync_prefs.py's pattern) that "
+    "holds ONLY the id + rotation timestamps -- the live bearer token "
+    "itself still never touches disk in any form (see that module's "
+    "docstring for the full security reasoning). Frontend: 'Remote Assist "
+    "enabled' is now a small localStorage boolean preference (never the "
+    "token) that auto-reconnects the tab on load without a re-click, "
+    "covering both a plain reload and a real daemon restart. "
     "7.13.20: two follow-ups landed alongside the brain-bloat fix above -- "
     "(1) dashboard.py's /activity and /state routes opened ~18 short-lived "
     "sqlite connections per request (one per _count/_rows call across 3-4 "

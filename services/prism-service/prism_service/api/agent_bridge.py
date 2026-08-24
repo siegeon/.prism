@@ -3,14 +3,16 @@
 See services/agent_bridge.py's module docstring and
 /home/siegeon/.claude/plans/peaceful-seeking-octopus.md for the full design.
 
-Only `POST /sessions` (session creation) uses the caller's REAL principal
-(current_principal) — that call is what decides whose session this is. The
-other two routes here, plus `GET /sse/agent-bridge/{id}` (routes/sse.py),
-carry the session's own short-lived token as their credential instead, and
-each performs that check itself; api/security.py carves these item paths out
-of the general team-boundary gate for exactly that reason (EventSource can't
-send an Authorization header, and reusing the general access key over this
-channel would be broader than the bridge session's intended scope).
+`POST /sessions` (session creation) and `GET /sessions` (discovery — "what's
+my own active session id") both use the caller's REAL principal
+(current_principal) — those are the two calls that decide/reveal whose
+session this is. The other two routes here, plus `GET /sse/agent-bridge/{id}`
+(routes/sse.py), carry the session's own short-lived token as their
+credential instead, and each performs that check itself; api/security.py
+carves these item paths out of the general team-boundary gate for exactly
+that reason (EventSource can't send an Authorization header, and reusing the
+general access key over this channel would be broader than the bridge
+session's intended scope).
 """
 
 from __future__ import annotations
@@ -78,6 +80,39 @@ def create_session(
         "token": session.token,
         "project": session.project_id,
         "expires_at": session.expires_at,
+    }
+
+
+@router.get("/sessions")
+def list_my_sessions(
+    project: str = Query(""),
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Discovery: "what is my current active bridge session id" for a
+    caller who is ALREADY authenticated -- no human needs to copy it out of
+    Settings and paste it into chat. Authenticated exactly like
+    `POST /sessions` (the same `current_principal` dependency, never the
+    item routes' narrow session token), so this can only ever answer for
+    the CALLER's own sessions -- api/security.py's carve-out explicitly
+    excludes the bare "/sessions" path from the item-path bypass for
+    exactly this reason (see `_is_agent_bridge_session_path`).
+
+    Returns id/project/expires_at only -- the bearer TOKEN is never handed
+    back here (it's only ever returned once, by the POST that mints it).
+    That's sufficient: `agent_bridge_command` authorizes purely on the
+    caller's own access key resolving to the session's owning user
+    (`session_owned_by`, task 6cef97ec's model), never on the token, so an
+    id is everything an authorized agent needs to actually drive a session.
+    """
+    principal = coerce_principal(principal)
+    service = get_agent_bridge_service()
+    sessions = service.sessions_for_user(
+        principal.user_id, project_id=(project or None))
+    return {
+        "sessions": [
+            {"id": s.id, "project": s.project_id, "expires_at": s.expires_at}
+            for s in sessions
+        ],
     }
 
 
